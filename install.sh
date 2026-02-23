@@ -59,6 +59,14 @@ info "Creating symlink..."
 mkdir -p "$BIN_DIR"
 ln -sf "$VENV_DIR/bin/ghaiwpy" "$BIN_DIR/ghaiwpy"
 
+# ─── Install git hooks ───────────────────────────────────────────────────────
+
+HOOKS_SCRIPT="${SCRIPT_DIR}/scripts/install-hooks.sh"
+if [[ -x "$HOOKS_SCRIPT" ]] && git -C "$SCRIPT_DIR" rev-parse --is-inside-work-tree &>/dev/null; then
+    info "Installing git hooks..."
+    bash "$HOOKS_SCRIPT"
+fi
+
 # ─── Verify ──────────────────────────────────────────────────────────────────
 
 if "$BIN_DIR/ghaiwpy" --version &>/dev/null; then
