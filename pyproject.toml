@@ -53,6 +53,9 @@ Repository = "https://github.com/ivanviragine/ghaiw-py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/ghaiw"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"templates" = "ghaiw/templates"
+
 [tool.ruff]
 target-version = "py311"
 src = ["src"]

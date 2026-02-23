@@ -33,8 +33,9 @@ logger = structlog.get_logger()
 
 def get_deps_prompt_template() -> str:
     """Load the dependency analysis prompt template."""
-    pkg_root = Path(__file__).parent.parent.parent.parent
-    template = pkg_root / "templates" / "prompts" / "deps-analysis.md"
+    from ghaiw.skills.installer import get_templates_dir
+
+    template = get_templates_dir() / "prompts" / "deps-analysis.md"
     if template.is_file():
         return template.read_text(encoding="utf-8")
     return (

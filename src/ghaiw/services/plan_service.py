@@ -41,9 +41,9 @@ logger = structlog.get_logger()
 
 def get_plan_prompt_template() -> str:
     """Load the plan session prompt template."""
-    # Walk up from this file to find templates/prompts/plan-session.md
-    pkg_root = Path(__file__).parent.parent.parent.parent
-    template = pkg_root / "templates" / "prompts" / "plan-session.md"
+    from ghaiw.skills.installer import get_templates_dir
+
+    template = get_templates_dir() / "prompts" / "plan-session.md"
     if template.is_file():
         return template.read_text(encoding="utf-8")
     # Fallback inline prompt

@@ -14,18 +14,28 @@ logger = structlog.get_logger()
 
 
 def get_templates_dir() -> Path:
-    """Get the path to the templates directory (packaged with ghaiw)."""
-    # Walk up from this file to find the templates/ directory
-    # Structure: src/ghaiw/skills/installer.py → ../../../../templates/
-    pkg_root = Path(__file__).parent.parent.parent.parent
-    templates = pkg_root / "templates"
-    if templates.is_dir():
-        return templates
-    # Fallback for installed package
+    """Get the path to the templates directory.
+
+    Looks in two places:
+    1. Repo root (development / editable install) — templates/ next to src/
+    2. Inside the installed package (pip install) — ghaiw/templates/
+    """
+    # 1. Dev mode: walk up from src/ghaiw/skills/installer.py → repo root
+    repo_root = Path(__file__).parent.parent.parent.parent
+    dev_templates = repo_root / "templates"
+    if dev_templates.is_dir() and (dev_templates / "skills").is_dir():
+        return dev_templates
+
+    # 2. Installed package: templates are force-included as ghaiw/templates/
     import importlib.resources
 
-    ref = importlib.resources.files("ghaiw").joinpath("../../templates")
-    return Path(str(ref))
+    pkg_templates = importlib.resources.files("ghaiw").joinpath("templates")
+    pkg_path = Path(str(pkg_templates))
+    if pkg_path.is_dir():
+        return pkg_path
+
+    # Last resort — return the dev path (will trigger "not found" warning)
+    return dev_templates
 
 
 def get_skills_templates_dir() -> Path:
