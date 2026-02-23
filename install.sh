@@ -6,7 +6,8 @@
 #   ./install.sh /usr/local   # Install to custom prefix
 #
 # Installs as `ghaiwpy` to coexist with the Bash `ghaiw` CLI.
-# Requires: Python 3.11+, uv (https://docs.astral.sh/uv/)
+# Requires: uv (https://docs.astral.sh/uv/) — installs it if missing.
+# Python 3.11+ is fetched automatically by uv if not available.
 
 set -euo pipefail
 
@@ -14,6 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PREFIX="${1:-$HOME/.local}"
 BIN_DIR="${PREFIX}/bin"
 VENV_DIR="${PREFIX}/share/ghaiw/venv"
+MIN_PYTHON="3.11"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -24,21 +26,7 @@ info()  { echo -e "${GREEN}[✓]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
 error() { echo -e "${RED}[✗]${NC} $*" >&2; }
 
-# ─── Checks ──────────────────────────────────────────────────────────────────
-
-if ! command -v python3 &>/dev/null; then
-    error "Python 3 is required but not found."
-    exit 1
-fi
-
-PYTHON_VERSION="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
-MAJOR="${PYTHON_VERSION%%.*}"
-MINOR="${PYTHON_VERSION##*.}"
-
-if [[ "$MAJOR" -lt 3 ]] || { [[ "$MAJOR" -eq 3 ]] && [[ "$MINOR" -lt 11 ]]; }; then
-    error "Python 3.11+ is required (found ${PYTHON_VERSION})."
-    exit 1
-fi
+# ─── Ensure uv ────────────────────────────────────────────────────────────────
 
 if ! command -v uv &>/dev/null; then
     warn "uv not found. Installing uv..."
@@ -46,14 +34,19 @@ if ! command -v uv &>/dev/null; then
     export PATH="$HOME/.local/bin:$PATH"
 fi
 
-info "Python ${PYTHON_VERSION} found"
 info "uv $(uv --version) found"
 
 # ─── Install ─────────────────────────────────────────────────────────────────
 
 info "Creating virtual environment at ${VENV_DIR}..."
 mkdir -p "$(dirname "$VENV_DIR")"
-uv venv "$VENV_DIR" --python "python${PYTHON_VERSION}"
+
+# Let uv find or download a suitable Python (>= 3.11).
+# This works even if the system python3 is too old — uv manages its own.
+uv venv "$VENV_DIR" --python ">=${MIN_PYTHON}"
+
+PYTHON_VERSION="$("$VENV_DIR/bin/python" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+info "Python ${PYTHON_VERSION} (managed by uv)"
 
 info "Installing ghaiwpy..."
 uv pip install --python "$VENV_DIR/bin/python" "$SCRIPT_DIR"
