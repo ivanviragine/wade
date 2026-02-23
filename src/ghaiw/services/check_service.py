@@ -96,7 +96,7 @@ class ConfigCheckResult:
         if self.exit_code == ConfigExitCode.NOT_FOUND:
             lines = ["CONFIG_NOT_FOUND"]
             lines.append("error: .ghaiw.yml not found in current directory or parents")
-            lines.append("hint: run 'ghaiw init' to create a default config")
+            lines.append("hint: run 'ghaiwpy init' to create a default config")
             return "\n".join(lines)
 
         if self.exit_code == ConfigExitCode.VALID:

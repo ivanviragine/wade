@@ -59,7 +59,7 @@ def create(
     if not no_start:
         console.empty()
         console.info("When you're ready to start, run:")
-        console.detail(f"ghaiw work start {task.id}")
+        console.detail(f"ghaiwpy work start {task.id}")
 
     raise typer.Exit(0)
 

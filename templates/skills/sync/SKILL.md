@@ -13,7 +13,7 @@ Sync the current feature branch with main so it can be merged cleanly.
 
 ## How this works
 
-The deterministic git operations (fetch + merge) are handled by the `ghaiw`
+The deterministic git operations (fetch + merge) are handled by the `ghaiwpy`
 CLI. Your job is to run it and **only** engage your reasoning if merge
 conflicts arise.
 
@@ -49,7 +49,7 @@ Optional flags:
 
 ### Exit code 0 — Success
 Report concisely: branch is up to date with main, ready to merge.
-Next step: run `ghaiw work done` to create a PR or merge.
+Next step: run `ghaiwpy work done` to create a PR or merge.
 
 ### Exit code 2 — Conflict merging main → feature branch
 The command paused due to conflicts:
@@ -67,7 +67,7 @@ and suggest how to fix it.
 
 ## Rules
 
-- **Never re-implement the git operations yourself.** Always use `ghaiw work sync`.
+- **Never re-implement the git operations yourself.** Always use `ghaiwpy work sync`.
 - When analyzing conflicts, read actual file contents — don't guess from diff.
 - Be concise on success, thorough on conflicts.
 

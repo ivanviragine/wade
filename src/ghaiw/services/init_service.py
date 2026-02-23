@@ -82,7 +82,7 @@ def init(
         console.error("Could not determine repository root")
         return False
 
-    console.header("ghaiw init")
+    console.header("ghaiwpy init")
 
     # 2. Detect/select AI tool
     selected_tool = _select_ai_tool(ai_tool, non_interactive)
@@ -131,7 +131,7 @@ def init(
         for err in check_result.errors:
             console.detail(err)
 
-    console.banner("ghaiw initialized")
+    console.banner("ghaiwpy initialized")
     return True
 
 
@@ -156,10 +156,10 @@ def update(project_root: Path | None = None) -> bool:
 
     config_path = find_config_file(root)
     if config_path is None:
-        console.error("No .ghaiw.yml found — run 'ghaiw init' first")
+        console.error("No .ghaiw.yml found — run 'ghaiwpy init' first")
         return False
 
-    console.header("ghaiw update")
+    console.header("ghaiwpy update")
 
     # Load current config
     config = load_config(root)
@@ -188,7 +188,7 @@ def update(project_root: Path | None = None) -> bool:
     # Update manifest
     _write_manifest(root, installed)
 
-    console.banner("ghaiw updated")
+    console.banner("ghaiwpy updated")
     return True
 
 
@@ -210,7 +210,7 @@ def deinit(project_root: Path | None = None, force: bool = False) -> bool:
         console.error("Not inside a git repository")
         return False
 
-    console.header("ghaiw deinit")
+    console.header("ghaiwpy deinit")
 
     # Remove skills
     removed = installer.remove_skills(root)
@@ -242,7 +242,7 @@ def deinit(project_root: Path | None = None, force: bool = False) -> bool:
     if ghaiw_dir.is_dir() and not any(ghaiw_dir.iterdir()):
         ghaiw_dir.rmdir()
 
-    console.banner("ghaiw removed")
+    console.banner("ghaiwpy removed")
     return True
 
 

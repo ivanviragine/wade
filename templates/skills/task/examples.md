@@ -100,7 +100,7 @@ Created 3 issues:
 
 ### 3. Auto-dependency analysis (multi-issue plans)
 
-When `ghaiw task plan` creates 2+ issues, it automatically runs `ghaiw task deps`
+When `ghaiwpy task plan` creates 2+ issues, it automatically runs `ghaiwpy task deps`
 to analyze dependencies. It updates each issue and creates a tracking issue:
 
 ```

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# install.sh — Install ghaiw using uv into a venv.
+# install.sh — Install ghaiwpy (Python ghaiw CLI) using uv into a venv.
 #
 # Usage:
 #   ./install.sh              # Install to default location (~/.local/bin)
 #   ./install.sh /usr/local   # Install to custom prefix
 #
+# Installs as `ghaiwpy` to coexist with the Bash `ghaiw` CLI.
 # Requires: Python 3.11+, uv (https://docs.astral.sh/uv/)
 
 set -euo pipefail
@@ -54,26 +55,26 @@ info "Creating virtual environment at ${VENV_DIR}..."
 mkdir -p "$(dirname "$VENV_DIR")"
 uv venv "$VENV_DIR" --python "python${PYTHON_VERSION}"
 
-info "Installing ghaiw..."
+info "Installing ghaiwpy..."
 uv pip install --python "$VENV_DIR/bin/python" "$SCRIPT_DIR"
 
 info "Creating symlink..."
 mkdir -p "$BIN_DIR"
-ln -sf "$VENV_DIR/bin/ghaiw" "$BIN_DIR/ghaiw"
+ln -sf "$VENV_DIR/bin/ghaiwpy" "$BIN_DIR/ghaiwpy"
 
 # ─── Verify ──────────────────────────────────────────────────────────────────
 
-if "$BIN_DIR/ghaiw" --version &>/dev/null; then
-    info "ghaiw installed successfully!"
+if "$BIN_DIR/ghaiwpy" --version &>/dev/null; then
+    info "ghaiwpy installed successfully!"
     echo ""
-    echo "  ghaiw $("$BIN_DIR/ghaiw" --version 2>/dev/null || echo '(version check failed)')"
-    echo "  Binary: ${BIN_DIR}/ghaiw"
+    echo "  ghaiwpy $("$BIN_DIR/ghaiwpy" --version 2>/dev/null || echo '(version check failed)')"
+    echo "  Binary: ${BIN_DIR}/ghaiwpy"
     echo ""
     if [[ ":$PATH:" != *":${BIN_DIR}:"* ]]; then
         warn "Add ${BIN_DIR} to your PATH:"
         echo "  export PATH=\"${BIN_DIR}:\$PATH\""
     fi
 else
-    error "Installation failed — ghaiw binary not working."
+    error "Installation failed — ghaiwpy binary not working."
     exit 1
 fi

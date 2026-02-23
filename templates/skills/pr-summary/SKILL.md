@@ -9,9 +9,9 @@ description: >
 # PR Summary
 
 Write a comprehensive summary of your work session that will be used as the PR
-description when you run `ghaiw work done`.
+description when you run `ghaiwpy work done`.
 
-**Strongly recommended:** `ghaiw work done` will show a warning if this file is
+**Strongly recommended:** `ghaiwpy work done` will show a warning if this file is
 missing (checked at `/tmp/PR-SUMMARY-{issue-number}.md`), and the PR will
 have a minimal description instead of your summary.
 
@@ -22,7 +22,7 @@ the summary as you work, updating it throughout the session.
 
 **When to write:**
 - After making significant changes
-- **Before running `ghaiw work done`** (mandatory)
+- **Before running `ghaiwpy work done`** (mandatory)
 - When you've completed testing and verification
 - After taking screenshots of UI changes
 
@@ -32,7 +32,7 @@ Write the summary to **`/tmp/PR-SUMMARY-{issue-number}.md`** (e.g. `/tmp/PR-SUMM
 for issue #42). Using the issue number in the filename keeps parallel sessions
 isolated — each worktree works on a different issue so filenames never collide.
 
-`ghaiw work done` picks up the file automatically by looking for
+`ghaiwpy work done` picks up the file automatically by looking for
 `/tmp/PR-SUMMARY-{issue-number}.md`.
 
 ## What to include
@@ -123,7 +123,7 @@ Use this template as a starting point:
 
 ## What happens next
 
-When you run `ghaiw work done`:
+When you run `ghaiwpy work done`:
 
 1. The command looks for `/tmp/PR-SUMMARY-{issue-number}.md`
 2. If found, it uses your summary as the PR description
@@ -158,7 +158,7 @@ ghaiw work done     # Uses /tmp/PR-SUMMARY-42.md to create PR description
 ## Integration with workflow
 
 This skill is referenced in Rule 5 of the workflow skill. Before running
-`ghaiw work done`, write your PR summary to ensure reviewers have adequate
+`ghaiwpy work done`, write your PR summary to ensure reviewers have adequate
 context.
 
 **Strongly recommended:** Write `/tmp/PR-SUMMARY-{issue-number}.md` for all work sessions so reviewers

@@ -222,7 +222,7 @@ def plan(
 
     resolved_model = _resolve_model(model, config, "plan")
 
-    console.header("ghaiw task plan")
+    console.header("ghaiwpy task plan")
     console.info(f"AI tool: {resolved_tool}")
     if resolved_model:
         console.info(f"Model: {resolved_model}")
@@ -386,7 +386,7 @@ def _finalize_issues(
     console.empty()
     console.info("When you're ready to start, run:")
     if issue_numbers:
-        console.detail(f"ghaiw work start {issue_numbers[0]}")
+        console.detail(f"ghaiwpy work start {issue_numbers[0]}")
 
 
 def _cleanup_plan_dir(plan_dir: str) -> None:

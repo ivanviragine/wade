@@ -7,7 +7,7 @@ import typer
 import ghaiw
 
 app = typer.Typer(
-    name="ghaiw",
+    name="ghaiwpy",
     help="AI-agent-driven git workflow management CLI.",
     no_args_is_help=False,
     invoke_without_command=True,
@@ -17,7 +17,7 @@ app = typer.Typer(
 
 def version_callback(value: bool) -> None:
     if value:
-        typer.echo(f"ghaiw {ghaiw.__version__}")
+        typer.echo(f"ghaiwpy {ghaiw.__version__}")
         raise typer.Exit()
 
 
@@ -38,7 +38,7 @@ def main(
         help="Enable verbose output.",
     ),
 ) -> None:
-    """ghaiw — AI-agent-driven git workflow management CLI."""
+    """ghaiwpy — AI-agent-driven git workflow management CLI."""
     from ghaiw.utils.terminal import set_terminal_title
 
     set_terminal_title("ghaiwpy")

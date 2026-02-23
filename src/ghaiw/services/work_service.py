@@ -205,7 +205,7 @@ def start(
     if not task:
         return False
 
-    console.header(f"ghaiw work start #{task.id}")
+    console.header(f"ghaiwpy work start #{task.id}")
     console.info(f"Issue: {task.title}")
 
     # Resolve AI tool
@@ -365,7 +365,7 @@ def batch(
         console.error("Not inside a git repository")
         return False
 
-    console.header(f"ghaiw work batch ({len(issue_numbers)} issues)")
+    console.header(f"ghaiwpy work batch ({len(issue_numbers)} issues)")
 
     # Resolve AI tool
     resolved_tool = ai_tool or config.get_ai_tool("work")
@@ -385,12 +385,12 @@ def batch(
 
     # Launch independent issues in parallel terminals
     for issue_id in independent:
-        cmd = ["ghaiw", "work", "start", issue_id]
+        cmd = ["ghaiwpy", "work", "start", issue_id]
         if resolved_tool:
             cmd.extend(["--ai", resolved_tool])
 
         console.step(f"Launching #{issue_id} in new terminal")
-        if launch_in_new_terminal(cmd, cwd=str(repo_root), title=f"ghaiw #{issue_id}"):
+        if launch_in_new_terminal(cmd, cwd=str(repo_root), title=f"ghaiwpy #{issue_id}"):
             launched += 1
         else:
             console.warn(f"Could not launch terminal for #{issue_id}")
@@ -399,12 +399,12 @@ def batch(
     for chain in chains:
         console.info(f"Sequential chain: {' → '.join(f'#{n}' for n in chain)}")
         for issue_id in chain:
-            cmd = ["ghaiw", "work", "start", issue_id]
+            cmd = ["ghaiwpy", "work", "start", issue_id]
             if resolved_tool:
                 cmd.extend(["--ai", resolved_tool])
 
             console.step(f"Launching #{issue_id} in new terminal")
-            if launch_in_new_terminal(cmd, cwd=str(repo_root), title=f"ghaiw #{issue_id}"):
+            if launch_in_new_terminal(cmd, cwd=str(repo_root), title=f"ghaiwpy #{issue_id}"):
                 launched += 1
             else:
                 console.warn(f"Could not launch terminal for #{issue_id}")

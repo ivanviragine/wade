@@ -26,20 +26,20 @@ uv pip install .
 ## Quick Start
 
 ```bash
-# 1. Initialize ghaiw in your project
-ghaiw init
+# 1. Initialize ghaiwpy in your project
+ghaiwpy init
 
 # 2. Plan a feature (launches AI for planning)
-ghaiw task plan
+ghaiwpy task plan
 
 # 3. Start working on an issue (creates worktree + launches AI)
-ghaiw work start 42
+ghaiwpy work start 42
 
 # 4. Sync with main before finishing
-ghaiw work sync
+ghaiwpy work sync
 
 # 5. Finalize and create PR
-ghaiw work done
+ghaiwpy work done
 ```
 
 ## Commands
@@ -48,37 +48,37 @@ ghaiw work done
 
 | Command | Description |
 |---------|-------------|
-| `ghaiw init` | Initialize ghaiw in the current project |
-| `ghaiw update` | Update ghaiw skills and config |
-| `ghaiw deinit` | Remove ghaiw from the project |
-| `ghaiw check` | Check worktree status (IN_WORKTREE / IN_MAIN_CHECKOUT / NOT_IN_GIT_REPO) |
-| `ghaiw check-config` | Validate `.ghaiw.yml` configuration |
+| `ghaiwpy init` | Initialize ghaiw in the current project |
+| `ghaiwpy update` | Update ghaiw skills and config |
+| `ghaiwpy deinit` | Remove ghaiw from the project |
+| `ghaiwpy check` | Check worktree status (IN_WORKTREE / IN_MAIN_CHECKOUT / NOT_IN_GIT_REPO) |
+| `ghaiwpy check-config` | Validate `.ghaiw.yml` configuration |
 
 ### Task Management
 
 | Command | Description |
 |---------|-------------|
-| `ghaiw task plan` | Launch AI planning session |
-| `ghaiw task create` | Create a GitHub issue (interactive or from plan file) |
-| `ghaiw task list` | List open issues with the configured label |
-| `ghaiw task read <N>` | Display issue details |
-| `ghaiw task close <N>` | Close an issue |
-| `ghaiw task deps` | Analyze dependencies between issues |
+| `ghaiwpy task plan` | Launch AI planning session |
+| `ghaiwpy task create` | Create a GitHub issue (interactive or from plan file) |
+| `ghaiwpy task list` | List open issues with the configured label |
+| `ghaiwpy task read <N>` | Display issue details |
+| `ghaiwpy task close <N>` | Close an issue |
+| `ghaiwpy task deps` | Analyze dependencies between issues |
 
 ### Work Sessions
 
 | Command | Description |
 |---------|-------------|
-| `ghaiw work start <N>` | Create worktree and start AI session for issue N |
-| `ghaiw work sync` | Sync feature branch with main (fetch + merge) |
-| `ghaiw work done` | Push branch and create PR (or direct merge) |
-| `ghaiw work list` | List active worktrees and their status |
-| `ghaiw work batch` | Start parallel sessions for multiple issues |
-| `ghaiw work remove <N>` | Remove a worktree |
+| `ghaiwpy work start <N>` | Create worktree and start AI session for issue N |
+| `ghaiwpy work sync` | Sync feature branch with main (fetch + merge) |
+| `ghaiwpy work done` | Push branch and create PR (or direct merge) |
+| `ghaiwpy work list` | List active worktrees and their status |
+| `ghaiwpy work batch` | Start parallel sessions for multiple issues |
+| `ghaiwpy work remove <N>` | Remove a worktree |
 
 ## Configuration
 
-ghaiw uses a `.ghaiw.yml` file in your project root:
+ghaiwpy uses a `.ghaiw.yml` file in your project root:
 
 ```yaml
 version: 2
@@ -112,11 +112,11 @@ models:
 
 ### Complexity-to-Model Mapping
 
-Issues include a `## Complexity` section (`easy`, `medium`, `complex`, `very_complex`). When `ghaiw work start` launches an AI tool, it automatically selects the configured model for that complexity level.
+Issues include a `## Complexity` section (`easy`, `medium`, `complex`, `very_complex`). When `ghaiwpy work start` launches an AI tool, it automatically selects the configured model for that complexity level.
 
 ## Agent Skills
 
-ghaiw installs Agent Skill files into your project that teach AI agents the workflow:
+ghaiwpy installs Agent Skill files into your project that teach AI agents the workflow:
 
 | Skill | Purpose |
 |-------|---------|
@@ -185,13 +185,13 @@ Typer provides built-in shell completion:
 
 ```bash
 # Bash
-ghaiw --install-completion bash
+ghaiwpy --install-completion bash
 
 # Zsh
-ghaiw --install-completion zsh
+ghaiwpy --install-completion zsh
 
 # Fish
-ghaiw --install-completion fish
+ghaiwpy --install-completion fish
 ```
 
 ## License

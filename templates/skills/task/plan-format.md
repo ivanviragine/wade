@@ -1,6 +1,6 @@
 # Plan File Format
 
-Reference for the `.md` format that `ghaiw task create --plan-file` expects.
+Reference for the `.md` format that `ghaiwpy task create --plan-file` expects.
 
 ## Structure
 
@@ -33,8 +33,8 @@ What to build / change.
 | **Title** | First `# Heading` line becomes the GitHub issue title. Required. Max 256 chars (truncated with a warning if exceeded). |
 | **Body** | Everything after the title heading becomes the issue body. Full markdown supported. |
 | **Label** | Applied automatically from `.ghaiw.yml` config (`issue_label`). |
-| **Complexity** | Optional `## Complexity` section with one value: `easy`, `medium`, `complex`, or `very_complex`. Used by `ghaiw work start` to auto-select the AI model. |
-| **Plan Summary** | When issues are created through `ghaiw task plan`, ghaiw appends a managed `## Plan Summary` section with `### Usage` to the GitHub issue body after creation. If available from the AI CLI output, the summary includes session total/input/output/cached token counts, estimated premium requests, and a `### Model Breakdown` table for per-model usage. |
+| **Complexity** | Optional `## Complexity` section with one value: `easy`, `medium`, `complex`, or `very_complex`. Used by `ghaiwpy work start` to auto-select the AI model. |
+| **Plan Summary** | When issues are created through `ghaiwpy task plan`, ghaiw appends a managed `## Plan Summary` section with `### Usage` to the GitHub issue body after creation. If available from the AI CLI output, the summary includes session total/input/output/cached token counts, estimated premium requests, and a `### Model Breakdown` table for per-model usage. |
 | **Sections** | Context, Proposed Solution, Tasks, and Acceptance Criteria are recommended but not enforced. |
 
 ## Complexity values
@@ -46,7 +46,7 @@ What to build / change.
 | `complex` | Multi-file feature or significant refactor (300-600 LOC) |
 | `very_complex` | Large feature, cross-cutting concern, or architecture change (>600 LOC) |
 
-`ghaiw work start` maps these to model names configured in `.ghaiw.yml`
+`ghaiwpy work start` maps these to model names configured in `.ghaiw.yml`
 (`model_easy`, `model_medium`, `model_complex`, `model_very_complex`).
 If the complexity field is absent or no model is configured, the default
 model for the AI tool is used.

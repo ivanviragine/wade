@@ -10,7 +10,7 @@ from ghaiw.utils.terminal import (
 class TestComposeWorkTitle:
     def test_basic(self) -> None:
         result = compose_work_title("42", "Add search command")
-        assert "ghaiw work" in result
+        assert "ghaiwpy work" in result
         assert "#42" in result
         assert "Add search command" in result
 
