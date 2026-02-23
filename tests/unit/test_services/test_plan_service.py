@@ -1,0 +1,215 @@
+"""Tests for plan service — prompt rendering, file discovery, orchestration."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from ghaiw.models.config import AIConfig, ProjectConfig, ProjectSettings
+from ghaiw.models.task import PlanFile, Task
+from ghaiw.services.plan_service import (
+    _resolve_ai_tool,
+    _resolve_model,
+    discover_plan_files,
+    get_plan_prompt_template,
+    render_plan_prompt,
+    validate_plan_files,
+)
+
+
+# ---------------------------------------------------------------------------
+# Prompt template tests
+# ---------------------------------------------------------------------------
+
+
+class TestPromptTemplate:
+    def test_get_template_exists(self) -> None:
+        template = get_plan_prompt_template()
+        assert len(template) > 100
+        assert "plan" in template.lower()
+        assert "{plan_dir}" in template
+
+    def test_render_with_plan_dir(self) -> None:
+        rendered = render_plan_prompt("/tmp/ghaiw-plan-abc123")
+        assert "/tmp/ghaiw-plan-abc123" in rendered
+        assert "{plan_dir}" not in rendered
+        assert "# Goal" in rendered
+
+
+# ---------------------------------------------------------------------------
+# AI tool / model resolution tests
+# ---------------------------------------------------------------------------
+
+
+class TestResolveAITool:
+    def test_explicit_arg_wins(self) -> None:
+        config = ProjectConfig(ai=AIConfig(default_tool="copilot"))
+        result = _resolve_ai_tool("claude", config)
+        assert result == "claude"
+
+    def test_config_fallback(self) -> None:
+        config = ProjectConfig(ai=AIConfig(default_tool="copilot"))
+        result = _resolve_ai_tool(None, config)
+        assert result == "copilot"
+
+    def test_detection_fallback(self) -> None:
+        config = ProjectConfig()
+        with patch(
+            "ghaiw.services.plan_service.AbstractAITool.detect_installed"
+        ) as mock:
+            from ghaiw.models.ai import AIToolID
+
+            mock.return_value = [AIToolID.CLAUDE]
+            result = _resolve_ai_tool(None, config)
+            assert result == "claude"
+
+    def test_no_tool_available(self) -> None:
+        config = ProjectConfig()
+        with patch(
+            "ghaiw.services.plan_service.AbstractAITool.detect_installed"
+        ) as mock:
+            mock.return_value = []
+            result = _resolve_ai_tool(None, config)
+            assert result is None
+
+
+class TestResolveModel:
+    def test_explicit_arg(self) -> None:
+        config = ProjectConfig()
+        result = _resolve_model("claude-opus-4-6", config)
+        assert result == "claude-opus-4-6"
+
+    def test_config_fallback(self) -> None:
+        from ghaiw.models.config import AICommandConfig
+
+        config = ProjectConfig(
+            ai=AIConfig(plan=AICommandConfig(model="claude-sonnet-4-6"))
+        )
+        result = _resolve_model(None, config, "plan")
+        assert result == "claude-sonnet-4-6"
+
+    def test_no_model(self) -> None:
+        config = ProjectConfig()
+        result = _resolve_model(None, config)
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Plan file discovery tests
+# ---------------------------------------------------------------------------
+
+
+class TestDiscoverPlanFiles:
+    def test_discover_sorts_by_name(self, tmp_path: Path) -> None:
+        (tmp_path / "plan-2-feature-b.md").write_text("# Feature B\n")
+        (tmp_path / "plan-1-feature-a.md").write_text("# Feature A\n")
+        (tmp_path / "plan-3-feature-c.md").write_text("# Feature C\n")
+
+        files = discover_plan_files(tmp_path)
+        assert len(files) == 3
+        assert files[0].name == "plan-1-feature-a.md"
+        assert files[1].name == "plan-2-feature-b.md"
+        assert files[2].name == "plan-3-feature-c.md"
+
+    def test_discover_ignores_non_md(self, tmp_path: Path) -> None:
+        (tmp_path / "plan.md").write_text("# Plan\n")
+        (tmp_path / "notes.txt").write_text("Some notes\n")
+        (tmp_path / ".transcript").write_text("log data\n")
+
+        files = discover_plan_files(tmp_path)
+        assert len(files) == 1
+        assert files[0].name == "plan.md"
+
+    def test_discover_empty_dir(self, tmp_path: Path) -> None:
+        files = discover_plan_files(tmp_path)
+        assert files == []
+
+    def test_discover_nonexistent_dir(self) -> None:
+        files = discover_plan_files(Path("/nonexistent"))
+        assert files == []
+
+
+class TestValidatePlanFiles:
+    def test_validate_all_valid(self, tmp_path: Path) -> None:
+        (tmp_path / "plan-1.md").write_text("# Feature A\n\n## Tasks\n- Do A\n")
+        (tmp_path / "plan-2.md").write_text("# Feature B\n\n## Tasks\n- Do B\n")
+
+        valid = validate_plan_files(tmp_path)
+        assert len(valid) == 2
+        assert valid[0].title == "Feature A"
+        assert valid[1].title == "Feature B"
+
+    def test_validate_skips_invalid(self, tmp_path: Path) -> None:
+        (tmp_path / "good.md").write_text("# Valid Plan\n\nContent\n")
+        (tmp_path / "bad.md").write_text("No title heading\n")
+
+        valid = validate_plan_files(tmp_path)
+        assert len(valid) == 1
+        assert valid[0].title == "Valid Plan"
+
+    def test_validate_extracts_complexity(self, tmp_path: Path) -> None:
+        (tmp_path / "plan.md").write_text(
+            "# Complex Feature\n\n"
+            "## Complexity\n"
+            "very_complex\n\n"
+            "## Tasks\n"
+            "- Many things\n"
+        )
+
+        valid = validate_plan_files(tmp_path)
+        assert len(valid) == 1
+        assert valid[0].complexity is not None
+        assert valid[0].complexity.value == "very_complex"
+
+    def test_validate_empty_dir(self, tmp_path: Path) -> None:
+        valid = validate_plan_files(tmp_path)
+        assert valid == []
+
+
+# ---------------------------------------------------------------------------
+# Plan file model tests
+# ---------------------------------------------------------------------------
+
+
+class TestPlanFile:
+    def test_from_markdown_basic(self, tmp_path: Path) -> None:
+        f = tmp_path / "plan.md"
+        f.write_text("# Add Auth\n\n## Tasks\n\n- Add login page\n")
+
+        plan = PlanFile.from_markdown(f)
+        assert plan.title == "Add Auth"
+        assert "Add login page" in plan.body
+        assert "tasks" in plan.sections
+
+    def test_from_markdown_complexity(self, tmp_path: Path) -> None:
+        f = tmp_path / "plan.md"
+        f.write_text(
+            "# Feature\n\n## Complexity\nmedium\n\n## Tasks\n- Task 1\n"
+        )
+
+        plan = PlanFile.from_markdown(f)
+        assert plan.complexity is not None
+        assert plan.complexity.value == "medium"
+
+    def test_from_markdown_no_title_raises(self, tmp_path: Path) -> None:
+        f = tmp_path / "bad.md"
+        f.write_text("No heading here\n\nJust text.\n")
+
+        with pytest.raises(ValueError, match="must have a '# Title'"):
+            PlanFile.from_markdown(f)
+
+    def test_from_markdown_multiple_sections(self, tmp_path: Path) -> None:
+        f = tmp_path / "plan.md"
+        f.write_text(
+            "# Feature\n\n"
+            "## Complexity\neasy\n\n"
+            "## Tasks\n- Do A\n- Do B\n\n"
+            "## Acceptance Criteria\n- Works\n"
+        )
+
+        plan = PlanFile.from_markdown(f)
+        assert "complexity" in plan.sections
+        assert "tasks" in plan.sections
+        assert "acceptance criteria" in plan.sections

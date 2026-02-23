@@ -1,0 +1,1335 @@
+"""Work service — session lifecycle: start, done, sync, list, batch, remove.
+
+Orchestrates: worktree creation, bootstrap, AI tool launch, PR/merge,
+sync, list, batch topology.
+
+Behavioral reference: lib/work/bootstrap.sh, lib/work/terminal.sh,
+lib/work/done.sh, lib/work/sync.sh
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import re
+import shutil
+from pathlib import Path
+
+import structlog
+
+from ghaiw.ai_tools.base import AbstractAITool
+from ghaiw.config.loader import load_config
+from ghaiw.git import branch as git_branch
+from ghaiw.git import pr as git_pr
+from ghaiw.git import repo as git_repo
+from ghaiw.git import sync as git_sync
+from ghaiw.git import worktree as git_worktree
+from ghaiw.git.repo import GitError
+from ghaiw.models.ai import AIToolID, TokenUsage
+from ghaiw.models.config import ProjectConfig
+from ghaiw.models.deps import DependencyGraph
+from ghaiw.models.task import Task
+from ghaiw.models.work import MergeStrategy, SyncEvent, SyncResult, WorktreeState
+from ghaiw.providers.base import AbstractTaskProvider
+from ghaiw.providers.registry import get_provider
+from ghaiw.services.task_service import (
+    PLAN_SUMMARY_MARKER_END,
+    PLAN_SUMMARY_MARKER_START,
+    add_in_progress_label,
+    add_worked_by_labels,
+    remove_in_progress_label,
+)
+from ghaiw.ui.console import console
+from ghaiw.utils.clipboard import copy_to_clipboard
+
+logger = structlog.get_logger()
+
+# --- Implementation usage block markers ---
+IMPL_USAGE_MARKER_START = "<!-- ghaiw:impl-usage:start -->"
+IMPL_USAGE_MARKER_END = "<!-- ghaiw:impl-usage:end -->"
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap helpers
+# ---------------------------------------------------------------------------
+
+
+def _resolve_worktrees_dir(config: ProjectConfig, repo_root: Path) -> Path:
+    """Resolve the worktrees directory from config."""
+    wt_dir = config.project.worktrees_dir
+    if Path(wt_dir).is_absolute():
+        return Path(wt_dir)
+    return (repo_root / wt_dir).resolve()
+
+
+def _complexity_to_model(
+    config: ProjectConfig,
+    ai_tool: str,
+    complexity: str | None,
+) -> str | None:
+    """Map task complexity to model ID from config.
+
+    Behavioral reference: lib/work/bootstrap.sh:_work_complexity_to_model()
+    """
+    if not complexity:
+        return None
+    return config.get_complexity_model(ai_tool, complexity)
+
+
+def write_issue_context(worktree_path: Path, task: Task) -> Path:
+    """Write .issue-context.md to the worktree.
+
+    Behavioral reference: lib/work/bootstrap.sh:_work_write_issue_context()
+    """
+    context_path = worktree_path / ".issue-context.md"
+    lines = [
+        f"# Issue #{task.id}: {task.title}",
+        "",
+    ]
+    if task.body:
+        lines.append(task.body)
+    if task.url:
+        lines.append("")
+        lines.append(f"URL: {task.url}")
+
+    context_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    logger.info("work.context_written", path=str(context_path))
+    return context_path
+
+
+def bootstrap_worktree(
+    worktree_path: Path,
+    config: ProjectConfig,
+    repo_root: Path,
+) -> None:
+    """Run post-creation bootstrap: copy files, run hooks.
+
+    Behavioral reference: lib/work/bootstrap.sh:_work_bootstrap_worktree()
+    """
+    # Copy configured files
+    for filename in config.hooks.copy_to_worktree:
+        src = repo_root / filename
+        dest = worktree_path / filename
+        if src.is_file():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
+            logger.debug("work.bootstrap_copy", file=filename)
+
+    # Run post-create hook
+    if config.hooks.post_worktree_create:
+        import subprocess
+
+        hook_path = repo_root / config.hooks.post_worktree_create
+        if hook_path.is_file():
+            try:
+                subprocess.run(
+                    [str(hook_path)],
+                    cwd=str(worktree_path),
+                    check=True,
+                    capture_output=True,
+                )
+                logger.info("work.hook_ran", hook=config.hooks.post_worktree_create)
+            except subprocess.CalledProcessError as e:
+                logger.warning(
+                    "work.hook_failed",
+                    hook=config.hooks.post_worktree_create,
+                    error=e.stderr,
+                )
+
+
+def build_work_prompt(task: Task, ai_tool: str | None = None) -> str:
+    """Build the clipboard prompt for a work session.
+
+    Behavioral reference: lib/work/bootstrap.sh:_work_copy_prompt()
+    """
+    return (
+        f"Working on Issue #{task.id}: {task.title}\n\n"
+        f"Read the issue context in .issue-context.md for details.\n"
+        f"Follow @.claude/skills/workflow/SKILL.md for session rules.\n"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Work start
+# ---------------------------------------------------------------------------
+
+
+def start(
+    target: str,
+    ai_tool: str | None = None,
+    model: str | None = None,
+    project_root: Path | None = None,
+) -> bool:
+    """Start a work session on an issue.
+
+    Behavioral reference: lib/work/terminal.sh:_work_do_start()
+
+    Steps:
+    1. Read the issue from the provider
+    2. Create worktree and branch
+    3. Bootstrap worktree (copy files, hooks, issue context)
+    4. Resolve model from complexity
+    5. Copy work prompt to clipboard
+    6. Launch AI tool
+    7. Post-exit processing
+
+    Args:
+        target: Issue number or plan file path.
+        ai_tool: AI tool to use (overrides config).
+        model: Model to use (overrides config + complexity mapping).
+        project_root: Repository root (defaults to CWD).
+
+    Returns:
+        True on success, False on failure.
+    """
+    config = load_config(project_root)
+    provider = get_provider(config)
+
+    # Resolve repo root
+    cwd = project_root or Path.cwd()
+    try:
+        repo_root = git_repo.get_repo_root(cwd)
+    except GitError:
+        console.error("Not inside a git repository")
+        return False
+
+    # Read the issue
+    task = _resolve_target(target, provider, config)
+    if not task:
+        return False
+
+    console.header(f"ghaiw work start #{task.id}")
+    console.info(f"Issue: {task.title}")
+
+    # Resolve AI tool
+    resolved_tool = ai_tool or config.get_ai_tool("work")
+    if not resolved_tool:
+        installed = AbstractAITool.detect_installed()
+        resolved_tool = installed[0].value if installed else None
+
+    # Resolve model from complexity or explicit arg
+    resolved_model = model
+    if not resolved_model and resolved_tool and task.complexity:
+        resolved_model = _complexity_to_model(
+            config, resolved_tool, task.complexity.value
+        )
+
+    # Resolve main branch
+    main_branch = config.project.main_branch or git_repo.detect_main_branch(repo_root)
+
+    # Create worktree
+    branch_name = git_branch.make_branch_name(
+        config.project.branch_prefix,
+        int(task.id),
+        task.title,
+    )
+
+    worktrees_dir = _resolve_worktrees_dir(config, repo_root)
+    worktree_path = worktrees_dir / branch_name.replace("/", "-")
+
+    console.step(f"Creating worktree: {branch_name}")
+
+    try:
+        git_worktree.create_worktree(
+            repo_root=repo_root,
+            branch_name=branch_name,
+            worktree_dir=worktree_path,
+            base_branch=main_branch,
+        )
+        console.success(f"Worktree at {worktree_path}")
+    except GitError as e:
+        console.error(f"Failed to create worktree: {e}")
+        return False
+
+    # Bootstrap
+    write_issue_context(worktree_path, task)
+    bootstrap_worktree(worktree_path, config, repo_root)
+
+    # Add in-progress label
+    try:
+        add_in_progress_label(provider, task.id)
+    except Exception:
+        pass  # Non-fatal
+
+    # Copy work prompt
+    prompt = build_work_prompt(task, resolved_tool)
+    copy_to_clipboard(prompt)
+    console.success("Copied work prompt to clipboard.")
+
+    # Launch AI tool
+    if resolved_tool:
+        console.step(f"Launching {resolved_tool}...")
+        if resolved_model:
+            console.detail(f"Model: {resolved_model}")
+
+        try:
+            adapter = AbstractAITool.get(AIToolID(resolved_tool))
+            exit_code = adapter.launch(
+                worktree_path=worktree_path,
+                model=resolved_model,
+            )
+            logger.info("work.ai_exited", exit_code=exit_code, tool=resolved_tool)
+        except (ValueError, KeyError):
+            console.warn(f"Unknown AI tool: {resolved_tool}")
+        except Exception as e:
+            console.warn(f"AI tool launch failed: {e}")
+
+        # Add worked-by labels
+        try:
+            add_worked_by_labels(provider, task.id, resolved_tool, resolved_model)
+        except Exception:
+            pass
+    else:
+        console.info("No AI tool configured. Worktree ready for manual work.")
+        console.detail(f"cd {worktree_path}")
+
+    console.empty()
+    console.banner("Work session ready")
+    console.detail(f"Worktree: {worktree_path}")
+    console.detail(f"Branch: {branch_name}")
+    console.detail(f"Issue: #{task.id} — {task.title}")
+
+    return True
+
+
+def _resolve_target(
+    target: str,
+    provider: AbstractTaskProvider,
+    config: ProjectConfig,
+) -> Task | None:
+    """Resolve a target (issue number or plan file) to a Task.
+
+    If the target is a path to a plan file, create the issue first.
+    """
+    # Check if target is a file path
+    target_path = Path(target).expanduser()
+    if target_path.is_file():
+        from ghaiw.services.task_service import create_from_plan_file
+
+        console.info(f"Creating issue from plan file: {target}")
+        task = create_from_plan_file(target_path, config=config, provider=provider)
+        return task
+
+    # Treat as issue number
+    try:
+        task = provider.read_task(target)
+        return task
+    except Exception as e:
+        console.error(f"Could not read issue #{target}: {e}")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Work batch
+# ---------------------------------------------------------------------------
+
+
+def batch(
+    issue_numbers: list[str],
+    ai_tool: str | None = None,
+    project_root: Path | None = None,
+) -> bool:
+    """Start parallel work sessions for multiple issues.
+
+    Independent issues launch in parallel terminals.
+    Dependent issues launch sequentially (topo-sorted).
+
+    Behavioral reference: lib/work/terminal.sh:_work_do_batch()
+    """
+    from ghaiw.utils.terminal import launch_in_new_terminal
+
+    config = load_config(project_root)
+    cwd = project_root or Path.cwd()
+
+    try:
+        repo_root = git_repo.get_repo_root(cwd)
+    except GitError:
+        console.error("Not inside a git repository")
+        return False
+
+    console.header(f"ghaiw work batch ({len(issue_numbers)} issues)")
+
+    # Resolve AI tool
+    resolved_tool = ai_tool or config.get_ai_tool("work")
+
+    # Check for dependency ordering
+    # Try to load deps from issue bodies (look for "Depends on" references)
+    graph = _build_graph_from_issues(issue_numbers, config)
+
+    if graph and graph.edges:
+        independent, chains = graph.partition(issue_numbers)
+        console.info(
+            f"Dependency analysis: {len(independent)} independent, "
+            f"{len(chains)} chain(s)"
+        )
+    else:
+        independent = issue_numbers
+        chains = []
+
+    launched = 0
+
+    # Launch independent issues in parallel terminals
+    for issue_id in independent:
+        cmd = ["ghaiw", "work", "start", issue_id]
+        if resolved_tool:
+            cmd.extend(["--ai", resolved_tool])
+
+        console.step(f"Launching #{issue_id} in new terminal")
+        if launch_in_new_terminal(cmd, cwd=str(repo_root), title=f"ghaiw #{issue_id}"):
+            launched += 1
+        else:
+            console.warn(f"Could not launch terminal for #{issue_id}")
+
+    # Launch chains sequentially
+    for chain in chains:
+        console.info(f"Sequential chain: {' → '.join(f'#{n}' for n in chain)}")
+        for issue_id in chain:
+            cmd = ["ghaiw", "work", "start", issue_id]
+            if resolved_tool:
+                cmd.extend(["--ai", resolved_tool])
+
+            console.step(f"Launching #{issue_id} in new terminal")
+            if launch_in_new_terminal(
+                cmd, cwd=str(repo_root), title=f"ghaiw #{issue_id}"
+            ):
+                launched += 1
+            else:
+                console.warn(f"Could not launch terminal for #{issue_id}")
+
+    console.banner(f"Launched {launched} work session(s)")
+    return launched > 0
+
+
+def _build_graph_from_issues(
+    issue_numbers: list[str],
+    config: ProjectConfig,
+) -> DependencyGraph | None:
+    """Try to build a dependency graph from issue body cross-references."""
+    import re
+
+    from ghaiw.models.deps import DependencyEdge, DependencyGraph
+
+    provider = get_provider(config)
+    edges: list[DependencyEdge] = []
+    valid_set = set(issue_numbers)
+
+    for num in issue_numbers:
+        try:
+            task = provider.read_task(num)
+        except Exception:
+            continue
+
+        # Parse "Depends on: #X, #Y" from issue body
+        match = re.search(
+            r"\*\*Depends on:\*\*\s*(.*?)$",
+            task.body,
+            re.MULTILINE,
+        )
+        if match:
+            deps_str = match.group(1)
+            for dep_match in re.finditer(r"#(\d+)", deps_str):
+                dep_id = dep_match.group(1)
+                if dep_id in valid_set:
+                    edges.append(DependencyEdge(from_task=dep_id, to_task=num))
+
+    if edges:
+        return DependencyGraph(edges=edges)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Work cd
+# ---------------------------------------------------------------------------
+
+
+def find_worktree_path(
+    target: str,
+    project_root: Path | None = None,
+) -> Path | None:
+    """Find the worktree path for a given issue number or branch name.
+
+    Behavioral reference: lib/work/done.sh:_work_find_worktree_by_name()
+    """
+    cwd = project_root or Path.cwd()
+    try:
+        repo_root = git_repo.get_repo_root(cwd)
+    except GitError:
+        return None
+
+    worktrees = git_worktree.list_worktrees(repo_root)
+
+    for wt in worktrees:
+        wt_branch = wt.get("branch", "")
+        wt_path = wt.get("path", "")
+
+        # Match by issue number in branch name
+        if f"/{target}-" in wt_branch or wt_branch.endswith(f"/{target}"):
+            return Path(wt_path)
+
+        # Match by worktree directory name
+        if target in Path(wt_path).name:
+            return Path(wt_path)
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Branch / issue helpers
+# ---------------------------------------------------------------------------
+
+
+def extract_issue_from_branch(branch: str) -> str | None:
+    """Extract the issue number from a branch name like ``feat/42-slug``.
+
+    Behavioral reference: lib/work/done.sh:_work_extract_issue_from_branch()
+    """
+    m = re.search(r"/(\d+)", branch)
+    return m.group(1) if m else None
+
+
+# ---------------------------------------------------------------------------
+# Staleness classification
+# ---------------------------------------------------------------------------
+
+
+def classify_staleness(
+    repo_root: Path,
+    branch: str,
+    main_branch: str,
+    issue_number: str | None = None,
+    provider: AbstractTaskProvider | None = None,
+) -> WorktreeState:
+    """Classify a worktree's staleness.
+
+    Behavioral reference: lib/work/done.sh:_work_staleness()
+
+    Returns one of:
+    - ACTIVE — issue is open or could not determine
+    - STALE_EMPTY — no commits ahead of main
+    - STALE_MERGED — branch merged into main
+    - STALE_REMOTE_GONE — remote tracking branch deleted
+    """
+    # 1. If issue number, check issue state
+    if issue_number and provider:
+        try:
+            task = provider.read_task(issue_number)
+            from ghaiw.models.task import TaskState
+
+            if task.state == TaskState.OPEN:
+                return WorktreeState.ACTIVE
+        except Exception:
+            # Can't read issue — treat as active (fail-safe)
+            return WorktreeState.ACTIVE
+
+    # 2. Count commits ahead of main
+    try:
+        ahead = git_branch.commits_ahead(repo_root, branch, main_branch)
+    except GitError:
+        return WorktreeState.ACTIVE
+
+    if ahead == 0:
+        return WorktreeState.STALE_EMPTY
+
+    # 3. Check if merged (merge-base equals branch tip)
+    try:
+        merge_base = git_repo._run_git(
+            "merge-base", branch, main_branch, cwd=repo_root
+        )
+        branch_tip = git_repo._run_git(
+            "rev-parse", branch, cwd=repo_root
+        )
+        if merge_base.stdout.strip() == branch_tip.stdout.strip():
+            return WorktreeState.STALE_MERGED
+    except GitError:
+        pass
+
+    # 4. Check if remote tracking branch gone
+    try:
+        result = git_repo._run_git(
+            "for-each-ref",
+            "--format=%(upstream:trackshort)",
+            f"refs/heads/{branch}",
+            cwd=repo_root,
+            check=False,
+        )
+        if result.stdout.strip() == "gone":
+            return WorktreeState.STALE_REMOTE_GONE
+    except GitError:
+        pass
+
+    return WorktreeState.ACTIVE
+
+
+# ---------------------------------------------------------------------------
+# Implementation usage block (for PR bodies)
+# ---------------------------------------------------------------------------
+
+
+def build_impl_usage_block(
+    ai_tool: str | None = None,
+    model: str | None = None,
+    token_usage: TokenUsage | None = None,
+) -> str:
+    """Build the ## Implementation Usage section for PR body.
+
+    Behavioral reference: lib/work/done.sh:_work_build_impl_usage_block()
+    """
+    from ghaiw.ai_tools.transcript import format_count
+
+    lines = [
+        IMPL_USAGE_MARKER_START,
+        "",
+        "## Implementation Usage",
+        "",
+        "### Usage",
+        "",
+        "| Metric | Value |",
+        "| --- | --- |",
+    ]
+
+    if ai_tool:
+        lines.append(f"| Implementation tool | `{ai_tool}` |")
+    if model:
+        lines.append(f"| Model | `{model}` |")
+
+    if token_usage:
+        if token_usage.total_tokens:
+            lines.append(
+                f"| Session tokens | **{format_count(token_usage.total_tokens)}** |"
+            )
+        if token_usage.input_tokens:
+            lines.append(
+                f"| Session input tokens | **{format_count(token_usage.input_tokens)}** |"
+            )
+        if token_usage.output_tokens:
+            lines.append(
+                f"| Session output tokens | **{format_count(token_usage.output_tokens)}** |"
+            )
+        if token_usage.cached_tokens:
+            lines.append(
+                f"| Session cached input tokens | **{format_count(token_usage.cached_tokens)}** |"
+            )
+
+    lines.append("")
+    lines.append(IMPL_USAGE_MARKER_END)
+
+    return "\n".join(lines)
+
+
+def _strip_impl_usage_block(body: str) -> str:
+    """Remove existing implementation usage block from body (idempotent)."""
+    start_idx = body.find(IMPL_USAGE_MARKER_START)
+    end_idx = body.find(IMPL_USAGE_MARKER_END)
+
+    if start_idx == -1 or end_idx == -1:
+        return body
+
+    before = body[:start_idx].rstrip("\n")
+    after = body[end_idx + len(IMPL_USAGE_MARKER_END) :].lstrip("\n")
+
+    result = before
+    if after.strip():
+        result += "\n\n" + after
+    return result.rstrip() + "\n" if result.strip() else ""
+
+
+def _extract_plan_summary(body: str) -> str:
+    """Extract plan summary block from an issue body, if present."""
+    start_idx = body.find(PLAN_SUMMARY_MARKER_START)
+    end_idx = body.find(PLAN_SUMMARY_MARKER_END)
+
+    if start_idx == -1 or end_idx == -1:
+        return ""
+
+    return body[start_idx : end_idx + len(PLAN_SUMMARY_MARKER_END)]
+
+
+# ---------------------------------------------------------------------------
+# PR body composition
+# ---------------------------------------------------------------------------
+
+
+def _build_pr_body(
+    task: Task,
+    pr_summary_path: Path | None = None,
+    close_issue: bool = True,
+    parent_issue: str | None = None,
+) -> str:
+    """Compose the PR body.
+
+    Order:
+    1. Closes #N
+    2. Part of #parent (if detected)
+    3. Plan summary (from issue body)
+    4. ## Summary (from PR-SUMMARY file)
+
+    Behavioral reference: lib/work/done.sh:_work_done_via_pr()
+    """
+    lines: list[str] = []
+
+    if close_issue:
+        lines.append(f"Closes #{task.id}")
+    if parent_issue:
+        lines.append(f"Part of #{parent_issue}")
+
+    if lines:
+        lines.append("")
+
+    # Plan summary from issue body
+    plan_summary = _extract_plan_summary(task.body)
+    if plan_summary:
+        lines.append(plan_summary)
+        lines.append("")
+
+    # PR summary from file
+    if pr_summary_path and pr_summary_path.is_file():
+        summary_content = pr_summary_path.read_text(encoding="utf-8").strip()
+        if summary_content:
+            lines.append("## Summary")
+            lines.append("")
+            lines.append(summary_content)
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Work sync
+# ---------------------------------------------------------------------------
+
+
+def sync(
+    dry_run: bool = False,
+    main_branch: str | None = None,
+    json_output: bool = False,
+    project_root: Path | None = None,
+) -> SyncResult:
+    """Sync current branch with main.
+
+    Behavioral reference: lib/work/sync.sh:_work_do_sync()
+
+    Flow:
+    1. Pre-flight checks (in git repo, not on main, clean worktree)
+    2. Fetch origin
+    3. Count commits behind
+    4. Merge (unless dry-run or up-to-date)
+    5. Emit structured events
+    """
+    config = load_config(project_root)
+    cwd = project_root or Path.cwd()
+    events: list[SyncEvent] = []
+
+    def emit(event: str, **data: str | int) -> None:
+        ev = SyncEvent(event=event, data=data)
+        events.append(ev)
+        if json_output:
+            console.raw(json.dumps({"event": event, **data}))
+
+    # Pre-flight checks
+    try:
+        repo_root = git_repo.get_repo_root(cwd)
+    except GitError:
+        emit("error", reason="not_git_repo")
+        return SyncResult(
+            success=False,
+            current_branch="",
+            main_branch=main_branch or "",
+            events=events,
+        )
+
+    try:
+        current = git_repo.get_current_branch(cwd)
+    except GitError:
+        emit("error", reason="detached_head")
+        return SyncResult(
+            success=False,
+            current_branch="",
+            main_branch=main_branch or "",
+            events=events,
+        )
+
+    resolved_main = main_branch or config.project.main_branch
+    if not resolved_main:
+        try:
+            resolved_main = git_repo.detect_main_branch(repo_root)
+        except GitError:
+            emit("error", reason="no_main_branch")
+            return SyncResult(
+                success=False,
+                current_branch=current,
+                main_branch="",
+                events=events,
+            )
+
+    if current == resolved_main:
+        emit("error", reason="on_main_branch")
+        return SyncResult(
+            success=False,
+            current_branch=current,
+            main_branch=resolved_main,
+            events=events,
+        )
+
+    # Check clean
+    if not git_repo.is_clean(cwd):
+        emit("error", reason="dirty_worktree")
+        return SyncResult(
+            success=False,
+            current_branch=current,
+            main_branch=resolved_main,
+            events=events,
+        )
+
+    emit("preflight_ok", current_branch=current, main_branch=resolved_main)
+    if not json_output:
+        console.step(f"Syncing {current} with {resolved_main}")
+
+    # Fetch
+    merge_ref = resolved_main
+    try:
+        remote_result = git_repo._run_git("remote", cwd=repo_root, check=False)
+        has_remote = bool(remote_result.stdout.strip())
+    except GitError:
+        has_remote = False
+
+    if has_remote:
+        try:
+            git_sync.fetch_origin(repo_root)
+            merge_ref = f"origin/{resolved_main}"
+            if not json_output:
+                console.detail(f"Fetched latest from origin/{resolved_main}")
+        except GitError:
+            if not json_output:
+                console.warn("Fetch failed; using local main")
+
+    # Count commits behind
+    try:
+        behind = git_branch.commits_ahead(repo_root, merge_ref, current)
+    except GitError:
+        behind = 0
+
+    if behind == 0:
+        emit("up_to_date", branch=current, main=resolved_main)
+        if not json_output:
+            console.success("Already up to date.")
+        emit("done", branch=current, main=resolved_main)
+        return SyncResult(
+            success=True,
+            current_branch=current,
+            main_branch=resolved_main,
+            events=events,
+        )
+
+    if dry_run:
+        emit("dry_run", action="merge_main_into_feature", behind=behind)
+        if not json_output:
+            console.info(f"Dry run: {behind} commit(s) would be merged.")
+        emit("done", branch=current, main=resolved_main)
+        return SyncResult(
+            success=True,
+            current_branch=current,
+            main_branch=resolved_main,
+            events=events,
+        )
+
+    # Merge
+    if not json_output:
+        console.step(f"Merging {merge_ref} ({behind} commit(s) behind)")
+
+    merge_result = git_sync.merge_branch(repo_root, merge_ref)
+
+    if merge_result.success:
+        emit("merged", commits_merged=merge_result.commits_merged or behind)
+        if not json_output:
+            console.success(f"Merged {merge_result.commits_merged or behind} commit(s).")
+        emit("done", branch=current, main=resolved_main)
+        return SyncResult(
+            success=True,
+            current_branch=current,
+            main_branch=resolved_main,
+            commits_merged=merge_result.commits_merged or behind,
+            events=events,
+        )
+
+    # Conflicts
+    conflicts = merge_result.conflicts
+    emit("conflict", source=resolved_main, target=current, files="\n".join(conflicts))
+    if not json_output:
+        console.error(f"Merge conflict in {len(conflicts)} file(s):")
+        for f in conflicts:
+            console.detail(f)
+
+    # Get conflict diff
+    try:
+        diff_result = git_repo._run_git("diff", cwd=repo_root, check=False)
+        if diff_result.stdout.strip():
+            emit("conflict_diff", diff=diff_result.stdout)
+    except GitError:
+        pass
+
+    return SyncResult(
+        success=False,
+        current_branch=current,
+        main_branch=resolved_main,
+        conflicts=conflicts,
+        events=events,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Work done
+# ---------------------------------------------------------------------------
+
+
+def done(
+    no_close: bool = False,
+    draft: bool = False,
+    project_root: Path | None = None,
+) -> bool:
+    """Complete work session — create PR or merge directly.
+
+    Behavioral reference: lib/work/done.sh:_work_do_done()
+
+    Detects current branch, extracts issue number, reads merge strategy
+    from config, and delegates to _done_via_pr or _done_via_direct.
+    """
+    config = load_config(project_root)
+    cwd = project_root or Path.cwd()
+
+    try:
+        repo_root = git_repo.get_repo_root(cwd)
+    except GitError:
+        console.error("Not inside a git repository")
+        return False
+
+    # Detect branch and issue
+    try:
+        branch = git_repo.get_current_branch(cwd)
+    except GitError:
+        console.error("Cannot determine current branch (detached HEAD?)")
+        return False
+
+    issue_number = extract_issue_from_branch(branch)
+    if not issue_number:
+        console.error(f"Cannot extract issue number from branch: {branch}")
+        return False
+
+    # Check clean
+    if not git_repo.is_clean(cwd):
+        console.error("Working tree is dirty. Commit or stash changes first.")
+        return False
+
+    main_branch = config.project.main_branch
+    if not main_branch:
+        try:
+            main_branch = git_repo.detect_main_branch(repo_root)
+        except GitError:
+            console.error("Cannot detect main branch")
+            return False
+
+    console.header(f"Completing work on #{issue_number}")
+
+    strategy = config.project.merge_strategy
+
+    if strategy == MergeStrategy.DIRECT:
+        return _done_via_direct(
+            repo_root=repo_root,
+            branch=branch,
+            issue_number=issue_number,
+            main_branch=main_branch,
+            close_issue=not no_close,
+            config=config,
+        )
+    else:
+        return _done_via_pr(
+            repo_root=repo_root,
+            branch=branch,
+            issue_number=issue_number,
+            main_branch=main_branch,
+            close_issue=not no_close,
+            draft=draft,
+            config=config,
+        )
+
+
+def _done_via_pr(
+    repo_root: Path,
+    branch: str,
+    issue_number: str,
+    main_branch: str,
+    close_issue: bool,
+    draft: bool,
+    config: ProjectConfig,
+) -> bool:
+    """Create a PR and finalize work.
+
+    Behavioral reference: lib/work/done.sh:_work_done_via_pr()
+    """
+    provider = get_provider(config)
+
+    # Read issue for title and body
+    try:
+        task = provider.read_task(issue_number)
+    except Exception as e:
+        console.error(f"Cannot read issue #{issue_number}: {e}")
+        return False
+
+    # Push branch
+    console.step("Pushing branch...")
+    try:
+        git_repo._run_git("push", "-u", "origin", branch, cwd=repo_root)
+        console.success("Branch pushed.")
+    except GitError as e:
+        console.error(f"Push failed: {e}")
+        return False
+
+    # Detect parent tracking issue
+    parent_issue: str | None = None
+    try:
+        parent_issue = provider.find_parent_issue(
+            issue_number, label=config.project.issue_label
+        )
+        if parent_issue:
+            console.detail(f"Detected parent tracking issue: #{parent_issue}")
+    except Exception:
+        pass
+
+    # Build PR body
+    pr_summary_path = Path(f"/tmp/PR-SUMMARY-{issue_number}.md")
+    body = _build_pr_body(
+        task,
+        pr_summary_path=pr_summary_path,
+        close_issue=close_issue,
+        parent_issue=parent_issue,
+    )
+
+    # Create PR
+    console.step("Creating pull request...")
+    try:
+        pr_info = git_pr.create_pr(
+            repo_root=repo_root,
+            title=task.title,
+            body=body,
+            base=main_branch,
+            head=branch,
+            draft=draft,
+        )
+        pr_url = pr_info.get("url", "")
+        console.success(f"PR created: {pr_url}")
+    except Exception as e:
+        console.error(f"PR creation failed: {e}")
+        return False
+
+    # Remove in-progress label
+    try:
+        remove_in_progress_label(provider, issue_number)
+    except Exception:
+        pass
+
+    console.empty()
+    console.banner("Work done")
+    console.detail(f"PR: {pr_url}")
+    console.detail(f"Issue: #{issue_number} — {task.title}")
+
+    return True
+
+
+def _done_via_direct(
+    repo_root: Path,
+    branch: str,
+    issue_number: str,
+    main_branch: str,
+    close_issue: bool,
+    config: ProjectConfig,
+) -> bool:
+    """Merge directly into main and clean up.
+
+    Behavioral reference: lib/work/done.sh:_work_done_via_direct()
+    """
+    provider = get_provider(config)
+
+    # Sync first
+    console.step(f"Merging {main_branch} into {branch}...")
+    try:
+        git_sync.fetch_origin(repo_root)
+    except GitError:
+        pass  # Continue with local
+
+    try:
+        merge_result = git_sync.merge_branch(repo_root, main_branch)
+        if not merge_result.success:
+            console.error("Merge conflicts detected. Resolve them first.")
+            return False
+    except GitError as e:
+        console.error(f"Merge failed: {e}")
+        return False
+
+    # Switch to main and merge feature branch
+    console.step(f"Merging {branch} into {main_branch}...")
+    try:
+        git_repo._run_git("checkout", main_branch, cwd=repo_root)
+        git_repo._run_git("merge", "--no-edit", branch, cwd=repo_root)
+        git_repo._run_git("push", "origin", main_branch, cwd=repo_root)
+        console.success("Merged and pushed.")
+    except GitError as e:
+        console.error(f"Direct merge failed: {e}")
+        return False
+
+    # Remove in-progress label
+    try:
+        remove_in_progress_label(provider, issue_number)
+    except Exception:
+        pass
+
+    # Close issue
+    if close_issue:
+        try:
+            provider.close_task(issue_number)
+            console.success(f"Closed #{issue_number}")
+        except Exception as e:
+            console.warn(f"Could not close issue #{issue_number}: {e}")
+
+    # Cleanup worktree
+    console.step("Cleaning up worktree...")
+    try:
+        git_branch.delete_branch(repo_root, branch, force=True)
+        git_worktree.prune_worktrees(repo_root)
+        console.success("Worktree cleaned up.")
+    except GitError:
+        pass
+
+    console.empty()
+    console.banner("Work done (direct merge)")
+    console.detail(f"Branch {branch} merged into {main_branch}")
+    console.detail(f"Issue: #{issue_number}")
+
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Work list
+# ---------------------------------------------------------------------------
+
+
+def list_sessions(
+    show_all: bool = False,
+    json_output: bool = False,
+    project_root: Path | None = None,
+) -> list[dict]:
+    """List active work sessions / worktrees.
+
+    Behavioral reference: lib/work/done.sh:_work_do_list()
+
+    Returns a list of dicts with worktree info (path, branch, issue, staleness).
+    """
+    config = load_config(project_root)
+    cwd = project_root or Path.cwd()
+
+    try:
+        repo_root = git_repo.get_repo_root(cwd)
+    except GitError:
+        console.error("Not inside a git repository")
+        return []
+
+    main_branch = config.project.main_branch
+    if not main_branch:
+        try:
+            main_branch = git_repo.detect_main_branch(repo_root)
+        except GitError:
+            main_branch = "main"
+
+    worktrees = git_worktree.list_worktrees(repo_root)
+    sessions: list[dict] = []
+
+    # The first worktree is the main checkout — skip unless --all
+    for i, wt in enumerate(worktrees):
+        wt_branch = wt.get("branch", "")
+        wt_path = wt.get("path", "")
+
+        # Skip main checkout unless --all
+        if i == 0 and not show_all:
+            continue
+
+        # Skip non-ghaiw branches unless --all
+        issue_number = extract_issue_from_branch(wt_branch)
+        if not issue_number and not show_all:
+            continue
+
+        # Classify staleness
+        staleness = classify_staleness(
+            repo_root=repo_root,
+            branch=wt_branch,
+            main_branch=main_branch,
+            issue_number=issue_number,
+        )
+
+        # Count commits ahead
+        try:
+            ahead = git_branch.commits_ahead(repo_root, wt_branch, main_branch)
+        except GitError:
+            ahead = 0
+
+        session_info = {
+            "path": wt_path,
+            "branch": wt_branch,
+            "issue": issue_number,
+            "staleness": staleness.value,
+            "commits_ahead": ahead,
+        }
+        sessions.append(session_info)
+
+    if json_output:
+        console.raw(json.dumps(sessions, indent=2))
+        return sessions
+
+    if not sessions:
+        console.info("No active ghaiw worktrees found.")
+        return sessions
+
+    console.header(f"Work sessions ({len(sessions)})")
+    for s in sessions:
+        staleness_label = s["staleness"].upper().replace("_", " ")
+        issue_str = f"#{s['issue']}" if s["issue"] else "(no issue)"
+        console.step(f"[{staleness_label}] {issue_str}")
+        console.detail(f"Path: {s['path']}")
+        console.detail(f"Branch: {s['branch']} ({s['commits_ahead']} commit(s) ahead)")
+
+    return sessions
+
+
+# ---------------------------------------------------------------------------
+# Work remove
+# ---------------------------------------------------------------------------
+
+
+def remove(
+    target: str | None = None,
+    stale: bool = False,
+    force: bool = False,
+    project_root: Path | None = None,
+) -> bool:
+    """Remove a worktree.
+
+    Behavioral reference: lib/work/done.sh:_work_do_remove()
+
+    Modes:
+    - target: remove a specific worktree by issue number or name
+    - stale: remove all stale (non-active) worktrees
+    """
+    config = load_config(project_root)
+    cwd = project_root or Path.cwd()
+
+    try:
+        repo_root = git_repo.get_repo_root(cwd)
+    except GitError:
+        console.error("Not inside a git repository")
+        return False
+
+    main_branch = config.project.main_branch
+    if not main_branch:
+        try:
+            main_branch = git_repo.detect_main_branch(repo_root)
+        except GitError:
+            main_branch = "main"
+
+    if stale:
+        return _remove_stale(repo_root, main_branch, force)
+
+    if target:
+        return _remove_target(repo_root, target, main_branch)
+
+    console.error("Specify a target or use --stale")
+    return False
+
+
+def _remove_target(repo_root: Path, target: str, main_branch: str) -> bool:
+    """Remove a specific worktree by issue number or name."""
+    wt_path = find_worktree_path(target, project_root=repo_root)
+    if not wt_path:
+        console.error(f"No worktree found for: {target}")
+        return False
+
+    return _cleanup_worktree(repo_root, wt_path, main_branch)
+
+
+def _remove_stale(repo_root: Path, main_branch: str, force: bool) -> bool:
+    """Remove all stale worktrees."""
+    worktrees = git_worktree.list_worktrees(repo_root)
+    stale_wts: list[dict] = []
+
+    for i, wt in enumerate(worktrees):
+        if i == 0:
+            continue  # Skip main
+
+        wt_branch = wt.get("branch", "")
+        wt_path = wt.get("path", "")
+        issue_number = extract_issue_from_branch(wt_branch)
+
+        staleness = classify_staleness(
+            repo_root=repo_root,
+            branch=wt_branch,
+            main_branch=main_branch,
+            issue_number=issue_number,
+        )
+
+        if staleness != WorktreeState.ACTIVE:
+            stale_wts.append({
+                "path": wt_path,
+                "branch": wt_branch,
+                "staleness": staleness.value,
+            })
+
+    if not stale_wts:
+        console.info("No stale worktrees found.")
+        return True
+
+    console.header(f"Stale worktrees ({len(stale_wts)})")
+    for wt in stale_wts:
+        console.step(f"[{wt['staleness'].upper()}] {wt['branch']}")
+        console.detail(f"Path: {wt['path']}")
+
+    if not force:
+        console.info("Use --force to remove these worktrees.")
+        return True
+
+    removed = 0
+    for wt in stale_wts:
+        if _cleanup_worktree(repo_root, Path(wt["path"]), main_branch):
+            removed += 1
+
+    console.banner(f"Removed {removed} stale worktree(s)")
+    return removed > 0
+
+
+def _cleanup_worktree(repo_root: Path, wt_path: Path, main_branch: str) -> bool:
+    """Remove a single worktree and its branch.
+
+    Behavioral reference: lib/worktree.sh:_worktree_cleanup()
+    """
+    console.step(f"Removing worktree: {wt_path}")
+
+    # Find the branch name for this worktree
+    worktrees = git_worktree.list_worktrees(repo_root)
+    branch_name: str | None = None
+    for wt in worktrees:
+        if wt.get("path") == str(wt_path):
+            branch_name = wt.get("branch")
+            break
+
+    try:
+        git_worktree.remove_worktree(repo_root, wt_path)
+    except GitError as e:
+        console.warn(f"Worktree removal failed: {e}")
+
+    if branch_name and branch_name != main_branch:
+        try:
+            git_branch.delete_branch(repo_root, branch_name, force=True)
+        except GitError:
+            pass
+
+    try:
+        git_worktree.prune_worktrees(repo_root)
+    except GitError:
+        pass
+
+    console.success(f"Removed {wt_path.name}")
+    return True

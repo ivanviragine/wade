@@ -1,0 +1,16 @@
+
+GitHub Copilot CLI v2.0
+
+> Plan the authentication system
+
+I'll design the authentication system for you...
+
+[Planning and creating issues...]
+
+Session complete.
+
+gpt-4o 736.6k in, 8.8k out, 625.5k cached (Est. 2 Premium requests)
+claude-opus-4 597.8k in, 5.8k out, 520.9k cached
+
+Total usage est. 5 Premium requests
+1.3m in, 14.6k out, 1.1m cached

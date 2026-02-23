@@ -1,0 +1,42 @@
+services:
+  test-unit:
+    build: .
+    command: pytest tests/unit/ -v --tb=short
+    volumes:
+      - ./src:/app/src
+      - ./tests:/app/tests
+
+  test-integration:
+    build: .
+    command: pytest tests/integration/ -v --tb=short
+    volumes:
+      - ./src:/app/src
+      - ./tests:/app/tests
+
+  test-all:
+    build: .
+    command: pytest tests/ -v --tb=short --ignore=tests/live
+    volumes:
+      - ./src:/app/src
+      - ./tests:/app/tests
+
+  test-py311:
+    build:
+      context: .
+      args:
+        PYTHON_VERSION: "3.11"
+    command: pytest tests/ -v --ignore=tests/live
+
+  test-py312:
+    build:
+      context: .
+      args:
+        PYTHON_VERSION: "3.12"
+    command: pytest tests/ -v --ignore=tests/live
+
+  test-py313:
+    build:
+      context: .
+      args:
+        PYTHON_VERSION: "3.13"
+    command: pytest tests/ -v --ignore=tests/live

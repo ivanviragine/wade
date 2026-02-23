@@ -1,0 +1,474 @@
+"""Dependency analysis service — parse, graph, apply, track.
+
+Orchestrates: building context from issues, running AI analysis (headless),
+parsing edges, applying cross-references, and creating tracking issues.
+
+Behavioral reference: lib/task/deps.sh
+"""
+
+from __future__ import annotations
+
+import re
+import tempfile
+from pathlib import Path
+
+import structlog
+
+from ghaiw.ai_tools.base import AbstractAITool
+from ghaiw.config.loader import load_config
+from ghaiw.models.ai import AIToolID
+from ghaiw.models.config import ProjectConfig
+from ghaiw.models.deps import DependencyEdge, DependencyGraph
+from ghaiw.models.task import Task
+from ghaiw.providers.base import AbstractTaskProvider
+from ghaiw.providers.registry import get_provider
+from ghaiw.services.task_service import ensure_issue_label
+from ghaiw.ui.console import console
+
+logger = structlog.get_logger()
+
+
+# ---------------------------------------------------------------------------
+# Prompt template
+# ---------------------------------------------------------------------------
+
+
+def get_deps_prompt_template() -> str:
+    """Load the dependency analysis prompt template."""
+    pkg_root = Path(__file__).parent.parent.parent.parent
+    template = pkg_root / "templates" / "prompts" / "deps-analysis.md"
+    if template.is_file():
+        return template.read_text(encoding="utf-8")
+    return (
+        "Analyze dependencies between the GitHub issues below.\n"
+        "Output ONLY: <number> -> <number> # reason\n"
+        "Context:\n{context}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Context building
+# ---------------------------------------------------------------------------
+
+
+def build_context(
+    provider: AbstractTaskProvider,
+    issue_numbers: list[str],
+) -> str:
+    """Build a context string with issue details for AI consumption.
+
+    Behavioral reference: _task_build_deps_context()
+    """
+    lines: list[str] = []
+    for num in issue_numbers:
+        try:
+            task = provider.read_task(num)
+            lines.append(f"## Issue #{num}: {task.title}")
+            lines.append("")
+            if task.body:
+                lines.append(task.body.strip())
+            lines.append("")
+        except Exception as e:
+            logger.warning("deps.context_failed", issue=num, error=str(e))
+            lines.append(f"## Issue #{num}: (could not read)")
+            lines.append("")
+    return "\n".join(lines)
+
+
+def build_deps_prompt(context: str) -> str:
+    """Build the full dependency analysis prompt from context."""
+    template = get_deps_prompt_template()
+    return template.replace("{context}", context)
+
+
+# ---------------------------------------------------------------------------
+# Edge parsing
+# ---------------------------------------------------------------------------
+
+# Regex for "X -> Y" edges with optional "# reason" comment
+_ARROW_RE = re.compile(
+    r"^\s*(\d+)\s*->\s*(\d+)(.*?)$",
+    re.MULTILINE,
+)
+_COMMENT_RE = re.compile(r"#\s*(.*)")
+
+
+def parse_deps_output(
+    text: str,
+    valid_numbers: set[str],
+) -> list[DependencyEdge]:
+    """Parse dependency edges from AI output text.
+
+    Behavioral reference: _task_parse_deps_output()
+
+    Args:
+        text: Raw AI output containing "X -> Y # reason" lines.
+        valid_numbers: Set of valid issue numbers to filter against.
+
+    Returns:
+        List of validated DependencyEdge objects.
+    """
+    edges: list[DependencyEdge] = []
+
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        # Strip markdown formatting (backticks, bullets, numbering)
+        cleaned = line.replace("`", "")
+        cleaned = re.sub(r"^[-*]\s+", "", cleaned)
+        cleaned = re.sub(r"^\d+[.)]\s+", "", cleaned)
+
+        match = _ARROW_RE.match(cleaned)
+        if not match:
+            continue
+
+        from_id = match.group(1)
+        to_id = match.group(2)
+        rest = match.group(3)
+
+        # Validate both numbers
+        if from_id not in valid_numbers or to_id not in valid_numbers:
+            console.warn(
+                f"Skipping invalid edge {from_id} -> {to_id} "
+                "(unknown issue number)"
+            )
+            continue
+
+        # Extract comment
+        reason = ""
+        comment_match = _COMMENT_RE.search(rest)
+        if comment_match:
+            reason = comment_match.group(1).strip()
+
+        edges.append(
+            DependencyEdge(from_task=from_id, to_task=to_id, reason=reason)
+        )
+
+    return edges
+
+
+def output_is_parseable(text: str) -> bool:
+    """Check if AI output contains parseable dependency edges or "no deps".
+
+    Behavioral reference: _task_deps_output_is_parseable()
+    """
+    if "# No dependencies found" in text:
+        return True
+    return bool(_ARROW_RE.search(text))
+
+
+# ---------------------------------------------------------------------------
+# Cross-reference injection
+# ---------------------------------------------------------------------------
+
+_DEPS_SECTION_RE = re.compile(
+    r"## Dependencies\n.*?(?=\n## [^D]|\Z)",
+    re.DOTALL,
+)
+
+
+def strip_deps_section(body: str) -> str:
+    """Remove existing ## Dependencies section from issue body."""
+    # Try regex first (handles Dependencies followed by another section)
+    result = _DEPS_SECTION_RE.sub("", body)
+    # Handle case where Dependencies is the last section
+    idx = result.find("## Dependencies")
+    if idx != -1:
+        result = result[:idx]
+    return result.rstrip("\n") + "\n" if result.strip() else ""
+
+
+def build_deps_section(
+    issue_id: str,
+    edges: list[DependencyEdge],
+) -> str:
+    """Build the ## Dependencies section for a single issue.
+
+    Shows "Depends on" and "Blocks" references.
+    """
+    depends_on: list[str] = []
+    blocks: list[str] = []
+
+    for edge in edges:
+        if edge.to_task == issue_id:
+            depends_on.append(f"#{edge.from_task}")
+        if edge.from_task == issue_id:
+            blocks.append(f"#{edge.to_task}")
+
+    if not depends_on and not blocks:
+        return ""
+
+    lines = ["## Dependencies", ""]
+    if depends_on:
+        lines.append(f"**Depends on:** {', '.join(depends_on)}")
+    if blocks:
+        lines.append(f"**Blocks:** {', '.join(blocks)}")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+def apply_deps_to_issues(
+    provider: AbstractTaskProvider,
+    issue_numbers: list[str],
+    edges: list[DependencyEdge],
+) -> int:
+    """Update each issue body with dependency cross-references.
+
+    Behavioral reference: _task_apply_deps()
+
+    Returns number of successfully updated issues.
+    """
+    updated = 0
+
+    for issue_id in issue_numbers:
+        deps_section = build_deps_section(issue_id, edges)
+        if not deps_section:
+            continue
+
+        try:
+            task = provider.read_task(issue_id)
+            cleaned_body = strip_deps_section(task.body)
+            new_body = cleaned_body.rstrip("\n") + "\n\n" + deps_section
+            provider.update_task(issue_id, body=new_body)
+            console.detail(f"Updated #{issue_id} with dependency refs")
+            updated += 1
+        except Exception as e:
+            logger.warning(
+                "deps.update_failed", issue=issue_id, error=str(e)
+            )
+
+    return updated
+
+
+# ---------------------------------------------------------------------------
+# Tracking issue
+# ---------------------------------------------------------------------------
+
+
+def create_tracking_issue(
+    provider: AbstractTaskProvider,
+    config: ProjectConfig,
+    issue_numbers: list[str],
+    graph: DependencyGraph,
+    task_titles: dict[str, str],
+) -> str | None:
+    """Create a tracking issue with execution plan and dependency graph.
+
+    Behavioral reference: _task_create_tracking_issue()
+
+    Returns the tracking issue ID, or None on failure.
+    """
+    # Compute execution order
+    try:
+        ordered = graph.topo_sort(issue_numbers)
+    except ValueError:
+        # Cycle detected — use original order
+        ordered = issue_numbers
+
+    # Build checklist body
+    lines = ["## Execution Plan", ""]
+    for num in ordered:
+        title = task_titles.get(num, f"Issue #{num}")
+        lines.append(f"- [ ] #{num} — {title}")
+    lines.append("")
+
+    # Add Mermaid diagram
+    mermaid = graph.generate_mermaid(task_titles)
+    lines.append("## Dependency Graph")
+    lines.append("")
+    lines.append("```mermaid")
+    lines.append(mermaid)
+    lines.append("```")
+    lines.append("")
+
+    body = "\n".join(lines)
+
+    # Determine title
+    if len(issue_numbers) <= 3:
+        issue_refs = ", ".join(f"#{n}" for n in issue_numbers)
+        title = f"Tracking: {issue_refs}"
+    else:
+        title = f"Tracking: {len(issue_numbers)} issues"
+
+    try:
+        ensure_issue_label(provider, config.project.issue_label)
+        task = provider.create_task(
+            title=title,
+            body=body,
+            labels=[config.project.issue_label],
+        )
+        console.success(f"Created tracking issue #{task.id}")
+        return task.id
+    except Exception as e:
+        console.error(f"Failed to create tracking issue: {e}")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# AI runner (headless)
+# ---------------------------------------------------------------------------
+
+
+def run_headless_analysis(
+    ai_tool: str,
+    prompt: str,
+    model: str | None = None,
+) -> str | None:
+    """Run dependency analysis in headless mode.
+
+    Returns the AI output text, or None if headless is not supported.
+
+    Behavioral reference: _task_run_ai_deps_headless()
+    """
+    try:
+        adapter = AbstractAITool.get(AIToolID(ai_tool))
+    except (ValueError, KeyError):
+        return None
+
+    caps = adapter.capabilities()
+    if not caps.supports_headless or not caps.headless_flag:
+        return None
+
+    # Build command
+    cmd = adapter.build_launch_command(model=model, prompt=prompt)
+
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.warning("deps.headless_failed", tool=ai_tool, error=str(e))
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Main orchestrator
+# ---------------------------------------------------------------------------
+
+
+def analyze_deps(
+    issue_numbers: list[str],
+    ai_tool: str | None = None,
+    model: str | None = None,
+    project_root: Path | None = None,
+) -> DependencyGraph | None:
+    """Analyze dependencies between issues.
+
+    Behavioral reference: lib/task/deps.sh:_task_do_deps()
+
+    Steps:
+    1. Build context from issue details
+    2. Run AI analysis (headless preferred, interactive fallback)
+    3. Parse edges
+    4. Apply cross-references to issues
+    5. Create tracking issue (3+ issues auto, 2 issues offered)
+
+    Returns the DependencyGraph, or None on failure.
+    """
+    config = load_config(project_root)
+    provider = get_provider(config)
+
+    if len(issue_numbers) < 2:
+        console.error("Need at least 2 issues for dependency analysis.")
+        return None
+
+    # Resolve AI tool
+    resolved_tool = ai_tool or config.get_ai_tool("deps")
+    if not resolved_tool:
+        installed = AbstractAITool.detect_installed()
+        resolved_tool = installed[0].value if installed else None
+    if not resolved_tool:
+        console.error("No AI tool available for dependency analysis.")
+        return None
+
+    resolved_model = model or config.get_model("deps")
+
+    console.header("ghaiw task deps")
+    console.info(f"Analyzing {len(issue_numbers)} issues")
+    console.info(f"AI tool: {resolved_tool}")
+
+    # Build context
+    context = build_context(provider, issue_numbers)
+    prompt = build_deps_prompt(context)
+
+    # Fetch titles for display
+    valid_numbers = set(issue_numbers)
+    task_titles: dict[str, str] = {}
+    for num in issue_numbers:
+        try:
+            task = provider.read_task(num)
+            task_titles[num] = task.title
+            console.step(f"#{num}: {task.title}")
+        except Exception:
+            task_titles[num] = f"Issue #{num}"
+
+    # Run headless AI analysis
+    console.step(f"Running {resolved_tool} for dependency analysis...")
+    output = run_headless_analysis(resolved_tool, prompt, resolved_model)
+
+    if output and output_is_parseable(output):
+        console.success("Headless analysis complete.")
+    elif output:
+        console.warn("Headless output not parseable.")
+        output = None
+    else:
+        console.warn(
+            f"Headless mode not available for {resolved_tool}. "
+            "Use interactive mode for dependency analysis."
+        )
+        return None
+
+    # Parse edges
+    edges = parse_deps_output(output, valid_numbers) if output else []
+
+    if not edges:
+        if output and "# No dependencies found" in output:
+            console.info("No dependencies found between issues.")
+        else:
+            console.warn("No dependency edges parsed.")
+        return DependencyGraph()
+
+    console.success(f"Found {len(edges)} dependency edge(s)")
+
+    # Build graph
+    graph = DependencyGraph(edges=edges)
+
+    # Generate Mermaid
+    mermaid = graph.generate_mermaid(task_titles)
+    graph.mermaid_diagram = mermaid
+    console.empty()
+    console.raw("```mermaid")
+    console.raw(mermaid)
+    console.raw("```")
+
+    # Compute topological order
+    try:
+        graph.topological_order = graph.topo_sort(issue_numbers)
+    except ValueError:
+        console.warn("Cycle detected — using original order")
+        graph.topological_order = issue_numbers
+
+    # Apply cross-references to issues
+    updated = apply_deps_to_issues(provider, issue_numbers, edges)
+    console.info(f"Updated {updated} issue(s) with dependency refs")
+
+    # Create tracking issue (3+ auto, skip for 2)
+    if len(issue_numbers) >= 3:
+        tracking_id = create_tracking_issue(
+            provider, config, issue_numbers, graph, task_titles
+        )
+        if tracking_id:
+            graph.tracking_task_id = tracking_id
+
+    return graph

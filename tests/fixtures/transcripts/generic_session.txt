@@ -1,0 +1,10 @@
+
+AI Assistant v1.0
+
+> Help me refactor the database module
+
+Refactoring the database module...
+
+Total tokens: 5,678
+Input tokens: 4,000
+Output tokens: 1,678
