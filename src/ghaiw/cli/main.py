@@ -43,11 +43,12 @@ def main(
 
     set_terminal_title("ghaiwpy")
 
-    # Store verbose flag in app state for subcommands
-    if verbose:
-        import ghaiw.logging.setup as log_setup
+    # Always configure logging (defaults to INFO level, stderr output).
+    # Without this, structlog's default PrintLogger writes to stdout
+    # and doesn't filter by level — polluting --json output.
+    import ghaiw.logging.setup as log_setup
 
-        log_setup.configure(verbose=True)
+    log_setup.configure(verbose=verbose)
 
 
 # Register subcommand groups

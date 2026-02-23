@@ -78,8 +78,12 @@ class Console:
         self.out.print(f"\u2502  {message}")
 
     def raw(self, text: str) -> None:
-        """Print raw text without any formatting."""
-        self.out.print(text, highlight=False)
+        """Print raw text without any formatting or word-wrapping.
+
+        Uses Python's built-in print() instead of Rich's Console.print()
+        to avoid Rich inserting line breaks in JSON output.
+        """
+        print(text)
 
     def section(self, title: str) -> None:
         """Bold section heading (minor sub-headings)."""
