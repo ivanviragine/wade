@@ -45,6 +45,7 @@ class AntigravityAdapter(AbstractAITool):
         model: str | None = None,
         prompt: str | None = None,
         detach: bool = False,
+        transcript_path: Path | None = None,
     ) -> int:
         cmd = [self.capabilities().binary, "."]
         logger.info("ai_tool.launch", tool="antigravity", cwd=str(worktree_path))

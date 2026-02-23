@@ -342,6 +342,59 @@ def apply_plan_token_usage(
 # ---------------------------------------------------------------------------
 
 
+def create_interactive(
+    config: ProjectConfig | None = None,
+    provider: AbstractTaskProvider | None = None,
+) -> Task | None:
+    """Create a GitHub Issue interactively — prompt for title and body.
+
+    Behavioral reference: lib/task/crud.sh:_task_create_interactive()
+    """
+    import sys
+
+    from ghaiw.ui import prompts
+
+    config = config or load_config()
+    provider = provider or get_provider(config)
+
+    title = prompts.input_prompt("Task title")
+    if not title:
+        console.error("Title is required")
+        return None
+
+    console.hint("Enter task body (press Ctrl+D when done, or leave empty):")
+    body_lines: list[str] = []
+    if not sys.stdin.isatty():
+        body = ""
+    else:
+        try:
+            while True:
+                line = input()
+                body_lines.append(line)
+        except EOFError:
+            pass
+        body = "\n".join(body_lines)
+
+    # Ensure task label exists
+    ensure_issue_label(provider, config.project.issue_label)
+
+    console.step(f"Creating issue: {title}")
+
+    try:
+        task = provider.create_task(
+            title=title,
+            body=body,
+            labels=[config.project.issue_label],
+        )
+        console.success(f"Created #{task.id}: {task.title}")
+        if task.url:
+            console.detail(task.url)
+        return task
+    except Exception as e:
+        console.error(f"Failed to create issue: {e}")
+        return None
+
+
 def create_from_plan_file(
     plan_file: Path,
     config: ProjectConfig | None = None,
@@ -415,6 +468,23 @@ def list_tasks(
         exclude_labels=exclude,
     )
 
+    # Build dependency info if requested
+    deps_map: dict[str, dict[str, list[str]]] = {}
+    if show_deps and tasks:
+        import re
+
+        for task in tasks:
+            deps_info: dict[str, list[str]] = {"depends_on": [], "blocks": []}
+            if task.body:
+                dep_match = re.search(r"\*\*Depends on:\*\*\s*(.*?)$", task.body, re.MULTILINE)
+                if dep_match:
+                    deps_info["depends_on"] = re.findall(r"#(\d+)", dep_match.group(1))
+                block_match = re.search(r"\*\*Blocks:\*\*\s*(.*?)$", task.body, re.MULTILINE)
+                if block_match:
+                    deps_info["blocks"] = re.findall(r"#(\d+)", block_match.group(1))
+            if deps_info["depends_on"] or deps_info["blocks"]:
+                deps_map[task.id] = deps_info
+
     if json_mode:
         import json
 
@@ -425,6 +495,7 @@ def list_tasks(
                 "state": t.state.value,
                 "labels": [label.name for label in t.labels],
                 "url": t.url,
+                **({"deps": deps_map[t.id]} if t.id in deps_map else {}),
             }
             for t in tasks
         ]
@@ -445,6 +516,14 @@ def list_tasks(
         console.step(f"#{task.id} {state_badge} {task.title}")
         if label_str:
             console.detail(label_str)
+        if show_deps and task.id in deps_map:
+            dep_info = deps_map[task.id]
+            if dep_info["depends_on"]:
+                console.detail(
+                    f"  Depends on: {', '.join(f'#{n}' for n in dep_info['depends_on'])}"
+                )
+            if dep_info["blocks"]:
+                console.detail(f"  Blocks: {', '.join(f'#{n}' for n in dep_info['blocks'])}")
 
     return tasks
 

@@ -87,16 +87,34 @@ def init(
     # 2. Detect/select AI tool
     selected_tool = _select_ai_tool(ai_tool, non_interactive)
 
-    # 3. Collect settings (defaults for now; interactive prompts in future)
-    model_mapping = _resolve_models(selected_tool)
+    # 3. Resolve models (probing or defaults)
+    model_mapping, models_probed = _resolve_models(selected_tool)
 
-    # 4. Generate config
+    # 4. Collect project settings
+    project_settings = _prompt_project_settings(root, non_interactive)
+
+    # 5. Let user review/edit model mapping
+    model_mapping = _prompt_model_mapping(
+        selected_tool, model_mapping, models_probed, non_interactive
+    )
+
+    # 6. Per-command AI tool overrides
+    installed_tools = [str(t) for t in AbstractAITool.detect_installed()]
+    command_overrides = _prompt_command_overrides(installed_tools, non_interactive)
+
+    # 7. Generate config
     config_path = root / ".ghaiw.yml"
     if config_path.exists():
         console.info("Config .ghaiw.yml already exists — patching missing values")
         _patch_config(config_path, selected_tool, model_mapping)
     else:
-        _write_config(config_path, selected_tool, model_mapping)
+        _write_config(
+            config_path,
+            selected_tool,
+            model_mapping,
+            project_settings=project_settings,
+            command_overrides=command_overrides,
+        )
         console.success(f"Created {config_path.name}")
 
     # Configure Gemini experimental settings if needed
@@ -140,14 +158,37 @@ def init(
 # ---------------------------------------------------------------------------
 
 
-def update(project_root: Path | None = None) -> bool:
+def update(
+    project_root: Path | None = None,
+    skip_self_upgrade: bool = False,
+) -> bool:
     """Update managed files to the latest ghaiw version.
+
+    Steps:
+    1.  Validate repo + config existence
+    2.  Self-upgrade if source version differs
+    3.  Read old version from manifest
+    4.  Show version transition
+    5.  Run config migration pipeline
+    6.  Reload config + backfill probed models
+    7.  Refresh skill files (force overwrite)
+    8.  Clean legacy artifacts
+    9.  Configure Claude Code allowlist
+    10. Configure Gemini experimental (if applicable)
+    11. Refresh .gitignore + AGENTS.md pointer
+    12. Rebuild manifest with version
 
     Never overwrites .ghaiw.yml user values — only patches missing keys
     and refreshes skill files.
     """
+    from ghaiw import __version__
+    from ghaiw.config.claude_allowlist import configure_allowlist
+    from ghaiw.config.legacy import cleanup_legacy_artifacts
+    from ghaiw.config.migrations import run_all_migrations
+
     cwd = project_root or Path.cwd()
 
+    # Step 1: Validate repo + config
     try:
         root = repo.get_repo_root(cwd)
     except GitError:
@@ -159,37 +200,117 @@ def update(project_root: Path | None = None) -> bool:
         console.error("No .ghaiw.yml found — run 'ghaiwpy init' first")
         return False
 
+    # Step 2: Self-upgrade if source version differs
+    if not skip_self_upgrade and _maybe_self_upgrade():
+        # re_exec() was called — this line is never reached
+        pass  # pragma: no cover
+
     console.header("ghaiwpy update")
 
-    # Load current config
-    config = load_config(root)
+    # Step 3: Read old version from manifest
+    old_version = _read_manifest_version(root)
 
-    # Patch missing model keys
+    # Step 4: Show version transition
+    if old_version and old_version != __version__:
+        console.info(f"Updating from ghaiwpy {old_version} → {__version__}")
+    else:
+        console.info(f"ghaiwpy {__version__}")
+
+    # Step 5: Run config migration pipeline
+    if run_all_migrations(config_path):
+        console.success("Config migrations applied")
+    else:
+        console.detail("Config already up to date")
+
+    # Step 6: Reload config + backfill probed models
+    config = load_config(root)
     ai_tool = config.get_ai_tool()
     if ai_tool:
-        model_mapping = _resolve_models(ai_tool)
+        model_mapping, _ = _resolve_models(ai_tool)
         _patch_config(config_path, ai_tool, model_mapping)
 
-    # Update skills (always overwrite)
+    # Step 7: Refresh skill files (force overwrite)
     is_self = root.resolve() == get_ghaiw_root().resolve()
     installed = installer.install_skills(root, is_self_init=is_self, force=True)
     console.info(f"Updated {len(installed)} skill entries")
 
-    # Configure Gemini if needed
+    # Step 8: Clean legacy artifacts
+    removed = cleanup_legacy_artifacts(root)
+    if removed:
+        console.info(f"Removed {removed} legacy artifact(s)")
+
+    # Step 9: Configure Claude Code allowlist
+    configure_allowlist(root)
+
+    # Step 10: Configure Gemini experimental (if applicable)
     if ai_tool and (ai_tool == AIToolID.GEMINI or ai_tool == "gemini"):
         _configure_gemini_experimental()
 
-    # Refresh .gitignore
+    # Step 11: Refresh .gitignore + AGENTS.md pointer
     _ensure_gitignore(root)
-
-    # Refresh pointer
     pointer.ensure_pointer(root)
 
-    # Update manifest
+    # Step 12: Rebuild manifest with version
     _write_manifest(root, installed)
 
     console.banner("ghaiwpy updated")
     return True
+
+
+def _maybe_self_upgrade() -> bool:
+    """Check if a source-version upgrade is available and apply it.
+
+    If upgrade is applied, calls re_exec() which replaces this process.
+    Returns True if an upgrade was detected (but re_exec already ran),
+    False if no upgrade was needed.
+    """
+    from ghaiw.utils.install import (
+        get_installed_version,
+        get_source_repo_path,
+        get_source_version,
+        re_exec,
+        self_upgrade,
+    )
+
+    source = get_source_repo_path()
+    if not source:
+        return False  # Editable install or no source marker
+
+    source_ver = get_source_version(source)
+    if not source_ver:
+        return False
+
+    installed_ver = get_installed_version()
+    if source_ver == installed_ver:
+        return False  # Already up to date
+
+    console.info(f"Source version {source_ver} differs from installed {installed_ver}")
+    console.step("Self-upgrading from source...")
+
+    if self_upgrade(source):
+        console.success(f"Upgraded to {source_ver} — restarting...")
+        re_exec()  # Does not return
+        return True  # pragma: no cover
+
+    console.warn("Self-upgrade failed — continuing with current version")
+    return False
+
+
+def _read_manifest_version(root: Path) -> str | None:
+    """Read the ghaiwpy version from the .ghaiw-managed manifest.
+
+    Looks for a line like: # Managed by ghaiw 0.1.0
+    or: # Managed by ghaiwpy 0.1.0
+    """
+    import re
+
+    manifest = root / MANIFEST_FILENAME
+    if not manifest.is_file():
+        return None
+
+    text = manifest.read_text(encoding="utf-8")
+    match = re.search(r"# Managed by (?:ghaiw(?:py)?)\s+(\S+)", text)
+    return match.group(1) if match else None
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +414,8 @@ def _select_ai_tool(
     non_interactive: bool,
 ) -> str | None:
     """Select an AI tool — from argument, detection, or interactive prompt."""
+    from ghaiw.ui import prompts
+
     if requested:
         try:
             AIToolID(requested)
@@ -305,32 +428,48 @@ def _select_ai_tool(
     installed = AbstractAITool.detect_installed()
 
     if not installed:
-        console.warn("No AI tools detected")
+        console.warn("No AI CLI tools detected. You can set 'ai_tool' in .ghaiw.yml later.")
         return None
 
-    if len(installed) == 1 or non_interactive:
+    if len(installed) == 1:
+        tool = installed[0]
+        console.success(f"Detected AI tool: {tool}")
+        return tool
+
+    if non_interactive:
         tool = installed[0]
         console.info(f"Using AI tool: {tool}")
         return tool
 
-    # Interactive: show menu
-    console.info(f"Detected AI tools: {', '.join(installed)}")
-    # For now, default to first detected
-    # Full interactive prompt will be added when UI prompts are wired
-    return installed[0]
+    # Interactive: show menu with Skip option
+    skip_label = "Skip (configure later)"
+    items = [str(t) for t in installed] + [skip_label]
+    idx = prompts.select("Select default AI tool", items)
+
+    if items[idx] == skip_label:
+        return None
+
+    selected = installed[idx]
+    console.success(f"Selected AI tool: {selected}")
+    return str(selected)
 
 
-def _resolve_models(tool: str | None) -> ComplexityModelMapping:
-    """Resolve model mappings for a tool via probing or defaults."""
+def _resolve_models(tool: str | None) -> tuple[ComplexityModelMapping, bool]:
+    """Resolve model mappings for a tool via probing or defaults.
+
+    Returns:
+        Tuple of (mapping, probed) where probed is True if live model
+        discovery succeeded, False if we fell back to hardcoded defaults.
+    """
     if not tool:
-        return ComplexityModelMapping()
+        return ComplexityModelMapping(), False
 
     # Try to probe the tool for available models
     try:
         adapter = AbstractAITool.get(AIToolID(tool))
         mapping = adapter.get_recommended_mapping()
         if mapping.easy or mapping.complex:
-            return _normalize_mapping(adapter, mapping)
+            return _normalize_mapping(adapter, mapping), True
     except (ValueError, Exception):
         pass
 
@@ -344,7 +483,7 @@ def _resolve_models(tool: str | None) -> ComplexityModelMapping:
     except (ValueError, Exception):
         pass
 
-    return mapping
+    return mapping, False
 
 
 def _normalize_mapping(
@@ -362,25 +501,182 @@ def _normalize_mapping(
     )
 
 
+def _prompt_project_settings(
+    project_root: Path,
+    non_interactive: bool,
+) -> dict[str, str]:
+    """Collect project settings — interactively or with defaults.
+
+    Auto-detects the main branch via git. Returns a dict with keys:
+    main_branch, merge_strategy, branch_prefix, issue_label, worktrees_dir.
+    """
+    from ghaiw.ui import prompts
+
+    # Auto-detect main branch (works in both modes)
+    try:
+        main_branch = repo.detect_main_branch(project_root)
+    except Exception:
+        main_branch = "main"
+
+    defaults = {
+        "main_branch": main_branch,
+        "merge_strategy": "PR",
+        "branch_prefix": "feat",
+        "issue_label": "feature-plan",
+        "worktrees_dir": "../.worktrees",
+    }
+
+    if non_interactive:
+        return defaults
+
+    console.header("Project settings (press Enter to accept defaults)")
+
+    defaults["merge_strategy"] = prompts.input_prompt(
+        "Merge strategy — PR or direct", defaults["merge_strategy"]
+    )
+    defaults["branch_prefix"] = prompts.input_prompt("Branch prefix", defaults["branch_prefix"])
+    defaults["issue_label"] = prompts.input_prompt("Issue label", defaults["issue_label"])
+    defaults["worktrees_dir"] = prompts.input_prompt(
+        "Worktrees directory", defaults["worktrees_dir"]
+    )
+
+    return defaults
+
+
+def _prompt_model_mapping(
+    tool: str | None,
+    mapping: ComplexityModelMapping,
+    models_probed: bool,
+    non_interactive: bool,
+) -> ComplexityModelMapping:
+    """Let the user review/edit the complexity-to-model mapping.
+
+    If non_interactive, returns the mapping unchanged.
+    If probing failed, shows a warning before prompting.
+    """
+    from ghaiw.ui import prompts
+
+    if non_interactive:
+        return mapping
+
+    console.header("Model complexity mapping")
+
+    if tool and not models_probed:
+        console.warn(
+            f"Could not auto-detect available models for {tool}. "
+            "Using defaults — edit .ghaiw.yml to change later."
+        )
+
+    easy = prompts.input_prompt("Easy tasks", mapping.easy or "")
+    medium = prompts.input_prompt("Medium tasks", mapping.medium or "")
+    complex_ = prompts.input_prompt("Complex tasks", mapping.complex or "")
+    very_complex = prompts.input_prompt("Very complex tasks", mapping.very_complex or "")
+
+    return ComplexityModelMapping(
+        easy=easy or mapping.easy,
+        medium=medium or mapping.medium,
+        complex=complex_ or mapping.complex,
+        very_complex=very_complex or mapping.very_complex,
+    )
+
+
+def _suggest_model_for_tool(tool: str) -> str:
+    """Get a suggested model for a tool — probes or falls back to complex-tier default."""
+    try:
+        adapter = AbstractAITool.get(AIToolID(tool))
+        mapping = adapter.get_recommended_mapping()
+        if mapping.complex:
+            return adapter.normalize_model_format(mapping.complex)
+    except (ValueError, Exception):
+        pass
+
+    defaults = get_defaults(tool)
+    return defaults.complex or ""
+
+
+def _prompt_command_overrides(
+    installed_tools: list[str],
+    non_interactive: bool,
+) -> dict[str, dict[str, str]]:
+    """Prompt for per-command AI tool and model overrides.
+
+    Returns a dict like:
+        {"plan": {"tool": "claude", "model": "claude-sonnet-4-6"}, ...}
+
+    Empty dicts for commands with no overrides.
+    """
+    from ghaiw.ui import prompts
+
+    if non_interactive:
+        return {"plan": {}, "deps": {}, "work": {}}
+
+    console.header("Per-command AI tool overrides")
+
+    tools_hint = ", ".join(installed_tools) if installed_tools else "claude, copilot, gemini"
+
+    result: dict[str, dict[str, str]] = {}
+    for cmd_name, label in [
+        ("plan", "Planning tasks"),
+        ("deps", "Dependency analysis"),
+        ("work", "Implementation work"),
+    ]:
+        tool = prompts.input_prompt(f"{label} ({tools_hint})", "")
+        if tool:
+            model_default = _suggest_model_for_tool(tool)
+            model = prompts.input_prompt(f"  Model for {label.lower()}", model_default)
+            result[cmd_name] = {"tool": tool}
+            if model:
+                result[cmd_name]["model"] = model
+        else:
+            result[cmd_name] = {}
+
+    return result
+
+
 def _write_config(
     config_path: Path,
     ai_tool: str | None,
     model_mapping: ComplexityModelMapping,
+    project_settings: dict[str, str] | None = None,
+    command_overrides: dict[str, dict[str, str]] | None = None,
 ) -> None:
     """Write a fresh .ghaiw.yml config file."""
     config_dict: dict[str, Any] = {"version": 2}
 
-    config_dict["project"] = {
-        "main_branch": "main",
-        "issue_label": "feature-plan",
-        "worktrees_dir": "../.worktrees",
-        "branch_prefix": "feat",
-        "merge_strategy": "PR",
-    }
+    if project_settings:
+        config_dict["project"] = {
+            "main_branch": project_settings.get("main_branch", "main"),
+            "issue_label": project_settings.get("issue_label", "feature-plan"),
+            "worktrees_dir": project_settings.get("worktrees_dir", "../.worktrees"),
+            "branch_prefix": project_settings.get("branch_prefix", "feat"),
+            "merge_strategy": project_settings.get("merge_strategy", "PR"),
+        }
+    else:
+        config_dict["project"] = {
+            "main_branch": "main",
+            "issue_label": "feature-plan",
+            "worktrees_dir": "../.worktrees",
+            "branch_prefix": "feat",
+            "merge_strategy": "PR",
+        }
 
     ai_section: dict[str, Any] = {}
     if ai_tool:
         ai_section["default_tool"] = str(ai_tool)
+
+    # Write per-command overrides
+    if command_overrides:
+        for cmd_name in ("plan", "deps", "work"):
+            overrides = command_overrides.get(cmd_name, {})
+            if overrides:
+                cmd_section: dict[str, str] = {}
+                if overrides.get("tool"):
+                    cmd_section["tool"] = overrides["tool"]
+                if overrides.get("model"):
+                    cmd_section["model"] = overrides["model"]
+                if cmd_section:
+                    ai_section[cmd_name] = cmd_section
+
     config_dict["ai"] = ai_section
 
     if ai_tool and (model_mapping.easy or model_mapping.complex):

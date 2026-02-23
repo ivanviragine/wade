@@ -51,6 +51,10 @@ info "Python ${PYTHON_VERSION} (managed by uv)"
 info "Installing ghaiwpy..."
 uv pip install --python "$VENV_DIR/bin/python" "$SCRIPT_DIR"
 
+# Record source repo path for self-upgrade support
+echo "$SCRIPT_DIR" > "$VENV_DIR/ghaiw-source.txt"
+info "Recorded source path for self-upgrade"
+
 info "Creating symlink..."
 mkdir -p "$BIN_DIR"
 ln -sf "$VENV_DIR/bin/ghaiwpy" "$BIN_DIR/ghaiwpy"

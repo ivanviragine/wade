@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from ghaiw.models.config import ProjectConfig, ProjectSettings
 from ghaiw.models.deps import DependencyEdge, DependencyGraph
 from ghaiw.models.task import Task
 from ghaiw.services.deps_service import (
+    _run_interactive_analysis,
     apply_deps_to_issues,
     build_context,
     build_deps_prompt,
@@ -266,3 +268,43 @@ class TestCreateTrackingIssue:
 
         result = create_tracking_issue(provider, config, ["1", "2", "3"], graph, {})
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Interactive fallback tests
+# ---------------------------------------------------------------------------
+
+
+class TestInteractiveFallback:
+    def test_reads_output_file(self, tmp_path: Path) -> None:
+        """_run_interactive_analysis should read deps-output.txt after AI exits."""
+        output_file = tmp_path / "deps-output.txt"
+        output_file.write_text("1 -> 2 # auth before UI\n")
+
+        with (
+            patch("ghaiw.services.deps_service.copy_to_clipboard"),
+            patch("ghaiw.services.deps_service.AbstractAITool.get") as mock_get,
+        ):
+            adapter = MagicMock()
+            mock_get.return_value = adapter
+
+            result = _run_interactive_analysis("claude", "prompt", None, str(tmp_path))
+            assert result == "1 -> 2 # auth before UI"
+
+    def test_returns_none_when_no_output(self, tmp_path: Path) -> None:
+        """_run_interactive_analysis should return None when no output file."""
+        with (
+            patch("ghaiw.services.deps_service.copy_to_clipboard"),
+            patch("ghaiw.services.deps_service.AbstractAITool.get") as mock_get,
+        ):
+            adapter = MagicMock()
+            mock_get.return_value = adapter
+
+            result = _run_interactive_analysis("claude", "prompt", None, str(tmp_path))
+            assert result is None
+
+    def test_returns_none_for_unknown_tool(self) -> None:
+        """_run_interactive_analysis returns None for unknown AI tool."""
+        with patch("ghaiw.services.deps_service.copy_to_clipboard"):
+            result = _run_interactive_analysis("nonexistent-tool", "prompt", None, None)
+            assert result is None

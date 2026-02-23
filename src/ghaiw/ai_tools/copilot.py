@@ -73,6 +73,7 @@ class CopilotAdapter(AbstractAITool):
         model: str | None = None,
         prompt: str | None = None,
         detach: bool = False,
+        transcript_path: Path | None = None,
     ) -> int:
         cmd = self.build_launch_command(model=model, prompt=prompt)
         logger.info("ai_tool.launch", tool="copilot", model=model, cwd=str(worktree_path))

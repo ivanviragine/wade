@@ -88,8 +88,14 @@ class ClaudeAdapter(AbstractAITool):
         model: str | None = None,
         prompt: str | None = None,
         detach: bool = False,
+        transcript_path: Path | None = None,
     ) -> int:
         cmd = self.build_launch_command(model=model, prompt=prompt)
+
+        # Claude Code supports --output-file for transcript capture
+        if transcript_path:
+            cmd.extend(["--output-file", str(transcript_path)])
+
         logger.info("ai_tool.launch", tool="claude", model=model, cwd=str(worktree_path))
 
         result = subprocess.run(cmd, cwd=worktree_path)

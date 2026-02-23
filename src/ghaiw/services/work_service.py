@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import re
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +46,7 @@ from ghaiw.ui.console import console
 from ghaiw.utils.clipboard import copy_to_clipboard
 from ghaiw.utils.terminal import (
     compose_work_title,
+    launch_in_new_terminal,
     set_terminal_title,
     start_title_keeper,
     stop_title_keeper,
@@ -144,6 +147,105 @@ def bootstrap_worktree(
                 )
 
 
+def _is_inside_ai_cli() -> bool:
+    """Detect if we are running inside an AI CLI session.
+
+    When an AI agent calls ``ghaiwpy work start`` from within its own
+    session, we must not launch another AI instance (infinite nesting).
+    Instead, create the worktree and print the path.
+
+    Behavioral reference: lib/work/terminal.sh:_is_inside_ai_cli()
+    """
+    # Claude Code sets CLAUDE_CODE=1 or CLAUDE_CODE_ENTRYPOINT
+    if os.environ.get("CLAUDE_CODE") or os.environ.get("CLAUDE_CODE_ENTRYPOINT"):
+        return True
+    # Copilot CLI
+    if os.environ.get("COPILOT_CLI"):
+        return True
+    # Gemini CLI
+    if os.environ.get("GEMINI_CLI"):
+        return True
+    # Codex CLI
+    if os.environ.get("CODEX_CLI"):
+        return True
+    # Generic: ghaiw sets this when launching an AI tool
+    return bool(os.environ.get("GHAIW_IN_AI_SESSION"))
+
+
+def _post_exit_capture(
+    transcript_path: Path | None,
+    adapter: AbstractAITool,
+    repo_root: Path,
+    branch: str,
+    ai_tool: str,
+    model: str | None,
+) -> None:
+    """Post-AI-exit processing: parse transcript, update PR with token usage.
+
+    Behavioral reference: lib/work/terminal.sh:_work_post_exit_capture()
+    """
+    if not transcript_path or not transcript_path.is_file():
+        return
+
+    # Parse transcript for token usage
+    try:
+        usage = adapter.parse_transcript(transcript_path)
+    except Exception as e:
+        logger.warning("work.transcript_parse_failed", error=str(e))
+        return
+
+    if not usage or (not usage.total_tokens and not usage.input_tokens):
+        logger.debug("work.no_token_usage")
+        return
+
+    # Find the PR for this branch (may have been created during the AI session)
+    from ghaiw.git import pr as git_pr
+
+    pr_info = git_pr.get_pr_for_branch(repo_root, branch)
+    if not pr_info:
+        logger.debug("work.no_pr_for_branch", branch=branch)
+        return
+
+    pr_number = int(pr_info["number"])
+
+    # Get current PR body
+    try:
+        result = git_pr._run_gh(
+            "pr",
+            "view",
+            str(pr_number),
+            "--json",
+            "body",
+            cwd=repo_root,
+            check=False,
+        )
+        if result.returncode != 0:
+            return
+        import json as json_mod
+
+        current_body = json_mod.loads(result.stdout).get("body", "")
+    except Exception:
+        return
+
+    # Strip any existing impl usage block and append new one
+    cleaned_body = _strip_impl_usage_block(current_body)
+    usage_block = build_impl_usage_block(
+        ai_tool=ai_tool,
+        model=model,
+        token_usage=usage,
+    )
+    new_body = cleaned_body.rstrip("\n") + "\n\n" + usage_block + "\n"
+
+    # Update PR body
+    if git_pr.update_pr_body(repo_root, pr_number, new_body):
+        console.success("Updated PR with implementation usage stats.")
+        logger.info(
+            "work.impl_usage_updated",
+            pr=pr_number,
+            total_tokens=usage.total_tokens,
+        )
+
+
 def build_work_prompt(task: Task, ai_tool: str | None = None) -> str:
     """Build the clipboard prompt for a work session.
 
@@ -166,6 +268,8 @@ def start(
     ai_tool: str | None = None,
     model: str | None = None,
     project_root: Path | None = None,
+    detach: bool = False,
+    cd_only: bool = False,
 ) -> bool:
     """Start a work session on an issue.
 
@@ -177,7 +281,7 @@ def start(
     3. Bootstrap worktree (copy files, hooks, issue context)
     4. Resolve model from complexity
     5. Copy work prompt to clipboard
-    6. Launch AI tool
+    6. Launch AI tool (or print path if cd_only / detach)
     7. Post-exit processing
 
     Args:
@@ -185,6 +289,8 @@ def start(
         ai_tool: AI tool to use (overrides config).
         model: Model to use (overrides config + complexity mapping).
         project_root: Repository root (defaults to CWD).
+        detach: If True, launch AI in a new terminal tab.
+        cd_only: If True, create worktree and print path only (no AI launch).
 
     Returns:
         True on success, False on failure.
@@ -259,15 +365,52 @@ def start(
     copy_to_clipboard(prompt)
     console.success("Copied work prompt to clipboard.")
 
+    # cd_only mode: just print the worktree path and return (no title, no AI)
+    if cd_only:
+        print(str(worktree_path))
+        return True
+
+    # AI-initiated start guard: if we're inside an AI CLI session,
+    # don't launch another AI tool — just print the worktree path.
+    if _is_inside_ai_cli():
+        console.info("Detected AI CLI session — skipping nested AI launch.")
+        console.detail(f"Worktree ready at: {worktree_path}")
+        print(str(worktree_path))
+        return True
+
     # Set terminal title
     work_title = compose_work_title(task.id, task.title)
     set_terminal_title(work_title)
     start_title_keeper(work_title)
 
-    # Launch AI tool
-    if resolved_tool:
+    # Set up transcript capture
+    transcript_path: Path | None = None
+    try:
+        transcript_dir = tempfile.mkdtemp(prefix="ghaiw-work-")
+        transcript_path = Path(transcript_dir) / f"transcript-{task.id}.log"
+    except OSError:
+        logger.warning("work.transcript_dir_failed")
+
+    # Detach mode: launch AI tool in a new terminal, don't block
+    if detach and resolved_tool:
+        try:
+            adapter = AbstractAITool.get(AIToolID(resolved_tool))
+            cmd = adapter.build_launch_command(model=resolved_model)
+        except (ValueError, KeyError):
+            cmd = [resolved_tool]
+
+        console.step(f"Launching {resolved_tool} in new terminal...")
+        if launch_in_new_terminal(cmd, cwd=str(worktree_path), title=work_title):
+            console.success(f"Detached AI session for #{task.id}")
+            return True
+        console.warn("Could not launch in new terminal — falling back to inline")
+        # Fall through to inline launch below
+
+    # Launch AI tool (inline)
+    if not detach and resolved_tool:
         console.step(f"Launching {resolved_tool}...")
 
+        adapter: AbstractAITool | None = None
         try:
             adapter = AbstractAITool.get(AIToolID(resolved_tool))
 
@@ -285,6 +428,7 @@ def start(
             exit_code = adapter.launch(
                 worktree_path=worktree_path,
                 model=resolved_model,
+                transcript_path=transcript_path,
             )
             logger.info("work.ai_exited", exit_code=exit_code, tool=resolved_tool)
         except (ValueError, KeyError):
@@ -294,10 +438,21 @@ def start(
 
         stop_title_keeper()
 
+        # Post-exit: capture token usage and update PR
+        if adapter is not None:
+            _post_exit_capture(
+                transcript_path=transcript_path,
+                adapter=adapter,
+                repo_root=repo_root,
+                branch=branch_name,
+                ai_tool=resolved_tool,
+                model=resolved_model,
+            )
+
         # Add worked-by labels
         with contextlib.suppress(Exception):
             add_worked_by_labels(provider, task.id, resolved_tool, resolved_model)
-    else:
+    elif not resolved_tool:
         console.info("No AI tool configured. Worktree ready for manual work.")
         console.detail(f"cd {worktree_path}")
 
@@ -345,6 +500,7 @@ def _resolve_target(
 def batch(
     issue_numbers: list[str],
     ai_tool: str | None = None,
+    model: str | None = None,
     project_root: Path | None = None,
 ) -> bool:
     """Start parallel work sessions for multiple issues.
@@ -354,8 +510,6 @@ def batch(
 
     Behavioral reference: lib/work/terminal.sh:_work_do_batch()
     """
-    from ghaiw.utils.terminal import launch_in_new_terminal
-
     config = load_config(project_root)
     cwd = project_root or Path.cwd()
 
@@ -388,6 +542,8 @@ def batch(
         cmd = ["ghaiwpy", "work", "start", issue_id]
         if resolved_tool:
             cmd.extend(["--ai", resolved_tool])
+        if model:
+            cmd.extend(["--model", model])
 
         console.step(f"Launching #{issue_id} in new terminal")
         if launch_in_new_terminal(cmd, cwd=str(repo_root), title=f"ghaiwpy #{issue_id}"):
@@ -402,6 +558,8 @@ def batch(
             cmd = ["ghaiwpy", "work", "start", issue_id]
             if resolved_tool:
                 cmd.extend(["--ai", resolved_tool])
+            if model:
+                cmd.extend(["--model", model])
 
             console.step(f"Launching #{issue_id} in new terminal")
             if launch_in_new_terminal(cmd, cwd=str(repo_root), title=f"ghaiwpy #{issue_id}"):
@@ -886,8 +1044,10 @@ def sync(
 
 
 def done(
+    target: str | None = None,
     no_close: bool = False,
     draft: bool = False,
+    no_cleanup: bool = False,
     project_root: Path | None = None,
 ) -> bool:
     """Complete work session — create PR or merge directly.
@@ -896,8 +1056,17 @@ def done(
 
     Detects current branch, extracts issue number, reads merge strategy
     from config, and delegates to _done_via_pr or _done_via_direct.
+
+    Args:
+        target: Optional issue number, worktree name, or plan file.
+            If None, detects from current branch.
+        no_close: Don't close the issue on merge.
+        draft: Create PR as draft.
+        no_cleanup: Don't remove worktree after merge (direct strategy).
+        project_root: Repository root.
     """
     config = load_config(project_root)
+    provider = get_provider(config)
     cwd = project_root or Path.cwd()
 
     try:
@@ -906,6 +1075,24 @@ def done(
         console.error("Not inside a git repository")
         return False
 
+    # If target is a plan file, create issue first (skip if target looks like a number)
+    if target and not target.isdigit():
+        target_path = Path(target).expanduser()
+        if target_path.is_file():
+            from ghaiw.services.task_service import create_from_plan_file
+
+            console.info(f"Creating issue from plan file: {target}")
+            task = create_from_plan_file(target_path, config=config, provider=provider)
+            if not task:
+                return False
+            target = task.id
+
+    # If target specifies a worktree, navigate to it
+    if target:
+        wt_path = find_worktree_path(target, project_root=repo_root)
+        if wt_path:
+            cwd = wt_path
+
     # Detect branch and issue
     try:
         branch = git_repo.get_current_branch(cwd)
@@ -913,7 +1100,7 @@ def done(
         console.error("Cannot determine current branch (detached HEAD?)")
         return False
 
-    issue_number = extract_issue_from_branch(branch)
+    issue_number = target or extract_issue_from_branch(branch)
     if not issue_number:
         console.error(f"Cannot extract issue number from branch: {branch}")
         return False
@@ -943,6 +1130,7 @@ def done(
             main_branch=main_branch,
             close_issue=not no_close,
             config=config,
+            no_cleanup=no_cleanup,
         )
     else:
         return _done_via_pr(
@@ -1041,6 +1229,7 @@ def _done_via_direct(
     main_branch: str,
     close_issue: bool,
     config: ProjectConfig,
+    no_cleanup: bool = False,
 ) -> bool:
     """Merge directly into main and clean up.
 
@@ -1085,14 +1274,15 @@ def _done_via_direct(
         except Exception as e:
             console.warn(f"Could not close issue #{issue_number}: {e}")
 
-    # Cleanup worktree
-    console.step("Cleaning up worktree...")
-    try:
-        git_branch.delete_branch(repo_root, branch, force=True)
-        git_worktree.prune_worktrees(repo_root)
-        console.success("Worktree cleaned up.")
-    except GitError:
-        pass
+    # Cleanup worktree (unless --no-cleanup)
+    if not no_cleanup:
+        console.step("Cleaning up worktree...")
+        try:
+            git_branch.delete_branch(repo_root, branch, force=True)
+            git_worktree.prune_worktrees(repo_root)
+            console.success("Worktree cleaned up.")
+        except GitError:
+            pass
 
     console.empty()
     console.banner("Work done (direct merge)")
@@ -1151,13 +1341,26 @@ def list_sessions(
         if not issue_number and not show_all:
             continue
 
-        # Classify staleness
+        # Classify staleness (also fetches issue state)
+        provider_inst = get_provider(config)
         staleness = classify_staleness(
             repo_root=repo_root,
             branch=wt_branch,
             main_branch=main_branch,
             issue_number=issue_number,
+            provider=provider_inst,
         )
+
+        # Fetch issue state for display
+        issue_state: str | None = None
+        issue_title: str | None = None
+        if issue_number:
+            try:
+                task_info = provider_inst.read_task(issue_number)
+                issue_state = task_info.state.value
+                issue_title = task_info.title
+            except Exception:
+                pass
 
         # Count commits ahead
         try:
@@ -1169,6 +1372,8 @@ def list_sessions(
             "path": wt_path,
             "branch": wt_branch,
             "issue": issue_number,
+            "issue_state": issue_state,
+            "issue_title": issue_title,
             "staleness": staleness.value,
             "commits_ahead": ahead,
         }
@@ -1186,7 +1391,9 @@ def list_sessions(
     for s in sessions:
         staleness_label = s["staleness"].upper().replace("_", " ")
         issue_str = f"#{s['issue']}" if s["issue"] else "(no issue)"
-        console.step(f"[{staleness_label}] {issue_str}")
+        state_str = f" [{s['issue_state'].upper()}]" if s.get("issue_state") else ""
+        title_str = f" {s['issue_title']}" if s.get("issue_title") else ""
+        console.step(f"[{staleness_label}] {issue_str}{state_str}{title_str}")
         console.detail(f"Path: {s['path']}")
         console.detail(f"Branch: {s['branch']} ({s['commits_ahead']} commit(s) ahead)")
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -15,6 +15,7 @@ from ghaiw.services.plan_service import (
     discover_plan_files,
     get_plan_prompt_template,
     render_plan_prompt,
+    run_ai_planning_session,
     validate_plan_files,
 )
 
@@ -200,3 +201,53 @@ class TestPlanFile:
         assert "complexity" in plan.sections
         assert "tasks" in plan.sections
         assert "acceptance criteria" in plan.sections
+
+
+# ---------------------------------------------------------------------------
+# Transcript wiring tests
+# ---------------------------------------------------------------------------
+
+
+class TestTranscriptWiring:
+    def test_launch_passes_transcript_path(self, tmp_path: Path) -> None:
+        """run_ai_planning_session should pass transcript_path to adapter.launch()."""
+        transcript = tmp_path / ".transcript"
+
+        with patch("ghaiw.services.plan_service.AbstractAITool.get") as mock_get:
+            adapter = MagicMock()
+            adapter.capabilities.return_value = MagicMock(
+                supports_headless=False, headless_flag=None
+            )
+            adapter.launch.return_value = 0
+            mock_get.return_value = adapter
+
+            run_ai_planning_session(
+                ai_tool="claude",
+                plan_dir=str(tmp_path),
+                model=None,
+                transcript_path=transcript,
+            )
+
+            adapter.launch.assert_called_once()
+            call_kwargs = adapter.launch.call_args[1]
+            assert call_kwargs["transcript_path"] == transcript
+
+    def test_launch_passes_none_transcript(self) -> None:
+        """run_ai_planning_session should accept None for transcript_path."""
+        with patch("ghaiw.services.plan_service.AbstractAITool.get") as mock_get:
+            adapter = MagicMock()
+            adapter.capabilities.return_value = MagicMock(
+                supports_headless=False, headless_flag=None
+            )
+            adapter.launch.return_value = 0
+            mock_get.return_value = adapter
+
+            run_ai_planning_session(
+                ai_tool="claude",
+                plan_dir="/tmp/test",
+                model=None,
+                transcript_path=None,
+            )
+
+            call_kwargs = adapter.launch.call_args[1]
+            assert call_kwargs["transcript_path"] is None

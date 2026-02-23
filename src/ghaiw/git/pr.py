@@ -162,6 +162,29 @@ def merge_pr(
     )
 
 
+def update_pr_body(repo_root: Path, pr_number: int, body: str) -> bool:
+    """Update the body of an existing pull request.
+
+    Args:
+        repo_root: Repository root directory.
+        pr_number: PR number to update.
+        body: New PR body content (Markdown).
+
+    Returns:
+        True if the update succeeded, False otherwise.
+    """
+    result = _run_gh(
+        "pr",
+        "edit",
+        str(pr_number),
+        "--body",
+        body,
+        cwd=repo_root,
+        check=False,
+    )
+    return result.returncode == 0
+
+
 def get_pr_for_branch(repo_root: Path, branch: str) -> dict[str, str | int] | None:
     """Find an open PR for the given branch.
 

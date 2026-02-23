@@ -1,4 +1,4 @@
-"""Admin commands — init, update, deinit, check, check-config."""
+"""Admin commands — init, update, deinit, check, check-config, shell-init."""
 
 from __future__ import annotations
 
@@ -26,11 +26,20 @@ def init(
 
 
 @admin_app.command()
-def update() -> None:
+def update(
+    skip_self_upgrade: bool = typer.Option(
+        False,
+        "--skip-self-upgrade",
+        help="Skip source-version self-upgrade check.",
+    ),
+) -> None:
     """Re-sync managed files from newer ghaiw version."""
     from ghaiw.services.init_service import update as do_update
 
-    success = do_update(project_root=Path.cwd())
+    success = do_update(
+        project_root=Path.cwd(),
+        skip_self_upgrade=skip_self_upgrade,
+    )
     raise typer.Exit(0 if success else 1)
 
 
@@ -73,3 +82,25 @@ def check_config() -> None:
     result = validate_config(Path.cwd())
     typer.echo(result.format_output())
     raise typer.Exit(result.exit_code)
+
+
+@admin_app.command("shell-init")
+def shell_init() -> None:
+    """Output a shell function wrapper for eval.
+
+    Usage: eval "$(ghaiwpy shell-init)"
+
+    Installs a shell function that intercepts `ghaiwpy work cd <n>`
+    to perform a real `cd` in the caller's shell.
+    """
+    # Print the shell function to stdout — no Rich formatting
+    print("""\
+ghaiwpy() {
+  if [[ "${1:-}" == "work" && "${2:-}" == "cd" ]]; then
+    local __p
+    __p=$(command ghaiwpy "$@") && cd "$__p"
+    return $?
+  fi
+  command ghaiwpy "$@"
+}""")
+    raise typer.Exit(0)

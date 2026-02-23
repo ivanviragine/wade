@@ -176,6 +176,7 @@ def run_ai_planning_session(
         worktree_path=Path.cwd(),
         model=model,
         prompt=None,  # Prompt is via clipboard, not CLI arg
+        transcript_path=transcript_path,
     )
     return exit_code
 
@@ -371,6 +372,26 @@ def _finalize_issues(
     # Add planned-by labels
     for issue_id in issue_numbers:
         add_planned_by_labels(provider, issue_id, ai_tool, model)
+
+    # Auto-dependency analysis for 2+ issues
+    if len(issue_numbers) >= 2:
+        console.empty()
+        console.step("Running automatic dependency analysis...")
+        try:
+            from ghaiw.services.deps_service import analyze_deps
+
+            graph = analyze_deps(
+                issue_numbers=issue_numbers,
+                ai_tool=ai_tool,
+                model=model,
+            )
+            if graph and graph.edges:
+                console.success(f"Applied {len(graph.edges)} dependency edge(s)")
+            elif graph is not None:
+                console.info("No dependencies found between issues.")
+        except Exception as e:
+            logger.warning("plan.auto_deps_failed", error=str(e))
+            console.warn(f"Auto-dependency analysis failed: {e}")
 
     # List created issues
     console.empty()

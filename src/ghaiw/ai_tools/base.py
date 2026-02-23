@@ -104,6 +104,7 @@ class AbstractAITool(ABC):
         model: str | None = None,
         prompt: str | None = None,
         detach: bool = False,
+        transcript_path: Path | None = None,
     ) -> int:
         """Launch the AI tool in the given worktree.
 
@@ -112,6 +113,8 @@ class AbstractAITool(ABC):
             model: Model ID to use (or None for tool default).
             prompt: Optional prompt text (clipboard or headless).
             detach: If True, launch in background (GUI tools).
+            transcript_path: Optional path to write session transcript for
+                token usage extraction.
 
         Returns:
             Exit code from the tool process (0 for detached).

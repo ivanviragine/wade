@@ -22,6 +22,7 @@ from ghaiw.providers.base import AbstractTaskProvider
 from ghaiw.providers.registry import get_provider
 from ghaiw.services.task_service import ensure_issue_label
 from ghaiw.ui.console import console
+from ghaiw.utils.clipboard import copy_to_clipboard
 
 logger = structlog.get_logger()
 
@@ -345,6 +346,77 @@ def run_headless_analysis(
 
 
 # ---------------------------------------------------------------------------
+# Interactive fallback
+# ---------------------------------------------------------------------------
+
+
+def _run_interactive_analysis(
+    ai_tool: str,
+    prompt: str,
+    model: str | None = None,
+    plan_dir: str | None = None,
+) -> str | None:
+    """Run dependency analysis interactively when headless fails.
+
+    Copies prompt to clipboard, launches AI interactively, then reads
+    the output from a temp file.
+
+    Behavioral reference: lib/task/deps.sh fallback at line 194
+    """
+    import tempfile
+
+    from ghaiw.ai_tools.base import AbstractAITool
+    from ghaiw.models.ai import AIToolID
+
+    # Set up output file for the AI to write results to
+    created_tmp = plan_dir is None
+    output_dir = plan_dir or tempfile.mkdtemp(prefix="ghaiw-deps-")
+    output_file = Path(output_dir) / "deps-output.txt"
+
+    # Append output instruction to prompt
+    interactive_prompt = (
+        f"{prompt}\n\n"
+        f"Write your dependency output to: {output_file}\n"
+        f"Format: one line per edge: <number> -> <number> # reason"
+    )
+
+    copy_to_clipboard(interactive_prompt)
+    console.success("Copied dependency analysis prompt to clipboard.")
+    console.hint("Paste it in the AI tool to get started.")
+    console.empty()
+
+    # Launch AI interactively
+    try:
+        adapter = AbstractAITool.get(AIToolID(ai_tool))
+        adapter.launch(
+            worktree_path=Path.cwd(),
+            model=model,
+        )
+    except (ValueError, KeyError):
+        console.warn(f"Unknown AI tool: {ai_tool}")
+        return None
+    except Exception as e:
+        console.warn(f"AI tool launch failed: {e}")
+        return None
+
+    # Read output file after AI exits
+    try:
+        if output_file.is_file():
+            text = output_file.read_text(encoding="utf-8").strip()
+            if text:
+                return text
+    finally:
+        # Clean up temp dir if we created it
+        if created_tmp:
+            import shutil
+
+            shutil.rmtree(output_dir, ignore_errors=True)
+
+    console.warn("No dependency output file found after interactive session.")
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Main orchestrator
 # ---------------------------------------------------------------------------
 
@@ -415,11 +487,15 @@ def analyze_deps(
         console.warn("Headless output not parseable.")
         output = None
     else:
-        console.warn(
-            f"Headless mode not available for {resolved_tool}. "
-            "Use interactive mode for dependency analysis."
+        console.info(
+            f"Headless mode not available for {resolved_tool}. Falling back to interactive..."
         )
-        return None
+        output = _run_interactive_analysis(
+            resolved_tool,
+            prompt,
+            resolved_model,
+            plan_dir=None,
+        )
 
     # Parse edges
     edges = parse_deps_output(output, valid_numbers) if output else []
@@ -455,8 +531,8 @@ def analyze_deps(
     updated = apply_deps_to_issues(provider, issue_numbers, edges)
     console.info(f"Updated {updated} issue(s) with dependency refs")
 
-    # Create tracking issue (3+ auto, skip for 2)
-    if len(issue_numbers) >= 3:
+    # Create tracking issue (2+ issues)
+    if len(issue_numbers) >= 2:
         tracking_id = create_tracking_issue(provider, config, issue_numbers, graph, task_titles)
         if tracking_id:
             graph.tracking_task_id = tracking_id

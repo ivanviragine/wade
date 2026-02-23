@@ -72,9 +72,9 @@ src/ghaiw/
 ├── __main__.py          # python -m ghaiw
 ├── cli/                 # Typer commands (thin dispatch)
 │   ├── main.py          # Root app + interactive menu, subcommand registration
-│   ├── admin.py         # init, update, deinit, check, check-config
+│   ├── admin.py         # init, update, deinit, check, check-config, shell-init
 │   ├── task.py          # task plan/create/list/read/update/close/deps
-│   └── work.py          # work start/done/sync/list/batch/remove/cd
+│   └── work.py          # work start/done/sync/list/batch/remove/cd (interactive menu)
 ├── models/              # Pydantic domain models (pure data, no I/O)
 │   ├── config.py        # ProjectConfig, ProjectSettings, AIConfig, ComplexityModelMapping
 │   ├── task.py          # Task, PlanFile, Complexity, Label, TaskState
@@ -118,7 +118,10 @@ src/ghaiw/
 ├── config/              # Configuration management
 │   ├── loader.py        # Find + parse .ghaiw.yml (walk up from CWD)
 │   ├── schema.py        # Re-exports from models (Pydantic Settings)
-│   └── defaults.py      # Hardcoded defaults per AI tool
+│   ├── defaults.py      # Hardcoded defaults per AI tool
+│   ├── migrations.py    # Config migration pipeline (v1→v2, model normalization)
+│   ├── claude_allowlist.py  # .claude/settings.json allowlist management
+│   └── legacy.py        # Legacy artifact cleanup
 ├── ui/                  # Terminal UI (Rich)
 │   ├── console.py       # Console class
 │   ├── prompts.py       # confirm, input, select, menu
@@ -127,10 +130,11 @@ src/ghaiw/
 │   └── setup.py         # structlog configuration
 └── utils/               # Shared utilities
     ├── clipboard.py     # Cross-platform clipboard
-    ├── terminal.py      # Tab title, TTY detection
+    ├── terminal.py      # Tab title, TTY detection, launch_in_new_terminal
     ├── slug.py          # Title -> URL-safe slug
     ├── markdown.py      # Plan file parsing
-    └── process.py       # Subprocess helpers
+    ├── process.py       # Subprocess helpers
+    └── install.py       # Self-upgrade helpers (venv/source detection, re-exec)
 ```
 
 ### Layered Architecture
@@ -149,9 +153,13 @@ No circular dependencies. Models are pure data. Services orchestrate. **Never im
 
 ### Command Dispatch
 
-`src/ghaiw/cli/main.py` is the root Typer application. It registers subcommand groups (`task`, `work`) and admin commands (`init`, `update`, `deinit`, `check`, `check-config`). The `tasks` alias is registered as a hidden Typer group pointing to the same `task_app`. The `ghaiwpy` entry point (defined in `pyproject.toml` as `ghaiw.cli.main:app`) invokes the root app.
+`src/ghaiw/cli/main.py` is the root Typer application. It registers subcommand groups (`task`, `work`) and admin commands (`init`, `update`, `deinit`, `check`, `check-config`, `shell-init`). The `tasks` alias is registered as a hidden Typer group pointing to the same `task_app`. The `ghaiwpy` entry point (defined in `pyproject.toml` as `ghaiw.cli.main:app`) invokes the root app.
 
 CLI modules are **thin dispatch layers** — they parse flags via Typer, then call service methods. Business logic lives in `services/`, not in `cli/`.
+
+**Interactive menus**: `ghaiwpy work` with no subcommand shows an interactive menu (start/done/sync/list/batch/remove). `ghaiwpy task create` without `--plan-file` prompts interactively for title and body.
+
+**Shell integration**: `ghaiwpy shell-init` outputs a shell function wrapper for `eval "$(ghaiwpy shell-init)"` that intercepts `ghaiwpy work cd <n>` to perform a real `cd` in the caller's shell.
 
 ### Key Design Patterns
 
@@ -201,6 +209,41 @@ hooks:
 
 **Per-command AI tool and model overrides**: The `ai` section supports `plan`, `deps`, and `work` sub-sections, each with optional `tool` and `model` keys. The fallback chain is: CLI `--ai`/`--model` flag -> command-specific config -> global `default_tool`. This is implemented in `ProjectConfig.get_ai_tool(command)` and `ProjectConfig.get_model(command)`.
 
+### Config Migration Pipeline
+
+`config/migrations.py` provides 7 idempotent migrations run during `ghaiwpy update`:
+
+| # | Function | What it does |
+|---|----------|-------------|
+| 1 | `ensure_version(raw)` | Set `version: 2` if missing |
+| 2 | `migrate_deprecated_model_values(raw, ai_tool)` | Replace deprecated model names (e.g., `gemini-3-flash` -> `claude-haiku-4-5`) |
+| 3 | `migrate_flat_to_nested_models(raw, ai_tool)` | Move v1 flat `model_easy` keys to v2 nested `models.<tool>.easy` |
+| 4 | `normalize_model_format(raw, ai_tool)` | Dashes/dots based on tool (Claude=dashes, Copilot=dots) |
+| 5 | `backfill_missing_model_keys(raw, ai_tool)` | Fill missing tier keys with probed/default models |
+| 6 | `backfill_per_command_keys(raw)` | Ensure `ai.plan`, `ai.deps`, `ai.work` sections exist |
+| 7 | `normalize_merge_strategy(raw)` | Lowercase `pr` -> uppercase `PR` |
+
+`run_all_migrations(config_path)` loads YAML, runs all 7 in order, writes back only if changed. Returns `True` if the file was modified.
+
+### Update Flow
+
+`ghaiwpy update` performs 12 steps:
+
+1. Validate repo + config existence
+2. Self-upgrade if source version differs (see below)
+3. Read old version from manifest
+4. Show version transition message
+5. Run config migration pipeline
+6. Reload config + backfill probed models
+7. Refresh skill files
+8. Clean legacy artifacts (`config/legacy.py`)
+9. Configure Claude Code allowlist (`config/claude_allowlist.py`)
+10. Configure Gemini experimental (if applicable)
+11. Refresh .gitignore + AGENTS.md pointer
+12. Rebuild manifest with version
+
+**Self-upgrade mechanism**: When `ghaiwpy` is installed via `install.sh` (frozen venv at `~/.local/share/ghaiw/venv/`), the installer records the source repo path in `ghaiw-source.txt`. On `ghaiwpy update`, if the installed version differs from the source version, `utils/install.py:self_upgrade()` reinstalls from source and `re_exec()` restarts the process with the new code. Editable installs (`uv pip install -e .`) skip this naturally. Pass `--skip-self-upgrade` to bypass.
+
 ### AI Interaction Pattern
 
 All AI-interactive commands follow the same pattern:
@@ -210,7 +253,9 @@ All AI-interactive commands follow the same pattern:
 3. **Launch AI CLI** — Execute the AI tool binary via `AbstractAITool.launch()`. The tool runs interactively in the terminal.
 4. **Post-AI processing** — After the AI CLI exits, the service picks up where it left off (e.g., detecting new issues, parsing output files, capturing token usage from transcripts).
 
-Each AI tool adapter implements `capabilities()` (binary name, model flag syntax, headless flag), `launch()`, `parse_transcript()`, `is_model_compatible()`, and `build_launch_command()`. When adding a new AI-interactive command, follow this existing pattern.
+Each AI tool adapter implements `capabilities()` (binary name, model flag syntax, headless flag), `launch()`, `parse_transcript()`, `is_model_compatible()`, and `build_launch_command()`. The `launch()` method accepts an optional `transcript_path: Path | None` parameter — when provided, the adapter captures session output to that file for post-session token usage extraction. When adding a new AI-interactive command, follow this existing pattern.
+
+**Deps interactive fallback**: When headless analysis fails (tool doesn't support `--print`/`--prompt`), `deps_service.py` falls back to interactive mode: copies the dependency prompt to clipboard, launches the AI tool interactively, then reads the output from `{plan_dir}/deps-output.txt` after exit.
 
 ### Issue Detection (Snapshot/Diff Pattern)
 
@@ -345,6 +390,33 @@ The AGENTS.md workflow pointer uses HTML comment markers to enable robust detect
 - **Constants**: `UPPER_SNAKE_CASE` — module-level constants (`MARKER_START`, `CONFIG_FILENAME`)
 - **Enums**: `StrEnum` for string-valued enums (`AIToolID`, `MergeStrategy`, `ProviderID`, `ModelTier`)
 - **CLI commands**: Match the Bash ghaiw commands — `ghaiwpy task plan`, `ghaiwpy work start`, etc.
+
+### CLI Flag Reference
+
+Key flags added for Bash parity:
+
+**`ghaiwpy work start`:**
+- `--detach` — Launch AI in a new terminal tab/window (non-blocking). Uses `build_launch_command()` + `launch_in_new_terminal()`.
+- `--cd` — Create worktree, print its path to stdout, and exit (no AI launch). Used internally by `ghaiwpy work cd`.
+
+**`ghaiwpy work done`:**
+- `target` (positional) — Optional issue number, worktree name, or plan file path. If a file path, creates the issue first. If a number/name, finds the worktree. If omitted, detects from current branch.
+- `--no-cleanup` — Keep the worktree after PR creation / direct merge.
+
+**`ghaiwpy work batch`:**
+- `--model` — Pass a specific AI model to all parallel sessions.
+
+**`ghaiwpy work remove`:**
+- `--all` — Hidden alias for `--stale` (removes all stale worktrees).
+
+**`ghaiwpy update`:**
+- `--skip-self-upgrade` — Skip the source-version self-upgrade check.
+
+**`ghaiwpy task create`:**
+- No flags required — when `--plan-file` is omitted, prompts interactively for title and body.
+
+**`ghaiwpy shell-init`:**
+- No flags. Outputs a shell function for `eval "$(ghaiwpy shell-init)"`.
 
 ### Adding a New Subcommand to `task`
 

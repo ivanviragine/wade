@@ -67,8 +67,8 @@ written to a file or discussed in conversation — you **must** proceed to
 create a GitHub Issue from it. Follow the task skill (@.claude/skills/task/SKILL.md)
 through **all** steps:
 
-1. Write the plan file
-2. Create the issue via `ghaiwpy task create --plan-file`
+1. Write the plan file (to `/tmp/`, never into the repo)
+2. Create the issue via `ghaiwpy task create --plan-file <path>` (from a file) or `ghaiwpy task create` (interactive)
 3. List the created issues and show `ghaiwpy work start <number>` as a hint
    (this is mandatory — see the task skill Step 7). Do **not** run the command
    yourself or offer it as a selectable option; the human starts work sessions.

@@ -49,32 +49,64 @@ ghaiwpy work done
 | Command | Description |
 |---------|-------------|
 | `ghaiwpy init` | Initialize ghaiw in the current project |
-| `ghaiwpy update` | Update ghaiw skills and config |
+| `ghaiwpy update` | Update ghaiw skills, config migrations, and self-upgrade |
+| `ghaiwpy update --skip-self-upgrade` | Update without checking for source code changes |
 | `ghaiwpy deinit` | Remove ghaiw from the project |
 | `ghaiwpy check` | Check worktree status (IN_WORKTREE / IN_MAIN_CHECKOUT / NOT_IN_GIT_REPO) |
 | `ghaiwpy check-config` | Validate `.ghaiw.yml` configuration |
+| `ghaiwpy shell-init` | Output shell function wrapper (see Shell Integration below) |
 
 ### Task Management
 
 | Command | Description |
 |---------|-------------|
 | `ghaiwpy task plan` | Launch AI planning session |
-| `ghaiwpy task create` | Create a GitHub issue (interactive or from plan file) |
+| `ghaiwpy task create` | Create a GitHub issue interactively (prompts for title + body) |
+| `ghaiwpy task create --plan-file <path>` | Create a GitHub issue from a plan markdown file |
 | `ghaiwpy task list` | List open issues with the configured label |
 | `ghaiwpy task read <N>` | Display issue details |
 | `ghaiwpy task close <N>` | Close an issue |
-| `ghaiwpy task deps` | Analyze dependencies between issues |
+| `ghaiwpy task deps <N> <M> ...` | Analyze dependencies between issues |
 
 ### Work Sessions
 
 | Command | Description |
 |---------|-------------|
+| `ghaiwpy work` | Interactive menu (no args) |
 | `ghaiwpy work start <N>` | Create worktree and start AI session for issue N |
+| `ghaiwpy work start <N> --detach` | Start AI session in a new terminal tab |
+| `ghaiwpy work start <N> --cd` | Create worktree and print path (no AI launch) |
 | `ghaiwpy work sync` | Sync feature branch with main (fetch + merge) |
 | `ghaiwpy work done` | Push branch and create PR (or direct merge) |
+| `ghaiwpy work done [target]` | Finalize a specific issue, worktree, or plan file |
+| `ghaiwpy work done --no-cleanup` | Create PR but keep the worktree |
 | `ghaiwpy work list` | List active worktrees and their status |
-| `ghaiwpy work batch` | Start parallel sessions for multiple issues |
+| `ghaiwpy work batch <N> <M> ...` | Start parallel sessions for multiple issues |
+| `ghaiwpy work batch --model <model>` | Parallel sessions with a specific AI model |
 | `ghaiwpy work remove <N>` | Remove a worktree |
+| `ghaiwpy work remove --stale` | Remove all stale worktrees |
+| `ghaiwpy work cd <N>` | Print worktree path (for shell `cd`, see Shell Integration) |
+
+## Shell Integration
+
+Add this to your shell profile (`.bashrc`, `.zshrc`, etc.) to enable `ghaiwpy work cd`:
+
+```bash
+eval "$(ghaiwpy shell-init)"
+```
+
+This installs a shell function that intercepts `ghaiwpy work cd <N>` and performs a real `cd` into the worktree directory in your current shell.
+
+## Self-Upgrade
+
+When installed via `./install.sh` (frozen venv), `ghaiwpy update` automatically checks if the source repo has a newer version and reinstalls itself before proceeding with project updates. This ensures you always run the latest code without manual reinstalls.
+
+```bash
+# Skip self-upgrade (e.g., in CI or when testing)
+ghaiwpy update --skip-self-upgrade
+```
+
+Editable installs (`uv pip install -e ".[dev]"`) skip self-upgrade automatically since code changes are reflected immediately.
 
 ## Configuration
 
@@ -193,6 +225,8 @@ ghaiwpy --install-completion zsh
 # Fish
 ghaiwpy --install-completion fish
 ```
+
+> **Note:** Shell completion is separate from `ghaiwpy shell-init`. The former provides tab-completion for subcommands; the latter enables `ghaiwpy work cd` to change your shell's directory.
 
 ## License
 

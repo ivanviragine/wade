@@ -273,7 +273,9 @@ If you are working on the tracking issue itself (not a specific child):
 ## Rules
 
 - **Never create issues without user confirmation** (Step 3 is mandatory).
-- **Always use `ghaiwpy task create --plan-file`** — never construct `gh issue create` commands manually.
+- **Always use `ghaiwpy task create`** — never construct `gh issue create` commands manually.
+  - From a plan file: `ghaiwpy task create --plan-file <path>`
+  - Interactively (no plan file): `ghaiwpy task create` (prompts for title + body)
 - **Every plan file must have a `# Title`** as the first heading (the script requires it).
 - Keep issue titles concise and actionable (max 256 chars).
 - Each issue should be independently implementable (even if there are dependencies).

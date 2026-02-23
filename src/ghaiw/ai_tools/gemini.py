@@ -88,6 +88,7 @@ class GeminiAdapter(AbstractAITool):
         model: str | None = None,
         prompt: str | None = None,
         detach: bool = False,
+        transcript_path: Path | None = None,
     ) -> int:
         cmd = self.build_launch_command(model=model)
         logger.info("ai_tool.launch", tool="gemini", model=model, cwd=str(worktree_path))
