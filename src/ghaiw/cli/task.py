@@ -127,9 +127,12 @@ def close(
     raise typer.Exit(0 if success else 1)
 
 
+_DEPS_NUMBERS = typer.Argument(None, help="Issue numbers to analyze.")
+
+
 @task_app.command()
 def deps(
-    numbers: list[int] = typer.Argument(None, help="Issue numbers to analyze."),
+    numbers: list[int] = _DEPS_NUMBERS,
     ai: str | None = typer.Option(None, "--ai", help="AI tool for analysis."),
     model: str | None = typer.Option(None, "--model", help="AI model to use."),
 ) -> None:

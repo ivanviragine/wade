@@ -9,6 +9,7 @@ Behavioral reference: lib/task/crud.sh (_task_do_plan, _task_run_ai_planning)
 
 from __future__ import annotations
 
+import contextlib
 import shutil
 import tempfile
 from pathlib import Path
@@ -23,7 +24,7 @@ from ghaiw.ai_tools.transcript import (
 from ghaiw.config.loader import load_config
 from ghaiw.models.ai import AIToolID, TokenUsage
 from ghaiw.models.config import ProjectConfig
-from ghaiw.models.task import PlanFile, Task
+from ghaiw.models.task import PlanFile
 from ghaiw.providers.base import AbstractTaskProvider
 from ghaiw.providers.registry import get_provider
 from ghaiw.services.task_service import (
@@ -347,18 +348,18 @@ def _finalize_issues(
             issue_numbers=issue_numbers,
             ai_tool=ai_tool,
             model=model,
-            total_tokens=usage.total,
-            input_tokens=usage.input,
-            output_tokens=usage.output,
-            cached_tokens=usage.cached,
+            total_tokens=usage.total_tokens,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cached_tokens=usage.cached_tokens,
             premium_requests=usage.premium_requests,
             model_breakdown=(
                 [
                     {
                         "model": b.model,
-                        "input": b.input,
-                        "output": b.output,
-                        "cached": b.cached,
+                        "input": b.input_tokens,
+                        "output": b.output_tokens,
+                        "cached": b.cached_tokens,
                     }
                     for b in usage.model_breakdown
                 ]
@@ -390,7 +391,5 @@ def _finalize_issues(
 
 def _cleanup_plan_dir(plan_dir: str) -> None:
     """Remove the temporary plan directory."""
-    try:
+    with contextlib.suppress(Exception):
         shutil.rmtree(plan_dir, ignore_errors=True)
-    except Exception:
-        pass

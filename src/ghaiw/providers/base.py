@@ -7,6 +7,7 @@ and exposes a uniform interface for task CRUD, label management, and PR ops.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 from ghaiw.models.task import Label, Task, TaskState
 
@@ -109,7 +110,7 @@ class AbstractTaskProvider(ABC):
             f"{type(self).__name__} does not support pull requests"
         )
 
-    def get_pr_for_branch(self, branch: str) -> dict | None:
+    def get_pr_for_branch(self, branch: str) -> dict[str, Any] | None:
         """Get PR info for a branch. Returns dict with number/body or None."""
         raise NotImplementedError(
             f"{type(self).__name__} does not support pull requests"

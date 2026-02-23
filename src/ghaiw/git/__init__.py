@@ -39,34 +39,29 @@ from ghaiw.git.worktree import (
 )
 
 __all__ = [
-    # repo
+    "GhCliError",
     "GitError",
+    "abort_merge",
+    "branch_exists",
+    "commits_ahead",
+    "create_branch",
+    "create_pr",
+    "create_worktree",
+    "delete_branch",
     "detect_main_branch",
+    "fetch_origin",
+    "get_conflicted_files",
     "get_current_branch",
+    "get_pr_for_branch",
     "get_remote_url",
     "get_repo_root",
     "is_clean",
     "is_git_repo",
     "is_worktree",
-    # branch
-    "branch_exists",
-    "commits_ahead",
-    "create_branch",
-    "delete_branch",
-    "make_branch_name",
-    # worktree
-    "create_worktree",
     "list_worktrees",
+    "make_branch_name",
+    "merge_branch",
+    "merge_pr",
     "prune_worktrees",
     "remove_worktree",
-    # sync
-    "abort_merge",
-    "fetch_origin",
-    "get_conflicted_files",
-    "merge_branch",
-    # pr
-    "GhCliError",
-    "create_pr",
-    "get_pr_for_branch",
-    "merge_pr",
 ]

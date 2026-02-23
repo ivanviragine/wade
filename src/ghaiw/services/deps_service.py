@@ -9,7 +9,6 @@ Behavioral reference: lib/task/deps.sh
 from __future__ import annotations
 
 import re
-import tempfile
 from pathlib import Path
 
 import structlog
@@ -19,7 +18,6 @@ from ghaiw.config.loader import load_config
 from ghaiw.models.ai import AIToolID
 from ghaiw.models.config import ProjectConfig
 from ghaiw.models.deps import DependencyEdge, DependencyGraph
-from ghaiw.models.task import Task
 from ghaiw.providers.base import AbstractTaskProvider
 from ghaiw.providers.registry import get_provider
 from ghaiw.services.task_service import ensure_issue_label

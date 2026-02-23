@@ -14,7 +14,6 @@ from pathlib import Path
 
 from ghaiw.models.ai import ModelBreakdown, TokenUsage
 
-
 # ---------------------------------------------------------------------------
 # Numeric parsing / formatting
 # ---------------------------------------------------------------------------
@@ -125,7 +124,7 @@ def _extract_last_number(text: str) -> str | None:
 
     Matches: "12,345", "1.2k", "2m", "614"
     """
-    matches = re.findall(r"[\d,]+(?:\.\d+)?[kKmM]?", text)
+    matches: list[str] = re.findall(r"[\d,]+(?:\.\d+)?[kKmM]?", text)
     if matches:
         return matches[-1]
     return None
@@ -489,12 +488,12 @@ def extract_token_usage_from_text(text: str) -> TokenUsage:
         return TokenUsage()
 
     # Strategy 1: Gemini table (most structured, highest priority)
-    gemini_usage, gemini_breakdowns = _extract_gemini_table(text)
+    gemini_usage, _gemini_breakdowns = _extract_gemini_table(text)
     if gemini_usage is not None:
         return gemini_usage
 
     # Strategy 2: Copilot summary (includes per-model + premium)
-    copilot_usage, copilot_breakdowns = _extract_copilot_summary(text)
+    copilot_usage, _copilot_breakdowns = _extract_copilot_summary(text)
     if copilot_usage is not None:
         return copilot_usage
 
@@ -646,8 +645,8 @@ def allocate_tokens(
     if total_lines <= 0:
         base = total_tokens // n
         remainder = total_tokens % n
-        result = [base + (1 if i < remainder else 0) for i in range(n)]
-        return result
+        even_result = [base + (1 if i < remainder else 0) for i in range(n)]
+        return even_result
 
     # Proportional allocation
     result: list[int] = []

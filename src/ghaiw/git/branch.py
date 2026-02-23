@@ -7,7 +7,7 @@ from pathlib import Path
 
 import structlog
 
-from ghaiw.git.repo import GitError, _run_git
+from ghaiw.git.repo import _run_git
 
 log = structlog.get_logger(__name__)
 
@@ -47,10 +47,7 @@ def _slugify(text: str, max_length: int = 50) -> str:
         # Try to truncate at a hyphen boundary
         truncated = slug[:max_length]
         last_hyphen = truncated.rfind("-")
-        if last_hyphen > max_length // 2:
-            slug = truncated[:last_hyphen]
-        else:
-            slug = truncated.rstrip("-")
+        slug = truncated[:last_hyphen] if last_hyphen > max_length // 2 else truncated.rstrip("-")
 
     return slug
 

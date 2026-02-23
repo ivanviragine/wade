@@ -13,9 +13,6 @@ from ghaiw.db.tables import (
 )
 
 __all__ = [
-    "create_db_engine",
-    "get_or_create_engine",
-    "init_db",
     "AuditLogRecord",
     "DependencyRecord",
     "ModelBreakdownRecord",
@@ -24,4 +21,7 @@ __all__ = [
     "TaskRecord",
     "TokenUsageRecord",
     "WorktreeRecord",
+    "create_db_engine",
+    "get_or_create_engine",
+    "init_db",
 ]

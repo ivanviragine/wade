@@ -12,6 +12,7 @@ import json
 import re
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import structlog
 
@@ -33,7 +34,7 @@ def _extract_number_from_url(url: str) -> str:
     raise ValueError(f"Could not extract number from URL: {url}")
 
 
-def _parse_gh_task(raw: dict) -> Task:
+def _parse_gh_task(raw: dict[str, Any]) -> Task:
     """Convert a gh JSON object to a Task model."""
     labels = []
     for lbl in raw.get("labels", []):
@@ -47,10 +48,7 @@ def _parse_gh_task(raw: dict) -> Task:
             )
 
     state_str = raw.get("state", "OPEN").lower()
-    if state_str == "closed":
-        state = TaskState.CLOSED
-    else:
-        state = TaskState.OPEN
+    state = TaskState.CLOSED if state_str == "closed" else TaskState.OPEN
 
     return Task(
         id=str(raw.get("number", "")),
@@ -311,14 +309,15 @@ class GitHubProvider(AbstractTaskProvider):
         run(cmd, check=True)
         logger.info("github.pr_merged", number=pr_number, strategy=strategy)
 
-    def get_pr_for_branch(self, branch: str) -> dict | None:
+    def get_pr_for_branch(self, branch: str) -> dict[str, Any] | None:
         """Get PR info for a branch. Returns dict with number/body or None."""
         try:
             result = run(
                 ["gh", "pr", "view", branch, "--json", "number,body"],
                 check=True,
             )
-            return json.loads(result.stdout)
+            data: dict[str, Any] = json.loads(result.stdout)
+            return data
         except CommandError:
             return None
 

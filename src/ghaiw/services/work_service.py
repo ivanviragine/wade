@@ -14,6 +14,7 @@ import json
 import re
 import shutil
 from pathlib import Path
+from typing import Any
 
 import structlog
 
@@ -246,10 +247,8 @@ def start(
     bootstrap_worktree(worktree_path, config, repo_root)
 
     # Add in-progress label
-    try:
+    with contextlib.suppress(Exception):
         add_in_progress_label(provider, task.id)
-    except Exception:
-        pass  # Non-fatal
 
     # Copy work prompt
     prompt = build_work_prompt(task, resolved_tool)
@@ -275,10 +274,8 @@ def start(
             console.warn(f"AI tool launch failed: {e}")
 
         # Add worked-by labels
-        try:
+        with contextlib.suppress(Exception):
             add_worked_by_labels(provider, task.id, resolved_tool, resolved_model)
-        except Exception:
-            pass
     else:
         console.info("No AI tool configured. Worktree ready for manual work.")
         console.detail(f"cd {worktree_path}")
@@ -1020,10 +1017,8 @@ def _done_via_pr(
         return False
 
     # Remove in-progress label
-    try:
+    with contextlib.suppress(Exception):
         remove_in_progress_label(provider, issue_number)
-    except Exception:
-        pass
 
     console.empty()
     console.banner("Work done")
@@ -1049,10 +1044,8 @@ def _done_via_direct(
 
     # Sync first
     console.step(f"Merging {main_branch} into {branch}...")
-    try:
+    with contextlib.suppress(GitError):
         git_sync.fetch_origin(repo_root)
-    except GitError:
-        pass  # Continue with local
 
     try:
         merge_result = git_sync.merge_branch(repo_root, main_branch)
@@ -1075,10 +1068,8 @@ def _done_via_direct(
         return False
 
     # Remove in-progress label
-    try:
+    with contextlib.suppress(Exception):
         remove_in_progress_label(provider, issue_number)
-    except Exception:
-        pass
 
     # Close issue
     if close_issue:
@@ -1114,7 +1105,7 @@ def list_sessions(
     show_all: bool = False,
     json_output: bool = False,
     project_root: Path | None = None,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """List active work sessions / worktrees.
 
     Behavioral reference: lib/work/done.sh:_work_do_list()
@@ -1138,7 +1129,7 @@ def list_sessions(
             main_branch = "main"
 
     worktrees = git_worktree.list_worktrees(repo_root)
-    sessions: list[dict] = []
+    sessions: list[dict[str, Any]] = []
 
     # The first worktree is the main checkout — skip unless --all
     for i, wt in enumerate(worktrees):
@@ -1254,7 +1245,7 @@ def _remove_target(repo_root: Path, target: str, main_branch: str) -> bool:
 def _remove_stale(repo_root: Path, main_branch: str, force: bool) -> bool:
     """Remove all stale worktrees."""
     worktrees = git_worktree.list_worktrees(repo_root)
-    stale_wts: list[dict] = []
+    stale_wts: list[dict[str, Any]] = []
 
     for i, wt in enumerate(worktrees):
         if i == 0:
@@ -1321,15 +1312,11 @@ def _cleanup_worktree(repo_root: Path, wt_path: Path, main_branch: str) -> bool:
         console.warn(f"Worktree removal failed: {e}")
 
     if branch_name and branch_name != main_branch:
-        try:
+        with contextlib.suppress(GitError):
             git_branch.delete_branch(repo_root, branch_name, force=True)
-        except GitError:
-            pass
 
-    try:
+    with contextlib.suppress(GitError):
         git_worktree.prune_worktrees(repo_root)
-    except GitError:
-        pass
 
     console.success(f"Removed {wt_path.name}")
     return True

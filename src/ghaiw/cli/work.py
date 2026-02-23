@@ -78,9 +78,12 @@ def list_sessions(
     raise typer.Exit(0)
 
 
+_BATCH_NUMBERS = typer.Argument(None, help="Issue numbers to work on.")
+
+
 @work_app.command()
 def batch(
-    numbers: list[int] = typer.Argument(None, help="Issue numbers to work on."),
+    numbers: list[int] = _BATCH_NUMBERS,
     ai: str | None = typer.Option(None, "--ai", help="AI tool to use."),
 ) -> None:
     """Start parallel work sessions for multiple issues."""

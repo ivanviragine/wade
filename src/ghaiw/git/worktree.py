@@ -6,7 +6,7 @@ from pathlib import Path
 
 import structlog
 
-from ghaiw.git.repo import GitError, _run_git
+from ghaiw.git.repo import _run_git
 
 log = structlog.get_logger(__name__)
 

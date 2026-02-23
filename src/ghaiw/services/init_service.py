@@ -9,6 +9,7 @@ Behavioral reference: lib/init.sh (ghaiw_init, ghaiw_update, ghaiw_deinit)
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import structlog
 import yaml
@@ -20,15 +21,8 @@ from ghaiw.git import repo
 from ghaiw.git.repo import GitError
 from ghaiw.models.ai import AIToolID
 from ghaiw.models.config import (
-    AICommandConfig,
-    AIConfig,
     ComplexityModelMapping,
-    HooksConfig,
-    ProjectConfig,
-    ProjectSettings,
-    ProviderConfig,
 )
-from ghaiw.models.work import MergeStrategy
 from ghaiw.skills import installer, pointer
 from ghaiw.ui.console import console
 
@@ -217,9 +211,8 @@ def deinit(project_root: Path | None = None, force: bool = False) -> bool:
     # Remove AGENTS.md pointer
     for name in ("AGENTS.md", "CLAUDE.md"):
         target = root / name
-        if target.is_file():
-            if pointer.remove_pointer(target):
-                console.info(f"Removed workflow pointer from {name}")
+        if target.is_file() and pointer.remove_pointer(target):
+            console.info(f"Removed workflow pointer from {name}")
 
     # Remove config
     config_path = root / ".ghaiw.yml"
@@ -306,7 +299,7 @@ def _write_config(
     model_mapping: ComplexityModelMapping,
 ) -> None:
     """Write a fresh .ghaiw.yml config file."""
-    config_dict: dict = {"version": 2}
+    config_dict: dict[str, Any] = {"version": 2}
 
     config_dict["project"] = {
         "main_branch": "main",
@@ -316,7 +309,7 @@ def _write_config(
         "merge_strategy": "PR",
     }
 
-    ai_section: dict = {}
+    ai_section: dict[str, Any] = {}
     if ai_tool:
         ai_section["default_tool"] = str(ai_tool)
     config_dict["ai"] = ai_section
@@ -440,6 +433,6 @@ def _write_manifest(project_root: Path, installed_files: list[str]) -> None:
     from ghaiw import __version__
 
     manifest = project_root / MANIFEST_FILENAME
-    lines = [".ghaiw.yml"] + installed_files
+    lines = [".ghaiw.yml", *installed_files]
     lines.append(f"# Managed by ghaiw {__version__}")
     manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")

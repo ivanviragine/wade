@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from enum import IntEnum, StrEnum
 from pathlib import Path
+from typing import Any
 
 import structlog
 import yaml
@@ -303,7 +304,7 @@ def _validate_config_file(config_path: Path) -> list[str]:
     return errors
 
 
-def _validate_project_section(project: dict, errors: list[str]) -> None:
+def _validate_project_section(project: dict[str, Any], errors: list[str]) -> None:
     """Validate the project section."""
     merge = project.get("merge_strategy")
     if merge is not None and str(merge) not in _VALID_MERGE_STRATEGIES:
@@ -324,7 +325,7 @@ def _validate_project_section(project: dict, errors: list[str]) -> None:
             )
 
 
-def _validate_ai_section(ai: dict, errors: list[str]) -> None:
+def _validate_ai_section(ai: dict[str, Any], errors: list[str]) -> None:
     """Validate the ai section."""
     default_tool = ai.get("default_tool")
     if default_tool is not None and str(default_tool) and str(default_tool) not in _VALID_AI_TOOLS:
@@ -353,7 +354,7 @@ def _validate_ai_section(ai: dict, errors: list[str]) -> None:
             errors.append(f"ai.{key}: unsupported key")
 
 
-def _validate_models_section(models: dict, errors: list[str]) -> None:
+def _validate_models_section(models: dict[str, Any], errors: list[str]) -> None:
     """Validate the models section (per-tool complexity mappings)."""
     if not models:
         errors.append(
@@ -386,7 +387,7 @@ def _validate_models_section(models: dict, errors: list[str]) -> None:
                 )
 
 
-def _validate_provider_section(provider: dict, errors: list[str]) -> None:
+def _validate_provider_section(provider: dict[str, Any], errors: list[str]) -> None:
     """Validate the provider section."""
     name = provider.get("name")
     valid_providers = {"github"}  # Only GitHub is supported now
@@ -402,7 +403,7 @@ def _validate_provider_section(provider: dict, errors: list[str]) -> None:
             errors.append(f"provider.{key}: unsupported key")
 
 
-def _validate_hooks_section(hooks: dict, errors: list[str]) -> None:
+def _validate_hooks_section(hooks: dict[str, Any], errors: list[str]) -> None:
     """Validate the hooks section."""
     copy_list = hooks.get("copy_to_worktree")
     if copy_list is not None:

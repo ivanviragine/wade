@@ -7,8 +7,6 @@ All output respects Rich markup and goes to the appropriate stream
 
 from __future__ import annotations
 
-import sys
-
 from rich.console import Console as RichConsole
 from rich.theme import Theme
 
@@ -35,7 +33,7 @@ class Console:
     ERR = "\u2717"      # ✗
     WARN = "\u26a0"     # ⚠
     ARROW = "\u2192"    # →
-    INFO = "\u2139"     # ℹ
+    INFO = "\u2139"     # info symbol
     STEP = "\u25cf"     # ●
     BULLET = "\u00b7"   # ·
 

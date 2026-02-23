@@ -58,9 +58,9 @@ def run(
     except subprocess.TimeoutExpired:
         logger.error("subprocess.timeout", command=command, timeout=timeout)
         raise
-    except FileNotFoundError:
+    except FileNotFoundError as err:
         logger.error("subprocess.not_found", command=command[0])
-        raise CommandError(command, 127, f"Command not found: {command[0]}")
+        raise CommandError(command, 127, f"Command not found: {command[0]}") from err
 
     if check and result.returncode != 0:
         stderr = result.stderr.strip() if capture else ""

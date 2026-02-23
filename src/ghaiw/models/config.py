@@ -31,7 +31,6 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
-from ghaiw.models.ai import AIToolID
 from ghaiw.models.work import MergeStrategy
 
 

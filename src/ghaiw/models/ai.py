@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from enum import StrEnum
 from pathlib import Path
-from typing import ClassVar
 
 from pydantic import BaseModel
 

@@ -9,6 +9,7 @@ Behavioral reference: lib/task/crud.sh, lib/task/labels.sh
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import structlog
 
@@ -204,7 +205,7 @@ def build_plan_summary_block(
     cached_tokens: int | None = None,
     premium_requests: int | None = None,
     per_issue_estimate: int | None = None,
-    model_breakdown: list[dict] | None = None,
+    model_breakdown: list[dict[str, Any]] | None = None,
 ) -> str:
     """Build the plan summary markdown block.
 
@@ -281,7 +282,7 @@ def apply_plan_token_usage(
     output_tokens: int | None = None,
     cached_tokens: int | None = None,
     premium_requests: int | None = None,
-    model_breakdown: list[dict] | None = None,
+    model_breakdown: list[dict[str, Any]] | None = None,
 ) -> None:
     """Annotate issues with token usage summaries.
 
@@ -424,7 +425,7 @@ def list_tasks(
                 "number": t.id,
                 "title": t.title,
                 "state": t.state.value,
-                "labels": [l.name for l in t.labels],
+                "labels": [label.name for label in t.labels],
                 "url": t.url,
             }
             for t in tasks
@@ -442,7 +443,7 @@ def list_tasks(
         state_badge = "OPEN" if task.state == TaskState.OPEN else "CLOSED"
         label_str = ""
         if task.labels:
-            label_str = " ".join(f"[{l.name}]" for l in task.labels)
+            label_str = " ".join(f"[{label.name}]" for label in task.labels)
         console.step(f"#{task.id} {state_badge} {task.title}")
         if label_str:
             console.detail(label_str)
@@ -477,7 +478,7 @@ def read_task(
             "title": task.title,
             "body": task.body,
             "state": task.state.value,
-            "labels": [l.name for l in task.labels],
+            "labels": [label.name for label in task.labels],
             "url": task.url,
         }
         console.raw(json.dumps(output, indent=2))
@@ -485,7 +486,7 @@ def read_task(
         console.header(f"#{task.id}: {task.title}")
         console.info(f"State: {task.state.value}")
         if task.labels:
-            console.info(f"Labels: {', '.join(l.name for l in task.labels)}")
+            console.info(f"Labels: {', '.join(label.name for label in task.labels)}")
         if task.url:
             console.info(f"URL: {task.url}")
         if task.body:

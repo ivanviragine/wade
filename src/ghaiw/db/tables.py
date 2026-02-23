@@ -16,7 +16,7 @@ from sqlmodel import Field, SQLModel
 class TaskRecord(SQLModel, table=True):
     """Local cache/mirror of a task from the external provider."""
 
-    __tablename__ = "tasks"  # type: ignore[assignment]
+    __tablename__ = "tasks"
 
     id: str = Field(primary_key=True)
     provider: str
@@ -34,7 +34,7 @@ class TaskRecord(SQLModel, table=True):
 class SessionRecord(SQLModel, table=True):
     """A work session — one AI agent on one task."""
 
-    __tablename__ = "sessions"  # type: ignore[assignment]
+    __tablename__ = "sessions"
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     task_id: str = Field(foreign_key="tasks.id")
@@ -51,7 +51,7 @@ class SessionRecord(SQLModel, table=True):
 class TokenUsageRecord(SQLModel, table=True):
     """Token usage for a session."""
 
-    __tablename__ = "token_usage"  # type: ignore[assignment]
+    __tablename__ = "token_usage"
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     session_id: str = Field(foreign_key="sessions.id")
@@ -66,7 +66,7 @@ class TokenUsageRecord(SQLModel, table=True):
 class ModelBreakdownRecord(SQLModel, table=True):
     """Per-model token breakdown within a session."""
 
-    __tablename__ = "model_breakdown"  # type: ignore[assignment]
+    __tablename__ = "model_breakdown"
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     usage_id: str = Field(foreign_key="token_usage.id")
@@ -80,7 +80,7 @@ class ModelBreakdownRecord(SQLModel, table=True):
 class PRRecord(SQLModel, table=True):
     """Pull request linked to a session."""
 
-    __tablename__ = "pull_requests"  # type: ignore[assignment]
+    __tablename__ = "pull_requests"
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     session_id: str = Field(foreign_key="sessions.id")
@@ -95,7 +95,7 @@ class PRRecord(SQLModel, table=True):
 class WorktreeRecord(SQLModel, table=True):
     """Tracked worktrees."""
 
-    __tablename__ = "worktrees"  # type: ignore[assignment]
+    __tablename__ = "worktrees"
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     task_id: str
@@ -109,7 +109,7 @@ class WorktreeRecord(SQLModel, table=True):
 class DependencyRecord(SQLModel, table=True):
     """Task dependency edges."""
 
-    __tablename__ = "dependencies"  # type: ignore[assignment]
+    __tablename__ = "dependencies"
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     from_task_id: str
@@ -121,7 +121,7 @@ class DependencyRecord(SQLModel, table=True):
 class AuditLogRecord(SQLModel, table=True):
     """Audit log for all workflow actions."""
 
-    __tablename__ = "audit_log"  # type: ignore[assignment]
+    __tablename__ = "audit_log"
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     action: str

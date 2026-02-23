@@ -8,7 +8,6 @@ from __future__ import annotations
 from ghaiw.models.ai import AIToolID
 from ghaiw.models.config import ComplexityModelMapping
 
-
 # Default model mappings when tool probing fails or returns no recognized models
 TOOL_DEFAULTS: dict[str, ComplexityModelMapping] = {
     AIToolID.CLAUDE: ComplexityModelMapping(

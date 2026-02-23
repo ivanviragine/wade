@@ -11,7 +11,6 @@ import sys
 from rich.console import Console
 from rich.prompt import Confirm, Prompt
 
-
 _console = Console(stderr=True)
 
 

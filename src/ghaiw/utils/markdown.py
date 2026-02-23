@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import re
-
 
 def extract_title(content: str) -> str | None:
     """Extract the first # heading from markdown content."""

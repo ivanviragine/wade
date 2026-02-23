@@ -20,7 +20,6 @@ from ghaiw.models.config import (
     ProviderConfig,
 )
 
-
 CONFIG_FILENAME = ".ghaiw.yml"
 
 

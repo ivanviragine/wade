@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from ghaiw.db.tables import (
     AuditLogRecord,
@@ -261,7 +261,7 @@ class AuditLogRepository:
         with Session(self.engine) as session:
             statement = (
                 select(AuditLogRecord)
-                .order_by(AuditLogRecord.timestamp.desc())  # type: ignore[union-attr]
+                .order_by(col(AuditLogRecord.timestamp).desc())
                 .limit(limit)
             )
             return list(session.exec(statement).all())

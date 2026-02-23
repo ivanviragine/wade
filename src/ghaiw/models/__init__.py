@@ -25,40 +25,34 @@ from ghaiw.models.task import Complexity, Label, LabelType, PlanFile, Task, Task
 from ghaiw.models.work import MergeStrategy, SyncEvent, SyncResult, WorkSession, WorktreeState
 
 __all__ = [
-    # ai
+    "AICommandConfig",
+    "AIConfig",
     "AIModel",
     "AIToolCapabilities",
     "AIToolID",
     "AIToolType",
+    "Complexity",
+    "ComplexityModelMapping",
+    "DependencyEdge",
+    "DependencyGraph",
+    "EventType",
+    "HooksConfig",
+    "Label",
+    "LabelType",
+    "MergeStrategy",
     "ModelBreakdown",
     "ModelTier",
-    "TokenUsage",
-    # config
-    "AICommandConfig",
-    "AIConfig",
-    "ComplexityModelMapping",
-    "HooksConfig",
+    "PlanFile",
     "ProjectConfig",
     "ProjectSettings",
     "ProviderConfig",
     "ProviderID",
-    # deps
-    "DependencyEdge",
-    "DependencyGraph",
-    # events
-    "EventType",
-    "WorkflowEvent",
-    # task
-    "Complexity",
-    "Label",
-    "LabelType",
-    "PlanFile",
-    "Task",
-    "TaskState",
-    # work
-    "MergeStrategy",
     "SyncEvent",
     "SyncResult",
+    "Task",
+    "TaskState",
+    "TokenUsage",
     "WorkSession",
+    "WorkflowEvent",
     "WorktreeState",
 ]

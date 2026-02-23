@@ -9,13 +9,15 @@ from typing import ClassVar
 import structlog
 
 from ghaiw.ai_tools.base import AbstractAITool
-from ghaiw.ai_tools.model_utils import classify_tier_claude, has_date_suffix, parse_model_list_output
+from ghaiw.ai_tools.model_utils import (
+    classify_tier_claude,
+    parse_model_list_output,
+)
 from ghaiw.models.ai import (
     AIModel,
     AIToolCapabilities,
     AIToolID,
     AIToolType,
-    ModelTier,
     TokenUsage,
 )
 

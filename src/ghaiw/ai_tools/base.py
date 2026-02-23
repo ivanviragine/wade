@@ -16,7 +16,6 @@ from ghaiw.models.ai import (
     AIModel,
     AIToolCapabilities,
     AIToolID,
-    AIToolType,
     ModelTier,
     TokenUsage,
 )
