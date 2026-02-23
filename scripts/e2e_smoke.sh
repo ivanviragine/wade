@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# e2e_smoke.sh — Automated end-to-end smoke test for ghaiw.
+# e2e_smoke.sh — Automated end-to-end smoke test for ghaiwpy.
 #
-# Exercises the full ghaiw lifecycle against a real or temporary
-# GitHub repo. Uses the installed Bash ghaiw CLI (not the Python
-# version under development).
+# Exercises the full ghaiwpy lifecycle against a real or temporary
+# GitHub repo. Tests the Python CLI (ghaiwpy) by default.
+# Use --bash to test the Bash CLI (ghaiw) instead.
 #
 # Usage:
 #   RUN_E2E_SMOKE=1 ./scripts/e2e_smoke.sh              # run against taskr

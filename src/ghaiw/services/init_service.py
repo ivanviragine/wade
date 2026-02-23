@@ -99,6 +99,12 @@ def init(
         _write_config(config_path, selected_tool, model_mapping)
         console.success(f"Created {config_path.name}")
 
+    # Configure Gemini experimental settings if needed
+    if selected_tool and (
+        selected_tool == AIToolID.GEMINI or selected_tool == "gemini"
+    ):
+        _configure_gemini_experimental()
+
     # 5. Install skills
     is_self = root.resolve() == get_ghaiw_root().resolve()
     installed = installer.install_skills(root, is_self_init=is_self)
@@ -170,6 +176,10 @@ def update(project_root: Path | None = None) -> bool:
     is_self = root.resolve() == get_ghaiw_root().resolve()
     installed = installer.install_skills(root, is_self_init=is_self, force=True)
     console.info(f"Updated {len(installed)} skill entries")
+
+    # Configure Gemini if needed
+    if ai_tool and (ai_tool == AIToolID.GEMINI or ai_tool == "gemini"):
+        _configure_gemini_experimental()
 
     # Refresh .gitignore
     _ensure_gitignore(root)
@@ -243,6 +253,43 @@ def deinit(project_root: Path | None = None, force: bool = False) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _configure_gemini_experimental() -> None:
+    """Write Gemini experimental settings for plan mode support.
+
+    Writes {"experimental":{"plan":true}} to ~/.gemini/settings.json,
+    merging non-destructively with existing content.
+
+    Behavioral ref: lib/init.sh:_init_configure_gemini_experimental()
+    """
+    import contextlib
+    import json
+
+    settings_path = Path.home() / ".gemini" / "settings.json"
+
+    existing: dict[str, Any] = {}
+    if settings_path.is_file():
+        with contextlib.suppress(json.JSONDecodeError, OSError):
+            raw = json.loads(settings_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                existing = raw
+
+    experimental: dict[str, Any] = existing.get("experimental", {})
+    if not isinstance(experimental, dict):
+        experimental = {}
+    if experimental.get("plan") is True:
+        return  # Already configured
+
+    experimental["plan"] = True
+    existing["experimental"] = experimental
+
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(
+        json.dumps(existing, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    logger.info("gemini.experimental_configured", path=str(settings_path))
+
+
 def _select_ai_tool(
     requested: str | None,
     non_interactive: bool,
@@ -285,12 +332,38 @@ def _resolve_models(tool: str | None) -> ComplexityModelMapping:
         adapter = AbstractAITool.get(AIToolID(tool))
         mapping = adapter.get_recommended_mapping()
         if mapping.easy or mapping.complex:
-            return mapping
+            return _normalize_mapping(adapter, mapping)
     except (ValueError, Exception):
         pass
 
     # Fallback to hardcoded defaults
-    return get_defaults(tool)
+    mapping = get_defaults(tool)
+
+    # Normalize format for the tool
+    try:
+        adapter = AbstractAITool.get(AIToolID(tool))
+        mapping = _normalize_mapping(adapter, mapping)
+    except (ValueError, Exception):
+        pass
+
+    return mapping
+
+
+def _normalize_mapping(
+    adapter: AbstractAITool,
+    mapping: ComplexityModelMapping,
+) -> ComplexityModelMapping:
+    """Normalize model IDs in a mapping to the tool's expected format."""
+    return ComplexityModelMapping(
+        easy=adapter.normalize_model_format(mapping.easy) if mapping.easy else None,
+        medium=adapter.normalize_model_format(mapping.medium) if mapping.medium else None,
+        complex=adapter.normalize_model_format(mapping.complex) if mapping.complex else None,
+        very_complex=(
+            adapter.normalize_model_format(mapping.very_complex)
+            if mapping.very_complex
+            else None
+        ),
+    )
 
 
 def _write_config(

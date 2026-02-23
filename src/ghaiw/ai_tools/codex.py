@@ -10,6 +10,10 @@ from typing import ClassVar
 import structlog
 
 from ghaiw.ai_tools.base import AbstractAITool
+from ghaiw.ai_tools.model_utils import (
+    raw_ids_to_models,
+    scrape_models_from_docs,
+)
 from ghaiw.models.ai import (
     AIModel,
     AIToolCapabilities,
@@ -39,7 +43,16 @@ class CodexAdapter(AbstractAITool):
         )
 
     def get_models(self) -> list[AIModel]:
-        # Codex doesn't have a built-in model listing command
+        """Probe for available Codex models via web scraping.
+
+        Codex has no model listing subcommand. Scrapes the OpenAI Codex
+        docs page for `codex -m <model>` usage examples.
+
+        Behavioral ref: lib/init.sh:_init_scrape_models_for_tool() codex case
+        """
+        scraped = scrape_models_from_docs("codex")
+        if scraped:
+            return raw_ids_to_models(scraped)
         return []
 
     def launch(

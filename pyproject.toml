@@ -44,7 +44,7 @@ dev = [
 ]
 
 [project.scripts]
-ghaiw = "ghaiw.cli.main:app"
+ghaiwpy = "ghaiw.cli.main:app"
 
 [project.urls]
 Homepage = "https://github.com/ivanviragine/ghaiw-py"

@@ -9,10 +9,15 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
+import time
 
 import structlog
 
 logger = structlog.get_logger()
+
+_title_keeper_thread: threading.Thread | None = None
+_title_keeper_running = False
 
 
 def is_tty() -> bool:
@@ -26,6 +31,57 @@ def set_terminal_title(title: str) -> None:
         return
     sys.stderr.write(f"\033]0;{title}\007")
     sys.stderr.flush()
+
+
+def compose_work_title(issue_id: str, issue_title: str) -> str:
+    """Compose a terminal title for a work session.
+
+    Format: "ghaiw work — Issue #42: Feature Name"
+    Behavioral ref: lib/work/terminal.sh:_work_compose_title()
+    """
+    max_title = 50
+    title = issue_title[:max_title] + "..." if len(issue_title) > max_title else issue_title
+    return f"ghaiw work — Issue #{issue_id}: {title}"
+
+
+def start_title_keeper(title: str, interval: float = 2.0) -> None:
+    """Start a background thread that re-asserts the terminal title periodically.
+
+    Some tools (AI CLIs) may overwrite the terminal title during their session.
+    This background thread re-sets it every ``interval`` seconds via stderr
+    (so it works even when stdout is captured/piped).
+
+    Behavioral ref: lib/common.sh:_start_title_keeper()
+    """
+    global _title_keeper_thread, _title_keeper_running
+
+    stop_title_keeper()  # Stop any existing keeper
+
+    if not is_tty():
+        return
+
+    _title_keeper_running = True
+
+    def _keeper() -> None:
+        while _title_keeper_running:
+            try:
+                sys.stderr.write(f"\033]0;{title}\007")
+                sys.stderr.flush()
+            except (OSError, ValueError):
+                break
+            time.sleep(interval)
+
+    _title_keeper_thread = threading.Thread(target=_keeper, daemon=True)
+    _title_keeper_thread.start()
+
+
+def stop_title_keeper() -> None:
+    """Stop the background title keeper thread."""
+    global _title_keeper_running, _title_keeper_thread
+    _title_keeper_running = False
+    if _title_keeper_thread is not None:
+        _title_keeper_thread.join(timeout=3.0)
+        _title_keeper_thread = None
 
 
 def detect_terminal() -> str | None:

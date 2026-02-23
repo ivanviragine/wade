@@ -44,8 +44,8 @@ def _run(cmd: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess
 
 
 def _ghaiw(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    """Run a ghaiw command."""
-    return _run(["ghaiw", *args], cwd=cwd)
+    """Run a ghaiwpy command."""
+    return _run(["ghaiwpy", *args], cwd=cwd)
 
 
 @pytest.fixture(autouse=True)
@@ -66,11 +66,11 @@ def require_gh() -> None:
 
 
 @pytest.fixture(autouse=True)
-def require_ghaiw() -> None:
-    """Skip if ghaiw CLI is not available."""
-    result = _run(["which", "ghaiw"])
+def require_ghaiwpy() -> None:
+    """Skip if ghaiwpy CLI is not available."""
+    result = _run(["which", "ghaiwpy"])
     if result.returncode != 0:
-        pytest.skip("ghaiw CLI not found in PATH")
+        pytest.skip("ghaiwpy CLI not found in PATH")
 
 
 class TestLiveGhaiwVersion:

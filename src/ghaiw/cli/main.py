@@ -39,6 +39,10 @@ def main(
     ),
 ) -> None:
     """ghaiw — AI-agent-driven git workflow management CLI."""
+    from ghaiw.utils.terminal import set_terminal_title
+
+    set_terminal_title("ghaiwpy")
+
     # Store verbose flag in app state for subcommands
     if verbose:
         import ghaiw.logging.setup as log_setup

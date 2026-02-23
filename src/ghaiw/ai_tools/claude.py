@@ -12,6 +12,8 @@ from ghaiw.ai_tools.base import AbstractAITool
 from ghaiw.ai_tools.model_utils import (
     classify_tier_claude,
     parse_model_list_output,
+    raw_ids_to_models,
+    scrape_models_from_docs,
 )
 from ghaiw.models.ai import (
     AIModel,
@@ -42,6 +44,14 @@ class ClaudeAdapter(AbstractAITool):
         )
 
     def get_models(self) -> list[AIModel]:
+        """Probe for available Claude models.
+
+        Strategy: try `claude models` first (works in modern Claude Code),
+        then fall back to web scraping docs.anthropic.com.
+
+        Behavioral ref: lib/init.sh:_init_probe_models_for_tool() claude case
+        """
+        # Strategy 1: `claude models` CLI subcommand
         try:
             result = subprocess.run(
                 ["claude", "models"],
@@ -49,25 +59,28 @@ class ClaudeAdapter(AbstractAITool):
                 text=True,
                 timeout=15,
             )
-            if result.returncode != 0:
-                return []
-
-            models = parse_model_list_output(result.stdout)
-            # Apply Claude-specific tier classification
-            for model in models:
-                tier = classify_tier_claude(model.id)
-                if tier:
-                    # Create new model with tier (AIModel is frozen)
-                    idx = models.index(model)
-                    models[idx] = AIModel(
-                        id=model.id,
-                        display_name=model.display_name,
-                        tier=tier,
-                        is_alias=model.is_alias,
-                    )
-            return models
+            if result.returncode == 0 and result.stdout.strip():
+                models = parse_model_list_output(result.stdout)
+                for i, model in enumerate(models):
+                    tier = classify_tier_claude(model.id)
+                    if tier:
+                        models[i] = AIModel(
+                            id=model.id,
+                            display_name=model.display_name,
+                            tier=tier,
+                            is_alias=model.is_alias,
+                        )
+                if models:
+                    return models
         except (subprocess.TimeoutExpired, FileNotFoundError):
-            return []
+            pass
+
+        # Strategy 2: Web scrape Anthropic docs
+        scraped = scrape_models_from_docs("claude")
+        if scraped:
+            return raw_ids_to_models(scraped)
+
+        return []
 
     def launch(
         self,
@@ -91,3 +104,16 @@ class ClaudeAdapter(AbstractAITool):
     def is_model_compatible(self, model: str) -> bool:
         """Claude CLI accepts only claude-* model IDs."""
         return model.lower().startswith("claude-")
+
+    def plan_mode_args(self) -> list[str]:
+        """Claude supports --approval-mode plan."""
+        return ["--approval-mode", "plan"]
+
+    def normalize_model_format(self, model_id: str) -> str:
+        """Claude uses dashed format for model IDs."""
+        if model_id.startswith("claude-"):
+            import re
+
+            # Convert claude-haiku-4.5 -> claude-haiku-4-5
+            return re.sub(r"(\d)\.(\d)", r"\1-\2", model_id)
+        return model_id

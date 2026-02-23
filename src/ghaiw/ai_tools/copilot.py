@@ -9,6 +9,10 @@ from typing import ClassVar
 import structlog
 
 from ghaiw.ai_tools.base import AbstractAITool
+from ghaiw.ai_tools.model_utils import (
+    classify_tier_universal,
+    probe_copilot_models,
+)
 from ghaiw.models.ai import (
     AIModel,
     AIToolCapabilities,
@@ -38,8 +42,30 @@ class CopilotAdapter(AbstractAITool):
         )
 
     def get_models(self) -> list[AIModel]:
-        # Copilot accepts any model — no probing command available
-        return []
+        """Probe Copilot for available models via --model validation error.
+
+        Copilot has no `models` subcommand. Passing `--model x` triggers a
+        validation error that lists all valid model names.
+
+        Behavioral ref: lib/init.sh:_init_list_available_models_from_tool() copilot case
+        """
+        from ghaiw.ai_tools.model_utils import has_date_suffix
+
+        raw_ids = probe_copilot_models()
+        if not raw_ids:
+            return []
+
+        models: list[AIModel] = []
+        for mid in raw_ids:
+            tier = classify_tier_universal(mid)
+            models.append(
+                AIModel(
+                    id=mid,
+                    is_alias=not has_date_suffix(mid),
+                    tier=tier,
+                )
+            )
+        return models
 
     def launch(
         self,
@@ -61,3 +87,13 @@ class CopilotAdapter(AbstractAITool):
     def is_model_compatible(self, model: str) -> bool:
         """Copilot accepts all model IDs."""
         return True
+
+    def normalize_model_format(self, model_id: str) -> str:
+        """Copilot uses dotted format for Claude models."""
+        if model_id.startswith("claude-"):
+            import re
+
+            # Convert claude-haiku-4-5 -> claude-haiku-4.5
+            # Only convert version number separators (digit-digit)
+            return re.sub(r"(\d)-(\d)", r"\1.\2", model_id)
+        return model_id

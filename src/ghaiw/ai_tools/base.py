@@ -133,6 +133,23 @@ class AbstractAITool(ABC):
         """
         return True  # Default: allow all. Override per tool.
 
+    def plan_mode_args(self) -> list[str]:
+        """Get extra CLI args for native plan/approval mode.
+
+        Behavioral ref: lib/common.sh:_tool_plan_mode_args()
+        """
+        return []  # Default: no plan mode support
+
+    def normalize_model_format(self, model_id: str) -> str:
+        """Normalize a model ID to this tool's expected format.
+
+        For example, Copilot uses dotted format (claude-haiku-4.5) while
+        Claude uses dashed format (claude-haiku-4-5).
+
+        Default: return as-is. Override per tool.
+        """
+        return model_id
+
     def build_launch_command(
         self,
         model: str | None = None,
@@ -148,6 +165,9 @@ class AbstractAITool(ABC):
 
         if prompt and caps.supports_headless and caps.headless_flag:
             cmd.extend([caps.headless_flag, prompt])
+
+        if plan_mode:
+            cmd.extend(self.plan_mode_args())
 
         return cmd
 

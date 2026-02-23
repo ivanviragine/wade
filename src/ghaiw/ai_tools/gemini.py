@@ -9,7 +9,12 @@ from typing import ClassVar
 import structlog
 
 from ghaiw.ai_tools.base import AbstractAITool
-from ghaiw.ai_tools.model_utils import classify_tier_gemini, parse_model_list_output
+from ghaiw.ai_tools.model_utils import (
+    classify_tier_gemini,
+    parse_model_list_output,
+    raw_ids_to_models,
+    scrape_models_from_docs,
+)
 from ghaiw.models.ai import (
     AIModel,
     AIToolCapabilities,
@@ -39,6 +44,14 @@ class GeminiAdapter(AbstractAITool):
         )
 
     def get_models(self) -> list[AIModel]:
+        """Probe for available Gemini models.
+
+        Strategy: try `gemini --list-models` first, then fall back to
+        web scraping geminicli.com docs.
+
+        Behavioral ref: lib/init.sh:_init_probe_models_for_tool() gemini case
+        """
+        # Strategy 1: `gemini --list-models` CLI flag
         try:
             result = subprocess.run(
                 ["gemini", "--list-models"],
@@ -46,22 +59,28 @@ class GeminiAdapter(AbstractAITool):
                 text=True,
                 timeout=15,
             )
-            if result.returncode != 0:
-                return []
-
-            models = parse_model_list_output(result.stdout)
-            for i, model in enumerate(models):
-                tier = classify_tier_gemini(model.id)
-                if tier:
-                    models[i] = AIModel(
-                        id=model.id,
-                        display_name=model.display_name,
-                        tier=tier,
-                        is_alias=model.is_alias,
-                    )
-            return models
+            if result.returncode == 0 and result.stdout.strip():
+                models = parse_model_list_output(result.stdout)
+                for i, model in enumerate(models):
+                    tier = classify_tier_gemini(model.id)
+                    if tier:
+                        models[i] = AIModel(
+                            id=model.id,
+                            display_name=model.display_name,
+                            tier=tier,
+                            is_alias=model.is_alias,
+                        )
+                if models:
+                    return models
         except (subprocess.TimeoutExpired, FileNotFoundError):
-            return []
+            pass
+
+        # Strategy 2: Web scrape geminicli.com docs
+        scraped = scrape_models_from_docs("gemini")
+        if scraped:
+            return raw_ids_to_models(scraped)
+
+        return []
 
     def launch(
         self,
@@ -83,3 +102,7 @@ class GeminiAdapter(AbstractAITool):
     def is_model_compatible(self, model: str) -> bool:
         """Gemini CLI accepts gemini-* model IDs."""
         return model.lower().startswith("gemini-")
+
+    def plan_mode_args(self) -> list[str]:
+        """Gemini supports --approval-mode plan."""
+        return ["--approval-mode", "plan"]

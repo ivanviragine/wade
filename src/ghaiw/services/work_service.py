@@ -42,6 +42,12 @@ from ghaiw.services.task_service import (
 )
 from ghaiw.ui.console import console
 from ghaiw.utils.clipboard import copy_to_clipboard
+from ghaiw.utils.terminal import (
+    compose_work_title,
+    set_terminal_title,
+    start_title_keeper,
+    stop_title_keeper,
+)
 
 logger = structlog.get_logger()
 
@@ -255,14 +261,29 @@ def start(
     copy_to_clipboard(prompt)
     console.success("Copied work prompt to clipboard.")
 
+    # Set terminal title
+    work_title = compose_work_title(task.id, task.title)
+    set_terminal_title(work_title)
+    start_title_keeper(work_title)
+
     # Launch AI tool
     if resolved_tool:
         console.step(f"Launching {resolved_tool}...")
-        if resolved_model:
-            console.detail(f"Model: {resolved_model}")
 
         try:
             adapter = AbstractAITool.get(AIToolID(resolved_tool))
+
+            # Check model compatibility
+            if resolved_model and not adapter.is_model_compatible(resolved_model):
+                console.warn(
+                    f"Model '{resolved_model}' is not compatible with {resolved_tool}; "
+                    "using tool default"
+                )
+                resolved_model = None
+
+            if resolved_model:
+                console.detail(f"Model: {resolved_model}")
+
             exit_code = adapter.launch(
                 worktree_path=worktree_path,
                 model=resolved_model,
@@ -272,6 +293,8 @@ def start(
             console.warn(f"Unknown AI tool: {resolved_tool}")
         except Exception as e:
             console.warn(f"AI tool launch failed: {e}")
+
+        stop_title_keeper()
 
         # Add worked-by labels
         with contextlib.suppress(Exception):
