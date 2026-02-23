@@ -26,12 +26,8 @@ def plan(
 
 @task_app.command()
 def create(
-    plan_file: str | None = typer.Option(
-        None, "--plan-file", help="Path to plan markdown file."
-    ),
-    no_start: bool = typer.Option(
-        False, "--no-start", help="Skip interactive work-start prompt."
-    ),
+    plan_file: str | None = typer.Option(None, "--plan-file", help="Path to plan markdown file."),
+    no_start: bool = typer.Option(False, "--no-start", help="Skip interactive work-start prompt."),
     ai: str | None = typer.Option(None, "--ai", help="AI tool (for labeling)."),
     model: str | None = typer.Option(None, "--model", help="AI model (for labeling)."),
 ) -> None:
@@ -70,9 +66,7 @@ def create(
 
 @task_app.command("list")
 def list_tasks(
-    state: str = typer.Option(
-        "open", "--state", "-s", help="Filter by state: open, closed, all."
-    ),
+    state: str = typer.Option("open", "--state", "-s", help="Filter by state: open, closed, all."),
     deps: bool = typer.Option(False, "--deps", help="Show dependency refs."),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON."),
 ) -> None:
@@ -101,9 +95,7 @@ def update(
     plan_file: str | None = typer.Option(
         None, "--plan-file", help="Path to markdown file with new body."
     ),
-    comment: str | None = typer.Option(
-        None, "--comment", help="Comment text to add."
-    ),
+    comment: str | None = typer.Option(None, "--comment", help="Comment text to add."),
 ) -> None:
     """Update a GitHub Issue body or add a comment."""
     from ghaiw.services.task_service import update_task
@@ -116,9 +108,7 @@ def update(
 @task_app.command()
 def close(
     number: int = typer.Argument(..., help="Issue number to close."),
-    comment: str | None = typer.Option(
-        None, "--comment", help="Final comment before closing."
-    ),
+    comment: str | None = typer.Option(None, "--comment", help="Final comment before closing."),
 ) -> None:
     """Close a GitHub Issue."""
     from ghaiw.services.task_service import close_task

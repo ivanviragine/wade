@@ -29,13 +29,13 @@ class Console:
     """Unified CLI output — mirrors the _ui_* functions from lib/ui.sh."""
 
     # Symbol constants (matching Bash _UI_* constants)
-    OK = "\u2713"       # ✓
-    ERR = "\u2717"      # ✗
-    WARN = "\u26a0"     # ⚠
-    ARROW = "\u2192"    # →
-    INFO = "\u2139"     # info symbol
-    STEP = "\u25cf"     # ●
-    BULLET = "\u00b7"   # ·
+    OK = "\u2713"  # ✓
+    ERR = "\u2717"  # ✗
+    WARN = "\u26a0"  # ⚠
+    ARROW = "\u2192"  # →
+    INFO = "\u2139"  # info symbol
+    STEP = "\u25cf"  # ●
+    BULLET = "\u00b7"  # ·
 
     def __init__(self) -> None:
         self.out = RichConsole(theme=_theme, stderr=False)

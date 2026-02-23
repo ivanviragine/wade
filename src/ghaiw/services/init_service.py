@@ -100,9 +100,7 @@ def init(
         console.success(f"Created {config_path.name}")
 
     # Configure Gemini experimental settings if needed
-    if selected_tool and (
-        selected_tool == AIToolID.GEMINI or selected_tool == "gemini"
-    ):
+    if selected_tool and (selected_tool == AIToolID.GEMINI or selected_tool == "gemini"):
         _configure_gemini_experimental()
 
     # 5. Install skills
@@ -359,9 +357,7 @@ def _normalize_mapping(
         medium=adapter.normalize_model_format(mapping.medium) if mapping.medium else None,
         complex=adapter.normalize_model_format(mapping.complex) if mapping.complex else None,
         very_complex=(
-            adapter.normalize_model_format(mapping.very_complex)
-            if mapping.very_complex
-            else None
+            adapter.normalize_model_format(mapping.very_complex) if mapping.very_complex else None
         ),
     )
 

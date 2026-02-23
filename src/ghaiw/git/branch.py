@@ -63,7 +63,9 @@ def branch_exists(repo_root: Path, branch_name: str) -> bool:
         True if the branch exists locally.
     """
     result = _run_git(
-        "rev-parse", "--verify", f"refs/heads/{branch_name}",
+        "rev-parse",
+        "--verify",
+        f"refs/heads/{branch_name}",
         cwd=repo_root,
         check=False,
     )
@@ -126,7 +128,9 @@ def commits_ahead(repo_root: Path, branch: str, base: str) -> int:
         GitError: If either ref is invalid.
     """
     result = _run_git(
-        "rev-list", "--count", f"{base}..{branch}",
+        "rev-list",
+        "--count",
+        f"{base}..{branch}",
         cwd=repo_root,
     )
     return int(result.stdout.strip())

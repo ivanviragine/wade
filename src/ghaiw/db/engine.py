@@ -57,10 +57,7 @@ def init_db(engine: object) -> None:
     with Session(engine) as session:  # type: ignore[arg-type]
         # Create schema version table if needed
         session.exec(  # type: ignore[call-overload]
-            text(
-                "CREATE TABLE IF NOT EXISTS _schema_version "
-                "(version INTEGER NOT NULL)"
-            )
+            text("CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER NOT NULL)")
         )
         result = session.exec(text("SELECT version FROM _schema_version"))  # type: ignore[call-overload]
         row = result.first()

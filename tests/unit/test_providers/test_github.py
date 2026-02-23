@@ -4,16 +4,15 @@ from __future__ import annotations
 
 import json
 import subprocess
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ghaiw.models.config import ProjectConfig, ProviderID
-from ghaiw.models.task import Label, LabelType, Task, TaskState
+from ghaiw.models.config import ProjectConfig
+from ghaiw.models.task import Label, TaskState
 from ghaiw.providers.github import GitHubProvider, _extract_number_from_url, _parse_gh_task
 from ghaiw.providers.registry import get_provider
 from ghaiw.utils.process import CommandError
-
 
 # ---------------------------------------------------------------------------
 # Helper fixtures
@@ -27,9 +26,7 @@ def provider() -> GitHubProvider:
 
 def _make_completed(stdout: str = "", returncode: int = 0) -> subprocess.CompletedProcess:
     """Build a fake CompletedProcess for mocking."""
-    return subprocess.CompletedProcess(
-        args=["gh"], returncode=returncode, stdout=stdout, stderr=""
-    )
+    return subprocess.CompletedProcess(args=["gh"], returncode=returncode, stdout=stdout, stderr="")
 
 
 # ---------------------------------------------------------------------------
@@ -99,10 +96,12 @@ class TestParseGhTask:
 class TestListTasks:
     @patch("ghaiw.providers.github.run")
     def test_list_open_issues(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
-        issues_json = json.dumps([
-            {"number": 1, "title": "Issue 1", "state": "OPEN", "labels": [], "body": ""},
-            {"number": 2, "title": "Issue 2", "state": "OPEN", "labels": [], "body": ""},
-        ])
+        issues_json = json.dumps(
+            [
+                {"number": 1, "title": "Issue 1", "state": "OPEN", "labels": [], "body": ""},
+                {"number": 2, "title": "Issue 2", "state": "OPEN", "labels": [], "body": ""},
+            ]
+        )
         mock_run.return_value = _make_completed(issues_json)
 
         tasks = provider.list_tasks(label="feature-plan")
@@ -133,9 +132,7 @@ class TestListTasks:
 class TestCreateTask:
     @patch("ghaiw.providers.github.run")
     def test_create_issue(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
-        mock_run.return_value = _make_completed(
-            "https://github.com/owner/repo/issues/42\n"
-        )
+        mock_run.return_value = _make_completed("https://github.com/owner/repo/issues/42\n")
 
         task = provider.create_task(
             title="New feature",
@@ -154,9 +151,7 @@ class TestCreateTask:
 
     @patch("ghaiw.providers.github.run")
     def test_create_without_labels(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
-        mock_run.return_value = _make_completed(
-            "https://github.com/owner/repo/issues/1\n"
-        )
+        mock_run.return_value = _make_completed("https://github.com/owner/repo/issues/1\n")
         task = provider.create_task(title="Simple", body="body")
         assert task.id == "1"
         cmd = mock_run.call_args[0][0]
@@ -186,37 +181,52 @@ class TestUpdateTask:
     @patch("ghaiw.providers.github.run")
     def test_update_body(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         # First call: edit, second call: read_task
-        read_response = json.dumps({
-            "number": 42, "title": "t", "body": "new body",
-            "state": "OPEN", "labels": [],
-        })
+        read_response = json.dumps(
+            {
+                "number": 42,
+                "title": "t",
+                "body": "new body",
+                "state": "OPEN",
+                "labels": [],
+            }
+        )
         mock_run.return_value = _make_completed(read_response)
 
-        task = provider.update_task("42", body="new body")
+        provider.update_task("42", body="new body")
         assert mock_run.call_count == 2  # edit + read
 
     @patch("ghaiw.providers.github.run")
     def test_update_title(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
-        read_response = json.dumps({
-            "number": 42, "title": "new title", "body": "",
-            "state": "OPEN", "labels": [],
-        })
+        read_response = json.dumps(
+            {
+                "number": 42,
+                "title": "new title",
+                "body": "",
+                "state": "OPEN",
+                "labels": [],
+            }
+        )
         mock_run.return_value = _make_completed(read_response)
 
-        task = provider.update_task("42", title="new title")
+        provider.update_task("42", title="new title")
         assert mock_run.call_count == 2  # edit + read
 
 
 class TestCloseTask:
     @patch("ghaiw.providers.github.run")
     def test_close(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
-        read_response = json.dumps({
-            "number": 42, "title": "t", "body": "",
-            "state": "CLOSED", "labels": [],
-        })
+        read_response = json.dumps(
+            {
+                "number": 42,
+                "title": "t",
+                "body": "",
+                "state": "CLOSED",
+                "labels": [],
+            }
+        )
         mock_run.return_value = _make_completed(read_response)
 
-        task = provider.close_task("42")
+        provider.close_task("42")
         # First call is close, second is read
         first_cmd = mock_run.call_args_list[0][0][0]
         assert "close" in first_cmd
@@ -321,11 +331,13 @@ class TestRemoveLabel:
 class TestSnapshotTaskNumbers:
     @patch("ghaiw.providers.github.run")
     def test_snapshot(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
-        issues_json = json.dumps([
-            {"number": 10, "title": "A", "state": "OPEN", "labels": [], "body": ""},
-            {"number": 20, "title": "B", "state": "OPEN", "labels": [], "body": ""},
-            {"number": 30, "title": "C", "state": "OPEN", "labels": [], "body": ""},
-        ])
+        issues_json = json.dumps(
+            [
+                {"number": 10, "title": "A", "state": "OPEN", "labels": [], "body": ""},
+                {"number": 20, "title": "B", "state": "OPEN", "labels": [], "body": ""},
+                {"number": 30, "title": "C", "state": "OPEN", "labels": [], "body": ""},
+            ]
+        )
         mock_run.return_value = _make_completed(issues_json)
 
         numbers = provider.snapshot_task_numbers(label="feature-plan")
@@ -340,9 +352,7 @@ class TestSnapshotTaskNumbers:
 class TestCreatePR:
     @patch("ghaiw.providers.github.run")
     def test_create_pr(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
-        mock_run.return_value = _make_completed(
-            "https://github.com/owner/repo/pull/5\n"
-        )
+        mock_run.return_value = _make_completed("https://github.com/owner/repo/pull/5\n")
 
         url = provider.create_pr(
             title="Add feature",
@@ -359,9 +369,7 @@ class TestCreatePR:
 
     @patch("ghaiw.providers.github.run")
     def test_create_draft_pr(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
-        mock_run.return_value = _make_completed(
-            "https://github.com/owner/repo/pull/6\n"
-        )
+        mock_run.return_value = _make_completed("https://github.com/owner/repo/pull/6\n")
 
         provider.create_pr("Draft", "body", "main", draft=True)
         cmd = mock_run.call_args[0][0]
@@ -390,9 +398,7 @@ class TestMergePR:
 class TestGetPRForBranch:
     @patch("ghaiw.providers.github.run")
     def test_found(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
-        mock_run.return_value = _make_completed(
-            json.dumps({"number": 5, "body": "PR body"})
-        )
+        mock_run.return_value = _make_completed(json.dumps({"number": 5, "body": "PR body"}))
         result = provider.get_pr_for_branch("feat/42-new-feature")
         assert result is not None
         assert result["number"] == 5

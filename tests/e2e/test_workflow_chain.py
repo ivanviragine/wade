@@ -70,8 +70,10 @@ def _parse_json_output(stdout: str) -> Any:
         # Fall back: find JSON content by stripping log-like lines
         lines = stdout.split("\n")
         json_lines = [
-            line for line in lines
-            if line.strip() and (
+            line
+            for line in lines
+            if line.strip()
+            and (
                 line.strip().startswith("{")
                 or line.strip().startswith("[")
                 or line.strip().startswith("]")
@@ -307,17 +309,13 @@ class TestCLIBasics:
 
     def test_version(self) -> None:
         """ghaiwpy --version exits 0 and prints version string."""
-        result = subprocess.run(
-            [GHAIWPY, "--version"], capture_output=True, text=True, timeout=10
-        )
+        result = subprocess.run([GHAIWPY, "--version"], capture_output=True, text=True, timeout=10)
         assert result.returncode == 0
         assert "ghaiw" in result.stdout.lower()
 
     def test_help(self) -> None:
         """ghaiwpy --help exits 0 and mentions key subcommands."""
-        result = subprocess.run(
-            [GHAIWPY, "--help"], capture_output=True, text=True, timeout=10
-        )
+        result = subprocess.run([GHAIWPY, "--help"], capture_output=True, text=True, timeout=10)
         assert result.returncode == 0
         output = result.stdout.lower()
         assert "task" in output or "work" in output or "check" in output
@@ -432,16 +430,12 @@ Add a search command to find tasks by keyword.
         combined = result.stdout + result.stderr
         assert "#1" in combined or "issues/1" in combined
 
-    def test_task_list(
-        self, e2e_repo: Path, mock_gh_cli: dict[str, Any]
-    ) -> None:
+    def test_task_list(self, e2e_repo: Path, mock_gh_cli: dict[str, Any]) -> None:
         """ghaiwpy task list exits 0."""
         result = _run(["task", "list"], cwd=e2e_repo)
         assert result.returncode == 0
 
-    def test_task_list_json(
-        self, e2e_repo: Path, mock_gh_cli: dict[str, Any]
-    ) -> None:
+    def test_task_list_json(self, e2e_repo: Path, mock_gh_cli: dict[str, Any]) -> None:
         """ghaiwpy task list --json outputs valid JSON array."""
         result = _run(["task", "list", "--json"], cwd=e2e_repo)
         assert result.returncode == 0
@@ -518,9 +512,7 @@ class TestWorkSyncCommand:
         assert result.returncode == 2
 
         # Clean up merge state
-        subprocess.run(
-            ["git", "merge", "--abort"], cwd=wt_dir, capture_output=True
-        )
+        subprocess.run(["git", "merge", "--abort"], cwd=wt_dir, capture_output=True)
 
     def test_sync_json_output(self, e2e_repo: Path) -> None:
         """ghaiwpy work sync --json emits structured events."""
@@ -535,7 +527,8 @@ class TestWorkSyncCommand:
 
         # Each non-empty line that starts with { should be valid JSON event
         json_lines = [
-            line for line in result.stdout.strip().split("\n")
+            line
+            for line in result.stdout.strip().split("\n")
             if line.strip() and line.strip().startswith("{")
         ]
         assert len(json_lines) >= 1, f"Expected JSON events, got: {result.stdout!r}"

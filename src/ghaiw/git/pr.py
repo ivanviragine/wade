@@ -50,9 +50,7 @@ def _run_gh(
             f"gh {' '.join(args)} failed (exit {exc.returncode}): {exc.stderr.strip()}"
         ) from exc
     except FileNotFoundError as exc:
-        raise GhCliError(
-            "gh CLI not found — install it from https://cli.github.com/"
-        ) from exc
+        raise GhCliError("gh CLI not found — install it from https://cli.github.com/") from exc
     return result
 
 
@@ -81,11 +79,16 @@ def create_pr(
         GhCliError: If PR creation fails.
     """
     cmd_args = [
-        "pr", "create",
-        "--title", title,
-        "--body", body,
-        "--base", base,
-        "--head", head,
+        "pr",
+        "create",
+        "--title",
+        title,
+        "--body",
+        body,
+        "--base",
+        base,
+        "--head",
+        head,
     ]
     if draft:
         cmd_args.append("--draft")
@@ -110,7 +113,11 @@ def _get_pr_info_from_url(repo_root: Path, pr_url: str) -> dict[str, str | int] 
     if not pr_url:
         return None
     result = _run_gh(
-        "pr", "view", pr_url, "--json", "number,url",
+        "pr",
+        "view",
+        pr_url,
+        "--json",
+        "number,url",
         cwd=repo_root,
         check=False,
     )
@@ -146,7 +153,9 @@ def merge_pr(
     flag = f"--{strategy}"
     log.info("pr.merge", pr_number=pr_number, strategy=strategy)
     _run_gh(
-        "pr", "merge", str(pr_number),
+        "pr",
+        "merge",
+        str(pr_number),
         flag,
         "--delete-branch",
         cwd=repo_root,
@@ -165,8 +174,11 @@ def get_pr_for_branch(repo_root: Path, branch: str) -> dict[str, str | int] | No
         "state" (str) keys, or None if no PR exists.
     """
     result = _run_gh(
-        "pr", "view", branch,
-        "--json", "number,url,title,state",
+        "pr",
+        "view",
+        branch,
+        "--json",
+        "number,url,title,state",
         cwd=repo_root,
         check=False,
     )

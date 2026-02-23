@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from ghaiw.services.check_service import (
     CheckExitCode,
     CheckStatus,
@@ -13,7 +11,6 @@ from ghaiw.services.check_service import (
     check_worktree,
     validate_config,
 )
-
 
 # ---------------------------------------------------------------------------
 # Worktree check tests
@@ -74,12 +71,7 @@ class TestValidateConfig:
 
     def test_valid_config(self, tmp_path: Path) -> None:
         config = tmp_path / ".ghaiw.yml"
-        config.write_text(
-            "version: 2\n"
-            "project:\n"
-            "  main_branch: main\n"
-            "  merge_strategy: PR\n"
-        )
+        config.write_text("version: 2\nproject:\n  main_branch: main\n  merge_strategy: PR\n")
         result = validate_config(tmp_path)
         assert result.exit_code == ConfigExitCode.VALID
         assert result.is_valid
@@ -108,11 +100,7 @@ class TestValidateConfig:
 
     def test_invalid_merge_strategy(self, tmp_path: Path) -> None:
         config = tmp_path / ".ghaiw.yml"
-        config.write_text(
-            "version: 2\n"
-            "project:\n"
-            "  merge_strategy: squash\n"
-        )
+        config.write_text("version: 2\nproject:\n  merge_strategy: squash\n")
         result = validate_config(tmp_path)
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("merge_strategy" in e for e in result.errors)
@@ -120,67 +108,42 @@ class TestValidateConfig:
 
     def test_invalid_ai_tool(self, tmp_path: Path) -> None:
         config = tmp_path / ".ghaiw.yml"
-        config.write_text(
-            "version: 2\n"
-            "ai:\n"
-            "  default_tool: chatgpt\n"
-        )
+        config.write_text("version: 2\nai:\n  default_tool: chatgpt\n")
         result = validate_config(tmp_path)
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("default_tool" in e for e in result.errors)
 
     def test_invalid_command_tool(self, tmp_path: Path) -> None:
         config = tmp_path / ".ghaiw.yml"
-        config.write_text(
-            "version: 2\n"
-            "ai:\n"
-            "  plan:\n"
-            "    tool: chatgpt\n"
-        )
+        config.write_text("version: 2\nai:\n  plan:\n    tool: chatgpt\n")
         result = validate_config(tmp_path)
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("ai.plan.tool" in e for e in result.errors)
 
     def test_unsupported_top_level_key(self, tmp_path: Path) -> None:
         config = tmp_path / ".ghaiw.yml"
-        config.write_text(
-            "version: 2\n"
-            "unknown_key: value\n"
-        )
+        config.write_text("version: 2\nunknown_key: value\n")
         result = validate_config(tmp_path)
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("unsupported key" in e for e in result.errors)
 
     def test_invalid_models_tool(self, tmp_path: Path) -> None:
         config = tmp_path / ".ghaiw.yml"
-        config.write_text(
-            "version: 2\n"
-            "models:\n"
-            "  chatgpt:\n"
-            "    easy: gpt-4\n"
-        )
+        config.write_text("version: 2\nmodels:\n  chatgpt:\n    easy: gpt-4\n")
         result = validate_config(tmp_path)
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("models.chatgpt" in e for e in result.errors)
 
     def test_invalid_complexity_key(self, tmp_path: Path) -> None:
         config = tmp_path / ".ghaiw.yml"
-        config.write_text(
-            "version: 2\n"
-            "models:\n"
-            "  claude:\n"
-            "    ultra: claude-ultra\n"
-        )
+        config.write_text("version: 2\nmodels:\n  claude:\n    ultra: claude-ultra\n")
         result = validate_config(tmp_path)
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("models.claude.ultra" in e for e in result.errors)
 
     def test_empty_models_block(self, tmp_path: Path) -> None:
         config = tmp_path / ".ghaiw.yml"
-        config.write_text(
-            "version: 2\n"
-            "models:\n"
-        )
+        config.write_text("version: 2\nmodels:\n")
         result = validate_config(tmp_path)
         # Empty models parsed as None by YAML, not as empty dict
         # So this should be valid (models key exists but is null)
@@ -190,11 +153,7 @@ class TestValidateConfig:
 
     def test_empty_copy_to_worktree(self, tmp_path: Path) -> None:
         config = tmp_path / ".ghaiw.yml"
-        config.write_text(
-            "version: 2\n"
-            "hooks:\n"
-            "  copy_to_worktree: []\n"
-        )
+        config.write_text("version: 2\nhooks:\n  copy_to_worktree: []\n")
         result = validate_config(tmp_path)
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("copy_to_worktree" in e and "empty" in e for e in result.errors)

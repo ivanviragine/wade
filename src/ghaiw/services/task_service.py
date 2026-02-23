@@ -243,9 +243,7 @@ def build_plan_summary_block(
         if cached_tokens is not None:
             lines.append(f"- **Cached tokens:** {format_count(cached_tokens)}")
         if per_issue_estimate is not None and per_issue_estimate > 0:
-            lines.append(
-                f"- **This issue (est.):** {format_count(per_issue_estimate)}"
-            )
+            lines.append(f"- **This issue (est.):** {format_count(per_issue_estimate)}")
     else:
         lines.append("Token usage: *unavailable*")
 

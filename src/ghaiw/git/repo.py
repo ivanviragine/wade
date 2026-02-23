@@ -74,9 +74,7 @@ def is_worktree(path: Path) -> bool:
     Returns:
         True if the path is inside a linked worktree.
     """
-    result = _run_git(
-        "rev-parse", "--git-common-dir", cwd=path, check=False
-    )
+    result = _run_git("rev-parse", "--git-common-dir", cwd=path, check=False)
     if result.returncode != 0:
         return False
     common_dir = result.stdout.strip()
@@ -140,7 +138,9 @@ def detect_main_branch(path: Path) -> str:
     """
     for candidate in ("main", "master"):
         result = _run_git(
-            "rev-parse", "--verify", f"refs/heads/{candidate}",
+            "rev-parse",
+            "--verify",
+            f"refs/heads/{candidate}",
             cwd=path,
             check=False,
         )

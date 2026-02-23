@@ -217,9 +217,7 @@ def start(
     # Resolve model from complexity or explicit arg
     resolved_model = model
     if not resolved_model and resolved_tool and task.complexity:
-        resolved_model = _complexity_to_model(
-            config, resolved_tool, task.complexity.value
-        )
+        resolved_model = _complexity_to_model(config, resolved_tool, task.complexity.value)
 
     # Resolve main branch
     main_branch = config.project.main_branch or git_repo.detect_main_branch(repo_root)
@@ -378,10 +376,7 @@ def batch(
 
     if graph and graph.edges:
         independent, chains = graph.partition(issue_numbers)
-        console.info(
-            f"Dependency analysis: {len(independent)} independent, "
-            f"{len(chains)} chain(s)"
-        )
+        console.info(f"Dependency analysis: {len(independent)} independent, {len(chains)} chain(s)")
     else:
         independent = issue_numbers
         chains = []
@@ -409,9 +404,7 @@ def batch(
                 cmd.extend(["--ai", resolved_tool])
 
             console.step(f"Launching #{issue_id} in new terminal")
-            if launch_in_new_terminal(
-                cmd, cwd=str(repo_root), title=f"ghaiw #{issue_id}"
-            ):
+            if launch_in_new_terminal(cmd, cwd=str(repo_root), title=f"ghaiw #{issue_id}"):
                 launched += 1
             else:
                 console.warn(f"Could not launch terminal for #{issue_id}")
@@ -552,12 +545,8 @@ def classify_staleness(
 
     # 3. Check if merged (merge-base equals branch tip)
     try:
-        merge_base = git_repo._run_git(
-            "merge-base", branch, main_branch, cwd=repo_root
-        )
-        branch_tip = git_repo._run_git(
-            "rev-parse", branch, cwd=repo_root
-        )
+        merge_base = git_repo._run_git("merge-base", branch, main_branch, cwd=repo_root)
+        branch_tip = git_repo._run_git("rev-parse", branch, cwd=repo_root)
         if merge_base.stdout.strip() == branch_tip.stdout.strip():
             return WorktreeState.STALE_MERGED
     except GitError:
@@ -614,13 +603,9 @@ def build_impl_usage_block(
 
     if token_usage:
         if token_usage.total_tokens:
-            lines.append(
-                f"| Session tokens | **{format_count(token_usage.total_tokens)}** |"
-            )
+            lines.append(f"| Session tokens | **{format_count(token_usage.total_tokens)}** |")
         if token_usage.input_tokens:
-            lines.append(
-                f"| Session input tokens | **{format_count(token_usage.input_tokens)}** |"
-            )
+            lines.append(f"| Session input tokens | **{format_count(token_usage.input_tokens)}** |")
         if token_usage.output_tokens:
             lines.append(
                 f"| Session output tokens | **{format_count(token_usage.output_tokens)}** |"
@@ -1005,9 +990,7 @@ def _done_via_pr(
     # Detect parent tracking issue
     parent_issue: str | None = None
     try:
-        parent_issue = provider.find_parent_issue(
-            issue_number, label=config.project.issue_label
-        )
+        parent_issue = provider.find_parent_issue(issue_number, label=config.project.issue_label)
         if parent_issue:
             console.detail(f"Detected parent tracking issue: #{parent_issue}")
     except Exception:
@@ -1286,11 +1269,13 @@ def _remove_stale(repo_root: Path, main_branch: str, force: bool) -> bool:
         )
 
         if staleness != WorktreeState.ACTIVE:
-            stale_wts.append({
-                "path": wt_path,
-                "branch": wt_branch,
-                "staleness": staleness.value,
-            })
+            stale_wts.append(
+                {
+                    "path": wt_path,
+                    "branch": wt_branch,
+                    "staleness": staleness.value,
+                }
+            )
 
     if not stale_wts:
         console.info("No stale worktrees found.")

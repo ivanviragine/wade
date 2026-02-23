@@ -39,8 +39,10 @@ def create_worktree(
         base=base_branch,
     )
     _run_git(
-        "worktree", "add",
-        "-b", branch_name,
+        "worktree",
+        "add",
+        "-b",
+        branch_name,
         str(worktree_path),
         base_branch,
         cwd=repo_root,
@@ -60,7 +62,10 @@ def remove_worktree(repo_root: Path, worktree_path: Path) -> None:
     """
     log.info("worktree.remove", worktree=str(worktree_path))
     _run_git(
-        "worktree", "remove", "--force", str(worktree_path),
+        "worktree",
+        "remove",
+        "--force",
+        str(worktree_path),
         cwd=repo_root,
     )
 
@@ -84,12 +89,12 @@ def list_worktrees(repo_root: Path) -> list[dict[str, str]]:
         if line.startswith("worktree "):
             if current:
                 worktrees.append(current)
-            current = {"path": line[len("worktree "):]}
+            current = {"path": line[len("worktree ") :]}
         elif line.startswith("HEAD "):
-            current["head"] = line[len("HEAD "):]
+            current["head"] = line[len("HEAD ") :]
         elif line.startswith("branch "):
             # Refs come as "refs/heads/branch-name"
-            ref = line[len("branch "):]
+            ref = line[len("branch ") :]
             current["branch"] = ref.removeprefix("refs/heads/")
         elif line.strip() == "detached":
             current["branch"] = "(detached)"

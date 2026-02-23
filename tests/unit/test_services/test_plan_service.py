@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from ghaiw.models.config import AIConfig, ProjectConfig, ProjectSettings
-from ghaiw.models.task import PlanFile, Task
+from ghaiw.models.config import AIConfig, ProjectConfig
+from ghaiw.models.task import PlanFile
 from ghaiw.services.plan_service import (
     _resolve_ai_tool,
     _resolve_model,
@@ -17,7 +17,6 @@ from ghaiw.services.plan_service import (
     render_plan_prompt,
     validate_plan_files,
 )
-
 
 # ---------------------------------------------------------------------------
 # Prompt template tests
@@ -56,9 +55,7 @@ class TestResolveAITool:
 
     def test_detection_fallback(self) -> None:
         config = ProjectConfig()
-        with patch(
-            "ghaiw.services.plan_service.AbstractAITool.detect_installed"
-        ) as mock:
+        with patch("ghaiw.services.plan_service.AbstractAITool.detect_installed") as mock:
             from ghaiw.models.ai import AIToolID
 
             mock.return_value = [AIToolID.CLAUDE]
@@ -67,9 +64,7 @@ class TestResolveAITool:
 
     def test_no_tool_available(self) -> None:
         config = ProjectConfig()
-        with patch(
-            "ghaiw.services.plan_service.AbstractAITool.detect_installed"
-        ) as mock:
+        with patch("ghaiw.services.plan_service.AbstractAITool.detect_installed") as mock:
             mock.return_value = []
             result = _resolve_ai_tool(None, config)
             assert result is None
@@ -84,9 +79,7 @@ class TestResolveModel:
     def test_config_fallback(self) -> None:
         from ghaiw.models.config import AICommandConfig
 
-        config = ProjectConfig(
-            ai=AIConfig(plan=AICommandConfig(model="claude-sonnet-4-6"))
-        )
+        config = ProjectConfig(ai=AIConfig(plan=AICommandConfig(model="claude-sonnet-4-6")))
         result = _resolve_model(None, config, "plan")
         assert result == "claude-sonnet-4-6"
 
@@ -151,11 +144,7 @@ class TestValidatePlanFiles:
 
     def test_validate_extracts_complexity(self, tmp_path: Path) -> None:
         (tmp_path / "plan.md").write_text(
-            "# Complex Feature\n\n"
-            "## Complexity\n"
-            "very_complex\n\n"
-            "## Tasks\n"
-            "- Many things\n"
+            "# Complex Feature\n\n## Complexity\nvery_complex\n\n## Tasks\n- Many things\n"
         )
 
         valid = validate_plan_files(tmp_path)
@@ -185,9 +174,7 @@ class TestPlanFile:
 
     def test_from_markdown_complexity(self, tmp_path: Path) -> None:
         f = tmp_path / "plan.md"
-        f.write_text(
-            "# Feature\n\n## Complexity\nmedium\n\n## Tasks\n- Task 1\n"
-        )
+        f.write_text("# Feature\n\n## Complexity\nmedium\n\n## Tasks\n- Task 1\n")
 
         plan = PlanFile.from_markdown(f)
         assert plan.complexity is not None

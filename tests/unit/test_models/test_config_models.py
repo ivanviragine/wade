@@ -7,7 +7,6 @@ from ghaiw.models.config import (
     AIConfig,
     ComplexityModelMapping,
     ProjectConfig,
-    ProjectSettings,
 )
 from ghaiw.models.work import MergeStrategy
 

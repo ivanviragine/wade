@@ -76,9 +76,7 @@ def format_count(n: int | None) -> str:
 # ---------------------------------------------------------------------------
 
 
-def read_transcript_excerpt(
-    transcript_path: Path, max_lines: int = 400
-) -> str:
+def read_transcript_excerpt(transcript_path: Path, max_lines: int = 400) -> str:
     """Read the tail of a transcript file, stripping control characters.
 
     AI CLI session footers (with token summaries) appear near the end.

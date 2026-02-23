@@ -87,9 +87,12 @@ class GitHubProvider(AbstractTaskProvider):
             search_parts = [f"-label:{lbl}" for lbl in exclude_labels]
             cmd.extend(["--search", " ".join(search_parts)])
 
-        cmd.extend([
-            "--json", "number,title,state,labels,body,url,createdAt,updatedAt",
-        ])
+        cmd.extend(
+            [
+                "--json",
+                "number,title,state,labels,body,url,createdAt,updatedAt",
+            ]
+        )
 
         result = run(cmd, check=True)
         raw_list = json.loads(result.stdout)
@@ -105,9 +108,7 @@ class GitHubProvider(AbstractTaskProvider):
         cmd = ["gh", "issue", "create", "--title", title]
 
         # Write body to temp file to handle multiline content safely
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".md", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write(body)
             body_file = f.name
 
@@ -137,10 +138,17 @@ class GitHubProvider(AbstractTaskProvider):
 
     def read_task(self, task_id: str) -> Task:
         """Read a single issue by number."""
-        result = run([
-            "gh", "issue", "view", task_id,
-            "--json", "number,title,body,state,labels,url,createdAt,updatedAt",
-        ], check=True)
+        result = run(
+            [
+                "gh",
+                "issue",
+                "view",
+                task_id,
+                "--json",
+                "number,title,body,state,labels,url,createdAt,updatedAt",
+            ],
+            check=True,
+        )
 
         raw = json.loads(result.stdout)
         return _parse_gh_task(raw)
@@ -153,9 +161,7 @@ class GitHubProvider(AbstractTaskProvider):
     ) -> Task:
         """Update an issue's title and/or body."""
         if body is not None:
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".md", delete=False
-            ) as f:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
                 f.write(body)
                 body_file = f.name
             try:
@@ -199,8 +205,7 @@ class GitHubProvider(AbstractTaskProvider):
         # Check if label already exists
         try:
             result = run(
-                ["gh", "label", "list", "--search", label.name,
-                 "--json", "name", "-q", ".[].name"],
+                ["gh", "label", "list", "--search", label.name, "--json", "name", "-q", ".[].name"],
                 check=True,
             )
             existing = result.stdout.strip().splitlines()
@@ -211,8 +216,12 @@ class GitHubProvider(AbstractTaskProvider):
 
         # Create the label
         cmd = [
-            "gh", "label", "create", label.name,
-            "--color", label.color,
+            "gh",
+            "label",
+            "create",
+            label.name,
+            "--color",
+            label.color,
         ]
         if label.description:
             cmd.extend(["--description", label.description])
@@ -236,7 +245,8 @@ class GitHubProvider(AbstractTaskProvider):
         except CommandError:
             logger.warning(
                 "github.label_add_failed",
-                task_id=task_id, label=label_name,
+                task_id=task_id,
+                label=label_name,
             )
 
     def remove_label(self, task_id: str, label_name: str) -> None:
@@ -249,7 +259,8 @@ class GitHubProvider(AbstractTaskProvider):
         except CommandError:
             logger.warning(
                 "github.label_remove_failed",
-                task_id=task_id, label=label_name,
+                task_id=task_id,
+                label=label_name,
             )
 
     # --- Snapshot/diff ---
@@ -273,18 +284,21 @@ class GitHubProvider(AbstractTaskProvider):
         draft: bool = False,
     ) -> str:
         """Create a pull request via gh pr create. Returns the PR URL."""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".md", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write(body)
             body_file = f.name
 
         try:
             cmd = [
-                "gh", "pr", "create",
-                "--title", title,
-                "--body-file", body_file,
-                "--base", base_branch,
+                "gh",
+                "pr",
+                "create",
+                "--title",
+                title,
+                "--body-file",
+                body_file,
+                "--base",
+                base_branch,
             ]
             if draft:
                 cmd.append("--draft")
@@ -323,9 +337,7 @@ class GitHubProvider(AbstractTaskProvider):
 
     def update_pr_body(self, pr_number: str, body: str) -> None:
         """Update a PR's body text."""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".md", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write(body)
             body_file = f.name
 
@@ -342,17 +354,14 @@ class GitHubProvider(AbstractTaskProvider):
     def get_repo_nwo(self) -> str:
         """Get the repo name-with-owner via gh repo view."""
         result = run(
-            ["gh", "repo", "view", "--json", "nameWithOwner",
-             "-q", ".nameWithOwner"],
+            ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
             check=True,
         )
         return result.stdout.strip()
 
     # --- Parent issue detection ---
 
-    def find_parent_issue(
-        self, task_id: str, label: str | None = None
-    ) -> str | None:
+    def find_parent_issue(self, task_id: str, label: str | None = None) -> str | None:
         """Find parent/tracking issue that references task_id in a checklist.
 
         Searches open issues for a body containing `- [ ] #<task_id>`.
@@ -422,13 +431,22 @@ query($owner: String!, $repo: String!, $number: Int!) {
 }"""
 
         try:
-            result = run([
-                "gh", "api", "graphql",
-                "-f", f"owner={owner}",
-                "-f", f"repo={repo}",
-                "-F", f"number={task_id}",
-                "-f", f"query={query}",
-            ], check=True)
+            result = run(
+                [
+                    "gh",
+                    "api",
+                    "graphql",
+                    "-f",
+                    f"owner={owner}",
+                    "-f",
+                    f"repo={repo}",
+                    "-F",
+                    f"number={task_id}",
+                    "-f",
+                    f"query={query}",
+                ],
+                check=True,
+            )
 
             data = json.loads(result.stdout)
             items = (
@@ -476,16 +494,27 @@ mutation($project_id: ID!, $item_id: ID!, $field_id: ID!, $option_id: String!) {
 }"""
 
             try:
-                run([
-                    "gh", "api", "graphql",
-                    "-f", f"project_id={project_id}",
-                    "-f", f"item_id={item_id}",
-                    "-f", f"field_id={field_id}",
-                    "-f", f"option_id={option_id}",
-                    "-f", f"query={mutation}",
-                ], check=True)
+                run(
+                    [
+                        "gh",
+                        "api",
+                        "graphql",
+                        "-f",
+                        f"project_id={project_id}",
+                        "-f",
+                        f"item_id={item_id}",
+                        "-f",
+                        f"field_id={field_id}",
+                        "-f",
+                        f"option_id={option_id}",
+                        "-f",
+                        f"query={mutation}",
+                    ],
+                    check=True,
+                )
                 logger.info(
-                    "github.moved_to_in_progress", task_id=task_id,
+                    "github.moved_to_in_progress",
+                    task_id=task_id,
                 )
                 return True
             except CommandError as e:

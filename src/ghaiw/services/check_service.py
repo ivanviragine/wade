@@ -290,8 +290,7 @@ def _validate_config_file(config_path: Path) -> list[str]:
     for key in raw:
         if key not in supported_keys:
             errors.append(
-                f"unsupported key '{key}'. "
-                f"Supported keys: {', '.join(sorted(supported_keys))}"
+                f"unsupported key '{key}'. Supported keys: {', '.join(sorted(supported_keys))}"
             )
 
     # Try to parse the full config to catch any remaining issues
@@ -314,14 +313,16 @@ def _validate_project_section(project: dict[str, Any], errors: list[str]) -> Non
         )
 
     valid_keys = {
-        "main_branch", "issue_label", "worktrees_dir",
-        "branch_prefix", "merge_strategy",
+        "main_branch",
+        "issue_label",
+        "worktrees_dir",
+        "branch_prefix",
+        "merge_strategy",
     }
     for key in project:
         if key not in valid_keys:
             errors.append(
-                f"project.{key}: unsupported key. "
-                f"Supported keys: {', '.join(sorted(valid_keys))}"
+                f"project.{key}: unsupported key. Supported keys: {', '.join(sorted(valid_keys))}"
             )
 
 
@@ -357,10 +358,7 @@ def _validate_ai_section(ai: dict[str, Any], errors: list[str]) -> None:
 def _validate_models_section(models: dict[str, Any], errors: list[str]) -> None:
     """Validate the models section (per-tool complexity mappings)."""
     if not models:
-        errors.append(
-            "models: block is empty. "
-            "Add at least one tool section or remove the key"
-        )
+        errors.append("models: block is empty. Add at least one tool section or remove the key")
         return
 
     for tool_name, mapping in models.items():
@@ -382,9 +380,7 @@ def _validate_models_section(models: dict[str, Any], errors: list[str]) -> None:
                     f"Allowed keys: {', '.join(sorted(_VALID_COMPLEXITY_KEYS))}"
                 )
             elif not value:
-                errors.append(
-                    f"models.{tool_name}.{key}: is empty. Set a model value"
-                )
+                errors.append(f"models.{tool_name}.{key}: is empty. Set a model value")
 
 
 def _validate_provider_section(provider: dict[str, Any], errors: list[str]) -> None:
@@ -421,8 +417,7 @@ def _validate_hooks_section(hooks: dict[str, Any], errors: list[str]) -> None:
             for i, item in enumerate(copy_list):
                 if not item or not str(item).strip():
                     errors.append(
-                        f"hooks.copy_to_worktree[{i}]: item is empty. "
-                        "Use: - <relative-path>"
+                        f"hooks.copy_to_worktree[{i}]: item is empty. Use: - <relative-path>"
                     )
 
     valid_keys = {"post_worktree_create", "copy_to_worktree"}

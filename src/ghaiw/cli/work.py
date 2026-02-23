@@ -25,9 +25,7 @@ def start(
 
 @work_app.command()
 def done(
-    no_close: bool = typer.Option(
-        False, "--no-close", help="Don't close the issue on merge."
-    ),
+    no_close: bool = typer.Option(False, "--no-close", help="Don't close the issue on merge."),
     draft: bool = typer.Option(False, "--draft", help="Create PR as draft."),
 ) -> None:
     """Finalize work — push branch and create PR (or direct merge)."""
@@ -39,9 +37,7 @@ def done(
 
 @work_app.command()
 def sync(
-    json_output: bool = typer.Option(
-        False, "--json", help="Output structured JSON events."
-    ),
+    json_output: bool = typer.Option(False, "--json", help="Output structured JSON events."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview without merging."),
     main_branch: str | None = typer.Option(
         None, "--main-branch", help="Override main branch name."
@@ -67,9 +63,7 @@ def sync(
 @work_app.command("list")
 def list_sessions(
     json_output: bool = typer.Option(False, "--json", help="Output as JSON."),
-    show_all: bool = typer.Option(
-        False, "--all", help="Show all worktrees including main."
-    ),
+    show_all: bool = typer.Option(False, "--all", help="Show all worktrees including main."),
 ) -> None:
     """List active work sessions / worktrees."""
     from ghaiw.services.work_service import list_sessions as do_list
@@ -101,9 +95,7 @@ def batch(
 
 @work_app.command()
 def remove(
-    target: str | None = typer.Argument(
-        None, help="Issue number or worktree name."
-    ),
+    target: str | None = typer.Argument(None, help="Issue number or worktree name."),
     stale: bool = typer.Option(False, "--stale", help="Remove all stale worktrees."),
     force: bool = typer.Option(False, "--force", help="Skip confirmation."),
 ) -> None:

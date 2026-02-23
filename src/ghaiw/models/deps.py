@@ -83,7 +83,7 @@ class DependencyGraph(BaseModel):
 
         for node in sorted(all_nodes):
             label = titles.get(node, f"#{node}")
-            lines.append(f"    {node}[\"#{node} {label}\"]")
+            lines.append(f'    {node}["#{node} {label}"]')
 
         # Add edges
         for edge in self.edges:

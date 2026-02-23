@@ -92,9 +92,7 @@ class TestTaskRepository:
 
 class TestSessionRepository:
     def test_create_and_get(self, db_engine) -> None:
-        TaskRepository(db_engine).create(
-            TaskRecord(id="42", provider="github", title="Task")
-        )
+        TaskRepository(db_engine).create(TaskRecord(id="42", provider="github", title="Task"))
 
         repo = SessionRepository(db_engine)
         record = SessionRecord(
@@ -107,9 +105,7 @@ class TestSessionRepository:
         assert created.task_id == "42"
 
     def test_get_by_task(self, db_engine) -> None:
-        TaskRepository(db_engine).create(
-            TaskRecord(id="42", provider="github", title="Task")
-        )
+        TaskRepository(db_engine).create(TaskRecord(id="42", provider="github", title="Task"))
         repo = SessionRepository(db_engine)
         repo.create(SessionRecord(task_id="42", session_type="plan", ai_tool="claude"))
         repo.create(SessionRecord(task_id="42", session_type="impl", ai_tool="copilot"))
@@ -124,12 +120,8 @@ class TestTokenUsageRepository:
         task_repo.create(TaskRecord(id="42", provider="github", title="Task"))
 
         session_repo = SessionRepository(db_engine)
-        s1 = session_repo.create(
-            SessionRecord(task_id="42", session_type="plan", ai_tool="claude")
-        )
-        s2 = session_repo.create(
-            SessionRecord(task_id="42", session_type="impl", ai_tool="claude")
-        )
+        s1 = session_repo.create(SessionRecord(task_id="42", session_type="plan", ai_tool="claude"))
+        s2 = session_repo.create(SessionRecord(task_id="42", session_type="impl", ai_tool="claude"))
 
         token_repo = TokenUsageRepository(db_engine)
         token_repo.create(TokenUsageRecord(session_id=s1.id, total_tokens=1000))
@@ -143,7 +135,14 @@ class TestWorktreeRepository:
     def test_get_active(self, db_engine) -> None:
         repo = WorktreeRepository(db_engine)
         repo.create(WorktreeRecord(task_id="1", path="/wt/1", branch="feat/1", state="active"))
-        repo.create(WorktreeRecord(task_id="2", path="/wt/2", branch="feat/2", state="stale_merged"))
+        repo.create(
+            WorktreeRecord(
+                task_id="2",
+                path="/wt/2",
+                branch="feat/2",
+                state="stale_merged",
+            )
+        )
 
         active = repo.get_active()
         assert len(active) == 1

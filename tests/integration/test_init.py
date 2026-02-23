@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -19,7 +18,7 @@ class TestInit:
         monkeypatch.chdir(tmp_git_repo)
 
         # Run init in non-interactive mode (provide inputs)
-        result = runner.invoke(
+        runner.invoke(
             app,
             ["init"],
             input="y\n",  # Confirm any prompts

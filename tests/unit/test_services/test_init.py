@@ -4,28 +4,24 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 import yaml
 
 from ghaiw.services.init_service import (
-    GITIGNORE_ENTRIES,
     MANIFEST_FILENAME,
     deinit,
     init,
     update,
 )
-from ghaiw.skills.installer import SKILL_FILES, get_templates_dir
+from ghaiw.skills.installer import get_templates_dir
 from ghaiw.skills.pointer import (
     MARKER_END,
     MARKER_START,
     ensure_pointer,
     extract_pointer_content,
-    get_pointer_content,
     has_pointer,
     remove_pointer,
     write_pointer,
 )
-
 
 # ---------------------------------------------------------------------------
 # Pointer tests
@@ -108,9 +104,7 @@ class TestPointer:
     def test_ensure_refreshes_stale(self, tmp_path: Path) -> None:
         target = tmp_path / "AGENTS.md"
         # Write an old pointer
-        target.write_text(
-            f"{MARKER_START}\nOld content\n{MARKER_END}\n"
-        )
+        target.write_text(f"{MARKER_START}\nOld content\n{MARKER_END}\n")
         result = ensure_pointer(tmp_path)
         assert result is not None
         # Should have been refreshed
@@ -191,18 +185,12 @@ class TestInit:
 
     def test_init_with_ai_tool(self, tmp_git_repo: Path) -> None:
         init(project_root=tmp_git_repo, ai_tool="claude", non_interactive=True)
-        config = yaml.safe_load(
-            (tmp_git_repo / ".ghaiw.yml").read_text()
-        )
+        config = yaml.safe_load((tmp_git_repo / ".ghaiw.yml").read_text())
         assert config["ai"]["default_tool"] == "claude"
 
     def test_init_patches_existing_config(self, tmp_git_repo: Path) -> None:
         config_path = tmp_git_repo / ".ghaiw.yml"
-        config_path.write_text(
-            "version: 2\n"
-            "project:\n"
-            "  issue_label: custom-label\n"
-        )
+        config_path.write_text("version: 2\nproject:\n  issue_label: custom-label\n")
 
         init(project_root=tmp_git_repo, ai_tool="claude", non_interactive=True)
 

@@ -45,7 +45,7 @@ class TestTask:
         assert task.parent_id == "10"
 
     def test_title_max_length(self) -> None:
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             Task(id="1", title="x" * 257)
 
 

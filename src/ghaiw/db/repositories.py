@@ -128,9 +128,7 @@ class TokenUsageRepository:
 
     def get_by_session(self, session_id: str) -> TokenUsageRecord | None:
         with Session(self.engine) as session:
-            statement = select(TokenUsageRecord).where(
-                TokenUsageRecord.session_id == session_id
-            )
+            statement = select(TokenUsageRecord).where(TokenUsageRecord.session_id == session_id)
             result = session.exec(statement).first()
             return result
 
@@ -138,9 +136,7 @@ class TokenUsageRepository:
         """Sum total tokens across all sessions for a task."""
         with Session(self.engine) as session:
             statement = (
-                select(TokenUsageRecord)
-                .join(SessionRecord)
-                .where(SessionRecord.task_id == task_id)
+                select(TokenUsageRecord).join(SessionRecord).where(SessionRecord.task_id == task_id)
             )
             records = session.exec(statement).all()
             return sum(r.total_tokens or 0 for r in records)
@@ -260,8 +256,6 @@ class AuditLogRepository:
     def get_recent(self, limit: int = 50) -> list[AuditLogRecord]:
         with Session(self.engine) as session:
             statement = (
-                select(AuditLogRecord)
-                .order_by(col(AuditLogRecord.timestamp).desc())
-                .limit(limit)
+                select(AuditLogRecord).order_by(col(AuditLogRecord.timestamp).desc()).limit(limit)
             )
             return list(session.exec(statement).all())

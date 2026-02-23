@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from ghaiw.ai_tools.transcript import (
     allocate_tokens,
     extract_model_breakdown_from_text,
@@ -38,7 +36,7 @@ class TestParseTokenCount:
     def test_k_suffix(self) -> None:
         assert parse_token_count("1.2k") == 1_200
 
-    def test_K_suffix_uppercase(self) -> None:
+    def test_k_suffix_uppercase(self) -> None:
         assert parse_token_count("1.2K") == 1_200
 
     def test_m_suffix(self) -> None:
@@ -203,10 +201,7 @@ class TestGeminiExtraction:
         assert usage.output_tokens == 8_901
 
     def test_multi_model(self) -> None:
-        text = (
-            "gemini-2.0-flash 12 45234 12345 8901\n"
-            "gemini-2.5-pro 3 15000 5000 3000\n"
-        )
+        text = "gemini-2.0-flash 12 45234 12345 8901\ngemini-2.5-pro 3 15000 5000 3000\n"
         usage = extract_token_usage_from_text(text)
         assert usage.input_tokens == 60_234
         assert usage.output_tokens == 11_901
@@ -274,11 +269,7 @@ class TestGenericExtraction:
         assert usage.total_tokens == 5_678
 
     def test_all_fields(self) -> None:
-        text = (
-            "Total tokens: 5,678\n"
-            "Input tokens: 4,000\n"
-            "Output tokens: 1,678\n"
-        )
+        text = "Total tokens: 5,678\nInput tokens: 4,000\nOutput tokens: 1,678\n"
         usage = extract_token_usage_from_text(text)
         assert usage.total_tokens == 5_678
         assert usage.input_tokens == 4_000
@@ -427,10 +418,7 @@ class TestAllocateTokens:
 
 class TestModelBreakdown:
     def test_gemini_breakdown(self) -> None:
-        text = (
-            "gemini-2.0-flash 12 45234 12345 8901\n"
-            "gemini-2.5-pro 3 15000 5000 3000\n"
-        )
+        text = "gemini-2.0-flash 12 45234 12345 8901\ngemini-2.5-pro 3 15000 5000 3000\n"
         breakdowns = extract_model_breakdown_from_text(text)
         assert len(breakdowns) == 2
         assert breakdowns[0].model == "gemini-2.0-flash"

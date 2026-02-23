@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from ghaiw.models.config import ProjectConfig, ProjectSettings
 from ghaiw.models.deps import DependencyEdge, DependencyGraph
 from ghaiw.models.task import Task
@@ -20,7 +18,6 @@ from ghaiw.services.deps_service import (
     parse_deps_output,
     strip_deps_section,
 )
-
 
 # ---------------------------------------------------------------------------
 # Prompt template tests
@@ -115,11 +112,7 @@ class TestParseEdges:
         assert len(edges) == 1
 
     def test_mixed_valid_invalid(self) -> None:
-        text = (
-            "1 -> 2 # valid\n"
-            "1 -> 99 # invalid\n"
-            "3 -> 2 # valid\n"
-        )
+        text = "1 -> 2 # valid\n1 -> 99 # invalid\n3 -> 2 # valid\n"
         edges = parse_deps_output(text, {"1", "2", "3"})
         assert len(edges) == 2
 
@@ -145,11 +138,7 @@ class TestOutputParseable:
 
 class TestStripDepsSection:
     def test_removes_deps_section_in_middle(self) -> None:
-        body = (
-            "## Tasks\n- Do A\n\n"
-            "## Dependencies\n**Depends on:** #1\n\n"
-            "## Notes\nSome notes\n"
-        )
+        body = "## Tasks\n- Do A\n\n## Dependencies\n**Depends on:** #1\n\n## Notes\nSome notes\n"
         stripped = strip_deps_section(body)
         assert "## Dependencies" not in stripped
         assert "## Tasks" in stripped
@@ -209,9 +198,7 @@ class TestApplyDeps:
 
     def test_skips_unrelated_issues(self) -> None:
         provider = MagicMock()
-        provider.read_task.return_value = Task(
-            id="3", title="Other", body="No deps"
-        )
+        provider.read_task.return_value = Task(id="3", title="Other", body="No deps")
 
         edges = [DependencyEdge(from_task="1", to_task="2")]
         updated = apply_deps_to_issues(provider, ["3"], edges)
@@ -226,13 +213,9 @@ class TestApplyDeps:
 class TestCreateTrackingIssue:
     def test_creates_tracking_issue(self) -> None:
         provider = MagicMock()
-        provider.create_task.return_value = Task(
-            id="10", title="Tracking: #1, #2, #3"
-        )
+        provider.create_task.return_value = Task(id="10", title="Tracking: #1, #2, #3")
 
-        config = ProjectConfig(
-            project=ProjectSettings(issue_label="feature-plan")
-        )
+        config = ProjectConfig(project=ProjectSettings(issue_label="feature-plan"))
         graph = DependencyGraph(
             edges=[
                 DependencyEdge(from_task="1", to_task="2"),
@@ -241,9 +224,7 @@ class TestCreateTrackingIssue:
         )
         titles = {"1": "Auth", "2": "DB", "3": "UI"}
 
-        tracking_id = create_tracking_issue(
-            provider, config, ["1", "2", "3"], graph, titles
-        )
+        tracking_id = create_tracking_issue(provider, config, ["1", "2", "3"], graph, titles)
         assert tracking_id == "10"
         provider.create_task.assert_called_once()
 
@@ -260,9 +241,7 @@ class TestCreateTrackingIssue:
         config = ProjectConfig()
         graph = DependencyGraph(edges=[])
 
-        create_tracking_issue(
-            provider, config, ["1", "2", "3", "4"], graph, {}
-        )
+        create_tracking_issue(provider, config, ["1", "2", "3", "4"], graph, {})
         call_kwargs = provider.create_task.call_args[1]
         assert "4 issues" in call_kwargs["title"]
 
@@ -273,9 +252,7 @@ class TestCreateTrackingIssue:
         config = ProjectConfig()
         graph = DependencyGraph(edges=[])
 
-        create_tracking_issue(
-            provider, config, ["1", "2"], graph, {}
-        )
+        create_tracking_issue(provider, config, ["1", "2"], graph, {})
         call_kwargs = provider.create_task.call_args[1]
         assert "#1" in call_kwargs["title"]
         assert "#2" in call_kwargs["title"]
@@ -287,7 +264,5 @@ class TestCreateTrackingIssue:
         config = ProjectConfig()
         graph = DependencyGraph(edges=[])
 
-        result = create_tracking_issue(
-            provider, config, ["1", "2", "3"], graph, {}
-        )
+        result = create_tracking_issue(provider, config, ["1", "2", "3"], graph, {})
         assert result is None

@@ -42,7 +42,9 @@ def merge_branch(repo_root: Path, branch: str) -> SyncResult:
     log.info("sync.merge", current=current, merging=branch)
 
     result = _run_git(
-        "merge", "--no-edit", branch,
+        "merge",
+        "--no-edit",
+        branch,
         cwd=repo_root,
         check=False,
     )
@@ -68,10 +70,7 @@ def merge_branch(repo_root: Path, branch: str) -> SyncResult:
         )
 
     # Non-conflict merge failure
-    raise GitError(
-        f"git merge {branch} failed (exit {result.returncode}): "
-        f"{result.stderr.strip()}"
-    )
+    raise GitError(f"git merge {branch} failed (exit {result.returncode}): {result.stderr.strip()}")
 
 
 def _count_merged_commits(merge_output: str) -> int:
@@ -102,7 +101,9 @@ def get_conflicted_files(repo_root: Path) -> list[str]:
         List of file paths relative to the repo root, or empty list.
     """
     result = _run_git(
-        "diff", "--name-only", "--diff-filter=U",
+        "diff",
+        "--name-only",
+        "--diff-filter=U",
         cwd=repo_root,
         check=False,
     )

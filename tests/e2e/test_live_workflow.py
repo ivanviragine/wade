@@ -22,9 +22,7 @@ from pathlib import Path
 
 import pytest
 
-TASKR_REPO = Path(os.environ.get("TASKR_REPO", os.path.expanduser(
-    "~/Documents/workspace/taskr"
-)))
+TASKR_REPO = Path(os.environ.get("TASKR_REPO", os.path.expanduser("~/Documents/workspace/taskr")))
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("RUN_LIVE_E2E") != "1",

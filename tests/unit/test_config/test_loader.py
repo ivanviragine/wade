@@ -6,7 +6,6 @@ from pathlib import Path
 
 from ghaiw.config.loader import find_config_file, load_config, parse_config_file
 
-
 SAMPLE_V2_CONFIG = """\
 version: 2
 

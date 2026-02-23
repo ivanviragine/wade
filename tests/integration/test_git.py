@@ -33,7 +33,6 @@ from ghaiw.git import (
 )
 from ghaiw.git.sync import abort_merge, merge_branch
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -115,15 +114,21 @@ class TestDetectMainBranch:
         repo.mkdir()
         subprocess.run(
             ["git", "init", "-b", "master"],
-            cwd=repo, capture_output=True, check=True,
+            cwd=repo,
+            capture_output=True,
+            check=True,
         )
         subprocess.run(
             ["git", "config", "user.email", "t@t.com"],
-            cwd=repo, capture_output=True, check=True,
+            cwd=repo,
+            capture_output=True,
+            check=True,
         )
         subprocess.run(
             ["git", "config", "user.name", "T"],
-            cwd=repo, capture_output=True, check=True,
+            cwd=repo,
+            capture_output=True,
+            check=True,
         )
         (repo / "f.txt").write_text("x")
         _git(repo, "add", "f.txt")
@@ -135,15 +140,21 @@ class TestDetectMainBranch:
         repo.mkdir()
         subprocess.run(
             ["git", "init", "-b", "develop"],
-            cwd=repo, capture_output=True, check=True,
+            cwd=repo,
+            capture_output=True,
+            check=True,
         )
         subprocess.run(
             ["git", "config", "user.email", "t@t.com"],
-            cwd=repo, capture_output=True, check=True,
+            cwd=repo,
+            capture_output=True,
+            check=True,
         )
         subprocess.run(
             ["git", "config", "user.name", "T"],
-            cwd=repo, capture_output=True, check=True,
+            cwd=repo,
+            capture_output=True,
+            check=True,
         )
         (repo / "f.txt").write_text("x")
         _git(repo, "add", "f.txt")
@@ -179,7 +190,8 @@ class TestGetRemoteUrl:
         bare = tmp_path / "bare.git"
         subprocess.run(
             ["git", "init", "--bare", str(bare)],
-            capture_output=True, check=True,
+            capture_output=True,
+            check=True,
         )
         _git(tmp_git_repo, "remote", "add", "origin", str(bare))
         url = get_remote_url(tmp_git_repo)
@@ -414,7 +426,8 @@ class TestGetConflictedFiles:
         # Attempt merge (will fail with conflicts)
         subprocess.run(
             ["git", "merge", "--no-edit", main],
-            cwd=tmp_git_repo, capture_output=True,
+            cwd=tmp_git_repo,
+            capture_output=True,
         )
 
         conflicts = get_conflicted_files(tmp_git_repo)
@@ -437,7 +450,8 @@ class TestAbortMerge:
         _git(tmp_git_repo, "checkout", "abort-test")
         subprocess.run(
             ["git", "merge", "--no-edit", main],
-            cwd=tmp_git_repo, capture_output=True,
+            cwd=tmp_git_repo,
+            capture_output=True,
         )
 
         # Should not raise

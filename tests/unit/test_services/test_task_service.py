@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from ghaiw.models.config import ProjectConfig, ProjectSettings
-from ghaiw.models.task import Label, LabelType, PlanFile, Task, TaskState
+from ghaiw.models.task import Task, TaskState
 from ghaiw.services.task_service import (
     LABEL_COLOR_IN_PROGRESS,
     LABEL_COLOR_ISSUE,
@@ -48,9 +48,7 @@ def mock_provider():
         title="Test Issue",
         body="Test body\nwith multiple lines\n",
     )
-    provider.close_task.return_value = Task(
-        id="42", title="Test Issue", state=TaskState.CLOSED
-    )
+    provider.close_task.return_value = Task(id="42", title="Test Issue", state=TaskState.CLOSED)
     provider.list_tasks.return_value = [
         Task(id="1", title="First Issue", state=TaskState.OPEN),
         Task(id="2", title="Second Issue", state=TaskState.OPEN),
@@ -96,9 +94,7 @@ class TestLabels:
         remove_in_progress_label(mock_provider, "42")
         mock_provider.remove_label.assert_called_once_with("42", "in-progress")
 
-    def test_add_planned_by_labels_tool_only(
-        self, mock_provider: MagicMock
-    ) -> None:
+    def test_add_planned_by_labels_tool_only(self, mock_provider: MagicMock) -> None:
         add_planned_by_labels(mock_provider, "42", ai_tool="claude")
         # Should create tool label and add it
         assert mock_provider.ensure_label.call_count == 1
@@ -107,12 +103,8 @@ class TestLabels:
         assert label.name == "planned-by:claude"
         assert label.color == LABEL_COLOR_PLANNED
 
-    def test_add_planned_by_labels_with_model(
-        self, mock_provider: MagicMock
-    ) -> None:
-        add_planned_by_labels(
-            mock_provider, "42", ai_tool="claude", model="claude-opus-4-6"
-        )
+    def test_add_planned_by_labels_with_model(self, mock_provider: MagicMock) -> None:
+        add_planned_by_labels(mock_provider, "42", ai_tool="claude", model="claude-opus-4-6")
         # Should create two labels: tool + model
         assert mock_provider.ensure_label.call_count == 2
         assert mock_provider.add_label.call_count == 2
@@ -120,23 +112,16 @@ class TestLabels:
         assert calls[0][0] == ("42", "planned-by:claude")
         assert calls[1][0] == ("42", "planned-model:claude-opus-4-6")
 
-    def test_add_planned_by_labels_no_tool(
-        self, mock_provider: MagicMock
-    ) -> None:
+    def test_add_planned_by_labels_no_tool(self, mock_provider: MagicMock) -> None:
         add_planned_by_labels(mock_provider, "42", ai_tool=None)
         # Should be a no-op
         mock_provider.ensure_label.assert_not_called()
         mock_provider.add_label.assert_not_called()
 
     def test_add_worked_by_labels(self, mock_provider: MagicMock) -> None:
-        add_worked_by_labels(
-            mock_provider, "42", ai_tool="copilot", model="claude-sonnet-4-6"
-        )
+        add_worked_by_labels(mock_provider, "42", ai_tool="copilot", model="claude-sonnet-4-6")
         assert mock_provider.ensure_label.call_count == 2
-        labels = [
-            mock_provider.ensure_label.call_args_list[i][0][0]
-            for i in range(2)
-        ]
+        labels = [mock_provider.ensure_label.call_args_list[i][0][0] for i in range(2)]
         assert labels[0].name == "worked-by:copilot"
         assert labels[0].color == LABEL_COLOR_WORKED
         assert labels[1].name == "worked-model:claude-sonnet-4-6"
@@ -261,9 +246,7 @@ class TestCreateFromPlanFile:
         assert task is None
         mock_provider.create_task.assert_not_called()
 
-    def test_create_missing_file(
-        self, mock_provider: MagicMock, config: ProjectConfig
-    ) -> None:
+    def test_create_missing_file(self, mock_provider: MagicMock, config: ProjectConfig) -> None:
         task = create_from_plan_file(
             Path("/nonexistent/plan.md"), config=config, provider=mock_provider
         )
@@ -280,48 +263,32 @@ class TestCreateFromPlanFile:
 
 
 class TestListTasks:
-    def test_list_open(
-        self, mock_provider: MagicMock, config: ProjectConfig
-    ) -> None:
+    def test_list_open(self, mock_provider: MagicMock, config: ProjectConfig) -> None:
         tasks = list_tasks(config=config, provider=mock_provider, state="open")
         assert len(tasks) == 2
         mock_provider.list_tasks.assert_called_once()
 
-    def test_list_json(
-        self, mock_provider: MagicMock, config: ProjectConfig
-    ) -> None:
-        tasks = list_tasks(
-            config=config, provider=mock_provider, json_mode=True
-        )
+    def test_list_json(self, mock_provider: MagicMock, config: ProjectConfig) -> None:
+        tasks = list_tasks(config=config, provider=mock_provider, json_mode=True)
         assert len(tasks) == 2
 
-    def test_list_empty(
-        self, mock_provider: MagicMock, config: ProjectConfig
-    ) -> None:
+    def test_list_empty(self, mock_provider: MagicMock, config: ProjectConfig) -> None:
         mock_provider.list_tasks.return_value = []
         tasks = list_tasks(config=config, provider=mock_provider)
         assert len(tasks) == 0
 
 
 class TestReadTask:
-    def test_read_success(
-        self, mock_provider: MagicMock, config: ProjectConfig
-    ) -> None:
+    def test_read_success(self, mock_provider: MagicMock, config: ProjectConfig) -> None:
         task = read_task("42", config=config, provider=mock_provider)
         assert task is not None
         assert task.id == "42"
 
-    def test_read_json(
-        self, mock_provider: MagicMock, config: ProjectConfig
-    ) -> None:
-        task = read_task(
-            "42", config=config, provider=mock_provider, json_mode=True
-        )
+    def test_read_json(self, mock_provider: MagicMock, config: ProjectConfig) -> None:
+        task = read_task("42", config=config, provider=mock_provider, json_mode=True)
         assert task is not None
 
-    def test_read_failure(
-        self, mock_provider: MagicMock, config: ProjectConfig
-    ) -> None:
+    def test_read_failure(self, mock_provider: MagicMock, config: ProjectConfig) -> None:
         mock_provider.read_task.side_effect = Exception("Not found")
         task = read_task("999", config=config, provider=mock_provider)
         assert task is None
@@ -337,45 +304,29 @@ class TestUpdateTask:
         plan = tmp_path / "update.md"
         plan.write_text("# Updated Title\n\nNew body content.\n")
 
-        mock_provider.update_task.return_value = Task(
-            id="42", title="Updated Title"
-        )
-        result = update_task(
-            "42", body_file=plan, config=config, provider=mock_provider
-        )
+        mock_provider.update_task.return_value = Task(id="42", title="Updated Title")
+        result = update_task("42", body_file=plan, config=config, provider=mock_provider)
         assert result is True
         mock_provider.update_task.assert_called_once()
 
-    def test_update_with_comment(
-        self, mock_provider: MagicMock, config: ProjectConfig
-    ) -> None:
-        result = update_task(
-            "42", comment="A comment", config=config, provider=mock_provider
-        )
+    def test_update_with_comment(self, mock_provider: MagicMock, config: ProjectConfig) -> None:
+        result = update_task("42", comment="A comment", config=config, provider=mock_provider)
         assert result is True
         mock_provider.comment_on_task.assert_called_once_with("42", "A comment")
 
-    def test_update_no_args(
-        self, mock_provider: MagicMock, config: ProjectConfig
-    ) -> None:
+    def test_update_no_args(self, mock_provider: MagicMock, config: ProjectConfig) -> None:
         result = update_task("42", config=config, provider=mock_provider)
         assert result is False
 
 
 class TestCloseTask:
-    def test_close_success(
-        self, mock_provider: MagicMock, config: ProjectConfig
-    ) -> None:
+    def test_close_success(self, mock_provider: MagicMock, config: ProjectConfig) -> None:
         result = close_task("42", config=config, provider=mock_provider)
         assert result is True
         mock_provider.close_task.assert_called_once_with("42")
 
-    def test_close_with_comment(
-        self, mock_provider: MagicMock, config: ProjectConfig
-    ) -> None:
-        result = close_task(
-            "42", comment="Done!", config=config, provider=mock_provider
-        )
+    def test_close_with_comment(self, mock_provider: MagicMock, config: ProjectConfig) -> None:
+        result = close_task("42", comment="Done!", config=config, provider=mock_provider)
         assert result is True
         mock_provider.comment_on_task.assert_called_once_with("42", "Done!")
         mock_provider.close_task.assert_called_once()
@@ -386,9 +337,7 @@ class TestCloseTask:
         close_task("42", config=config, provider=mock_provider)
         mock_provider.remove_label.assert_called_once_with("42", "in-progress")
 
-    def test_close_failure(
-        self, mock_provider: MagicMock, config: ProjectConfig
-    ) -> None:
+    def test_close_failure(self, mock_provider: MagicMock, config: ProjectConfig) -> None:
         mock_provider.close_task.side_effect = Exception("API error")
         result = close_task("42", config=config, provider=mock_provider)
         assert result is False

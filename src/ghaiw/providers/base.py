@@ -95,9 +95,7 @@ class AbstractTaskProvider(ABC):
         draft: bool = False,
     ) -> str:
         """Create a pull request. Returns the PR URL."""
-        raise NotImplementedError(
-            f"{type(self).__name__} does not support pull requests"
-        )
+        raise NotImplementedError(f"{type(self).__name__} does not support pull requests")
 
     def merge_pr(
         self,
@@ -106,35 +104,25 @@ class AbstractTaskProvider(ABC):
         delete_branch: bool = True,
     ) -> None:
         """Merge a pull request."""
-        raise NotImplementedError(
-            f"{type(self).__name__} does not support pull requests"
-        )
+        raise NotImplementedError(f"{type(self).__name__} does not support pull requests")
 
     def get_pr_for_branch(self, branch: str) -> dict[str, Any] | None:
         """Get PR info for a branch. Returns dict with number/body or None."""
-        raise NotImplementedError(
-            f"{type(self).__name__} does not support pull requests"
-        )
+        raise NotImplementedError(f"{type(self).__name__} does not support pull requests")
 
     def update_pr_body(self, pr_number: str, body: str) -> None:
         """Update a PR's body text."""
-        raise NotImplementedError(
-            f"{type(self).__name__} does not support pull requests"
-        )
+        raise NotImplementedError(f"{type(self).__name__} does not support pull requests")
 
     # --- Repository info ---
 
     def get_repo_nwo(self) -> str:
         """Get the repo name-with-owner (e.g., 'owner/repo')."""
-        raise NotImplementedError(
-            f"{type(self).__name__} does not support repo info"
-        )
+        raise NotImplementedError(f"{type(self).__name__} does not support repo info")
 
     # --- Parent issue detection ---
 
-    def find_parent_issue(
-        self, task_id: str, label: str | None = None
-    ) -> str | None:
+    def find_parent_issue(self, task_id: str, label: str | None = None) -> str | None:
         """Find parent/tracking issue containing task_id in a checklist.
 
         Returns the parent issue number or None.

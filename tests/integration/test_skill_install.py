@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 
 class TestSkillInstallation:
     def test_install_copies_skill_files(self, tmp_git_repo: Path) -> None:

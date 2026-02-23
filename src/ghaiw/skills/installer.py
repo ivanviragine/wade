@@ -201,9 +201,7 @@ def _link_cross_tool(
 
     # Calculate relative path
     try:
-        rel_target = primary_skills_dir.resolve().relative_to(
-            link.parent.resolve()
-        )
+        rel_target = primary_skills_dir.resolve().relative_to(link.parent.resolve())
     except ValueError:
         rel_target = primary_skills_dir.resolve()
 

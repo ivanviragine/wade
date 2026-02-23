@@ -5,15 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from ghaiw.models.config import (
     HooksConfig,
     ProjectConfig,
     ProjectSettings,
 )
-from ghaiw.models.deps import DependencyEdge, DependencyGraph
-from ghaiw.models.task import Complexity, Task
+from ghaiw.models.task import Task
 from ghaiw.services.work_service import (
     _build_graph_from_issues,
     _complexity_to_model,
@@ -24,7 +21,6 @@ from ghaiw.services.work_service import (
     find_worktree_path,
     write_issue_context,
 )
-
 
 # ---------------------------------------------------------------------------
 # Bootstrap helper tests
@@ -51,9 +47,7 @@ class TestComplexityToModel:
     def test_maps_easy(self) -> None:
         from ghaiw.models.config import ComplexityModelMapping
 
-        config = ProjectConfig(
-            models={"claude": ComplexityModelMapping(easy="claude-haiku-4-5")}
-        )
+        config = ProjectConfig(models={"claude": ComplexityModelMapping(easy="claude-haiku-4-5")})
         result = _complexity_to_model(config, "claude", "easy")
         assert result == "claude-haiku-4-5"
 
@@ -198,9 +192,7 @@ class TestBuildGraphFromIssues:
             ),
         ]
 
-        with patch(
-            "ghaiw.services.work_service.get_provider", return_value=provider
-        ):
+        with patch("ghaiw.services.work_service.get_provider", return_value=provider):
             config = ProjectConfig()
             graph = _build_graph_from_issues(["1", "2"], config)
             assert graph is not None
@@ -215,9 +207,7 @@ class TestBuildGraphFromIssues:
             Task(id="2", title="B", body="Also no deps"),
         ]
 
-        with patch(
-            "ghaiw.services.work_service.get_provider", return_value=provider
-        ):
+        with patch("ghaiw.services.work_service.get_provider", return_value=provider):
             config = ProjectConfig()
             graph = _build_graph_from_issues(["1", "2"], config)
             assert graph is None

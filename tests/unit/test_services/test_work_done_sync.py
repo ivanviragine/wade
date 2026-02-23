@@ -22,7 +22,6 @@ from ghaiw.services.work_service import (
     list_sessions,
 )
 
-
 # ---------------------------------------------------------------------------
 # Branch/issue extraction
 # ---------------------------------------------------------------------------
@@ -60,9 +59,7 @@ class TestClassifyStaleness:
         create_worktree(tmp_git_repo, branch, wt_dir, "main")
 
         provider = MagicMock()
-        provider.read_task.return_value = Task(
-            id="42", title="Test", state=TaskState.OPEN
-        )
+        provider.read_task.return_value = Task(id="42", title="Test", state=TaskState.OPEN)
 
         result = classify_staleness(
             repo_root=tmp_git_repo,
@@ -189,12 +186,7 @@ class TestStripImplUsageBlock:
         assert result == body
 
     def test_block_at_end(self) -> None:
-        body = (
-            "Content\n\n"
-            f"{IMPL_USAGE_MARKER_START}\n"
-            "## Usage\n"
-            f"{IMPL_USAGE_MARKER_END}\n"
-        )
+        body = f"Content\n\n{IMPL_USAGE_MARKER_START}\n## Usage\n{IMPL_USAGE_MARKER_END}\n"
         result = _strip_impl_usage_block(body)
         assert IMPL_USAGE_MARKER_START not in result
         assert "Content" in result
@@ -287,12 +279,15 @@ class TestSync:
     def test_not_in_git_repo(self) -> None:
         from ghaiw.services.work_service import sync
 
-        with patch(
-            "ghaiw.services.work_service.load_config",
-            return_value=ProjectConfig(),
-        ), patch(
-            "ghaiw.services.work_service.git_repo.get_repo_root",
-            side_effect=GitError("not a repo"),
+        with (
+            patch(
+                "ghaiw.services.work_service.load_config",
+                return_value=ProjectConfig(),
+            ),
+            patch(
+                "ghaiw.services.work_service.git_repo.get_repo_root",
+                side_effect=GitError("not a repo"),
+            ),
         ):
             result = sync(project_root=Path("/tmp/nonexistent"))
             assert not result.success
@@ -511,12 +506,15 @@ class TestDone:
     def test_not_in_git_repo(self) -> None:
         from ghaiw.services.work_service import done
 
-        with patch(
-            "ghaiw.services.work_service.load_config",
-            return_value=ProjectConfig(),
-        ), patch(
-            "ghaiw.services.work_service.git_repo.get_repo_root",
-            side_effect=GitError("not a repo"),
+        with (
+            patch(
+                "ghaiw.services.work_service.load_config",
+                return_value=ProjectConfig(),
+            ),
+            patch(
+                "ghaiw.services.work_service.git_repo.get_repo_root",
+                side_effect=GitError("not a repo"),
+            ),
         ):
             result = done(project_root=Path("/tmp/nonexistent"))
             assert not result

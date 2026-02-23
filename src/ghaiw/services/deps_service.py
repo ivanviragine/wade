@@ -128,10 +128,7 @@ def parse_deps_output(
 
         # Validate both numbers
         if from_id not in valid_numbers or to_id not in valid_numbers:
-            console.warn(
-                f"Skipping invalid edge {from_id} -> {to_id} "
-                "(unknown issue number)"
-            )
+            console.warn(f"Skipping invalid edge {from_id} -> {to_id} (unknown issue number)")
             continue
 
         # Extract comment
@@ -140,9 +137,7 @@ def parse_deps_output(
         if comment_match:
             reason = comment_match.group(1).strip()
 
-        edges.append(
-            DependencyEdge(from_task=from_id, to_task=to_id, reason=reason)
-        )
+        edges.append(DependencyEdge(from_task=from_id, to_task=to_id, reason=reason))
 
     return edges
 
@@ -234,9 +229,7 @@ def apply_deps_to_issues(
             console.detail(f"Updated #{issue_id} with dependency refs")
             updated += 1
         except Exception as e:
-            logger.warning(
-                "deps.update_failed", issue=issue_id, error=str(e)
-            )
+            logger.warning("deps.update_failed", issue=issue_id, error=str(e))
 
     return updated
 
@@ -463,9 +456,7 @@ def analyze_deps(
 
     # Create tracking issue (3+ auto, skip for 2)
     if len(issue_numbers) >= 3:
-        tracking_id = create_tracking_issue(
-            provider, config, issue_numbers, graph, task_titles
-        )
+        tracking_id = create_tracking_issue(provider, config, issue_numbers, graph, task_titles)
         if tracking_id:
             graph.tracking_task_id = tracking_id
 

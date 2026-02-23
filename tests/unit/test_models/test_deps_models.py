@@ -77,9 +77,7 @@ class TestPartition:
         assert chains == []
 
     def test_mixed(self) -> None:
-        graph = DependencyGraph(
-            edges=[DependencyEdge(from_task="2", to_task="3")]
-        )
+        graph = DependencyGraph(edges=[DependencyEdge(from_task="2", to_task="3")])
         independent, chains = graph.partition(["1", "2", "3"])
         assert "1" in independent
         assert len(chains) == 1

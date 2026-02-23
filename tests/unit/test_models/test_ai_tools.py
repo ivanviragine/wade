@@ -225,10 +225,10 @@ class TestScrapeModelsFromDocs:
         mock_result = MagicMock(spec=subprocess.CompletedProcess)
         mock_result.returncode = 0
         mock_result.stdout = (
-            '<code>claude-haiku-4-5</code> and '
-            '<code>claude-sonnet-4-6</code> and '
-            '<code>claude-opus-4-6</code> and '
-            '<code>claude-haiku-4-5-20251001</code>'
+            "<code>claude-haiku-4-5</code> and "
+            "<code>claude-sonnet-4-6</code> and "
+            "<code>claude-opus-4-6</code> and "
+            "<code>claude-haiku-4-5-20251001</code>"
         )
         assert isinstance(mock_run, MagicMock)
         mock_run.return_value = mock_result
@@ -248,8 +248,7 @@ class TestScrapeModelsFromDocs:
         mock_result = MagicMock(spec=subprocess.CompletedProcess)
         mock_result.returncode = 0
         mock_result.stdout = (
-            'Use gemini-2.0-flash or gemini-2.5-pro for best results. '
-            'gemini-3.0-ultra coming soon.'
+            "Use gemini-2.0-flash or gemini-2.5-pro for best results. gemini-3.0-ultra coming soon."
         )
         assert isinstance(mock_run, MagicMock)
         mock_run.return_value = mock_result
@@ -265,7 +264,9 @@ class TestScrapeModelsFromDocs:
 
         mock_result = MagicMock(spec=subprocess.CompletedProcess)
         mock_result.returncode = 0
-        mock_result.stdout = 'Run <code>codex -m gpt-5.3-codex</code> or <code>codex -m gpt-4o</code>'
+        mock_result.stdout = (
+            "Run <code>codex -m gpt-5.3-codex</code> or <code>codex -m gpt-4o</code>"
+        )
         assert isinstance(mock_run, MagicMock)
         mock_run.return_value = mock_result
 
