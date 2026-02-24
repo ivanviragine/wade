@@ -85,6 +85,35 @@ def _parse_json_output(stdout: str) -> Any:
         return json.loads("\n".join(json_lines))
 
 
+def _read_gh_log(log_file: Path) -> list[list[str]]:
+    """Parse the mock gh CLI JSONL log into a list of arg lists."""
+    if not log_file.exists():
+        return []
+    invocations: list[list[str]] = []
+    for line in log_file.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            invocations.append(json.loads(line))
+        except json.JSONDecodeError:
+            # Backward compat: treat as flat string (space-separated)
+            invocations.append(line.split())
+    return invocations
+
+
+def _assert_gh_called_with(
+    log_file: Path,
+    expected_args: list[str],
+) -> None:
+    """Assert at least one gh invocation contains all expected args."""
+    invocations = _read_gh_log(log_file)
+    for inv in invocations:
+        if all(arg in inv for arg in expected_args):
+            return
+    pytest.fail(f"No gh invocation contained all of {expected_args}.\nInvocations: {invocations}")
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -171,8 +200,8 @@ set -euo pipefail
 LOG="{log_file}"
 STATE="{state_file}"
 
-# Log the invocation
-echo "$@" >> "$LOG"
+# Log the invocation as a JSON array for unambiguous parsing
+printf '%s\n' "$(python3 -c "import json,sys; print(json.dumps(sys.argv[1:]))" "$@")" >> "$LOG"
 
 # Read state
 state=$(cat "$STATE")
@@ -429,6 +458,12 @@ Add a search command to find tasks by keyword.
         # Should mention the created issue number
         combined = result.stdout + result.stderr
         assert "#1" in combined or "issues/1" in combined
+
+        # Verify mock gh was called with expected arguments
+        _assert_gh_called_with(
+            mock_gh_cli["log_file"],
+            ["issue", "create", "--title"],
+        )
 
     def test_task_list(self, e2e_repo: Path, mock_gh_cli: dict[str, Any]) -> None:
         """ghaiwpy task list exits 0."""

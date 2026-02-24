@@ -18,6 +18,7 @@ from ghaiw.services.deps_service import (
     get_deps_prompt_template,
     output_is_parseable,
     parse_deps_output,
+    run_headless_analysis,
     strip_deps_section,
 )
 
@@ -307,4 +308,68 @@ class TestInteractiveFallback:
         """_run_interactive_analysis returns None for unknown AI tool."""
         with patch("ghaiw.services.deps_service.copy_to_clipboard"):
             result = _run_interactive_analysis("nonexistent-tool", "prompt", None, None)
+            assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Headless command assembly tests
+# ---------------------------------------------------------------------------
+
+
+class TestHeadlessCommandAssembly:
+    """Verify run_headless_analysis builds the correct subprocess commands."""
+
+    def test_claude_headless_uses_print_flag(self) -> None:
+        """Claude headless should use --print flag with capture_output=True."""
+        prompt = "Analyze deps between #1 and #2"
+
+        with patch("ghaiw.services.deps_service.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="1 -> 2 # reason\n")
+            result = run_headless_analysis("claude", prompt, "claude-haiku-4-5")
+
+            mock_run.assert_called_once()
+            cmd = mock_run.call_args[0][0]
+            assert cmd[0] == "claude"
+            assert "--model" in cmd
+            assert "claude-haiku-4-5" in cmd
+            assert "--print" in cmd
+            assert prompt in cmd
+            assert mock_run.call_args[1]["capture_output"] is True
+            assert mock_run.call_args[1]["timeout"] == 120
+            assert result == "1 -> 2 # reason\n"
+
+    def test_copilot_headless_uses_prompt_flag(self) -> None:
+        """Copilot headless should use --prompt flag."""
+        prompt = "Analyze deps"
+
+        with patch("ghaiw.services.deps_service.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="1 -> 2\n")
+            run_headless_analysis("copilot", prompt, "claude-sonnet-4.6")
+
+            cmd = mock_run.call_args[0][0]
+            assert cmd[0] == "copilot"
+            assert "--prompt" in cmd
+            assert prompt in cmd
+
+    def test_gemini_returns_none_no_headless(self) -> None:
+        """Gemini has no headless support — should return None without calling subprocess."""
+        with patch("ghaiw.services.deps_service.subprocess.run") as mock_run:
+            result = run_headless_analysis("gemini", "prompt", "gemini-2.5-pro")
+            assert result is None
+            mock_run.assert_not_called()
+
+    def test_codex_returns_none_no_headless(self) -> None:
+        """Codex has no headless support — should return None without calling subprocess."""
+        with patch("ghaiw.services.deps_service.subprocess.run") as mock_run:
+            result = run_headless_analysis("codex", "prompt", "o4-mini")
+            assert result is None
+            mock_run.assert_not_called()
+
+    def test_headless_timeout_returns_none(self) -> None:
+        """TimeoutExpired should be caught and return None gracefully."""
+        import subprocess as sp
+
+        with patch("ghaiw.services.deps_service.subprocess.run") as mock_run:
+            mock_run.side_effect = sp.TimeoutExpired(cmd=["claude"], timeout=120)
+            result = run_headless_analysis("claude", "prompt", "claude-haiku-4-5")
             assert result is None

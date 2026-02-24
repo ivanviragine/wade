@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from typer.testing import CliRunner
 
 import ghaiw
@@ -59,9 +61,10 @@ class TestSubcommandStubs:
         assert result.exit_code == 1
 
     def test_task_list_exits(self) -> None:
-        # task list runs real code but fails without gh auth
+        # task list gracefully handles missing gh auth — returns empty list
         result = runner.invoke(app, ["task", "list"])
-        assert result.exit_code != 0 or result.exit_code == 0
+        assert result.exit_code == 0
+        assert "no tasks" in result.output.lower() or result.output.strip()
 
     def test_work_done_exits(self) -> None:
         # work done runs real code but needs git context
@@ -74,6 +77,23 @@ class TestSubcommandStubs:
         assert result.exit_code != 0  # Fails without git context
 
     def test_work_list_exits(self) -> None:
-        # work list runs real code (may succeed or fail based on git context)
+        # work list gracefully handles missing git context — returns empty list
         result = runner.invoke(app, ["work", "list"])
-        assert result.exit_code == 0 or result.exit_code != 0
+        assert result.exit_code == 0
+        assert "no active" in result.output.lower() or result.output.strip()
+
+
+class TestInteractiveMenu:
+    """Verify that ghaiwpy with no args invokes the interactive menu."""
+
+    def test_no_args_invokes_menu(self) -> None:
+        """Running ghaiwpy with no subcommand should call _interactive_main_menu."""
+        with patch("ghaiw.cli.main._interactive_main_menu") as mock_menu:
+            runner.invoke(app, [])
+            mock_menu.assert_called_once()
+
+    def test_help_selection_exits_cleanly(self) -> None:
+        """Selecting 'Show help' (index 4) from the menu should exit 0."""
+        with patch("ghaiw.ui.prompts.menu", return_value=4):
+            result = runner.invoke(app, [])
+            assert result.exit_code == 0

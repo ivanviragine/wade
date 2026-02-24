@@ -5,6 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from ghaiw.ai_tools.claude import ClaudeAdapter
+from ghaiw.ai_tools.codex import CodexAdapter
+from ghaiw.ai_tools.copilot import CopilotAdapter
+from ghaiw.ai_tools.gemini import GeminiAdapter
 from ghaiw.models.config import (
     HooksConfig,
     ProjectConfig,
@@ -233,3 +237,116 @@ class TestFindWorktreePath:
     def test_returns_none_for_unknown(self, tmp_git_repo: Path) -> None:
         path = find_worktree_path("999", project_root=tmp_git_repo)
         assert path is None
+
+
+# ---------------------------------------------------------------------------
+# Command assembly tests — verify exact subprocess.run cmd lists
+# ---------------------------------------------------------------------------
+
+
+class TestWorkLaunchCommandAssembly:
+    """Verify each adapter builds the correct command for work sessions."""
+
+    def test_claude_launch_includes_transcript(self, tmp_path: Path) -> None:
+        """Claude launch with transcript_path should include --output-file."""
+        adapter = ClaudeAdapter()
+        transcript = tmp_path / "transcript.jsonl"
+
+        with patch("ghaiw.ai_tools.claude.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            adapter.launch(
+                worktree_path=tmp_path,
+                model="claude-sonnet-4-6",
+                transcript_path=transcript,
+            )
+            mock_run.assert_called_once()
+            cmd = mock_run.call_args[0][0]
+            assert cmd[0] == "claude"
+            assert "--model" in cmd
+            assert "claude-sonnet-4-6" in cmd
+            assert "--output-file" in cmd
+            assert str(transcript) in cmd
+            assert mock_run.call_args[1]["cwd"] == tmp_path
+
+    def test_claude_launch_no_transcript(self, tmp_path: Path) -> None:
+        """Claude launch without transcript_path should NOT include --output-file."""
+        adapter = ClaudeAdapter()
+
+        with patch("ghaiw.ai_tools.claude.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            adapter.launch(
+                worktree_path=tmp_path,
+                model="claude-haiku-4-5",
+            )
+            cmd = mock_run.call_args[0][0]
+            assert "--output-file" not in cmd
+
+    def test_copilot_launch_no_transcript_support(self, tmp_path: Path) -> None:
+        """Copilot launch should NOT include --output-file (no transcript support)."""
+        adapter = CopilotAdapter()
+
+        with patch("ghaiw.ai_tools.copilot.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            adapter.launch(
+                worktree_path=tmp_path,
+                model="claude-sonnet-4.6",
+                transcript_path=tmp_path / "transcript.jsonl",
+            )
+            cmd = mock_run.call_args[0][0]
+            assert cmd[0] == "copilot"
+            assert "--model" in cmd
+            assert "claude-sonnet-4.6" in cmd
+            assert "--output-file" not in cmd
+            assert mock_run.call_args[1]["cwd"] == tmp_path
+
+    def test_gemini_launch_command(self, tmp_path: Path) -> None:
+        """Gemini launch should use 'gemini' binary with --model."""
+        adapter = GeminiAdapter()
+
+        with patch("ghaiw.ai_tools.gemini.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            adapter.launch(
+                worktree_path=tmp_path,
+                model="gemini-2.5-pro",
+            )
+            cmd = mock_run.call_args[0][0]
+            assert cmd[0] == "gemini"
+            assert "--model" in cmd
+            assert "gemini-2.5-pro" in cmd
+            assert mock_run.call_args[1]["cwd"] == tmp_path
+
+    def test_codex_launch_command(self, tmp_path: Path) -> None:
+        """Codex launch should use 'codex' binary with --model."""
+        adapter = CodexAdapter()
+
+        with patch("ghaiw.ai_tools.codex.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            adapter.launch(
+                worktree_path=tmp_path,
+                model="o4-mini",
+            )
+            cmd = mock_run.call_args[0][0]
+            assert cmd[0] == "codex"
+            assert "--model" in cmd
+            assert "o4-mini" in cmd
+            assert mock_run.call_args[1]["cwd"] == tmp_path
+
+    def test_no_plan_mode_in_work_session(self, tmp_path: Path) -> None:
+        """Work session launches should NOT include plan/approval mode flags."""
+        adapters = [
+            ("ghaiw.ai_tools.claude.subprocess.run", ClaudeAdapter()),
+            ("ghaiw.ai_tools.copilot.subprocess.run", CopilotAdapter()),
+            ("ghaiw.ai_tools.gemini.subprocess.run", GeminiAdapter()),
+            ("ghaiw.ai_tools.codex.subprocess.run", CodexAdapter()),
+        ]
+        for patch_target, adapter in adapters:
+            with patch(patch_target) as mock_run:
+                mock_run.return_value = MagicMock(returncode=0)
+                adapter.launch(
+                    worktree_path=tmp_path,
+                    model="test-model",
+                )
+                cmd = mock_run.call_args[0][0]
+                tool = adapter.TOOL_ID
+                assert "--permission-mode" not in cmd, f"{tool}: leaked --permission-mode"
+                assert "--approval-mode" not in cmd, f"{tool}: leaked --approval-mode"

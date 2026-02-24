@@ -9,6 +9,7 @@ Behavioral reference: lib/task/deps.sh
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 import structlog
@@ -327,8 +328,6 @@ def run_headless_analysis(
 
     # Build command
     cmd = adapter.build_launch_command(model=model, prompt=prompt)
-
-    import subprocess
 
     try:
         result = subprocess.run(
