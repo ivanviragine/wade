@@ -562,20 +562,22 @@ def _prompt_model_mapping(
 
     console.header("Model complexity mapping")
 
-    # Ensure we always have defaults to show — fall back to Claude defaults
-    if not (mapping.easy or mapping.complex):
-        fallback = get_defaults(AIToolID.CLAUDE)
-        mapping = ComplexityModelMapping(
-            easy=mapping.easy or fallback.easy,
-            medium=mapping.medium or fallback.medium,
-            complex=mapping.complex or fallback.complex,
-            very_complex=mapping.very_complex or fallback.very_complex,
-        )
+    # Backfill missing tiers: tool defaults first, then Claude defaults
+    tool_defaults = get_defaults(tool) if tool else ComplexityModelMapping()
+    claude_defaults = get_defaults(AIToolID.CLAUDE)
+    mapping = ComplexityModelMapping(
+        easy=mapping.easy or tool_defaults.easy or claude_defaults.easy,
+        medium=mapping.medium or tool_defaults.medium or claude_defaults.medium,
+        complex=mapping.complex or tool_defaults.complex or claude_defaults.complex,
+        very_complex=(
+            mapping.very_complex or tool_defaults.very_complex or claude_defaults.very_complex
+        ),
+    )
 
     if tool and not models_probed:
         console.warn(
             f"Could not auto-detect models for {tool} — "
-            "showing Claude defaults. Press Enter to accept or type a model name."
+            "showing defaults. Press Enter to accept or type a model name."
         )
 
     easy = prompts.input_prompt("Easy tasks", mapping.easy or "")
