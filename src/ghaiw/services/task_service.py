@@ -301,6 +301,7 @@ def apply_plan_token_usage(
             task = provider.read_task(issue_id)
             body = task.body
         except Exception:
+            logger.debug("task.read_body_failed", issue_id=issue_id, exc_info=True)
             body = ""
         bodies.append(body)
         line_counts.append(max(body.count("\n"), 1))
@@ -372,7 +373,7 @@ def create_interactive(
                 line = input()
                 body_lines.append(line)
         except EOFError:
-            pass
+            pass  # Expected: signals end of stdin input
         body = "\n".join(body_lines)
 
     # Ensure task label exists

@@ -411,6 +411,7 @@ def _finalize_issues(
             task = provider.read_task(issue_id)
             console.step(f"#{task.id} — {task.title}")
         except Exception:
+            logger.debug("plan.issue_read_failed", issue_id=issue_id, exc_info=True)
             console.step(f"#{issue_id}")
 
     # Hint for next steps

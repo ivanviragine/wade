@@ -474,6 +474,7 @@ def analyze_deps(
             task_titles[num] = task.title
             console.step(f"#{num}: {task.title}")
         except Exception:
+            logger.debug("deps.issue_read_failed", issue_num=num, exc_info=True)
             task_titles[num] = f"Issue #{num}"
 
     # Run headless AI analysis

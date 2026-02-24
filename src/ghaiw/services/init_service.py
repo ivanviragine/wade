@@ -477,7 +477,7 @@ def _resolve_models(tool: str | None) -> tuple[ComplexityModelMapping, bool]:
         if mapping.easy or mapping.complex:
             return _normalize_mapping(adapter, mapping), True
     except (ValueError, Exception):
-        pass
+        logger.debug("init.model_probe_failed", tool=tool, exc_info=True)
 
     # Fallback to hardcoded defaults
     mapping = get_defaults(tool)
@@ -487,7 +487,7 @@ def _resolve_models(tool: str | None) -> tuple[ComplexityModelMapping, bool]:
         adapter = AbstractAITool.get(AIToolID(tool))
         mapping = _normalize_mapping(adapter, mapping)
     except (ValueError, Exception):
-        pass
+        logger.debug("init.model_normalize_failed", tool=tool, exc_info=True)
 
     return mapping, False
 
@@ -522,6 +522,7 @@ def _prompt_project_settings(
     try:
         main_branch = repo.detect_main_branch(project_root)
     except Exception:
+        logger.debug("init.main_branch_detect_failed", exc_info=True)
         main_branch = "main"
 
     defaults = {
