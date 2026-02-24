@@ -539,19 +539,19 @@ class TestDeinit:
         init(project_root=tmp_git_repo, non_interactive=True)
         assert (tmp_git_repo / ".ghaiw.yml").is_file()
 
-        deinit(project_root=tmp_git_repo)
+        deinit(project_root=tmp_git_repo, force=True)
         assert not (tmp_git_repo / ".ghaiw.yml").is_file()
 
     def test_deinit_removes_manifest(self, tmp_git_repo: Path) -> None:
         init(project_root=tmp_git_repo, non_interactive=True)
-        deinit(project_root=tmp_git_repo)
+        deinit(project_root=tmp_git_repo, force=True)
         assert not (tmp_git_repo / MANIFEST_FILENAME).is_file()
 
     def test_deinit_removes_pointer(self, tmp_git_repo: Path) -> None:
         init(project_root=tmp_git_repo, non_interactive=True)
         assert (tmp_git_repo / "AGENTS.md").is_file()
 
-        deinit(project_root=tmp_git_repo)
+        deinit(project_root=tmp_git_repo, force=True)
         # AGENTS.md should be removed (was only pointer content)
         assert not (tmp_git_repo / "AGENTS.md").is_file()
 
@@ -561,7 +561,7 @@ class TestDeinit:
         agents.write_text("# My Project\n\nProject-specific rules.\n")
 
         init(project_root=tmp_git_repo, non_interactive=True)
-        deinit(project_root=tmp_git_repo)
+        deinit(project_root=tmp_git_repo, force=True)
 
         # AGENTS.md should still exist with project content
         assert agents.is_file()
@@ -571,7 +571,7 @@ class TestDeinit:
 
     def test_deinit_cleans_gitignore(self, tmp_git_repo: Path) -> None:
         init(project_root=tmp_git_repo, non_interactive=True)
-        deinit(project_root=tmp_git_repo)
+        deinit(project_root=tmp_git_repo, force=True)
         gitignore = tmp_git_repo / ".gitignore"
         if gitignore.is_file():
             content = gitignore.read_text()
@@ -589,7 +589,7 @@ class TestDeinit:
         assert update(project_root=tmp_git_repo)
 
         # Deinit
-        assert deinit(project_root=tmp_git_repo)
+        assert deinit(project_root=tmp_git_repo, force=True)
         assert not (tmp_git_repo / ".ghaiw.yml").is_file()
         assert not (tmp_git_repo / MANIFEST_FILENAME).is_file()
 

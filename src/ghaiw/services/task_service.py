@@ -465,7 +465,7 @@ def list_tasks(
 
     tasks = provider.list_tasks(
         label=config.project.issue_label,
-        state=task_state or TaskState.OPEN,
+        state=task_state,  # None passes "all" to the provider
         exclude_labels=exclude,
     )
 

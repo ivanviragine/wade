@@ -45,11 +45,13 @@ def update(
 
 
 @admin_app.command()
-def deinit() -> None:
+def deinit(
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt."),
+) -> None:
     """Remove ghaiw from the current project."""
     from ghaiw.services.init_service import deinit as do_deinit
 
-    success = do_deinit(project_root=Path.cwd())
+    success = do_deinit(project_root=Path.cwd(), force=force)
     raise typer.Exit(0 if success else 1)
 
 

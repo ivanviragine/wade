@@ -234,6 +234,7 @@ def test_direct_strategy_merge_and_close(
 @patch("ghaiw.services.work_service.add_in_progress_label")
 @patch("ghaiw.services.work_service.bootstrap_worktree")
 @patch("ghaiw.services.work_service.write_issue_context")
+@patch("ghaiw.services.work_service.git_worktree.list_worktrees", return_value=[])
 @patch("ghaiw.services.work_service.git_worktree.create_worktree")
 @patch("ghaiw.services.work_service.git_repo.get_repo_root")
 @patch("ghaiw.services.work_service._resolve_target")
@@ -245,6 +246,7 @@ def test_lifecycle_skipped_in_detach_mode(
     mock_resolve_target: MagicMock,
     mock_get_repo_root: MagicMock,
     _mock_create_worktree: MagicMock,
+    _mock_list_worktrees: MagicMock,
     _mock_write_issue_context: MagicMock,
     _mock_bootstrap_worktree: MagicMock,
     _mock_add_in_progress: MagicMock,
@@ -282,6 +284,7 @@ def test_lifecycle_skipped_in_detach_mode(
 @patch("ghaiw.services.work_service.add_in_progress_label")
 @patch("ghaiw.services.work_service.bootstrap_worktree")
 @patch("ghaiw.services.work_service.write_issue_context")
+@patch("ghaiw.services.work_service.git_worktree.list_worktrees", return_value=[])
 @patch("ghaiw.services.work_service.git_worktree.create_worktree")
 @patch("ghaiw.services.work_service.git_repo.get_repo_root")
 @patch("ghaiw.services.work_service._resolve_target")
@@ -295,6 +298,7 @@ def test_lifecycle_runs_after_ai_crash(
     mock_resolve_target: MagicMock,
     mock_get_repo_root: MagicMock,
     _mock_create_worktree: MagicMock,
+    _mock_list_worktrees: MagicMock,
     _mock_write_issue_context: MagicMock,
     _mock_bootstrap_worktree: MagicMock,
     _mock_add_in_progress: MagicMock,

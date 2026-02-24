@@ -507,28 +507,43 @@ def start(
     repo_name = repo_root.name
     worktree_path = worktrees_dir / f"{repo_name}-{branch_name.replace('/', '-')}"
 
-    console.step(f"Creating worktree: {branch_name}")
+    # Reuse the worktree if the branch already exists (idempotent re-run)
+    existing_wt = next(
+        (
+            Path(wt["path"])
+            for wt in git_worktree.list_worktrees(repo_root)
+            if wt.get("branch") == branch_name
+        ),
+        None,
+    )
 
-    try:
-        git_worktree.create_worktree(
-            repo_root=repo_root,
-            branch_name=branch_name,
-            worktree_dir=worktree_path,
-            base_branch=main_branch,
-        )
-        console.success(f"Worktree at {worktree_path}")
-    except GitError as e:
-        console.error(f"Failed to create worktree: {e}")
-        return False
+    if existing_wt:
+        worktree_path = existing_wt
+        console.info(f"Reusing existing worktree: {worktree_path}")
+    else:
+        console.step(f"Creating worktree: {branch_name}")
+        try:
+            git_worktree.create_worktree(
+                repo_root=repo_root,
+                branch_name=branch_name,
+                worktree_dir=worktree_path,
+                base_branch=main_branch,
+            )
+            console.success(f"Worktree at {worktree_path}")
+        except GitError as e:
+            console.error(f"Failed to create worktree: {e}")
+            return False
 
     # Bootstrap
     write_issue_context(worktree_path, task)
     write_plan_md(worktree_path, task)
     bootstrap_worktree(worktree_path, config, repo_root)
 
-    # Add in-progress label
+    # Add in-progress label and move to in-progress on project board (both non-critical)
     with contextlib.suppress(Exception):
         add_in_progress_label(provider, task.id)
+    with contextlib.suppress(Exception):
+        provider.move_to_in_progress(task.id)
 
     # Copy work prompt
     prompt = build_work_prompt(task, resolved_tool)
@@ -707,7 +722,9 @@ def batch(
     """Start parallel work sessions for multiple issues.
 
     Independent issues launch in parallel terminals.
-    Dependent issues launch sequentially (topo-sorted).
+    Dependent chains: only the first issue in each chain is launched; the
+    remaining chain members are printed in order for manual sequential
+    execution (one cannot work on a dependent issue before its blocker is done).
 
     Behavioral reference: lib/work/terminal.sh:_work_do_batch()
     """

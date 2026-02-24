@@ -277,6 +277,26 @@ class TestListTasks:
         tasks = list_tasks(config=config, provider=mock_provider)
         assert len(tasks) == 0
 
+    def test_list_all_passes_none_state(
+        self, mock_provider: MagicMock, config: ProjectConfig
+    ) -> None:
+        """state='all' must pass state=None to provider, not fall back to OPEN."""
+        list_tasks(config=config, provider=mock_provider, state="all")
+        call_kwargs = mock_provider.list_tasks.call_args.kwargs
+        assert call_kwargs["state"] is None, (
+            "state='all' should pass None to provider; got OPEN instead (regression)"
+        )
+
+    def test_list_closed_passes_closed_state(
+        self, mock_provider: MagicMock, config: ProjectConfig
+    ) -> None:
+        """state='closed' must pass TaskState.CLOSED to provider."""
+        from ghaiw.models.task import TaskState
+
+        list_tasks(config=config, provider=mock_provider, state="closed")
+        call_kwargs = mock_provider.list_tasks.call_args.kwargs
+        assert call_kwargs["state"] == TaskState.CLOSED
+
 
 class TestReadTask:
     def test_read_success(self, mock_provider: MagicMock, config: ProjectConfig) -> None:

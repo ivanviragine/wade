@@ -331,6 +331,13 @@ def deinit(project_root: Path | None = None, force: bool = False) -> bool:
         console.error("Not inside a git repository")
         return False
 
+    if not force:
+        from ghaiw.ui import prompts
+
+        if not prompts.confirm("Remove ghaiw from this project?"):
+            console.info("Aborted.")
+            return False
+
     console.header("ghaiwpy deinit")
 
     # Remove skills

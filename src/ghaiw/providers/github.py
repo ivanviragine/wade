@@ -68,15 +68,15 @@ class GitHubProvider(AbstractTaskProvider):
     def list_tasks(
         self,
         label: str | None = None,
-        state: TaskState = TaskState.OPEN,
+        state: TaskState | None = TaskState.OPEN,
         limit: int = 50,
         exclude_labels: list[str] | None = None,
     ) -> list[Task]:
-        """List issues with optional label and state filters."""
+        """List issues with optional label and state filters. Pass state=None to list all states."""
         cmd = ["gh", "issue", "list", "--limit", str(limit)]
 
-        # Map state
-        gh_state = "all" if state == TaskState.IN_PROGRESS else state.value
+        # Map state: None means "all"
+        gh_state = "all" if state is None else state.value
         cmd.extend(["--state", gh_state])
 
         if label:

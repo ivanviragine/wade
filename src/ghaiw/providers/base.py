@@ -25,11 +25,11 @@ class AbstractTaskProvider(ABC):
     def list_tasks(
         self,
         label: str | None = None,
-        state: TaskState = TaskState.OPEN,
+        state: TaskState | None = TaskState.OPEN,
         limit: int = 50,
         exclude_labels: list[str] | None = None,
     ) -> list[Task]:
-        """List tasks matching the given filters."""
+        """List tasks matching the given filters. Pass state=None to list all states."""
 
     @abstractmethod
     def create_task(
