@@ -143,6 +143,13 @@ class AbstractAITool(ABC):
         """
         return []  # Default: no plan mode support
 
+    def plan_dir_args(self, plan_dir: str) -> list[str]:
+        """Get extra CLI args to grant write access to a plan output directory.
+
+        Behavioral ref: lib/common.sh:_tool_plan_dir_permission_args()
+        """
+        return []  # Default: no plan dir support
+
     def normalize_model_format(self, model_id: str) -> str:
         """Normalize a model ID to this tool's expected format.
 

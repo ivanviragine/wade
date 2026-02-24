@@ -209,17 +209,19 @@ class TestPlanFile:
 
 
 class TestTranscriptWiring:
-    def test_launch_passes_transcript_path(self, tmp_path: Path) -> None:
-        """run_ai_planning_session should pass transcript_path to adapter.launch()."""
+    def test_claude_includes_output_file_for_transcript(self, tmp_path: Path) -> None:
+        """run_ai_planning_session should add --output-file for claude transcript."""
         transcript = tmp_path / ".transcript"
 
-        with patch("ghaiw.services.plan_service.AbstractAITool.get") as mock_get:
+        with (
+            patch("ghaiw.services.plan_service.AbstractAITool.get") as mock_get,
+            patch("ghaiw.services.plan_service.subprocess") as mock_sp,
+        ):
             adapter = MagicMock()
-            adapter.capabilities.return_value = MagicMock(
-                supports_headless=False, headless_flag=None
-            )
-            adapter.launch.return_value = 0
+            adapter.build_launch_command.return_value = ["claude", "--permission-mode", "plan"]
+            adapter.plan_dir_args.return_value = ["--add-dir", str(tmp_path)]
             mock_get.return_value = adapter
+            mock_sp.run.return_value = MagicMock(returncode=0)
 
             run_ai_planning_session(
                 ai_tool="claude",
@@ -228,19 +230,21 @@ class TestTranscriptWiring:
                 transcript_path=transcript,
             )
 
-            adapter.launch.assert_called_once()
-            call_kwargs = adapter.launch.call_args[1]
-            assert call_kwargs["transcript_path"] == transcript
+            cmd = mock_sp.run.call_args[0][0]
+            assert "--output-file" in cmd
+            assert str(transcript) in cmd
 
-    def test_launch_passes_none_transcript(self) -> None:
-        """run_ai_planning_session should accept None for transcript_path."""
-        with patch("ghaiw.services.plan_service.AbstractAITool.get") as mock_get:
+    def test_no_output_file_without_transcript(self) -> None:
+        """run_ai_planning_session should not add --output-file when no transcript."""
+        with (
+            patch("ghaiw.services.plan_service.AbstractAITool.get") as mock_get,
+            patch("ghaiw.services.plan_service.subprocess") as mock_sp,
+        ):
             adapter = MagicMock()
-            adapter.capabilities.return_value = MagicMock(
-                supports_headless=False, headless_flag=None
-            )
-            adapter.launch.return_value = 0
+            adapter.build_launch_command.return_value = ["claude", "--permission-mode", "plan"]
+            adapter.plan_dir_args.return_value = ["--add-dir", "/tmp/test"]
             mock_get.return_value = adapter
+            mock_sp.run.return_value = MagicMock(returncode=0)
 
             run_ai_planning_session(
                 ai_tool="claude",
@@ -249,5 +253,26 @@ class TestTranscriptWiring:
                 transcript_path=None,
             )
 
-            call_kwargs = adapter.launch.call_args[1]
-            assert call_kwargs["transcript_path"] is None
+            cmd = mock_sp.run.call_args[0][0]
+            assert "--output-file" not in cmd
+
+    def test_includes_plan_dir_args(self, tmp_path: Path) -> None:
+        """run_ai_planning_session should include plan_dir_args from adapter."""
+        with (
+            patch("ghaiw.services.plan_service.AbstractAITool.get") as mock_get,
+            patch("ghaiw.services.plan_service.subprocess") as mock_sp,
+        ):
+            adapter = MagicMock()
+            adapter.build_launch_command.return_value = ["copilot", "--model", "test"]
+            adapter.plan_dir_args.return_value = ["--add-dir", str(tmp_path)]
+            mock_get.return_value = adapter
+            mock_sp.run.return_value = MagicMock(returncode=0)
+
+            run_ai_planning_session(
+                ai_tool="copilot",
+                plan_dir=str(tmp_path),
+            )
+
+            cmd = mock_sp.run.call_args[0][0]
+            assert "--add-dir" in cmd
+            assert str(tmp_path) in cmd

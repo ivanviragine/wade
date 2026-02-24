@@ -314,7 +314,7 @@ class TestPlanModeArgs:
 
     def test_claude_plan_mode(self) -> None:
         adapter = AbstractAITool.get("claude")
-        assert adapter.plan_mode_args() == ["--approval-mode", "plan"]
+        assert adapter.plan_mode_args() == ["--permission-mode", "plan"]
 
     def test_gemini_plan_mode(self) -> None:
         adapter = AbstractAITool.get("gemini")
@@ -331,7 +331,7 @@ class TestPlanModeArgs:
     def test_plan_mode_in_launch_command(self) -> None:
         adapter = AbstractAITool.get("claude")
         cmd = adapter.build_launch_command(plan_mode=True)
-        assert "--approval-mode" in cmd
+        assert "--permission-mode" in cmd
         assert "plan" in cmd
 
     def test_no_plan_mode_in_launch_command(self) -> None:

@@ -89,6 +89,10 @@ class CopilotAdapter(AbstractAITool):
         """Copilot accepts all model IDs."""
         return True
 
+    def plan_dir_args(self, plan_dir: str) -> list[str]:
+        """Copilot uses --add-dir for plan directory access."""
+        return ["--add-dir", plan_dir]
+
     def normalize_model_format(self, model_id: str) -> str:
         """Copilot uses dotted format for Claude models."""
         if model_id.startswith("claude-"):

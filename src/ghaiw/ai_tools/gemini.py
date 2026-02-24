@@ -107,3 +107,7 @@ class GeminiAdapter(AbstractAITool):
     def plan_mode_args(self) -> list[str]:
         """Gemini supports --approval-mode plan."""
         return ["--approval-mode", "plan"]
+
+    def plan_dir_args(self, plan_dir: str) -> list[str]:
+        """Gemini uses --include-directories for plan directory access."""
+        return ["--include-directories", plan_dir]

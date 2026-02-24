@@ -112,8 +112,12 @@ class ClaudeAdapter(AbstractAITool):
         return model.lower().startswith("claude-")
 
     def plan_mode_args(self) -> list[str]:
-        """Claude supports --approval-mode plan."""
-        return ["--approval-mode", "plan"]
+        """Claude supports --permission-mode plan."""
+        return ["--permission-mode", "plan"]
+
+    def plan_dir_args(self, plan_dir: str) -> list[str]:
+        """Claude uses --add-dir for plan directory access."""
+        return ["--add-dir", plan_dir]
 
     def normalize_model_format(self, model_id: str) -> str:
         """Claude uses dashed format for model IDs."""

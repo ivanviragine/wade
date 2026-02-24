@@ -73,6 +73,10 @@ class CodexAdapter(AbstractAITool):
 
         return parse_codex_transcript(transcript_path)
 
+    def plan_dir_args(self, plan_dir: str) -> list[str]:
+        """Codex uses --add-dir for plan directory access."""
+        return ["--add-dir", plan_dir]
+
     def is_model_compatible(self, model: str) -> bool:
         """Codex accepts codex-*, gpt-*, and o<digit>* model IDs."""
         lower = model.lower()

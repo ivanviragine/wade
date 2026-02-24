@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -142,8 +143,8 @@ def run_ai_planning_session(
 ) -> int:
     """Launch the AI CLI for a planning session.
 
-    Copies the plan prompt to clipboard, launches the AI tool.
-    Returns the AI tool exit code.
+    Copies the plan prompt to clipboard, launches the AI tool with
+    plan-mode and plan-directory permission args.
 
     Behavioral reference: _task_run_ai_planning() in crud.sh
     """
@@ -158,27 +159,36 @@ def run_ai_planning_session(
     copy_to_clipboard(prompt)
     console.success("Copied planning prompt to clipboard.")
     console.hint("Paste it in the AI tool to get started.")
-    console.empty()
 
-    # Launch the AI tool
+    # Resolve adapter
     try:
         adapter = AbstractAITool.get(AIToolID(ai_tool))
     except (ValueError, KeyError):
         console.warn(f"Unknown AI tool: {ai_tool} — launching directly")
-        # Fallback: try to run the tool binary directly
-        import subprocess
-
         result = subprocess.run([ai_tool], cwd=None)
         return result.returncode
 
-    # Launch interactively in the current working directory
-    exit_code = adapter.launch(
-        worktree_path=Path.cwd(),
+    # Build command with plan-mode and plan-dir permission args
+    cmd = adapter.build_launch_command(model=model, plan_mode=True)
+    plan_dir_args = adapter.plan_dir_args(plan_dir)
+    if plan_dir_args:
+        cmd.extend(plan_dir_args)
+        console.info(f"Plan directory: {plan_dir}")
+
+    # Transcript capture (tool-specific)
+    if transcript_path and ai_tool.lower() == "claude":
+        cmd.extend(["--output-file", str(transcript_path)])
+
+    console.empty()
+    logger.info(
+        "plan.ai_launch",
+        tool=ai_tool,
         model=model,
-        prompt=None,  # Prompt is via clipboard, not CLI arg
-        transcript_path=transcript_path,
+        cmd=" ".join(cmd),
     )
-    return exit_code
+
+    result = subprocess.run(cmd, cwd=Path.cwd())
+    return result.returncode
 
 
 # ---------------------------------------------------------------------------
