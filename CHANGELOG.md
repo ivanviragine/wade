@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.3.0] — 2026-02-23
+
+### Features
+
+- add interactive main menu when ghaiwpy is called with no args (005af4c)
+
 ## [v0.2.2] — 2026-02-23
 
 ### Bug Fixes
