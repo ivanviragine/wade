@@ -49,8 +49,8 @@ class TestGetAIToolValidation:
         with pytest.raises(ValueError) as exc_info:
             _get_ai_tool(raw)
         error_msg = str(exc_info.value)
-        # Check that at least some valid tools are mentioned
-        assert "claude" in error_msg or "Valid values:" in error_msg
+        assert "claude" in error_msg
+        assert "Valid values:" in error_msg
 
     def test_get_ai_tool_missing_key_returns_default(self) -> None:
         """Missing AI tool key should return None without error."""

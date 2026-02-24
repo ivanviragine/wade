@@ -120,4 +120,4 @@ class TestBootstrapHookTimeout:
                 bootstrap_worktree(worktree_path, config, repo_root)
 
             error_msg = str(exc_info.value)
-            assert "custom/hook.sh" in error_msg or "custom" in error_msg
+            assert "custom/hook.sh" in error_msg

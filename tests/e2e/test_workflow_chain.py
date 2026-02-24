@@ -562,9 +562,9 @@ class TestWorkSyncCommand:
             assert "event" in parsed
 
     def test_sync_from_main_rejected(self, e2e_repo: Path) -> None:
-        """ghaiwpy work sync from main branch → should fail."""
+        """ghaiwpy work sync from main branch → exit 4 (preflight failure)."""
         result = _run(["work", "sync"], cwd=e2e_repo)
-        assert result.returncode != 0
+        assert result.returncode == 4
 
 
 # ---------------------------------------------------------------------------

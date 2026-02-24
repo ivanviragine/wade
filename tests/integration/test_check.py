@@ -38,7 +38,8 @@ class TestCheckConfig:
         assert result.exit_code == 0
 
     def test_missing_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """check-config without .ghaiw.yml should fail."""
+        """check-config without .ghaiw.yml should exit 1 and report CONFIG_NOT_FOUND."""
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["check-config"])
-        assert result.exit_code != 0
+        assert result.exit_code == 1
+        assert "CONFIG_NOT_FOUND" in result.output

@@ -59,6 +59,7 @@ class TestCommandBehaviorWithoutContext:
     def test_task_create_requires_plan_file(self) -> None:
         result = runner.invoke(app, ["task", "create"])
         assert result.exit_code == 1
+        assert "Title is required" in result.output
 
     def test_task_list_exits(self) -> None:
         # task list gracefully handles missing gh auth — returns empty list
@@ -70,6 +71,7 @@ class TestCommandBehaviorWithoutContext:
         # work done requires git context; exits 1 without it
         result = runner.invoke(app, ["work", "done"])
         assert result.exit_code == 1
+        assert "Cannot extract issue number" in result.output
 
     def test_work_sync_exits_with_error(self) -> None:
         # work sync outside a worktree exits 4 (preflight failure)
