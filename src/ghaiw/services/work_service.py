@@ -791,6 +791,38 @@ def find_worktree_path(
     return None
 
 
+def _resolve_worktree_from_plan(
+    plan_file: Path,
+    project_root: Path | None = None,
+) -> tuple[Path, str, str | None]:
+    if not plan_file.is_file():
+        raise ValueError(f"Plan file '{plan_file}' not found.")
+
+    first_line = plan_file.read_text(encoding="utf-8").split("\n", 1)[0].strip()
+    match = re.match(r"^#\s+(.+)", first_line)
+    if not match:
+        raise ValueError(
+            "Plan file must start with a '# Title' heading to derive the worktree name."
+        )
+    title = match.group(1).strip()
+
+    from ghaiw.utils.slug import slugify
+
+    slug = slugify(title)
+
+    wt_path = find_worktree_path(slug, project_root=project_root)
+    if not wt_path:
+        raise ValueError(
+            f"No worktree found matching plan title '{title}' (slug: '{slug}'). "
+            "Check active worktrees with: ghaiwpy work list"
+        )
+
+    branch = git_repo.get_current_branch(wt_path)
+    issue_number = extract_issue_from_branch(branch)
+
+    return wt_path, branch, issue_number
+
+
 # ---------------------------------------------------------------------------
 # Branch / issue helpers
 # ---------------------------------------------------------------------------
