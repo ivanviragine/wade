@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.3.4] — 2026-02-24
+
+### Bug Fixes
+
+- create CLAUDE.md symlink and correct skill/cross-tool symlink paths (65412f2)
+
 ## [v0.3.3] — 2026-02-24
 
 ### Bug Fixes
