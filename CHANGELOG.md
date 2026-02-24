@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.5.2] — 2026-02-24
+
+### Bug Fixes
+
+- fix CI failures in copilot probing and help text tests (ef061f0)
+
 ## [v0.5.1] — 2026-02-24
 
 ### Bug Fixes
