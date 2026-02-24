@@ -171,7 +171,7 @@ class AbstractAITool(ABC):
         cmd = [caps.binary]
 
         if model and caps.supports_model_flag:
-            cmd.extend([caps.model_flag, model])
+            cmd.extend([caps.model_flag, self.normalize_model_format(model)])
 
         if prompt and caps.supports_headless and caps.headless_flag:
             cmd.extend([caps.headless_flag, prompt])

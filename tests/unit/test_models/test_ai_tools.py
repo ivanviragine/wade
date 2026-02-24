@@ -114,6 +114,12 @@ class TestBuildLaunchCommand:
         # Antigravity doesn't support --model
         assert "--model" not in cmd
 
+    def test_copilot_normalizes_model_in_launch_command(self) -> None:
+        """Copilot must receive dotted model format (claude-sonnet-4.6 not claude-sonnet-4-6)."""
+        adapter = AbstractAITool.get("copilot")
+        cmd = adapter.build_launch_command(model="claude-sonnet-4-6")
+        assert cmd == ["copilot", "--model", "claude-sonnet-4.6"]
+
 
 class TestTierClassification:
     def test_claude_tiers(self) -> None:
