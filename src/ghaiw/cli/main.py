@@ -23,6 +23,7 @@ def version_callback(value: bool) -> None:
 
 @app.callback()
 def main(
+    ctx: typer.Context,
     version: bool = typer.Option(
         False,
         "--version",
@@ -49,6 +50,57 @@ def main(
     import ghaiw.logging.setup as log_setup
 
     log_setup.configure(verbose=verbose)
+
+    if ctx.invoked_subcommand is not None:
+        return
+
+    _interactive_main_menu()
+
+
+def _interactive_main_menu() -> None:
+    """Show the main interactive menu when ghaiwpy is called with no args."""
+    from ghaiw.ui import prompts
+    from ghaiw.ui.console import console
+
+    console.header("ghaiwpy — AI-assisted Git workflow toolkit")
+
+    menu_items = [
+        "Start working on a task",
+        "List active worktrees",
+        "Create a new task",
+        "Plan a new task with AI",
+        "Show help",
+    ]
+
+    idx = prompts.menu("What would you like to do?", menu_items)
+
+    if idx == 0:  # Start working
+        from ghaiw.services.task_service import list_tasks
+
+        list_tasks(show_deps=False)
+        target = prompts.input_prompt("Issue number", allow_empty=True)
+        if target:
+            from ghaiw.services.work_service import start as do_start
+
+            success = do_start(target=target)
+            raise typer.Exit(0 if success else 1)
+    elif idx == 1:  # List worktrees
+        from ghaiw.services.work_service import list_sessions
+
+        list_sessions()
+    elif idx == 2:  # Create task
+        from ghaiw.services.task_service import create_task
+
+        create_task()
+    elif idx == 3:  # Plan with AI
+        from ghaiw.services.plan_service import plan
+
+        plan()
+    elif idx == 4:  # Help
+        typer.echo(app.info.help or "")
+        raise typer.Exit(0)
+
+    raise typer.Exit(0)
 
 
 # Register subcommand groups

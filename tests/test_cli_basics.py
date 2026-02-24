@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typer.testing import CliRunner
 
+import ghaiw
 from ghaiw.cli.main import app
 
 runner = CliRunner()
@@ -13,13 +14,13 @@ class TestVersion:
     def test_version_flag(self) -> None:
         result = runner.invoke(app, ["--version"])
         assert result.exit_code == 0
-        assert "ghaiw" in result.output
-        assert "0.1.0" in result.output
+        assert "ghaiwpy" in result.output
+        assert ghaiw.__version__ in result.output
 
     def test_version_short_flag(self) -> None:
         result = runner.invoke(app, ["-V"])
         assert result.exit_code == 0
-        assert "0.1.0" in result.output
+        assert ghaiw.__version__ in result.output
 
 
 class TestHelp:
