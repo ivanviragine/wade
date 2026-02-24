@@ -6,6 +6,7 @@ Behavioral reference: lib/common.sh:_set_terminal_title(), _start_title_keeper()
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -140,6 +141,18 @@ def launch_in_new_terminal(
         tmux_cmd.append(" ".join(command))
         try:
             subprocess.run(tmux_cmd, check=True, capture_output=True)
+            return True
+        except subprocess.CalledProcessError:
+            pass
+
+    if terminal == "iterm2" and sys.platform == "darwin":
+        cmd_str = " ".join(shlex.quote(str(c)) for c in command)
+        osa_script = (
+            f'tell application "iTerm2" to create window with default profile '
+            f"command \"cd '{cwd or '.'}' && {cmd_str}\""
+        )
+        try:
+            subprocess.run(["osascript", "-e", osa_script], check=True, capture_output=True)
             return True
         except subprocess.CalledProcessError:
             pass
