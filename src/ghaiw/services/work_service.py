@@ -1224,6 +1224,7 @@ def sync(
 
 def done(
     target: str | None = None,
+    plan_file: Path | None = None,
     no_close: bool = False,
     draft: bool = False,
     no_cleanup: bool = False,
@@ -1254,6 +1255,20 @@ def done(
         console.error("Not inside a git repository")
         return False
 
+    resolved_wt_path: Path | None = None
+    if plan_file is not None:
+        try:
+            resolved_wt_path, resolved_branch, issue_num = _resolve_worktree_from_plan(
+                plan_file, project_root=project_root
+            )
+            console.step("Resolved from plan:")
+            console.detail(f"Worktree: {resolved_wt_path}")
+            console.detail(f"Branch: {resolved_branch}")
+            target = issue_num
+        except ValueError as e:
+            console.error(str(e))
+            return False
+
     # If target is a plan file, create issue first (skip if target looks like a number)
     if target and not target.isdigit():
         target_path = Path(target).expanduser()
@@ -1266,10 +1281,13 @@ def done(
                 return False
             target = task.id
 
-    wt_path: Path | None = None
+    wt_path: Path | None = resolved_wt_path
+
+    if wt_path is not None:
+        cwd = wt_path
 
     # If target specifies a worktree, navigate to it
-    if target:
+    if target and wt_path is None:
         wt_path = find_worktree_path(target, project_root=repo_root)
         if wt_path:
             cwd = wt_path

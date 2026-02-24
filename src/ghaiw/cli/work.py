@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import typer
 
 work_app = typer.Typer(
@@ -105,6 +107,7 @@ def start(
 @work_app.command()
 def done(
     target: str | None = typer.Argument(None, help="Issue number, worktree name, or plan file."),
+    plan: str | None = typer.Option(None, "--plan", help="Plan file to resolve worktree from."),
     no_close: bool = typer.Option(False, "--no-close", help="Don't close the issue on merge."),
     draft: bool = typer.Option(False, "--draft", help="Create PR as draft."),
     no_cleanup: bool = typer.Option(False, "--no-cleanup", help="Don't remove worktree."),
@@ -112,7 +115,13 @@ def done(
     """Finalize work — push branch and create PR (or direct merge)."""
     from ghaiw.services.work_service import done as do_done
 
-    success = do_done(target=target, no_close=no_close, draft=draft, no_cleanup=no_cleanup)
+    success = do_done(
+        target=target,
+        plan_file=Path(plan) if plan else None,
+        no_close=no_close,
+        draft=draft,
+        no_cleanup=no_cleanup,
+    )
     raise typer.Exit(0 if success else 1)
 
 
