@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.5.1] — 2026-02-24
+
+### Bug Fixes
+
+- broaden type ignore for changelog import compatibility (1607439)
+
 ## [v0.5.0] — 2026-02-24
 
 ### Features
