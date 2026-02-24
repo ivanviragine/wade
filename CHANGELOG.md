@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.5.7] — 2026-02-24
+
+### Tests
+
+- fix 5 remaining weak assertions from second triage pass (92a0125)
+
 ## [v0.5.6] — 2026-02-24
 
 ### Tests
