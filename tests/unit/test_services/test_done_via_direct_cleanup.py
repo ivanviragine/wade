@@ -229,5 +229,5 @@ class TestDoneViaDirectCleanup:
         assert result is True
         assert mock_delete.call_count == 2
         mock_logger.warning.assert_called_once_with(
-            "worktree.cleanup_skipped", reason="retry_failed"
+            "worktree.cleanup_skipped", reason="retry_failed", exc_info=True
         )

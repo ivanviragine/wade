@@ -109,6 +109,28 @@ def write_issue_context(worktree_path: Path, task: Task) -> Path:
     return context_path
 
 
+def write_plan_md(worktree_path: Path, task: Task) -> Path:
+    """Write PLAN.md to the worktree (mirrors .issue-context.md).
+
+    Behavioral reference: lib/work/bootstrap.sh:39 — Bash writes both
+    .issue-context.md AND PLAN.md so agents referencing PLAN.md find it.
+    """
+    plan_path = worktree_path / "PLAN.md"
+    lines = [
+        f"# Issue #{task.id}: {task.title}",
+        "",
+    ]
+    if task.body:
+        lines.append(task.body)
+    if task.url:
+        lines.append("")
+        lines.append(f"URL: {task.url}")
+
+    plan_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    logger.info("work.plan_md_written", path=str(plan_path))
+    return plan_path
+
+
 def bootstrap_worktree(
     worktree_path: Path,
     config: ProjectConfig,
@@ -230,6 +252,7 @@ def _post_exit_capture(
 
         current_body = json_mod.loads(result.stdout).get("body", "")
     except Exception:
+        logger.debug("work.pr_body_read_failed", exc_info=True)
         return
 
     # Strip any existing impl usage block and append new one
@@ -257,9 +280,9 @@ def build_work_prompt(task: Task, ai_tool: str | None = None) -> str:
     Behavioral reference: lib/work/bootstrap.sh:_work_copy_prompt()
     """
     return (
-        f"Working on Issue #{task.id}: {task.title}\n\n"
-        f"Read the issue context in .issue-context.md for details.\n"
-        f"Follow @.claude/skills/workflow/SKILL.md for session rules.\n"
+        "Let's implement PLAN.md. ALWAYS follow @.claude/skills/workflow/SKILL.md"
+        f"for session rules.\n\n"
+        f"Working on Issue #{task.id}: {task.title}\n"
     )
 
 
@@ -452,10 +475,21 @@ def start(
     resolved_tool = ai_tool or config.get_ai_tool("work")
     if not resolved_tool:
         installed = AbstractAITool.detect_installed()
-        resolved_tool = installed[0].value if installed else None
+        if installed and len(installed) > 1 and prompts.is_tty():
+            tool_names = [str(t) for t in installed]
+            idx = prompts.select("Select AI tool", tool_names)
+            resolved_tool = tool_names[idx]
+        elif installed:
+            resolved_tool = installed[0].value
+        else:
+            resolved_tool = None
 
-    # Resolve model from complexity or explicit arg
+    # Resolve model: CLI flag → env var override → complexity mapping
     resolved_model = model
+    if not resolved_model:
+        env_model = os.environ.get("GHAIW_WORK_MODEL")
+        if env_model:
+            resolved_model = env_model
     if not resolved_model and resolved_tool and task.complexity:
         resolved_model = _complexity_to_model(config, resolved_tool, task.complexity.value)
 
@@ -470,7 +504,8 @@ def start(
     )
 
     worktrees_dir = _resolve_worktrees_dir(config, repo_root)
-    worktree_path = worktrees_dir / branch_name.replace("/", "-")
+    repo_name = repo_root.name
+    worktree_path = worktrees_dir / f"{repo_name}-{branch_name.replace('/', '-')}"
 
     console.step(f"Creating worktree: {branch_name}")
 
@@ -488,6 +523,7 @@ def start(
 
     # Bootstrap
     write_issue_context(worktree_path, task)
+    write_plan_md(worktree_path, task)
     bootstrap_worktree(worktree_path, config, repo_root)
 
     # Add in-progress label
@@ -507,7 +543,25 @@ def start(
     # AI-initiated start guard: if we're inside an AI CLI session,
     # don't launch another AI tool — just print the worktree path.
     if _is_inside_ai_cli():
-        console.info("Detected AI CLI session — skipping nested AI launch.")
+        detected_env = (
+            "CLAUDE_CODE"
+            if os.environ.get("CLAUDE_CODE") or os.environ.get("CLAUDE_CODE_ENTRYPOINT")
+            else "COPILOT_CLI"
+            if os.environ.get("COPILOT_CLI")
+            else "GEMINI_CLI"
+            if os.environ.get("GEMINI_CLI")
+            else "CODEX_CLI"
+            if os.environ.get("CODEX_CLI")
+            else "GHAIW_IN_AI_SESSION"
+        )
+        logger.info(
+            "work.ai_launch_skipped",
+            reason="inside_ai_cli",
+            env_var=detected_env,
+        )
+        console.info(
+            f"Skipping AI launch: already inside AI session (detected via {detected_env})."
+        )
         console.detail(f"Worktree ready at: {worktree_path}")
         print(str(worktree_path))
         return True
@@ -698,21 +752,25 @@ def batch(
         else:
             console.warn(f"Could not launch terminal for #{issue_id}")
 
-    # Launch chains sequentially
+    # Launch chains: start only the first item, list the rest in order
     for chain in chains:
-        console.info(f"Sequential chain: {' → '.join(f'#{n}' for n in chain)}")
-        for issue_id in chain:
-            cmd = ["ghaiwpy", "work", "start", issue_id]
-            if resolved_tool:
-                cmd.extend(["--ai", resolved_tool])
-            if model:
-                cmd.extend(["--model", model])
+        console.info(f"Dependency chain: {' → '.join(f'#{n}' for n in chain)}")
+        first_id = chain[0]
+        cmd = ["ghaiwpy", "work", "start", first_id]
+        if resolved_tool:
+            cmd.extend(["--ai", resolved_tool])
+        if model:
+            cmd.extend(["--model", model])
 
-            console.step(f"Launching #{issue_id} in new terminal")
-            if launch_in_new_terminal(cmd, cwd=str(repo_root), title=f"ghaiwpy #{issue_id}"):
-                launched += 1
-            else:
-                console.warn(f"Could not launch terminal for #{issue_id}")
+        console.step(f"Launching #{first_id} (first in chain) in new terminal")
+        if launch_in_new_terminal(cmd, cwd=str(repo_root), title=f"ghaiwpy #{first_id}"):
+            launched += 1
+        else:
+            console.warn(f"Could not launch terminal for #{first_id}")
+
+        if len(chain) > 1:
+            remaining = ", ".join(f"#{n}" for n in chain[1:])
+            console.info(f"After completing #{first_id}, work on these in order: {remaining}")
 
     console.banner(f"Launched {launched} work session(s)")
     return launched > 0
@@ -735,6 +793,7 @@ def _build_graph_from_issues(
         try:
             task = provider.read_task(num)
         except Exception:
+            logger.debug("batch.issue_read_failed", issue_num=num, exc_info=True)
             continue
 
         # Parse "Depends on: #X, #Y" from issue body
@@ -868,6 +927,7 @@ def classify_staleness(
             if task.state == TaskState.OPEN:
                 return WorktreeState.ACTIVE
         except Exception:
+            logger.debug("staleness.issue_read_failed", issue=issue_number, exc_info=True)
             # Can't read issue — treat as active (fail-safe)
             return WorktreeState.ACTIVE
 
@@ -887,7 +947,7 @@ def classify_staleness(
         if merge_base.stdout.strip() == branch_tip.stdout.strip():
             return WorktreeState.STALE_MERGED
     except GitError:
-        pass
+        logger.debug("staleness.merge_base_check_failed", exc_info=True)
 
     # 4. Check if remote tracking branch gone
     try:
@@ -901,7 +961,7 @@ def classify_staleness(
         if result.stdout.strip() == "gone":
             return WorktreeState.STALE_REMOTE_GONE
     except GitError:
-        pass
+        logger.debug("staleness.remote_tracking_check_failed", exc_info=True)
 
     return WorktreeState.ACTIVE
 
@@ -1111,9 +1171,20 @@ def sync(
             events=events,
         )
 
-    # Check clean
+    # Check clean — with detailed diagnostics
     if not git_repo.is_clean(cwd):
-        emit("error", reason="dirty_worktree")
+        dirty = git_repo.get_dirty_status(cwd)
+        detail_parts = []
+        if dirty["staged"]:
+            detail_parts.append(f"{dirty['staged']} staged")
+        if dirty["unstaged"]:
+            detail_parts.append(f"{dirty['unstaged']} unstaged")
+        if dirty["untracked"]:
+            detail_parts.append(f"{dirty['untracked']} untracked")
+        detail_str = ", ".join(detail_parts) if detail_parts else "dirty"
+        emit("error", reason="dirty_worktree", details=detail_str)
+        if not json_output:
+            console.error(f"Working tree is dirty ({detail_str}). Commit or stash changes first.")
         return SyncResult(
             success=False,
             current_branch=current,
@@ -1206,7 +1277,7 @@ def sync(
         if diff_result.stdout.strip():
             emit("conflict_diff", diff=diff_result.stdout)
     except GitError:
-        pass
+        logger.debug("sync.conflict_diff_read_failed", exc_info=True)
 
     return SyncResult(
         success=False,
@@ -1306,7 +1377,16 @@ def done(
 
     # Check clean
     if not git_repo.is_clean(cwd):
-        console.error("Working tree is dirty. Commit or stash changes first.")
+        dirty = git_repo.get_dirty_status(cwd)
+        detail_parts = []
+        if dirty["staged"]:
+            detail_parts.append(f"{dirty['staged']} staged")
+        if dirty["unstaged"]:
+            detail_parts.append(f"{dirty['unstaged']} unstaged")
+        if dirty["untracked"]:
+            detail_parts.append(f"{dirty['untracked']} untracked")
+        detail_str = ", ".join(detail_parts) if detail_parts else "dirty"
+        console.error(f"Working tree is dirty ({detail_str}). Commit or stash changes first.")
         return False
 
     main_branch = config.project.main_branch
@@ -1383,7 +1463,7 @@ def _done_via_pr(
         if parent_issue:
             console.detail(f"Detected parent tracking issue: #{parent_issue}")
     except Exception:
-        pass
+        logger.debug("work.parent_issue_detection_failed", exc_info=True)
 
     # Build PR body
     # Resolve PR-SUMMARY.md path: check worktree first, then fall back to /tmp
@@ -1391,7 +1471,7 @@ def _done_via_pr(
     if worktree_path and (worktree_path / "PR-SUMMARY.md").exists():
         pr_summary_path = worktree_path / "PR-SUMMARY.md"
     else:
-        tmp_path = Path(f"/tmp/PR-SUMMARY-{issue_number}.md")
+        tmp_path = Path(tempfile.gettempdir()) / f"PR-SUMMARY-{issue_number}.md"
         if tmp_path.exists():
             pr_summary_path = tmp_path
 
@@ -1501,7 +1581,7 @@ def _done_via_direct(
                     git_worktree.prune_worktrees(repo_root)
                     console.success("Worktree cleaned up.")
                 except Exception:
-                    logger.warning("worktree.cleanup_skipped", reason="retry_failed")
+                    logger.warning("worktree.cleanup_skipped", reason="retry_failed", exc_info=True)
             else:  # Skip
                 logger.warning("worktree.cleanup_skipped", reason="user_skipped")
 
@@ -1581,7 +1661,7 @@ def list_sessions(
                 issue_state = task_info.state.value
                 issue_title = task_info.title
             except Exception:
-                pass
+                logger.debug("work.issue_read_failed", issue=issue_number, exc_info=True)
 
         # Count commits ahead
         try:

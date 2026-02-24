@@ -133,7 +133,7 @@ class TestBuildWorkPrompt:
         prompt = build_work_prompt(task)
         assert "#42" in prompt
         assert "Add auth" in prompt
-        assert ".issue-context.md" in prompt
+        assert "PLAN.md" in prompt
 
 
 # ---------------------------------------------------------------------------

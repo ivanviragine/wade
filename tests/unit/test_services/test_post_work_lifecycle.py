@@ -225,6 +225,7 @@ def test_direct_strategy_merge_and_close(
     provider.close_task.assert_called_once_with("42")
 
 
+@patch("ghaiw.services.work_service.write_plan_md")
 @patch("ghaiw.services.work_service._post_work_lifecycle")
 @patch("ghaiw.services.work_service.launch_in_new_terminal", return_value=True)
 @patch("ghaiw.services.work_service.AbstractAITool.get")
@@ -252,6 +253,7 @@ def test_lifecycle_skipped_in_detach_mode(
     mock_get_adapter: MagicMock,
     _mock_launch_terminal: MagicMock,
     mock_lifecycle: MagicMock,
+    _mock_write_plan_md: MagicMock,
     tmp_path: Path,
 ) -> None:
     mock_load_config.return_value = _config(MergeStrategy.PR)
@@ -267,6 +269,7 @@ def test_lifecycle_skipped_in_detach_mode(
     mock_lifecycle.assert_not_called()
 
 
+@patch("ghaiw.services.work_service.write_plan_md")
 @patch("ghaiw.services.work_service._post_work_lifecycle")
 @patch("ghaiw.services.work_service.add_worked_by_labels")
 @patch("ghaiw.services.work_service._post_exit_capture")
@@ -304,6 +307,7 @@ def test_lifecycle_runs_after_ai_crash(
     _mock_post_exit_capture: MagicMock,
     _mock_add_worked_by: MagicMock,
     mock_lifecycle: MagicMock,
+    _mock_write_plan_md: MagicMock,
     tmp_path: Path,
 ) -> None:
     mock_load_config.return_value = _config(MergeStrategy.PR)
