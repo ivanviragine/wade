@@ -394,8 +394,8 @@ def start(
     # Detach mode: launch AI tool in a new terminal, don't block
     if detach and resolved_tool:
         try:
-            adapter = AbstractAITool.get(AIToolID(resolved_tool))
-            cmd = adapter.build_launch_command(model=resolved_model)
+            detach_adapter = AbstractAITool.get(AIToolID(resolved_tool))
+            cmd = detach_adapter.build_launch_command(model=resolved_model)
         except (ValueError, KeyError):
             cmd = [resolved_tool]
 

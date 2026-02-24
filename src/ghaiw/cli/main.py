@@ -89,9 +89,9 @@ def _interactive_main_menu() -> None:
 
         list_sessions()
     elif idx == 2:  # Create task
-        from ghaiw.services.task_service import create_task
+        from ghaiw.services.task_service import create_interactive
 
-        create_task()
+        create_interactive()
     elif idx == 3:  # Plan with AI
         from ghaiw.services.plan_service import plan
 

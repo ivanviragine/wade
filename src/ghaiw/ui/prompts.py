@@ -41,7 +41,7 @@ def input_prompt(label: str, default: str = "", allow_empty: bool = False) -> st
         # Rich Prompt.ask with default=None requires input — use a sentinel
         result = Prompt.ask(f"{label} (Enter to skip)", default="", console=_console)
         return result
-    result = Prompt.ask(label, default=default or None, console=_console)
+    result = Prompt.ask(label, default=default if default else "", console=_console)
     return result or default
 
 

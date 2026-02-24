@@ -9,6 +9,7 @@ Behavioral reference: lib/init.sh (various _init_* migration helpers)
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -270,7 +271,7 @@ def run_all_migrations(config_path: Path) -> bool:
 
     ai_tool = _get_ai_tool(raw)
 
-    migrations = [
+    migrations: list[Callable[[dict[str, object]], bool]] = [
         lambda r: ensure_version(r),
         lambda r: migrate_deprecated_model_values(r, ai_tool),
         lambda r: migrate_flat_to_nested_models(r, ai_tool),

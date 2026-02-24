@@ -29,7 +29,7 @@ def configure_allowlist(project_root: Path) -> None:
     """
     settings_path = project_root / ".claude" / "settings.json"
 
-    existing: dict = {}
+    existing: dict[str, object] = {}
     if settings_path.is_file():
         with contextlib.suppress(json.JSONDecodeError, OSError):
             raw = json.loads(settings_path.read_text(encoding="utf-8"))
