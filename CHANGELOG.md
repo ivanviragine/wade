@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.3.2] — 2026-02-24
+
+### Bug Fixes
+
+- normalize model format in build_launch_command for all tools (7c58685)
+
+### Tests
+
+- fix tautological assertions and add command assembly tests (a2733d0)
+
 ## [v0.3.1] — 2026-02-23
 
 ### Bug Fixes
