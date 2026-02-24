@@ -57,6 +57,4 @@ class TestGhProvider:
             capture_output=True,
             text=True,
         )
-        # May fail if not in a repo with gh configured
-        # Just verify gh itself works
-        assert result.returncode == 0 or "not a git repository" in result.stderr
+        assert result.returncode == 0

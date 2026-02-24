@@ -48,11 +48,11 @@ class TestHelp:
         assert "sync" in result.output
 
 
-class TestSubcommandStubs:
-    """Verify all stub subcommands exist and exit with code 1 (not implemented)."""
+class TestCommandBehaviorWithoutContext:
+    """Verify subcommand exit codes and output when run without git/gh context."""
 
     def test_task_plan_exits_without_ai(self) -> None:
-        # task plan now runs real code; exits 1 when no AI tool / gh available
+        # task plan exits 1 when no AI tool / gh available
         result = runner.invoke(app, ["task", "plan"])
         assert result.exit_code == 1
 
@@ -66,15 +66,15 @@ class TestSubcommandStubs:
         assert result.exit_code == 0
         assert result.output.strip()
 
-    def test_work_done_exits(self) -> None:
-        # work done runs real code but needs git context
+    def test_work_done_exits_with_error(self) -> None:
+        # work done requires git context; exits 1 without it
         result = runner.invoke(app, ["work", "done"])
-        assert result.exit_code != 0  # Fails without git context
+        assert result.exit_code == 1
 
-    def test_work_sync_exits(self) -> None:
-        # work sync runs real code but needs git context
+    def test_work_sync_exits_with_error(self) -> None:
+        # work sync outside a worktree exits 4 (preflight failure)
         result = runner.invoke(app, ["work", "sync"])
-        assert result.exit_code != 0  # Fails without git context
+        assert result.exit_code == 4
 
     def test_work_list_exits(self) -> None:
         # work list gracefully handles missing git context — returns empty list

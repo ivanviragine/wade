@@ -75,14 +75,14 @@ class TestLiveGhaiwVersion:
     """Basic smoke tests for ghaiw CLI."""
 
     def test_version(self) -> None:
-        result = _ghaiw("version")
-        assert result.returncode == 0
-        assert "ghaiw" in result.stdout.lower() or result.stdout.strip() != ""
-
-    def test_help(self) -> None:
-        result = _ghaiw("help")
+        result = _ghaiw("--version")
         assert result.returncode == 0
         assert "ghaiw" in result.stdout.lower()
+
+    def test_help(self) -> None:
+        result = _ghaiw("--help")
+        assert result.returncode == 0
+        assert "task" in result.stdout.lower() or "work" in result.stdout.lower()
 
 
 class TestLiveCheck:
@@ -145,7 +145,7 @@ have failed to clean up.
         result = _ghaiw("task", "create", "--plan-file", str(plan), "--no-start")
 
         if result.returncode != 0:
-            pytest.skip(f"task create failed: {result.stderr}")
+            pytest.fail(f"task create failed (exit {result.returncode}): {result.stderr}")
 
         # Extract issue number from output
         import re

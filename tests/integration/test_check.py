@@ -13,19 +13,21 @@ runner = CliRunner()
 
 
 class TestCheck:
-    def test_check_in_main_checkout(self, tmp_ghaiw_project: Path) -> None:
-        """check in a main checkout should exit 2 (IN_MAIN_CHECKOUT)."""
+    def test_check_in_main_checkout(
+        self, tmp_ghaiw_project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """check in a main checkout should exit 2 and report IN_MAIN_CHECKOUT."""
+        monkeypatch.chdir(tmp_ghaiw_project)
         result = runner.invoke(app, ["check"], catch_exceptions=False)
-        # Outside a proper git context in test runner, may get various codes
-        # Just verify it doesn't crash
-        assert result.exit_code in (0, 1, 2)
+        assert result.exit_code == 2
+        assert "IN_MAIN_CHECKOUT" in result.output
 
     def test_check_not_in_repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """check outside git should exit 1."""
+        """check outside git should exit 1 and report NOT_IN_GIT_REPO."""
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["check"])
-        # Should report not in git repo
-        assert result.exit_code in (1, 2)
+        assert result.exit_code == 1
+        assert "NOT_IN_GIT_REPO" in result.output
 
 
 class TestCheckConfig:

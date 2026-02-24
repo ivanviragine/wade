@@ -23,11 +23,9 @@ class TestInit:
             ["init"],
             input="y\n",  # Confirm any prompts
         )
-        # Init may fail without AI tools, but should at least attempt
-        # If it creates a config, that's success
         config_path = tmp_git_repo / ".ghaiw.yml"
-        if config_path.exists():
-            assert "version" in config_path.read_text()
+        assert config_path.exists(), "init should create .ghaiw.yml"
+        assert "version" in config_path.read_text()
 
 
 class TestDeinit:
@@ -47,3 +45,5 @@ class TestDeinit:
         )
         # Deinit should remove .ghaiw.yml when forced
         assert result.exit_code == 0
+        config_path = tmp_ghaiw_project / ".ghaiw.yml"
+        assert not config_path.exists(), ".ghaiw.yml should be removed after deinit"

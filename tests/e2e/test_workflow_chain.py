@@ -58,31 +58,20 @@ def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
 
 
 def _parse_json_output(stdout: str) -> Any:
-    """Extract JSON from CLI stdout, tolerating log lines.
+    """Parse JSON from CLI stdout. Fails with an informative message if stdout is not pure JSON.
 
-    Tries full stdout first. If that fails, strips non-JSON lines
-    (e.g., structlog output that leaked to stdout) and retries.
+    When --json is used, stdout must be pure JSON. Any non-JSON output indicates
+    structlog or other logging has leaked to stdout, which is a bug.
     """
     stdout = stdout.strip()
     try:
         return json.loads(stdout)
-    except json.JSONDecodeError:
-        # Fall back: find JSON content by stripping log-like lines
-        lines = stdout.split("\n")
-        json_lines = [
-            line
-            for line in lines
-            if line.strip()
-            and (
-                line.strip().startswith("{")
-                or line.strip().startswith("[")
-                or line.strip().startswith("]")
-                or line.strip().startswith("}")
-                or line.strip().startswith('"')
-                or line.strip()[0:1].isdigit()
-            )
-        ]
-        return json.loads("\n".join(json_lines))
+    except json.JSONDecodeError as exc:
+        pytest.fail(
+            f"--json output is not valid JSON (structlog may have leaked to stdout).\n"
+            f"Raw stdout:\n{stdout!r}\n"
+            f"JSONDecodeError: {exc}"
+        )
 
 
 def _read_gh_log(log_file: Path) -> list[list[str]]:
@@ -591,7 +580,7 @@ class TestWorkListCommand:
         assert result.returncode == 0
 
     def test_list_with_worktrees(self, e2e_repo: Path) -> None:
-        """ghaiwpy work list with worktrees → shows them."""
+        """ghaiwpy work list with worktrees → shows branch names in output."""
         for num, slug in [("10", "auth"), ("11", "db")]:
             wt_dir = e2e_repo.parent / ".worktrees" / f"{num}-{slug}"
             _git(
@@ -601,6 +590,12 @@ class TestWorkListCommand:
 
         result = _run(["work", "list"], cwd=e2e_repo)
         assert result.returncode == 0
+        assert "10" in result.stdout or "auth" in result.stdout, (
+            f"Expected worktree '10-auth' in output, got: {result.stdout!r}"
+        )
+        assert "11" in result.stdout or "db" in result.stdout, (
+            f"Expected worktree '11-db' in output, got: {result.stdout!r}"
+        )
 
     def test_list_json(self, e2e_repo: Path) -> None:
         """ghaiwpy work list --json outputs valid JSON array."""

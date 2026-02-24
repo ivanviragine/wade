@@ -23,22 +23,30 @@ class TestSkillInstallation:
 
         install_skills(tmp_git_repo)
 
-        # Check cross-tool symlinks
         for cross_dir in [".github/skills", ".agents/skills", ".gemini/skills"]:
             link = tmp_git_repo / cross_dir
-            if link.exists():
-                assert link.is_symlink() or link.is_dir()
+            assert link.is_symlink(), f"{cross_dir} should be a symlink, not a plain dir"
 
     def test_install_idempotent(self, tmp_git_repo: Path) -> None:
-        """Running install twice doesn't duplicate files."""
+        """Running install twice leaves the same on-disk state."""
         from ghaiw.skills.installer import install_skills
 
-        installed1 = install_skills(tmp_git_repo)
-        installed2 = install_skills(tmp_git_repo)
+        install_skills(tmp_git_repo)
+        skills_dir = tmp_git_repo / ".claude" / "skills"
+        files_after_first = {
+            str(p.relative_to(tmp_git_repo)) for p in skills_dir.rglob("*") if p.is_file()
+        }
 
-        # Should succeed both times
-        assert len(installed1) > 0
-        assert len(installed2) > 0
+        install_skills(tmp_git_repo)
+        files_after_second = {
+            str(p.relative_to(tmp_git_repo)) for p in skills_dir.rglob("*") if p.is_file()
+        }
+
+        assert files_after_first == files_after_second, (
+            f"Second install changed on-disk state.\n"
+            f"Added:   {files_after_second - files_after_first}\n"
+            f"Removed: {files_after_first - files_after_second}"
+        )
 
     def test_uninstall_removes_skills(self, tmp_git_repo: Path) -> None:
         """Uninstall removes skill directories."""

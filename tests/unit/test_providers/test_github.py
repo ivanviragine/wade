@@ -395,21 +395,6 @@ class TestMergePR:
         assert "--delete-branch" not in cmd
 
 
-class TestGetPRForBranch:
-    @patch("ghaiw.providers.github.run")
-    def test_found(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
-        mock_run.return_value = _make_completed(json.dumps({"number": 5, "body": "PR body"}))
-        result = provider.get_pr_for_branch("feat/42-new-feature")
-        assert result is not None
-        assert result["number"] == 5
-
-    @patch("ghaiw.providers.github.run")
-    def test_not_found(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
-        mock_run.side_effect = CommandError(["gh"], 1, "no pull requests found")
-        result = provider.get_pr_for_branch("no-pr-branch")
-        assert result is None
-
-
 # ---------------------------------------------------------------------------
 # Repository info tests
 # ---------------------------------------------------------------------------
