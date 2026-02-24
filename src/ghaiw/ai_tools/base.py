@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import inspect
 import shutil
+import warnings
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import ClassVar
@@ -35,6 +36,14 @@ class AbstractAITool(ABC):
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
         if hasattr(cls, "TOOL_ID") and not inspect.isabstract(cls):
+            if cls.TOOL_ID in AbstractAITool._registry:
+                existing_cls = AbstractAITool._registry[cls.TOOL_ID]
+                warnings.warn(
+                    f"TOOL_ID '{cls.TOOL_ID}' already registered by {existing_cls.__name__}; "
+                    f"overwriting with {cls.__name__}",
+                    UserWarning,
+                    stacklevel=2,
+                )
             AbstractAITool._registry[cls.TOOL_ID] = cls
 
     @classmethod
