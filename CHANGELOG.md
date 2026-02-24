@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.2.2] — 2026-02-23
+
+### Bug Fixes
+
+- backfill every missing model tier individually, not all-or-nothing (3f64ee5)
+
 ## [v0.2.1] — 2026-02-23
 
 ### Bug Fixes
