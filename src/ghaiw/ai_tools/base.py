@@ -72,7 +72,7 @@ class AbstractAITool(ABC):
     @abstractmethod
     def capabilities(self) -> AIToolCapabilities:
         """Declare what this tool can do."""
-        ...
+        raise NotImplementedError
 
     @abstractmethod
     def get_models(self) -> list[AIModel]:
@@ -80,7 +80,7 @@ class AbstractAITool(ABC):
 
         Returns an empty list if probing fails.
         """
-        ...
+        raise NotImplementedError
 
     def get_default_model(self, tier: ModelTier) -> AIModel | None:
         """Get the best model for a given tier.
@@ -128,7 +128,7 @@ class AbstractAITool(ABC):
         Returns:
             Exit code from the tool process (0 for detached).
         """
-        ...
+        raise NotImplementedError
 
     @abstractmethod
     def parse_transcript(self, transcript_path: Path) -> TokenUsage:
@@ -136,7 +136,7 @@ class AbstractAITool(ABC):
 
         Returns TokenUsage with whatever fields could be parsed.
         """
-        ...
+        raise NotImplementedError
 
     def is_model_compatible(self, model: str) -> bool:
         """Check if a model ID is valid for this tool.
