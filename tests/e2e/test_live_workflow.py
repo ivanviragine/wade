@@ -82,21 +82,20 @@ class TestLiveGhaiwVersion:
     def test_help(self) -> None:
         result = _ghaiw("--help")
         assert result.returncode == 0
-        assert "task" in result.stdout.lower() or "work" in result.stdout.lower()
+        assert "task" in result.stdout.lower()
+        assert "work" in result.stdout.lower()
 
 
 class TestLiveCheck:
     """Test ghaiw check against real taskr repo."""
 
     def test_check_main_checkout(self) -> None:
-        """ghaiw check on main branch returns IN_MAIN_CHECKOUT."""
-        # Ensure we're on main
+        """ghaiw check on main branch exits 2 and reports IN_MAIN_CHECKOUT."""
         _run(["git", "checkout", "main"])
 
         result = _ghaiw("check")
-        # Exit code 2 = IN_MAIN_CHECKOUT (not error, expected on main)
-        assert result.returncode in (0, 2)
-        assert "IN_MAIN_CHECKOUT" in result.stdout or "IN_WORKTREE" in result.stdout
+        assert result.returncode == 2
+        assert "IN_MAIN_CHECKOUT" in result.stdout
 
 
 class TestLiveCheckConfig:

@@ -332,11 +332,12 @@ class TestCLIBasics:
         assert "ghaiw" in result.stdout.lower()
 
     def test_help(self) -> None:
-        """ghaiwpy --help exits 0 and mentions key subcommands."""
+        """ghaiwpy --help exits 0 and lists key subcommands."""
         result = subprocess.run([GHAIWPY, "--help"], capture_output=True, text=True, timeout=10)
         assert result.returncode == 0
         output = result.stdout.lower()
-        assert "task" in output or "work" in output or "check" in output
+        assert "task" in output
+        assert "work" in output
 
 
 # ---------------------------------------------------------------------------
