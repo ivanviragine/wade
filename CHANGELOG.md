@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.3.3] — 2026-02-24
+
+### Bug Fixes
+
+- resolve 5 mypy strict errors and add mypy to pre-commit (ce7813b)
+
 ## [v0.3.2] — 2026-02-24
 
 ### Bug Fixes
