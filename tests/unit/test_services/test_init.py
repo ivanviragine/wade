@@ -412,9 +412,11 @@ class TestPromptCommandOverrides:
         result = _prompt_command_overrides(["claude"], non_interactive=True)
         assert result == {"plan": {}, "deps": {}, "work": {}}
 
-    @patch("ghaiw.ui.prompts.input_prompt")
-    def test_interactive_no_overrides(self, mock_input: MagicMock) -> None:
-        mock_input.side_effect = ["", "", ""]  # No tool for any command
+    @patch("ghaiw.ui.prompts.select")
+    def test_interactive_no_overrides(self, mock_select: MagicMock) -> None:
+        # Select "Skip (use default)" for all three commands
+        # With installed_tools=["claude"], options are: ["claude", "Skip (use default)"]
+        mock_select.side_effect = [1, 1, 1]  # index 1 = Skip
         result = _prompt_command_overrides(["claude"], non_interactive=False)
         assert result["plan"] == {}
         assert result["deps"] == {}
@@ -422,12 +424,15 @@ class TestPromptCommandOverrides:
 
     @patch("ghaiw.services.init_service._suggest_model_for_tool")
     @patch("ghaiw.ui.prompts.input_prompt")
+    @patch("ghaiw.ui.prompts.select")
     def test_interactive_with_tool_override(
-        self, mock_input: MagicMock, mock_suggest: MagicMock
+        self, mock_select: MagicMock, mock_input: MagicMock, mock_suggest: MagicMock
     ) -> None:
         mock_suggest.return_value = "gemini-2.5-pro"
-        # plan: tool=gemini, model=gemini-2.5-pro; deps: empty; work: empty
-        mock_input.side_effect = ["gemini", "gemini-2.5-pro", "", ""]
+        # plan: select gemini (index 1), deps: skip (index 2), work: skip (index 2)
+        mock_select.side_effect = [1, 2, 2]
+        # After selecting gemini for plan, input_prompt asks for model
+        mock_input.side_effect = ["gemini-2.5-pro"]
         result = _prompt_command_overrides(["claude", "gemini"], non_interactive=False)
         assert result["plan"]["tool"] == "gemini"
         assert result["plan"]["model"] == "gemini-2.5-pro"

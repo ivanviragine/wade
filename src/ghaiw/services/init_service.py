@@ -553,6 +553,7 @@ def _prompt_model_mapping(
 
     If non_interactive, returns the mapping unchanged.
     If probing failed, shows a warning before prompting.
+    Falls back to Claude defaults when the tool has no model suggestions.
     """
     from ghaiw.ui import prompts
 
@@ -561,10 +562,20 @@ def _prompt_model_mapping(
 
     console.header("Model complexity mapping")
 
+    # Ensure we always have defaults to show — fall back to Claude defaults
+    if not (mapping.easy or mapping.complex):
+        fallback = get_defaults(AIToolID.CLAUDE)
+        mapping = ComplexityModelMapping(
+            easy=mapping.easy or fallback.easy,
+            medium=mapping.medium or fallback.medium,
+            complex=mapping.complex or fallback.complex,
+            very_complex=mapping.very_complex or fallback.very_complex,
+        )
+
     if tool and not models_probed:
         console.warn(
-            f"Could not auto-detect available models for {tool}. "
-            "Using defaults — edit .ghaiw.yml to change later."
+            f"Could not auto-detect models for {tool} — "
+            "showing Claude defaults. Press Enter to accept or type a model name."
         )
 
     easy = prompts.input_prompt("Easy tasks", mapping.easy or "")
@@ -581,17 +592,18 @@ def _prompt_model_mapping(
 
 
 def _suggest_model_for_tool(tool: str) -> str:
-    """Get a suggested model for a tool — probes or falls back to complex-tier default."""
-    try:
-        adapter = AbstractAITool.get(AIToolID(tool))
-        mapping = adapter.get_recommended_mapping()
-        if mapping.complex:
-            return adapter.normalize_model_format(mapping.complex)
-    except (ValueError, Exception):
-        pass
+    """Get a suggested model for a tool — uses defaults, skips slow probing.
 
+    During interactive init, probing has already happened in _resolve_models().
+    Here we just need a quick suggestion, so we use cached defaults only.
+    """
     defaults = get_defaults(tool)
-    return defaults.complex or ""
+    if defaults.complex:
+        return defaults.complex
+
+    # Fallback to Claude defaults for unknown tools
+    fallback = get_defaults(AIToolID.CLAUDE)
+    return fallback.complex or ""
 
 
 def _prompt_command_overrides(
@@ -612,7 +624,11 @@ def _prompt_command_overrides(
 
     console.header("Per-command AI tool overrides")
 
-    tools_hint = ", ".join(installed_tools) if installed_tools else "claude, copilot, gemini"
+    # Build selectable list: installed tools + "Skip (use default)"
+    skip_label = "Skip (use default)"
+    tool_options = (installed_tools if installed_tools else ["claude", "copilot", "gemini"]) + [
+        skip_label
+    ]
 
     result: dict[str, dict[str, str]] = {}
     for cmd_name, label in [
@@ -620,15 +636,16 @@ def _prompt_command_overrides(
         ("deps", "Dependency analysis"),
         ("work", "Implementation work"),
     ]:
-        tool = prompts.input_prompt(f"{label} ({tools_hint})", "")
-        if tool:
+        idx = prompts.select(f"AI tool for {label.lower()}", tool_options)
+        tool = tool_options[idx]
+        if tool == skip_label:
+            result[cmd_name] = {}
+        else:
             model_default = _suggest_model_for_tool(tool)
             model = prompts.input_prompt(f"  Model for {label.lower()}", model_default)
             result[cmd_name] = {"tool": tool}
             if model:
                 result[cmd_name]["model"] = model
-        else:
-            result[cmd_name] = {}
 
     return result
 

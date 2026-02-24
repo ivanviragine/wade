@@ -43,7 +43,7 @@ mkdir -p "$(dirname "$VENV_DIR")"
 
 # Let uv find or download a suitable Python (>= 3.11).
 # This works even if the system python3 is too old — uv manages its own.
-uv venv "$VENV_DIR" --python ">=${MIN_PYTHON}"
+uv venv "$VENV_DIR" --python ">=${MIN_PYTHON}" --clear
 
 PYTHON_VERSION="$("$VENV_DIR/bin/python" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 info "Python ${PYTHON_VERSION} (managed by uv)"

@@ -29,13 +29,18 @@ def confirm(message: str, default: bool = False) -> bool:
     return Confirm.ask(message, default=default, console=_console)
 
 
-def input_prompt(label: str, default: str = "") -> str:
+def input_prompt(label: str, default: str = "", allow_empty: bool = False) -> str:
     """Ask for text input.
 
     Returns default when stdin is not a TTY.
+    When allow_empty is True, pressing Enter without input returns "".
     """
     if not is_tty():
         return default
+    if allow_empty and not default:
+        # Rich Prompt.ask with default=None requires input — use a sentinel
+        result = Prompt.ask(f"{label} (Enter to skip)", default="", console=_console)
+        return result
     result = Prompt.ask(label, default=default or None, console=_console)
     return result or default
 
