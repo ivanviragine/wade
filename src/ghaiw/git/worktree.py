@@ -50,24 +50,23 @@ def create_worktree(
     return worktree_path
 
 
-def remove_worktree(repo_root: Path, worktree_path: Path) -> None:
+def remove_worktree(repo_root: Path, worktree_path: Path, force: bool = True) -> None:
     """Remove a linked worktree and clean up its administrative files.
 
     Args:
         repo_root: Root of the main repository checkout.
         worktree_path: Path to the worktree to remove.
+        force: If True (default), use --force flag to remove even if worktree is dirty.
 
     Raises:
         GitError: If the worktree could not be removed.
     """
-    log.info("worktree.remove", worktree=str(worktree_path))
-    _run_git(
-        "worktree",
-        "remove",
-        "--force",
-        str(worktree_path),
-        cwd=repo_root,
-    )
+    log.info("worktree.remove", worktree=str(worktree_path), force=force)
+    args = ["worktree", "remove"]
+    if force:
+        args.append("--force")
+    args.append(str(worktree_path))
+    _run_git(*args, cwd=repo_root)
 
 
 def list_worktrees(repo_root: Path) -> list[dict[str, str]]:
