@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.5.8] — 2026-02-24
+
+### Tests
+
+- tighten remaining weak OR/broad-range assertions (d667523)
+
 ## [v0.5.7] — 2026-02-24
 
 ### Tests
