@@ -505,7 +505,7 @@ def start(
 
     worktrees_dir = _resolve_worktrees_dir(config, repo_root)
     repo_name = repo_root.name
-    worktree_path = worktrees_dir / f"{repo_name}-{branch_name.replace('/', '-')}"
+    worktree_path = worktrees_dir / repo_name / branch_name.replace("/", "-")
 
     # Reuse the worktree if the branch already exists (idempotent re-run)
     existing_wt = next(
