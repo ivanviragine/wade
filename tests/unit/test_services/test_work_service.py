@@ -471,7 +471,7 @@ class TestWorkStart:
             mock_get.assert_not_called()
 
         captured = capsys.readouterr()
-        assert captured.out.strip()  # A path was printed
+        assert "42" in captured.out  # Worktree path containing issue ID was printed
 
     def test_inside_ai_cli_skips_launch(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -499,7 +499,7 @@ class TestWorkStart:
             mock_get.assert_not_called()
 
         captured = capsys.readouterr()
-        assert captured.out.strip()  # Path was printed
+        assert "42" in captured.out  # Worktree path containing issue ID was printed
 
 
 # ---------------------------------------------------------------------------
@@ -547,7 +547,7 @@ class TestWorkBatch:
         assert result is True
         assert mock_launch.call_count == 1  # Only the first in the chain
         launched_cmd = mock_launch.call_args[0][0]
-        assert "1" in launched_cmd
+        assert launched_cmd[:4] == ["ghaiwpy", "work", "start", "1"]
 
     def test_warns_on_terminal_failure(self, tmp_path: Path) -> None:
         """One terminal fails → warns but continues and counts successful launches."""

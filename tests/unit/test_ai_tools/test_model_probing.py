@@ -39,9 +39,9 @@ class TestProbeCopilotModels:
         assert "codex-2024" in result
         assert "o1-preview" in result
 
-        # Should NOT return bare prefixes
-        assert "claude" not in result or "claude-sonnet-4.6" in result
-        assert "gpt" not in result or "gpt-4o" in result
+        # Should NOT return bare prefixes (e.g. "claude" or "gpt" as standalone entries)
+        assert "claude" not in result
+        assert "gpt" not in result
 
     def test_probe_copilot_models_cleans_trailing_punctuation(self) -> None:
         """probe_copilot_models should clean trailing punctuation from model names."""

@@ -69,8 +69,8 @@ class TestBootstrapHookTimeout:
             call_kwargs = mock_run.call_args[1]
             assert call_kwargs["timeout"] == 60
 
-    def test_bootstrap_hook_non_timeout_error_propagates(self, tmp_path: Path) -> None:
-        """Non-timeout subprocess errors should propagate as-is (not wrapped)."""
+    def test_bootstrap_hook_called_process_error_is_caught(self, tmp_path: Path) -> None:
+        """CalledProcessError from the hook is caught and logged as a warning, not re-raised."""
         worktree_path = tmp_path / "worktree"
         worktree_path.mkdir()
         repo_root = tmp_path / "repo"
@@ -87,14 +87,11 @@ class TestBootstrapHookTimeout:
         )
 
         with patch("subprocess.run") as mock_run:
-            # CalledProcessError is NOT wrapped in RuntimeError
             mock_run.side_effect = subprocess.CalledProcessError(1, "cmd", stderr=b"error")
 
-            # Should NOT raise RuntimeError; CalledProcessError should be caught
-            # and logged as a warning (not re-raised)
+            # Should not raise — CalledProcessError is suppressed and logged
             bootstrap_worktree(worktree_path, config, repo_root)
 
-            # Verify subprocess.run was called with timeout=60
             mock_run.assert_called_once()
             call_kwargs = mock_run.call_args[1]
             assert call_kwargs["timeout"] == 60

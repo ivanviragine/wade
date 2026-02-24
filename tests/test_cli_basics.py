@@ -64,7 +64,7 @@ class TestCommandBehaviorWithoutContext:
         # task list gracefully handles missing gh auth — returns empty list
         result = runner.invoke(app, ["task", "list"])
         assert result.exit_code == 0
-        assert result.output.strip()
+        assert "No tasks found" in result.output
 
     def test_work_done_exits_with_error(self) -> None:
         # work done requires git context; exits 1 without it
@@ -80,7 +80,7 @@ class TestCommandBehaviorWithoutContext:
         # work list gracefully handles missing git context — returns empty list
         result = runner.invoke(app, ["work", "list"])
         assert result.exit_code == 0
-        assert result.output.strip()
+        assert "No active ghaiw worktrees" in result.output
 
 
 class TestInteractiveMenu:

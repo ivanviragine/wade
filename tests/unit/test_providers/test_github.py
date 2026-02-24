@@ -504,9 +504,17 @@ class TestMoveToInProgress:
         result = provider.move_to_in_progress("42")
 
         assert result is True
-        # Verify that at least one graphql call was made
+        # Verify both the query and the mutation were made (exactly 2 graphql calls)
         graphql_calls = [c for c in mock_run.call_args_list if "graphql" in c[0][0]]
-        assert len(graphql_calls) >= 1
+        assert len(graphql_calls) == 2, (
+            f"Expected query + mutation graphql calls, got {len(graphql_calls)}: {graphql_calls}"
+        )
+        # Verify the mutation received the IDs extracted from the query response
+        mutation_args = graphql_calls[1][0][0]
+        assert "project_id=project-id" in mutation_args
+        assert "item_id=item-id" in mutation_args
+        assert "field_id=field-id" in mutation_args
+        assert "option_id=opt-id" in mutation_args
 
     @patch("ghaiw.providers.github.run")
     def test_returns_false_on_gh_failure(
