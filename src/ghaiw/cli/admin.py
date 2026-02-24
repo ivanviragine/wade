@@ -121,3 +121,41 @@ ghaiwpy() {
   command ghaiwpy "$@"
 }""")
     raise typer.Exit(0)
+
+
+@admin_app.command()
+def changelog(
+    stdout: bool = typer.Option(
+        False,
+        "--stdout",
+        help="Print to stdout instead of writing CHANGELOG.md.",
+    ),
+    tag: str | None = typer.Option(
+        None,
+        "--tag",
+        help="Label unreleased commits as this version.",
+    ),
+) -> None:
+    """Generate CHANGELOG.md from conventional commits."""
+    import sys as _sys
+
+    # Import the changelog generator from scripts/
+    scripts_dir = Path(__file__).resolve().parent.parent.parent.parent / "scripts"
+    _sys.path.insert(0, str(scripts_dir))
+    try:
+        from changelog import generate  # type: ignore[import-not-found]
+    except ImportError:
+        typer.echo("Error: scripts/changelog.py not found.", err=True)
+        raise typer.Exit(1) from None
+    finally:
+        _sys.path.pop(0)
+
+    content = generate(next_tag=tag or "")
+
+    if stdout:
+        typer.echo(content, nl=False)
+    else:
+        changelog_path = Path.cwd() / "CHANGELOG.md"
+        changelog_path.write_text(content)
+        typer.echo(f"Generated {changelog_path.name}")
+    raise typer.Exit(0)
