@@ -103,6 +103,9 @@ def detect_terminal() -> str | None:
     if os.environ.get("TMUX"):
         return "tmux"
 
+    if shutil.which("gnome-terminal"):
+        return "gnome-terminal"
+
     return None
 
 
@@ -169,6 +172,23 @@ def launch_in_new_terminal(
             )
             return True
         except subprocess.CalledProcessError:
+            pass
+
+    if terminal == "gnome-terminal" and sys.platform != "darwin" and shutil.which("gnome-terminal"):
+        cmd_str = " ".join(shlex.quote(str(c)) for c in command)
+        try:
+            subprocess.Popen(
+                [
+                    "gnome-terminal",
+                    "--",
+                    "bash",
+                    "-c",
+                    f"cd '{cwd or '.'}' && {cmd_str}; exec bash",
+                ],
+                start_new_session=True,
+            )
+            return True
+        except OSError:
             pass
 
     logger.warning("terminal.launch_failed", command=command)
