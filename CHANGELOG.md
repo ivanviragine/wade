@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.4.0] — 2026-02-24
+
+### Features
+
+- add --plan flag to work done for worktree resolution by plan title (feef24e)
+- add _resolve_worktree_from_plan() for --plan flag support (a908fec)
+
+### Bug Fixes
+
+- implement post-work lifecycle prompt after AI tool exits (ea129b7)
+- use AppleScript for Ghostty macOS launch (3fa02c8)
+- add gnome-terminal detection and launch support (6e50cb6)
+- add iTerm2 AppleScript launch for detach mode (c0f3b12)
+- accept multiple --ai flags with interactive selection (d041023)
+- check worktree first for PR-SUMMARY.md before /tmp fallback (222ccbe)
+- implement connected-component partitioning in DependencyGraph (2f024b5)
+- correct copilot model probing regex to use non-capturing group (57c5ddf)
+- parameterize remove_worktree force flag (80ccb7a)
+- warn on duplicate AI tool TOOL_ID registration (5db94a8)
+- set SQLite busy_timeout to 30s for parallel safety (c45aa31)
+- make config migration pipeline atomic and validate AI tools (69e704a)
+- add timeout and cleanup prompt to work service (335a7dc)
+- log specific exceptions in get_pr_for_branch (5174d96)
+- raise GitError on subprocess failure in get_conflicted_files (b8d715c)
+
+### Tests
+
+- add branch slugify tests (696ed73)
+
 ## [v0.3.4] — 2026-02-24
 
 ### Bug Fixes
