@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.5.6] — 2026-02-24
+
+### Tests
+
+- harden 9 test files from triage plan (75f7c3a)
+
 ## [v0.5.5] — 2026-02-24
 
 ### Bug Fixes
