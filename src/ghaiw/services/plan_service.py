@@ -175,10 +175,6 @@ def run_ai_planning_session(
         cmd.extend(plan_dir_args)
         console.info(f"Plan directory: {plan_dir}")
 
-    # Transcript capture (tool-specific)
-    if transcript_path and ai_tool.lower() == "claude":
-        cmd.extend(["--output-file", str(transcript_path)])
-
     console.empty()
     logger.info(
         "plan.ai_launch",

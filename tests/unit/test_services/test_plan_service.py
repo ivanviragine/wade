@@ -209,8 +209,8 @@ class TestPlanFile:
 
 
 class TestTranscriptWiring:
-    def test_claude_includes_output_file_for_transcript(self, tmp_path: Path) -> None:
-        """run_ai_planning_session should add --output-file for claude transcript."""
+    def test_claude_no_output_file_flag(self, tmp_path: Path) -> None:
+        """run_ai_planning_session must NOT add --output-file (flag doesn't exist in Claude CLI)."""
         transcript = tmp_path / ".transcript"
 
         with (
@@ -231,8 +231,7 @@ class TestTranscriptWiring:
             )
 
             cmd = mock_sp.run.call_args[0][0]
-            assert "--output-file" in cmd
-            assert str(transcript) in cmd
+            assert "--output-file" not in cmd
 
     def test_no_output_file_without_transcript(self) -> None:
         """run_ai_planning_session should not add --output-file when no transcript."""
