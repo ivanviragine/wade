@@ -1145,6 +1145,7 @@ def done(
             close_issue=not no_close,
             draft=draft,
             config=config,
+            worktree_path=wt_path,
         )
 
 
@@ -1156,6 +1157,7 @@ def _done_via_pr(
     close_issue: bool,
     draft: bool,
     config: ProjectConfig,
+    worktree_path: Path | None = None,
 ) -> bool:
     """Create a PR and finalize work.
 
@@ -1189,7 +1191,15 @@ def _done_via_pr(
         pass
 
     # Build PR body
-    pr_summary_path = Path(f"/tmp/PR-SUMMARY-{issue_number}.md")
+    # Resolve PR-SUMMARY.md path: check worktree first, then fall back to /tmp
+    pr_summary_path: Path | None = None
+    if worktree_path and (worktree_path / "PR-SUMMARY.md").exists():
+        pr_summary_path = worktree_path / "PR-SUMMARY.md"
+    else:
+        tmp_path = Path(f"/tmp/PR-SUMMARY-{issue_number}.md")
+        if tmp_path.exists():
+            pr_summary_path = tmp_path
+
     body = _build_pr_body(
         task,
         pr_summary_path=pr_summary_path,
