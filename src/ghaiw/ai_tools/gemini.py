@@ -22,6 +22,7 @@ from ghaiw.models.ai import (
     AIToolType,
     TokenUsage,
 )
+from ghaiw.utils.process import run_with_transcript
 
 logger = structlog.get_logger()
 
@@ -92,8 +93,7 @@ class GeminiAdapter(AbstractAITool):
     ) -> int:
         cmd = self.build_launch_command(model=model)
         logger.info("ai_tool.launch", tool="gemini", model=model, cwd=str(worktree_path))
-        result = subprocess.run(cmd, cwd=worktree_path)
-        return result.returncode
+        return run_with_transcript(cmd, transcript_path, cwd=worktree_path)
 
     def parse_transcript(self, transcript_path: Path) -> TokenUsage:
         from ghaiw.ai_tools.transcript import parse_gemini_transcript

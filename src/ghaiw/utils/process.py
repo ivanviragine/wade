@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shlex
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -73,6 +75,48 @@ def run(
         raise CommandError(command, result.returncode, stderr)
 
     return result
+
+
+def run_with_transcript(
+    cmd: list[str],
+    transcript_path: Path | None,
+    cwd: Path | str | None = None,
+) -> int:
+    """Run a command, capturing terminal output to transcript_path via `script`.
+
+    Uses the `script` utility (BSD on macOS, GNU on Linux) to record the
+    interactive session. Falls back to plain subprocess.run when transcript_path
+    is None or `script` is not available.
+
+    Behavioral reference: lib/task/tokens.sh:_task_run_with_transcript()
+    """
+    if transcript_path is None or not shutil.which("script"):
+        result = subprocess.run(cmd, cwd=cwd)
+        return result.returncode
+
+    # Detect GNU vs BSD script: GNU accepts --version; BSD does not.
+    version_check = subprocess.run(
+        ["script", "--version"],
+        capture_output=True,
+    )
+
+    if version_check.returncode == 0:
+        # GNU script (Linux): script -q -c "cmd" transcript_file
+        cmd_str = " ".join(shlex.quote(c) for c in cmd)
+        full_cmd = ["script", "-q", "-c", cmd_str, str(transcript_path)]
+    else:
+        # BSD script (macOS): script -q transcript_file cmd...
+        full_cmd = ["script", "-q", str(transcript_path), *cmd]
+
+    logger.debug(
+        "subprocess.run_with_transcript",
+        cmd=cmd,
+        transcript=str(transcript_path),
+        cwd=str(cwd) if cwd else None,
+    )
+
+    result = subprocess.run(full_cmd, cwd=cwd)
+    return result.returncode
 
 
 def run_silent(

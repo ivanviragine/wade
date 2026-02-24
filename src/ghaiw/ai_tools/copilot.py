@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from typing import ClassVar
 
@@ -20,6 +19,7 @@ from ghaiw.models.ai import (
     AIToolType,
     TokenUsage,
 )
+from ghaiw.utils.process import run_with_transcript
 
 logger = structlog.get_logger()
 
@@ -77,8 +77,7 @@ class CopilotAdapter(AbstractAITool):
     ) -> int:
         cmd = self.build_launch_command(model=model, prompt=prompt)
         logger.info("ai_tool.launch", tool="copilot", model=model, cwd=str(worktree_path))
-        result = subprocess.run(cmd, cwd=worktree_path)
-        return result.returncode
+        return run_with_transcript(cmd, transcript_path, cwd=worktree_path)
 
     def parse_transcript(self, transcript_path: Path) -> TokenUsage:
         from ghaiw.ai_tools.transcript import parse_copilot_transcript

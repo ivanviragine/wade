@@ -36,6 +36,7 @@ from ghaiw.services.task_service import (
 )
 from ghaiw.ui.console import console
 from ghaiw.utils.clipboard import copy_to_clipboard
+from ghaiw.utils.process import run_with_transcript
 
 logger = structlog.get_logger()
 
@@ -183,8 +184,7 @@ def run_ai_planning_session(
         cmd=" ".join(cmd),
     )
 
-    result = subprocess.run(cmd, cwd=Path.cwd())
-    return result.returncode
+    return run_with_transcript(cmd, transcript_path, cwd=Path.cwd())
 
 
 # ---------------------------------------------------------------------------

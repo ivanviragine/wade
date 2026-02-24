@@ -22,6 +22,7 @@ from ghaiw.models.ai import (
     AIToolType,
     TokenUsage,
 )
+from ghaiw.utils.process import run_with_transcript
 
 logger = structlog.get_logger()
 
@@ -94,8 +95,7 @@ class ClaudeAdapter(AbstractAITool):
 
         logger.info("ai_tool.launch", tool="claude", model=model, cwd=str(worktree_path))
 
-        result = subprocess.run(cmd, cwd=worktree_path)
-        return result.returncode
+        return run_with_transcript(cmd, transcript_path, cwd=worktree_path)
 
     def parse_transcript(self, transcript_path: Path) -> TokenUsage:
         # Delegated to transcript.py — this is a stub
