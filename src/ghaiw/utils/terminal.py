@@ -37,12 +37,12 @@ def set_terminal_title(title: str) -> None:
 def compose_work_title(issue_id: str, issue_title: str) -> str:
     """Compose a terminal title for a work session.
 
-    Format: "ghaiwpy work — Issue #42: Feature Name"
+    Format: "ghaiw work #42 — Feature Name"
     Behavioral ref: lib/work/terminal.sh:_work_compose_title()
     """
     max_title = 50
     title = issue_title[:max_title] + "..." if len(issue_title) > max_title else issue_title
-    return f"ghaiwpy work — Issue #{issue_id}: {title}"
+    return f"ghaiw work #{issue_id} — {title}"
 
 
 def start_title_keeper(title: str, interval: float = 2.0) -> None:
