@@ -35,7 +35,7 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras
       - name: Type check with mypy
-        run: uv run mypy src/ --ignore-missing-imports
+        run: uv run mypy src/ --strict
 
   test:
     runs-on: ubuntu-latest
