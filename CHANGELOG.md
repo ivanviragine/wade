@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.2.1] — 2026-02-23
+
+### Bug Fixes
+
+- resolve init UX issues — model defaults, command override hang, venv prompt (6212dda)
+
 ## [v0.2.0] — 2026-02-23
 
 ### Features
