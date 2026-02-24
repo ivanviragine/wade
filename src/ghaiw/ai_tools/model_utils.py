@@ -188,7 +188,7 @@ def probe_copilot_models() -> list[str]:
         output = result.stdout + result.stderr
 
         # Extract model-like IDs from the validation error output
-        matches = re.findall(r"(claude|gpt|gemini|codex|o[0-9])[a-zA-Z0-9._-]*", output)
+        matches = re.findall(r"(?:claude|gpt|gemini|codex|o[0-9])[a-zA-Z0-9._-]*", output)
         # Clean trailing punctuation
         cleaned = [re.sub(r"[.,;]+$", "", m) for m in matches if not m.startswith(".")]
         return sorted(set(cleaned))
