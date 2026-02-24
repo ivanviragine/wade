@@ -73,7 +73,7 @@ def work_callback(ctx: typer.Context) -> None:
 @work_app.command()
 def start(
     target: str = typer.Argument(..., help="Issue number or plan file path."),
-    ai: str | None = typer.Option(None, "--ai", help="AI tool to use."),
+    ai: list[str] | None = typer.Option(None, "--ai", help="AI tool to use."),  # noqa: B008
     model: str | None = typer.Option(None, "--model", help="AI model to use."),
     detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
     cd_only: bool = typer.Option(
@@ -82,8 +82,23 @@ def start(
 ) -> None:
     """Start a work session on an issue."""
     from ghaiw.services.work_service import start as do_start
+    from ghaiw.ui import prompts
 
-    success = do_start(target=target, ai_tool=ai, model=model, detach=detach, cd_only=cd_only)
+    # Resolve multiple --ai flags to a single value
+    selected_ai: str | None = None
+    if ai and len(ai) > 1:
+        idx = prompts.select("Select AI tool", ai)
+        selected_ai = ai[idx]
+    elif ai and len(ai) == 1:
+        selected_ai = ai[0]
+
+    success = do_start(
+        target=target,
+        ai_tool=selected_ai,
+        model=model,
+        detach=detach,
+        cd_only=cd_only,
+    )
     raise typer.Exit(0 if success else 1)
 
 

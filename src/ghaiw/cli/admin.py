@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import typer
@@ -85,7 +86,9 @@ def check_config() -> None:
 
 
 @admin_app.command("shell-init")
-def shell_init() -> None:
+def shell_init(
+    shell: str | None = typer.Option(None, "--shell", help="Target shell: bash, zsh, fish"),
+) -> None:
     """Output a shell function wrapper for eval.
 
     Usage: eval "$(ghaiwpy shell-init)"
@@ -93,8 +96,22 @@ def shell_init() -> None:
     Installs a shell function that intercepts `ghaiwpy work cd <n>`
     to perform a real `cd` in the caller's shell.
     """
+    # Detect shell from --shell flag or SHELL env var
+    shell_env: str = os.environ.get("SHELL", "/bin/bash")
+    detected: str = shell if shell else shell_env
     # Print the shell function to stdout — no Rich formatting
-    print("""\
+    if "fish" in detected:
+        print("""\
+function ghaiwpy
+  if test (count $argv) -ge 2; and test "$argv[1]" = "work"; and test "$argv[2]" = "cd"
+    set -l dir (command ghaiwpy work cd $argv[3..])
+    and builtin cd $dir
+  else
+    command ghaiwpy $argv
+  end
+end""")
+    else:
+        print("""\
 ghaiwpy() {
   if [[ "${1:-}" == "work" && "${2:-}" == "cd" ]]; then
     local __p
