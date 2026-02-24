@@ -178,4 +178,11 @@ def ensure_pointer(project_root: Path) -> str | None:
         remove_pointer(target)
 
     write_pointer(target)
+
+    # Create CLAUDE.md as a symlink to AGENTS.md so Claude Code can discover the pointer.
+    # Only create if: we wrote to AGENTS.md AND CLAUDE.md doesn't already exist.
+    if target == agents_md and not claude_md.exists() and not claude_md.is_symlink():
+        claude_md.symlink_to("AGENTS.md")
+        logger.info("pointer.claude_symlink_created", path=str(claude_md))
+
     return str(target)

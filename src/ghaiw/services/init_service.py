@@ -340,7 +340,13 @@ def deinit(project_root: Path | None = None, force: bool = False) -> bool:
     # Remove AGENTS.md pointer
     for name in ("AGENTS.md", "CLAUDE.md"):
         target = root / name
-        if target.is_file() and pointer.remove_pointer(target):
+        if target.is_symlink() and name == "CLAUDE.md":
+            # Only remove if ghaiw created it (points to AGENTS.md)
+            link_target = target.resolve()
+            if link_target == (root / "AGENTS.md").resolve():
+                target.unlink()
+                console.info("Removed CLAUDE.md symlink")
+        elif target.is_file() and pointer.remove_pointer(target):
             console.info(f"Removed workflow pointer from {name}")
 
     # Remove config

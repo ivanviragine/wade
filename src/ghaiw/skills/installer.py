@@ -5,6 +5,7 @@ Behavioral reference: lib/init.sh (skill installation in ghaiw_init/ghaiw_update
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 
@@ -178,11 +179,11 @@ def _link_skill_dir(project_root: Path, skill_name: str, templates_dir: Path) ->
     if not target.is_dir():
         return
 
-    # Calculate relative path from link location to target
+    # Calculate relative path from link location (.claude/skills/<name>/) to target
+    # Link lives 2 levels deep from project root, so go up 2 levels then into rel_target.
     try:
         rel_target = target.resolve().relative_to(project_root.resolve())
-        # Build relative path from .claude/skills/<name> to templates/skills/<name>
-        rel_path = Path("../../..") / rel_target
+        rel_path = Path("../..") / rel_target
     except ValueError:
         # Target is outside project root — use absolute
         rel_path = target.resolve()
@@ -209,11 +210,9 @@ def _link_cross_tool(
     if not primary_skills_dir.is_dir():
         return
 
-    # Calculate relative path
-    try:
-        rel_target = primary_skills_dir.resolve().relative_to(link.parent.resolve())
-    except ValueError:
-        rel_target = primary_skills_dir.resolve()
+    # Calculate relative path from link parent to primary_skills_dir.
+    # e.g. .github/skills → ../.claude/skills (matches bash behavior)
+    rel_target = Path(os.path.relpath(primary_skills_dir.resolve(), link.parent.resolve()))
 
     link.parent.mkdir(parents=True, exist_ok=True)
 
