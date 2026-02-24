@@ -17,6 +17,7 @@ import structlog
 import yaml
 
 from ghaiw.config.defaults import get_defaults
+from ghaiw.models.ai import AIToolID
 
 logger = structlog.get_logger()
 
@@ -31,16 +32,36 @@ _CLAUDE_DOT_TO_DASH_RE = re.compile(r"(claude-\w+-\d+)\.(\d+)")
 
 
 def _get_ai_tool(raw: dict[str, Any]) -> str | None:
-    """Extract the AI tool from config, handling both v1 and v2 formats."""
+    """Extract the AI tool from config, handling both v1 and v2 formats.
+    Raises ValueError if the tool value is a string that doesn't match any
+    valid AIToolID.
+    """
     ai = raw.get("ai")
     if isinstance(ai, dict):
         tool = ai.get("default_tool")
         if tool:
-            return str(tool)
+            tool_str = str(tool)
+            # Validate only if the original value was a string
+            if isinstance(tool, str):
+                valid_tools = {t.value for t in AIToolID}
+                if tool_str not in valid_tools:
+                    raise ValueError(
+                        f"Unknown AI tool '{tool_str}' in config. "
+                        f"Valid values: {sorted(valid_tools)}"
+                    )
+            return tool_str
     # Legacy v1 key
     legacy = raw.get("ai_tool")
     if legacy:
-        return str(legacy)
+        legacy_str = str(legacy)
+        # Validate only if the original value was a string
+        if isinstance(legacy, str):
+            valid_tools = {t.value for t in AIToolID}
+            if legacy_str not in valid_tools:
+                raise ValueError(
+                    f"Unknown AI tool '{legacy_str}' in config. Valid values: {sorted(valid_tools)}"
+                )
+        return legacy_str
     return None
 
 
@@ -258,10 +279,12 @@ def run_all_migrations(config_path: Path) -> bool:
     """Run all migrations on a .ghaiw.yml file.
 
     Loads the file, runs each migration in order, writes back if changed.
-    Returns True if any migration made changes.
+    Returns True if any migration made changes.  If any migration step
+    fails, the original file content is restored and RuntimeError is raised.
     """
     try:
-        raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        original_content = config_path.read_text(encoding="utf-8")
+        raw = yaml.safe_load(original_content)
     except (yaml.YAMLError, OSError) as e:
         logger.warning("migrations.load_failed", path=str(config_path), error=str(e))
         return False
@@ -281,16 +304,20 @@ def run_all_migrations(config_path: Path) -> bool:
         lambda r: normalize_merge_strategy(r),
     ]
 
-    changed = False
-    for migration in migrations:
-        if migration(raw):
-            changed = True
+    try:
+        changed = False
+        for migration in migrations:
+            if migration(raw):
+                changed = True
 
-    if changed:
-        config_path.write_text(
-            yaml.dump(raw, default_flow_style=False, sort_keys=False),
-            encoding="utf-8",
-        )
-        logger.info("migrations.applied", path=str(config_path))
+        if changed:
+            config_path.write_text(
+                yaml.dump(raw, default_flow_style=False, sort_keys=False),
+                encoding="utf-8",
+            )
+            logger.info("migrations.applied", path=str(config_path))
+    except Exception as e:
+        config_path.write_text(original_content, encoding="utf-8")
+        raise RuntimeError(f"Migration failed; config file restored to original. Error: {e}") from e
 
     return changed
