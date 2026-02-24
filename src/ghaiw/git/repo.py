@@ -179,3 +179,28 @@ def get_remote_url(path: Path) -> str | None:
         return None
     url = result.stdout.strip()
     return url if url else None
+
+
+def get_dirty_status(path: Path) -> dict[str, int]:
+    """Get detailed dirty working tree status.
+
+    Returns a dict with counts for staged, unstaged, and untracked files.
+    Behavioral reference: lib/work/terminal.sh dirty worktree diagnostics.
+    """
+    result = _run_git("status", "--porcelain", cwd=path)
+    staged = 0
+    unstaged = 0
+    untracked = 0
+    for line in result.stdout.splitlines():
+        if not line or len(line) < 2:
+            continue
+        index_status = line[0]
+        worktree_status = line[1]
+        if index_status == "?":
+            untracked += 1
+        else:
+            if index_status not in (" ", "?"):
+                staged += 1
+            if worktree_status not in (" ", "?"):
+                unstaged += 1
+    return {"staged": staged, "unstaged": unstaged, "untracked": untracked}
