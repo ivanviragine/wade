@@ -120,20 +120,76 @@ def launch_in_new_terminal(
     Returns True if launched successfully, False otherwise.
     """
     terminal = detect_terminal()
-    env = os.environ.copy()
 
-    if terminal == "ghostty" and shutil.which("ghostty"):
-        cmd_str = " ".join(command)
-        try:
-            subprocess.Popen(
-                ["ghostty", "-e", cmd_str],
-                cwd=cwd,
-                env=env,
-                start_new_session=True,
-            )
-            return True
-        except OSError:
-            pass
+    if terminal == "ghostty":
+        cmd_str = " ".join(shlex.quote(str(c)) for c in command)
+        if sys.platform == "darwin":
+            import tempfile
+
+            with tempfile.NamedTemporaryFile(
+                prefix="ghaiw-", dir="/tmp", suffix="", delete=False, mode="w"
+            ) as f:
+                tmp_path = f.name
+                f.write(f"#!/usr/bin/env bash\ncd '{cwd or '.'}'\nexec {cmd_str}\n")
+            os.chmod(tmp_path, 0o755)
+            osa = f"""tell application "Ghostty" to activate
+delay 0.3
+tell application "System Events"
+  tell process "Ghostty"
+    tell menu bar 1
+      tell menu bar item "File"
+        tell menu "File"
+          click menu item "New Tab"
+        end tell
+      end tell
+    end tell
+  end tell
+end tell
+delay 1.0
+keystroke "{tmp_path}"
+key code 36"""
+            try:
+                subprocess.run(["osascript", "-e", osa], check=True, capture_output=True)
+                threading.Timer(15, lambda: os.unlink(tmp_path)).start()
+                return True
+            except subprocess.CalledProcessError:
+                try:
+                    subprocess.run(
+                        [
+                            "open",
+                            "-na",
+                            "Ghostty",
+                            "--args",
+                            f"--working-directory={cwd or '.'}",
+                            "-e",
+                            "bash",
+                            "-c",
+                            cmd_str,
+                        ],
+                        check=True,
+                        capture_output=True,
+                    )
+                    return True
+                except subprocess.CalledProcessError:
+                    pass
+        else:
+            ghostty_bin = os.environ.get("GHOSTTY_BIN_DIR", "")
+            ghostty_bin = f"{ghostty_bin}/ghostty" if ghostty_bin else "ghostty"
+            try:
+                subprocess.Popen(
+                    [
+                        ghostty_bin,
+                        "+new-window",
+                        "-e",
+                        "bash",
+                        "-c",
+                        f"cd '{cwd or '.'}' && {cmd_str}",
+                    ],
+                    start_new_session=True,
+                )
+                return True
+            except OSError:
+                pass
 
     if terminal == "tmux" and shutil.which("tmux"):
         tmux_cmd = ["tmux", "new-window"]
