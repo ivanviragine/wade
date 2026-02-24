@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.5.5] — 2026-02-24
+
+### Bug Fixes
+
+- remove --output-file flag from Claude CLI launch commands (4248856)
+
+### Tests
+
+- improve test coverage with 13 new tests and assertion hardening (5686fac)
+
 ## [v0.5.4] — 2026-02-24
 
 ### Bug Fixes
