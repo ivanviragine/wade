@@ -108,7 +108,11 @@ def get_conflicted_files(repo_root: Path) -> list[str]:
         check=False,
     )
     if result.returncode != 0:
-        return []
+        error_msg = (
+            f"git diff --name-only --diff-filter=U failed "
+            f"(exit {result.returncode}): {result.stderr.strip()}"
+        )
+        raise GitError(error_msg)
     files = [f for f in result.stdout.strip().splitlines() if f]
     return files
 
