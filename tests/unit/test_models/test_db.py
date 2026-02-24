@@ -38,6 +38,38 @@ class TestEngine:
         # Should not raise on second call
         init_db(db_engine)
 
+    def test_engine_busy_timeout_is_30s(self, tmp_path: Path) -> None:
+        """Verify SQLite busy_timeout is set to 30 seconds."""
+        from sqlalchemy import text
+        from sqlmodel import Session
+
+        db_path = tmp_path / ".ghaiw" / "ghaiw.db"
+        engine = create_db_engine(db_path)
+        init_db(engine)
+
+        # Create a connection and check PRAGMA busy_timeout
+        with Session(engine) as session:  # type: ignore[arg-type]
+            result = session.exec(text("PRAGMA busy_timeout"))  # type: ignore[call-overload]
+            timeout_ms = result.first()
+            # SQLite PRAGMA busy_timeout returns milliseconds (as a tuple)
+            assert timeout_ms[0] == 30000, f"Expected 30000ms, got {timeout_ms[0]}ms"
+
+    def test_engine_wal_mode_enabled(self, tmp_path: Path) -> None:
+        """Verify WAL mode is enabled (regression guard)."""
+        from sqlalchemy import text
+        from sqlmodel import Session
+
+        db_path = tmp_path / ".ghaiw" / "ghaiw.db"
+        engine = create_db_engine(db_path)
+        init_db(engine)
+
+        # Create a connection and check PRAGMA journal_mode
+        with Session(engine) as session:  # type: ignore[arg-type]
+            result = session.exec(text("PRAGMA journal_mode"))  # type: ignore[call-overload]
+            mode = result.first()
+            # SQLite PRAGMA journal_mode returns mode as a tuple
+            assert mode[0] == "wal", f"Expected WAL mode, got {mode[0]}"
+
 
 class TestTaskRepository:
     def test_create_and_get(self, db_engine) -> None:

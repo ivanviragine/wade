@@ -28,7 +28,7 @@ def create_db_engine(db_path: Path) -> object:
     engine = create_engine(
         f"sqlite:///{db_path}",
         echo=False,
-        connect_args={"check_same_thread": False},
+        connect_args={"check_same_thread": False, "timeout": 30},
     )
 
     # Enable WAL mode and busy timeout on every connection
@@ -36,7 +36,7 @@ def create_db_engine(db_path: Path) -> object:
     def _set_sqlite_pragmas(dbapi_conn, connection_record):  # type: ignore[no-untyped-def]
         cursor = dbapi_conn.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.execute("PRAGMA busy_timeout=30000")
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
 
