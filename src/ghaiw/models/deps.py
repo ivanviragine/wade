@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import defaultdict, deque
 
 from pydantic import BaseModel
 
@@ -101,28 +101,51 @@ class DependencyGraph(BaseModel):
             Tuple of (independent_ids, chains) where chains are ordered lists
             of task IDs that must execute sequentially.
         """
-        # Build dependency info scoped to requested task_ids
         task_set = set(task_ids)
-        has_dep: set[str] = set()
-        is_dep_of: set[str] = set()
+        scoped_edges = [
+            edge for edge in self.edges if edge.from_task in task_set and edge.to_task in task_set
+        ]
 
-        for edge in self.edges:
-            if edge.from_task in task_set and edge.to_task in task_set:
-                has_dep.add(edge.to_task)
-                is_dep_of.add(edge.from_task)
+        adjacency: dict[str, set[str]] = defaultdict(set)
+        for edge in scoped_edges:
+            adjacency[edge.from_task].add(edge.to_task)
+            adjacency[edge.to_task].add(edge.from_task)
 
-        dependent = has_dep | is_dep_of
-        independent = [t for t in task_ids if t not in dependent]
-
-        # Build chains from dependent tasks using topo sort
+        visited: set[str] = set()
+        independent: list[str] = []
         chains: list[list[str]] = []
-        if dependent:
-            ordered = self.topo_sort(list(dependent))
-            # Group into connected chains
-            chain: list[str] = []
-            for task_id in ordered:
-                chain.append(task_id)
-            if chain:
-                chains.append(chain)
+
+        for task_id in task_ids:
+            if task_id in visited:
+                continue
+
+            if task_id not in adjacency:
+                visited.add(task_id)
+                independent.append(task_id)
+                continue
+
+            queue: deque[str] = deque([task_id])
+            component_nodes: list[str] = []
+            visited.add(task_id)
+
+            while queue:
+                node = queue.popleft()
+                component_nodes.append(node)
+                for neighbor in sorted(adjacency[node]):
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        queue.append(neighbor)
+
+            component_set = set(component_nodes)
+            component_edges = [
+                edge
+                for edge in scoped_edges
+                if edge.from_task in component_set and edge.to_task in component_set
+            ]
+
+            if component_edges:
+                chains.append(DependencyGraph(edges=component_edges).topo_sort(component_nodes))
+            else:
+                independent.extend(component_nodes)
 
         return independent, chains
