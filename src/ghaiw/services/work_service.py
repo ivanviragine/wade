@@ -42,6 +42,7 @@ from ghaiw.services.task_service import (
     add_worked_by_labels,
     remove_in_progress_label,
 )
+from ghaiw.ui import prompts
 from ghaiw.ui.console import console
 from ghaiw.utils.clipboard import copy_to_clipboard
 from ghaiw.utils.terminal import (
@@ -137,8 +138,11 @@ def bootstrap_worktree(
                     cwd=str(worktree_path),
                     check=True,
                     capture_output=True,
+                    timeout=60,
                 )
                 logger.info("work.hook_ran", hook=config.hooks.post_worktree_create)
+            except subprocess.TimeoutExpired as e:
+                raise RuntimeError(f"Bootstrap hook timed out after 60 seconds: {hook_path}") from e
             except subprocess.CalledProcessError as e:
                 logger.warning(
                     "work.hook_failed",
@@ -1281,8 +1285,20 @@ def _done_via_direct(
             git_branch.delete_branch(repo_root, branch, force=True)
             git_worktree.prune_worktrees(repo_root)
             console.success("Worktree cleaned up.")
-        except GitError:
-            pass
+        except Exception as e:
+            choice = prompts.select(
+                f"Worktree cleanup failed: {e}. What would you like to do?",
+                ["Retry", "Skip (leave worktree in place)"],
+            )
+            if choice == 0:  # Retry
+                try:
+                    git_branch.delete_branch(repo_root, branch, force=True)
+                    git_worktree.prune_worktrees(repo_root)
+                    console.success("Worktree cleaned up.")
+                except Exception:
+                    logger.warning("worktree.cleanup_skipped", reason="retry_failed")
+            else:  # Skip
+                logger.warning("worktree.cleanup_skipped", reason="user_skipped")
 
     console.empty()
     console.banner("Work done (direct merge)")
