@@ -143,7 +143,7 @@ def changelog(
     scripts_dir = Path(__file__).resolve().parent.parent.parent.parent / "scripts"
     _sys.path.insert(0, str(scripts_dir))
     try:
-        from changelog import generate  # type: ignore[import-not-found]
+        from changelog import generate  # type: ignore
     except ImportError:
         typer.echo("Error: scripts/changelog.py not found.", err=True)
         raise typer.Exit(1) from None
