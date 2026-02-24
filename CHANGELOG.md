@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.5.0] — 2026-02-24
+
+### Features
+
+- wire changelog command to admin CLI (5b745e4)
+- address Bash parity gaps in work sessions (77d7791)
+- add get_dirty_status for detailed worktree diagnostics (492a223)
+
+### Bug Fixes
+
+- replace bare except handlers with structured logging (f35fc9a)
+- match terminal title format to Bash convention (fe77417)
+
+### Refactoring
+
+- use NotImplementedError in abstract method bodies (d069ca4)
+
 ## [v0.4.0] — 2026-02-24
 
 ### Features
