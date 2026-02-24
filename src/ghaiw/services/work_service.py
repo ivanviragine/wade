@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -262,6 +263,135 @@ def build_work_prompt(task: Task, ai_tool: str | None = None) -> str:
     )
 
 
+def _post_work_lifecycle(
+    repo_root: Path,
+    branch: str,
+    issue_number: str | int | None,
+    worktree_path: Path | None,
+    config: ProjectConfig,
+    provider: AbstractTaskProvider,
+) -> None:
+    if config.project.merge_strategy == MergeStrategy.PR:
+        _post_work_lifecycle_pr(repo_root, branch, issue_number, worktree_path, config, provider)
+    else:
+        _post_work_lifecycle_direct(
+            repo_root, branch, issue_number, worktree_path, config, provider
+        )
+
+
+def _post_work_lifecycle_pr(
+    repo_root: Path,
+    branch: str,
+    issue_number: str | int | None,
+    worktree_path: Path | None,
+    config: ProjectConfig,
+    provider: AbstractTaskProvider,
+) -> None:
+    main_branch = config.project.main_branch or "main"
+    provider_get_pr = getattr(provider, "get_pr_for_branch", None)
+    pr_info_raw = (
+        provider_get_pr(branch)
+        if callable(provider_get_pr)
+        else git_pr.get_pr_for_branch(repo_root, branch)
+    )
+    pr_info = pr_info_raw if isinstance(pr_info_raw, dict) else None
+    if not pr_info:
+        console.warn(f"No open PR found for branch '{branch}'. Skipping lifecycle.")
+        return
+
+    pr_number = pr_info.get("number") or pr_info.get("pr_number")
+    if not pr_number:
+        console.warn(f"Could not determine PR number for branch '{branch}'.")
+        return
+
+    if not prompts.confirm(f"Do you want to merge PR #{pr_number}?", default=True):
+        return
+
+    try:
+        git_pr.merge_pr(repo_root=repo_root, pr_number=int(pr_number), strategy="squash")
+    except Exception as e:
+        logger.error("pr_merge.failed", pr_number=pr_number, error=str(e))
+        with contextlib.suppress(Exception):
+            subprocess.run(
+                ["git", "push", "origin", "--delete", branch],
+                check=True,
+                capture_output=True,
+                cwd=repo_root,
+            )
+        return
+
+    if worktree_path:
+        _cleanup_worktree(repo_root, worktree_path, main_branch)
+
+    with contextlib.suppress(Exception):
+        subprocess.run(["git", "pull", "--quiet"], cwd=repo_root)
+
+    if issue_number:
+        with contextlib.suppress(Exception):
+            provider.close_task(str(issue_number))
+
+
+def _post_work_lifecycle_direct(
+    repo_root: Path,
+    branch: str,
+    issue_number: str | int | None,
+    worktree_path: Path | None,
+    config: ProjectConfig,
+    provider: AbstractTaskProvider,
+) -> None:
+    main_branch = config.project.main_branch or "main"
+    result = subprocess.run(
+        ["git", "rev-list", "--count", f"{main_branch}..{branch}"],
+        capture_output=True,
+        text=True,
+        cwd=repo_root,
+    )
+    ahead = int(result.stdout.strip() or "0")
+
+    if ahead == 0:
+        if not prompts.confirm("Branch has no new commits. Delete empty worktree?", default=False):
+            return
+        if worktree_path:
+            _cleanup_worktree(repo_root, worktree_path, main_branch)
+        return
+
+    choices = ["Merge into main", "Merge + close task", "Skip"]
+    idx = prompts.select(f"Branch '{branch}' has {ahead} commit(s). What next?", choices)
+    choice = choices[idx]
+    if choice == "Skip":
+        return
+
+    try:
+        subprocess.run(
+            ["git", "merge", "--squash", branch],
+            check=True,
+            capture_output=True,
+            cwd=repo_root,
+        )
+        subprocess.run(
+            ["git", "commit", "--no-edit"],
+            check=True,
+            capture_output=True,
+            cwd=repo_root,
+        )
+        subprocess.run(
+            ["git", "push"],
+            check=True,
+            capture_output=True,
+            cwd=repo_root,
+        )
+    except Exception as e:
+        logger.error("direct_merge.failed", branch=branch, error=str(e))
+        return
+
+    if worktree_path:
+        _cleanup_worktree(repo_root, worktree_path, main_branch)
+
+    if choice == "Merge + close task" and issue_number:
+        with contextlib.suppress(Exception):
+            provider.close_task(str(issue_number))
+
+
 # ---------------------------------------------------------------------------
 # Work start
 # ---------------------------------------------------------------------------
@@ -439,8 +569,21 @@ def start(
             console.warn(f"Unknown AI tool: {resolved_tool}")
         except Exception as e:
             console.warn(f"AI tool launch failed: {e}")
+        finally:
+            stop_title_keeper()
 
-        stop_title_keeper()
+            if adapter is not None:
+                try:
+                    _post_work_lifecycle(
+                        repo_root=repo_root,
+                        branch=branch_name,
+                        issue_number=task.id,
+                        worktree_path=worktree_path,
+                        config=config,
+                        provider=provider,
+                    )
+                except Exception:
+                    logger.exception("post_work_lifecycle.failed")
 
         # Post-exit: capture token usage and update PR
         if adapter is not None:
@@ -1090,6 +1233,8 @@ def done(
             if not task:
                 return False
             target = task.id
+
+    wt_path: Path | None = None
 
     # If target specifies a worktree, navigate to it
     if target:
