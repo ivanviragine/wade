@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.3.1] — 2026-02-23
+
+### Bug Fixes
+
+- add --add-dir and --permission-mode to plan AI launch (e56fc49)
+
 ## [v0.3.0] — 2026-02-23
 
 ### Features
