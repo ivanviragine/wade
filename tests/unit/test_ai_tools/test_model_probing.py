@@ -21,7 +21,10 @@ class TestProbeCopilotModels:
             "claude-sonnet-4.6, gpt-4o, gemini-1.5-pro, codex-2024, o1-preview"
         )
 
-        with patch("subprocess.run") as mock_run:
+        with (
+            patch("shutil.which", return_value="/usr/bin/copilot"),
+            patch("subprocess.run") as mock_run,
+        ):
             mock_run.return_value = MagicMock(
                 stdout="",
                 stderr=mock_output,
@@ -47,7 +50,10 @@ class TestProbeCopilotModels:
             "claude-sonnet-4.6, gpt-4o, gemini-1.5-pro."
         )
 
-        with patch("subprocess.run") as mock_run:
+        with (
+            patch("shutil.which", return_value="/usr/bin/copilot"),
+            patch("subprocess.run") as mock_run,
+        ):
             mock_run.return_value = MagicMock(
                 stdout="",
                 stderr=mock_output,

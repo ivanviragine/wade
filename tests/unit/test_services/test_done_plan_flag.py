@@ -141,6 +141,11 @@ def test_done_plan_flag_shows_in_help() -> None:
     from ghaiw.cli.work import work_app
 
     result = runner.invoke(work_app, ["done", "--help"])
+    # Strip ANSI escape codes before checking — Rich/Typer may split
+    # flags across styled spans (e.g. \x1b[1;36m-\x1b[0m\x1b[1;36m-plan\x1b[0m).
+    import re
+
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
 
     assert result.exit_code == 0
-    assert "--plan" in result.output
+    assert "--plan" in plain
