@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.5.9] — 2026-02-24
+
+### Tests
+
+- tighten 5 more weak assertions from third triage pass (62f0b59)
+
 ## [v0.5.8] — 2026-02-24
 
 ### Tests
