@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.5.4] — 2026-02-24
+
+### Bug Fixes
+
+- resolve 5 Bash parity regressions identified in analysis (21a4b3f)
+
 ## [v0.5.3] — 2026-02-24
 
 ### Bug Fixes
