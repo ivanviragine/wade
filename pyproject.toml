@@ -85,6 +85,9 @@ plugins = ["pydantic.mypy"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-v --tb=short"
+filterwarnings = [
+    "error::ResourceWarning",
+]
 
 [tool.coverage.run]
 source = ["ghaiw"]

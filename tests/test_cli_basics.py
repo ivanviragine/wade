@@ -64,7 +64,7 @@ class TestSubcommandStubs:
         # task list gracefully handles missing gh auth — returns empty list
         result = runner.invoke(app, ["task", "list"])
         assert result.exit_code == 0
-        assert "no tasks" in result.output.lower() or result.output.strip()
+        assert result.output.strip()
 
     def test_work_done_exits(self) -> None:
         # work done runs real code but needs git context
@@ -80,7 +80,7 @@ class TestSubcommandStubs:
         # work list gracefully handles missing git context — returns empty list
         result = runner.invoke(app, ["work", "list"])
         assert result.exit_code == 0
-        assert "no active" in result.output.lower() or result.output.strip()
+        assert result.output.strip()
 
 
 class TestInteractiveMenu:

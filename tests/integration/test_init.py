@@ -43,9 +43,7 @@ class TestDeinit:
 
         result = runner.invoke(
             app,
-            ["deinit"],
-            input="y\n",  # Confirm
+            ["deinit", "--force"],  # Non-TTY: confirm() returns default=False, so use --force
         )
-        # Deinit should remove .ghaiw.yml
-        # (May succeed or fail depending on state, but shouldn't crash)
-        assert result.exit_code in (0, 1)
+        # Deinit should remove .ghaiw.yml when forced
+        assert result.exit_code == 0

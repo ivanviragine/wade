@@ -534,6 +534,39 @@ class TestUpdate:
 # ---------------------------------------------------------------------------
 
 
+class TestDeinitConfirmation:
+    """Tests for the confirmation gate in deinit() (force=False path)."""
+
+    @patch("ghaiw.ui.prompts.confirm", return_value=False)
+    def test_deinit_aborts_when_user_declines(
+        self, mock_confirm: MagicMock, tmp_git_repo: Path
+    ) -> None:
+        """When the user declines, deinit() returns False without removing config."""
+        config_path = tmp_git_repo / ".ghaiw.yml"
+        config_path.write_text("version: 2\n")
+
+        result = deinit(project_root=tmp_git_repo, force=False)
+
+        assert result is False
+        assert config_path.is_file()  # Config was NOT removed
+        mock_confirm.assert_called_once()
+
+    @patch("ghaiw.ui.prompts.confirm", return_value=True)
+    def test_deinit_proceeds_when_user_confirms(
+        self, mock_confirm: MagicMock, tmp_git_repo: Path
+    ) -> None:
+        """When the user confirms, deinit() proceeds and removes config."""
+        init(project_root=tmp_git_repo, non_interactive=True)
+        config_path = tmp_git_repo / ".ghaiw.yml"
+        assert config_path.is_file()
+
+        result = deinit(project_root=tmp_git_repo, force=False)
+
+        assert result is True
+        assert not config_path.is_file()  # Config WAS removed
+        mock_confirm.assert_called_once()
+
+
 class TestDeinit:
     def test_deinit_removes_config(self, tmp_git_repo: Path) -> None:
         init(project_root=tmp_git_repo, non_interactive=True)

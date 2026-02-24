@@ -5,10 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from ghaiw.ai_tools.claude import ClaudeAdapter
 from ghaiw.ai_tools.codex import CodexAdapter
 from ghaiw.ai_tools.copilot import CopilotAdapter
 from ghaiw.ai_tools.gemini import GeminiAdapter
+from ghaiw.git.repo import GitError
 from ghaiw.models.config import (
     HooksConfig,
     ProjectConfig,
@@ -20,9 +23,11 @@ from ghaiw.services.work_service import (
     _complexity_to_model,
     _resolve_target,
     _resolve_worktrees_dir,
+    batch,
     bootstrap_worktree,
     build_work_prompt,
     find_worktree_path,
+    start,
     write_issue_context,
 )
 
@@ -247,8 +252,8 @@ class TestFindWorktreePath:
 class TestWorkLaunchCommandAssembly:
     """Verify each adapter builds the correct command for work sessions."""
 
-    def test_claude_launch_includes_transcript(self, tmp_path: Path) -> None:
-        """Claude launch with transcript_path should include --output-file."""
+    def test_claude_launch_with_transcript(self, tmp_path: Path) -> None:
+        """Claude launch must NOT include --output-file (flag does not exist in Claude CLI)."""
         adapter = ClaudeAdapter()
         transcript = tmp_path / "transcript.jsonl"
 
@@ -264,8 +269,7 @@ class TestWorkLaunchCommandAssembly:
             assert cmd[0] == "claude"
             assert "--model" in cmd
             assert "claude-sonnet-4-6" in cmd
-            assert "--output-file" in cmd
-            assert str(transcript) in cmd
+            assert "--output-file" not in cmd
             assert mock_run.call_args[1]["cwd"] == tmp_path
 
     def test_claude_launch_no_transcript(self, tmp_path: Path) -> None:
@@ -350,3 +354,225 @@ class TestWorkLaunchCommandAssembly:
                 tool = adapter.TOOL_ID
                 assert "--permission-mode" not in cmd, f"{tool}: leaked --permission-mode"
                 assert "--approval-mode" not in cmd, f"{tool}: leaked --approval-mode"
+
+
+# ---------------------------------------------------------------------------
+# Work start tests
+# ---------------------------------------------------------------------------
+
+
+class TestWorkStart:
+    """Tests for work_service.start() — exercises the full start() orchestration."""
+
+    def _make_task(self) -> Task:
+        return Task(id="42", title="Test task")
+
+    def _make_config(self) -> ProjectConfig:
+        """ProjectConfig with main_branch set to avoid detect_main_branch subprocess call."""
+        return ProjectConfig(project=ProjectSettings(main_branch="main"))
+
+    def test_creates_worktree(self, tmp_path: Path) -> None:
+        """Happy path: no existing worktree → create_worktree called, returns True."""
+        task = self._make_task()
+        mock_provider = MagicMock()
+        mock_provider.read_task.return_value = task
+
+        with (
+            patch("ghaiw.services.work_service.load_config", return_value=self._make_config()),
+            patch("ghaiw.services.work_service.get_provider", return_value=mock_provider),
+            patch("ghaiw.git.repo.get_repo_root", return_value=tmp_path),
+            patch("ghaiw.git.worktree.list_worktrees", return_value=[]),
+            patch("ghaiw.git.worktree.create_worktree") as mock_create,
+            patch("ghaiw.services.work_service.write_issue_context"),
+            patch("ghaiw.services.work_service.write_plan_md"),
+            patch("ghaiw.services.work_service.bootstrap_worktree"),
+            patch("ghaiw.services.work_service.copy_to_clipboard"),
+            patch("ghaiw.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
+            patch("ghaiw.services.work_service._is_inside_ai_cli", return_value=False),
+        ):
+            result = start("42", project_root=tmp_path)
+            assert result is True
+            mock_create.assert_called_once()
+
+    def test_reuses_existing_worktree(self, tmp_path: Path) -> None:
+        """Idempotency: list_worktrees returns matching branch → create_worktree NOT called."""
+        from ghaiw.git.branch import make_branch_name
+
+        task = self._make_task()
+        branch_name = make_branch_name("feat", int(task.id), task.title)
+        existing_wt = tmp_path / "existing-wt"
+        existing_wt.mkdir()
+
+        mock_provider = MagicMock()
+        mock_provider.read_task.return_value = task
+
+        with (
+            patch("ghaiw.services.work_service.load_config", return_value=self._make_config()),
+            patch("ghaiw.services.work_service.get_provider", return_value=mock_provider),
+            patch("ghaiw.git.repo.get_repo_root", return_value=tmp_path),
+            patch(
+                "ghaiw.git.worktree.list_worktrees",
+                return_value=[{"path": str(existing_wt), "branch": branch_name}],
+            ),
+            patch("ghaiw.git.worktree.create_worktree") as mock_create,
+            patch("ghaiw.services.work_service.write_issue_context"),
+            patch("ghaiw.services.work_service.write_plan_md"),
+            patch("ghaiw.services.work_service.bootstrap_worktree"),
+            patch("ghaiw.services.work_service.copy_to_clipboard"),
+            patch("ghaiw.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
+            patch("ghaiw.services.work_service._is_inside_ai_cli", return_value=False),
+        ):
+            result = start("42", project_root=tmp_path)
+            assert result is True
+            mock_create.assert_not_called()
+
+    def test_returns_false_on_creation_failure(self, tmp_path: Path) -> None:
+        """create_worktree raises GitError → start() returns False."""
+        task = self._make_task()
+        mock_provider = MagicMock()
+        mock_provider.read_task.return_value = task
+
+        with (
+            patch("ghaiw.services.work_service.load_config", return_value=self._make_config()),
+            patch("ghaiw.services.work_service.get_provider", return_value=mock_provider),
+            patch("ghaiw.git.repo.get_repo_root", return_value=tmp_path),
+            patch("ghaiw.git.worktree.list_worktrees", return_value=[]),
+            patch(
+                "ghaiw.git.worktree.create_worktree",
+                side_effect=GitError("Branch already exists"),
+            ),
+            patch("ghaiw.services.work_service.copy_to_clipboard"),
+        ):
+            result = start("42", project_root=tmp_path)
+
+        assert result is False
+
+    def test_cd_only_prints_path(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        """cd_only=True → worktree path printed to stdout, no AI launched, returns True."""
+        task = self._make_task()
+        mock_provider = MagicMock()
+        mock_provider.read_task.return_value = task
+
+        with (
+            patch("ghaiw.services.work_service.load_config", return_value=self._make_config()),
+            patch("ghaiw.services.work_service.get_provider", return_value=mock_provider),
+            patch("ghaiw.git.repo.get_repo_root", return_value=tmp_path),
+            patch("ghaiw.git.worktree.list_worktrees", return_value=[]),
+            patch("ghaiw.git.worktree.create_worktree"),
+            patch("ghaiw.services.work_service.write_issue_context"),
+            patch("ghaiw.services.work_service.write_plan_md"),
+            patch("ghaiw.services.work_service.bootstrap_worktree"),
+            patch("ghaiw.services.work_service.copy_to_clipboard"),
+            patch("ghaiw.services.work_service._is_inside_ai_cli", return_value=False),
+            patch("ghaiw.ai_tools.base.AbstractAITool.get") as mock_get,
+        ):
+            result = start("42", project_root=tmp_path, cd_only=True)
+            assert result is True
+            mock_get.assert_not_called()
+
+        captured = capsys.readouterr()
+        assert captured.out.strip()  # A path was printed
+
+    def test_inside_ai_cli_skips_launch(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """_is_inside_ai_cli()=True → AI tool .get()/.launch() not called, path printed."""
+        task = self._make_task()
+        mock_provider = MagicMock()
+        mock_provider.read_task.return_value = task
+
+        with (
+            patch("ghaiw.services.work_service.load_config", return_value=self._make_config()),
+            patch("ghaiw.services.work_service.get_provider", return_value=mock_provider),
+            patch("ghaiw.git.repo.get_repo_root", return_value=tmp_path),
+            patch("ghaiw.git.worktree.list_worktrees", return_value=[]),
+            patch("ghaiw.git.worktree.create_worktree"),
+            patch("ghaiw.services.work_service.write_issue_context"),
+            patch("ghaiw.services.work_service.write_plan_md"),
+            patch("ghaiw.services.work_service.bootstrap_worktree"),
+            patch("ghaiw.services.work_service.copy_to_clipboard"),
+            patch("ghaiw.services.work_service._is_inside_ai_cli", return_value=True),
+            patch("ghaiw.ai_tools.base.AbstractAITool.get") as mock_get,
+        ):
+            result = start("42", project_root=tmp_path)
+            assert result is True
+            mock_get.assert_not_called()
+
+        captured = capsys.readouterr()
+        assert captured.out.strip()  # Path was printed
+
+
+# ---------------------------------------------------------------------------
+# Work batch tests
+# ---------------------------------------------------------------------------
+
+
+class TestWorkBatch:
+    """Tests for work_service.batch() — exercises topology and launch dispatch."""
+
+    def test_launches_independent_issues(self, tmp_path: Path) -> None:
+        """No deps graph → all issues launched in separate terminals."""
+        with (
+            patch("ghaiw.services.work_service.load_config", return_value=ProjectConfig()),
+            patch("ghaiw.git.repo.get_repo_root", return_value=tmp_path),
+            patch("ghaiw.services.work_service._build_graph_from_issues", return_value=None),
+            patch(
+                "ghaiw.services.work_service.launch_in_new_terminal", return_value=True
+            ) as mock_launch,
+        ):
+            result = batch(["1", "2", "3"], project_root=tmp_path)
+
+        assert result is True
+        assert mock_launch.call_count == 3
+
+    def test_launches_only_first_in_chain(self, tmp_path: Path) -> None:
+        """Dependency chain → only the first issue launched, rest printed."""
+        mock_graph = MagicMock()
+        mock_graph.edges = [MagicMock()]  # non-empty → triggers partition
+        mock_graph.partition.return_value = ([], [["1", "2", "3"]])
+
+        with (
+            patch("ghaiw.services.work_service.load_config", return_value=ProjectConfig()),
+            patch("ghaiw.git.repo.get_repo_root", return_value=tmp_path),
+            patch(
+                "ghaiw.services.work_service._build_graph_from_issues",
+                return_value=mock_graph,
+            ),
+            patch(
+                "ghaiw.services.work_service.launch_in_new_terminal", return_value=True
+            ) as mock_launch,
+        ):
+            result = batch(["1", "2", "3"], project_root=tmp_path)
+
+        assert result is True
+        assert mock_launch.call_count == 1  # Only the first in the chain
+        launched_cmd = mock_launch.call_args[0][0]
+        assert "1" in launched_cmd
+
+    def test_warns_on_terminal_failure(self, tmp_path: Path) -> None:
+        """One terminal fails → warns but continues and counts successful launches."""
+        with (
+            patch("ghaiw.services.work_service.load_config", return_value=ProjectConfig()),
+            patch("ghaiw.git.repo.get_repo_root", return_value=tmp_path),
+            patch("ghaiw.services.work_service._build_graph_from_issues", return_value=None),
+            patch(
+                "ghaiw.services.work_service.launch_in_new_terminal",
+                side_effect=[False, True],
+            ) as mock_launch,
+        ):
+            result = batch(["1", "2"], project_root=tmp_path)
+
+        assert result is True  # One succeeded
+        assert mock_launch.call_count == 2  # Both attempted (no abort on failure)
+
+    def test_returns_false_when_none_launched(self, tmp_path: Path) -> None:
+        """All launch_in_new_terminal calls fail → batch() returns False."""
+        with (
+            patch("ghaiw.services.work_service.load_config", return_value=ProjectConfig()),
+            patch("ghaiw.git.repo.get_repo_root", return_value=tmp_path),
+            patch("ghaiw.services.work_service._build_graph_from_issues", return_value=None),
+            patch("ghaiw.services.work_service.launch_in_new_terminal", return_value=False),
+        ):
+            result = batch(["1", "2"], project_root=tmp_path)
+
+        assert result is False

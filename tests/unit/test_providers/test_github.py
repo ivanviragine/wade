@@ -472,6 +472,71 @@ class TestFindParentIssue:
 
 
 # ---------------------------------------------------------------------------
+# move_to_in_progress tests
+# ---------------------------------------------------------------------------
+
+
+class TestMoveToInProgress:
+    @patch("ghaiw.providers.github.run")
+    def test_calls_gh_api_graphql(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
+        """move_to_in_progress should call gh api graphql and return True on success."""
+        nwo_response = _make_completed("owner/repo\n")
+        query_response = _make_completed(
+            json.dumps(
+                {
+                    "data": {
+                        "repository": {
+                            "issue": {
+                                "projectItems": {
+                                    "nodes": [
+                                        {
+                                            "id": "item-id",
+                                            "project": {
+                                                "id": "project-id",
+                                                "field": {
+                                                    "id": "field-id",
+                                                    "options": [
+                                                        {"id": "opt-id", "name": "In Progress"}
+                                                    ],
+                                                },
+                                            },
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            )
+        )
+        mutation_response = _make_completed(
+            json.dumps(
+                {"data": {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "item-id"}}}}
+            )
+        )
+        mock_run.side_effect = [nwo_response, query_response, mutation_response]
+
+        result = provider.move_to_in_progress("42")
+
+        assert result is True
+        # Verify that at least one graphql call was made
+        graphql_calls = [c for c in mock_run.call_args_list if "graphql" in c[0][0]]
+        assert len(graphql_calls) >= 1
+
+    @patch("ghaiw.providers.github.run")
+    def test_returns_false_on_gh_failure(
+        self, mock_run: MagicMock, provider: GitHubProvider
+    ) -> None:
+        """move_to_in_progress returns False when gh api graphql fails."""
+        nwo_response = _make_completed("owner/repo\n")
+        mock_run.side_effect = [nwo_response, CommandError(["gh"], 1, "GraphQL error")]
+
+        result = provider.move_to_in_progress("42")
+
+        assert result is False
+
+
+# ---------------------------------------------------------------------------
 # Registry tests
 # ---------------------------------------------------------------------------
 
