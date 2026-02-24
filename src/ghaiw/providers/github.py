@@ -332,7 +332,15 @@ class GitHubProvider(AbstractTaskProvider):
             )
             data: dict[str, Any] = json.loads(result.stdout)
             return data
-        except CommandError:
+        except CommandError as e:
+            logger.warning("get_pr_for_branch failed", branch=branch, error=str(e))
+            return None
+        except json.JSONDecodeError as e:
+            logger.warning(
+                "get_pr_for_branch: invalid JSON response",
+                branch=branch,
+                error=str(e),
+            )
             return None
 
     def update_pr_body(self, pr_number: str, body: str) -> None:
