@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.5.3] — 2026-02-24
+
+### Bug Fixes
+
+- use mypy --strict to match local dev workflow (e6f5892)
+
 ## [v0.5.2] — 2026-02-24
 
 ### Bug Fixes
