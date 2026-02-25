@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.12.0] — 2026-02-25
+
+### Features
+
+- implement local hardcoded model registry (b163b17)
+
+### Bug Fixes
+
+- wire work-context.md template into build_work_prompt, remove inline fallbacks (dbdef53)
+- strip ANSI fragments from transcripts and warn on token extraction failure (c57dbe8)
+
 ## [v0.11.0] — 2026-02-25
 
 ### Features
