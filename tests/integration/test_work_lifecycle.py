@@ -217,7 +217,7 @@ class TestWorkLifecycle:
             assert issues == {"42", "43"}
 
             # Remove one
-            result = remove(target="42", project_root=tmp_git_repo)
+            result = remove(target="42", force=True, project_root=tmp_git_repo)
             assert result
 
             # List should now show one

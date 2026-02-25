@@ -128,8 +128,8 @@ class Console:
         self.out.print()
 
     def detail(self, message: str) -> None:
-        """Indented detail line with │ prefix."""
-        self.out.print(f"    \u2502 {message}")
+        """Indented detail line (continuation under info/step)."""
+        self.out.print(f"[dim]      {message}[/]")
 
     def raw(self, text: str) -> None:
         """Print raw text without any formatting or word-wrapping.

@@ -1,4 +1,4 @@
-Working on Issue #{issue_number}: {issue_title}
+Let's implement @plan.md. Working on Issue #{issue_number}: {issue_title}
 
-Read the issue context in .issue-context.md for details.
+Read the issue context in @.issue-context.md for details.
 Follow @.claude/skills/workflow/SKILL.md for session rules.

@@ -614,7 +614,7 @@ class TestRemove:
                 project=ProjectSettings(main_branch="main"),
             ),
         ):
-            result = remove(target="42", project_root=tmp_git_repo)
+            result = remove(target="42", force=True, project_root=tmp_git_repo)
             assert result
             assert not wt_dir.exists()
 

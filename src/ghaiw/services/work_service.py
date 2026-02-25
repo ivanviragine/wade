@@ -1768,17 +1768,20 @@ def remove(
         return _remove_stale(repo_root, main_branch, force)
 
     if target:
-        return _remove_target(repo_root, target, main_branch)
+        return _remove_target(repo_root, target, main_branch, force)
 
     console.error("Specify a target or use --stale")
     return False
 
 
-def _remove_target(repo_root: Path, target: str, main_branch: str) -> bool:
+def _remove_target(repo_root: Path, target: str, main_branch: str, force: bool = False) -> bool:
     """Remove a specific worktree by issue number or name."""
     wt_path = find_worktree_path(target, project_root=repo_root)
     if not wt_path:
         console.error(f"No worktree found for: {target}")
+        return False
+
+    if not force and not prompts.confirm(f"Remove worktree {wt_path.name}?"):
         return False
 
     return _cleanup_worktree(repo_root, wt_path, main_branch)
