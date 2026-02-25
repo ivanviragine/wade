@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.9.0] — 2026-02-25
+
+### Features
+
+- arrow-key navigation menus and modernized visual language (b90e6ba)
+
 ## [v0.8.0] — 2026-02-25
 
 ### Features
