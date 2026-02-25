@@ -29,6 +29,7 @@ class TestSelfRegistration:
         assert AIToolID.GEMINI in registered
         assert AIToolID.CODEX in registered
         assert AIToolID.ANTIGRAVITY in registered
+        assert AIToolID.OPENCODE in registered
 
     def test_get_adapter(self) -> None:
         adapter = AbstractAITool.get("claude")
@@ -62,6 +63,15 @@ class TestCapabilities:
         caps = AbstractAITool.get("antigravity").capabilities()
         assert caps.supports_model_flag is False
 
+    def test_opencode_capabilities(self) -> None:
+        caps = AbstractAITool.get("opencode").capabilities()
+        assert caps.binary == "opencode"
+        assert caps.tool_type == AIToolType.TERMINAL
+        assert caps.supports_model_flag is True
+        assert caps.model_flag == "--model"
+        assert caps.headless_flag == "--prompt"
+        assert caps.supports_headless is True
+
 
 class TestModelCompatibility:
     def test_claude_accepts_claude_models(self) -> None:
@@ -89,6 +99,13 @@ class TestModelCompatibility:
         assert adapter.is_model_compatible("gpt-4o") is True
         assert adapter.is_model_compatible("o3") is True
         assert adapter.is_model_compatible("claude-opus") is False
+
+    def test_opencode_accepts_all(self) -> None:
+        adapter = AbstractAITool.get("opencode")
+        # opencode supports 75+ providers — accepts any model ID
+        assert adapter.is_model_compatible("anthropic/claude-sonnet-4") is True
+        assert adapter.is_model_compatible("openai/gpt-4o") is True
+        assert adapter.is_model_compatible("google/gemini-2.0-flash") is True
 
 
 class TestBuildLaunchCommand:
@@ -119,6 +136,24 @@ class TestBuildLaunchCommand:
         adapter = AbstractAITool.get("copilot")
         cmd = adapter.build_launch_command(model="claude-sonnet-4-6")
         assert cmd == ["copilot", "--model", "claude-sonnet-4.6"]
+
+    def test_opencode_with_provider_slash_model(self) -> None:
+        """opencode accepts provider/model format as-is."""
+        adapter = AbstractAITool.get("opencode")
+        cmd = adapter.build_launch_command(model="anthropic/claude-sonnet-4")
+        assert cmd == ["opencode", "--model", "anthropic/claude-sonnet-4"]
+
+    def test_opencode_headless_with_prompt(self) -> None:
+        """opencode headless uses --prompt flag."""
+        adapter = AbstractAITool.get("opencode")
+        cmd = adapter.build_launch_command(model="anthropic/claude-haiku-4-5", prompt="Fix the bug")
+        assert cmd == [
+            "opencode",
+            "--model",
+            "anthropic/claude-haiku-4-5",
+            "--prompt",
+            "Fix the bug",
+        ]
 
 
 class TestTierClassification:
@@ -334,6 +369,10 @@ class TestPlanModeArgs:
         adapter = AbstractAITool.get("codex")
         assert adapter.plan_mode_args() == []
 
+    def test_opencode_no_plan_mode(self) -> None:
+        adapter = AbstractAITool.get("opencode")
+        assert adapter.plan_mode_args() == []
+
     def test_plan_mode_in_launch_command(self) -> None:
         adapter = AbstractAITool.get("claude")
         cmd = adapter.build_launch_command(plan_mode=True)
@@ -378,3 +417,12 @@ class TestNormalizeModelFormat:
     def test_gemini_passthrough(self) -> None:
         adapter = AbstractAITool.get("gemini")
         assert adapter.normalize_model_format("gemini-2.0-flash") == "gemini-2.0-flash"
+
+    def test_opencode_passthrough(self) -> None:
+        """opencode passes provider/model IDs through unchanged."""
+        adapter = AbstractAITool.get("opencode")
+        assert (
+            adapter.normalize_model_format("anthropic/claude-sonnet-4")
+            == "anthropic/claude-sonnet-4"
+        )
+        assert adapter.normalize_model_format("openai/gpt-4o") == "openai/gpt-4o"

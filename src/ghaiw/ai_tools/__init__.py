@@ -9,6 +9,7 @@ import ghaiw.ai_tools.claude
 import ghaiw.ai_tools.codex
 import ghaiw.ai_tools.copilot
 import ghaiw.ai_tools.gemini
+import ghaiw.ai_tools.opencode
 import ghaiw.ai_tools.vscode  # noqa: F401
 from ghaiw.ai_tools.base import AbstractAITool, pick_best_model
 

@@ -17,6 +17,7 @@ class AIToolID(StrEnum):
     CODEX = "codex"
     ANTIGRAVITY = "antigravity"
     VSCODE = "vscode"
+    OPENCODE = "opencode"
 
 
 class AIToolType(StrEnum):

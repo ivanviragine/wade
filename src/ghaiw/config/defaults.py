@@ -34,6 +34,12 @@ TOOL_DEFAULTS: dict[str, ComplexityModelMapping] = {
         complex="codex-mini-latest",
         very_complex="codex-mini-latest",
     ),
+    AIToolID.OPENCODE: ComplexityModelMapping(
+        easy="anthropic/claude-haiku-4-5",
+        medium="anthropic/claude-haiku-4-5",
+        complex="anthropic/claude-sonnet-4",
+        very_complex="anthropic/claude-opus-4",
+    ),
 }
 
 
