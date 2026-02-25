@@ -238,6 +238,7 @@ def main() -> int:
     )
 
     import os
+
     env = os.environ.copy()
     env.pop("CLAUDECODE", None)  # Prevent nested session crash if user runs this inside Claude Code
 
