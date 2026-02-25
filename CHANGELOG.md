@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.10.1] — 2026-02-25
+
+### Refactoring
+
+- standardize on dot notation for all model IDs in config (a9226db)
+
 ## [v0.10.0] — 2026-02-25
 
 ### Features
