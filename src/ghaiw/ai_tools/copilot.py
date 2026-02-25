@@ -8,10 +8,7 @@ from typing import ClassVar
 import structlog
 
 from ghaiw.ai_tools.base import AbstractAITool
-from ghaiw.ai_tools.model_utils import (
-    classify_tier_universal,
-    probe_copilot_models,
-)
+from ghaiw.ai_tools.model_utils import classify_tier_universal, has_date_suffix
 from ghaiw.models.ai import (
     AIModel,
     AIToolCapabilities,
@@ -42,30 +39,17 @@ class CopilotAdapter(AbstractAITool):
         )
 
     def get_models(self) -> list[AIModel]:
-        """Probe Copilot for available models via --model validation error.
+        """Return known Copilot models from the static registry."""
+        from ghaiw.data import get_models_for_tool
 
-        Copilot has no `models` subcommand. Passing `--model x` triggers a
-        validation error that lists all valid model names.
-
-        Behavioral ref: lib/init.sh:_init_list_available_models_from_tool() copilot case
-        """
-        from ghaiw.ai_tools.model_utils import has_date_suffix
-
-        raw_ids = probe_copilot_models()
-        if not raw_ids:
-            return []
-
-        models: list[AIModel] = []
-        for mid in raw_ids:
-            tier = classify_tier_universal(mid)
-            models.append(
-                AIModel(
-                    id=mid,
-                    is_alias=not has_date_suffix(mid),
-                    tier=tier,
-                )
+        return [
+            AIModel(
+                id=mid,
+                tier=classify_tier_universal(mid),
+                is_alias=not has_date_suffix(mid),
             )
-        return models
+            for mid in get_models_for_tool(str(self.TOOL_ID))
+        ]
 
     def launch(
         self,

@@ -169,6 +169,17 @@ class AbstractAITool(ABC):
         """
         return model_id
 
+    def standardize_model_id(self, raw_model_id: str) -> str:
+        """Convert a tool-specific model ID to the internal standard format.
+
+        Our internal registry uses dotted notation (e.g. claude-haiku-4.5).
+        Tools that output dashed notation (claude-haiku-4-5) should override
+        this to convert it back to dotted notation.
+
+        Default: return as-is. Override per tool.
+        """
+        return raw_model_id
+
     def build_launch_command(
         self,
         model: str | None = None,

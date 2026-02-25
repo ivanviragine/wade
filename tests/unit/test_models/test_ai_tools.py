@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
-
 import pytest
 
 from ghaiw.ai_tools import AbstractAITool
@@ -14,9 +12,6 @@ from ghaiw.ai_tools.model_utils import (
     classify_tier_gemini,
     classify_tier_universal,
     has_date_suffix,
-    probe_copilot_models,
-    raw_ids_to_models,
-    scrape_models_from_docs,
 )
 from ghaiw.models.ai import AIModel, AIToolID, AIToolType, ModelTier
 
@@ -224,130 +219,6 @@ class TestClassifyTierUniversal:
     def test_unrecognized_defaults_to_balanced(self) -> None:
         assert classify_tier_universal("gpt-4o") == ModelTier.BALANCED
         assert classify_tier_universal("some-unknown-model") == ModelTier.BALANCED
-
-
-class TestRawIdsToModels:
-    """Test converting raw model ID strings to AIModel instances."""
-
-    def test_basic_conversion(self) -> None:
-        models = raw_ids_to_models(["claude-haiku-4-5", "claude-opus-4-6"])
-        assert len(models) == 2
-        assert models[0].id == "claude-haiku-4-5"
-        assert models[0].tier == ModelTier.FAST
-        assert models[0].is_alias is True
-        assert models[1].tier == ModelTier.POWERFUL
-
-    def test_with_date_suffix(self) -> None:
-        models = raw_ids_to_models(["claude-haiku-4-5-20251001"])
-        assert models[0].is_alias is False
-
-    def test_empty_strings_filtered(self) -> None:
-        models = raw_ids_to_models(["", "claude-haiku-4-5", "  "])
-        assert len(models) == 1
-
-    def test_explicit_tier_classifier(self) -> None:
-        models = raw_ids_to_models(["anything"], classifier=ModelTier.POWERFUL)
-        assert models[0].tier == ModelTier.POWERFUL
-
-
-class TestScrapeModelsFromDocs:
-    """Test web scraping model discovery (mocked curl)."""
-
-    @patch("ghaiw.ai_tools.model_utils.shutil.which", return_value=None)
-    def test_returns_empty_without_curl(self, mock_which: object) -> None:
-        assert scrape_models_from_docs("claude") == []
-
-    @patch("ghaiw.ai_tools.model_utils.shutil.which", return_value="/usr/bin/curl")
-    @patch("ghaiw.ai_tools.model_utils.subprocess.run")
-    def test_claude_scraping(self, mock_run: object, mock_which: object) -> None:
-        import subprocess
-        from unittest.mock import MagicMock
-
-        mock_result = MagicMock(spec=subprocess.CompletedProcess)
-        mock_result.returncode = 0
-        mock_result.stdout = (
-            "<code>claude-haiku-4-5</code> and "
-            "<code>claude-sonnet-4-6</code> and "
-            "<code>claude-opus-4-6</code> and "
-            "<code>claude-haiku-4-5-20251001</code>"
-        )
-        assert isinstance(mock_run, MagicMock)
-        mock_run.return_value = mock_result
-
-        result = scrape_models_from_docs("claude")
-        assert len(result) >= 3
-        assert any("haiku" in r for r in result)
-        assert any("sonnet" in r for r in result)
-        assert any("opus" in r for r in result)
-
-    @patch("ghaiw.ai_tools.model_utils.shutil.which", return_value="/usr/bin/curl")
-    @patch("ghaiw.ai_tools.model_utils.subprocess.run")
-    def test_gemini_scraping(self, mock_run: object, mock_which: object) -> None:
-        import subprocess
-        from unittest.mock import MagicMock
-
-        mock_result = MagicMock(spec=subprocess.CompletedProcess)
-        mock_result.returncode = 0
-        mock_result.stdout = (
-            "Use gemini-2.0-flash or gemini-2.5-pro for best results. gemini-3.0-ultra coming soon."
-        )
-        assert isinstance(mock_run, MagicMock)
-        mock_run.return_value = mock_result
-
-        result = scrape_models_from_docs("gemini")
-        assert len(result) >= 2
-
-    @patch("ghaiw.ai_tools.model_utils.shutil.which", return_value="/usr/bin/curl")
-    @patch("ghaiw.ai_tools.model_utils.subprocess.run")
-    def test_codex_scraping(self, mock_run: object, mock_which: object) -> None:
-        import subprocess
-        from unittest.mock import MagicMock
-
-        mock_result = MagicMock(spec=subprocess.CompletedProcess)
-        mock_result.returncode = 0
-        mock_result.stdout = (
-            "Run <code>codex -m gpt-5.3-codex</code> or <code>codex -m gpt-4o</code>"
-        )
-        assert isinstance(mock_run, MagicMock)
-        mock_run.return_value = mock_result
-
-        result = scrape_models_from_docs("codex")
-        assert len(result) >= 1
-        assert any("gpt-" in r for r in result)
-
-    def test_unknown_tool_returns_empty(self) -> None:
-        assert scrape_models_from_docs("nonexistent") == []
-
-
-class TestProbeCopilotModels:
-    """Test Copilot --model x validation error probing."""
-
-    @patch("ghaiw.ai_tools.model_utils.shutil.which", return_value=None)
-    def test_returns_empty_without_copilot(self, mock_which: object) -> None:
-        assert probe_copilot_models() == []
-
-    @patch("ghaiw.ai_tools.model_utils.shutil.which", return_value="/usr/bin/copilot")
-    @patch("ghaiw.ai_tools.model_utils.subprocess.run")
-    def test_parses_validation_error(self, mock_run: object, mock_which: object) -> None:
-        import subprocess
-        from unittest.mock import MagicMock
-
-        mock_result = MagicMock(spec=subprocess.CompletedProcess)
-        mock_result.returncode = 1
-        mock_result.stdout = ""
-        mock_result.stderr = (
-            "Error: Invalid value for --model: 'x'. "
-            "Allowed choices are claude-sonnet-4.6, gpt-5.3-codex, "
-            "claude-haiku-4.5, o3."
-        )
-        assert isinstance(mock_run, MagicMock)
-        mock_run.return_value = mock_result
-
-        result = probe_copilot_models()
-        assert len(result) >= 3
-        assert any("claude" in r for r in result)
-        assert any("gpt" in r for r in result)
-        assert any(r.startswith("o3") for r in result)
 
 
 class TestPlanModeArgs:

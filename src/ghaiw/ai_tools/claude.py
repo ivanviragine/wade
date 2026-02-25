@@ -2,19 +2,13 @@
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from typing import ClassVar
 
 import structlog
 
 from ghaiw.ai_tools.base import AbstractAITool
-from ghaiw.ai_tools.model_utils import (
-    classify_tier_claude,
-    parse_model_list_output,
-    raw_ids_to_models,
-    scrape_models_from_docs,
-)
+from ghaiw.ai_tools.model_utils import classify_tier_universal, has_date_suffix
 from ghaiw.models.ai import (
     AIModel,
     AIToolCapabilities,
@@ -45,43 +39,17 @@ class ClaudeAdapter(AbstractAITool):
         )
 
     def get_models(self) -> list[AIModel]:
-        """Probe for available Claude models.
+        """Return known Claude models from the static registry."""
+        from ghaiw.data import get_models_for_tool
 
-        Strategy: try `claude models` first (works in modern Claude Code),
-        then fall back to web scraping docs.anthropic.com.
-
-        Behavioral ref: lib/init.sh:_init_probe_models_for_tool() claude case
-        """
-        # Strategy 1: `claude models` CLI subcommand
-        try:
-            result = subprocess.run(
-                ["claude", "models"],
-                capture_output=True,
-                text=True,
-                timeout=15,
+        return [
+            AIModel(
+                id=mid,
+                tier=classify_tier_universal(mid),
+                is_alias=not has_date_suffix(mid),
             )
-            if result.returncode == 0 and result.stdout.strip():
-                models = parse_model_list_output(result.stdout)
-                for i, model in enumerate(models):
-                    tier = classify_tier_claude(model.id)
-                    if tier:
-                        models[i] = AIModel(
-                            id=model.id,
-                            display_name=model.display_name,
-                            tier=tier,
-                            is_alias=model.is_alias,
-                        )
-                if models:
-                    return models
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass
-
-        # Strategy 2: Web scrape Anthropic docs
-        scraped = scrape_models_from_docs("claude")
-        if scraped:
-            return raw_ids_to_models(scraped)
-
-        return []
+            for mid in get_models_for_tool(str(self.TOOL_ID))
+        ]
 
     def launch(
         self,
@@ -123,3 +91,12 @@ class ClaudeAdapter(AbstractAITool):
             # Convert claude-haiku-4.5 -> claude-haiku-4-5
             return re.sub(r"(\d)\.(\d)", r"\1-\2", model_id)
         return model_id
+
+    def standardize_model_id(self, raw_model_id: str) -> str:
+        """Convert Claude's dashed format back to the internal dotted format."""
+        if raw_model_id.startswith("claude-"):
+            import re
+
+            # Convert claude-haiku-4-5 -> claude-haiku-4.5
+            return re.sub(r"(\d)-(\d)", r"\1.\2", raw_model_id)
+        return raw_model_id

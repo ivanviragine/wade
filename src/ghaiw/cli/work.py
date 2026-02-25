@@ -6,6 +6,8 @@ from pathlib import Path
 
 import typer
 
+from ghaiw.cli.autocomplete import complete_ai_tools, complete_models
+
 work_app = typer.Typer(
     help="Work session lifecycle.",
     invoke_without_command=True,
@@ -83,8 +85,12 @@ def work_callback(ctx: typer.Context) -> None:
 @work_app.command()
 def start(
     target: str = typer.Argument(..., help="Issue number or plan file path."),
-    ai: list[str] | None = typer.Option(None, "--ai", help="AI tool to use."),  # noqa: B008
-    model: str | None = typer.Option(None, "--model", help="AI model to use."),
+    ai: list[str] | None = typer.Option(  # noqa: B008
+        None, "--ai", help="AI tool to use.", autocompletion=complete_ai_tools
+    ),
+    model: str | None = typer.Option(
+        None, "--model", help="AI model to use.", autocompletion=complete_models
+    ),
     detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
     cd_only: bool = typer.Option(
         False, "--cd", help="Create worktree and print path (no AI launch)."
@@ -189,8 +195,12 @@ _BATCH_NUMBERS = typer.Argument(None, help="Issue numbers to work on.")
 @work_app.command()
 def batch(
     numbers: list[int] = _BATCH_NUMBERS,
-    ai: str | None = typer.Option(None, "--ai", help="AI tool to use."),
-    model: str | None = typer.Option(None, "--model", help="AI model to use."),
+    ai: str | None = typer.Option(
+        None, "--ai", help="AI tool to use.", autocompletion=complete_ai_tools
+    ),
+    model: str | None = typer.Option(
+        None, "--model", help="AI model to use.", autocompletion=complete_models
+    ),
 ) -> None:
     """Start parallel work sessions for multiple issues."""
     from ghaiw.services.work_service import batch as do_batch

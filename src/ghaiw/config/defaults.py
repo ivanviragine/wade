@@ -48,4 +48,10 @@ def get_defaults(tool: str) -> ComplexityModelMapping:
 
     Returns empty mapping for unknown tools.
     """
-    return TOOL_DEFAULTS.get(tool, ComplexityModelMapping())
+    try:
+        from ghaiw.models.ai import AIToolID
+
+        tool_id = AIToolID(tool)
+        return TOOL_DEFAULTS.get(tool_id, ComplexityModelMapping())
+    except ValueError:
+        return ComplexityModelMapping()

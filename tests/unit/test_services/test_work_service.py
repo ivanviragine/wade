@@ -280,7 +280,7 @@ class TestWorkLaunchCommandAssembly:
         """Claude launch without transcript_path should NOT include --output-file."""
         adapter = ClaudeAdapter()
 
-        with patch("ghaiw.ai_tools.claude.subprocess.run") as mock_run:
+        with patch("ghaiw.utils.process.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             adapter.launch(
                 worktree_path=tmp_path,
@@ -314,7 +314,7 @@ class TestWorkLaunchCommandAssembly:
         """Gemini launch should use 'gemini' binary with --model."""
         adapter = GeminiAdapter()
 
-        with patch("ghaiw.ai_tools.gemini.subprocess.run") as mock_run:
+        with patch("ghaiw.utils.process.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             adapter.launch(
                 worktree_path=tmp_path,

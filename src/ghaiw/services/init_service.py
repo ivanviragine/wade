@@ -90,20 +90,27 @@ def init(
     # 2. Detect/select AI tool
     selected_tool = _select_ai_tool(ai_tool, non_interactive)
 
-    # 3. Resolve models (probing or defaults)
-    model_mapping, models_probed = _resolve_models(selected_tool)
+    # 3. Resolve models (registry defaults)
+    model_mapping = _resolve_models(selected_tool)
+
+    # 3b. Ask for a single default model (fallback when no complexity/model specified)
+    default_model = _prompt_default_model(selected_tool, model_mapping, non_interactive)
 
     # 4. Collect project settings
     project_settings = _prompt_project_settings(root, non_interactive)
 
     # 5. Let user review/edit model mapping
-    model_mapping = _prompt_model_mapping(
-        selected_tool, model_mapping, models_probed, non_interactive
-    )
+    model_mapping = _prompt_model_mapping(selected_tool, model_mapping, non_interactive)
 
     # 6. Per-command AI tool overrides
     installed_tools = [str(t) for t in AbstractAITool.detect_installed()]
     command_overrides = _prompt_command_overrides(installed_tools, non_interactive)
+
+    # Apply default_model as fallback for commands with no explicit model set
+    if default_model:
+        for cmd in ("plan", "deps", "work"):
+            if not command_overrides.get(cmd, {}).get("model"):
+                command_overrides.setdefault(cmd, {})["model"] = default_model
 
     # 7. Generate config
     config_path = root / ".ghaiw.yml"
@@ -234,7 +241,7 @@ def update(
     config = load_config(root)
     ai_tool = config.get_ai_tool()
     if ai_tool:
-        model_mapping, _ = _resolve_models(ai_tool)
+        model_mapping = _resolve_models(ai_tool)
         _patch_config(config_path, ai_tool, model_mapping)
 
     # Step 7: Refresh skill files (force overwrite)
@@ -475,28 +482,15 @@ def _select_ai_tool(
     return str(selected)
 
 
-def _resolve_models(tool: str | None) -> tuple[ComplexityModelMapping, bool]:
-    """Resolve model mappings for a tool via probing or defaults.
+def _resolve_models(tool: str | None) -> ComplexityModelMapping:
+    """Resolve model mappings for a tool from hardcoded defaults.
 
     Returns:
-        Tuple of (mapping, probed) where probed is True if live model
-        discovery succeeded, False if we fell back to hardcoded defaults.
+        Normalized complexity-to-model mapping for the tool.
     """
     if not tool:
-        return ComplexityModelMapping(), False
-
-    # Try to probe the tool for available models
-    try:
-        adapter = AbstractAITool.get(AIToolID(tool))
-        mapping = adapter.get_recommended_mapping()
-        if mapping.easy or mapping.complex:
-            return _normalize_mapping(mapping), True
-    except (ValueError, Exception):
-        logger.debug("init.model_probe_failed", tool=tool, exc_info=True)
-
-    # Fallback to hardcoded defaults
-    mapping = get_defaults(tool)
-    return _normalize_mapping(mapping), False
+        return ComplexityModelMapping()
+    return _normalize_mapping(get_defaults(tool))
 
 
 def _normalize_model(model_id: str | None) -> str | None:
@@ -580,13 +574,11 @@ def _prompt_project_settings(
 def _prompt_model_mapping(
     tool: str | None,
     mapping: ComplexityModelMapping,
-    models_probed: bool,
     non_interactive: bool,
 ) -> ComplexityModelMapping:
     """Let the user review/edit the complexity-to-model mapping.
 
     If non_interactive, returns the mapping unchanged.
-    If probing failed, shows a warning before prompting.
     Falls back to Claude defaults when the tool has no model suggestions.
 
     Shows a select menu with available models for each tier, plus a Custom
@@ -611,11 +603,8 @@ def _prompt_model_mapping(
         ),
     )
 
-    if tool and not models_probed:
-        console.warn(f"Could not auto-detect models for {tool} — showing defaults.")
-
-    # Collect unique model IDs from the mapping for the select menu
-    available = _collect_model_options(mapping, tool)
+    # Collect model IDs from the registry for the select menu
+    available = _collect_model_options(tool)
 
     custom_label = "Custom..."
     tiers = [
@@ -650,24 +639,56 @@ def _prompt_model_mapping(
 
 
 def _collect_model_options(
-    mapping: ComplexityModelMapping,
     tool: str | None,
 ) -> list[str]:
-    """Collect unique model IDs from mapping and tool defaults for the select menu.
+    """Return the full flat model list from the registry for the select menu."""
+    if not tool:
+        return []
+    from ghaiw.data import get_models_for_tool
 
-    Returns a deduplicated list ordered from lightest to heaviest.
+    return get_models_for_tool(tool)
+
+
+def _prompt_default_model(
+    tool: str | None,
+    model_mapping: ComplexityModelMapping,
+    non_interactive: bool,
+) -> str | None:
+    """Prompt the user to select a default model for the AI tool.
+
+    This is the fallback model used when no complexity tier is matched and
+    no --model flag is passed. It is written to ai.{plan,deps,work}.model
+    for any command that does not have an explicit model override.
+
+    The complexity tier mapping (easy/medium/complex/very_complex) is left
+    unchanged.
+
+    Returns the chosen model ID, or None if the user skips.
     """
-    tool_defaults = get_defaults(tool) if tool else ComplexityModelMapping()
-    claude_defaults = get_defaults(AIToolID.CLAUDE)
+    from ghaiw.ui import prompts
 
-    # Gather all model IDs from all sources
-    candidates: list[str] = []
-    for src in (mapping, tool_defaults, claude_defaults):
-        for val in (src.easy, src.medium, src.complex, src.very_complex):
-            if val and val not in candidates:
-                candidates.append(val)
+    if non_interactive or not tool:
+        return None
 
-    return candidates
+    available = _collect_model_options(tool)
+    if not available:
+        return None
+
+    skip_label = "Skip (configure per-complexity)"
+    options = [*available, skip_label]
+
+    # Pre-select the "complex" tier model as a sensible starting default
+    default_idx = 0
+    if model_mapping.complex and model_mapping.complex in options:
+        default_idx = options.index(model_mapping.complex)
+
+    idx = prompts.select(f"Select default model for {tool}", options, default=default_idx)
+    if options[idx] == skip_label:
+        return None
+
+    selected = options[idx]
+    console.success(f"Selected model: {selected}")
+    return selected
 
 
 def _suggest_model_for_tool(tool: str) -> str:

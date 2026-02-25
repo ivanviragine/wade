@@ -282,33 +282,14 @@ class TestSelectAITool:
 
 
 class TestResolveModels:
-    def test_no_tool_returns_empty_and_false(self) -> None:
-        mapping, probed = _resolve_models(None)
+    def test_no_tool_returns_empty(self) -> None:
+        mapping = _resolve_models(None)
         assert mapping.easy is None
-        assert probed is False
 
-    @patch("ghaiw.services.init_service.AbstractAITool.get")
-    def test_successful_probe_returns_true(self, mock_get: MagicMock) -> None:
-        adapter = MagicMock()
-        adapter.get_recommended_mapping.return_value = ComplexityModelMapping(
-            easy="haiku", medium="haiku", complex="sonnet", very_complex="opus"
-        )
-        adapter.normalize_model_format.side_effect = lambda x: x
-        mock_get.return_value = adapter
-
-        mapping, probed = _resolve_models("claude")
-        assert probed is True
-        assert mapping.easy == "haiku"
-        assert mapping.complex == "sonnet"
-
-    @patch("ghaiw.services.init_service.AbstractAITool.get")
-    def test_failed_probe_returns_false(self, mock_get: MagicMock) -> None:
-        mock_get.side_effect = ValueError("No such tool")
-
-        mapping, probed = _resolve_models("claude")
-        assert probed is False
-        # Should still get defaults
+    def test_resolves_defaults(self) -> None:
+        mapping = _resolve_models("claude")
         assert mapping.easy is not None
+        assert mapping.complex is not None
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +337,7 @@ class TestPromptModelMapping:
         mapping = ComplexityModelMapping(
             easy="haiku", medium="haiku", complex="sonnet", very_complex="opus"
         )
-        result = _prompt_model_mapping("claude", mapping, True, non_interactive=True)
+        result = _prompt_model_mapping("claude", mapping, non_interactive=True)
         assert result == mapping
 
     @patch("ghaiw.ui.prompts.select")
@@ -366,7 +347,7 @@ class TestPromptModelMapping:
         )
         # User accepts all defaults (select returns default index each time)
         mock_select.side_effect = lambda title, items, default=0: default
-        result = _prompt_model_mapping("claude", mapping, True, non_interactive=False)
+        result = _prompt_model_mapping("claude", mapping, non_interactive=False)
         assert result.easy == "haiku"
         assert result.complex == "sonnet"
 
@@ -381,30 +362,11 @@ class TestPromptModelMapping:
         # select returns last index (Custom...) each time
         mock_select.side_effect = lambda title, items, default=0: len(items) - 1
         mock_input.side_effect = ["custom-easy", "custom-med", "custom-complex", "custom-vc"]
-        result = _prompt_model_mapping("claude", mapping, True, non_interactive=False)
+        result = _prompt_model_mapping("claude", mapping, non_interactive=False)
         assert result.easy == "custom-easy"
         assert result.medium == "custom-med"
         assert result.complex == "custom-complex"
         assert result.very_complex == "custom-vc"
-
-    @patch("ghaiw.services.init_service.console")
-    def test_probing_failed_shows_warning(self, mock_console: MagicMock) -> None:
-        mapping = ComplexityModelMapping(easy="haiku")
-        _prompt_model_mapping("claude", mapping, False, non_interactive=True)
-        # Non-interactive returns early, but no warning in non-interactive mode
-        # Test interactive mode warning
-        mock_console.reset_mock()
-
-    @patch("ghaiw.ui.prompts.select")
-    @patch("ghaiw.services.init_service.console")
-    def test_probing_failed_interactive_warns(
-        self, mock_console: MagicMock, mock_select: MagicMock
-    ) -> None:
-        mapping = ComplexityModelMapping(easy="haiku")
-        mock_select.side_effect = lambda title, items, default=0: default
-        _prompt_model_mapping("claude", mapping, False, non_interactive=False)
-        mock_console.warn.assert_called_once()
-        assert "Could not auto-detect" in mock_console.warn.call_args[0][0]
 
 
 # ---------------------------------------------------------------------------

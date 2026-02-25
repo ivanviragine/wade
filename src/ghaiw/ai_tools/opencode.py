@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from typing import ClassVar
 
@@ -48,43 +47,17 @@ class OpenCodeAdapter(AbstractAITool):
         )
 
     def get_models(self) -> list[AIModel]:
-        """Probe for available models via ``opencode models``.
+        """Return known OpenCode models from the static registry."""
+        from ghaiw.data import get_models_for_tool
 
-        OpenCode lists models from all configured providers. Model IDs are
-        in ``provider/model`` format. Tier classification uses the model
-        component after the ``/`` separator.
-        """
-        try:
-            result = subprocess.run(
-                ["opencode", "models"],
-                capture_output=True,
-                text=True,
-                timeout=15,
+        return [
+            AIModel(
+                id=mid,
+                tier=classify_tier_universal(mid.split("/")[-1] if "/" in mid else mid),
+                is_alias=not has_date_suffix(mid.split("/")[-1] if "/" in mid else mid),
             )
-            if result.returncode == 0 and result.stdout.strip():
-                models: list[AIModel] = []
-                for line in result.stdout.strip().split("\n"):
-                    line = line.strip()
-                    if not line or line.startswith("#"):
-                        continue
-                    parts = line.split()
-                    if not parts:
-                        continue
-                    model_id = parts[0]
-                    # Skip header rows
-                    if model_id.lower() in ("model", "name", "id", "provider"):
-                        continue
-                    # Use the model name part (after provider/) for tier classification
-                    model_part = model_id.split("/")[-1] if "/" in model_id else model_id
-                    tier = classify_tier_universal(model_part)
-                    is_alias = not has_date_suffix(model_part)
-                    models.append(AIModel(id=model_id, tier=tier, is_alias=is_alias))
-                if models:
-                    return models
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            logger.debug("model_discovery.opencode_probe_failed")
-
-        return []
+            for mid in get_models_for_tool(str(self.TOOL_ID))
+        ]
 
     def launch(
         self,
@@ -100,3 +73,12 @@ class OpenCodeAdapter(AbstractAITool):
 
     def parse_transcript(self, transcript_path: Path) -> TokenUsage:
         return TokenUsage()
+
+    def standardize_model_id(self, raw_model_id: str) -> str:
+        """Convert OpenCode's dashed format back to the internal dotted format."""
+        if "claude-" in raw_model_id:
+            import re
+
+            # Convert anthropic/claude-haiku-4-5 -> anthropic/claude-haiku-4.5
+            return re.sub(r"(\d)-(\d)", r"\1.\2", raw_model_id)
+        return raw_model_id

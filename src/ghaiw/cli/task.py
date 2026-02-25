@@ -6,6 +6,8 @@ from pathlib import Path
 
 import typer
 
+from ghaiw.cli.autocomplete import complete_ai_tools, complete_models
+
 task_app = typer.Typer(
     help="GitHub Issue CRUD + AI planning.",
     invoke_without_command=True,
@@ -101,8 +103,12 @@ def task_callback(ctx: typer.Context) -> None:
 
 @task_app.command()
 def plan(
-    ai: str | None = typer.Option(None, "--ai", help="AI tool to use for planning."),
-    model: str | None = typer.Option(None, "--model", help="AI model to use."),
+    ai: str | None = typer.Option(
+        None, "--ai", help="AI tool to use for planning.", autocompletion=complete_ai_tools
+    ),
+    model: str | None = typer.Option(
+        None, "--model", help="AI model to use.", autocompletion=complete_models
+    ),
 ) -> None:
     """Run an AI-assisted planning session."""
     from ghaiw.services.plan_service import plan as do_plan
@@ -115,8 +121,12 @@ def plan(
 def create(
     plan_file: str | None = typer.Option(None, "--plan-file", help="Path to plan markdown file."),
     no_start: bool = typer.Option(False, "--no-start", help="Skip interactive work-start prompt."),
-    ai: str | None = typer.Option(None, "--ai", help="AI tool (for labeling)."),
-    model: str | None = typer.Option(None, "--model", help="AI model (for labeling)."),
+    ai: str | None = typer.Option(
+        None, "--ai", help="AI tool (for labeling).", autocompletion=complete_ai_tools
+    ),
+    model: str | None = typer.Option(
+        None, "--model", help="AI model (for labeling).", autocompletion=complete_models
+    ),
 ) -> None:
     """Create a GitHub Issue from a plan file or interactively."""
     from ghaiw.services.task_service import (
@@ -227,8 +237,12 @@ _DEPS_NUMBERS = typer.Argument(None, help="Issue numbers to analyze.")
 @task_app.command()
 def deps(
     numbers: list[int] = _DEPS_NUMBERS,
-    ai: str | None = typer.Option(None, "--ai", help="AI tool for analysis."),
-    model: str | None = typer.Option(None, "--model", help="AI model to use."),
+    ai: str | None = typer.Option(
+        None, "--ai", help="AI tool for analysis.", autocompletion=complete_ai_tools
+    ),
+    model: str | None = typer.Option(
+        None, "--model", help="AI model to use.", autocompletion=complete_models
+    ),
     check: bool = typer.Option(False, "--check", help="Validate existing dependencies."),
 ) -> None:
     """Analyze dependencies between issues."""

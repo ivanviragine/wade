@@ -78,7 +78,8 @@ class TestCommandBehaviorWithoutContext:
         result = runner.invoke(app, ["work", "sync"])
         assert result.exit_code == 4
 
-    def test_work_list_exits(self) -> None:
+    @patch("ghaiw.git.worktree.list_worktrees", return_value=[])
+    def test_work_list_exits(self, mock_wt: patch) -> None:
         # work list gracefully handles missing git context — returns empty list
         result = runner.invoke(app, ["work", "list"])
         assert result.exit_code == 0

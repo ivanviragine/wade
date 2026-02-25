@@ -1,0 +1,8 @@
+{
+  "_note": "Edit to add models or run scripts/probe_models.py to check for updates.",
+  "claude":    ["claude-haiku-4.5", "claude-sonnet-4.5", "claude-sonnet-4.6", "claude-opus-4.5", "claude-opus-4.6"],
+  "copilot":   ["claude-haiku-4.5", "gpt-4o-mini", "claude-sonnet-4.6", "gpt-4o", "gpt-4.5-preview", "claude-opus-4.6", "o3", "o4-mini"],
+  "gemini":    ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.0-pro", "gemini-2.5-pro"],
+  "codex":     ["codex-mini-latest"],
+  "opencode":  ["anthropic/claude-haiku-4.5", "openai/gpt-4o-mini", "anthropic/claude-sonnet-4.6", "openai/gpt-4o", "anthropic/claude-opus-4.6", "openai/o3"]
+}
