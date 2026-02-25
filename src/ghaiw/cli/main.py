@@ -60,19 +60,28 @@ def main(
 def _interactive_main_menu() -> None:
     """Show the main interactive menu when ghaiwpy is called with no args."""
     from ghaiw.ui import prompts
-    from ghaiw.ui.console import console
-
-    console.header("ghaiwpy — AI-assisted Git workflow toolkit")
 
     menu_items = [
         "Start working on a task",
         "List active worktrees",
         "Create a new task",
-        "Plan a new task with AI",
+        "Plan tasks with AI",
         "Show help",
     ]
+    hints = [
+        "work start",
+        "work list",
+        "task create",
+        "task plan",
+        "--help",
+    ]
 
-    idx = prompts.menu("What would you like to do?", menu_items)
+    idx = prompts.menu(
+        "What would you like to do?",
+        menu_items,
+        hints=hints,
+        version=f"ghaiwpy v{ghaiw.__version__}",
+    )
 
     if idx == 0:  # Start working
         from ghaiw.services.task_service import list_tasks

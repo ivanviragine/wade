@@ -376,7 +376,7 @@ def create_interactive(
             body=body,
             labels=[config.project.issue_label],
         )
-        console.success(f"Created #{task.id}: {task.title}")
+        console.success(f"Created {console.issue_ref(task.id, task.title)}")
         if task.url:
             console.detail(task.url)
         return task
@@ -416,7 +416,7 @@ def create_from_plan_file(
             body=plan.body,
             labels=[config.project.issue_label],
         )
-        console.success(f"Created #{task.id}: {task.title}")
+        console.success(f"Created {console.issue_ref(task.id, task.title)}")
         if task.url:
             console.detail(task.url)
         return task
@@ -497,14 +497,13 @@ def list_tasks(
         return tasks
 
     # Human-readable output
-    console.header(f"Tasks ({len(tasks)})")
+    console.rule(f"Tasks ({len(tasks)})")
     for task in tasks:
         state_badge = "OPEN" if task.state == TaskState.OPEN else "CLOSED"
-        label_str = ""
+        badge = console.badge_str(state_badge, "open" if task.state == TaskState.OPEN else "closed")
+        console.out.print(f"  {console.issue_ref(task.id, task.title)}  {badge}")
         if task.labels:
             label_str = " ".join(f"[{label.name}]" for label in task.labels)
-        console.step(f"#{task.id} {state_badge} {task.title}")
-        if label_str:
             console.detail(label_str)
         if show_deps and task.id in deps_map:
             dep_info = deps_map[task.id]
@@ -550,15 +549,18 @@ def read_task(
         }
         console.raw(json.dumps(output, indent=2))
     else:
-        console.header(f"#{task.id}: {task.title}")
-        console.info(f"State: {task.state.value}")
+        state_variant = "open" if task.state == TaskState.OPEN else "closed"
+        state_str = console.badge_str(task.state.value, state_variant)
+        lines = []
+        lines.append(f"  State      {state_str}")
         if task.labels:
-            console.info(f"Labels: {', '.join(label.name for label in task.labels)}")
+            lines.append(f"  Labels     {', '.join(label.name for label in task.labels)}")
         if task.url:
-            console.info(f"URL: {task.url}")
+            lines.append(f"  URL        [url]{task.url}[/]")
+        console.panel("\n".join(lines), title=f"#{task.id}: {task.title}")
         if task.body:
             console.empty()
-            console.raw(task.body)
+            console.markdown(task.body)
 
     return task
 

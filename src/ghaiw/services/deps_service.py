@@ -467,9 +467,9 @@ def analyze_deps(
 
     resolved_model = model or config.get_model("deps")
 
-    console.header("ghaiwpy task deps")
-    console.info(f"Analyzing {len(issue_numbers)} issues")
-    console.info(f"AI tool: {resolved_tool}")
+    console.rule("ghaiwpy task deps")
+    console.kv("Issues", str(len(issue_numbers)))
+    console.kv("AI tool", resolved_tool)
 
     # Build context
     context = build_context(provider, issue_numbers)
@@ -526,9 +526,7 @@ def analyze_deps(
     mermaid = graph.generate_mermaid(task_titles)
     graph.mermaid_diagram = mermaid
     console.empty()
-    console.raw("```mermaid")
-    console.raw(mermaid)
-    console.raw("```")
+    console.dep_tree([(e.from_task, e.to_task, e.reason) for e in edges], task_titles)
 
     # Compute topological order
     try:

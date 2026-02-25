@@ -461,7 +461,7 @@ def start(
     try:
         repo_root = git_repo.get_repo_root(cwd)
     except GitError:
-        console.error("Not inside a git repository")
+        console.error_with_fix("Not inside a git repository", "Navigate to your project directory")
         return False
 
     # Read the issue
@@ -469,8 +469,8 @@ def start(
     if not task:
         return False
 
-    console.header(f"ghaiwpy work start #{task.id}")
-    console.info(f"Issue: {task.title}")
+    console.rule(f"work start #{task.id}")
+    console.kv("Issue", console.issue_ref(task.id, task.title))
 
     # Resolve AI tool
     resolved_tool = ai_tool or config.get_ai_tool("work")
@@ -493,6 +493,14 @@ def start(
             resolved_model = env_model
     if not resolved_model and resolved_tool and task.complexity:
         resolved_model = _complexity_to_model(config, resolved_tool, task.complexity.value)
+
+    if resolved_tool:
+        console.kv("AI tool", resolved_tool)
+    if resolved_model:
+        model_str = resolved_model
+        if task.complexity:
+            model_str += f" (complexity: {task.complexity.value})"
+        console.kv("Model", model_str)
 
     # Resolve main branch
     main_branch = config.project.main_branch or git_repo.detect_main_branch(repo_root)
@@ -522,15 +530,16 @@ def start(
         worktree_path = existing_wt
         console.info(f"Reusing existing worktree: {worktree_path}")
     else:
-        console.step(f"Creating worktree: {branch_name}")
         try:
-            git_worktree.create_worktree(
-                repo_root=repo_root,
-                branch_name=branch_name,
-                worktree_dir=worktree_path,
-                base_branch=main_branch,
-            )
-            console.success(f"Worktree at {worktree_path}")
+            with console.status("Creating worktree..."):
+                git_worktree.create_worktree(
+                    repo_root=repo_root,
+                    branch_name=branch_name,
+                    worktree_dir=worktree_path,
+                    base_branch=main_branch,
+                )
+            console.kv("Worktree", str(branch_name))
+            console.kv("Path", str(worktree_path))
         except GitError as e:
             console.error(f"Failed to create worktree: {e}")
             return False
@@ -673,11 +682,10 @@ def start(
         console.info("No AI tool configured. Worktree ready for manual work.")
         console.detail(f"cd {worktree_path}")
 
-    console.empty()
-    console.banner("Work session ready")
-    console.detail(f"Worktree: {worktree_path}")
-    console.detail(f"Branch: {branch_name}")
-    console.detail(f"Issue: #{task.id} — {task.title}")
+    lines = []
+    lines.append(f"  Worktree   {console.git_ref(branch_name)}")
+    lines.append(f"  Issue      {console.issue_ref(task.id, task.title)}")
+    console.panel("\n".join(lines), title="Work session complete")
 
     return True
 
@@ -738,7 +746,7 @@ def batch(
         console.error("Not inside a git repository")
         return False
 
-    console.header(f"ghaiwpy work batch ({len(issue_numbers)} issues)")
+    console.rule(f"work batch ({len(issue_numbers)} issues)")
 
     # Resolve AI tool
     resolved_tool = ai_tool or config.get_ai_tool("work")
@@ -790,7 +798,7 @@ def batch(
             remaining = ", ".join(f"#{n}" for n in chain[1:])
             console.info(f"After completing #{first_id}, work on these in order: {remaining}")
 
-    console.banner(f"Launched {launched} work session(s)")
+    console.panel(f"  Launched {launched} work session(s)", title="Batch started")
     return launched > 0
 
 
@@ -1190,7 +1198,11 @@ def sync(
         detail_str = ", ".join(detail_parts) if detail_parts else "dirty"
         emit("error", reason="dirty_worktree", details=detail_str)
         if not json_output:
-            console.error(f"Working tree is dirty ({detail_str}). Commit or stash changes first.")
+            console.error_with_fix(
+                f"Working tree is dirty ({detail_str})",
+                "Commit or stash your changes first",
+                "git stash",
+            )
         return SyncResult(
             success=False,
             current_branch=current,
@@ -1276,6 +1288,9 @@ def sync(
         console.error(f"Merge conflict in {len(conflicts)} file(s):")
         for f in conflicts:
             console.detail(f)
+        console.empty()
+        console.hint("Resolve conflicts, then run:")
+        console.out.print("      [prompt.dimmed]$ ghaiwpy work sync[/]")
 
     # Get conflict diff
     try:
@@ -1373,7 +1388,10 @@ def done(
     try:
         branch = git_repo.get_current_branch(cwd)
     except GitError:
-        console.error("Cannot determine current branch (detached HEAD?)")
+        console.error_with_fix(
+            "Cannot determine current branch",
+            "Check that HEAD is not detached",
+        )
         return False
 
     issue_number = target or extract_issue_from_branch(branch)
@@ -1392,7 +1410,11 @@ def done(
         if dirty["untracked"]:
             detail_parts.append(f"{dirty['untracked']} untracked")
         detail_str = ", ".join(detail_parts) if detail_parts else "dirty"
-        console.error(f"Working tree is dirty ({detail_str}). Commit or stash changes first.")
+        console.error_with_fix(
+            f"Working tree is dirty ({detail_str})",
+            "Commit or stash your changes first",
+            "git stash",
+        )
         return False
 
     main_branch = config.project.main_branch
@@ -1403,7 +1425,7 @@ def done(
             console.error("Cannot detect main branch")
             return False
 
-    console.header(f"Completing work on #{issue_number}")
+    console.rule(f"work done #{issue_number}")
 
     strategy = config.project.merge_strategy
 
@@ -1509,10 +1531,10 @@ def _done_via_pr(
     with contextlib.suppress(Exception):
         remove_in_progress_label(provider, issue_number)
 
-    console.empty()
-    console.banner("Work done")
-    console.detail(f"PR: {pr_url}")
-    console.detail(f"Issue: #{issue_number} — {task.title}")
+    lines = []
+    lines.append(f"  PR      [url]{pr_url}[/]")
+    lines.append(f"  Issue   {console.issue_ref(issue_number, task.title)}")
+    console.panel("\n".join(lines), title="Work done")
 
     return True
 
@@ -1591,10 +1613,10 @@ def _done_via_direct(
             else:  # Skip
                 logger.warning("worktree.cleanup_skipped", reason="user_skipped")
 
-    console.empty()
-    console.banner("Work done (direct merge)")
-    console.detail(f"Branch {branch} merged into {main_branch}")
-    console.detail(f"Issue: #{issue_number}")
+    lines = []
+    lines.append(f"  Branch   {console.git_ref(branch)} merged into {console.git_ref(main_branch)}")
+    lines.append(f"  Issue    #{issue_number}")
+    console.panel("\n".join(lines), title="Work done")
 
     return True
 
@@ -1694,7 +1716,7 @@ def list_sessions(
         console.info("No active ghaiw worktrees found.")
         return sessions
 
-    console.header(f"Work sessions ({len(sessions)})")
+    console.rule(f"Work sessions ({len(sessions)})")
     for s in sessions:
         staleness_label = s["staleness"].upper().replace("_", " ")
         issue_str = f"#{s['issue']}" if s["issue"] else "(no issue)"
@@ -1795,7 +1817,7 @@ def _remove_stale(repo_root: Path, main_branch: str, force: bool) -> bool:
         console.info("No stale worktrees found.")
         return True
 
-    console.header(f"Stale worktrees ({len(stale_wts)})")
+    console.rule(f"Stale worktrees ({len(stale_wts)})")
     for wt in stale_wts:
         console.step(f"[{wt['staleness'].upper()}] {wt['branch']}")
         console.detail(f"Path: {wt['path']}")
@@ -1809,7 +1831,7 @@ def _remove_stale(repo_root: Path, main_branch: str, force: bool) -> bool:
         if _cleanup_worktree(repo_root, Path(wt["path"]), main_branch):
             removed += 1
 
-    console.banner(f"Removed {removed} stale worktree(s)")
+    console.panel(f"  Removed {removed} stale worktree(s)", title="Stale cleanup")
     return removed > 0
 
 

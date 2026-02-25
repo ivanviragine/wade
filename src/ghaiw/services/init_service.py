@@ -73,16 +73,19 @@ def init(
 
     # 1. Validate git repo
     if not repo.is_git_repo(cwd):
-        console.error("Not inside a git repository")
+        console.error_with_fix("Not inside a git repository", "Navigate to your project directory")
         return False
 
     try:
         root = repo.get_repo_root(cwd)
     except GitError:
-        console.error("Could not determine repository root")
+        console.error_with_fix(
+            "Could not determine repository root",
+            "Check that you are in a git repository",
+        )
         return False
 
-    console.header("ghaiwpy init")
+    console.rule("ghaiwpy init")
 
     # 2. Detect/select AI tool
     selected_tool = _select_ai_tool(ai_tool, non_interactive)
@@ -149,7 +152,10 @@ def init(
         for err in check_result.errors:
             console.detail(err)
 
-    console.banner("ghaiwpy initialized")
+    console.panel(
+        "  Project initialized. Run [bold]ghaiwpy task plan[/] to get started.",
+        title="ghaiwpy initialized",
+    )
     return True
 
 
@@ -192,12 +198,14 @@ def update(
     try:
         root = repo.get_repo_root(cwd)
     except GitError:
-        console.error("Not inside a git repository")
+        console.error_with_fix("Not inside a git repository", "Navigate to your project directory")
         return False
 
     config_path = find_config_file(root)
     if config_path is None:
-        console.error("No .ghaiw.yml found — run 'ghaiwpy init' first")
+        console.error_with_fix(
+            "No .ghaiw.yml found", "Initialize your project first", "ghaiwpy init"
+        )
         return False
 
     # Step 2: Self-upgrade if source version differs
@@ -205,7 +213,7 @@ def update(
         # re_exec() was called — this line is never reached
         pass  # pragma: no cover
 
-    console.header("ghaiwpy update")
+    console.rule("ghaiwpy update")
 
     # Step 3: Read old version from manifest
     old_version = _read_manifest_version(root)
@@ -253,7 +261,7 @@ def update(
     # Step 12: Rebuild manifest with version
     _write_manifest(root, installed)
 
-    console.banner("ghaiwpy updated")
+    console.panel("  All managed files are up to date.", title="ghaiwpy updated")
     return True
 
 
@@ -328,7 +336,7 @@ def deinit(project_root: Path | None = None, force: bool = False) -> bool:
     try:
         root = repo.get_repo_root(cwd)
     except GitError:
-        console.error("Not inside a git repository")
+        console.error_with_fix("Not inside a git repository", "Navigate to your project directory")
         return False
 
     if not force:
@@ -338,7 +346,7 @@ def deinit(project_root: Path | None = None, force: bool = False) -> bool:
             console.info("Aborted.")
             return False
 
-    console.header("ghaiwpy deinit")
+    console.rule("ghaiwpy deinit")
 
     # Remove skills
     removed = installer.remove_skills(root)
@@ -376,7 +384,7 @@ def deinit(project_root: Path | None = None, force: bool = False) -> bool:
     if ghaiw_dir.is_dir() and not any(ghaiw_dir.iterdir()):
         ghaiw_dir.rmdir()
 
-    console.banner("ghaiwpy removed")
+    console.panel("  All ghaiw artifacts removed.", title="ghaiwpy removed")
     return True
 
 
@@ -543,7 +551,7 @@ def _prompt_project_settings(
     if non_interactive:
         return defaults
 
-    console.header("Project settings (press Enter to accept defaults)")
+    console.rule("Project settings")
 
     defaults["merge_strategy"] = prompts.input_prompt(
         "Merge strategy — PR or direct", defaults["merge_strategy"]
@@ -574,7 +582,7 @@ def _prompt_model_mapping(
     if non_interactive:
         return mapping
 
-    console.header("Model complexity mapping")
+    console.rule("Model complexity mapping")
 
     # Backfill missing tiers: tool defaults first, then Claude defaults
     tool_defaults = get_defaults(tool) if tool else ComplexityModelMapping()
@@ -638,7 +646,7 @@ def _prompt_command_overrides(
     if non_interactive:
         return {"plan": {}, "deps": {}, "work": {}}
 
-    console.header("Per-command AI tool overrides")
+    console.rule("Per-command AI tool overrides")
 
     # Build selectable list: installed tools + "Skip (use default)"
     skip_label = "Skip (use default)"

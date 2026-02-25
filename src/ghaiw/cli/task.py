@@ -22,16 +22,25 @@ def task_callback(ctx: typer.Context) -> None:
     from ghaiw.ui.console import console
 
     menu_items = [
-        "plan — AI-assisted planning session",
-        "create — Create a GitHub Issue",
-        "list — List GitHub Issues",
-        "read — Read a GitHub Issue",
-        "update — Update a GitHub Issue",
-        "close — Close a GitHub Issue",
-        "deps — Analyze dependencies",
+        "Plan tasks with AI",
+        "Create a GitHub Issue",
+        "List GitHub Issues",
+        "Read a GitHub Issue",
+        "Update a GitHub Issue",
+        "Close a GitHub Issue",
+        "Analyze dependencies",
+    ]
+    hints = [
+        "task plan",
+        "task create",
+        "task list",
+        "task read",
+        "task update",
+        "task close",
+        "task deps",
     ]
 
-    idx = prompts.menu("ghaiwpy task", menu_items)
+    idx = prompts.menu("ghaiwpy task", menu_items, hints=hints)
 
     subcommands = ["plan", "create", "list", "read", "update", "close", "deps"]
     selected = subcommands[idx]

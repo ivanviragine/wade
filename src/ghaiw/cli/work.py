@@ -22,15 +22,23 @@ def work_callback(ctx: typer.Context) -> None:
     from ghaiw.ui.console import console
 
     menu_items = [
-        "start — Start a work session",
-        "done — Finalize work (create PR or merge)",
-        "sync — Sync current branch with main",
-        "list — List active work sessions",
-        "batch — Start parallel work sessions",
-        "remove — Remove a worktree",
+        "Start a work session",
+        "Finalize work (create PR or merge)",
+        "Sync branch with main",
+        "List active work sessions",
+        "Start parallel work sessions",
+        "Remove a worktree",
+    ]
+    hints = [
+        "work start",
+        "work done",
+        "work sync",
+        "work list",
+        "work batch",
+        "work remove",
     ]
 
-    idx = prompts.menu("ghaiwpy work", menu_items)
+    idx = prompts.menu("ghaiwpy work", menu_items, hints=hints)
 
     # Map menu selection to subcommand invocations
     subcommands = ["start", "done", "sync", "list", "batch", "remove"]

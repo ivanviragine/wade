@@ -229,10 +229,10 @@ def plan(
 
     resolved_model = _resolve_model(model, config, "plan")
 
-    console.header("ghaiwpy task plan")
-    console.info(f"AI tool: {resolved_tool}")
+    console.rule("ghaiwpy task plan")
+    console.kv("AI tool", resolved_tool)
     if resolved_model:
-        console.info(f"Model: {resolved_model}")
+        console.kv("Model", resolved_model)
 
     # Ensure task label exists
     ensure_issue_label(provider, config.project.issue_label)
@@ -401,14 +401,15 @@ def _finalize_issues(
 
     # List created issues
     console.empty()
-    console.banner(f"Created {len(issue_numbers)} issue(s)")
+    issue_lines = []
     for issue_id in issue_numbers:
         try:
             task = provider.read_task(issue_id)
-            console.step(f"#{task.id} — {task.title}")
+            issue_lines.append(f"  {console.issue_ref(task.id, task.title)}")
         except Exception:
             logger.debug("plan.issue_read_failed", issue_id=issue_id, exc_info=True)
-            console.step(f"#{issue_id}")
+            issue_lines.append(f"  {console.issue_ref(issue_id)}")
+    console.panel("\n".join(issue_lines), title=f"Created {len(issue_numbers)} issue(s)")
 
     # Hint for next steps
     console.empty()
