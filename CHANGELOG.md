@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.6.0] — 2026-02-24
+
+### Features
+
+- add VS Code (code) as AI tool adapter (344ec81)
+
 ## [v0.5.10] — 2026-02-24
 
 ### Bug Fixes
