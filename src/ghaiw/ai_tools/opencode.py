@@ -28,7 +28,7 @@ class OpenCodeAdapter(AbstractAITool):
     providers via the AI SDK. Models are specified as ``provider_id/model_id``
     (e.g., ``anthropic/claude-sonnet-4``).
 
-    Headless mode: ``opencode --prompt "text"`` (or ``-p``) runs a single
+    Headless mode: ``opencode run "text"`` runs a single
     prompt non-interactively without launching the TUI.
     """
 
@@ -42,7 +42,7 @@ class OpenCodeAdapter(AbstractAITool):
             tool_type=AIToolType.TERMINAL,
             supports_model_flag=True,
             model_flag="--model",
-            headless_flag="--prompt",
+            headless_flag="run",
             supports_headless=True,
         )
 

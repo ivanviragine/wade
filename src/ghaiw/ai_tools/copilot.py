@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import ClassVar
 
 import structlog
 
@@ -85,8 +85,3 @@ class CopilotAdapter(AbstractAITool):
             # Only convert version number separators (digit-digit)
             return re.sub(r"(\d)-(\d)", r"\1.\2", model_id)
         return model_id
-
-    def structured_output_args(self, json_schema: dict[str, Any]) -> list[str]:
-        import json
-
-        return ["--output-format", "stream-json", "--json-schema", json.dumps(json_schema)]

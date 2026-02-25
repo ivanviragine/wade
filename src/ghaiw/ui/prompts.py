@@ -51,7 +51,7 @@ def confirm(message: str, default: bool = False) -> bool:
         return default
     choices = ["Yes", "No"]
     default_choice = "Yes" if default else "No"
-    
+
     result: str | None = questionary.select(
         message,
         choices=choices,
@@ -60,7 +60,7 @@ def confirm(message: str, default: bool = False) -> bool:
         style=_style,
         instruction="",
     ).ask()
-    
+
     _handle_none(result)
     return result == "Yes"
 

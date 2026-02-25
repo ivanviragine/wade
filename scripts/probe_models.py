@@ -306,7 +306,11 @@ def main() -> int:
     valid_json = extract_json(out)
     if not valid_json:
         console.error("AI tool did not return valid JSON.")
-        console.detail(f"Raw output was:\n{out}")
+        if res.returncode != 0:
+            console.error(f"Command failed with exit code: {res.returncode}")
+        console.detail(f"Raw stdout was:\n{out}")
+        if res.stderr:
+            console.detail(f"Raw stderr was:\n{res.stderr.strip()}")
         return 1
 
     out = valid_json

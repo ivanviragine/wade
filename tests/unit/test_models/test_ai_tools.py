@@ -64,7 +64,7 @@ class TestCapabilities:
         assert caps.tool_type == AIToolType.TERMINAL
         assert caps.supports_model_flag is True
         assert caps.model_flag == "--model"
-        assert caps.headless_flag == "--prompt"
+        assert caps.headless_flag == "run"
         assert caps.supports_headless is True
 
 
@@ -139,14 +139,14 @@ class TestBuildLaunchCommand:
         assert cmd == ["opencode", "--model", "anthropic/claude-sonnet-4"]
 
     def test_opencode_headless_with_prompt(self) -> None:
-        """opencode headless uses --prompt flag."""
+        """opencode headless uses run arg."""
         adapter = AbstractAITool.get("opencode")
         cmd = adapter.build_launch_command(model="anthropic/claude-haiku-4-5", prompt="Fix the bug")
         assert cmd == [
             "opencode",
             "--model",
             "anthropic/claude-haiku-4-5",
-            "--prompt",
+            "run",
             "Fix the bug",
         ]
 
