@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.15.1] — 2026-02-25
+
+### Bug Fixes
+
+- opencode headless execution and logging probe errors (abd1ee6)
+
 ## [v0.15.0] — 2026-02-25
 
 ### Features
