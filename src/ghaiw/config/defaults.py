@@ -37,8 +37,8 @@ TOOL_DEFAULTS: dict[str, ComplexityModelMapping] = {
     AIToolID.OPENCODE: ComplexityModelMapping(
         easy="anthropic/claude-haiku-4-5",
         medium="anthropic/claude-haiku-4-5",
-        complex="anthropic/claude-sonnet-4",
-        very_complex="anthropic/claude-opus-4",
+        complex="anthropic/claude-sonnet-4-6",
+        very_complex="anthropic/claude-opus-4-6",
     ),
 }
 

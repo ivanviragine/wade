@@ -31,6 +31,7 @@ dependencies = [
     "pyyaml>=6.0",
     "rich>=13.0",
     "structlog>=24.0",
+    "questionary>=2.0",
 ]
 
 [project.optional-dependencies]
@@ -80,6 +81,10 @@ strict = true
 warn_return_any = true
 warn_unused_configs = true
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["questionary.*", "prompt_toolkit.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

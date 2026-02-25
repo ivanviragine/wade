@@ -22,17 +22,17 @@ _theme = Theme(
         # Primary
         "success": "#2ecc71 bold",
         "error": "#e74c3c bold",
-        "warning": "#f39c12",
-        "info": "default",
+        "warning": "#f39c12 bold",
+        "info": "dim",
         # Progress
-        "step": "#3498db",
-        "step.count": "#3498db bold",
-        "hint": "dim",
+        "step": "#7c8aff",
+        "step.count": "#7c8aff bold",
+        "hint": "dim italic",
         "detail": "default",
         # Structure
-        "header.rule": "#5f5faf",
-        "header.title": "#5f5faf bold",
-        "banner.border": "#5f5faf",
+        "header.rule": "#6366f1",
+        "header.title": "#6366f1 bold",
+        "banner.border": "#6366f1",
         "banner.text": "bold",
         # State badges
         "badge.open": "#2ecc71",
@@ -62,13 +62,13 @@ _theme = Theme(
         "ai.gemini": "#3b82f6",
         "ai.codex": "#10b981",
         # Prompts
-        "prompt.selected": "#3498db bold",
+        "prompt.selected": "#7c8aff bold",
         "prompt.option": "default",
-        "prompt.cursor": "#3498db bold",
+        "prompt.cursor": "#7c8aff bold",
         "prompt.dimmed": "dim",
         # Panels
-        "panel.border": "#5f5faf",
-        "panel.title": "#5f5faf bold",
+        "panel.border": "#6366f1",
+        "panel.title": "#6366f1 bold",
         # URLs
         "url": "#3498db underline",
     }
@@ -81,10 +81,10 @@ class Console:
     # Symbol constants (matching Bash _UI_* constants)
     OK = "\u2713"  # ✓
     ERR = "\u2717"  # ✗
-    WARN = "\u26a0"  # ⚠
+    WARN = "!"  # clean bang
     ARROW = "\u2192"  # →
-    INFO = "\u2139"  # info symbol
-    STEP = "\u25cf"  # ●
+    INFO = "\u00b7"  # · subtle dot
+    STEP = "\u25b8"  # ▸ right triangle
     BULLET = "\u00b7"  # ·
 
     def __init__(self) -> None:
@@ -109,7 +109,7 @@ class Console:
 
     def info(self, message: str) -> None:
         """Info line to stdout."""
-        self.out.print(f"  {self.INFO} {message}")
+        self.out.print(f"  [info]{self.INFO}[/] {message}")
 
     def step(self, message: str) -> None:
         """Step indicator with [●] bullet to stdout."""
@@ -120,8 +120,8 @@ class Console:
         self.out.print(f"  [step.count]\\[{n}/{total}][/] {message}")
 
     def hint(self, message: str) -> None:
-        """Dim hint text with · bullet."""
-        self.out.print(f"[hint]    {self.BULLET} {message}[/]")
+        """Dim hint text with → arrow."""
+        self.out.print(f"[hint]    {self.ARROW} {message}[/]")
 
     def empty(self) -> None:
         """Print a blank line."""
