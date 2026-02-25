@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.7.0] — 2026-02-24
+
+### Features
+
+- wire deps-interactive.md template into interactive fallback (05a6758)
+
 ## [v0.6.0] — 2026-02-24
 
 ### Features
