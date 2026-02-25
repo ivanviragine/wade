@@ -110,15 +110,15 @@ class TestMigrateDeprecatedModelValues:
         }
         result = migrate_deprecated_model_values(raw, "claude")
         assert result is True
-        assert raw["models"]["claude"]["easy"] == "claude-sonnet-4-6"
-        assert raw["models"]["claude"]["medium"] == "claude-haiku-4-5"
+        assert raw["models"]["claude"]["easy"] == "claude-sonnet-4.6"
+        assert raw["models"]["claude"]["medium"] == "claude-haiku-4.5"
 
     def test_skips_unknown_model(self) -> None:
         raw: dict = {
             "models": {
                 "claude": {
-                    "easy": "claude-haiku-4-5",
-                    "complex": "claude-sonnet-4-6",
+                    "easy": "claude-haiku-4.5",
+                    "complex": "claude-sonnet-4.6",
                 }
             }
         }
@@ -149,14 +149,14 @@ class TestMigrateDeprecatedModelValues:
         }
         result = migrate_deprecated_model_values(raw, "claude")
         assert result is True
-        assert raw["models"]["claude"]["easy"] == "claude-sonnet-4-6"
-        assert raw["models"]["copilot"]["easy"] == "claude-opus-4-6"
+        assert raw["models"]["claude"]["easy"] == "claude-sonnet-4.6"
+        assert raw["models"]["copilot"]["easy"] == "claude-opus-4.6"
 
     def test_no_ai_tool_still_works(self) -> None:
         raw: dict = {"models": {"claude": {"easy": "claude-sonnet-4"}}}
         result = migrate_deprecated_model_values(raw, None)
         assert result is True
-        assert raw["models"]["claude"]["easy"] == "claude-sonnet-4-6"
+        assert raw["models"]["claude"]["easy"] == "claude-sonnet-4.6"
 
     def test_non_string_values_ignored(self) -> None:
         raw: dict = {"models": {"claude": {"easy": 123}}}
@@ -259,19 +259,19 @@ class TestMigrateFlatToNestedModels:
 
 
 class TestNormalizeModelFormat:
-    def test_dashes_for_claude(self) -> None:
+    def test_dots_for_claude(self) -> None:
         raw: dict = {
             "models": {
                 "claude": {
-                    "easy": "claude-haiku-4.5",
-                    "complex": "claude-sonnet-4.6",
+                    "easy": "claude-haiku-4-5",
+                    "complex": "claude-sonnet-4-6",
                 }
             }
         }
         result = normalize_model_format(raw, "claude")
         assert result is True
-        assert raw["models"]["claude"]["easy"] == "claude-haiku-4-5"
-        assert raw["models"]["claude"]["complex"] == "claude-sonnet-4-6"
+        assert raw["models"]["claude"]["easy"] == "claude-haiku-4.5"
+        assert raw["models"]["claude"]["complex"] == "claude-sonnet-4.6"
 
     def test_dots_for_copilot(self) -> None:
         raw: dict = {
@@ -287,18 +287,18 @@ class TestNormalizeModelFormat:
         assert raw["models"]["copilot"]["easy"] == "claude-haiku-4.5"
         assert raw["models"]["copilot"]["complex"] == "claude-sonnet-4.6"
 
-    def test_noop_when_already_correct_dashes(self) -> None:
+    def test_noop_when_already_correct_dots(self) -> None:
         raw: dict = {
             "models": {
                 "claude": {
-                    "easy": "claude-haiku-4-5",
+                    "easy": "claude-haiku-4.5",
                 }
             }
         }
         result = normalize_model_format(raw, "claude")
         assert result is False
 
-    def test_noop_when_already_correct_dots(self) -> None:
+    def test_noop_when_already_correct_dots_copilot(self) -> None:
         raw: dict = {
             "models": {
                 "copilot": {
@@ -341,25 +341,25 @@ class TestNormalizeModelFormat:
     def test_normalizes_across_all_tool_sections(self) -> None:
         raw: dict = {
             "models": {
-                "claude": {"easy": "claude-haiku-4.5"},
-                "copilot": {"easy": "claude-haiku-4.5"},
+                "claude": {"easy": "claude-haiku-4-5"},
+                "copilot": {"easy": "claude-haiku-4-5"},
             }
         }
         result = normalize_model_format(raw, "claude")
         assert result is True
-        assert raw["models"]["claude"]["easy"] == "claude-haiku-4-5"
-        assert raw["models"]["copilot"]["easy"] == "claude-haiku-4-5"
+        assert raw["models"]["claude"]["easy"] == "claude-haiku-4.5"
+        assert raw["models"]["copilot"]["easy"] == "claude-haiku-4.5"
 
     def test_non_string_values_ignored(self) -> None:
         raw: dict = {"models": {"claude": {"easy": 123}}}
         result = normalize_model_format(raw, "claude")
         assert result is False
 
-    def test_opus_model_dashes(self) -> None:
-        raw: dict = {"models": {"claude": {"very_complex": "claude-opus-4.6"}}}
+    def test_opus_model_dashes_to_dots(self) -> None:
+        raw: dict = {"models": {"claude": {"very_complex": "claude-opus-4-6"}}}
         result = normalize_model_format(raw, "claude")
         assert result is True
-        assert raw["models"]["claude"]["very_complex"] == "claude-opus-4-6"
+        assert raw["models"]["claude"]["very_complex"] == "claude-opus-4.6"
 
     def test_opus_model_dots(self) -> None:
         raw: dict = {"models": {"copilot": {"very_complex": "claude-opus-4-6"}}}
@@ -391,10 +391,10 @@ class TestBackfillMissingModelKeys:
         result = backfill_missing_model_keys(raw, "claude")
         assert result is True
         mapping = raw["models"]["claude"]
-        assert mapping["easy"] == "claude-haiku-4-5"
-        assert mapping["medium"] == "claude-haiku-4-5"
-        assert mapping["complex"] == "claude-sonnet-4-6"
-        assert mapping["very_complex"] == "claude-opus-4-6"
+        assert mapping["easy"] == "claude-haiku-4.5"
+        assert mapping["medium"] == "claude-haiku-4.5"
+        assert mapping["complex"] == "claude-sonnet-4.6"
+        assert mapping["very_complex"] == "claude-opus-4.6"
 
     def test_preserves_existing_values(self) -> None:
         raw: dict = {
@@ -409,8 +409,8 @@ class TestBackfillMissingModelKeys:
         assert result is True
         assert raw["models"]["claude"]["easy"] == "custom-model"
         assert raw["models"]["claude"]["complex"] == "another-custom"
-        assert raw["models"]["claude"]["medium"] == "claude-haiku-4-5"
-        assert raw["models"]["claude"]["very_complex"] == "claude-opus-4-6"
+        assert raw["models"]["claude"]["medium"] == "claude-haiku-4.5"
+        assert raw["models"]["claude"]["very_complex"] == "claude-opus-4.6"
 
     def test_noop_when_all_present(self) -> None:
         raw: dict = {
@@ -634,8 +634,8 @@ class TestRunAllMigrations:
         # Deprecated model survives first pass (moved by flat-to-nested after
         # deprecated-replacement already ran). Second run will fix it.
         assert migrated["models"]["claude"]["easy"] == "gemini-3-flash"
-        # Dotted model normalized to dashed for claude
-        assert migrated["models"]["claude"]["medium"] == "claude-haiku-4-5"
+        # Model stays dotted (dot notation is canonical)
+        assert migrated["models"]["claude"]["medium"] == "claude-haiku-4.5"
         # Merge strategy normalized
         assert migrated["project"]["merge_strategy"] == "PR"
         # Per-command keys backfilled
@@ -643,7 +643,7 @@ class TestRunAllMigrations:
         assert "deps" in migrated["ai"]
         assert "work" in migrated["ai"]
         # Missing tiers backfilled
-        assert migrated["models"]["claude"]["very_complex"] == "claude-opus-4-6"
+        assert migrated["models"]["claude"]["very_complex"] == "claude-opus-4.6"
 
     def test_full_pipeline_v1_deprecated_cleaned_on_second_run(self, tmp_path: Path) -> None:
         """Deprecated flat values that were moved to nested on first run are
@@ -667,7 +667,7 @@ class TestRunAllMigrations:
         assert second is True
 
         migrated = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        assert migrated["models"]["claude"]["easy"] == "claude-sonnet-4-6"
+        assert migrated["models"]["claude"]["easy"] == "claude-sonnet-4.6"
 
         # Third run should be a no-op
         third = run_all_migrations(config_path)
@@ -742,10 +742,10 @@ class TestRunAllMigrations:
                     },
                     "models": {
                         "claude": {
-                            "easy": "claude-haiku-4-5",
-                            "medium": "claude-haiku-4-5",
-                            "complex": "claude-sonnet-4-6",
-                            "very_complex": "claude-opus-4-6",
+                            "easy": "claude-haiku-4.5",
+                            "medium": "claude-haiku-4.5",
+                            "complex": "claude-sonnet-4.6",
+                            "very_complex": "claude-opus-4.6",
                         }
                     },
                     "project": {"merge_strategy": "PR"},
@@ -804,10 +804,10 @@ class TestRunAllMigrations:
                 },
                 "models": {
                     "claude": {
-                        "easy": "claude-haiku-4-5",
-                        "medium": "claude-haiku-4-5",
-                        "complex": "claude-sonnet-4-6",
-                        "very_complex": "claude-opus-4-6",
+                        "easy": "claude-haiku-4.5",
+                        "medium": "claude-haiku-4.5",
+                        "complex": "claude-sonnet-4.6",
+                        "very_complex": "claude-opus-4.6",
                     }
                 },
                 "project": {"merge_strategy": "PR"},

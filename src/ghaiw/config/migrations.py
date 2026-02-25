@@ -23,14 +23,18 @@ logger = structlog.get_logger()
 
 # Deprecated model values that should be replaced
 _DEPRECATED_MODELS: dict[str, str] = {
-    # Unversioned Claude model aliases → latest versioned
-    "claude-haiku-4": "claude-haiku-4-5",
-    "claude-sonnet-4": "claude-sonnet-4-6",
-    "claude-opus-4": "claude-opus-4-6",
-    # Dotted variants (Copilot format)
-    "claude-haiku-4.0": "claude-haiku-4-5",
-    "claude-sonnet-4.0": "claude-sonnet-4-6",
-    "claude-opus-4.0": "claude-opus-4-6",
+    # Unversioned Claude model aliases → latest versioned (dot notation)
+    "claude-haiku-4": "claude-haiku-4.5",
+    "claude-sonnet-4": "claude-sonnet-4.6",
+    "claude-opus-4": "claude-opus-4.6",
+    # Dotted unversioned variants
+    "claude-haiku-4.0": "claude-haiku-4.5",
+    "claude-sonnet-4.0": "claude-sonnet-4.6",
+    "claude-opus-4.0": "claude-opus-4.6",
+    # Legacy dashed format → dot notation
+    "claude-haiku-4-5": "claude-haiku-4.5",
+    "claude-sonnet-4-6": "claude-sonnet-4.6",
+    "claude-opus-4-6": "claude-opus-4.6",
     # Old Gemini versions
     "gemini-2.0-flash": "gemini-3.0-flash",
     "gemini-2.5-pro": "gemini-3.0-pro",
@@ -45,9 +49,8 @@ def fixup_deprecated_model(model_id: str) -> str:
     return _DEPRECATED_MODELS.get(model_id, model_id)
 
 
-# Claude model ID format: dashes for Claude CLI, dots for Copilot
+# Regex: claude-haiku-4-5 → claude-haiku-4.5 (dash-to-dot in version number)
 _CLAUDE_DASH_TO_DOT_RE = re.compile(r"(claude-\w+-\d+)-(\d+)")
-_CLAUDE_DOT_TO_DASH_RE = re.compile(r"(claude-\w+-\d+)\.(\d+)")
 
 
 def _get_ai_tool(raw: dict[str, Any]) -> str | None:
@@ -166,26 +169,16 @@ def migrate_flat_to_nested_models(raw: dict[str, Any], ai_tool: str | None) -> b
 # ---------------------------------------------------------------------------
 
 
-def _to_dashed(model_id: str) -> str:
-    """Convert claude-haiku-4.5 -> claude-haiku-4-5."""
-    return _CLAUDE_DOT_TO_DASH_RE.sub(r"\1-\2", model_id)
-
-
 def _to_dotted(model_id: str) -> str:
     """Convert claude-haiku-4-5 -> claude-haiku-4.5."""
     return _CLAUDE_DASH_TO_DOT_RE.sub(r"\1.\2", model_id)
 
 
-def _tool_uses_dotted(tool: str) -> bool:
-    """Return True if the tool expects dotted Claude model IDs."""
-    return tool in ("copilot",)
-
-
 def normalize_model_format(raw: dict[str, Any], ai_tool: str | None) -> bool:
-    """Normalize Claude model IDs to the tool's expected format.
+    """Normalize Claude model IDs to canonical dot notation.
 
-    Claude CLI = dashes (claude-haiku-4-5)
-    Copilot = dots (claude-haiku-4.5)
+    All tools store dot notation (claude-haiku-4.5) in config.
+    Tool-specific conversion (e.g., dashes for Claude CLI) happens at launch time.
     Non-Claude models are left unchanged.
 
     Behavioral ref: _init_normalize_model_values_for_tool
@@ -197,8 +190,6 @@ def normalize_model_format(raw: dict[str, Any], ai_tool: str | None) -> bool:
     if not isinstance(models, dict):
         return False
 
-    use_dots = _tool_uses_dotted(ai_tool)
-    converter = _to_dotted if use_dots else _to_dashed
     changed = False
 
     for _tool_key, mapping in models.items():
@@ -206,7 +197,7 @@ def normalize_model_format(raw: dict[str, Any], ai_tool: str | None) -> bool:
             continue
         for tier_key, model_val in list(mapping.items()):
             if isinstance(model_val, str) and model_val.startswith("claude-"):
-                new_val = converter(model_val)
+                new_val = _to_dotted(model_val)
                 if new_val != model_val:
                     mapping[tier_key] = new_val
                     changed = True

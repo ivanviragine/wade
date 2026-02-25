@@ -490,49 +490,47 @@ def _resolve_models(tool: str | None) -> tuple[ComplexityModelMapping, bool]:
         adapter = AbstractAITool.get(AIToolID(tool))
         mapping = adapter.get_recommended_mapping()
         if mapping.easy or mapping.complex:
-            return _normalize_mapping(adapter, mapping), True
+            return _normalize_mapping(mapping), True
     except (ValueError, Exception):
         logger.debug("init.model_probe_failed", tool=tool, exc_info=True)
 
     # Fallback to hardcoded defaults
     mapping = get_defaults(tool)
-
-    # Normalize format for the tool
-    try:
-        adapter = AbstractAITool.get(AIToolID(tool))
-        mapping = _normalize_mapping(adapter, mapping)
-    except (ValueError, Exception):
-        logger.debug("init.model_normalize_failed", tool=tool, exc_info=True)
-
-    return mapping, False
+    return _normalize_mapping(mapping), False
 
 
-def _fixup_deprecated(model_id: str) -> str:
-    """Replace deprecated/unversioned model IDs with current equivalents."""
+def _normalize_model(model_id: str | None) -> str | None:
+    """Normalize a single model ID: fix deprecated names and ensure dot notation.
+
+    Config always stores dot notation (claude-haiku-4.5). Tool-specific
+    conversion (e.g., dashes for Claude CLI) happens at launch time.
+    """
+    if not model_id:
+        return None
+    import re
+
     from ghaiw.config.migrations import fixup_deprecated_model
 
-    return fixup_deprecated_model(model_id)
+    # Fix deprecated/unversioned model names first
+    model_id = fixup_deprecated_model(model_id)
+    # Ensure dot notation for Claude models (4-5 → 4.5)
+    if model_id.startswith("claude-"):
+        model_id = re.sub(r"(\d)-(\d)", r"\1.\2", model_id)
+    return model_id
 
 
 def _normalize_mapping(
-    adapter: AbstractAITool,
     mapping: ComplexityModelMapping,
 ) -> ComplexityModelMapping:
-    """Normalize model IDs in a mapping to the tool's expected format.
+    """Normalize model IDs: fix deprecated names and standardize to dot notation.
 
-    Applies deprecated model fixup before format normalization.
+    Config always stores dot notation. Tool-specific conversion happens at launch.
     """
-
-    def _fix(model_id: str | None) -> str | None:
-        if not model_id:
-            return None
-        return adapter.normalize_model_format(_fixup_deprecated(model_id))
-
     return ComplexityModelMapping(
-        easy=_fix(mapping.easy),
-        medium=_fix(mapping.medium),
-        complex=_fix(mapping.complex),
-        very_complex=_fix(mapping.very_complex),
+        easy=_normalize_model(mapping.easy),
+        medium=_normalize_model(mapping.medium),
+        complex=_normalize_model(mapping.complex),
+        very_complex=_normalize_model(mapping.very_complex),
     )
 
 

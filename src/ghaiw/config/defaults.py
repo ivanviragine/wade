@@ -11,10 +11,10 @@ from ghaiw.models.config import ComplexityModelMapping
 # Default model mappings when tool probing fails or returns no recognized models
 TOOL_DEFAULTS: dict[str, ComplexityModelMapping] = {
     AIToolID.CLAUDE: ComplexityModelMapping(
-        easy="claude-haiku-4-5",
-        medium="claude-haiku-4-5",
-        complex="claude-sonnet-4-6",
-        very_complex="claude-opus-4-6",
+        easy="claude-haiku-4.5",
+        medium="claude-haiku-4.5",
+        complex="claude-sonnet-4.6",
+        very_complex="claude-opus-4.6",
     ),
     AIToolID.COPILOT: ComplexityModelMapping(
         easy="claude-haiku-4.5",
@@ -35,10 +35,10 @@ TOOL_DEFAULTS: dict[str, ComplexityModelMapping] = {
         very_complex="codex-mini-latest",
     ),
     AIToolID.OPENCODE: ComplexityModelMapping(
-        easy="anthropic/claude-haiku-4-5",
-        medium="anthropic/claude-haiku-4-5",
-        complex="anthropic/claude-sonnet-4-6",
-        very_complex="anthropic/claude-opus-4-6",
+        easy="anthropic/claude-haiku-4.5",
+        medium="anthropic/claude-haiku-4.5",
+        complex="anthropic/claude-sonnet-4.6",
+        very_complex="anthropic/claude-opus-4.6",
     ),
 }
 
