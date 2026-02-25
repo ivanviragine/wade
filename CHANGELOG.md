@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.14.2] — 2026-02-25
+
+### Bug Fixes
+
+- restore models.json shape after corrupted payload extraction test (b944b4e)
+
 ## [v0.14.1] — 2026-02-25
 
 ### Documentation
