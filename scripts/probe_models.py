@@ -14,6 +14,7 @@ import subprocess
 import sys
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from ghaiw.ai_tools.base import AbstractAITool
 
@@ -238,11 +239,18 @@ def main() -> int:
     )
 
     import os
-
     env = os.environ.copy()
     env.pop("CLAUDECODE", None)  # Prevent nested session crash if user runs this inside Claude Code
 
-    cmd = adapter.build_launch_command(prompt=prompt)
+    expected_schema = {
+        "type": "object",
+        "additionalProperties": {
+            "type": "array",
+            "items": {"type": "string"},
+        }
+    }
+
+    cmd = adapter.build_launch_command(prompt=prompt, json_schema=expected_schema)
     with console.status(f"Asking {adapter.capabilities().display_name} to fix {JSON_PATH.name}..."):
         res = subprocess.run(cmd, capture_output=True, text=True, env=env)
 
@@ -250,10 +258,23 @@ def main() -> int:
 
     # Try multiple strategies to find valid JSON
     def extract_json(text: str) -> str | None:
+        def extract_payload(parsed: Any) -> str | None:
+            # Claude and Copilot `--json-schema` wraps the answer inside `structured_output`
+            if isinstance(parsed, dict) and "structured_output" in parsed:
+                return json.dumps(parsed["structured_output"], indent=2)
+            # Or it might just be the direct object itself
+            is_dict = isinstance(parsed, dict)
+            providers = ["claude", "copilot", "gemini", "codex", "opencode"]
+            has_providers = any(k in parsed for k in providers)
+            if is_dict and has_providers:
+                return json.dumps(parsed, indent=2)
+            return None
+
         # Strategy 1: The whole thing might be valid JSON
         try:
-            json.loads(text)
-            return text
+            parsed = json.loads(text)
+            if payload := extract_payload(parsed):
+                return payload
         except ValueError:
             pass
 
@@ -261,8 +282,9 @@ def main() -> int:
         cleaned = re.sub(r"^```(?:json)?\n?", "", text, flags=re.MULTILINE)
         cleaned = re.sub(r"\n```$", "", cleaned)
         try:
-            json.loads(cleaned)
-            return cleaned.strip()
+            parsed = json.loads(cleaned)
+            if payload := extract_payload(parsed):
+                return payload
         except ValueError:
             pass
 
@@ -273,8 +295,9 @@ def main() -> int:
             if start < end:
                 substring = text[start:end]
                 try:
-                    json.loads(substring)
-                    return substring
+                    parsed = json.loads(substring)
+                    if payload := extract_payload(parsed):
+                        return payload
                 except ValueError:
                     pass
         return None

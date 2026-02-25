@@ -11,7 +11,7 @@ import shutil
 import warnings
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from ghaiw.models.ai import (
     AIModel,
@@ -180,11 +180,19 @@ class AbstractAITool(ABC):
         """
         return raw_model_id
 
+    def structured_output_args(self, json_schema: dict[str, Any]) -> list[str]:
+        """Get extra CLI args to enforce structured JSON output according to a schema.
+
+        Default: return empty list. Override per tool if they support it.
+        """
+        return []
+
     def build_launch_command(
         self,
         model: str | None = None,
         prompt: str | None = None,
         plan_mode: bool = False,
+        json_schema: dict[str, Any] | None = None,
     ) -> list[str]:
         """Build the command line for launching this tool."""
         caps = self.capabilities()
@@ -198,6 +206,9 @@ class AbstractAITool(ABC):
 
         if plan_mode:
             cmd.extend(self.plan_mode_args())
+
+        if json_schema:
+            cmd.extend(self.structured_output_args(json_schema))
 
         return cmd
 

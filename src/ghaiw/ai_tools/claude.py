@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import structlog
 
@@ -100,3 +100,8 @@ class ClaudeAdapter(AbstractAITool):
             # Convert claude-haiku-4-5 -> claude-haiku-4.5
             return re.sub(r"(\d)-(\d)", r"\1.\2", raw_model_id)
         return raw_model_id
+
+    def structured_output_args(self, json_schema: dict[str, Any]) -> list[str]:
+        import json
+
+        return ["--output-format", "json", "--json-schema", json.dumps(json_schema)]
