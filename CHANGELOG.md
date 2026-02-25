@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.5.10] — 2026-02-24
+
+### Bug Fixes
+
+- capture AI session transcript for plan token usage reporting (b000feb)
+- use repo name as subdirectory for worktree paths (b3a359a)
+
+### Refactoring
+
+- unify HTML marker block utilities into markdown.py (b9eb952)
+
+### Tests
+
+- fix 5 CI failures in work service and CLI flag tests (7d6b4cb)
+
 ## [v0.5.9] — 2026-02-24
 
 ### Tests
