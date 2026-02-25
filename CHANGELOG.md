@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.10.0] — 2026-02-25
+
+### Features
+
+- select-based model picker, fix deprecated models, update Gemini defaults (53048df)
+
 ## [v0.9.0] — 2026-02-25
 
 ### Features
