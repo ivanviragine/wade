@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.11.0] — 2026-02-25
+
+### Features
+
+- add confirmation prompt on work remove + modernize detail lines (048ba4f)
+
 ## [v0.10.1] — 2026-02-25
 
 ### Refactoring
