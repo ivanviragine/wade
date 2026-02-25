@@ -19,6 +19,7 @@ from pathlib import Path
 import structlog
 
 from ghaiw.skills.installer import get_templates_dir
+from ghaiw.utils.markdown import extract_marker_block, has_marker_block
 
 logger = structlog.get_logger()
 
@@ -44,7 +45,7 @@ def has_pointer(file_path: Path) -> bool:
     if not file_path.is_file():
         return False
     content = file_path.read_text(encoding="utf-8")
-    return MARKER_START in content and MARKER_END in content
+    return has_marker_block(content, MARKER_START, MARKER_END)
 
 
 def extract_pointer_content(file_path: Path) -> str | None:
@@ -54,16 +55,8 @@ def extract_pointer_content(file_path: Path) -> str | None:
     """
     if not file_path.is_file():
         return None
-
     content = file_path.read_text(encoding="utf-8")
-    start_idx = content.find(MARKER_START)
-    end_idx = content.find(MARKER_END)
-
-    if start_idx == -1 or end_idx == -1 or end_idx <= start_idx:
-        return None
-
-    inner = content[start_idx + len(MARKER_START) : end_idx].strip()
-    return inner
+    return extract_marker_block(content, MARKER_START, MARKER_END)
 
 
 def remove_pointer(file_path: Path) -> bool:

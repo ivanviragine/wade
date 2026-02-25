@@ -19,6 +19,7 @@ from ghaiw.models.task import Label, LabelType, PlanFile, Task, TaskState
 from ghaiw.providers.base import AbstractTaskProvider
 from ghaiw.providers.registry import get_provider
 from ghaiw.ui.console import console
+from ghaiw.utils.markdown import remove_marker_block
 
 logger = structlog.get_logger()
 
@@ -181,19 +182,7 @@ PLAN_SUMMARY_MARKER_END = "<!-- ghaiw:plan-summary:end -->"
 
 def _strip_plan_summary(body: str) -> str:
     """Remove existing plan summary block from issue body (idempotent)."""
-    start_idx = body.find(PLAN_SUMMARY_MARKER_START)
-    end_idx = body.find(PLAN_SUMMARY_MARKER_END)
-
-    if start_idx == -1 or end_idx == -1:
-        return body
-
-    before = body[:start_idx].rstrip("\n")
-    after = body[end_idx + len(PLAN_SUMMARY_MARKER_END) :].lstrip("\n")
-
-    result = before
-    if after.strip():
-        result += "\n\n" + after
-    return result.rstrip() + "\n" if result.strip() else ""
+    return remove_marker_block(body, PLAN_SUMMARY_MARKER_START, PLAN_SUMMARY_MARKER_END)
 
 
 def build_plan_summary_block(

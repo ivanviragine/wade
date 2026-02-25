@@ -74,3 +74,34 @@ class TestMarkerBlock:
         assert "middle" not in result
         assert "before" in result
         assert "after" in result
+
+    def test_remove_blank_line_normalization(self) -> None:
+        """Before and after content should be separated by exactly two newlines."""
+        content = f"before\n\n{self.START}\nmiddle\n{self.END}\n\nafter"
+        result = remove_marker_block(content, self.START, self.END)
+        assert result == "before\n\nafter"
+
+    def test_remove_block_at_end(self) -> None:
+        """Block at end of content: result ends with single newline."""
+        content = f"before\n\n{self.START}\nmiddle\n{self.END}\n"
+        result = remove_marker_block(content, self.START, self.END)
+        assert result == "before\n"
+
+    def test_remove_block_only_content(self) -> None:
+        """Content is only the block: result is empty string."""
+        content = f"{self.START}\nmiddle\n{self.END}\n"
+        result = remove_marker_block(content, self.START, self.END)
+        assert result == ""
+
+    def test_remove_marker_not_found(self) -> None:
+        """Missing markers: content returned unchanged."""
+        content = "no markers here"
+        result = remove_marker_block(content, self.START, self.END)
+        assert result == content
+
+    def test_remove_idempotent(self) -> None:
+        """Removing twice produces same result as removing once."""
+        content = f"before\n{self.START}\nmiddle\n{self.END}\nafter"
+        once = remove_marker_block(content, self.START, self.END)
+        twice = remove_marker_block(once, self.START, self.END)
+        assert once == twice

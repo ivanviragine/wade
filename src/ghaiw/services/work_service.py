@@ -46,6 +46,7 @@ from ghaiw.services.task_service import (
 from ghaiw.ui import prompts
 from ghaiw.ui.console import console
 from ghaiw.utils.clipboard import copy_to_clipboard
+from ghaiw.utils.markdown import remove_marker_block
 from ghaiw.utils.terminal import (
     compose_work_title,
     launch_in_new_terminal,
@@ -1037,19 +1038,7 @@ def build_impl_usage_block(
 
 def _strip_impl_usage_block(body: str) -> str:
     """Remove existing implementation usage block from body (idempotent)."""
-    start_idx = body.find(IMPL_USAGE_MARKER_START)
-    end_idx = body.find(IMPL_USAGE_MARKER_END)
-
-    if start_idx == -1 or end_idx == -1:
-        return body
-
-    before = body[:start_idx].rstrip("\n")
-    after = body[end_idx + len(IMPL_USAGE_MARKER_END) :].lstrip("\n")
-
-    result = before
-    if after.strip():
-        result += "\n\n" + after
-    return result.rstrip() + "\n" if result.strip() else ""
+    return remove_marker_block(body, IMPL_USAGE_MARKER_START, IMPL_USAGE_MARKER_END)
 
 
 def _extract_plan_summary(body: str) -> str:

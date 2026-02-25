@@ -78,15 +78,15 @@ def extract_marker_block(content: str, start_marker: str, end_marker: str) -> st
 
 
 def remove_marker_block(content: str, start_marker: str, end_marker: str) -> str:
-    """Remove a marker-delimited block (including markers) from content."""
+    """Remove a marker-delimited block (including markers), normalizing blank lines."""
     start_idx = content.find(start_marker)
     end_idx = content.find(end_marker)
     if start_idx == -1 or end_idx == -1:
         return content
 
-    block_end = end_idx + len(end_marker)
-    # Remove any trailing newline after the block
-    if block_end < len(content) and content[block_end] == "\n":
-        block_end += 1
+    before = content[:start_idx].rstrip("\n")
+    after = content[end_idx + len(end_marker) :].lstrip("\n")
 
-    return content[:start_idx] + content[block_end:]
+    if not after.strip():
+        return before + "\n" if before.strip() else ""
+    return before + "\n\n" + after
