@@ -161,6 +161,8 @@ def main() -> int:
 
     has_diff = False
     console.empty()
+    diff_summary: list[str] = []
+
     for tool, expected in registry.items():
         actual_raw = found.get(tool, set())
 
@@ -188,18 +190,80 @@ def main() -> int:
                 console.warn(f"NEW (found in probe but not in {JSON_PATH.name}):")
                 for m in sorted(new):
                     console.detail(f"  + {m}")
+                diff_summary.append(f"For the '{tool}' tools list, ADD these items: {sorted(new)}")
             if missing:
                 console.warn(f"OBSOLETE (found in {JSON_PATH.name} but not in probe):")
                 for m in sorted(missing):
                     console.detail(f"  - {m}")
+                diff_summary.append(
+                    f"For the '{tool}' tools list, REMOVE these items: {sorted(missing)}"
+                )
         console.empty()
 
-    if has_diff:
+    if not has_diff:
+        console.success("All models strictly match the JSON registry!")
+        return 0
+
+    from ghaiw.ui import prompts
+
+    msg = f"\nWould you like to use an AI agent to auto-correct {JSON_PATH.name}?"
+    if not prompts.confirm(msg, default=True):
         console.error(f"Differences found. Please update {JSON_PATH} manually.")
         return 1
 
-    console.success("All models strictly match the JSON registry!")
-    return 0
+    installed = []
+    for tool_id in AbstractAITool.detect_installed():
+        try:
+            adapter = AbstractAITool.get(tool_id)
+            if adapter.capabilities().supports_headless:
+                installed.append((tool_id, adapter))
+        except ValueError:
+            pass
+
+    if not installed:
+        console.error("No compatible headless AI tools installed to perform auto-correction.")
+        return 1
+
+    items = [f"{t[1].capabilities().display_name} ({t[0]})" for t in installed]
+    idx = prompts.select("Select AI tool to use for correction", items)
+    tool_id, adapter = installed[idx]
+
+    prompt = (
+        "You are tasked with updating a JSON file based on some diff instructions.\n"
+        "Output ONLY valid JSON. Do not include markdown formatting (like ```json), "
+        "intro, or outro text. Output raw JSON only.\n\n"
+        "Here is the current JSON:\n"
+        f"{json.dumps(registry_raw, indent=2)}\n\n"
+        "Please apply the following changes to the lists:\n" + "\n".join(diff_summary)
+    )
+
+    cmd = adapter.build_launch_command(prompt=prompt)
+    with console.status(f"Asking {adapter.capabilities().display_name} to fix {JSON_PATH.name}..."):
+        res = subprocess.run(cmd, capture_output=True, text=True)
+
+    out = res.stdout.strip()
+    # Strip markdown blocks if the LLM ignorned instructions
+    if out.startswith("```"):
+        out = re.sub(r"^```(?:json)?\n", "", out)
+        out = re.sub(r"\n```$", "", out)
+    out = out.strip()
+
+    from rich.console import Console
+    from rich.syntax import Syntax
+
+    rc = Console()
+    console.empty()
+    console.header(f"Proposed {JSON_PATH.name}")
+    rc.print(Syntax(out, "json", theme="monokai", word_wrap=True))
+    console.empty()
+
+    if prompts.confirm(f"Overwrite {JSON_PATH.name} with this new content?", default=True):
+        with open(JSON_PATH, "w", encoding="utf-8") as f:
+            f.write(out + "\n")
+        console.success(f"Successfully updated {JSON_PATH.name}.")
+        return 0
+
+    return 1
 
 
 if __name__ == "__main__":
