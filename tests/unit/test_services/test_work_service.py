@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from ghaiw.ai_tools.base import AbstractAITool
 from ghaiw.ai_tools.claude import ClaudeAdapter
 from ghaiw.ai_tools.codex import CodexAdapter
 from ghaiw.ai_tools.copilot import CopilotAdapter
@@ -257,7 +258,10 @@ class TestWorkLaunchCommandAssembly:
         adapter = ClaudeAdapter()
         transcript = tmp_path / "transcript.jsonl"
 
-        with patch("ghaiw.ai_tools.claude.subprocess.run") as mock_run:
+        with (
+            patch("ghaiw.utils.process.shutil.which", return_value=None),
+            patch("ghaiw.utils.process.subprocess.run") as mock_run,
+        ):
             mock_run.return_value = MagicMock(returncode=0)
             adapter.launch(
                 worktree_path=tmp_path,
@@ -289,7 +293,10 @@ class TestWorkLaunchCommandAssembly:
         """Copilot launch should NOT include --output-file (no transcript support)."""
         adapter = CopilotAdapter()
 
-        with patch("ghaiw.ai_tools.copilot.subprocess.run") as mock_run:
+        with (
+            patch("ghaiw.utils.process.shutil.which", return_value=None),
+            patch("ghaiw.utils.process.subprocess.run") as mock_run,
+        ):
             mock_run.return_value = MagicMock(returncode=0)
             adapter.launch(
                 worktree_path=tmp_path,
@@ -323,7 +330,10 @@ class TestWorkLaunchCommandAssembly:
         """Codex launch should use 'codex' binary with --model."""
         adapter = CodexAdapter()
 
-        with patch("ghaiw.ai_tools.codex.subprocess.run") as mock_run:
+        with (
+            patch("ghaiw.utils.process.shutil.which", return_value=None),
+            patch("ghaiw.utils.process.subprocess.run") as mock_run,
+        ):
             mock_run.return_value = MagicMock(returncode=0)
             adapter.launch(
                 worktree_path=tmp_path,
@@ -337,14 +347,17 @@ class TestWorkLaunchCommandAssembly:
 
     def test_no_plan_mode_in_work_session(self, tmp_path: Path) -> None:
         """Work session launches should NOT include plan/approval mode flags."""
-        adapters = [
-            ("ghaiw.ai_tools.claude.subprocess.run", ClaudeAdapter()),
-            ("ghaiw.ai_tools.copilot.subprocess.run", CopilotAdapter()),
-            ("ghaiw.ai_tools.gemini.subprocess.run", GeminiAdapter()),
-            ("ghaiw.ai_tools.codex.subprocess.run", CodexAdapter()),
+        adapters: list[AbstractAITool] = [
+            ClaudeAdapter(),
+            CopilotAdapter(),
+            GeminiAdapter(),
+            CodexAdapter(),
         ]
-        for patch_target, adapter in adapters:
-            with patch(patch_target) as mock_run:
+        for adapter in adapters:
+            with (
+                patch("ghaiw.utils.process.shutil.which", return_value=None),
+                patch("ghaiw.utils.process.subprocess.run") as mock_run,
+            ):
                 mock_run.return_value = MagicMock(returncode=0)
                 adapter.launch(
                     worktree_path=tmp_path,
