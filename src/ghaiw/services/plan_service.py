@@ -47,13 +47,9 @@ def get_plan_prompt_template() -> str:
     from ghaiw.skills.installer import get_templates_dir
 
     template = get_templates_dir() / "prompts" / "plan-session.md"
-    if template.is_file():
-        return template.read_text(encoding="utf-8")
-    # Fallback inline prompt
-    return (
-        "Planning session — no implementation yet. Start by asking what "
-        "feature or problem to plan, then break it down into GitHub issues."
-    )
+    if not template.is_file():
+        raise FileNotFoundError(f"Prompt template not found: {template}")
+    return template.read_text(encoding="utf-8")
 
 
 def render_plan_prompt(plan_dir: str) -> str:

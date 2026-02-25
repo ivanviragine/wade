@@ -38,13 +38,9 @@ def get_deps_prompt_template() -> str:
     from ghaiw.skills.installer import get_templates_dir
 
     template = get_templates_dir() / "prompts" / "deps-analysis.md"
-    if template.is_file():
-        return template.read_text(encoding="utf-8")
-    return (
-        "Analyze dependencies between the GitHub issues below.\n"
-        "Output ONLY: <number> -> <number> # reason\n"
-        "Context:\n{context}"
-    )
+    if not template.is_file():
+        raise FileNotFoundError(f"Prompt template not found: {template}")
+    return template.read_text(encoding="utf-8")
 
 
 def get_deps_interactive_template() -> str:
@@ -52,12 +48,9 @@ def get_deps_interactive_template() -> str:
     from ghaiw.skills.installer import get_templates_dir
 
     template = get_templates_dir() / "prompts" / "deps-interactive.md"
-    if template.is_file():
-        return template.read_text(encoding="utf-8").strip()
-    return (
-        "Write your dependency output to: {output_file}\n"
-        "Format: one line per edge: <number> -> <number> # reason"
-    )
+    if not template.is_file():
+        raise FileNotFoundError(f"Prompt template not found: {template}")
+    return template.read_text(encoding="utf-8").strip()
 
 
 # ---------------------------------------------------------------------------
