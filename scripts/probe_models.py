@@ -239,6 +239,7 @@ def main() -> int:
     )
 
     import os
+
     env = os.environ.copy()
     env.pop("CLAUDECODE", None)  # Prevent nested session crash if user runs this inside Claude Code
 
@@ -247,7 +248,7 @@ def main() -> int:
         "additionalProperties": {
             "type": "array",
             "items": {"type": "string"},
-        }
+        },
     }
 
     cmd = adapter.build_launch_command(prompt=prompt, json_schema=expected_schema)
