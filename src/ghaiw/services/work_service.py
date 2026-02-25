@@ -280,11 +280,13 @@ def build_work_prompt(task: Task, ai_tool: str | None = None) -> str:
 
     Behavioral reference: lib/work/bootstrap.sh:_work_copy_prompt()
     """
-    return (
-        "Let's implement PLAN.md. ALWAYS follow @.claude/skills/workflow/SKILL.md"
-        f"for session rules.\n\n"
-        f"Working on Issue #{task.id}: {task.title}\n"
-    )
+    from ghaiw.skills.installer import get_templates_dir
+
+    template_path = get_templates_dir() / "prompts" / "work-context.md"
+    if not template_path.is_file():
+        raise FileNotFoundError(f"Prompt template not found: {template_path}")
+    template = template_path.read_text(encoding="utf-8")
+    return template.format(issue_number=task.id, issue_title=task.title)
 
 
 def _post_work_lifecycle(
