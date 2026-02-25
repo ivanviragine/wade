@@ -237,16 +237,54 @@ def main() -> int:
         "Please apply the following changes to the lists:\n" + "\n".join(diff_summary)
     )
 
+    import os
+    env = os.environ.copy()
+    env.pop("CLAUDECODE", None)  # Prevent nested session crash if user runs this inside Claude Code
+
     cmd = adapter.build_launch_command(prompt=prompt)
     with console.status(f"Asking {adapter.capabilities().display_name} to fix {JSON_PATH.name}..."):
-        res = subprocess.run(cmd, capture_output=True, text=True)
+        res = subprocess.run(cmd, capture_output=True, text=True, env=env)
 
     out = res.stdout.strip()
-    # Strip markdown blocks if the LLM ignorned instructions
-    if out.startswith("```"):
-        out = re.sub(r"^```(?:json)?\n", "", out)
-        out = re.sub(r"\n```$", "", out)
-    out = out.strip()
+
+    # Try multiple strategies to find valid JSON
+    def extract_json(text: str) -> str | None:
+        # Strategy 1: The whole thing might be valid JSON
+        try:
+            json.loads(text)
+            return text
+        except ValueError:
+            pass
+
+        # Strategy 2: Remove markdown formatting
+        cleaned = re.sub(r"^```(?:json)?\n?", "", text, flags=re.MULTILINE)
+        cleaned = re.sub(r"\n```$", "", cleaned)
+        try:
+            json.loads(cleaned)
+            return cleaned.strip()
+        except ValueError:
+            pass
+
+        # Strategy 3: Find first { and last }
+        if "{" in text and "}" in text:
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            if start < end:
+                substring = text[start:end]
+                try:
+                    json.loads(substring)
+                    return substring
+                except ValueError:
+                    pass
+        return None
+
+    valid_json = extract_json(out)
+    if not valid_json:
+        console.error("AI tool did not return valid JSON.")
+        console.detail(f"Raw output was:\n{out}")
+        return 1
+
+    out = valid_json
 
     from rich.console import Console
     from rich.syntax import Syntax
