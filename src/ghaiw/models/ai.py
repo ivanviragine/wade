@@ -16,6 +16,7 @@ class AIToolID(StrEnum):
     GEMINI = "gemini"
     CODEX = "codex"
     ANTIGRAVITY = "antigravity"
+    VSCODE = "vscode"
 
 
 class AIToolType(StrEnum):
