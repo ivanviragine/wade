@@ -559,9 +559,15 @@ def _prompt_project_settings(
 
     console.rule("Project settings")
 
-    defaults["merge_strategy"] = prompts.input_prompt(
-        "Merge strategy — PR or direct", defaults["merge_strategy"]
+    merge_options = ["PR", "direct"]
+    merge_default = (
+        merge_options.index(defaults["merge_strategy"])
+        if defaults["merge_strategy"] in merge_options
+        else 0
     )
+    defaults["merge_strategy"] = merge_options[
+        prompts.select("Merge strategy", merge_options, default=merge_default)
+    ]
     defaults["branch_prefix"] = prompts.input_prompt("Branch prefix", defaults["branch_prefix"])
     defaults["issue_label"] = prompts.input_prompt("Issue label", defaults["issue_label"])
     defaults["worktrees_dir"] = prompts.input_prompt(
@@ -742,10 +748,27 @@ def _prompt_command_overrides(
             result[cmd_name] = {}
         else:
             model_default = _suggest_model_for_tool(tool)
-            model = prompts.input_prompt(f"  Model for {label.lower()}", model_default)
+            available = _collect_model_options(tool)
+            custom_label = "Custom..."
+            skip_model_label = "Skip (use default)"
+            model_options = list(available)
+            if model_default and model_default not in model_options:
+                model_options.insert(0, model_default)
+            model_options += [custom_label, skip_model_label]
+            default_idx = (
+                model_options.index(model_default) if model_default in model_options else 0
+            )
+            chosen_idx = prompts.select(
+                f"  Model for {label.lower()}", model_options, default=default_idx
+            )
+            chosen = model_options[chosen_idx]
+            if chosen == custom_label:
+                chosen = prompts.input_prompt(
+                    f"  Model for {label.lower()} (model ID)", model_default
+                )
             result[cmd_name] = {"tool": tool}
-            if model:
-                result[cmd_name]["model"] = model
+            if chosen and chosen != skip_model_label:
+                result[cmd_name]["model"] = chosen
 
     return result
 
