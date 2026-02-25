@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.13.1] — 2026-02-25
+
+### Bug Fixes
+
+- robust JSON extraction in probe script (36a0e23)
+
 ## [v0.13.0] — 2026-02-25
 
 ### Features
