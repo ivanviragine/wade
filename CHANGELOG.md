@@ -4,7 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
-## [v0.15.1] — 2026-02-25
+## [v0.16.0] — 2026-02-25
+
+### Features
+
+- use select menus for merge strategy and per-command model prompts (da2895f)
 
 ### Bug Fixes
 
