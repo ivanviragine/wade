@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.15.0] — 2026-02-25
+
+### Features
+
+- make confirm prompt require Enter key (97edf0f)
+
 ## [v0.14.2] — 2026-02-25
 
 ### Bug Fixes
