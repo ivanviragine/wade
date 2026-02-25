@@ -47,6 +47,19 @@ def get_deps_prompt_template() -> str:
     )
 
 
+def get_deps_interactive_template() -> str:
+    """Load the interactive fallback output instruction template."""
+    from ghaiw.skills.installer import get_templates_dir
+
+    template = get_templates_dir() / "prompts" / "deps-interactive.md"
+    if template.is_file():
+        return template.read_text(encoding="utf-8").strip()
+    return (
+        "Write your dependency output to: {output_file}\n"
+        "Format: one line per edge: <number> -> <number> # reason"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Context building
 # ---------------------------------------------------------------------------
@@ -373,11 +386,8 @@ def _run_interactive_analysis(
     output_file = Path(output_dir) / "deps-output.txt"
 
     # Append output instruction to prompt
-    interactive_prompt = (
-        f"{prompt}\n\n"
-        f"Write your dependency output to: {output_file}\n"
-        f"Format: one line per edge: <number> -> <number> # reason"
-    )
+    output_instruction = get_deps_interactive_template().replace("{output_file}", str(output_file))
+    interactive_prompt = f"{prompt}\n\n{output_instruction}"
 
     copy_to_clipboard(interactive_prompt)
     console.success("Copied dependency analysis prompt to clipboard.")
