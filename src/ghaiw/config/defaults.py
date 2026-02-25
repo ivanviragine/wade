@@ -23,10 +23,10 @@ TOOL_DEFAULTS: dict[str, ComplexityModelMapping] = {
         very_complex="claude-opus-4.6",
     ),
     AIToolID.GEMINI: ComplexityModelMapping(
-        easy="gemini-2.0-flash",
-        medium="gemini-2.0-flash",
-        complex="gemini-2.5-pro",
-        very_complex="gemini-2.5-pro",
+        easy="gemini-3.0-flash",
+        medium="gemini-3.0-flash",
+        complex="gemini-3.0-pro",
+        very_complex="gemini-3.0-pro",
     ),
     AIToolID.CODEX: ComplexityModelMapping(
         easy="codex-mini-latest",

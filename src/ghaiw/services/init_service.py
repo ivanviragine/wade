@@ -507,18 +507,32 @@ def _resolve_models(tool: str | None) -> tuple[ComplexityModelMapping, bool]:
     return mapping, False
 
 
+def _fixup_deprecated(model_id: str) -> str:
+    """Replace deprecated/unversioned model IDs with current equivalents."""
+    from ghaiw.config.migrations import fixup_deprecated_model
+
+    return fixup_deprecated_model(model_id)
+
+
 def _normalize_mapping(
     adapter: AbstractAITool,
     mapping: ComplexityModelMapping,
 ) -> ComplexityModelMapping:
-    """Normalize model IDs in a mapping to the tool's expected format."""
+    """Normalize model IDs in a mapping to the tool's expected format.
+
+    Applies deprecated model fixup before format normalization.
+    """
+
+    def _fix(model_id: str | None) -> str | None:
+        if not model_id:
+            return None
+        return adapter.normalize_model_format(_fixup_deprecated(model_id))
+
     return ComplexityModelMapping(
-        easy=adapter.normalize_model_format(mapping.easy) if mapping.easy else None,
-        medium=adapter.normalize_model_format(mapping.medium) if mapping.medium else None,
-        complex=adapter.normalize_model_format(mapping.complex) if mapping.complex else None,
-        very_complex=(
-            adapter.normalize_model_format(mapping.very_complex) if mapping.very_complex else None
-        ),
+        easy=_fix(mapping.easy),
+        medium=_fix(mapping.medium),
+        complex=_fix(mapping.complex),
+        very_complex=_fix(mapping.very_complex),
     )
 
 
@@ -576,6 +590,9 @@ def _prompt_model_mapping(
     If non_interactive, returns the mapping unchanged.
     If probing failed, shows a warning before prompting.
     Falls back to Claude defaults when the tool has no model suggestions.
+
+    Shows a select menu with available models for each tier, plus a Custom
+    option for typing a model name directly.
     """
     from ghaiw.ui import prompts
 
@@ -597,22 +614,62 @@ def _prompt_model_mapping(
     )
 
     if tool and not models_probed:
-        console.warn(
-            f"Could not auto-detect models for {tool} — "
-            "showing defaults. Press Enter to accept or type a model name."
-        )
+        console.warn(f"Could not auto-detect models for {tool} — showing defaults.")
 
-    easy = prompts.input_prompt("Easy tasks", mapping.easy or "")
-    medium = prompts.input_prompt("Medium tasks", mapping.medium or "")
-    complex_ = prompts.input_prompt("Complex tasks", mapping.complex or "")
-    very_complex = prompts.input_prompt("Very complex tasks", mapping.very_complex or "")
+    # Collect unique model IDs from the mapping for the select menu
+    available = _collect_model_options(mapping, tool)
+
+    custom_label = "Custom..."
+    tiers = [
+        ("Easy tasks", mapping.easy or ""),
+        ("Medium tasks", mapping.medium or ""),
+        ("Complex tasks", mapping.complex or ""),
+        ("Very complex tasks", mapping.very_complex or ""),
+    ]
+
+    results: list[str] = []
+    for label, default_model in tiers:
+        options = list(available)
+        if default_model and default_model not in options:
+            options.insert(0, default_model)
+        options.append(custom_label)
+
+        # Set default to the current model
+        default_idx = options.index(default_model) if default_model in options else 0
+        chosen_idx = prompts.select(label, options, default=default_idx)
+
+        if options[chosen_idx] == custom_label:
+            results.append(prompts.input_prompt(f"{label} (model ID)", default_model))
+        else:
+            results.append(options[chosen_idx])
 
     return ComplexityModelMapping(
-        easy=easy or mapping.easy,
-        medium=medium or mapping.medium,
-        complex=complex_ or mapping.complex,
-        very_complex=very_complex or mapping.very_complex,
+        easy=results[0] or mapping.easy,
+        medium=results[1] or mapping.medium,
+        complex=results[2] or mapping.complex,
+        very_complex=results[3] or mapping.very_complex,
     )
+
+
+def _collect_model_options(
+    mapping: ComplexityModelMapping,
+    tool: str | None,
+) -> list[str]:
+    """Collect unique model IDs from mapping and tool defaults for the select menu.
+
+    Returns a deduplicated list ordered from lightest to heaviest.
+    """
+    tool_defaults = get_defaults(tool) if tool else ComplexityModelMapping()
+    claude_defaults = get_defaults(AIToolID.CLAUDE)
+
+    # Gather all model IDs from all sources
+    candidates: list[str] = []
+    for src in (mapping, tool_defaults, claude_defaults):
+        for val in (src.easy, src.medium, src.complex, src.very_complex):
+            if val and val not in candidates:
+                candidates.append(val)
+
+    return candidates
 
 
 def _suggest_model_for_tool(tool: str) -> str:

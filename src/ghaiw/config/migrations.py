@@ -23,8 +23,27 @@ logger = structlog.get_logger()
 
 # Deprecated model values that should be replaced
 _DEPRECATED_MODELS: dict[str, str] = {
-    "gemini-3-flash": "claude-haiku-4-5",
+    # Unversioned Claude model aliases → latest versioned
+    "claude-haiku-4": "claude-haiku-4-5",
+    "claude-sonnet-4": "claude-sonnet-4-6",
+    "claude-opus-4": "claude-opus-4-6",
+    # Dotted variants (Copilot format)
+    "claude-haiku-4.0": "claude-haiku-4-5",
+    "claude-sonnet-4.0": "claude-sonnet-4-6",
+    "claude-opus-4.0": "claude-opus-4-6",
+    # Old Gemini versions
+    "gemini-2.0-flash": "gemini-3.0-flash",
+    "gemini-2.5-pro": "gemini-3.0-pro",
 }
+
+
+def fixup_deprecated_model(model_id: str) -> str:
+    """Replace a deprecated/unversioned model ID with its current equivalent.
+
+    Returns the model_id unchanged if it's not in the deprecated list.
+    """
+    return _DEPRECATED_MODELS.get(model_id, model_id)
+
 
 # Claude model ID format: dashes for Claude CLI, dots for Copilot
 _CLAUDE_DASH_TO_DOT_RE = re.compile(r"(claude-\w+-\d+)-(\d+)")

@@ -359,22 +359,27 @@ class TestPromptModelMapping:
         result = _prompt_model_mapping("claude", mapping, True, non_interactive=True)
         assert result == mapping
 
-    @patch("ghaiw.ui.prompts.input_prompt")
-    def test_interactive_allows_edits(self, mock_input: MagicMock) -> None:
+    @patch("ghaiw.ui.prompts.select")
+    def test_interactive_allows_edits(self, mock_select: MagicMock) -> None:
         mapping = ComplexityModelMapping(
             easy="haiku", medium="haiku", complex="sonnet", very_complex="opus"
         )
-        # User accepts all defaults (returns empty → falls back to mapping values)
-        mock_input.side_effect = ["", "", "", ""]
+        # User accepts all defaults (select returns default index each time)
+        mock_select.side_effect = lambda title, items, default=0: default
         result = _prompt_model_mapping("claude", mapping, True, non_interactive=False)
         assert result.easy == "haiku"
         assert result.complex == "sonnet"
 
     @patch("ghaiw.ui.prompts.input_prompt")
-    def test_interactive_overrides_values(self, mock_input: MagicMock) -> None:
+    @patch("ghaiw.ui.prompts.select")
+    def test_interactive_overrides_values(
+        self, mock_select: MagicMock, mock_input: MagicMock
+    ) -> None:
         mapping = ComplexityModelMapping(
             easy="haiku", medium="haiku", complex="sonnet", very_complex="opus"
         )
+        # select returns last index (Custom...) each time
+        mock_select.side_effect = lambda title, items, default=0: len(items) - 1
         mock_input.side_effect = ["custom-easy", "custom-med", "custom-complex", "custom-vc"]
         result = _prompt_model_mapping("claude", mapping, True, non_interactive=False)
         assert result.easy == "custom-easy"
@@ -390,13 +395,13 @@ class TestPromptModelMapping:
         # Test interactive mode warning
         mock_console.reset_mock()
 
-    @patch("ghaiw.ui.prompts.input_prompt")
+    @patch("ghaiw.ui.prompts.select")
     @patch("ghaiw.services.init_service.console")
     def test_probing_failed_interactive_warns(
-        self, mock_console: MagicMock, mock_input: MagicMock
+        self, mock_console: MagicMock, mock_select: MagicMock
     ) -> None:
         mapping = ComplexityModelMapping(easy="haiku")
-        mock_input.side_effect = ["", "", "", ""]
+        mock_select.side_effect = lambda title, items, default=0: default
         _prompt_model_mapping("claude", mapping, False, non_interactive=False)
         mock_console.warn.assert_called_once()
         assert "Could not auto-detect" in mock_console.warn.call_args[0][0]

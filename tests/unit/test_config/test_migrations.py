@@ -103,14 +103,14 @@ class TestMigrateDeprecatedModelValues:
         raw: dict = {
             "models": {
                 "claude": {
-                    "easy": "gemini-3-flash",
+                    "easy": "claude-sonnet-4",
                     "medium": "claude-haiku-4-5",
                 }
             }
         }
         result = migrate_deprecated_model_values(raw, "claude")
         assert result is True
-        assert raw["models"]["claude"]["easy"] == "claude-haiku-4-5"
+        assert raw["models"]["claude"]["easy"] == "claude-sonnet-4-6"
         assert raw["models"]["claude"]["medium"] == "claude-haiku-4-5"
 
     def test_skips_unknown_model(self) -> None:
@@ -143,20 +143,20 @@ class TestMigrateDeprecatedModelValues:
     def test_replaces_across_multiple_tools(self) -> None:
         raw: dict = {
             "models": {
-                "claude": {"easy": "gemini-3-flash"},
-                "copilot": {"easy": "gemini-3-flash"},
+                "claude": {"easy": "claude-sonnet-4"},
+                "copilot": {"easy": "claude-opus-4"},
             }
         }
         result = migrate_deprecated_model_values(raw, "claude")
         assert result is True
-        assert raw["models"]["claude"]["easy"] == "claude-haiku-4-5"
-        assert raw["models"]["copilot"]["easy"] == "claude-haiku-4-5"
+        assert raw["models"]["claude"]["easy"] == "claude-sonnet-4-6"
+        assert raw["models"]["copilot"]["easy"] == "claude-opus-4-6"
 
     def test_no_ai_tool_still_works(self) -> None:
-        raw: dict = {"models": {"claude": {"easy": "gemini-3-flash"}}}
+        raw: dict = {"models": {"claude": {"easy": "claude-sonnet-4"}}}
         result = migrate_deprecated_model_values(raw, None)
         assert result is True
-        assert raw["models"]["claude"]["easy"] == "claude-haiku-4-5"
+        assert raw["models"]["claude"]["easy"] == "claude-sonnet-4-6"
 
     def test_non_string_values_ignored(self) -> None:
         raw: dict = {"models": {"claude": {"easy": 123}}}
@@ -164,7 +164,7 @@ class TestMigrateDeprecatedModelValues:
         assert result is False
 
     def test_idempotent_second_call(self) -> None:
-        raw: dict = {"models": {"claude": {"easy": "gemini-3-flash"}}}
+        raw: dict = {"models": {"claude": {"easy": "claude-sonnet-4"}}}
         migrate_deprecated_model_values(raw, "claude")
         result = migrate_deprecated_model_values(raw, "claude")
         assert result is False
@@ -448,8 +448,8 @@ class TestBackfillMissingModelKeys:
     def test_gemini_defaults(self) -> None:
         raw: dict = {}
         backfill_missing_model_keys(raw, "gemini")
-        assert raw["models"]["gemini"]["easy"] == "gemini-2.0-flash"
-        assert raw["models"]["gemini"]["complex"] == "gemini-2.5-pro"
+        assert raw["models"]["gemini"]["easy"] == "gemini-3.0-flash"
+        assert raw["models"]["gemini"]["complex"] == "gemini-3.0-pro"
 
     def test_unknown_tool_returns_false(self) -> None:
         raw: dict = {}
@@ -654,7 +654,7 @@ class TestRunAllMigrations:
             yaml.dump(
                 {
                     "ai_tool": "claude",
-                    "model_easy": "gemini-3-flash",
+                    "model_easy": "claude-sonnet-4",
                     "model_complex": "claude-sonnet-4-6",
                     "project": {"merge_strategy": "pr"},
                 },
@@ -667,7 +667,7 @@ class TestRunAllMigrations:
         assert second is True
 
         migrated = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        assert migrated["models"]["claude"]["easy"] == "claude-haiku-4-5"
+        assert migrated["models"]["claude"]["easy"] == "claude-sonnet-4-6"
 
         # Third run should be a no-op
         third = run_all_migrations(config_path)
