@@ -10,6 +10,7 @@ Behavioral reference: lib/task/crud.sh (_task_do_plan, _task_run_ai_planning)
 from __future__ import annotations
 
 import contextlib
+import os
 import shutil
 import subprocess
 import tempfile
@@ -200,6 +201,30 @@ def _extract_token_usage(transcript_path: Path | None) -> TokenUsage:
     return extract_token_usage_from_text(text)
 
 
+def _warn_token_extraction(transcript_path: Path | None) -> None:
+    """Warn the user that token usage could not be extracted.
+
+    If a transcript file exists, copies it to a stable debug path so the
+    user can inspect it after the temp plan directory is cleaned up.
+    """
+    if not transcript_path or not transcript_path.is_file():
+        logger.warning("plan.transcript_not_captured", path=str(transcript_path))
+        console.warn("Session transcript was not captured — token usage unavailable.")
+        return
+
+    fd, debug_path_str = tempfile.mkstemp(prefix="ghaiw-transcript-", suffix=".txt")
+    os.close(fd)
+    debug_path = Path(debug_path_str)
+    try:
+        shutil.copy2(transcript_path, debug_path)
+        logger.warning("plan.token_extraction_failed", transcript=str(debug_path))
+        console.warn("Could not extract token usage from session transcript.")
+        console.hint(f"Transcript saved for inspection: {debug_path}")
+    except OSError:
+        logger.warning("plan.token_extraction_failed", transcript=str(transcript_path))
+        console.warn("Could not extract token usage from session transcript.")
+
+
 # ---------------------------------------------------------------------------
 # Main plan orchestrator
 # ---------------------------------------------------------------------------
@@ -265,6 +290,8 @@ def plan(
 
     # Post-session: extract token usage
     usage = _extract_token_usage(transcript_path)
+    if not usage.total_tokens:
+        _warn_token_extraction(transcript_path)
 
     # Path A: Check for issues created during AI session
     after_snapshot = provider.snapshot_task_numbers(

@@ -346,6 +346,24 @@ class TestReadTranscriptExcerpt:
         assert "HelloWorld" in text
         assert "in:100" in text
 
+    def test_ansi_fragments_stripped(self, tmp_path: Path) -> None:
+        """ANSI parameter fragments left after ESC removal must be stripped.
+
+        When script(1) captures a session, ESC (0x1B) is kept by the byte
+        filter but the trailing "[NNNm" sequences remain as literal ASCII.
+        If Claude Code colors token counts (e.g. in:[33m166[0m), the regex
+        must still match after those fragments are removed.
+        """
+        path = tmp_path / "transcript.txt"
+        # Simulate a status bar line where ESC has already been stripped,
+        # leaving raw ANSI fragments around the token numbers.
+        path.write_bytes(b"status: in:[33m166[0m out:[33m5.2k[0m\n")
+        text = read_transcript_excerpt(path)
+        assert "in:166" in text
+        assert "out:5.2k" in text
+        assert "[33m" not in text
+        assert "[0m" not in text
+
     def test_max_lines_respected(self, tmp_path: Path) -> None:
         path = tmp_path / "long.txt"
         lines = [f"line {i}" for i in range(1000)]
