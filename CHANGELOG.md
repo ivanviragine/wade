@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.14.1] — 2026-02-25
+
+### Documentation
+
+- update walkthrough.md (4010a46)
+
 ## [v0.14.0] — 2026-02-25
 
 ### Features
