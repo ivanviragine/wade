@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.13.0] — 2026-02-25
+
+### Features
+
+- interactive AI auto-correction for model registry (4a959c3)
+
 ## [v0.12.0] — 2026-02-25
 
 ### Features
