@@ -101,6 +101,12 @@ def read_transcript_excerpt(transcript_path: Path, max_lines: int = 400) -> str:
             cleaned.append(b)
 
     text = cleaned.decode("ascii", errors="ignore")
+    # Strip remaining ANSI parameter fragments left after ESC removal.
+    # ESC is 0x1B (stripped above), but the trailing "[NNN;NNNm" sequences
+    # remain as literal ASCII and must be removed too, otherwise token
+    # counts like "in:[33m166[0m" fail to match.
+    # Mirrors: gsub(/\[[0-9;?]*[[:alpha:]]/, "", raw) in tokens.sh
+    text = re.sub(r"\[[0-9;?]*[a-zA-Z]", "", text)
     # Replace CR with newline
     text = text.replace("\r", "\n")
 
