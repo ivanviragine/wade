@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.8.0] — 2026-02-25
+
+### Features
+
+- modernize terminal UI with Rich panels, spinners, and semantic theme (6b569f1)
+- add OpenCode as AI tool adapter (5dc64f5)
+
 ## [v0.7.0] — 2026-02-24
 
 ### Features
