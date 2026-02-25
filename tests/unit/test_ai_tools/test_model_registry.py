@@ -36,7 +36,7 @@ class TestRegistryGetModels:
         adapter = AbstractAITool.get(AIToolID.COPILOT)
         models = adapter.get_models()
         assert len(models) == len(get_models_for_tool("copilot"))
-        assert "gpt-4o" in [m.id for m in models]
+        assert "gpt-4.1" in [m.id for m in models]
 
     def test_gemini_adapter_reads_registry(self) -> None:
         adapter = AbstractAITool.get(AIToolID.GEMINI)
@@ -48,7 +48,7 @@ class TestRegistryGetModels:
         adapter = AbstractAITool.get(AIToolID.CODEX)
         models = adapter.get_models()
         assert len(models) == len(get_models_for_tool("codex"))
-        assert "codex-mini-latest" in [m.id for m in models]
+        assert "gpt-5-codex" in [m.id for m in models]
 
     def test_opencode_adapter_reads_registry(self) -> None:
         adapter = AbstractAITool.get(AIToolID.OPENCODE)

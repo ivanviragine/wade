@@ -49,13 +49,20 @@ def confirm(message: str, default: bool = False) -> bool:
     """
     if not is_tty():
         return default
-    result: bool | None = questionary.confirm(
+    choices = ["Yes", "No"]
+    default_choice = "Yes" if default else "No"
+    
+    result: str | None = questionary.select(
         message,
-        default=default,
+        choices=choices,
+        default=default_choice,
+        pointer="\u203a",
         style=_style,
+        instruction="",
     ).ask()
+    
     _handle_none(result)
-    return bool(result)
+    return result == "Yes"
 
 
 def input_prompt(label: str, default: str = "", allow_empty: bool = False) -> str:
