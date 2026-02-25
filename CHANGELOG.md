@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.14.0] — 2026-02-25
+
+### Features
+
+- native JSON schema structured outputs for Copilot and Claude adapters (50321e4)
+
 ## [v0.13.2] — 2026-02-25
 
 ### Documentation
