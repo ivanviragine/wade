@@ -77,6 +77,7 @@ class AIConfig(BaseModel):
     """AI tool configuration section."""
 
     default_tool: str | None = None
+    default_model: str | None = None
     plan: AICommandConfig = AICommandConfig()
     deps: AICommandConfig = AICommandConfig()
     work: AICommandConfig = AICommandConfig()
@@ -132,13 +133,13 @@ class ProjectConfig(BaseModel):
     def get_model(self, command: str | None = None) -> str | None:
         """Get the model for a command, with fallback chain.
 
-        Fallback: command-specific model → None.
+        Fallback: command-specific model → ai.default_model → None.
         """
         if command:
             cmd_config = getattr(self.ai, command, None)
             if isinstance(cmd_config, AICommandConfig) and cmd_config.model:
                 return cmd_config.model
-        return None
+        return self.ai.default_model
 
     def get_complexity_model(self, tool: str, complexity: str) -> str | None:
         """Get model ID for a tool + complexity combination."""

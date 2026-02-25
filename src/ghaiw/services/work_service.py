@@ -495,6 +495,9 @@ def start(
             resolved_model = env_model
     if not resolved_model and resolved_tool and task.complexity:
         resolved_model = _complexity_to_model(config, resolved_tool, task.complexity.value)
+    # Final fallback: ai.work.model or ai.default_model from config
+    if not resolved_model:
+        resolved_model = config.get_model("work")
 
     if resolved_tool:
         console.kv("AI tool", resolved_tool)

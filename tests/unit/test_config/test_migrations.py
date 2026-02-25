@@ -448,8 +448,8 @@ class TestBackfillMissingModelKeys:
     def test_gemini_defaults(self) -> None:
         raw: dict = {}
         backfill_missing_model_keys(raw, "gemini")
-        assert raw["models"]["gemini"]["easy"] == "gemini-3.0-flash"
-        assert raw["models"]["gemini"]["complex"] == "gemini-3.0-pro"
+        assert raw["models"]["gemini"]["easy"] == "gemini-3-flash-preview"
+        assert raw["models"]["gemini"]["complex"] == "gemini-3-pro-preview"
 
     def test_unknown_tool_returns_false(self) -> None:
         raw: dict = {}

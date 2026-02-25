@@ -306,9 +306,15 @@ class TestPromptProjectSettings:
         assert result["issue_label"] == "feature-plan"
         assert result["worktrees_dir"] == "../.worktrees"
 
+    @patch("ghaiw.ui.prompts.select")
     @patch("ghaiw.ui.prompts.input_prompt")
-    def test_interactive_uses_prompts(self, mock_input: MagicMock, tmp_git_repo: Path) -> None:
-        mock_input.side_effect = ["direct", "fix", "bug", "../worktrees"]
+    def test_interactive_uses_prompts(
+        self, mock_input: MagicMock, mock_select: MagicMock, tmp_git_repo: Path
+    ) -> None:
+        # merge_strategy uses prompts.select (index 1 = "direct")
+        mock_select.side_effect = [1]
+        # branch_prefix, issue_label, worktrees_dir use input_prompt
+        mock_input.side_effect = ["fix", "bug", "../worktrees"]
         result = _prompt_project_settings(tmp_git_repo, non_interactive=False)
         assert result["merge_strategy"] == "direct"
         assert result["branch_prefix"] == "fix"
@@ -377,34 +383,33 @@ class TestPromptModelMapping:
 class TestPromptCommandOverrides:
     def test_non_interactive_returns_empty(self) -> None:
         result = _prompt_command_overrides(["claude"], non_interactive=True)
-        assert result == {"plan": {}, "deps": {}, "work": {}}
+        assert result == {"plan": {}, "deps": {}}
 
     @patch("ghaiw.ui.prompts.select")
     def test_interactive_no_overrides(self, mock_select: MagicMock) -> None:
-        # Select "Skip (use default)" for all three commands
+        # Select "Skip (use default)" for plan and deps only
         # With installed_tools=["claude"], options are: ["claude", "Skip (use default)"]
-        mock_select.side_effect = [1, 1, 1]  # index 1 = Skip
+        mock_select.side_effect = [1, 1]  # index 1 = Skip
         result = _prompt_command_overrides(["claude"], non_interactive=False)
         assert result["plan"] == {}
         assert result["deps"] == {}
-        assert result["work"] == {}
+        assert "work" not in result
 
     @patch("ghaiw.services.init_service._suggest_model_for_tool")
-    @patch("ghaiw.ui.prompts.input_prompt")
     @patch("ghaiw.ui.prompts.select")
     def test_interactive_with_tool_override(
-        self, mock_select: MagicMock, mock_input: MagicMock, mock_suggest: MagicMock
+        self, mock_select: MagicMock, mock_suggest: MagicMock
     ) -> None:
         mock_suggest.return_value = "gemini-2.5-pro"
-        # plan: select gemini (index 1), deps: skip (index 2), work: skip (index 2)
-        mock_select.side_effect = [1, 2, 2]
-        # After selecting gemini for plan, input_prompt asks for model
-        mock_input.side_effect = ["gemini-2.5-pro"]
+        # installed_tools=["claude", "gemini"], tool_options=["claude", "gemini", "Skip"]
+        # plan: idx 1 = gemini; model for plan: idx 1 = "gemini-2.5-pro" (2nd in gemini list);
+        # deps: idx 2 = "Skip (use default)"
+        mock_select.side_effect = [1, 1, 2]
         result = _prompt_command_overrides(["claude", "gemini"], non_interactive=False)
         assert result["plan"]["tool"] == "gemini"
         assert result["plan"]["model"] == "gemini-2.5-pro"
         assert result["deps"] == {}
-        assert result["work"] == {}
+        assert "work" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -443,12 +448,12 @@ class TestWriteConfig:
         overrides = {
             "plan": {"tool": "gemini", "model": "gemini-2.5-pro"},
             "deps": {},
-            "work": {"tool": "copilot"},
         }
         _write_config(
             config_path,
             "claude",
             ComplexityModelMapping(),
+            work_tool="copilot",
             command_overrides=overrides,
         )
         config = yaml.safe_load(config_path.read_text())
@@ -475,6 +480,32 @@ class TestWriteConfig:
         config = yaml.safe_load(config_path.read_text())
         assert "default_tool" not in config.get("ai", {})
         assert "models" not in config
+
+    def test_with_default_model_and_work_tool(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".ghaiw.yml"
+        mapping = ComplexityModelMapping(easy="haiku", complex="sonnet")
+        _write_config(
+            config_path,
+            "claude",
+            mapping,
+            work_tool="gemini",
+            default_model="gemini-2.5-pro",
+        )
+        config = yaml.safe_load(config_path.read_text())
+        # default_model written to ai section
+        assert config["ai"]["default_model"] == "gemini-2.5-pro"
+        # work tool written only when different from default_tool
+        assert config["ai"]["work"]["tool"] == "gemini"
+        # models keyed by work_tool, not default_tool
+        assert "gemini" in config["models"]
+        assert "claude" not in config.get("models", {})
+
+    def test_work_tool_same_as_ai_tool_omits_work_section(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".ghaiw.yml"
+        _write_config(config_path, "claude", ComplexityModelMapping(), work_tool="claude")
+        config = yaml.safe_load(config_path.read_text())
+        # work section omitted when tool matches default
+        assert "work" not in config.get("ai", {})
 
 
 # ---------------------------------------------------------------------------

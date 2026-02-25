@@ -90,39 +90,34 @@ def init(
     # 2. Detect/select AI tool
     selected_tool = _select_ai_tool(ai_tool, non_interactive)
 
-    # 3. Resolve models (registry defaults)
-    model_mapping = _resolve_models(selected_tool)
-
-    # 3b. Ask for a single default model (fallback when no complexity/model specified)
-    default_model = _prompt_default_model(selected_tool, model_mapping, non_interactive)
-
-    # 4. Collect project settings
+    # 3. Collect project settings
     project_settings = _prompt_project_settings(root, non_interactive)
 
-    # 5. Let user review/edit model mapping
-    model_mapping = _prompt_model_mapping(selected_tool, model_mapping, non_interactive)
-
-    # 6. Per-command AI tool overrides
+    # 4. Implementation work: tool, complexity model mapping, default model
     installed_tools = [str(t) for t in AbstractAITool.detect_installed()]
-    command_overrides = _prompt_command_overrides(installed_tools, non_interactive)
+    work_setup = _prompt_work_setup(selected_tool, installed_tools, non_interactive)
+    # work_setup keys: "tool", "model_mapping", "default_model"
 
-    # Apply default_model as fallback for commands with no explicit model set
-    if default_model:
-        for cmd in ("plan", "deps", "work"):
-            if not command_overrides.get(cmd, {}).get("model"):
-                command_overrides.setdefault(cmd, {})["model"] = default_model
+    # 5. Per-command AI tool overrides (plan + deps only; work handled above)
+    command_overrides = _prompt_command_overrides(
+        installed_tools,
+        non_interactive,
+        default_model=work_setup["default_model"],
+    )
 
-    # 7. Generate config
+    # 6. Generate config
     config_path = root / ".ghaiw.yml"
     if config_path.exists():
         console.info("Config .ghaiw.yml already exists — patching missing values")
-        _patch_config(config_path, selected_tool, model_mapping)
+        _patch_config(config_path, selected_tool, work_setup["model_mapping"])
     else:
         _write_config(
             config_path,
             selected_tool,
-            model_mapping,
+            work_setup["model_mapping"],
             project_settings=project_settings,
+            work_tool=work_setup["tool"],
+            default_model=work_setup["default_model"],
             command_overrides=command_overrides,
         )
         console.success(f"Created {config_path.name}")
@@ -712,21 +707,70 @@ def _suggest_model_for_tool(tool: str) -> str:
     return fallback.complex or ""
 
 
+def _prompt_work_setup(
+    default_tool: str | None,
+    installed_tools: list[str],
+    non_interactive: bool,
+) -> dict[str, Any]:
+    """Prompt for all implementation-work configuration as a single cohesive unit.
+
+    Covers: work tool selection, complexity model mapping for that tool, and
+    the default fallback model.  The default model is prompted AFTER the
+    complexity mapping so the pre-selected value reflects the user's just-chosen
+    ``mapping.complex`` tier rather than a hardcoded default.
+
+    Returns a dict with keys:
+        ``tool``          - work-specific tool override, or None (use default_tool)
+        ``model_mapping`` - ComplexityModelMapping for the effective tool
+        ``default_model`` - fallback model ID, or None if skipped
+    """
+    if non_interactive:
+        mapping = _resolve_models(default_tool)
+        return {"tool": None, "model_mapping": mapping, "default_model": None}
+
+    from ghaiw.ui import prompts
+
+    console.rule("Implementation work")
+
+    # 1. Work tool selection
+    skip_label = "Skip (use default)"
+    tool_options = (installed_tools if installed_tools else ["claude", "copilot", "gemini"]) + [
+        skip_label
+    ]
+    idx = prompts.select("AI tool for implementation work", tool_options)
+    work_tool: str | None = None
+    if tool_options[idx] != skip_label:
+        work_tool = tool_options[idx]
+
+    # 2. Resolve and prompt complexity mapping for the *effective* tool
+    effective_tool = work_tool or default_tool
+    mapping = _resolve_models(effective_tool)
+    mapping = _prompt_model_mapping(effective_tool, mapping, non_interactive=False)
+
+    # 3. Default model — prompted AFTER mapping so mapping.complex is available
+    default_model = _prompt_default_model(effective_tool, mapping, non_interactive=False)
+
+    return {"tool": work_tool, "model_mapping": mapping, "default_model": default_model}
+
+
 def _prompt_command_overrides(
     installed_tools: list[str],
     non_interactive: bool,
+    default_model: str | None = None,
 ) -> dict[str, dict[str, str]]:
-    """Prompt for per-command AI tool and model overrides.
+    """Prompt for per-command AI tool and model overrides for plan and deps.
+
+    Work configuration is handled separately by ``_prompt_work_setup()``.
 
     Returns a dict like:
-        {"plan": {"tool": "claude", "model": "claude-sonnet-4-6"}, ...}
+        {"plan": {"tool": "claude", "model": "claude-sonnet-4-6"}, "deps": {}}
 
     Empty dicts for commands with no overrides.
     """
     from ghaiw.ui import prompts
 
     if non_interactive:
-        return {"plan": {}, "deps": {}, "work": {}}
+        return {"plan": {}, "deps": {}}
 
     console.rule("Per-command AI tool overrides")
 
@@ -740,15 +784,20 @@ def _prompt_command_overrides(
     for cmd_name, label in [
         ("plan", "Planning tasks"),
         ("deps", "Dependency analysis"),
-        ("work", "Implementation work"),
     ]:
         idx = prompts.select(f"AI tool for {label.lower()}", tool_options)
         tool = tool_options[idx]
         if tool == skip_label:
             result[cmd_name] = {}
         else:
-            model_default = _suggest_model_for_tool(tool)
             available = _collect_model_options(tool)
+            suggested = _suggest_model_for_tool(tool)
+            # Pre-select default_model if it is in the available list (same tool as work),
+            # otherwise fall back to the tool's suggested model.
+            if default_model and default_model in available:
+                model_default = default_model
+            else:
+                model_default = suggested
             custom_label = "Custom..."
             skip_model_label = "Skip (use default)"
             model_options = list(available)
@@ -778,6 +827,8 @@ def _write_config(
     ai_tool: str | None,
     model_mapping: ComplexityModelMapping,
     project_settings: dict[str, str] | None = None,
+    work_tool: str | None = None,
+    default_model: str | None = None,
     command_overrides: dict[str, dict[str, str]] | None = None,
 ) -> None:
     """Write a fresh .ghaiw.yml config file."""
@@ -803,10 +854,16 @@ def _write_config(
     ai_section: dict[str, Any] = {}
     if ai_tool:
         ai_section["default_tool"] = str(ai_tool)
+    if default_model:
+        ai_section["default_model"] = default_model
 
-    # Write per-command overrides
+    # Write work tool override (only when different from default_tool)
+    if work_tool and work_tool != ai_tool:
+        ai_section["work"] = {"tool": work_tool}
+
+    # Write plan/deps per-command overrides
     if command_overrides:
-        for cmd_name in ("plan", "deps", "work"):
+        for cmd_name in ("plan", "deps"):
             overrides = command_overrides.get(cmd_name, {})
             if overrides:
                 cmd_section: dict[str, str] = {}
@@ -819,9 +876,11 @@ def _write_config(
 
     config_dict["ai"] = ai_section
 
-    if ai_tool and (model_mapping.easy or model_mapping.complex):
+    # models section keyed by work tool (or default tool)
+    models_key = work_tool or ai_tool
+    if models_key and (model_mapping.easy or model_mapping.complex):
         config_dict["models"] = {
-            str(ai_tool): {
+            str(models_key): {
                 k: v
                 for k, v in {
                     "easy": model_mapping.easy,
