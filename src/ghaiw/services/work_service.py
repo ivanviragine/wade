@@ -565,7 +565,7 @@ def start(
     prompt = build_work_prompt(task, resolved_tool)
     copy_to_clipboard(prompt)
     console.success("Copied work prompt to clipboard.")
-    console.empty()
+    console.panel(prompt, title="Paste in Claude")
 
     # cd_only mode: just print the worktree path and return (no title, no AI)
     if cd_only:
