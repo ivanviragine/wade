@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.24.4] — 2026-02-26
+
+### Bug Fixes
+
+- use sentinel-based back detection in select() to fix ← Back being treated as an option (a713c71)
+
 ## [v0.24.3] — 2026-02-26
 
 ### Bug Fixes
