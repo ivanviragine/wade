@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.16.3] — 2026-02-26
+
+### Refactoring
+
+- replace monolithic workflow skill with phase-specific bundles (ea3679f)
+
 ## [v0.16.2] — 2026-02-25
 
 ### Refactoring
