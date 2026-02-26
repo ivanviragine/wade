@@ -59,8 +59,9 @@ class CodexAdapter(AbstractAITool):
         prompt: str | None = None,
         detach: bool = False,
         transcript_path: Path | None = None,
+        trusted_dirs: list[str] | None = None,
     ) -> int:
-        cmd = self.build_launch_command(model=model)
+        cmd = self.build_launch_command(model=model, trusted_dirs=trusted_dirs)
         logger.info("ai_tool.launch", tool="codex", model=model, cwd=str(worktree_path))
         return run_with_transcript(cmd, transcript_path, cwd=worktree_path)
 

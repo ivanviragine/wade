@@ -613,7 +613,10 @@ def start(
     if detach and resolved_tool:
         try:
             detach_adapter = AbstractAITool.get(AIToolID(resolved_tool))
-            cmd = detach_adapter.build_launch_command(model=resolved_model)
+            cmd = detach_adapter.build_launch_command(
+                model=resolved_model,
+                trusted_dirs=[str(worktree_path), "/tmp"],
+            )
         except (ValueError, KeyError):
             cmd = [resolved_tool]
 
@@ -647,6 +650,7 @@ def start(
                 worktree_path=worktree_path,
                 model=resolved_model,
                 transcript_path=transcript_path,
+                trusted_dirs=[str(worktree_path), "/tmp"],
             )
             logger.info("work.ai_exited", exit_code=exit_code, tool=resolved_tool)
         except (ValueError, KeyError):

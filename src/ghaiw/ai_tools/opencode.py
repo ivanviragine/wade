@@ -66,8 +66,9 @@ class OpenCodeAdapter(AbstractAITool):
         prompt: str | None = None,
         detach: bool = False,
         transcript_path: Path | None = None,
+        trusted_dirs: list[str] | None = None,
     ) -> int:
-        cmd = self.build_launch_command(model=model, prompt=prompt)
+        cmd = self.build_launch_command(model=model, prompt=prompt, trusted_dirs=trusted_dirs)
         logger.info("ai_tool.launch", tool="opencode", model=model, cwd=str(worktree_path))
         return run_with_transcript(cmd, transcript_path, cwd=worktree_path)
 

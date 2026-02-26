@@ -333,7 +333,11 @@ def run_headless_analysis(
         return None
 
     # Build command
-    cmd = adapter.build_launch_command(model=model, prompt=prompt)
+    cmd = adapter.build_launch_command(
+        model=model,
+        prompt=prompt,
+        trusted_dirs=[str(Path.cwd()), "/tmp"],
+    )
 
     try:
         result = subprocess.run(
@@ -393,6 +397,7 @@ def _run_interactive_analysis(
         adapter.launch(
             worktree_path=Path.cwd(),
             model=model,
+            trusted_dirs=[str(Path.cwd()), output_dir, "/tmp"],
         )
     except (ValueError, KeyError):
         console.warn(f"Unknown AI tool: {ai_tool}")

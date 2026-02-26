@@ -114,6 +114,7 @@ class AbstractAITool(ABC):
         prompt: str | None = None,
         detach: bool = False,
         transcript_path: Path | None = None,
+        trusted_dirs: list[str] | None = None,
     ) -> int:
         """Launch the AI tool in the given worktree.
 
@@ -124,6 +125,9 @@ class AbstractAITool(ABC):
             detach: If True, launch in background (GUI tools).
             transcript_path: Optional path to write session transcript for
                 token usage extraction.
+            trusted_dirs: Optional list of directory paths to pre-authorize.
+                Tools that support directory-trust flags (e.g. --add-dir) will
+                pass these so the user is not prompted for confirmation.
 
         Returns:
             Exit code from the tool process (0 for detached).
@@ -159,6 +163,18 @@ class AbstractAITool(ABC):
         """
         return []  # Default: no plan dir support
 
+    def trusted_dirs_args(self, dirs: list[str]) -> list[str]:
+        """Get extra CLI args to grant access to a list of trusted directories.
+
+        Default implementation delegates to plan_dir_args() per directory, so
+        any adapter that overrides plan_dir_args() automatically supports this
+        method. Adapters without directory-trust support return [].
+        """
+        result: list[str] = []
+        for d in dirs:
+            result.extend(self.plan_dir_args(d))
+        return result
+
     def normalize_model_format(self, model_id: str) -> str:
         """Normalize a model ID to this tool's expected format.
 
@@ -193,6 +209,7 @@ class AbstractAITool(ABC):
         prompt: str | None = None,
         plan_mode: bool = False,
         json_schema: dict[str, Any] | None = None,
+        trusted_dirs: list[str] | None = None,
     ) -> list[str]:
         """Build the command line for launching this tool."""
         caps = self.capabilities()
@@ -209,6 +226,9 @@ class AbstractAITool(ABC):
 
         if json_schema:
             cmd.extend(self.structured_output_args(json_schema))
+
+        if trusted_dirs:
+            cmd.extend(self.trusted_dirs_args(trusted_dirs))
 
         return cmd
 

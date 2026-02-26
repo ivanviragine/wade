@@ -166,8 +166,12 @@ def run_ai_planning_session(
         result = subprocess.run([ai_tool], cwd=None)
         return result.returncode
 
-    # Build command with plan-mode and plan-dir permission args
-    cmd = adapter.build_launch_command(model=model, plan_mode=True)
+    # Build command with plan-mode, trusted dirs, and plan-dir permission args
+    cmd = adapter.build_launch_command(
+        model=model,
+        plan_mode=True,
+        trusted_dirs=[str(Path.cwd()), "/tmp"],
+    )
     plan_dir_args = adapter.plan_dir_args(plan_dir)
     if plan_dir_args:
         cmd.extend(plan_dir_args)
