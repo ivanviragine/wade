@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.19.3] — 2026-02-26
+
+### Documentation
+
+- strengthen PR-SUMMARY requirement in work-session skill (dd6be41)
+
 ## [v0.19.2] — 2026-02-26
 
 ### Bug Fixes
