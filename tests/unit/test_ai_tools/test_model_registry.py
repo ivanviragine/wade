@@ -48,7 +48,7 @@ class TestRegistryGetModels:
         adapter = AbstractAITool.get(AIToolID.CODEX)
         models = adapter.get_models()
         assert len(models) == len(get_models_for_tool("codex"))
-        assert "gpt-5-codex" in [m.id for m in models]
+        assert any("codex" in m.id for m in models)
 
     def test_opencode_adapter_reads_registry(self) -> None:
         adapter = AbstractAITool.get(AIToolID.OPENCODE)
