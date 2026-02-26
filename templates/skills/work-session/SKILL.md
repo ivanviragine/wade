@@ -49,10 +49,20 @@ multi-line messages.
 
 ## PR summary
 
-Before finalizing your work, write a PR summary to
-**`/tmp/PR-SUMMARY-{issue-number}.md`** (e.g., `/tmp/PR-SUMMARY-42.md`).
-This file is **required** — `ghaiwpy work done` reads it to populate the PR
-body. Without it, the PR description will be empty.
+**Write this file immediately — before you write any code.**
+
+```bash
+cat > /tmp/PR-SUMMARY-{issue-number}.md << 'EOF'
+# PR Summary
+(in progress)
+EOF
+```
+
+`ghaiwpy work done` reads **`/tmp/PR-SUMMARY-{issue-number}.md`** to populate
+the PR body. If the file is missing, the PR will have no description.
+Creating it early as a placeholder guarantees it exists; update it as you work.
+
+> **Never commit this file** — it is a session artifact.
 
 ### What to include
 
@@ -62,7 +72,7 @@ body. Without it, the PR description will be empty.
 4. **What was tested** — how you verified the changes work
 5. **Screenshots** — visual evidence for UI/UX changes (if applicable)
 
-### Template
+### Final form
 
 ```markdown
 # PR Summary
@@ -81,11 +91,6 @@ body. Without it, the PR description will be empty.
 ## Notes for reviewers
 [Optional: anything the reviewer should know]
 ```
-
-Write the summary outside the repo (to `/tmp`). Update it as you work — don't
-wait until the end.
-
-> **Note:** `PR-SUMMARY-*.md` is a session artifact — **never commit it**.
 
 ## Syncing with main
 
@@ -131,11 +136,28 @@ in repo, already on main) and suggest how to fix it.
 **NEVER** create Pull Requests manually (`gh pr create`) or push branches
 directly.
 
-To finalize your work:
+To finalize your work, follow these steps in order:
 
-1. **Write PR summary** → `/tmp/PR-SUMMARY-{issue-number}.md`
-2. **Sync** → `ghaiwpy work sync --json`
-3. **Done** → `ghaiwpy work done`
+**Step 1 — Verify PR summary exists and is complete:**
+
+```bash
+cat /tmp/PR-SUMMARY-{issue-number}.md
+```
+
+The file must exist and contain a real description (not just the placeholder).
+If it is missing or still says "(in progress)", write it now before continuing.
+
+**Step 2 — Sync with main:**
+
+```bash
+ghaiwpy work sync --json
+```
+
+**Step 3 — Done:**
+
+```bash
+ghaiwpy work done
+```
 
 `ghaiwpy work done` handles pushing the branch, creating the PR (or merging),
 and triggering auto-versioning (if enabled). The worktree is **not** deleted —
