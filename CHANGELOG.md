@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.24.1] — 2026-02-26
+
+### Bug Fixes
+
+- show prompt in panel matching work start layout (24c4ead)
+
 ## [v0.24.0] — 2026-02-26
 
 ### Features
