@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.22.3] — 2026-02-26
+
+### Bug Fixes
+
+- use last status bar match for correct Claude token counts (dbd13bc)
+
 ## [v0.22.2] — 2026-02-26
 
 ### Bug Fixes
