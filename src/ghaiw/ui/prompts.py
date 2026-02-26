@@ -9,6 +9,7 @@ Uses questionary for arrow-key navigation menus.
 from __future__ import annotations
 
 import sys
+from typing import Final
 
 import questionary
 import typer
@@ -16,6 +17,16 @@ from prompt_toolkit.styles import Style
 from rich.console import Console
 
 _console = Console(stderr=True)
+
+
+class _BackSentinel:
+    """Singleton sentinel: value returned by questionary when "← Back" is selected."""
+
+    __slots__ = ()
+
+
+_BACK_VALUE: Final = _BackSentinel()
+_BACK_TITLE: Final = "\u2190 Back"
 
 # Custom prompt_toolkit style matching the color palette
 _style = Style(
@@ -108,7 +119,7 @@ def select(
     if not is_tty():
         return default
 
-    # Build choice labels — append hints if provided
+    # Build display labels (with hints) — these are the plain string choices
     choices: list[str] = []
     for i, item in enumerate(items):
         if hints and i < len(hints) and hints[i]:
@@ -116,21 +127,26 @@ def select(
         else:
             choices.append(item)
 
-    back_label = "\u2190 Back"
+    # Build the questionary choice list. "← Back" uses a Choice with a sentinel
+    # value so that back detection is identity-based (immune to string rendering
+    # differences that would break a simple string comparison).
+    q_choices: list[str | questionary.Choice]
     if allow_back:
-        choices = [back_label, *choices]
+        back_choice = questionary.Choice(title=_BACK_TITLE, value=_BACK_VALUE)
+        q_choices = [back_choice, *choices]
         adjusted_default = default + 1
-        if adjusted_default >= len(choices):
+        if adjusted_default >= len(q_choices):
             adjusted_default = 1
     else:
+        q_choices = list(choices)
         adjusted_default = default
 
-    default_choice = (
-        choices[adjusted_default] if 0 <= adjusted_default < len(choices) else choices[0]
+    default_choice: str | questionary.Choice = (
+        q_choices[adjusted_default] if 0 <= adjusted_default < len(q_choices) else q_choices[0]
     )
-    result: str | None = questionary.select(
+    result: object = questionary.select(
         title,
-        choices=choices,
+        choices=q_choices,
         default=default_choice,
         pointer="\u203a",
         style=_style,
@@ -138,13 +154,14 @@ def select(
     ).ask()
     _handle_none(result)
 
-    if allow_back and result == back_label:
+    if result is _BACK_VALUE:
         return -1
 
-    # Map back to original index (accounting for prepended "← Back" item)
+    # result is a plain string — map it to a 0-based index into the original items
+    if not isinstance(result, str):
+        return default
     try:
-        idx = choices.index(result)  # type: ignore[arg-type]
-        return idx - 1 if allow_back else idx
+        return choices.index(result)
     except ValueError:
         return default
 
