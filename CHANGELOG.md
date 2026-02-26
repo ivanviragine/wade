@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.18.0] — 2026-02-26
+
+### Features
+
+- show complexity/model as separate rows and add spacing in work start summary (d0f4827)
+
 ## [v0.17.0] — 2026-02-26
 
 ### Features
