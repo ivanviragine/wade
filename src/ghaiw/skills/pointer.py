@@ -30,14 +30,10 @@ MARKER_END = "<!-- ghaiw:pointer:end -->"
 def get_pointer_content() -> str:
     """Load the pointer template content from templates/agents-pointer.md."""
     template_path = get_templates_dir() / "agents-pointer.md"
-    if template_path.is_file():
-        return template_path.read_text(encoding="utf-8").strip()
-    # Fallback inline content
-    return (
-        "## Git Workflow\n\n"
-        "**First action every session** — read @.claude/skills/workflow/SKILL.md for\n"
-        "full rules."
-    )
+    if not template_path.is_file():
+        msg = f"Pointer template not found: {template_path}"
+        raise FileNotFoundError(msg)
+    return template_path.read_text(encoding="utf-8").strip()
 
 
 def has_pointer(file_path: Path) -> bool:
@@ -48,6 +44,24 @@ def has_pointer(file_path: Path) -> bool:
     return has_marker_block(content, MARKER_START, MARKER_END)
 
 
+def _warn_if_multiple_markers(content: str, file_path: Path) -> None:
+    """Log a warning if multiple pointer marker pairs are found."""
+    count = content.count(MARKER_START)
+    if count > 1:
+        logger.warning(
+            "pointer.multiple_markers",
+            path=str(file_path),
+            count=count,
+            msg=(
+                f"Multiple pointer markers found in {file_path.name} "
+                f"(expected 1, found {count}). Using the last one. "
+                "This is expected in the ghaiw-py repo itself "
+                "(documentation examples) but may indicate a bug in "
+                "other projects."
+            ),
+        )
+
+
 def extract_pointer_content(file_path: Path) -> str | None:
     """Extract the text between markers (for staleness comparison).
 
@@ -56,6 +70,7 @@ def extract_pointer_content(file_path: Path) -> str | None:
     if not file_path.is_file():
         return None
     content = file_path.read_text(encoding="utf-8")
+    _warn_if_multiple_markers(content, file_path)
     return extract_marker_block(content, MARKER_START, MARKER_END)
 
 
@@ -69,10 +84,11 @@ def remove_pointer(file_path: Path) -> bool:
         return False
 
     content = file_path.read_text(encoding="utf-8")
+    _warn_if_multiple_markers(content, file_path)
 
-    # Try marker-based removal first
-    start_idx = content.find(MARKER_START)
-    end_idx = content.find(MARKER_END)
+    # Try marker-based removal (last pair — skip documentation examples)
+    end_idx = content.rfind(MARKER_END)
+    start_idx = content.rfind(MARKER_START, 0, end_idx) if end_idx != -1 else -1
 
     if start_idx != -1 and end_idx != -1:
         # Remove the marker block including surrounding blank lines

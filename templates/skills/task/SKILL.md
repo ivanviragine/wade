@@ -31,23 +31,6 @@ issues using the project's \`ghaiwpy\` infrastructure.
 > (Step 1 assess → propose single issue → confirm → create) exactly like
 > multi-issue plans — it just skips the multi-issue steps.
 
-## ⚠️ Inside a `ghaiwpy task plan` session
-
-If you were launched by `ghaiwpy task plan`, you are in a **planning session**.
-
-**Do not create GitHub Issues yourself** — ghaiw handles that automatically
-after you exit.
-
-Your job in a planning session:
-1. Plan the feature with the user
-2. Write your plan as Markdown file(s) to the directory shown in your
-   clipboard/prompt (format: `# Title`, `## Complexity`, `## Tasks`, etc.)
-3. Exit — ghaiw reads the files and creates GitHub Issues automatically
-
-The steps below describe the **manual issue-creation workflow**, used when
-creating issues outside of a `ghaiwpy task plan` session. Only follow Steps 1–7
-when not inside a planning session.
-
 ## Step 1: Assess scope
 
 Read the plan and estimate the implementation size:
@@ -136,37 +119,6 @@ The script handles:
 - Label from `.ghaiw.yml` config
 
 Collect the issue number and URL from each creation.
-
-## Step 5.25: Plan summary token usage (`task plan` flow)
-
-When issues are created via `ghaiwpy task plan`, the shell script automatically
-annotates each new issue body with:
-
-- `## Plan Summary`
-- `### Usage`
-
-If the AI CLI reports session token usage, the summary includes the total and,
-when available, session `input` / `output` / `cached` counts.
-If the AI CLI reports per-model usage rows, the summary also includes a
-`### Model Breakdown` table.
-For multi-issue plans, per-issue token values are estimated proportionally
-using each issue body's `wc -l` line count.
-
-If the AI CLI reports premium-request estimates (for example, Copilot's
-"Total usage est"), that estimate is also included in the summary.
-
-If token usage cannot be parsed from the AI CLI transcript, the summary is
-still written and marked as unavailable.
-
-## Step 5.5: Dependency analysis (multi-issue only)
-
-When multiple issues are created, `ghaiwpy task plan` automatically runs
-dependency analysis via `ghaiwpy task deps`. The shell script handles this —
-**no agent action is needed**. The script will:
-
-1. Launch an AI session to analyze dependencies between the new issues
-2. Generate a Mermaid dependency graph
-3. Update each issue's body with "Depends on" / "Blocks" references
 
 ## Step 6: Offer epic (multi-issue only)
 

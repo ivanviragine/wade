@@ -67,9 +67,13 @@ def has_marker_block(content: str, start_marker: str, end_marker: str) -> bool:
 
 
 def extract_marker_block(content: str, start_marker: str, end_marker: str) -> str | None:
-    """Extract text between markers (exclusive of markers themselves)."""
-    start_idx = content.find(start_marker)
-    end_idx = content.find(end_marker)
+    """Extract text between the last marker pair (exclusive of markers).
+
+    Uses rfind so that documentation examples of the markers (e.g. in code
+    blocks) are skipped in favor of the real block appended at the end.
+    """
+    end_idx = content.rfind(end_marker)
+    start_idx = content.rfind(start_marker, 0, end_idx) if end_idx != -1 else -1
     if start_idx == -1 or end_idx == -1 or end_idx <= start_idx:
         return None
 
@@ -78,9 +82,12 @@ def extract_marker_block(content: str, start_marker: str, end_marker: str) -> st
 
 
 def remove_marker_block(content: str, start_marker: str, end_marker: str) -> str:
-    """Remove a marker-delimited block (including markers), normalizing blank lines."""
-    start_idx = content.find(start_marker)
-    end_idx = content.find(end_marker)
+    """Remove the last marker-delimited block (including markers).
+
+    Uses rfind so that documentation examples of the markers are preserved.
+    """
+    end_idx = content.rfind(end_marker)
+    start_idx = content.rfind(start_marker, 0, end_idx) if end_idx != -1 else -1
     if start_idx == -1 or end_idx == -1:
         return content
 

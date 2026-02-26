@@ -23,7 +23,7 @@ Two distinct worlds interact in this codebase. Always be clear which one you are
 
 **This `AGENTS.md` governs development of ghaiw-py itself.** The skills, the AGENTS.md pointer, and the progressive disclosure architecture described below are all *outputs* of ghaiw — artifacts installed into inited projects, not rules for developing ghaiw-py.
 
-**ghaiw-py uses its own workflow.** This repo is itself an inited project — it has `.ghaiw.yml`, uses `ghaiwpy task` / `ghaiwpy work` for its own development, and the `## Git Workflow` section at the bottom of this file is the self-installed pointer. When developing ghaiw-py, follow that pointer (read and follow `@.claude/skills/workflow/SKILL.md`).
+**ghaiw-py uses its own workflow.** This repo is itself an inited project — it has `.ghaiw.yml`, uses `ghaiwpy task` / `ghaiwpy work` for its own development, and the `## Git Workflow` section at the bottom of this file is the self-installed pointer. When developing ghaiw-py, follow that pointer and the phase-specific skill referenced in your clipboard prompt (`@.claude/skills/work-session/SKILL.md` or `@.claude/skills/plan-session/SKILL.md`).
 
 ## Commands
 
@@ -295,13 +295,14 @@ In inited projects, `ghaiwpy init` writes the workflow pointer to whichever of `
 In this repo (self-init), the skill directories should be symlinks rather than file copies, so edits to skill templates are reflected immediately without re-running `ghaiwpy init`:
 
 ```
-.claude/skills/workflow  ->  ../../templates/skills/workflow  (symlink)
-.claude/skills/task      ->  ../../templates/skills/task      (symlink)
-.claude/skills/sync      ->  ../../templates/skills/sync      (symlink)
+.claude/skills/plan-session  ->  ../../templates/skills/plan-session  (symlink)
+.claude/skills/work-session  ->  ../../templates/skills/work-session  (symlink)
+.claude/skills/task          ->  ../../templates/skills/task          (symlink)
+.claude/skills/deps          ->  ../../templates/skills/deps          (symlink)
 
-.github/skills/          ->  (same targets, separate symlinks)
-.agents/skills/          ->  (same targets, separate symlinks)
-.gemini/skills/          ->  (same targets, separate symlinks)
+.github/skills/              ->  (same targets, separate symlinks)
+.agents/skills/              ->  (same targets, separate symlinks)
+.gemini/skills/              ->  (same targets, separate symlinks)
 ```
 
 **Always edit `templates/skills/<name>/SKILL.md`** — never edit files inside `.claude/skills/`, `.github/skills/`, `.agents/skills/`, or `.gemini/skills/` directly. In this repo those are all symlinks; in inited projects they are copies that would be overwritten by `ghaiwpy update`.
@@ -313,9 +314,9 @@ In inited projects (normal init), `ghaiwpy init` copies skill files (not symlink
 `ghaiwpy init` installs skills file-by-file via the `skills/installer.py` module. When adding a new skill:
 
 1. Create the skill template in `templates/skills/<name>/SKILL.md`
-2. Register the skill in `skills/installer.py` — add it to the install, self-init (symlink), and update paths
+2. Register the skill in `skills/installer.py` — add it to `SKILL_FILES` and optionally `ALWAYS_OVERWRITE`
 3. Add the skill directory to the cleanup logic in `init_service.py` (deinit path)
-4. Add the skill reference to `templates/skills/workflow/SKILL.md`
+4. Reference the skill from `plan-session/SKILL.md` or `work-session/SKILL.md` as appropriate
 
 The self-init path creates symlinks from `.claude/skills/<name>` -> `../../templates/skills/<name>` to avoid file duplication when working on ghaiw-py itself.
 
@@ -323,22 +324,25 @@ The self-init path creates symlinks from `.claude/skills/<name>` -> `../../templ
 
 > **Scope: inited projects.** The skill templates in `templates/skills/` are installed into inited projects by `ghaiwpy init`. They are *not* guidance for developing ghaiw-py itself — they teach AI agents in target projects how to use the ghaiw workflow. When you are developing ghaiw-py, treat these files as **output artifacts** you are authoring, not as rules you follow.
 
-Skill templates are Markdown files installed to an inited project's `.claude/skills/` by `ghaiwpy init`, with symlinks from `.github/skills/`, `.agents/skills/`, and `.gemini/skills/` for cross-tool discovery. They teach AI agents the ghaiw workflow (task management, sync, PR summaries, session rules). The `work sync` command emits structured JSON events on stdout (with `--json`) for machine consumption.
+Skill templates are Markdown files installed to an inited project's `.claude/skills/` by `ghaiwpy init`, with symlinks from `.github/skills/`, `.agents/skills/`, and `.gemini/skills/` for cross-tool discovery. They teach AI agents the ghaiw workflow via phase-specific session skills and on-demand task skills.
 
-#### Progressive Disclosure Architecture (for inited projects)
+#### Phase-Specific Skill Architecture (for inited projects)
 
 > **Scope: inited projects.** The following describes how ghaiw structures agent-facing documentation *in the projects it is installed into* — not how this repo's own documentation is organized.
 
-The agent-facing documentation in inited projects follows a **progressive disclosure** pattern:
+Skills are organized into **phase skills** (one per session type) and **task skills** (on-demand reference):
 
-1. **AGENTS.md pointer** — `ghaiwpy init` reads `templates/agents-pointer.md` and inserts its content into the target project's `AGENTS.md`. It says "read and follow @.claude/skills/workflow/SKILL.md before doing anything else" plus a handful of critical inline rules as a safety net. **To change what gets injected into inited projects, edit `templates/agents-pointer.md`** — not this repo's own `## Git Workflow` section, which is only the self-installed copy for this repo.
-2. **`templates/skills/workflow/SKILL.md`** — Always-on session rules: worktree safety, commit conventions, planning lifecycle, sync workflow, and pointers to task-specific skills. Agents read this at session start.
-3. **`templates/skills/*/SKILL.md`** (task, sync, deps, pr-summary) — Self-contained task skills with full workflows, commands, flags, examples, and decision trees. Agents read these on-demand when performing a specific task.
+1. **AGENTS.md pointer** — `ghaiwpy init` reads `templates/agents-pointer.md` and inserts its content into the target project's `AGENTS.md`. It directs agents to read the skill referenced in their clipboard prompt. **To change what gets injected into inited projects, edit `templates/agents-pointer.md`** — not this repo's own `## Git Workflow` section, which is only the self-installed copy for this repo.
+2. **`templates/skills/plan-session/SKILL.md`** — Self-contained rules for planning sessions (`ghaiwpy task plan`). Covers plan file format, complexity tagging, session boundaries. No implementation rules.
+3. **`templates/skills/work-session/SKILL.md`** — Self-contained rules for implementation sessions (`ghaiwpy work start`). Covers worktree safety, commit conventions, syncing, PR summaries, and session closing. No planning rules.
+4. **`templates/skills/task/SKILL.md`** — On-demand skill for standalone issue creation outside of planning sessions.
+5. **`templates/skills/deps/SKILL.md`** — On-demand skill for dependency analysis.
 
-This keeps the project's `AGENTS.md` minimal (one pointer) while the workflow skill handles "what rules to follow" and task skills handle "how to do it". When adding new agent-facing commands or workflows:
-- **Do NOT add rules or commands to the AGENTS.md pointer** — put session rules in the workflow skill and task workflows in task skills.
-- **Create or update a skill** in `templates/skills/` with the full command reference and workflow steps.
-- If a command doesn't fit an existing skill, consider whether it needs a new skill or is simple enough to be discovered via `ghaiwpy <command> --help`.
+Each phase skill is self-contained — agents only read the skill for their current phase. This eliminates noise from irrelevant rules. When adding new agent-facing commands or workflows:
+- **Put implementation rules** in `work-session/SKILL.md`
+- **Put planning rules** in `plan-session/SKILL.md`
+- **Create or update a task skill** in `templates/skills/` for on-demand reference
+- Keep the AGENTS.md pointer minimal — it should only direct agents to their phase skill
 
 #### Pointer Placement & Precedence
 
@@ -643,8 +647,8 @@ Every change **must** include documentation updates as part of the implementatio
 
 1. **`AGENTS.md`** — Update if the change affects architecture, commands, conventions, design principles, or development workflow.
 2. **`README.md`** — Update if the change affects user-facing behavior: new commands, flags, install steps, configuration options, or supported tools.
-3. **`templates/skills/workflow/SKILL.md`** — *(inited-project artifact)* Update if the change affects always-on agent session rules that get installed into inited projects (worktree safety, commit workflow, planning lifecycle, sync mandate).
-4. **`templates/skills/`** (task, deps, sync, pr-summary) — *(inited-project artifacts)* Update if the change affects how AI agents in inited projects should use ghaiw commands. This is where command references, flags, workflows, and examples belong.
+3. **`templates/skills/plan-session/SKILL.md`** / **`templates/skills/work-session/SKILL.md`** — *(inited-project artifacts)* Update if the change affects phase-specific session rules (planning rules in plan-session, implementation rules in work-session).
+4. **`templates/skills/`** (task, deps) — *(inited-project artifacts)* Update if the change affects how AI agents in inited projects should use ghaiw commands. This is where command references, flags, workflows, and examples belong.
 5. **`templates/agents-pointer.md`** — *(inited-project artifact)* The pointer text that `ghaiwpy init` injects into target projects' `AGENTS.md`. Update this when the critical inline rules or pointer wording changes. **This is not the same as this repo's own `## Git Workflow` section** — that is the self-installed copy, written once by `ghaiwpy init` and never overwritten by `ghaiwpy update`.
 
 Do not skip documentation even for "small" changes — a new flag, a renamed option, or a changed default all need docs updates. Documentation is part of "done", not a separate task.
@@ -658,10 +662,10 @@ Before considering any work complete, verify each item:
 - [ ] **Lint** — `uv run ruff check src/` and `uv run ruff format --check src/` pass
 - [ ] **`AGENTS.md`** — updated if architecture, conventions, design principles, or workflow changed
 - [ ] **`README.md`** — updated if user-facing behavior changed (commands, flags, config, install)
-- [ ] **`templates/skills/workflow/SKILL.md`** — updated if always-on agent session rules changed
+- [ ] **`templates/skills/plan-session/SKILL.md`** / **`work-session/SKILL.md`** — updated if phase-specific session rules changed
 - [ ] **`templates/agents-pointer.md`** — updated if the critical inline rules or pointer wording changed
-- [ ] **`templates/skills/`** (task, deps, sync) — updated if agent-facing command workflows, flags, or examples changed
-- [ ] **Progressive disclosure** *(inited-project artifacts)* — session rules go in workflow skill, task workflows go in task skills, AGENTS.md pointer stays minimal
+- [ ] **`templates/skills/`** (task, deps) — updated if agent-facing command workflows, flags, or examples changed
+- [ ] **Phase skills** *(inited-project artifacts)* — planning rules go in plan-session, implementation rules go in work-session, AGENTS.md pointer stays minimal
 - [ ] **Commit** — uses conventional-commit prefix for correct auto-versioning
 
 ### Documentation Feedback Loop
@@ -700,11 +704,13 @@ The goal: every correction should happen **at most once**. If a future agent wou
 <!-- ghaiw:pointer:start -->
 ## Git Workflow
 
-**First action every session** — read @.claude/skills/workflow/SKILL.md for
-full rules. The critical rules you must always follow:
+**First action every session** — read the skill referenced in your clipboard
+prompt for full session rules.
 
-1. Run `ghaiwpy check` first — **never edit source files in the main checkout, even before committing**; only planning operations (creating issues, writing plan files to `/tmp`) are allowed from main
-2. Never create PRs manually (`gh pr create`) or push branches directly. `ghaiwpy work done` is the only way to finalize work — if it fails, debug and fix the error; do NOT bypass it
-3. To finalize work: `ghaiwpy work sync` then `ghaiwpy work done`
-4. Never create GitHub Issues via `gh issue create` — use `ghaiwpy task create` or read @.claude/skills/task/SKILL.md
+Critical rules you must always follow:
+
+1. Never create GitHub Issues via `gh issue create` — use `ghaiwpy task create`
+   or read @.claude/skills/task/SKILL.md
+2. Never create PRs manually (`gh pr create`) or push branches directly — use
+   `ghaiwpy work done`
 <!-- ghaiw:pointer:end -->

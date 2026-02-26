@@ -1,9 +1,11 @@
 ## Git Workflow
 
-**First action every session** — read @.claude/skills/workflow/SKILL.md for
-full rules. The critical rules you must always follow:
+**First action every session** — read the skill referenced in your clipboard
+prompt for full session rules.
 
-1. Run `ghaiwpy check` first — **never edit source files in the main checkout, even before committing**; only planning operations (creating issues, writing plan files to `/tmp`) are allowed from main
-2. Never create PRs manually (`gh pr create`) or push branches directly. `ghaiwpy work done` is the only way to finalize work — if it fails, debug and fix the error; do NOT bypass it
-3. To finalize work: `ghaiwpy work sync` then `ghaiwpy work done`
-4. Never create GitHub Issues via `gh issue create` — use `ghaiwpy task create` or read @.claude/skills/task/SKILL.md
+Critical rules you must always follow:
+
+1. Never create GitHub Issues via `gh issue create` — use `ghaiwpy task create`
+   or read @.claude/skills/task/SKILL.md
+2. Never create PRs manually (`gh pr create`) or push branches directly — use
+   `ghaiwpy work done`

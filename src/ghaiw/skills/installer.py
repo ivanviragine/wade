@@ -48,14 +48,16 @@ def get_skills_templates_dir() -> Path:
 
 SKILL_FILES: dict[str, list[str]] = {
     "task": ["SKILL.md", "plan-format.md", "examples.md"],
-    "sync": ["SKILL.md", "examples.md", "reference.md"],
+    "plan-session": ["SKILL.md"],
+    "work-session": ["SKILL.md"],
     "deps": ["SKILL.md"],
-    "pr-summary": ["SKILL.md"],
-    "workflow": ["SKILL.md"],
 }
 
 # Skills that should always be overwritten on update
-ALWAYS_OVERWRITE = {"workflow"}
+ALWAYS_OVERWRITE = {"plan-session", "work-session"}
+
+# Old skill names removed in the phase-skill refactor — cleaned up during update
+_LEGACY_SKILLS = {"workflow", "sync", "pr-summary"}
 
 # Cross-tool directories that get symlinked to .claude/skills
 CROSS_TOOL_DIRS = [".github/skills", ".agents/skills", ".gemini/skills"]
@@ -84,6 +86,16 @@ def install_skills(
         return installed
 
     primary_skills_dir = project_root / ".claude" / "skills"
+
+    # Clean up legacy skill directories from previous versions
+    for legacy_name in _LEGACY_SKILLS:
+        legacy_dir = primary_skills_dir / legacy_name
+        if legacy_dir.is_symlink():
+            legacy_dir.unlink()
+            logger.debug("skills.removed_legacy", name=legacy_name)
+        elif legacy_dir.is_dir():
+            shutil.rmtree(legacy_dir)
+            logger.debug("skills.removed_legacy", name=legacy_name)
 
     for skill_name, files in SKILL_FILES.items():
         if is_self_init:
@@ -129,9 +141,9 @@ def remove_skills(project_root: Path) -> list[str]:
             shutil.rmtree(cross_path)
             removed.append(cross_dir)
 
-    # Remove skill directories
+    # Remove skill directories (current + legacy)
     primary_skills_dir = project_root / ".claude" / "skills"
-    for skill_name in SKILL_FILES:
+    for skill_name in {*SKILL_FILES, *_LEGACY_SKILLS}:
         skill_dir = primary_skills_dir / skill_name
         if skill_dir.is_symlink():
             skill_dir.unlink()

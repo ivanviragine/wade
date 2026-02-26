@@ -1,3 +1,5 @@
+Follow @.claude/skills/plan-session/SKILL.md for session rules.
+
 # Goal
 
 Let's plan a feature. You'll plan the feature, break it down into one or more

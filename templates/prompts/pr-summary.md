@@ -7,4 +7,4 @@ The summary should be written to /tmp/PR-SUMMARY-{issue_number}.md and include:
 3. Technical decisions (if any non-obvious choices were made)
 4. Testing done (how you verified the changes)
 
-Follow @.claude/skills/pr-summary/SKILL.md for the full format.
+Follow the PR summary section in @.claude/skills/work-session/SKILL.md for the full format.
