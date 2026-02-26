@@ -606,7 +606,7 @@ def start(
     # Set up transcript capture
     transcript_path: Path | None = None
     try:
-        transcript_dir = tempfile.mkdtemp(prefix="ghaiw-work-")
+        transcript_dir = tempfile.mkdtemp(prefix="ghaiw-work-", dir="/tmp")
         transcript_path = Path(transcript_dir) / f"transcript-{task.id}.log"
         console.hint(f"Transcript: {transcript_path}")
     except OSError:

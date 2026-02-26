@@ -214,7 +214,7 @@ def _warn_token_extraction(transcript_path: Path | None) -> None:
         console.warn("Session transcript was not captured — token usage unavailable.")
         return
 
-    fd, debug_path_str = tempfile.mkstemp(prefix="ghaiw-transcript-", suffix=".txt")
+    fd, debug_path_str = tempfile.mkstemp(prefix="ghaiw-transcript-", suffix=".txt", dir="/tmp")
     os.close(fd)
     debug_path = Path(debug_path_str)
     try:
@@ -265,7 +265,7 @@ def plan(
     ensure_issue_label(provider, config.project.issue_label)
 
     # Create temp directory for plan files
-    plan_dir = tempfile.mkdtemp(prefix="ghaiw-plan-")
+    plan_dir = tempfile.mkdtemp(prefix="ghaiw-plan-", dir="/tmp")
 
     # Snapshot current issue numbers (for Path A detection)
     before_snapshot = provider.snapshot_task_numbers(

@@ -379,7 +379,7 @@ def _run_interactive_analysis(
 
     # Set up output file for the AI to write results to
     created_tmp = plan_dir is None
-    output_dir = plan_dir or tempfile.mkdtemp(prefix="ghaiw-deps-")
+    output_dir = plan_dir or tempfile.mkdtemp(prefix="ghaiw-deps-", dir="/tmp")
     output_file = Path(output_dir) / "deps-output.txt"
 
     # Append output instruction to prompt
