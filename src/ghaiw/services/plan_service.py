@@ -158,10 +158,7 @@ def run_ai_planning_session(
     prompt_file = Path(plan_dir) / "prompt.txt"
     prompt_file.write_text(prompt)
     console.success("Copied planning prompt to clipboard.")
-    preview_lines = prompt.splitlines()[:3]
-    preview = "  " + "\n  ".join(preview_lines) + "\n  …"
-    console.out.print(f"[dim]{preview}[/]")
-    console.hint(f"Paste it in the AI tool to get started.  (full prompt: {prompt_file})")
+    console.panel(prompt, title="Paste in Claude")
 
     # Resolve adapter
     try:
