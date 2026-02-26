@@ -115,7 +115,7 @@ def bootstrap_worktree(
     config: ProjectConfig,
     repo_root: Path,
 ) -> None:
-    """Run post-creation bootstrap: copy files, run hooks.
+    """Run post-creation bootstrap: copy files, install skills, run hooks.
 
     Behavioral reference: lib/work/bootstrap.sh:_work_bootstrap_worktree()
     """
@@ -127,6 +127,12 @@ def bootstrap_worktree(
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dest)
             logger.debug("work.bootstrap_copy", file=filename)
+
+    # Install skill files — not tracked by git so worktrees don't inherit them
+    from ghaiw.skills.installer import install_skills
+
+    install_skills(worktree_path, is_self_init=False, force=True)
+    logger.debug("work.bootstrap_skills", path=str(worktree_path))
 
     # Run post-create hook
     if config.hooks.post_worktree_create:
