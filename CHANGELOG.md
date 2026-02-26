@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.16.4] — 2026-02-26
+
+### Bug Fixes
+
+- fix test isolation for task list and stale codex model ID (b19baa6)
+
 ## [v0.16.3] — 2026-02-26
 
 ### Refactoring
