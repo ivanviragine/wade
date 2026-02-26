@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.19.1] — 2026-02-26
+
+### Bug Fixes
+
+- remove legacy .issue-context.md, gitignore PLAN.md (0dab45e)
+
 ## [v0.19.0] — 2026-02-26
 
 ### Features
