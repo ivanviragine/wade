@@ -323,6 +323,9 @@ def _extract_claude_footer(text: str) -> TokenUsage | None:
     """Parse Claude Code status footer.
 
     Format: in:614 out:94 (optional: cached:2,345)
+
+    Claude Code redraws the status bar on every response, so the transcript
+    may contain many occurrences.  Use the LAST match to get final session totals.
     """
     in_re = re.compile(r"in:\s?([\d,]+(?:\.\d+)?[kKmM]?)")
     out_re = re.compile(r"out:\s?([\d,]+(?:\.\d+)?[kKmM]?)")
@@ -332,16 +335,16 @@ def _extract_claude_footer(text: str) -> TokenUsage | None:
     out: int | None = None
     cached: int | None = None
 
-    in_match = in_re.search(text)
-    out_match = out_re.search(text)
-    cache_match = cache_re.search(text)
+    in_matches: list[str] = in_re.findall(text)
+    out_matches: list[str] = out_re.findall(text)
+    cache_matches: list[str] = cache_re.findall(text)
 
-    if in_match:
-        inp = parse_token_count(in_match.group(1))
-    if out_match:
-        out = parse_token_count(out_match.group(1))
-    if cache_match:
-        cached = parse_token_count(cache_match.group(1))
+    if in_matches:
+        inp = parse_token_count(in_matches[-1])
+    if out_matches:
+        out = parse_token_count(out_matches[-1])
+    if cache_matches:
+        cached = parse_token_count(cache_matches[-1])
 
     if inp is None and out is None:
         return None

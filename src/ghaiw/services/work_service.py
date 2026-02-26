@@ -676,10 +676,9 @@ def start(
                 except Exception:
                     logger.exception("post_work_lifecycle.failed")
 
-        # Post-exit: capture token usage, update PR and issue, detect model
-        detected_model: str | None = None
+        # Post-exit: parse transcript, update PR body and issue with token usage.
         if adapter is not None:
-            detected_model = _post_exit_capture(
+            _post_exit_capture(
                 transcript_path=transcript_path,
                 adapter=adapter,
                 repo_root=repo_root,
@@ -690,10 +689,14 @@ def start(
                 provider=provider,
             )
 
-        # Add worked-by labels; prefer transcript-detected model over configured model
-        effective_model = detected_model or resolved_model
-        with contextlib.suppress(Exception):
+        # Add worked-by labels using the model we passed to the AI tool.
+        # Transcript model_breakdown may expose internal routing models.
+        effective_model = resolved_model
+        try:
             add_worked_by_labels(provider, task.id, resolved_tool, effective_model)
+        except Exception as e:
+            console.warn(f"Could not apply worked-by labels: {e}")
+            logger.warning("work.worked_by_labels_failed", error=str(e))
     elif not resolved_tool:
         console.info("No AI tool configured. Worktree ready for manual work.")
         console.detail(f"cd {worktree_path}")

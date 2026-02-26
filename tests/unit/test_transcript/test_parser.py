@@ -129,6 +129,23 @@ class TestClaudeExtraction:
         assert usage.input_tokens == 614
         assert usage.output_tokens == 94
 
+    def test_multiple_footer_lines_last_wins(self) -> None:
+        """When the status bar appears multiple times, the last values win.
+
+        Claude Code redraws the status bar on every response, so a captured
+        transcript may contain many occurrences.  The final entry is the
+        correct session total.
+        """
+        text = (
+            "in:30.0k out:9.0k\n"
+            "in:45.0k out:13.5k\n"
+            "in:56.0k out:17.4k\n"
+            "in:56.0k out:17.5k\n"  # final, correct
+        )
+        usage = extract_token_usage_from_text(text)
+        assert usage.input_tokens == 56_000
+        assert usage.output_tokens == 17_500
+
     def test_fixture_file(self) -> None:
         usage = parse_claude_transcript(FIXTURES / "claude_session.txt")
         assert usage.input_tokens == 12_345
