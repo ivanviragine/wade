@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.19.0] — 2026-02-26
+
+### Features
+
+- print clipboard prompt to console as fallback if clipboard missed (51b964d)
+
 ## [v0.18.0] — 2026-02-26
 
 ### Features
