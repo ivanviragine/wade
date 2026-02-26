@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.21.0] — 2026-02-26
+
+### Features
+
+- show prompt preview and persist to file on task plan (5a17ad3)
+
 ## [v0.20.1] — 2026-02-26
 
 ### Bug Fixes
