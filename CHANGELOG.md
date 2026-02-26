@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.19.2] — 2026-02-26
+
+### Bug Fixes
+
+- fix 4 post-work bugs in lifecycle and usage capture (48b020a)
+
 ## [v0.19.1] — 2026-02-26
 
 ### Bug Fixes
