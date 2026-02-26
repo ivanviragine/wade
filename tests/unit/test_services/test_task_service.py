@@ -225,7 +225,7 @@ class TestCreateFromPlanFile:
     def test_create_success(
         self, tmp_path: Path, mock_provider: MagicMock, config: ProjectConfig
     ) -> None:
-        plan = tmp_path / "plan.md"
+        plan = tmp_path / "PLAN.md"
         plan.write_text("# My Feature\n\n## Tasks\n\n- Do thing A\n- Do thing B\n")
 
         task = create_from_plan_file(plan, config=config, provider=mock_provider)
@@ -248,14 +248,14 @@ class TestCreateFromPlanFile:
 
     def test_create_missing_file(self, mock_provider: MagicMock, config: ProjectConfig) -> None:
         task = create_from_plan_file(
-            Path("/nonexistent/plan.md"), config=config, provider=mock_provider
+            Path("/nonexistent/PLAN.md"), config=config, provider=mock_provider
         )
         assert task is None
 
     def test_create_ensures_label(
         self, tmp_path: Path, mock_provider: MagicMock, config: ProjectConfig
     ) -> None:
-        plan = tmp_path / "plan.md"
+        plan = tmp_path / "PLAN.md"
         plan.write_text("# Feature\n\nBody content\n")
 
         create_from_plan_file(plan, config=config, provider=mock_provider)

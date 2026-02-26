@@ -34,7 +34,7 @@ Add a `GET /api/health` endpoint returning `{ "status": "ok", "version": "..." }
 ```
 
 ```bash
-ghaiw task create --plan-file plan.md
+ghaiw task create --plan-file PLAN.md
 # Created issue #42: Add health check endpoint
 ```
 

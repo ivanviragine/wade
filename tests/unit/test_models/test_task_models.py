@@ -51,7 +51,7 @@ class TestTask:
 
 class TestPlanFile:
     def test_from_markdown(self, tmp_path: Path) -> None:
-        plan = tmp_path / "plan.md"
+        plan = tmp_path / "PLAN.md"
         plan.write_text(
             "# Add user authentication\n\n"
             "## Complexity\n\ncomplex\n\n"
@@ -67,21 +67,21 @@ class TestPlanFile:
         assert "OAuth" in result.sections["context"]
 
     def test_from_markdown_no_title_raises(self, tmp_path: Path) -> None:
-        plan = tmp_path / "plan.md"
+        plan = tmp_path / "PLAN.md"
         plan.write_text("No heading here\n\nJust text.\n")
 
         with pytest.raises(ValueError, match="must have a '# Title'"):
             PlanFile.from_markdown(plan)
 
     def test_from_markdown_easy_complexity(self, tmp_path: Path) -> None:
-        plan = tmp_path / "plan.md"
+        plan = tmp_path / "PLAN.md"
         plan.write_text("# Fix typo\n\n## Complexity\n\neasy\n")
 
         result = PlanFile.from_markdown(plan)
         assert result.complexity == Complexity.EASY
 
     def test_from_markdown_no_complexity(self, tmp_path: Path) -> None:
-        plan = tmp_path / "plan.md"
+        plan = tmp_path / "PLAN.md"
         plan.write_text("# Simple fix\n\nJust a one-liner.\n")
 
         result = PlanFile.from_markdown(plan)

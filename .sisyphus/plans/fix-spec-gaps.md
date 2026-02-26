@@ -55,7 +55,7 @@ Add `--plan <file>` flag to `ghaiwpy work done` that resolves a plan file to its
 - [ ] `uv run mypy src/ --strict` — 0 errors
 - [ ] `uv run ruff check src/` — 0 errors
 - [ ] `uv run ruff format --check src/` — 0 errors
-- [ ] `ghaiwpy work done --plan path/to/plan.md` resolves worktree and runs done
+- [ ] `ghaiwpy work done --plan path/to/PLAN.md` resolves worktree and runs done
 - [ ] `ghaiwpy work done --help` shows `--plan` in options
 
 ### Must Have
@@ -258,10 +258,10 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
 
   **What to do**:
   - **RED**: In test file `tests/unit/test_services/test_done_plan_flag.py` (created by Task 1):
-  - Write test `test_done_with_plan_flag_resolves_and_delegates()`: When `done(plan_file=Path("plan.md"))` is called, `_resolve_worktree_from_plan()` is called, and `done()` proceeds with the resolved worktree/branch/issue
+  - Write test `test_done_with_plan_flag_resolves_and_delegates()`: When `done(plan_file=Path("PLAN.md"))` is called, `_resolve_worktree_from_plan()` is called, and `done()` proceeds with the resolved worktree/branch/issue
   - Write test `test_done_plan_flag_overrides_target()`: When both `target` and `plan_file` are given, `plan_file` takes precedence (same as Bash where `--plan` is separate from positional)
   - Write test `test_done_plan_flag_error_returns_false()`: When `_resolve_worktree_from_plan()` raises ValueError, `done()` prints error and returns False
-  - Write test `test_cli_plan_flag_passes_to_service()`: CLI `done --plan /tmp/plan.md` passes `plan_file=Path("/tmp/plan.md")` to service `done()`
+  - Write test `test_cli_plan_flag_passes_to_service()`: CLI `done --plan /tmp/PLAN.md` passes `plan_file=Path("/tmp/PLAN.md")` to service `done()`
   - Run tests → expect FAIL (RED)
   - **GREEN**:
     1. In `src/ghaiw/cli/work.py`, add `--plan` option to `done` command:

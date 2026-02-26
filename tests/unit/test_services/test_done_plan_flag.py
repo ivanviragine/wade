@@ -12,7 +12,7 @@ runner = CliRunner()
 
 
 def test_resolve_plan_extracts_title(tmp_path: Path) -> None:
-    plan_file = tmp_path / "plan.md"
+    plan_file = tmp_path / "PLAN.md"
     plan_file.write_text("# My Feature Plan\n\nBody\n", encoding="utf-8")
     expected_path = tmp_path / "worktree"
 
@@ -29,7 +29,7 @@ def test_resolve_plan_extracts_title(tmp_path: Path) -> None:
 
 
 def test_resolve_plan_no_heading_errors(tmp_path: Path) -> None:
-    plan_file = tmp_path / "plan.md"
+    plan_file = tmp_path / "PLAN.md"
     plan_file.write_text("No heading here\nMore content\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="# Title"):
@@ -37,7 +37,7 @@ def test_resolve_plan_no_heading_errors(tmp_path: Path) -> None:
 
 
 def test_resolve_plan_finds_worktree_by_slug(tmp_path: Path) -> None:
-    plan_file = tmp_path / "plan.md"
+    plan_file = tmp_path / "PLAN.md"
     plan_file.write_text("# My Feature Plan\n", encoding="utf-8")
     expected_path = tmp_path / "wt"
 
@@ -57,7 +57,7 @@ def test_resolve_plan_finds_worktree_by_slug(tmp_path: Path) -> None:
 
 
 def test_resolve_plan_no_matching_worktree_errors(tmp_path: Path) -> None:
-    plan_file = tmp_path / "plan.md"
+    plan_file = tmp_path / "PLAN.md"
     plan_file.write_text("# My Feature Plan\n", encoding="utf-8")
 
     with (
@@ -97,9 +97,9 @@ def test_done_with_plan_flag_resolves_and_delegates() -> None:
         patch("ghaiw.services.work_service.git_repo.is_clean", return_value=True),
         patch("ghaiw.services.work_service._done_via_pr", return_value=True) as mock_done,
     ):
-        result = work_service.done(plan_file=Path("plan.md"))
+        result = work_service.done(plan_file=Path("PLAN.md"))
 
-    mock_resolve.assert_called_once_with(Path("plan.md"), project_root=None)
+    mock_resolve.assert_called_once_with(Path("PLAN.md"), project_root=None)
     assert mock_done.called
     assert result is True
 
@@ -116,7 +116,7 @@ def test_done_plan_flag_error_returns_false() -> None:
             side_effect=ValueError("No worktree found"),
         ),
     ):
-        result = work_service.done(plan_file=Path("plan.md"))
+        result = work_service.done(plan_file=Path("PLAN.md"))
 
     assert result is False
 
@@ -125,12 +125,12 @@ def test_cli_plan_flag_passes_to_service() -> None:
     from ghaiw.cli.work import work_app
 
     with patch("ghaiw.services.work_service.done", return_value=True) as mock_done:
-        result = runner.invoke(work_app, ["done", "--plan", "/tmp/plan.md"])
+        result = runner.invoke(work_app, ["done", "--plan", "/tmp/PLAN.md"])
 
     assert result.exit_code == 0
     mock_done.assert_called_once_with(
         target=None,
-        plan_file=Path("/tmp/plan.md"),
+        plan_file=Path("/tmp/PLAN.md"),
         no_close=False,
         draft=False,
         no_cleanup=False,

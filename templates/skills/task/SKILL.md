@@ -91,8 +91,8 @@ estimate from Step 1). This lets `ghaiwpy work start` automatically select
 the appropriate AI model for the implementation session.
 
 File naming convention:
-- Single issue: `plan.md`
-- Multi-issue: `plan-1-<slug>.md`, `plan-2-<slug>.md`, etc.
+- Single issue: `PLAN.md`
+- Multi-issue: `PLAN-1-<slug>.md`, `PLAN-2-<slug>.md`, etc.
 
 Write plan files to `/tmp/` (or the temp dir shown in your clipboard if inside
 a `ghaiwpy task plan` session). **Never write plan files into the repo working

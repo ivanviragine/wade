@@ -135,7 +135,7 @@ class TestResolveTarget:
         provider.read_task.assert_called_once_with("42")
 
     def test_resolves_plan_file(self, tmp_path: Path) -> None:
-        plan = tmp_path / "plan.md"
+        plan = tmp_path / "PLAN.md"
         plan.write_text("# New Feature\n\n## Tasks\n- Do stuff\n")
 
         provider = MagicMock()

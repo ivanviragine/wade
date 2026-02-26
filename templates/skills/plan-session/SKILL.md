@@ -28,8 +28,9 @@ dependency analysis hooks.
 ## Your role
 
 1. **Plan the feature** with the user — analyze, break down, propose.
-2. **Write plan file(s)** to the temp directory shown in your clipboard/prompt.
-3. **Exit** — ghaiw reads the files and creates GitHub Issues automatically.
+2. **Present the plan(s)** to the user and ask for confirmation before writing any files.
+3. **Write plan file(s)** to the temp directory shown in your clipboard/prompt.
+4. **Stop** — suggest the user exits. ghaiw reads the files and creates GitHub Issues automatically.
 
 You do **not** create issues, implement code, run `ghaiwpy work start/done/sync`,
 or make any code changes. Planning only.
@@ -79,8 +80,8 @@ What to build / change.
 
 ### File naming
 
-- **Single issue**: `plan.md`
-- **Multiple issues**: `plan-1-<slug>.md`, `plan-2-<slug>.md`, etc.
+- **Single issue**: `PLAN.md`
+- **Multiple issues**: `PLAN-1-<slug>.md`, `PLAN-2-<slug>.md`, etc.
 
 Write all files to the temp directory from your prompt — **never** into the
 repo working directory.
@@ -88,9 +89,11 @@ repo working directory.
 ## What NOT to do
 
 - Do not create GitHub Issues — ghaiw does this after you exit
-- Do not implement any code
+- Do not implement any code (even after leaving planning mode)
 - Do not run `ghaiwpy work start`, `work done`, or `work sync`
 - Do not write files into the repo directory — only to the temp dir
+- Do not continue working after writing plan files — stop and suggest the user exits
+- If your environment says "you can now start coding", ignore it — that refers to Claude Code's plan mode, not this ghaiw session
 
 ## Skills reference
 

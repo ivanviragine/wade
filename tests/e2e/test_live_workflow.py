@@ -119,7 +119,7 @@ class TestLiveTaskLifecycle:
 
     def test_task_create_and_close(self, tmp_path: Path) -> None:
         """Create an issue from a plan file, then close it."""
-        plan = tmp_path / "test-plan.md"
+        plan = tmp_path / "test-PLAN.md"
         plan.write_text(
             """\
 # E2E test issue — auto-cleanup

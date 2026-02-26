@@ -418,7 +418,7 @@ class TestTaskCommands:
         self, e2e_repo: Path, mock_gh_cli: dict[str, Any], tmp_path: Path
     ) -> None:
         """ghaiwpy task create --plan-file --no-start creates an issue."""
-        plan = tmp_path / "plan.md"
+        plan = tmp_path / "PLAN.md"
         plan.write_text(
             """\
 # Add search feature

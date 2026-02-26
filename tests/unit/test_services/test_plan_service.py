@@ -108,13 +108,13 @@ class TestDiscoverPlanFiles:
         assert files[2].name == "plan-3-feature-c.md"
 
     def test_discover_ignores_non_md(self, tmp_path: Path) -> None:
-        (tmp_path / "plan.md").write_text("# Plan\n")
+        (tmp_path / "PLAN.md").write_text("# Plan\n")
         (tmp_path / "notes.txt").write_text("Some notes\n")
         (tmp_path / ".transcript").write_text("log data\n")
 
         files = discover_plan_files(tmp_path)
         assert len(files) == 1
-        assert files[0].name == "plan.md"
+        assert files[0].name == "PLAN.md"
 
     def test_discover_empty_dir(self, tmp_path: Path) -> None:
         files = discover_plan_files(tmp_path)
@@ -144,7 +144,7 @@ class TestValidatePlanFiles:
         assert valid[0].title == "Valid Plan"
 
     def test_validate_extracts_complexity(self, tmp_path: Path) -> None:
-        (tmp_path / "plan.md").write_text(
+        (tmp_path / "PLAN.md").write_text(
             "# Complex Feature\n\n## Complexity\nvery_complex\n\n## Tasks\n- Many things\n"
         )
 
@@ -165,7 +165,7 @@ class TestValidatePlanFiles:
 
 class TestPlanFile:
     def test_from_markdown_basic(self, tmp_path: Path) -> None:
-        f = tmp_path / "plan.md"
+        f = tmp_path / "PLAN.md"
         f.write_text("# Add Auth\n\n## Tasks\n\n- Add login page\n")
 
         plan = PlanFile.from_markdown(f)
@@ -174,7 +174,7 @@ class TestPlanFile:
         assert "tasks" in plan.sections
 
     def test_from_markdown_complexity(self, tmp_path: Path) -> None:
-        f = tmp_path / "plan.md"
+        f = tmp_path / "PLAN.md"
         f.write_text("# Feature\n\n## Complexity\nmedium\n\n## Tasks\n- Task 1\n")
 
         plan = PlanFile.from_markdown(f)
@@ -189,7 +189,7 @@ class TestPlanFile:
             PlanFile.from_markdown(f)
 
     def test_from_markdown_multiple_sections(self, tmp_path: Path) -> None:
-        f = tmp_path / "plan.md"
+        f = tmp_path / "PLAN.md"
         f.write_text(
             "# Feature\n\n"
             "## Complexity\neasy\n\n"
