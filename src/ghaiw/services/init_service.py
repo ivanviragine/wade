@@ -110,7 +110,10 @@ def init(
         )
         return False
 
+    from ghaiw import __version__
+
     console.rule("ghaiwpy init")
+    console.info(f"ghaiwpy {__version__}")
 
     # Compute installed tools once — doesn't depend on any wizard step
     installed_tools = [str(t) for t in AbstractAITool.detect_installed()]
