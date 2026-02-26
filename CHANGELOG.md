@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.16.2] — 2026-02-25
+
+### Refactoring
+
+- strip premature migrations and fix model registry (4281f3d)
+
 ## [v0.16.1] — 2026-02-25
 
 ### Bug Fixes
