@@ -501,11 +501,10 @@ def start(
 
     if resolved_tool:
         console.kv("AI tool", resolved_tool)
+    if task.complexity:
+        console.kv("Complexity", task.complexity.value)
     if resolved_model:
-        model_str = resolved_model
-        if task.complexity:
-            model_str += f" (complexity: {task.complexity.value})"
-        console.kv("Model", model_str)
+        console.kv("Model", resolved_model)
 
     # Resolve main branch
     main_branch = config.project.main_branch or git_repo.detect_main_branch(repo_root)
@@ -549,6 +548,8 @@ def start(
             console.error(f"Failed to create worktree: {e}")
             return False
 
+    console.empty()
+
     # Bootstrap
     write_issue_context(worktree_path, task)
     write_plan_md(worktree_path, task)
@@ -564,6 +565,7 @@ def start(
     prompt = build_work_prompt(task, resolved_tool)
     copy_to_clipboard(prompt)
     console.success("Copied work prompt to clipboard.")
+    console.empty()
 
     # cd_only mode: just print the worktree path and return (no title, no AI)
     if cd_only:
