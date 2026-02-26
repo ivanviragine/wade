@@ -7,7 +7,7 @@ This file provides guidance to AI agents when working with code in this reposito
 
 **ghaiw** (Git + AI Workflow) is a Python CLI toolkit for AI-agent-driven git workflow management. It wraps `gh` CLI and native git to manage GitHub Issues as tasks, git worktrees for isolated development, branch safety checks, and installable Agent Skill files.
 
-This is the Python reimplementation of the original Bash-based ghaiw. It uses Typer for CLI dispatch, Pydantic for data models, SQLModel for SQLite persistence, Rich for terminal UI, and structlog for structured logging. The CLI entry point is **`ghaiwpy`** (not `ghaiw`).
+This is the Python reimplementation of the original Bash-based ghaiw. It uses Typer for CLI dispatch, Pydantic for data models, SQLModel for SQLite persistence, Rich for terminal UI, and structlog for structured logging. The CLI entry point is **`ghaiw`**.
 
 ## Terminology
 
@@ -15,15 +15,15 @@ Two distinct worlds interact in this codebase. Always be clear which one you are
 
 | Term | Meaning |
 |------|---------|
-| **the ghaiw-py repo** / **this project** | This source repository — `src/ghaiw/`, `templates/`, `tests/`, `scripts/` |
-| **inited project** / **target project** | Any third-party repo that has run `ghaiwpy init` to adopt the workflow |
-| **skill templates** | Markdown files in `templates/skills/` — the source of truth, part of the ghaiw-py repo |
-| **installed skills** | Copies (or symlinks) of skill templates placed in a project's `.claude/skills/` by `ghaiwpy init` |
-| **AGENTS.md pointer** | A short `## Git Workflow` block that `ghaiwpy init` injects into an inited project's `AGENTS.md` |
+| **the ghaiw repo** / **this project** | This source repository — `src/ghaiw/`, `templates/`, `tests/`, `scripts/` |
+| **inited project** / **target project** | Any third-party repo that has run `ghaiw init` to adopt the workflow |
+| **skill templates** | Markdown files in `templates/skills/` — the source of truth, part of the ghaiw repo |
+| **installed skills** | Copies (or symlinks) of skill templates placed in a project's `.claude/skills/` by `ghaiw init` |
+| **AGENTS.md pointer** | A short `## Git Workflow` block that `ghaiw init` injects into an inited project's `AGENTS.md` |
 
-**This `AGENTS.md` governs development of ghaiw-py itself.** The skills, the AGENTS.md pointer, and the progressive disclosure architecture described below are all *outputs* of ghaiw — artifacts installed into inited projects, not rules for developing ghaiw-py.
+**This `AGENTS.md` governs development of ghaiw itself.** The skills, the AGENTS.md pointer, and the progressive disclosure architecture described below are all *outputs* of ghaiw — artifacts installed into inited projects, not rules for developing ghaiw.
 
-**ghaiw-py uses its own workflow.** This repo is itself an inited project — it has `.ghaiw.yml`, uses `ghaiwpy task` / `ghaiwpy work` for its own development, and the `## Git Workflow` section at the bottom of this file is the self-installed pointer. When developing ghaiw-py, follow that pointer and the phase-specific skill referenced in your clipboard prompt (`@.claude/skills/work-session/SKILL.md` or `@.claude/skills/plan-session/SKILL.md`).
+**ghaiw uses its own workflow.** This repo is itself an inited project — it has `.ghaiw.yml`, uses `ghaiw task` / `ghaiw work` for its own development, and the `## Git Workflow` section at the bottom of this file is the self-installed pointer. When developing ghaiw, follow that pointer and the phase-specific skill referenced in your clipboard prompt (`@.claude/skills/work-session/SKILL.md` or `@.claude/skills/plan-session/SKILL.md`).
 
 ## Commands
 
@@ -155,13 +155,13 @@ No circular dependencies. Models are pure data. Services orchestrate. **Never im
 
 ### Command Dispatch
 
-`src/ghaiw/cli/main.py` is the root Typer application. It registers subcommand groups (`task`, `work`) and admin commands (`init`, `update`, `deinit`, `check`, `check-config`, `shell-init`). The `tasks` alias is registered as a hidden Typer group pointing to the same `task_app`. The `ghaiwpy` entry point (defined in `pyproject.toml` as `ghaiw.cli.main:app`) invokes the root app.
+`src/ghaiw/cli/main.py` is the root Typer application. It registers subcommand groups (`task`, `work`) and admin commands (`init`, `update`, `deinit`, `check`, `check-config`, `shell-init`). The `tasks` alias is registered as a hidden Typer group pointing to the same `task_app`. The `ghaiw` entry point (defined in `pyproject.toml` as `ghaiw.cli.main:app`) invokes the root app.
 
 CLI modules are **thin dispatch layers** — they parse flags via Typer, then call service methods. Business logic lives in `services/`, not in `cli/`.
 
-**Interactive menus**: `ghaiwpy work` with no subcommand shows an interactive menu (start/done/sync/list/batch/remove). `ghaiwpy task create` without `--plan-file` prompts interactively for title and body.
+**Interactive menus**: `ghaiw work` with no subcommand shows an interactive menu (start/done/sync/list/batch/remove). `ghaiw task create` without `--plan-file` prompts interactively for title and body.
 
-**Shell integration**: `ghaiwpy shell-init` outputs a shell function wrapper for `eval "$(ghaiwpy shell-init)"` that intercepts `ghaiwpy work cd <n>` to perform a real `cd` in the caller's shell.
+**Shell integration**: `ghaiw shell-init` outputs a shell function wrapper for `eval "$(ghaiw shell-init)"` that intercepts `ghaiw work cd <n>` to perform a real `cd` in the caller's shell.
 
 ### Key Design Patterns
 
@@ -213,7 +213,7 @@ hooks:
 
 ### Config Migration Pipeline
 
-`config/migrations.py` provides a single migration run during `ghaiwpy update`:
+`config/migrations.py` provides a single migration run during `ghaiw update`:
 
 | # | Function | What it does |
 |---|----------|-------------|
@@ -223,7 +223,7 @@ hooks:
 
 ### Update Flow
 
-`ghaiwpy update` performs 11 steps:
+`ghaiw update` performs 11 steps:
 
 1. Validate repo + config existence
 2. Self-upgrade if source version differs (see below)
@@ -237,7 +237,7 @@ hooks:
 10. Refresh .gitignore + AGENTS.md pointer
 11. Rebuild manifest with version
 
-**Self-upgrade mechanism**: When `ghaiwpy` is installed via `install.sh` (frozen venv at `~/.local/share/ghaiw/venv/`), the installer records the source repo path in `ghaiw-source.txt`. On `ghaiwpy update`, if the installed version differs from the source version, `utils/install.py:self_upgrade()` reinstalls from source and `re_exec()` restarts the process with the new code. Editable installs (`uv pip install -e .`) skip this naturally. Pass `--skip-self-upgrade` to bypass.
+**Self-upgrade mechanism**: When `ghaiw` is installed via `install.sh` (frozen venv at `~/.local/share/ghaiw/venv/`), the installer records the source repo path in `ghaiw-source.txt`. On `ghaiw update`, if the installed version differs from the source version, `utils/install.py:self_upgrade()` reinstalls from source and `re_exec()` restarts the process with the new code. Editable installs (`uv pip install -e .`) skip this naturally. Pass `--skip-self-upgrade` to bypass.
 
 ### AI Interaction Pattern
 
@@ -257,7 +257,7 @@ Each AI tool adapter implements `capabilities()` (binary name, model flag syntax
 `task plan` uses a snapshot/diff pattern to detect issues created during an AI session (Path A — backward-compatible fallback):
 
 1. **Before AI** — Snapshot all open issue numbers with the configured label
-2. **AI runs** — The agent creates issues via `ghaiwpy task create` from within the AI CLI
+2. **AI runs** — The agent creates issues via `ghaiw task create` from within the AI CLI
 3. **After AI** — Compare current issue numbers against the pre-snapshot, returning only newly created ones
 
 This avoids requiring the AI to report back which issues it created — the service detects them deterministically. When no issues are detected (Path B), the service reads plan files from the session temp dir instead.
@@ -265,34 +265,34 @@ This avoids requiring the AI to report back which issues it created — the serv
 ### Merge Strategy
 
 `MergeStrategy` (config key `project.merge_strategy`) controls how feature branches are merged into main:
-- **`PR`** (default) — The agent runs `ghaiwpy work done` during its session to push the branch and create a PR via `gh pr create`. The worktree is **not** cleaned up by `work done` — it is cleaned up automatically by `work start` after the human merges the PR. When the tool exits, `work start`'s post-work prompt detects the PR and asks "Do you want to merge this PR?" — if yes, squash-merges via `gh pr merge --squash --delete-branch`.
+- **`PR`** (default) — The agent runs `ghaiw work done` during its session to push the branch and create a PR via `gh pr create`. The worktree is **not** cleaned up by `work done` — it is cleaned up automatically by `work start` after the human merges the PR. When the tool exits, `work start`'s post-work prompt detects the PR and asks "Do you want to merge this PR?" — if yes, squash-merges via `gh pr merge --squash --delete-branch`.
 - **`direct`** — Merge locally into main, push, and clean up the worktree. Useful for solo projects or repos without branch protection.
 
-`ghaiwpy work done` handles PR creation / direct merge. The post-work lifecycle prompt handles the merge decision (PR strategy) or local merge options (direct strategy).
+`ghaiw work done` handles PR creation / direct merge. The post-work lifecycle prompt handles the merge decision (PR strategy) or local merge options (direct strategy).
 
-### Two Worlds: ghaiw-py repo vs inited projects
+### Two Worlds: ghaiw repo vs inited projects
 
 This boundary is critical. Everything in this repo exists in one of two worlds:
 
-| ghaiw-py repo (source) | Inited project (output) |
+| ghaiw repo (source) | Inited project (output) |
 |---------------------|------------------------|
-| `src/ghaiw/` | installed `ghaiwpy` binary (via pip/uv) |
+| `src/ghaiw/` | installed `ghaiw` binary (via pip/uv) |
 | `templates/skills/<name>/SKILL.md` | `.claude/skills/<name>/SKILL.md` |
 | `templates/agents-pointer.md` | `## Git Workflow` block in target `AGENTS.md` |
 | `AGENTS.md` (this file) | target project's own `AGENTS.md` (different content) |
 | `.ghaiw.yml` (this repo's config) | target project's own `.ghaiw.yml` |
 
-When developing ghaiw-py, **only touch the left column**. The right column is what users get after running `ghaiwpy init` in their own projects.
+When developing ghaiw, **only touch the left column**. The right column is what users get after running `ghaiw init` in their own projects.
 
 ### AGENTS.md and CLAUDE.md
 
 `AGENTS.md` is the canonical agent guidance file for this repo. `CLAUDE.md` is a committed symlink -> `AGENTS.md`, providing Claude Code discovery without duplicating content. **Always edit `AGENTS.md` directly** — changes reflect in `CLAUDE.md` automatically via the symlink.
 
-In inited projects, `ghaiwpy init` writes the workflow pointer to whichever of `AGENTS.md` / `CLAUDE.md` already exists (preferring `AGENTS.md`), or creates `AGENTS.md` if neither exists.
+In inited projects, `ghaiw init` writes the workflow pointer to whichever of `AGENTS.md` / `CLAUDE.md` already exists (preferring `AGENTS.md`), or creates `AGENTS.md` if neither exists.
 
 ### Skill File Symlink Structure
 
-In this repo (self-init), the skill directories should be symlinks rather than file copies, so edits to skill templates are reflected immediately without re-running `ghaiwpy init`:
+In this repo (self-init), the skill directories should be symlinks rather than file copies, so edits to skill templates are reflected immediately without re-running `ghaiw init`:
 
 ```
 .claude/skills/plan-session  ->  ../../templates/skills/plan-session  (symlink)
@@ -305,26 +305,26 @@ In this repo (self-init), the skill directories should be symlinks rather than f
 .gemini/skills/              ->  (same targets, separate symlinks)
 ```
 
-**Always edit `templates/skills/<name>/SKILL.md`** — never edit files inside `.claude/skills/`, `.github/skills/`, `.agents/skills/`, or `.gemini/skills/` directly. In this repo those are all symlinks; in inited projects they are copies that would be overwritten by `ghaiwpy update`.
+**Always edit `templates/skills/<name>/SKILL.md`** — never edit files inside `.claude/skills/`, `.github/skills/`, `.agents/skills/`, or `.gemini/skills/` directly. In this repo those are all symlinks; in inited projects they are copies that would be overwritten by `ghaiw update`.
 
-In inited projects (normal init), `ghaiwpy init` copies skill files (not symlinks), so agents in those projects read standalone files that don't change unless `ghaiwpy update` is run.
+In inited projects (normal init), `ghaiw init` copies skill files (not symlinks), so agents in those projects read standalone files that don't change unless `ghaiw update` is run.
 
 ### Skill Installation Lifecycle
 
-`ghaiwpy init` installs skills file-by-file via the `skills/installer.py` module. When adding a new skill:
+`ghaiw init` installs skills file-by-file via the `skills/installer.py` module. When adding a new skill:
 
 1. Create the skill template in `templates/skills/<name>/SKILL.md`
 2. Register the skill in `skills/installer.py` — add it to `SKILL_FILES` and optionally `ALWAYS_OVERWRITE`
 3. Add the skill directory to the cleanup logic in `init_service.py` (deinit path)
 4. Reference the skill from `plan-session/SKILL.md` or `work-session/SKILL.md` as appropriate
 
-The self-init path creates symlinks from `.claude/skills/<name>` -> `../../templates/skills/<name>` to avoid file duplication when working on ghaiw-py itself.
+The self-init path creates symlinks from `.claude/skills/<name>` -> `../../templates/skills/<name>` to avoid file duplication when working on ghaiw itself.
 
 ### Agent Skills (templates/skills/)
 
-> **Scope: inited projects.** The skill templates in `templates/skills/` are installed into inited projects by `ghaiwpy init`. They are *not* guidance for developing ghaiw-py itself — they teach AI agents in target projects how to use the ghaiw workflow. When you are developing ghaiw-py, treat these files as **output artifacts** you are authoring, not as rules you follow.
+> **Scope: inited projects.** The skill templates in `templates/skills/` are installed into inited projects by `ghaiw init`. They are *not* guidance for developing ghaiw itself — they teach AI agents in target projects how to use the ghaiw workflow. When you are developing ghaiw, treat these files as **output artifacts** you are authoring, not as rules you follow.
 
-Skill templates are Markdown files installed to an inited project's `.claude/skills/` by `ghaiwpy init`, with symlinks from `.github/skills/`, `.agents/skills/`, and `.gemini/skills/` for cross-tool discovery. They teach AI agents the ghaiw workflow via phase-specific session skills and on-demand task skills.
+Skill templates are Markdown files installed to an inited project's `.claude/skills/` by `ghaiw init`, with symlinks from `.github/skills/`, `.agents/skills/`, and `.gemini/skills/` for cross-tool discovery. They teach AI agents the ghaiw workflow via phase-specific session skills and on-demand task skills.
 
 #### Phase-Specific Skill Architecture (for inited projects)
 
@@ -332,9 +332,9 @@ Skill templates are Markdown files installed to an inited project's `.claude/ski
 
 Skills are organized into **phase skills** (one per session type) and **task skills** (on-demand reference):
 
-1. **AGENTS.md pointer** — `ghaiwpy init` reads `templates/agents-pointer.md` and inserts its content into the target project's `AGENTS.md`. It directs agents to read the skill referenced in their clipboard prompt. **To change what gets injected into inited projects, edit `templates/agents-pointer.md`** — not this repo's own `## Git Workflow` section, which is only the self-installed copy for this repo.
-2. **`templates/skills/plan-session/SKILL.md`** — Self-contained rules for planning sessions (`ghaiwpy task plan`). Covers plan file format, complexity tagging, session boundaries. No implementation rules.
-3. **`templates/skills/work-session/SKILL.md`** — Self-contained rules for implementation sessions (`ghaiwpy work start`). Covers worktree safety, commit conventions, syncing, PR summaries, and session closing. No planning rules.
+1. **AGENTS.md pointer** — `ghaiw init` reads `templates/agents-pointer.md` and inserts its content into the target project's `AGENTS.md`. It directs agents to read the skill referenced in their clipboard prompt. **To change what gets injected into inited projects, edit `templates/agents-pointer.md`** — not this repo's own `## Git Workflow` section, which is only the self-installed copy for this repo.
+2. **`templates/skills/plan-session/SKILL.md`** — Self-contained rules for planning sessions (`ghaiw task plan`). Covers plan file format, complexity tagging, session boundaries. No implementation rules.
+3. **`templates/skills/work-session/SKILL.md`** — Self-contained rules for implementation sessions (`ghaiw work start`). Covers worktree safety, commit conventions, syncing, PR summaries, and session closing. No planning rules.
 4. **`templates/skills/task/SKILL.md`** — On-demand skill for standalone issue creation outside of planning sessions.
 5. **`templates/skills/deps/SKILL.md`** — On-demand skill for dependency analysis.
 
@@ -388,34 +388,34 @@ The AGENTS.md workflow pointer uses HTML comment markers to enable robust detect
 - **Functions**: `snake_case` — public API functions are unadorned, private helpers use `_` prefix
 - **Constants**: `UPPER_SNAKE_CASE` — module-level constants (`MARKER_START`, `CONFIG_FILENAME`)
 - **Enums**: `StrEnum` for string-valued enums (`AIToolID`, `MergeStrategy`, `ProviderID`, `ModelTier`)
-- **CLI commands**: Match the Bash ghaiw commands — `ghaiwpy task plan`, `ghaiwpy work start`, etc.
+- **CLI commands**: Match the Bash ghaiw commands — `ghaiw task plan`, `ghaiw work start`, etc.
 
 ### CLI Flag Reference
 
 Key flags added for Bash parity:
 
-**`ghaiwpy work start`:**
+**`ghaiw work start`:**
 - `--detach` — Launch AI in a new terminal tab/window (non-blocking). Uses `build_launch_command()` + `launch_in_new_terminal()`.
-- `--cd` — Create worktree, print its path to stdout, and exit (no AI launch). Used internally by `ghaiwpy work cd`.
+- `--cd` — Create worktree, print its path to stdout, and exit (no AI launch). Used internally by `ghaiw work cd`.
 
-**`ghaiwpy work done`:**
+**`ghaiw work done`:**
 - `target` (positional) — Optional issue number, worktree name, or plan file path. If a file path, creates the issue first. If a number/name, finds the worktree. If omitted, detects from current branch.
 - `--no-cleanup` — Keep the worktree after PR creation / direct merge.
 
-**`ghaiwpy work batch`:**
+**`ghaiw work batch`:**
 - `--model` — Pass a specific AI model to all parallel sessions.
 
-**`ghaiwpy work remove`:**
+**`ghaiw work remove`:**
 - `--all` — Hidden alias for `--stale` (removes all stale worktrees).
 
-**`ghaiwpy update`:**
+**`ghaiw update`:**
 - `--skip-self-upgrade` — Skip the source-version self-upgrade check.
 
-**`ghaiwpy task create`:**
+**`ghaiw task create`:**
 - No flags required — when `--plan-file` is omitted, prompts interactively for title and body.
 
-**`ghaiwpy shell-init`:**
-- No flags. Outputs a shell function for `eval "$(ghaiwpy shell-init)"`.
+**`ghaiw shell-init`:**
+- No flags. Outputs a shell function for `eval "$(ghaiw shell-init)"`.
 
 ### Adding a New Subcommand to `task`
 
@@ -472,7 +472,7 @@ Dev:
 
 All deterministic operations — git commands, state transitions, file manipulation, API calls — **must live in service/utility code**, never in AI agent reasoning. Agents are non-deterministic; code is deterministic. The boundary is:
 
-- **Code decides and executes** — fetch, merge, branch creation, worktree lifecycle, issue state changes. These are codified in `services/`, `git/`, `providers/` and exposed via `ghaiwpy <command>`.
+- **Code decides and executes** — fetch, merge, branch creation, worktree lifecycle, issue state changes. These are codified in `services/`, `git/`, `providers/` and exposed via `ghaiw <command>`.
 - **Agents interpret and decide next steps** — reading conflict diffs, choosing resolution strategies, composing commit messages, deciding whether to proceed. These are guided by skills.
 
 When adding new functionality, ask: "Can an AI agent get this wrong by reasoning about it?" If yes, put it in code. Examples:
@@ -484,13 +484,13 @@ When adding new functionality, ask: "Can an AI agent get this wrong by reasoning
 | Creating branch with naming convention | Writing commit messages |
 | Emitting structured JSON events | Interpreting event output |
 
-This is why `ghaiwpy work sync` exists as a CLI command rather than instructions for agents to run raw git commands — the sequence (preflight -> fetch -> merge -> conflict detection -> event emission) is deterministic and must not vary between agent sessions.
+This is why `ghaiw work sync` exists as a CLI command rather than instructions for agents to run raw git commands — the sequence (preflight -> fetch -> merge -> conflict detection -> event emission) is deterministic and must not vary between agent sessions.
 
-When ghaiw installs skills into a target project (`ghaiwpy init`), the skills reference `ghaiwpy <command>` — they do **not** bundle standalone copies of the logic. The ghaiw CLI is the single source of truth for deterministic operations.
+When ghaiw installs skills into a target project (`ghaiw init`), the skills reference `ghaiw <command>` — they do **not** bundle standalone copies of the logic. The ghaiw CLI is the single source of truth for deterministic operations.
 
 ## Testing
 
-ghaiw-py uses **pytest** exclusively for all test suites.
+ghaiw uses **pytest** exclusively for all test suites.
 
 ### Test Organization
 
@@ -599,7 +599,7 @@ def test_issue_creation(tmp_ghaiw_project: Path, mock_gh: Path) -> None:
 - For `--json` modes, parse stdout as JSON and fail if any non-JSON line appears.
 - Pure functions (parsing, formatting, model validation) can and should be tested without mocks.
 
-**When to skip re-running tests after `ghaiwpy work sync`:** If the sync merge only brings in changes to documentation or template files (`templates/`, `docs/`, `README.md`, `AGENTS.md`, `CHANGELOG.md`), there is no need to re-run tests. Re-run tests after sync when the merged changes touch `src/`, `scripts/`, or `tests/`.
+**When to skip re-running tests after `ghaiw work sync`:** If the sync merge only brings in changes to documentation or template files (`templates/`, `docs/`, `README.md`, `AGENTS.md`, `CHANGELOG.md`), there is no need to re-run tests. Re-run tests after sync when the merged changes touch `src/`, `scripts/`, or `tests/`.
 
 ## Version Bumping
 
@@ -649,7 +649,7 @@ Every change **must** include documentation updates as part of the implementatio
 2. **`README.md`** — Update if the change affects user-facing behavior: new commands, flags, install steps, configuration options, or supported tools.
 3. **`templates/skills/plan-session/SKILL.md`** / **`templates/skills/work-session/SKILL.md`** — *(inited-project artifacts)* Update if the change affects phase-specific session rules (planning rules in plan-session, implementation rules in work-session).
 4. **`templates/skills/`** (task, deps) — *(inited-project artifacts)* Update if the change affects how AI agents in inited projects should use ghaiw commands. This is where command references, flags, workflows, and examples belong.
-5. **`templates/agents-pointer.md`** — *(inited-project artifact)* The pointer text that `ghaiwpy init` injects into target projects' `AGENTS.md`. Update this when the critical inline rules or pointer wording changes. **This is not the same as this repo's own `## Git Workflow` section** — that is the self-installed copy, written once by `ghaiwpy init` and never overwritten by `ghaiwpy update`.
+5. **`templates/agents-pointer.md`** — *(inited-project artifact)* The pointer text that `ghaiw init` injects into target projects' `AGENTS.md`. Update this when the critical inline rules or pointer wording changes. **This is not the same as this repo's own `## Git Workflow` section** — that is the self-installed copy, written once by `ghaiw init` and never overwritten by `ghaiw update`.
 
 Do not skip documentation even for "small" changes — a new flag, a renamed option, or a changed default all need docs updates. Documentation is part of "done", not a separate task.
 
@@ -675,7 +675,7 @@ After completing any task, reflect on whether you encountered any friction durin
 **At the end of every session, ask yourself:**
 
 1. **Did I hit a bug or unexpected behavior?**
-   - Describe it to the user and **offer** to create a GitHub Issue (`ghaiwpy task create`)
+   - Describe it to the user and **offer** to create a GitHub Issue (`ghaiw task create`)
    - Do not silently work around it — surface it so it can be tracked and fixed
 
 2. **Did I hit a doc gap or architecture misunderstanding?**
@@ -709,8 +709,8 @@ prompt for full session rules.
 
 Critical rules you must always follow:
 
-1. Never create GitHub Issues via `gh issue create` — use `ghaiwpy task create`
+1. Never create GitHub Issues via `gh issue create` — use `ghaiw task create`
    or read @.claude/skills/task/SKILL.md
 2. Never create PRs manually (`gh pr create`) or push branches directly — use
-   `ghaiwpy work done`
+   `ghaiw work done`
 <!-- ghaiw:pointer:end -->

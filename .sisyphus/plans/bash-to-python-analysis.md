@@ -4,13 +4,13 @@
 
 ### What Was Compared
 
-| Dimension | Bash (`ghaiw`) | Python (`ghaiw-py`) |
+| Dimension | Bash (`ghaiw`) | Python (`ghaiw`) |
 |-----------|----------------|---------------------|
 | **Version** | v3.14.0 | 0.5.0 (dev) |
 | **Source files** | 19 shell scripts | 50+ Python modules |
 | **Lines of code** | ~6,600+ | ~8,000+ |
-| **Entry point** | `ghaiw` (shell function) | `ghaiwpy` (Typer CLI) |
-| **Location** | `~/Documents/workspace/ghaiw/` | `~/Documents/workspace/ghaiw-py/` |
+| **Entry point** | `ghaiw` (shell function) | `ghaiw` (Typer CLI) |
+| **Location** | `~/Documents/workspace/ghaiw/` | `~/Documents/workspace/ghaiw/` |
 
 ### Classification Rules
 

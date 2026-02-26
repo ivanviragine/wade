@@ -1,4 +1,4 @@
-"""CLI-level tests for the --ai flag in ghaiwpy work start."""
+"""CLI-level tests for the --ai flag in ghaiw work start."""
 
 from __future__ import annotations
 

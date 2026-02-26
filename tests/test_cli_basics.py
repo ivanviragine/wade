@@ -16,7 +16,7 @@ class TestVersion:
     def test_version_flag(self) -> None:
         result = runner.invoke(app, ["--version"])
         assert result.exit_code == 0
-        assert "ghaiwpy" in result.output
+        assert "ghaiw" in result.output
         assert ghaiw.__version__ in result.output
 
     def test_version_short_flag(self) -> None:
@@ -87,10 +87,10 @@ class TestCommandBehaviorWithoutContext:
 
 
 class TestInteractiveMenu:
-    """Verify that ghaiwpy with no args invokes the interactive menu."""
+    """Verify that ghaiw with no args invokes the interactive menu."""
 
     def test_no_args_invokes_menu(self) -> None:
-        """Running ghaiwpy with no subcommand should call _interactive_main_menu."""
+        """Running ghaiw with no subcommand should call _interactive_main_menu."""
         with patch("ghaiw.cli.main._interactive_main_menu") as mock_menu:
             runner.invoke(app, [])
             mock_menu.assert_called_once()

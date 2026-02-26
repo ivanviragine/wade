@@ -1,11 +1,11 @@
-"""End-to-end workflow chain tests via the ghaiwpy CLI binary.
+"""End-to-end workflow chain tests via the ghaiw CLI binary.
 
-Tests the full ghaiw lifecycle by invoking `ghaiwpy` as a subprocess,
+Tests the full ghaiw lifecycle by invoking `ghaiw` as a subprocess,
 exactly as a user would. This exercises CLI argument parsing, exit codes,
 output formatting, and the full service stack end-to-end.
 
 Uses real git repos and a mock gh CLI in PATH.
-Requires `ghaiwpy` to be installed (e.g., `uv pip install -e .`).
+Requires `ghaiw` to be installed (e.g., `uv pip install -e .`).
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
-GHAIWPY = "ghaiwpy"
+GHAIWPY = "ghaiw"
 
 
 def _run(
@@ -32,7 +32,7 @@ def _run(
     env: dict[str, str] | None = None,
     timeout: int = 30,
 ) -> subprocess.CompletedProcess[str]:
-    """Run a ghaiwpy CLI command as a subprocess."""
+    """Run a ghaiw CLI command as a subprocess."""
     run_env = os.environ.copy()
     if env:
         run_env.update(env)
@@ -109,17 +109,17 @@ def _assert_gh_called_with(
 
 
 @pytest.fixture(autouse=True)
-def require_ghaiwpy() -> None:
-    """Skip all tests if ghaiwpy is not installed."""
+def require_ghaiw() -> None:
+    """Skip all tests if ghaiw is not installed."""
     if not shutil.which(GHAIWPY):
-        pytest.skip("ghaiwpy CLI not found in PATH")
+        pytest.skip("ghaiw CLI not found in PATH")
 
 
 @pytest.fixture
 def e2e_repo(tmp_path: Path) -> Path:
     """Create a fully initialized ghaiw project with config and initial commit.
 
-    Simulates what a user would have after running `ghaiwpy init`.
+    Simulates what a user would have after running `ghaiw init`.
     """
     repo = tmp_path / "project"
     repo.mkdir()
@@ -167,7 +167,7 @@ ai:
 def mock_gh_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """Create a mock gh CLI that handles issue/PR/label/repo commands.
 
-    Prepends the mock binary directory to PATH so ghaiwpy's subprocess
+    Prepends the mock binary directory to PATH so ghaiw's subprocess
     calls to `gh` hit the mock instead.
     """
     mock_bin = tmp_path / "mock_bin"
@@ -307,7 +307,7 @@ esac
     )
     gh_script.chmod(0o755)
 
-    # Prepend mock bin to PATH so ghaiwpy subprocess calls hit the mock
+    # Prepend mock bin to PATH so ghaiw subprocess calls hit the mock
     monkeypatch.setenv("PATH", f"{mock_bin}:{os.environ.get('PATH', '')}")
 
     return {
@@ -323,16 +323,16 @@ esac
 
 
 class TestCLIBasics:
-    """Smoke tests for basic ghaiwpy commands."""
+    """Smoke tests for basic ghaiw commands."""
 
     def test_version(self) -> None:
-        """ghaiwpy --version exits 0 and prints version string."""
+        """ghaiw --version exits 0 and prints version string."""
         result = subprocess.run([GHAIWPY, "--version"], capture_output=True, text=True, timeout=10)
         assert result.returncode == 0
         assert "ghaiw" in result.stdout.lower()
 
     def test_help(self) -> None:
-        """ghaiwpy --help exits 0 and lists key subcommands."""
+        """ghaiw --help exits 0 and lists key subcommands."""
         result = subprocess.run([GHAIWPY, "--help"], capture_output=True, text=True, timeout=10)
         assert result.returncode == 0
         output = result.stdout.lower()
@@ -346,16 +346,16 @@ class TestCLIBasics:
 
 
 class TestCheckCommand:
-    """Test `ghaiwpy check` via CLI subprocess."""
+    """Test `ghaiw check` via CLI subprocess."""
 
     def test_check_in_main_checkout(self, e2e_repo: Path) -> None:
-        """ghaiwpy check on main → exit 2, stdout contains IN_MAIN_CHECKOUT."""
+        """ghaiw check on main → exit 2, stdout contains IN_MAIN_CHECKOUT."""
         result = _run(["check"], cwd=e2e_repo)
         assert result.returncode == 2
         assert "IN_MAIN_CHECKOUT" in result.stdout
 
     def test_check_in_worktree(self, e2e_repo: Path) -> None:
-        """ghaiwpy check in a worktree → exit 0, stdout contains IN_WORKTREE."""
+        """ghaiw check in a worktree → exit 0, stdout contains IN_WORKTREE."""
         wt_dir = e2e_repo.parent / ".worktrees" / "42-test"
         _git(
             ["worktree", "add", "-b", "feat/42-test", str(wt_dir)],
@@ -367,7 +367,7 @@ class TestCheckCommand:
         assert "IN_WORKTREE" in result.stdout
 
     def test_check_not_in_git(self, tmp_path: Path) -> None:
-        """ghaiwpy check outside git → exit 1, stdout contains NOT_IN_GIT_REPO."""
+        """ghaiw check outside git → exit 1, stdout contains NOT_IN_GIT_REPO."""
         bare_dir = tmp_path / "not-a-repo"
         bare_dir.mkdir()
 
@@ -382,16 +382,16 @@ class TestCheckCommand:
 
 
 class TestCheckConfigCommand:
-    """Test `ghaiwpy check-config` via CLI subprocess."""
+    """Test `ghaiw check-config` via CLI subprocess."""
 
     def test_valid_config(self, e2e_repo: Path) -> None:
-        """ghaiwpy check-config with valid .ghaiw.yml → exit 0."""
+        """ghaiw check-config with valid .ghaiw.yml → exit 0."""
         result = _run(["check-config"], cwd=e2e_repo)
         assert result.returncode == 0
         assert "VALID_CONFIG" in result.stdout
 
     def test_no_config(self, tmp_path: Path) -> None:
-        """ghaiwpy check-config without .ghaiw.yml → exit 1."""
+        """ghaiw check-config without .ghaiw.yml → exit 1."""
         bare = tmp_path / "empty"
         bare.mkdir()
         _git(["init"], cwd=bare)
@@ -412,12 +412,12 @@ class TestCheckConfigCommand:
 
 
 class TestTaskCommands:
-    """Test `ghaiwpy task` subcommands via CLI subprocess."""
+    """Test `ghaiw task` subcommands via CLI subprocess."""
 
     def test_task_create_from_plan(
         self, e2e_repo: Path, mock_gh_cli: dict[str, Any], tmp_path: Path
     ) -> None:
-        """ghaiwpy task create --plan-file --no-start creates an issue."""
+        """ghaiw task create --plan-file --no-start creates an issue."""
         plan = tmp_path / "PLAN.md"
         plan.write_text(
             """\
@@ -456,12 +456,12 @@ Add a search command to find tasks by keyword.
         )
 
     def test_task_list(self, e2e_repo: Path, mock_gh_cli: dict[str, Any]) -> None:
-        """ghaiwpy task list exits 0."""
+        """ghaiw task list exits 0."""
         result = _run(["task", "list"], cwd=e2e_repo)
         assert result.returncode == 0
 
     def test_task_list_json(self, e2e_repo: Path, mock_gh_cli: dict[str, Any]) -> None:
-        """ghaiwpy task list --json outputs valid JSON array."""
+        """ghaiw task list --json outputs valid JSON array."""
         result = _run(["task", "list", "--json"], cwd=e2e_repo)
         assert result.returncode == 0
         # Extract the JSON portion (skip any non-JSON lines)
@@ -475,10 +475,10 @@ Add a search command to find tasks by keyword.
 
 
 class TestWorkSyncCommand:
-    """Test `ghaiwpy work sync` via CLI subprocess."""
+    """Test `ghaiw work sync` via CLI subprocess."""
 
     def test_sync_clean_merge(self, e2e_repo: Path) -> None:
-        """ghaiwpy work sync when main has diverged — clean merge."""
+        """ghaiw work sync when main has diverged — clean merge."""
         # Create worktree
         wt_dir = e2e_repo.parent / ".worktrees" / "50-feature"
         _git(
@@ -505,7 +505,7 @@ class TestWorkSyncCommand:
         assert (wt_dir / "feature.py").exists()  # feature work preserved
 
     def test_sync_already_up_to_date(self, e2e_repo: Path) -> None:
-        """ghaiwpy work sync when already up to date — no-op."""
+        """ghaiw work sync when already up to date — no-op."""
         wt_dir = e2e_repo.parent / ".worktrees" / "51-uptodate"
         _git(
             ["worktree", "add", "-b", "feat/51-uptodate", str(wt_dir)],
@@ -516,7 +516,7 @@ class TestWorkSyncCommand:
         assert result.returncode == 0
 
     def test_sync_conflict_exit_code(self, e2e_repo: Path) -> None:
-        """ghaiwpy work sync with merge conflict → exit 2."""
+        """ghaiw work sync with merge conflict → exit 2."""
         wt_dir = e2e_repo.parent / ".worktrees" / "60-conflict"
         _git(
             ["worktree", "add", "-b", "feat/60-conflict", str(wt_dir)],
@@ -540,7 +540,7 @@ class TestWorkSyncCommand:
         subprocess.run(["git", "merge", "--abort"], cwd=wt_dir, capture_output=True)
 
     def test_sync_json_output(self, e2e_repo: Path) -> None:
-        """ghaiwpy work sync --json emits structured events."""
+        """ghaiw work sync --json emits structured events."""
         wt_dir = e2e_repo.parent / ".worktrees" / "52-json"
         _git(
             ["worktree", "add", "-b", "feat/52-json", str(wt_dir)],
@@ -562,7 +562,7 @@ class TestWorkSyncCommand:
             assert "event" in parsed
 
     def test_sync_from_main_rejected(self, e2e_repo: Path) -> None:
-        """ghaiwpy work sync from main branch → exit 4 (preflight failure)."""
+        """ghaiw work sync from main branch → exit 4 (preflight failure)."""
         result = _run(["work", "sync"], cwd=e2e_repo)
         assert result.returncode == 4
 
@@ -573,15 +573,15 @@ class TestWorkSyncCommand:
 
 
 class TestWorkListCommand:
-    """Test `ghaiwpy work list` via CLI subprocess."""
+    """Test `ghaiw work list` via CLI subprocess."""
 
     def test_list_empty(self, e2e_repo: Path) -> None:
-        """ghaiwpy work list with no worktrees → exit 0."""
+        """ghaiw work list with no worktrees → exit 0."""
         result = _run(["work", "list"], cwd=e2e_repo)
         assert result.returncode == 0
 
     def test_list_with_worktrees(self, e2e_repo: Path) -> None:
-        """ghaiwpy work list with worktrees → shows branch names in output."""
+        """ghaiw work list with worktrees → shows branch names in output."""
         for num, slug in [("10", "auth"), ("11", "db")]:
             wt_dir = e2e_repo.parent / ".worktrees" / f"{num}-{slug}"
             _git(
@@ -599,7 +599,7 @@ class TestWorkListCommand:
         )
 
     def test_list_json(self, e2e_repo: Path) -> None:
-        """ghaiwpy work list --json outputs valid JSON array."""
+        """ghaiw work list --json outputs valid JSON array."""
         wt_dir = e2e_repo.parent / ".worktrees" / "20-test"
         _git(
             ["worktree", "add", "-b", "feat/20-test", str(wt_dir)],

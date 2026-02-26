@@ -67,7 +67,7 @@ class TestValidateConfig:
         assert not result.is_valid
         output = result.format_output()
         assert "CONFIG_NOT_FOUND" in output
-        assert "ghaiwpy init" in output
+        assert "ghaiw init" in output
 
     def test_valid_config(self, tmp_path: Path) -> None:
         config = tmp_path / ".ghaiw.yml"

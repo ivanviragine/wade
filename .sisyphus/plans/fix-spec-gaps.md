@@ -2,10 +2,10 @@
 
 ## TL;DR
 
-> **Quick Summary**: Add explicit `--plan <file>` flag to `ghaiwpy work done` to match Bash interface. The flag resolves a plan file's title to find the matching worktree, then runs `done` against it — distinct from the positional `target` argument which creates a new issue from the file.
+> **Quick Summary**: Add explicit `--plan <file>` flag to `ghaiw work done` to match Bash interface. The flag resolves a plan file's title to find the matching worktree, then runs `done` against it — distinct from the positional `target` argument which creates a new issue from the file.
 >
 > **Deliverables**:
-> - `--plan <file>` flag on `ghaiwpy work done` CLI command
+> - `--plan <file>` flag on `ghaiw work done` CLI command
 > - Service function `_resolve_worktree_from_plan(plan_file: Path) -> tuple[Path, str, str | None]` in `work_service.py`
 > - TDD test coverage for both CLI wiring and service logic
 >
@@ -18,7 +18,7 @@
 ## Context
 
 ### Original Request
-Fix spec gap SG-002: Bash `ghaiw work done` accepts an explicit `--plan <file>` flag that resolves a plan file's title to find the matching worktree, then runs `done` against it. Python's `ghaiwpy work done` only has a positional `target` argument.
+Fix spec gap SG-002: Bash `ghaiw work done` accepts an explicit `--plan <file>` flag that resolves a plan file's title to find the matching worktree, then runs `done` against it. Python's `ghaiw work done` only has a positional `target` argument.
 
 ### Interview Summary
 **Key Discussions**:
@@ -43,7 +43,7 @@ Fix spec gap SG-002: Bash `ghaiw work done` accepts an explicit `--plan <file>` 
 ## Work Objectives
 
 ### Core Objective
-Add `--plan <file>` flag to `ghaiwpy work done` that resolves a plan file to its matching worktree, matching the Bash `ghaiw work done --plan <file>` interface.
+Add `--plan <file>` flag to `ghaiw work done` that resolves a plan file to its matching worktree, matching the Bash `ghaiw work done --plan <file>` interface.
 
 ### Concrete Deliverables
 - `--plan` flag in `cli/work.py` `done` command
@@ -55,8 +55,8 @@ Add `--plan <file>` flag to `ghaiwpy work done` that resolves a plan file to its
 - [ ] `uv run mypy src/ --strict` — 0 errors
 - [ ] `uv run ruff check src/` — 0 errors
 - [ ] `uv run ruff format --check src/` — 0 errors
-- [ ] `ghaiwpy work done --plan path/to/PLAN.md` resolves worktree and runs done
-- [ ] `ghaiwpy work done --help` shows `--plan` in options
+- [ ] `ghaiw work done --plan path/to/PLAN.md` resolves worktree and runs done
+- [ ] `ghaiw work done --help` shows `--plan` in options
 
 ### Must Have
 - `--plan <file>` flag on `work done` command
@@ -170,7 +170,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
         if not wt_path:
             raise ValueError(
                 f"No worktree found matching plan title '{title}' (slug: {slug}). "
-                "Check active worktrees with: ghaiwpy work list"
+                "Check active worktrees with: ghaiw work list"
             )
 
         # Extract branch and issue from worktree
@@ -345,7 +345,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   - [ ] `done()` service function accepts `plan_file: Path | None`
   - [ ] Plan file resolution happens before normal target handling
   - [ ] `uv run pytest tests/unit/test_services/test_done_plan_flag.py -v` → PASS (9 tests total, 0 failures)
-  - [ ] `ghaiwpy work done --help` shows `--plan` option
+  - [ ] `ghaiw work done --help` shows `--plan` option
 
   **QA Scenarios (MANDATORY):**
 
@@ -375,8 +375,8 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
     Evidence: .sisyphus/evidence/task-2-plan-flag-error.txt
 
   Scenario: --plan shows in help output
-    Tool: Bash (ghaiwpy work done --help)
-    Preconditions: ghaiwpy installed
+    Tool: Bash (ghaiw work done --help)
+    Preconditions: ghaiw installed
     Steps:
       1. Run `uv run python -m ghaiw.cli.main work done --help`
       2. Check output contains "--plan"
@@ -406,7 +406,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   Output: `Mypy [PASS/FAIL] | Ruff [PASS/FAIL] | Tests [N pass/N fail] | VERDICT`
 
 - [ ] F3. **Real Manual QA** — `unspecified-high`
-  Execute EVERY QA scenario from EVERY task. Test `ghaiwpy work done --help` shows `--plan`. Save evidence to `.sisyphus/evidence/final-qa/`.
+  Execute EVERY QA scenario from EVERY task. Test `ghaiw work done --help` shows `--plan`. Save evidence to `.sisyphus/evidence/final-qa/`.
   Output: `Scenarios [N/N pass] | VERDICT`
 
 - [ ] F4. **Scope Fidelity Check** — `deep`
@@ -436,7 +436,7 @@ uv run python -m ghaiw.cli.main work done --help  # Expected: --plan flag visibl
 ```
 
 ### Final Checklist
-- [ ] `--plan <file>` flag present on `ghaiwpy work done`
+- [ ] `--plan <file>` flag present on `ghaiw work done`
 - [ ] Plan file title extraction works
 - [ ] Worktree resolution by slug works
 - [ ] Positional target behavior unchanged

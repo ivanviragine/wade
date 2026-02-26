@@ -484,13 +484,13 @@ class TestReExec:
             patch("ghaiw.utils.install.os.execv") as mock_execv,
             patch("ghaiw.utils.install.os.path.isabs", return_value=True),
         ):
-            mock_sys.argv = ["/usr/local/bin/ghaiwpy", "work", "start", "42"]
+            mock_sys.argv = ["/usr/local/bin/ghaiw", "work", "start", "42"]
 
             re_exec()
 
         mock_execv.assert_called_once_with(
-            "/usr/local/bin/ghaiwpy",
-            ["/usr/local/bin/ghaiwpy", "work", "start", "42"],
+            "/usr/local/bin/ghaiw",
+            ["/usr/local/bin/ghaiw", "work", "start", "42"],
         )
 
     def test_resolves_relative_path_via_which(self) -> None:
@@ -499,15 +499,15 @@ class TestReExec:
             patch("ghaiw.utils.install.sys") as mock_sys,
             patch("ghaiw.utils.install.os.execv") as mock_execv,
             patch("ghaiw.utils.install.os.path.isabs", return_value=False),
-            patch("ghaiw.utils.install.shutil.which", return_value="/usr/local/bin/ghaiwpy"),
+            patch("ghaiw.utils.install.shutil.which", return_value="/usr/local/bin/ghaiw"),
         ):
-            mock_sys.argv = ["ghaiwpy", "update"]
+            mock_sys.argv = ["ghaiw", "update"]
 
             re_exec()
 
         mock_execv.assert_called_once_with(
-            "/usr/local/bin/ghaiwpy",
-            ["/usr/local/bin/ghaiwpy", "update"],
+            "/usr/local/bin/ghaiw",
+            ["/usr/local/bin/ghaiw", "update"],
         )
 
     def test_uses_original_when_which_returns_none(self) -> None:
@@ -518,13 +518,13 @@ class TestReExec:
             patch("ghaiw.utils.install.os.path.isabs", return_value=False),
             patch("ghaiw.utils.install.shutil.which", return_value=None),
         ):
-            mock_sys.argv = ["ghaiwpy", "check"]
+            mock_sys.argv = ["ghaiw", "check"]
 
             re_exec()
 
         mock_execv.assert_called_once_with(
-            "ghaiwpy",
-            ["ghaiwpy", "check"],
+            "ghaiw",
+            ["ghaiw", "check"],
         )
 
     def test_no_extra_args(self) -> None:
@@ -534,11 +534,11 @@ class TestReExec:
             patch("ghaiw.utils.install.os.execv") as mock_execv,
             patch("ghaiw.utils.install.os.path.isabs", return_value=True),
         ):
-            mock_sys.argv = ["/usr/local/bin/ghaiwpy"]
+            mock_sys.argv = ["/usr/local/bin/ghaiw"]
 
             re_exec()
 
         mock_execv.assert_called_once_with(
-            "/usr/local/bin/ghaiwpy",
-            ["/usr/local/bin/ghaiwpy"],
+            "/usr/local/bin/ghaiw",
+            ["/usr/local/bin/ghaiw"],
         )

@@ -42,7 +42,7 @@ def task_callback(ctx: typer.Context) -> None:
         "task deps",
     ]
 
-    idx = prompts.menu("ghaiwpy task", menu_items, hints=hints)
+    idx = prompts.menu("ghaiw task", menu_items, hints=hints)
 
     subcommands = ["plan", "create", "list", "read", "update", "close", "deps"]
     selected = subcommands[idx]
@@ -59,7 +59,7 @@ def task_callback(ctx: typer.Context) -> None:
         if task:
             console.empty()
             console.info("When you're ready to start, run:")
-            console.detail(f"ghaiwpy work start {task.id}")
+            console.detail(f"ghaiw work start {task.id}")
         raise typer.Exit(0 if task else 1)
     elif selected == "list":
         from ghaiw.services.task_service import list_tasks as do_list
@@ -165,7 +165,7 @@ def create(
     if not no_start:
         console.empty()
         console.info("When you're ready to start, run:")
-        console.detail(f"ghaiwpy work start {task.id}")
+        console.detail(f"ghaiw work start {task.id}")
 
     raise typer.Exit(0)
 

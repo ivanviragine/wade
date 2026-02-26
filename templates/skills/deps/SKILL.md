@@ -10,16 +10,16 @@ description: >
 # Dependency Analysis
 
 Analyze a set of GitHub issues and determine the dependency relationships
-between them. Output a structured file that `ghaiwpy` will use to generate
+between them. Output a structured file that `ghaiw` will use to generate
 dependency graphs and update issue bodies.
 
 ## When to activate
 
-- After `ghaiwpy task plan` creates multiple issues
-- When `ghaiwpy task deps` is run on existing issues
+- After `ghaiw task plan` creates multiple issues
+- When `ghaiw task deps` is run on existing issues
 - When the user asks to analyze dependencies between issues
 
-> **Note:** `ghaiwpy task deps` first attempts headless analysis (AI tools that
+> **Note:** `ghaiw task deps` first attempts headless analysis (AI tools that
 > support `--print`/`--prompt`). If headless fails, it falls back to interactive
 > mode: copies the analysis prompt to your clipboard, launches the AI tool, and
 > reads the output from a file after exit.

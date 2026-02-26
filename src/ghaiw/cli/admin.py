@@ -93,9 +93,9 @@ def shell_init(
 ) -> None:
     """Output a shell function wrapper for eval.
 
-    Usage: eval "$(ghaiwpy shell-init)"
+    Usage: eval "$(ghaiw shell-init)"
 
-    Installs a shell function that intercepts `ghaiwpy work cd <n>`
+    Installs a shell function that intercepts `ghaiw work cd <n>`
     to perform a real `cd` in the caller's shell.
     """
     # Detect shell from --shell flag or SHELL env var
@@ -104,23 +104,23 @@ def shell_init(
     # Print the shell function to stdout — no Rich formatting
     if "fish" in detected:
         print("""\
-function ghaiwpy
+function ghaiw
   if test (count $argv) -ge 2; and test "$argv[1]" = "work"; and test "$argv[2]" = "cd"
-    set -l dir (command ghaiwpy work cd $argv[3..])
+    set -l dir (command ghaiw work cd $argv[3..])
     and builtin cd $dir
   else
-    command ghaiwpy $argv
+    command ghaiw $argv
   end
 end""")
     else:
         print("""\
-ghaiwpy() {
+ghaiw() {
   if [[ "${1:-}" == "work" && "${2:-}" == "cd" ]]; then
     local __p
-    __p=$(command ghaiwpy "$@") && cd "$__p"
+    __p=$(command ghaiw "$@") && cd "$__p"
     return $?
   fi
-  command ghaiwpy "$@"
+  command ghaiw "$@"
 }""")
     raise typer.Exit(0)
 

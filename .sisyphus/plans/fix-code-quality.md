@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-> **Quick Summary**: Fix 11 code quality issues in Python ghaiw-py that are unrelated to Bash parity but represent real bugs, silent failure modes, and robustness gaps. Covers error handling, concurrency safety, timeout protection, and defensive programming.
+> **Quick Summary**: Fix 11 code quality issues in Python ghaiw that are unrelated to Bash parity but represent real bugs, silent failure modes, and robustness gaps. Covers error handling, concurrency safety, timeout protection, and defensive programming.
 >
 > **Deliverables**:
 > - CQ-001: `get_conflicted_files()` raises on subprocess error instead of returning empty list
@@ -10,7 +10,7 @@
 > - CQ-003: Bootstrap hook subprocess gets 60-second timeout
 > - CQ-004: Config migration pipeline is atomic — aborts all on failure, leaves file unchanged
 > - CQ-005: `_get_ai_tool()` validates unknown values instead of silently coercing
-> - CQ-006: SQLite `busy_timeout` set to 30000ms (30s) for parallel `ghaiwpy` safety
+> - CQ-006: SQLite `busy_timeout` set to 30000ms (30s) for parallel `ghaiw` safety
 > - CQ-007: All DB write operations (INSERT/UPDATE/DELETE) wrapped in explicit transactions
 > - CQ-008: `__init_subclass__` warns on duplicate `TOOL_ID` registration instead of silently overwriting
 > - CQ-009: `remove_worktree()` parameterized with `force: bool = True` (default preserves behavior)
@@ -33,8 +33,8 @@ Fix all code quality issues identified in the Bash-to-Python comparative analysi
 - Test strategy: Tests-after (implement fix first, then add tests verifying the new behavior)
 - CQ-003 timeout: **60 seconds** — long enough for real setup scripts (npm install, brew, etc.), short enough to fail fast on hangs
 - CQ-004 migration failure: **Atomic** — abort all migrations, leave file unchanged. A half-migrated config is worse than an unmigrated one.
-- CQ-006 busy_timeout: **30000ms (30s)** — NOT configurable. Hardcoded. Enables safe parallel `ghaiwpy` invocations in different terminals.
-- CQ-007 scope: **Writes only** (INSERT/UPDATE/DELETE). SQLite WAL mode already gives safe concurrent reads; wrapping writes prevents races between parallel `ghaiwpy` instances.
+- CQ-006 busy_timeout: **30000ms (30s)** — NOT configurable. Hardcoded. Enables safe parallel `ghaiw` invocations in different terminals.
+- CQ-007 scope: **Writes only** (INSERT/UPDATE/DELETE). SQLite WAL mode already gives safe concurrent reads; wrapping writes prevents races between parallel `ghaiw` instances.
 - CQ-009: Parameterize `remove_worktree(force: bool = True)` — default `True` preserves all existing behavior. Only one caller: `_cleanup_worktree()` at `work_service.py:1525`.
 - CQ-010: Prompt user to retry or skip (not silent log, not hard abort).
 - CQ-011: Replace Unicode with `-` not `?`. Do NOT add `unidecode` dependency.
@@ -53,7 +53,7 @@ Fix all code quality issues identified in the Bash-to-Python comparative analysi
 ## Work Objectives
 
 ### Core Objective
-Improve robustness, error visibility, and concurrency safety of Python ghaiw-py by fixing 11 code quality issues, verified via tests-after approach.
+Improve robustness, error visibility, and concurrency safety of Python ghaiw by fixing 11 code quality issues, verified via tests-after approach.
 
 ### Concrete Deliverables
 - 11 targeted fixes across 9 Python modules

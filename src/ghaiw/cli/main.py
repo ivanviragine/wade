@@ -7,7 +7,7 @@ import typer
 import ghaiw
 
 app = typer.Typer(
-    name="ghaiwpy",
+    name="ghaiw",
     help="AI-agent-driven git workflow management CLI.",
     no_args_is_help=False,
     invoke_without_command=True,
@@ -17,7 +17,7 @@ app = typer.Typer(
 
 def version_callback(value: bool) -> None:
     if value:
-        typer.echo(f"ghaiwpy {ghaiw.__version__}")
+        typer.echo(f"ghaiw {ghaiw.__version__}")
         raise typer.Exit()
 
 
@@ -39,10 +39,10 @@ def main(
         help="Enable verbose output.",
     ),
 ) -> None:
-    """ghaiwpy — AI-agent-driven git workflow management CLI."""
+    """ghaiw — AI-agent-driven git workflow management CLI."""
     from ghaiw.utils.terminal import set_terminal_title
 
-    set_terminal_title("ghaiwpy")
+    set_terminal_title("ghaiw")
 
     # Always configure logging (defaults to INFO level, stderr output).
     # Without this, structlog's default PrintLogger writes to stdout
@@ -58,7 +58,7 @@ def main(
 
 
 def _interactive_main_menu() -> None:
-    """Show the main interactive menu when ghaiwpy is called with no args."""
+    """Show the main interactive menu when ghaiw is called with no args."""
     from ghaiw.ui import prompts
 
     menu_items = [
@@ -80,7 +80,7 @@ def _interactive_main_menu() -> None:
         "What would you like to do?",
         menu_items,
         hints=hints,
-        version=f"ghaiwpy v{ghaiw.__version__}",
+        version=f"ghaiw v{ghaiw.__version__}",
     )
 
     if idx == 0:  # Start working

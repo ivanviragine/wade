@@ -45,11 +45,11 @@ dev = [
 ]
 
 [project.scripts]
-ghaiwpy = "ghaiw.cli.main:app"
+ghaiw = "ghaiw.cli.main:app"
 
 [project.urls]
-Homepage = "https://github.com/ivanviragine/ghaiw-py"
-Repository = "https://github.com/ivanviragine/ghaiw-py"
+Homepage = "https://github.com/ivanviragine/ghaiw"
+Repository = "https://github.com/ivanviragine/ghaiw"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ghaiw"]

@@ -55,7 +55,7 @@ def _warn_if_multiple_markers(content: str, file_path: Path) -> None:
             msg=(
                 f"Multiple pointer markers found in {file_path.name} "
                 f"(expected 1, found {count}). Using the last one. "
-                "This is expected in the ghaiw-py repo itself "
+                "This is expected in the ghaiw repo itself "
                 "(documentation examples) but may indicate a bug in "
                 "other projects."
             ),

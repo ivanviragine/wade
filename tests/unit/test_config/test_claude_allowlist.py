@@ -174,4 +174,4 @@ class TestConfigureAllowlist:
 
     def test_pattern_value(self) -> None:
         """Verify the constant pattern has the expected value."""
-        assert GHAIWPY_ALLOW_PATTERN == "Bash(ghaiwpy *)"
+        assert GHAIWPY_ALLOW_PATTERN == "Bash(ghaiw *)"

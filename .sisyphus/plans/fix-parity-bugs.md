@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-> **Quick Summary**: Fix 9 verified parity bugs where Python ghaiw-py diverges from Bash ghaiw behavior, covering dependency partitioning, AI model probing, post-work lifecycle, terminal launch support, multi-shell init, and PR-SUMMARY path resolution.
+> **Quick Summary**: Fix 9 verified parity bugs where Python ghaiw diverges from Bash ghaiw behavior, covering dependency partitioning, AI model probing, post-work lifecycle, terminal launch support, multi-shell init, and PR-SUMMARY path resolution.
 >
 > **Deliverables**:
 > - BUG-001: Correct connected-component partitioning in `DependencyGraph.partition()`
@@ -24,7 +24,7 @@
 ## Context
 
 ### Original Request
-Fix all parity bugs identified in the Bash-to-Python comparative analysis report (`.sisyphus/plans/bash-to-python-analysis.md` §5). These are cases where Python ghaiw-py diverges from documented Bash ghaiw behavior in a way that produces incorrect results.
+Fix all parity bugs identified in the Bash-to-Python comparative analysis report (`.sisyphus/plans/bash-to-python-analysis.md` §5). These are cases where Python ghaiw diverges from documented Bash ghaiw behavior in a way that produces incorrect results.
 
 ### Interview Summary
 **Key Discussions**:
@@ -55,7 +55,7 @@ Fix all parity bugs identified in the Bash-to-Python comparative analysis report
 ## Work Objectives
 
 ### Core Objective
-Bring Python ghaiw-py to full behavioral parity with Bash ghaiw for 9 identified divergences, verified via TDD.
+Bring Python ghaiw to full behavioral parity with Bash ghaiw for 9 identified divergences, verified via TDD.
 
 ### Concrete Deliverables
 - 9 bug fixes across 6 Python modules
@@ -528,7 +528,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   - **RED**: Create test file `tests/unit/test_cli/test_shell_init.py`
   - Write test `test_bash_output_default()`: When `$SHELL` is `/bin/bash` or unset, output contains bash function syntax with `[[ ]]`
   - Write test `test_zsh_output()`: When `$SHELL` is `/bin/zsh`, output contains zsh-compatible function syntax
-  - Write test `test_fish_output()`: When `$SHELL` is `/usr/bin/fish`, output contains `function ghaiwpy ... end` Fish syntax
+  - Write test `test_fish_output()`: When `$SHELL` is `/usr/bin/fish`, output contains `function ghaiw ... end` Fish syntax
   - Write test `test_shell_flag_overrides_env()`: When `--shell fish` passed, output is Fish regardless of `$SHELL`
   - Write test `test_bash_output_unchanged()`: The Bash output must match current behavior exactly (no regression)
   - Run tests → expect zsh/fish tests FAIL (RED)
@@ -537,8 +537,8 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
     2. Detect shell: `detected = shell or os.environ.get("SHELL", "/bin/bash")`
     3. Map detected shell to output generator:
        - `/bin/bash` or `/bin/zsh` or anything with `bash`/`zsh` → bash/zsh function (current output — `[[ ]]` works in both)
-       - `/usr/bin/fish` or anything with `fish` → Fish function syntax: `function ghaiwpy ... end`
-    4. Fish syntax must handle `ghaiwpy work cd` interception like bash version but using Fish idioms: `set -l`, `builtin cd`, `eval`
+       - `/usr/bin/fish` or anything with `fish` → Fish function syntax: `function ghaiw ... end`
+    4. Fish syntax must handle `ghaiw work cd` interception like bash version but using Fish idioms: `set -l`, `builtin cd`, `eval`
   - Run tests → expect PASS (GREEN)
 
   **Must NOT do**:
@@ -566,12 +566,12 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   **Bash Reference**:
   - Bash ghaiw had multi-shell in older versions. The key difference is Fish's function syntax:
     ```fish
-    function ghaiwpy
+    function ghaiw
       if test (count $argv) -ge 2; and test "$argv[1]" = "work"; and test "$argv[2]" = "cd"
-        set -l dir (command ghaiwpy work cd $argv[3..])
+        set -l dir (command ghaiw work cd $argv[3..])
         and builtin cd $dir
       else
-        command ghaiwpy $argv
+        command ghaiw $argv
       end
     end
     ```
@@ -599,7 +599,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
     Steps:
       1. Run `uv run pytest tests/unit/test_cli/test_shell_init.py::test_bash_output_unchanged -v`
       2. Assert PASSED
-      3. Test verifies output contains `function ghaiwpy()`, `[[ ]]`, `local`
+      3. Test verifies output contains `function ghaiw()`, `[[ ]]`, `local`
     Expected Result: Bash function syntax unchanged
     Failure Indicators: Missing bash keywords or changed function structure
     Evidence: .sisyphus/evidence/task-5-bash-output.txt
@@ -610,7 +610,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
     Steps:
       1. Run `uv run pytest tests/unit/test_cli/test_shell_init.py::test_fish_output -v`
       2. Assert PASSED
-      3. Test verifies output contains `function ghaiwpy`, `end`, `set -l`, `test`
+      3. Test verifies output contains `function ghaiw`, `end`, `set -l`, `test`
     Expected Result: Fish-native function syntax
     Failure Indicators: Bash syntax in output (e.g., `[[ ]]`, `local`)
     Evidence: .sisyphus/evidence/task-5-fish-output.txt

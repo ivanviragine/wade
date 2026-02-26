@@ -5,7 +5,7 @@ prompt for full session rules.
 
 Critical rules you must always follow:
 
-1. Never create GitHub Issues via `gh issue create` — use `ghaiwpy task create`
+1. Never create GitHub Issues via `gh issue create` — use `ghaiw task create`
    or read @.claude/skills/task/SKILL.md
 2. Never create PRs manually (`gh pr create`) or push branches directly — use
-   `ghaiwpy work done`
+   `ghaiw work done`

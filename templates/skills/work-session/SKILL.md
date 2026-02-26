@@ -13,32 +13,32 @@ Read and follow them before performing any other action.
 
 ## Execution mode
 
-Run `ghaiwpy` and `gh` commands with the required permissions/capabilities (not
+Run `ghaiw` and `gh` commands with the required permissions/capabilities (not
 in sandboxed mode). Do not "try sandbox first" — run them unsandboxed from the
 start.
 
 ## Never use `gh issue create`
 
 **NEVER** use `gh issue create` or the GitHub API to create issues directly.
-Always use `ghaiwpy task create` (or `ghaiwpy task create --plan-file`).
+Always use `ghaiw task create` (or `ghaiw task create --plan-file`).
 Using `gh` directly bypasses label enforcement, snapshot/diff detection, and
 dependency analysis hooks.
 
 ## First action: check your context
 
-Run `ghaiwpy check` as your **first action**:
+Run `ghaiw check` as your **first action**:
 
 - `IN_WORKTREE` — you may proceed with work (code changes, commits, etc.)
 - `IN_MAIN_CHECKOUT` — **editing any source file is forbidden, even before
   committing**. Tell the human to create a worktree first via
-  `ghaiwpy work start`.
+  `ghaiw work start`.
 - `NOT_IN_GIT_REPO` — you are not inside a git repository.
 
 ## Worktree safety
 
 All **code changes** (edits, new files, commits) **must** happen in a worktree.
-The human creates worktrees via `ghaiwpy work start` (single issue) or
-`ghaiwpy work batch` (multiple issues in parallel). **Never** create worktrees
+The human creates worktrees via `ghaiw work start` (single issue) or
+`ghaiw work batch` (multiple issues in parallel). **Never** create worktrees
 yourself.
 
 ## Commit conventions
@@ -58,7 +58,7 @@ cat > /tmp/PR-SUMMARY-{issue-number}.md << 'EOF'
 EOF
 ```
 
-`ghaiwpy work done` reads **`/tmp/PR-SUMMARY-{issue-number}.md`** to populate
+`ghaiw work done` reads **`/tmp/PR-SUMMARY-{issue-number}.md`** to populate
 the PR body. If the file is missing, the PR will have no description.
 Creating it early as a placeholder guarantees it exists; update it as you work.
 
@@ -111,25 +111,25 @@ git commit -m "<type>: <summary>"
 ### Step 2: Run the sync command
 
 ```bash
-ghaiwpy work sync --json
+ghaiw work sync --json
 ```
 
 ### Step 3: Handle the result
 
 **Exit code 0 — Success**: Branch is up to date with main. Proceed to
-`ghaiwpy work done`.
+`ghaiw work done`.
 
 **Exit code 2 — Conflict**: The merge is paused due to conflicts:
 1. Read each conflicted file to see the conflict markers
 2. Explain what changed on main vs the feature branch
 3. Suggest a resolution and ask for confirmation
 4. Apply fixes: `git add -A && git commit --no-edit`
-5. Re-run `ghaiwpy work sync --json` to verify clean
+5. Re-run `ghaiw work sync --json` to verify clean
 
 **Exit code 4 — Pre-flight failure**: Report the issue (dirty worktree, not
 in repo, already on main) and suggest how to fix it.
 
-**Never re-implement git operations yourself.** Always use `ghaiwpy work sync`.
+**Never re-implement git operations yourself.** Always use `ghaiw work sync`.
 
 ## Closing the session
 
@@ -150,33 +150,33 @@ If it is missing or still says "(in progress)", write it now before continuing.
 **Step 2 — Sync with main:**
 
 ```bash
-ghaiwpy work sync --json
+ghaiw work sync --json
 ```
 
 **Step 3 — Done:**
 
 ```bash
-ghaiwpy work done
+ghaiw work done
 ```
 
-`ghaiwpy work done` handles pushing the branch, creating the PR (or merging),
+`ghaiw work done` handles pushing the branch, creating the PR (or merging),
 and triggering auto-versioning (if enabled). The worktree is **not** deleted —
 it is cleaned up automatically by `work start` after the human merges the PR.
 
-This is a **mandatory** final step. If `ghaiwpy work done` fails, debug and
+This is a **mandatory** final step. If `ghaiw work done` fails, debug and
 fix the error — do NOT bypass it.
 
 ### Working on a child issue (sub-issue of a tracking/epic)
 
 If your issue appears in a parent "Tracking:" issue checklist:
 
-- `ghaiwpy work done` **automatically detects** the parent tracking issue and
+- `ghaiw work done` **automatically detects** the parent tracking issue and
   adds `Part of #<parent>` to the PR body alongside `Closes #<child>` — no
   manual action needed. Pass `--no-close` to leave the issue open.
 - After your PR is merged, update the parent tracking issue's checklist:
   change `- [ ] #<your-issue>` to `- [x] #<your-issue>` using
   `gh issue edit <parent-number> --body "<updated-body>"`.
-- If all children are complete, close the parent: `ghaiwpy task close <parent-number>`.
+- If all children are complete, close the parent: `ghaiw task close <parent-number>`.
 
 ## After creating a new plan
 
@@ -184,9 +184,9 @@ If you finalize a plan or feature spec during a work session, you **must**
 create a GitHub Issue from it:
 
 1. Write the plan file (to `/tmp/`, never into the repo)
-2. Create the issue via `ghaiwpy task create --plan-file <path>` or
-   `ghaiwpy task create` (interactive)
-3. List the created issues and show `ghaiwpy work start <number>` as a hint.
+2. Create the issue via `ghaiw task create --plan-file <path>` or
+   `ghaiw task create` (interactive)
+3. List the created issues and show `ghaiw work start <number>` as a hint.
    Do **not** run the command yourself — the human starts work sessions.
 
 ## Skills reference

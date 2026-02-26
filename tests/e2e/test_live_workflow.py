@@ -42,8 +42,8 @@ def _run(cmd: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess
 
 
 def _ghaiw(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    """Run a ghaiwpy command."""
-    return _run(["ghaiwpy", *args], cwd=cwd)
+    """Run a ghaiw command."""
+    return _run(["ghaiw", *args], cwd=cwd)
 
 
 @pytest.fixture(autouse=True)
@@ -64,11 +64,11 @@ def require_gh() -> None:
 
 
 @pytest.fixture(autouse=True)
-def require_ghaiwpy() -> None:
-    """Skip if ghaiwpy CLI is not available."""
-    result = _run(["which", "ghaiwpy"])
+def require_ghaiw() -> None:
+    """Skip if ghaiw CLI is not available."""
+    result = _run(["which", "ghaiw"])
     if result.returncode != 0:
-        pytest.skip("ghaiwpy CLI not found in PATH")
+        pytest.skip("ghaiw CLI not found in PATH")
 
 
 class TestLiveGhaiwVersion:
@@ -130,7 +130,7 @@ easy
 
 ## Description
 
-This is an automated test issue created by ghaiw-py E2E tests.
+This is an automated test issue created by ghaiw E2E tests.
 It should be closed automatically. If you see this, the test may
 have failed to clean up.
 

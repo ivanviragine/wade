@@ -754,9 +754,9 @@ class TestDeinit:
 
 
 class TestReadManifestVersion:
-    def test_parses_ghaiwpy_version(self, tmp_path: Path) -> None:
+    def test_parses_ghaiw_version(self, tmp_path: Path) -> None:
         manifest = tmp_path / MANIFEST_FILENAME
-        manifest.write_text("# Managed by ghaiwpy 0.1.0\n.ghaiw.yml\n")
+        manifest.write_text("# Managed by ghaiw 0.1.0\n.ghaiw.yml\n")
         assert _read_manifest_version(tmp_path) == "0.1.0"
 
     def test_parses_ghaiw_version(self, tmp_path: Path) -> None:
@@ -810,7 +810,7 @@ class TestUpdateExtended:
 
         # Write a manifest with an old version number
         manifest = tmp_git_repo / MANIFEST_FILENAME
-        manifest.write_text("# Managed by ghaiwpy 0.0.1\n.ghaiw.yml\n")
+        manifest.write_text("# Managed by ghaiw 0.0.1\n.ghaiw.yml\n")
 
         success = update(project_root=tmp_git_repo, skip_self_upgrade=True)
         assert success  # update should succeed and detect version difference

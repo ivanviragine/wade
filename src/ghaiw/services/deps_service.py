@@ -465,7 +465,7 @@ def analyze_deps(
 
     resolved_model = model or config.get_model("deps")
 
-    console.rule("ghaiwpy task deps")
+    console.rule("ghaiw task deps")
     console.kv("Issues", str(len(issue_numbers)))
     console.kv("AI tool", resolved_tool)
 

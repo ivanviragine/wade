@@ -160,7 +160,7 @@ def bootstrap_worktree(
 def _is_inside_ai_cli() -> bool:
     """Detect if we are running inside an AI CLI session.
 
-    When an AI agent calls ``ghaiwpy work start`` from within its own
+    When an AI agent calls ``ghaiw work start`` from within its own
     session, we must not launch another AI instance (infinite nesting).
     Instead, create the worktree and print the path.
 
@@ -783,14 +783,14 @@ def batch(
 
     # Launch independent issues in parallel terminals
     for issue_id in independent:
-        cmd = ["ghaiwpy", "work", "start", issue_id]
+        cmd = ["ghaiw", "work", "start", issue_id]
         if resolved_tool:
             cmd.extend(["--ai", resolved_tool])
         if model:
             cmd.extend(["--model", model])
 
         console.step(f"Launching #{issue_id} in new terminal")
-        if launch_in_new_terminal(cmd, cwd=str(repo_root), title=f"ghaiwpy #{issue_id}"):
+        if launch_in_new_terminal(cmd, cwd=str(repo_root), title=f"ghaiw #{issue_id}"):
             launched += 1
         else:
             console.warn(f"Could not launch terminal for #{issue_id}")
@@ -799,14 +799,14 @@ def batch(
     for chain in chains:
         console.info(f"Dependency chain: {' → '.join(f'#{n}' for n in chain)}")
         first_id = chain[0]
-        cmd = ["ghaiwpy", "work", "start", first_id]
+        cmd = ["ghaiw", "work", "start", first_id]
         if resolved_tool:
             cmd.extend(["--ai", resolved_tool])
         if model:
             cmd.extend(["--model", model])
 
         console.step(f"Launching #{first_id} (first in chain) in new terminal")
-        if launch_in_new_terminal(cmd, cwd=str(repo_root), title=f"ghaiwpy #{first_id}"):
+        if launch_in_new_terminal(cmd, cwd=str(repo_root), title=f"ghaiw #{first_id}"):
             launched += 1
         else:
             console.warn(f"Could not launch terminal for #{first_id}")
@@ -916,7 +916,7 @@ def _resolve_worktree_from_plan(
     if not wt_path:
         raise ValueError(
             f"No worktree found matching plan title '{title}' (slug: '{slug}'). "
-            "Check active worktrees with: ghaiwpy work list"
+            "Check active worktrees with: ghaiw work list"
         )
 
     branch = git_repo.get_current_branch(wt_path)
@@ -1291,7 +1291,7 @@ def sync(
             console.detail(f)
         console.empty()
         console.hint("Resolve conflicts, then run:")
-        console.out.print("      [prompt.dimmed]$ ghaiwpy work sync[/]")
+        console.out.print("      [prompt.dimmed]$ ghaiw work sync[/]")
 
     # Get conflict diff
     try:

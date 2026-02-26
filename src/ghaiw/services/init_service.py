@@ -31,7 +31,7 @@ logger = structlog.get_logger()
 
 # Marker comments wrapping the managed block in .gitignore
 GITIGNORE_MARKER_START: Final = (
-    "# ghaiw:start — managed by ghaiw (do not edit — run `ghaiwpy update` to refresh)"
+    "# ghaiw:start — managed by ghaiw (do not edit — run `ghaiw update` to refresh)"
 )
 GITIGNORE_MARKER_END: Final = "# ghaiw:end"
 
@@ -100,8 +100,8 @@ def init(
 
     from ghaiw import __version__
 
-    console.rule("ghaiwpy init")
-    console.info(f"ghaiwpy {__version__}")
+    console.rule("ghaiw init")
+    console.info(f"ghaiw {__version__}")
 
     # Compute installed tools once — doesn't depend on any wizard step
     installed_tools = [str(t) for t in AbstractAITool.detect_installed()]
@@ -167,8 +167,8 @@ def init(
             console.detail(err)
 
     console.panel(
-        "  Project initialized. Run [bold]ghaiwpy task plan[/] to get started.",
-        title="ghaiwpy initialized",
+        "  Project initialized. Run [bold]ghaiw task plan[/] to get started.",
+        title="ghaiw initialized",
     )
     return True
 
@@ -216,7 +216,7 @@ def update(
     config_path = find_config_file(root)
     if config_path is None:
         console.error_with_fix(
-            "No .ghaiw.yml found", "Initialize your project first", "ghaiwpy init"
+            "No .ghaiw.yml found", "Initialize your project first", "ghaiw init"
         )
         return False
 
@@ -225,16 +225,16 @@ def update(
         # re_exec() was called — this line is never reached
         pass  # pragma: no cover
 
-    console.rule("ghaiwpy update")
+    console.rule("ghaiw update")
 
     # Step 3: Read old version from manifest
     old_version = _read_manifest_version(root)
 
     # Step 4: Show version transition
     if old_version and old_version != __version__:
-        console.info(f"Updating from ghaiwpy {old_version} → {__version__}")
+        console.info(f"Updating from ghaiw {old_version} → {__version__}")
     else:
-        console.info(f"ghaiwpy {__version__}")
+        console.info(f"ghaiw {__version__}")
 
     # Step 5: Run config migration pipeline
     if run_all_migrations(config_path):
@@ -268,7 +268,7 @@ def update(
     # Step 11: Rebuild manifest with version
     _write_manifest(root, installed)
 
-    console.panel("  All managed files are up to date.", title="ghaiwpy updated")
+    console.panel("  All managed files are up to date.", title="ghaiw updated")
     return True
 
 
@@ -312,10 +312,10 @@ def _maybe_self_upgrade() -> bool:
 
 
 def _read_manifest_version(root: Path) -> str | None:
-    """Read the ghaiwpy version from the .ghaiw-managed manifest.
+    """Read the ghaiw version from the .ghaiw-managed manifest.
 
     Looks for a line like: # Managed by ghaiw 0.1.0
-    or: # Managed by ghaiwpy 0.1.0
+    or: # Managed by ghaiw 0.1.0
     """
     import re
 
@@ -353,7 +353,7 @@ def deinit(project_root: Path | None = None, force: bool = False) -> bool:
             console.info("Aborted.")
             return False
 
-    console.rule("ghaiwpy deinit")
+    console.rule("ghaiw deinit")
 
     # Remove skills
     removed = installer.remove_skills(root)
@@ -391,7 +391,7 @@ def deinit(project_root: Path | None = None, force: bool = False) -> bool:
     if ghaiw_dir.is_dir():
         shutil.rmtree(ghaiw_dir)
 
-    console.panel("  All ghaiw artifacts removed.", title="ghaiwpy removed")
+    console.panel("  All ghaiw artifacts removed.", title="ghaiw removed")
     return True
 
 

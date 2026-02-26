@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# install.sh — Install ghaiwpy (Python ghaiw CLI) using uv into a venv.
+# install.sh — Install ghaiw (Python ghaiw CLI) using uv into a venv.
 #
 # Usage:
 #   ./install.sh              # Install to default location (~/.local/bin)
 #   ./install.sh /usr/local   # Install to custom prefix
 #
-# Installs as `ghaiwpy` to coexist with the Bash `ghaiw` CLI.
+# Installs the `ghaiw` CLI using uv into a frozen venv.
 # Requires: uv (https://docs.astral.sh/uv/) — installs it if missing.
 # Python 3.11+ is fetched automatically by uv if not available.
 
@@ -48,7 +48,7 @@ uv venv "$VENV_DIR" --python ">=${MIN_PYTHON}" --clear
 PYTHON_VERSION="$("$VENV_DIR/bin/python" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 info "Python ${PYTHON_VERSION} (managed by uv)"
 
-info "Installing ghaiwpy..."
+info "Installing ghaiw..."
 uv pip install --python "$VENV_DIR/bin/python" "$SCRIPT_DIR"
 
 # Record source repo path for self-upgrade support
@@ -57,7 +57,7 @@ info "Recorded source path for self-upgrade"
 
 info "Creating symlink..."
 mkdir -p "$BIN_DIR"
-ln -sf "$VENV_DIR/bin/ghaiwpy" "$BIN_DIR/ghaiwpy"
+ln -sf "$VENV_DIR/bin/ghaiw" "$BIN_DIR/ghaiw"
 
 # ─── Install git hooks ───────────────────────────────────────────────────────
 
@@ -69,17 +69,17 @@ fi
 
 # ─── Verify ──────────────────────────────────────────────────────────────────
 
-if "$BIN_DIR/ghaiwpy" --version &>/dev/null; then
-    info "ghaiwpy installed successfully!"
+if "$BIN_DIR/ghaiw" --version &>/dev/null; then
+    info "ghaiw installed successfully!"
     echo ""
-    echo "  ghaiwpy $("$BIN_DIR/ghaiwpy" --version 2>/dev/null || echo '(version check failed)')"
-    echo "  Binary: ${BIN_DIR}/ghaiwpy"
+    echo "  ghaiw $("$BIN_DIR/ghaiw" --version 2>/dev/null || echo '(version check failed)')"
+    echo "  Binary: ${BIN_DIR}/ghaiw"
     echo ""
     if [[ ":$PATH:" != *":${BIN_DIR}:"* ]]; then
         warn "Add ${BIN_DIR} to your PATH:"
         echo "  export PATH=\"${BIN_DIR}:\$PATH\""
     fi
 else
-    error "Installation failed — ghaiwpy binary not working."
+    error "Installation failed — ghaiw binary not working."
     exit 1
 fi

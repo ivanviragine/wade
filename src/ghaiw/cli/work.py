@@ -40,7 +40,7 @@ def work_callback(ctx: typer.Context) -> None:
         "work remove",
     ]
 
-    idx = prompts.menu("ghaiwpy work", menu_items, hints=hints)
+    idx = prompts.menu("ghaiw work", menu_items, hints=hints)
 
     # Map menu selection to subcommand invocations
     subcommands = ["start", "done", "sync", "list", "batch", "remove"]
@@ -71,7 +71,7 @@ def work_callback(ctx: typer.Context) -> None:
         do_list()
         raise typer.Exit(0)
     elif selected == "batch":
-        console.info("Use: ghaiwpy work batch <issue numbers>")
+        console.info("Use: ghaiw work batch <issue numbers>")
         raise typer.Exit(0)
     elif selected == "remove":
         target = prompts.input_prompt("Issue number or worktree name")

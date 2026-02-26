@@ -62,7 +62,7 @@ def test_resolve_plan_no_matching_worktree_errors(tmp_path: Path) -> None:
 
     with (
         patch("ghaiw.services.work_service.find_worktree_path", return_value=None),
-        pytest.raises(ValueError, match="ghaiwpy work list"),
+        pytest.raises(ValueError, match="ghaiw work list"),
     ):
         work_service._resolve_worktree_from_plan(plan_file)
 

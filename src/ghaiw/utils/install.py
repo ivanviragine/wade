@@ -1,6 +1,6 @@
 """Self-upgrade helpers — detect source repo, compare versions, re-exec.
 
-Used by `ghaiwpy update` to upgrade the installed venv from the local source
+Used by `ghaiw update` to upgrade the installed venv from the local source
 before updating project-level files. Editable (dev) installs skip this
 automatically because they don't have a `ghaiw-source.txt` marker.
 
@@ -79,7 +79,7 @@ def get_installed_version() -> str:
 
 
 def self_upgrade(source: Path) -> bool:
-    """Reinstall ghaiwpy from source into the current venv.
+    """Reinstall ghaiw from source into the current venv.
 
     Tries uv first, falls back to pip.
 

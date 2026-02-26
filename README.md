@@ -26,20 +26,20 @@ uv pip install .
 ## Quick Start
 
 ```bash
-# 1. Initialize ghaiwpy in your project
-ghaiwpy init
+# 1. Initialize ghaiw in your project
+ghaiw init
 
 # 2. Plan a feature (launches AI for planning)
-ghaiwpy task plan
+ghaiw task plan
 
 # 3. Start working on an issue (creates worktree + launches AI)
-ghaiwpy work start 42
+ghaiw work start 42
 
 # 4. Sync with main before finishing
-ghaiwpy work sync
+ghaiw work sync
 
 # 5. Finalize and create PR
-ghaiwpy work done
+ghaiw work done
 ```
 
 ## Commands
@@ -48,69 +48,69 @@ ghaiwpy work done
 
 | Command | Description |
 |---------|-------------|
-| `ghaiwpy init` | Initialize ghaiw in the current project |
-| `ghaiwpy update` | Update ghaiw skills, config migrations, and self-upgrade |
-| `ghaiwpy update --skip-self-upgrade` | Update without checking for source code changes |
-| `ghaiwpy deinit` | Remove ghaiw from the project |
-| `ghaiwpy check` | Check worktree status (IN_WORKTREE / IN_MAIN_CHECKOUT / NOT_IN_GIT_REPO) |
-| `ghaiwpy check-config` | Validate `.ghaiw.yml` configuration |
-| `ghaiwpy shell-init` | Output shell function wrapper (see Shell Integration below) |
+| `ghaiw init` | Initialize ghaiw in the current project |
+| `ghaiw update` | Update ghaiw skills, config migrations, and self-upgrade |
+| `ghaiw update --skip-self-upgrade` | Update without checking for source code changes |
+| `ghaiw deinit` | Remove ghaiw from the project |
+| `ghaiw check` | Check worktree status (IN_WORKTREE / IN_MAIN_CHECKOUT / NOT_IN_GIT_REPO) |
+| `ghaiw check-config` | Validate `.ghaiw.yml` configuration |
+| `ghaiw shell-init` | Output shell function wrapper (see Shell Integration below) |
 
 ### Task Management
 
 | Command | Description |
 |---------|-------------|
-| `ghaiwpy task plan` | Launch AI planning session |
-| `ghaiwpy task create` | Create a GitHub issue interactively (prompts for title + body) |
-| `ghaiwpy task create --plan-file <path>` | Create a GitHub issue from a plan markdown file |
-| `ghaiwpy task list` | List open issues with the configured label |
-| `ghaiwpy task read <N>` | Display issue details |
-| `ghaiwpy task close <N>` | Close an issue |
-| `ghaiwpy task deps <N> <M> ...` | Analyze dependencies between issues |
+| `ghaiw task plan` | Launch AI planning session |
+| `ghaiw task create` | Create a GitHub issue interactively (prompts for title + body) |
+| `ghaiw task create --plan-file <path>` | Create a GitHub issue from a plan markdown file |
+| `ghaiw task list` | List open issues with the configured label |
+| `ghaiw task read <N>` | Display issue details |
+| `ghaiw task close <N>` | Close an issue |
+| `ghaiw task deps <N> <M> ...` | Analyze dependencies between issues |
 
 ### Work Sessions
 
 | Command | Description |
 |---------|-------------|
-| `ghaiwpy work` | Interactive menu (no args) |
-| `ghaiwpy work start <N>` | Create worktree and start AI session for issue N |
-| `ghaiwpy work start <N> --detach` | Start AI session in a new terminal tab |
-| `ghaiwpy work start <N> --cd` | Create worktree and print path (no AI launch) |
-| `ghaiwpy work sync` | Sync feature branch with main (fetch + merge) |
-| `ghaiwpy work done` | Push branch and create PR (or direct merge) |
-| `ghaiwpy work done [target]` | Finalize a specific issue, worktree, or plan file |
-| `ghaiwpy work done --no-cleanup` | Create PR but keep the worktree |
-| `ghaiwpy work list` | List active worktrees and their status |
-| `ghaiwpy work batch <N> <M> ...` | Start parallel sessions for multiple issues |
-| `ghaiwpy work batch --model <model>` | Parallel sessions with a specific AI model |
-| `ghaiwpy work remove <N>` | Remove a worktree |
-| `ghaiwpy work remove --stale` | Remove all stale worktrees |
-| `ghaiwpy work cd <N>` | Print worktree path (for shell `cd`, see Shell Integration) |
+| `ghaiw work` | Interactive menu (no args) |
+| `ghaiw work start <N>` | Create worktree and start AI session for issue N |
+| `ghaiw work start <N> --detach` | Start AI session in a new terminal tab |
+| `ghaiw work start <N> --cd` | Create worktree and print path (no AI launch) |
+| `ghaiw work sync` | Sync feature branch with main (fetch + merge) |
+| `ghaiw work done` | Push branch and create PR (or direct merge) |
+| `ghaiw work done [target]` | Finalize a specific issue, worktree, or plan file |
+| `ghaiw work done --no-cleanup` | Create PR but keep the worktree |
+| `ghaiw work list` | List active worktrees and their status |
+| `ghaiw work batch <N> <M> ...` | Start parallel sessions for multiple issues |
+| `ghaiw work batch --model <model>` | Parallel sessions with a specific AI model |
+| `ghaiw work remove <N>` | Remove a worktree |
+| `ghaiw work remove --stale` | Remove all stale worktrees |
+| `ghaiw work cd <N>` | Print worktree path (for shell `cd`, see Shell Integration) |
 
 ## Shell Integration
 
-Add this to your shell profile (`.bashrc`, `.zshrc`, etc.) to enable `ghaiwpy work cd`:
+Add this to your shell profile (`.bashrc`, `.zshrc`, etc.) to enable `ghaiw work cd`:
 
 ```bash
-eval "$(ghaiwpy shell-init)"
+eval "$(ghaiw shell-init)"
 ```
 
-This installs a shell function that intercepts `ghaiwpy work cd <N>` and performs a real `cd` into the worktree directory in your current shell.
+This installs a shell function that intercepts `ghaiw work cd <N>` and performs a real `cd` into the worktree directory in your current shell.
 
 ## Self-Upgrade
 
-When installed via `./install.sh` (frozen venv), `ghaiwpy update` automatically checks if the source repo has a newer version and reinstalls itself before proceeding with project updates. This ensures you always run the latest code without manual reinstalls.
+When installed via `./install.sh` (frozen venv), `ghaiw update` automatically checks if the source repo has a newer version and reinstalls itself before proceeding with project updates. This ensures you always run the latest code without manual reinstalls.
 
 ```bash
 # Skip self-upgrade (e.g., in CI or when testing)
-ghaiwpy update --skip-self-upgrade
+ghaiw update --skip-self-upgrade
 ```
 
 Editable installs (`uv pip install -e ".[dev]"`) skip self-upgrade automatically since code changes are reflected immediately.
 
 ## Configuration
 
-ghaiwpy uses a `.ghaiw.yml` file in your project root:
+ghaiw uses a `.ghaiw.yml` file in your project root:
 
 ```yaml
 version: 2
@@ -144,11 +144,11 @@ models:
 
 ### Complexity-to-Model Mapping
 
-Issues include a `## Complexity` section (`easy`, `medium`, `complex`, `very_complex`). When `ghaiwpy work start` launches an AI tool, it automatically selects the configured model for that complexity level.
+Issues include a `## Complexity` section (`easy`, `medium`, `complex`, `very_complex`). When `ghaiw work start` launches an AI tool, it automatically selects the configured model for that complexity level.
 
 ## Agent Skills
 
-ghaiwpy installs Agent Skill files into your project that teach AI agents the workflow:
+ghaiw installs Agent Skill files into your project that teach AI agents the workflow:
 
 | Skill | Purpose |
 |-------|---------|
@@ -217,16 +217,16 @@ Typer provides built-in shell completion:
 
 ```bash
 # Bash
-ghaiwpy --install-completion bash
+ghaiw --install-completion bash
 
 # Zsh
-ghaiwpy --install-completion zsh
+ghaiw --install-completion zsh
 
 # Fish
-ghaiwpy --install-completion fish
+ghaiw --install-completion fish
 ```
 
-> **Note:** Shell completion is separate from `ghaiwpy shell-init`. The former provides tab-completion for subcommands; the latter enables `ghaiwpy work cd` to change your shell's directory.
+> **Note:** Shell completion is separate from `ghaiw shell-init`. The former provides tab-completion for subcommands; the latter enables `ghaiw work cd` to change your shell's directory.
 
 ## License
 

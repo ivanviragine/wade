@@ -9,7 +9,7 @@
 - Modified `src/ghaiw/db/engine.py`:
   - Added `"timeout": 30` to `connect_args` in `create_engine()` call (line 31)
   - Updated PRAGMA busy_timeout from 5000ms to 30000ms (line 39)
-  - Both changes ensure 30-second timeout for parallel ghaiwpy safety
+  - Both changes ensure 30-second timeout for parallel ghaiw safety
 
 ### Tests Added
 - `test_engine_busy_timeout_is_30s()` — Verifies PRAGMA busy_timeout returns 30000ms

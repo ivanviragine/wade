@@ -1,7 +1,7 @@
 """Claude Code .claude/settings.json allowlist management.
 
-Configures the Claude Code permission allowlist to include `ghaiwpy` commands,
-so agents can run `ghaiwpy work done`, `ghaiwpy task create`, etc. without
+Configures the Claude Code permission allowlist to include `ghaiw` commands,
+so agents can run `ghaiw work done`, `ghaiw task create`, etc. without
 manual approval.
 
 Behavioral reference: Bash ghaiw_update() allowlist step
@@ -17,12 +17,12 @@ import structlog
 
 logger = structlog.get_logger()
 
-# Allowlist entry pattern for ghaiwpy commands
-GHAIWPY_ALLOW_PATTERN = "Bash(ghaiwpy *)"
+# Allowlist entry pattern for ghaiw commands
+GHAIWPY_ALLOW_PATTERN = "Bash(ghaiw *)"
 
 
 def configure_allowlist(project_root: Path) -> None:
-    """Add ghaiwpy commands to .claude/settings.json permissions allowlist.
+    """Add ghaiw commands to .claude/settings.json permissions allowlist.
 
     Idempotent — skips if already present. Non-destructive merge with
     existing settings.
