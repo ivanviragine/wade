@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.24.3] — 2026-02-26
+
+### Bug Fixes
+
+- use /tmp for all temp files instead of system default dir (3f7b491)
+
 ## [v0.24.2] — 2026-02-26
 
 ### Bug Fixes
