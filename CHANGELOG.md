@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.24.6] — 2026-02-26
+
+### Refactoring
+
+- remove back functionality from init wizard and prompts (f528e06)
+
 ## [v0.24.5] — 2026-02-26
 
 ### Bug Fixes
