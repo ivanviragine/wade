@@ -259,7 +259,7 @@ class TestTranscriptWiring:
 
             assert mock_rwt.call_args[0][1] == transcript
 
-    def test_no_transcript_path_passes_none(self) -> None:
+    def test_no_transcript_path_passes_none(self, tmp_path: Path) -> None:
         """When transcript_path is None, run_with_transcript receives None."""
         with (
             patch("ghaiw.services.plan_service.AbstractAITool.get") as mock_get,
@@ -267,13 +267,13 @@ class TestTranscriptWiring:
         ):
             adapter = MagicMock()
             adapter.build_launch_command.return_value = ["claude", "--permission-mode", "plan"]
-            adapter.plan_dir_args.return_value = ["--add-dir", "/tmp/test"]
+            adapter.plan_dir_args.return_value = ["--add-dir", str(tmp_path)]
             mock_get.return_value = adapter
             mock_rwt.return_value = 0
 
             run_ai_planning_session(
                 ai_tool="claude",
-                plan_dir="/tmp/test",
+                plan_dir=str(tmp_path),
                 model=None,
                 transcript_path=None,
             )

@@ -29,18 +29,6 @@ from ghaiw.ui.console import console
 
 logger = structlog.get_logger()
 
-
-class _BackType:
-    """Singleton sentinel returned by prompt functions when the user selects "← Back"."""
-
-    __slots__ = ()
-
-    def __repr__(self) -> str:
-        return "_BACK"
-
-
-_BACK: Final = _BackType()
-
 # Marker comments wrapping the managed block in .gitignore
 GITIGNORE_MARKER_START: Final = (
     "# ghaiw:start — managed by ghaiw (do not edit — run `ghaiwpy update` to refresh)"
@@ -118,61 +106,13 @@ def init(
     # Compute installed tools once — doesn't depend on any wizard step
     installed_tools = [str(t) for t in AbstractAITool.detect_installed()]
 
-    # Interactive wizard — state machine with back navigation at every step:
-    #   step 0: AI tool selection  (anchor — no back)
-    #   step 1: project settings   (back → step 0)
-    #   step 2: work setup         (back → step 1)
-    #   step 3: command overrides  (back → step 2)
-    step = 0
-    selected_tool: str | None = None
-    project_settings: dict[str, str] = {}
-    work_setup: dict[str, Any] = {
-        "tool": None,
-        "model_mapping": ComplexityModelMapping(),
-        "default_model": None,
-    }
-    command_overrides: dict[str, dict[str, str]] = {"plan": {}, "deps": {}}
-
-    while True:
-        if step == 0:
-            selected_tool = _select_ai_tool(ai_tool, non_interactive)
-            step = 1
-
-        elif step == 1:
-            ps_result = _prompt_project_settings(
-                root, non_interactive, allow_back=not non_interactive
-            )
-            if isinstance(ps_result, _BackType):
-                step = 0
-            else:
-                project_settings = ps_result
-                step = 2
-
-        elif step == 2:
-            ws_result = _prompt_work_setup(
-                selected_tool,
-                installed_tools,
-                non_interactive,
-                allow_back=not non_interactive,
-            )
-            if isinstance(ws_result, _BackType):
-                step = 1
-            else:
-                work_setup = ws_result
-                step = 3
-
-        elif step == 3:
-            co_result = _prompt_command_overrides(
-                installed_tools,
-                non_interactive,
-                default_model=work_setup["default_model"],
-                allow_back=not non_interactive,
-            )
-            if isinstance(co_result, _BackType):
-                step = 2
-            else:
-                command_overrides = co_result
-                break
+    # Interactive wizard
+    selected_tool = _select_ai_tool(ai_tool, non_interactive)
+    project_settings = _prompt_project_settings(root, non_interactive)
+    work_setup = _prompt_work_setup(selected_tool, installed_tools, non_interactive)
+    command_overrides = _prompt_command_overrides(
+        installed_tools, non_interactive, default_model=work_setup["default_model"]
+    )
 
     # Generate config
     config_path = root / ".ghaiw.yml"
@@ -653,13 +593,11 @@ def _normalize_mapping(
 def _prompt_project_settings(
     project_root: Path,
     non_interactive: bool,
-    allow_back: bool = False,
-) -> dict[str, str] | _BackType:
+) -> dict[str, str]:
     """Collect project settings — interactively or with defaults.
 
     Auto-detects the main branch via git. Returns a dict with keys:
     main_branch, merge_strategy, branch_prefix, issue_label, worktrees_dir.
-    Returns _BACK if allow_back is True and the user navigates back.
     """
     from ghaiw.ui import prompts
 
@@ -689,11 +627,7 @@ def _prompt_project_settings(
         if defaults["merge_strategy"] in merge_options
         else 0
     )
-    merge_idx = prompts.select(
-        "Merge strategy", merge_options, default=merge_default, allow_back=allow_back
-    )
-    if merge_idx == -1:
-        return _BACK
+    merge_idx = prompts.select("Merge strategy", merge_options, default=merge_default)
     defaults["merge_strategy"] = merge_options[merge_idx]
     defaults["branch_prefix"] = prompts.input_prompt("Branch prefix", defaults["branch_prefix"])
     defaults["issue_label"] = prompts.input_prompt("Issue label", defaults["issue_label"])
@@ -708,17 +642,14 @@ def _prompt_model_mapping(
     tool: str | None,
     mapping: ComplexityModelMapping,
     non_interactive: bool,
-    allow_back: bool = False,
-) -> ComplexityModelMapping | _BackType:
+) -> ComplexityModelMapping:
     """Let the user review/edit the complexity-to-model mapping.
 
     If non_interactive, returns the mapping unchanged.
     Falls back to Claude defaults when the tool has no model suggestions.
-    Returns _BACK if allow_back is True and the user navigates back from tier 0.
 
     Shows a select menu with available models for each tier, plus a Custom
-    option for typing a model name directly. Arrow-key back navigation within
-    tiers is always enabled for tiers 1+ (so tiers 0 uses allow_back).
+    option for typing a model name directly.
     """
     from ghaiw.ui import prompts
 
@@ -750,34 +681,21 @@ def _prompt_model_mapping(
         ("Very complex tasks", mapping.very_complex or ""),
     ]
 
-    # Pre-allocate results so previously-selected values are preserved on back-navigation
-    results: list[str] = [""] * len(tiers)
-    tier_idx = 0
-    while tier_idx < len(tiers):
-        tier_label, tier_default = tiers[tier_idx]
-        # Use previously selected value as default when re-visiting after back
-        current_default = results[tier_idx] if results[tier_idx] else tier_default
+    results: list[str] = []
 
+    for tier_label, tier_default in tiers:
         options = list(available)
-        if current_default and current_default not in options:
-            options.insert(0, current_default)
+        if tier_default and tier_default not in options:
+            options.insert(0, tier_default)
         options.append(custom_label)
 
-        default_idx = options.index(current_default) if current_default in options else 0
-        back = allow_back if tier_idx == 0 else True
-        chosen_idx = prompts.select(tier_label, options, default=default_idx, allow_back=back)
-
-        if chosen_idx == -1:
-            if tier_idx == 0:
-                return _BACK
-            tier_idx -= 1
-            continue
+        default_idx = options.index(tier_default) if tier_default in options else 0
+        chosen_idx = prompts.select(tier_label, options, default=default_idx)
 
         if options[chosen_idx] == custom_label:
-            results[tier_idx] = prompts.input_prompt(f"{tier_label} (model ID)", current_default)
+            results.append(prompts.input_prompt(f"{tier_label} (model ID)", tier_default))
         else:
-            results[tier_idx] = options[chosen_idx]
-        tier_idx += 1
+            results.append(options[chosen_idx])
 
     return ComplexityModelMapping(
         easy=results[0] or mapping.easy,
@@ -802,8 +720,7 @@ def _prompt_default_model(
     tool: str | None,
     model_mapping: ComplexityModelMapping,
     non_interactive: bool,
-    allow_back: bool = False,
-) -> str | None | _BackType:
+) -> str | None:
     """Prompt the user to select a default model for the AI tool.
 
     This is the fallback model used when no complexity tier is matched and
@@ -813,8 +730,7 @@ def _prompt_default_model(
     The complexity tier mapping (easy/medium/complex/very_complex) is left
     unchanged.
 
-    Returns the chosen model ID, None if the user skips, or _BACK if
-    allow_back is True and the user navigates back.
+    Returns the chosen model ID, or None if the user skips.
     """
     from ghaiw.ui import prompts
 
@@ -833,11 +749,7 @@ def _prompt_default_model(
     if model_mapping.complex and model_mapping.complex in options:
         default_idx = options.index(model_mapping.complex)
 
-    idx = prompts.select(
-        f"Select default model for {tool}", options, default=default_idx, allow_back=allow_back
-    )
-    if idx == -1:
-        return _BACK
+    idx = prompts.select(f"Select default model for {tool}", options, default=default_idx)
     if options[idx] == skip_label:
         return None
 
@@ -865,8 +777,7 @@ def _prompt_work_setup(
     default_tool: str | None,
     installed_tools: list[str],
     non_interactive: bool,
-    allow_back: bool = False,
-) -> dict[str, Any] | _BackType:
+) -> dict[str, Any]:
     """Prompt for all implementation-work configuration as a single cohesive unit.
 
     Covers: work tool selection, complexity model mapping for that tool, and
@@ -878,7 +789,6 @@ def _prompt_work_setup(
         ``tool``          - work-specific tool override, or None (use default_tool)
         ``model_mapping`` - ComplexityModelMapping for the effective tool
         ``default_model`` - fallback model ID, or None if skipped
-    Returns _BACK if allow_back is True and the user navigates back from sub-step 0.
     """
     if non_interactive:
         mapping = _resolve_models(default_tool)
@@ -893,48 +803,15 @@ def _prompt_work_setup(
         skip_label
     ]
 
-    # State: 0=tool, 1=model_mapping, 2=default_model
-    sub_step = 0
-    work_tool: str | None = None
-    mapping = ComplexityModelMapping()
-    effective_tool_at_mapping: str | None = None  # Track tool when mapping was last resolved
-    default_model: str | None = None
+    idx = prompts.select("AI tool for implementation work", tool_options)
+    work_tool = None if tool_options[idx] == skip_label else tool_options[idx]
 
-    while True:
-        if sub_step == 0:
-            idx = prompts.select(
-                "AI tool for implementation work", tool_options, allow_back=allow_back
-            )
-            if idx == -1:
-                return _BACK
-            work_tool = None if tool_options[idx] == skip_label else tool_options[idx]
-            sub_step = 1
+    current_effective = work_tool or default_tool
+    mapping = _resolve_models(current_effective)
 
-        elif sub_step == 1:
-            current_effective = work_tool or default_tool
-            # Re-resolve from defaults only when the effective tool changed
-            if current_effective != effective_tool_at_mapping:
-                mapping = _resolve_models(current_effective)
-                effective_tool_at_mapping = current_effective
-            result_m = _prompt_model_mapping(
-                current_effective, mapping, non_interactive=False, allow_back=True
-            )
-            if isinstance(result_m, _BackType):
-                sub_step = 0
-            else:
-                mapping = result_m
-                sub_step = 2
+    mapping = _prompt_model_mapping(current_effective, mapping, non_interactive=False)
 
-        elif sub_step == 2:
-            current_effective = work_tool or default_tool
-            result_d = _prompt_default_model(
-                current_effective, mapping, non_interactive=False, allow_back=True
-            )
-            if isinstance(result_d, _BackType):
-                sub_step = 1
-            else:
-                default_model = result_d
-                break
+    default_model = _prompt_default_model(current_effective, mapping, non_interactive=False)
 
     return {"tool": work_tool, "model_mapping": mapping, "default_model": default_model}
 
@@ -943,8 +820,7 @@ def _prompt_command_overrides(
     installed_tools: list[str],
     non_interactive: bool,
     default_model: str | None = None,
-    allow_back: bool = False,
-) -> dict[str, dict[str, str]] | _BackType:
+) -> dict[str, dict[str, str]]:
     """Prompt for per-command AI tool and model overrides for plan and deps.
 
     Work configuration is handled separately by ``_prompt_work_setup()``.
@@ -952,8 +828,7 @@ def _prompt_command_overrides(
     Returns a dict like:
         {"plan": {"tool": "claude", "model": "claude-sonnet-4-6"}, "deps": {}}
 
-    Empty dicts for commands with no overrides. Returns _BACK if allow_back is
-    True and the user navigates back from the first prompt (plan tool).
+    Empty dicts for commands with no overrides.
     """
     from ghaiw.ui import prompts
 
@@ -971,76 +846,36 @@ def _prompt_command_overrides(
     cmd_pairs = [("plan", "Planning tasks"), ("deps", "Dependency analysis")]
     result: dict[str, dict[str, str]] = {"plan": {}, "deps": {}}
     tool_for_cmd: list[str | None] = [None] * len(cmd_pairs)
-    # Track the last phase visited per command for backward navigation
-    exit_phase_for_cmd: list[str] = ["tool"] * len(cmd_pairs)
+    for cmd_idx, (cmd_name, label) in enumerate(cmd_pairs):
+        idx = prompts.select(f"AI tool for {label.lower()}", tool_options)
+        selected_tool = tool_options[idx]
+        tool_for_cmd[cmd_idx] = None if selected_tool == skip_label else selected_tool
+        result[cmd_name] = {}
 
-    cmd_idx = 0
-    phase = "tool"
-
-    while True:
-        cmd_name, label = cmd_pairs[cmd_idx]
-
-        if phase == "tool":
-            is_first = cmd_idx == 0
-            back = allow_back if is_first else True
-            idx = prompts.select(f"AI tool for {label.lower()}", tool_options, allow_back=back)
-
-            if idx == -1:
-                if is_first:
-                    return _BACK
-                # Go back to the previous command's last visited phase
-                cmd_idx -= 1
-                phase = exit_phase_for_cmd[cmd_idx]
-                continue
-
-            selected_tool = tool_options[idx]
-            tool_for_cmd[cmd_idx] = None if selected_tool == skip_label else selected_tool
-            result[cmd_name] = {}
-
-            if tool_for_cmd[cmd_idx] is None:
-                # No model phase for this command
-                exit_phase_for_cmd[cmd_idx] = "tool"
-                if cmd_idx < len(cmd_pairs) - 1:
-                    cmd_idx += 1
-                    phase = "tool"
-                else:
-                    break
-            else:
-                result[cmd_name]["tool"] = selected_tool
-                phase = "model"
-
-        elif phase == "model":
-            maybe_tool = tool_for_cmd[cmd_idx]
-            if maybe_tool is None:
-                # Defensive: should not reach model phase without a tool
-                phase = "tool"
-                continue
+        if tool_for_cmd[cmd_idx] is not None:
+            result[cmd_name]["tool"] = selected_tool
+            maybe_tool = selected_tool
 
             available = _collect_model_options(maybe_tool)
             suggested = _suggest_model_for_tool(maybe_tool)
-            # Pre-select default_model if it is in the available list (same tool as work),
-            # otherwise fall back to the tool's suggested model.
             if default_model and default_model in available:
                 model_default = default_model
             else:
                 model_default = suggested
+
             custom_label = "Custom..."
             skip_model_label = "Skip (use default)"
             model_options = list(available)
             if model_default and model_default not in model_options:
                 model_options.insert(0, model_default)
             model_options += [custom_label, skip_model_label]
+
             default_idx = (
                 model_options.index(model_default) if model_default in model_options else 0
             )
             chosen_idx = prompts.select(
-                f"  Model for {label.lower()}", model_options, default=default_idx, allow_back=True
+                f"  Model for {label.lower()}", model_options, default=default_idx
             )
-
-            if chosen_idx == -1:
-                # Back to tool selection for the same command
-                phase = "tool"
-                continue
 
             chosen = model_options[chosen_idx]
             if chosen == custom_label:
@@ -1049,13 +884,6 @@ def _prompt_command_overrides(
                 )
             if chosen and chosen != skip_model_label:
                 result[cmd_name]["model"] = chosen
-
-            exit_phase_for_cmd[cmd_idx] = "model"
-            if cmd_idx < len(cmd_pairs) - 1:
-                cmd_idx += 1
-                phase = "tool"
-            else:
-                break
 
     return result
 
