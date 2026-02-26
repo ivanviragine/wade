@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.24.2] — 2026-02-26
+
+### Bug Fixes
+
+- use /tmp directly for PR-SUMMARY fallback instead of tempfile.gettempdir() (ad532e6)
+
 ## [v0.24.1] — 2026-02-26
 
 ### Bug Fixes
