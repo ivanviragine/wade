@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.23.0] — 2026-02-26
+
+### Features
+
+- display version number on init startup (d466c23)
+
 ## [v0.22.3] — 2026-02-26
 
 ### Bug Fixes
