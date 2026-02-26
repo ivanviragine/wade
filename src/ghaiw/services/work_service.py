@@ -185,72 +185,79 @@ def _post_exit_capture(
     branch: str,
     ai_tool: str,
     model: str | None,
-) -> None:
-    """Post-AI-exit processing: parse transcript, update PR with token usage.
+    issue_number: str | None = None,
+    provider: AbstractTaskProvider | None = None,
+) -> str | None:
+    """Post-AI-exit processing: parse transcript, update PR and issue with token usage.
+
+    Returns the primary model detected from the transcript (for worked-model label),
+    or the explicitly passed model if no breakdown is available.
 
     Behavioral reference: lib/work/terminal.sh:_work_post_exit_capture()
     """
     if not transcript_path or not transcript_path.is_file():
-        return
+        return None
 
     # Parse transcript for token usage
     try:
         usage = adapter.parse_transcript(transcript_path)
     except Exception as e:
         logger.warning("work.transcript_parse_failed", error=str(e))
-        return
+        return None
 
     if not usage or (not usage.total_tokens and not usage.input_tokens):
         logger.debug("work.no_token_usage")
-        return
+        return None
 
-    # Find the PR for this branch (may have been created during the AI session)
-    from ghaiw.git import pr as git_pr
+    # Use transcript model_breakdown as source of truth when model wasn't set explicitly
+    effective_model = model or (usage.model_breakdown[0].model if usage.model_breakdown else None)
 
-    pr_info = git_pr.get_pr_for_branch(repo_root, branch)
-    if not pr_info:
-        logger.debug("work.no_pr_for_branch", branch=branch)
-        return
-
-    pr_number = int(pr_info["number"])
-
-    # Get current PR body
-    try:
-        result = git_pr._run_gh(
-            "pr",
-            "view",
-            str(pr_number),
-            "--json",
-            "body",
-            cwd=repo_root,
-            check=False,
-        )
-        if result.returncode != 0:
-            return
-        import json as json_mod
-
-        current_body = json_mod.loads(result.stdout).get("body", "")
-    except Exception:
-        logger.debug("work.pr_body_read_failed", exc_info=True)
-        return
-
-    # Strip any existing impl usage block and append new one
-    cleaned_body = _strip_impl_usage_block(current_body)
     usage_block = build_impl_usage_block(
         ai_tool=ai_tool,
-        model=model,
+        model=effective_model,
         token_usage=usage,
     )
-    new_body = cleaned_body.rstrip("\n") + "\n\n" + usage_block + "\n"
 
-    # Update PR body
-    if git_pr.update_pr_body(repo_root, pr_number, new_body):
-        console.success("Updated PR with implementation usage stats.")
-        logger.info(
-            "work.impl_usage_updated",
-            pr=pr_number,
-            total_tokens=usage.total_tokens,
-        )
+    # Update PR body with usage stats
+    pr_info = git_pr.get_pr_for_branch(repo_root, branch)
+    if pr_info:
+        pr_number = int(pr_info["number"])
+        try:
+            result = git_pr._run_gh(
+                "pr",
+                "view",
+                str(pr_number),
+                "--json",
+                "body",
+                cwd=repo_root,
+                check=False,
+            )
+            if result.returncode == 0:
+                import json as json_mod
+
+                current_body = json_mod.loads(result.stdout).get("body", "")
+                cleaned_body = _strip_impl_usage_block(current_body)
+                new_body = cleaned_body.rstrip("\n") + "\n\n" + usage_block + "\n"
+                if git_pr.update_pr_body(repo_root, pr_number, new_body):
+                    console.success("Updated PR with implementation usage stats.")
+                    logger.info(
+                        "work.impl_usage_updated",
+                        pr=pr_number,
+                        total_tokens=usage.total_tokens,
+                    )
+        except Exception:
+            logger.debug("work.pr_body_read_failed", exc_info=True)
+    else:
+        logger.debug("work.no_pr_for_branch", branch=branch)
+
+    # Also post usage stats as a comment on the issue
+    if issue_number and provider:
+        with contextlib.suppress(Exception):
+            provider.comment_on_task(str(issue_number), usage_block)
+            console.success("Added implementation usage stats to issue.")
+            logger.info("work.impl_usage_issue_commented", issue=issue_number)
+
+    return effective_model
 
 
 def build_work_prompt(task: Task, ai_tool: str | None = None) -> str:
@@ -276,7 +283,7 @@ def _post_work_lifecycle(
     provider: AbstractTaskProvider,
 ) -> None:
     if config.project.merge_strategy == MergeStrategy.PR:
-        _post_work_lifecycle_pr(repo_root, branch, issue_number, worktree_path, config, provider)
+        _post_work_lifecycle_pr(repo_root, branch, issue_number, worktree_path, provider)
     else:
         _post_work_lifecycle_direct(
             repo_root, branch, issue_number, worktree_path, config, provider
@@ -288,10 +295,8 @@ def _post_work_lifecycle_pr(
     branch: str,
     issue_number: str | int | None,
     worktree_path: Path | None,
-    config: ProjectConfig,
     provider: AbstractTaskProvider,
 ) -> None:
-    main_branch = config.project.main_branch or "main"
     provider_get_pr = getattr(provider, "get_pr_for_branch", None)
     pr_info_raw = (
         provider_get_pr(branch)
@@ -311,10 +316,22 @@ def _post_work_lifecycle_pr(
     if not prompts.confirm(f"Do you want to merge PR #{pr_number}?", default=True):
         return
 
+    # Remove the worktree before merging. git refuses to delete a branch that
+    # is checked out in a linked worktree, so `gh pr merge --delete-branch`
+    # would fail without this step.
+    if worktree_path:
+        console.step(f"Removing worktree: {worktree_path.name}")
+        with contextlib.suppress(Exception):
+            git_worktree.remove_worktree(repo_root, worktree_path)
+        with contextlib.suppress(Exception):
+            git_worktree.prune_worktrees(repo_root)
+        console.success(f"Removed {worktree_path.name}")
+
     try:
         git_pr.merge_pr(repo_root=repo_root, pr_number=int(pr_number), strategy="squash")
     except Exception as e:
         logger.error("pr_merge.failed", pr_number=pr_number, error=str(e))
+        # Try to clean up remote branch
         with contextlib.suppress(Exception):
             subprocess.run(
                 ["git", "push", "origin", "--delete", branch],
@@ -322,10 +339,10 @@ def _post_work_lifecycle_pr(
                 capture_output=True,
                 cwd=repo_root,
             )
+        # Try to clean up local branch (worktree already removed above)
+        with contextlib.suppress(Exception):
+            git_branch.delete_branch(repo_root, branch, force=True)
         return
-
-    if worktree_path:
-        _cleanup_worktree(repo_root, worktree_path, main_branch)
 
     with contextlib.suppress(Exception):
         subprocess.run(["git", "pull", "--quiet"], cwd=repo_root)
@@ -652,20 +669,24 @@ def start(
                 except Exception:
                     logger.exception("post_work_lifecycle.failed")
 
-        # Post-exit: capture token usage and update PR
+        # Post-exit: capture token usage, update PR and issue, detect model
+        detected_model: str | None = None
         if adapter is not None:
-            _post_exit_capture(
+            detected_model = _post_exit_capture(
                 transcript_path=transcript_path,
                 adapter=adapter,
                 repo_root=repo_root,
                 branch=branch_name,
                 ai_tool=resolved_tool,
                 model=resolved_model,
+                issue_number=task.id,
+                provider=provider,
             )
 
-        # Add worked-by labels
+        # Add worked-by labels; prefer transcript-detected model over configured model
+        effective_model = detected_model or resolved_model
         with contextlib.suppress(Exception):
-            add_worked_by_labels(provider, task.id, resolved_tool, resolved_model)
+            add_worked_by_labels(provider, task.id, resolved_tool, effective_model)
     elif not resolved_tool:
         console.info("No AI tool configured. Worktree ready for manual work.")
         console.detail(f"cd {worktree_path}")
@@ -1372,6 +1393,11 @@ def done(
         if wt_path:
             cwd = wt_path
 
+    # If running from inside a linked worktree with no explicit target,
+    # use cwd as the worktree path so PR-SUMMARY.md lookup works.
+    if wt_path is None and git_repo.is_worktree(cwd):
+        wt_path = cwd
+
     # Detect branch and issue
     try:
         branch = git_repo.get_current_branch(cwd)
@@ -1490,6 +1516,10 @@ def _done_via_pr(
         tmp_path = Path(tempfile.gettempdir()) / f"PR-SUMMARY-{issue_number}.md"
         if tmp_path.exists():
             pr_summary_path = tmp_path
+
+    if pr_summary_path is None:
+        console.warn("No PR-SUMMARY file found — PR description will have no summary.")
+        console.detail(f"Expected: /tmp/PR-SUMMARY-{issue_number}.md")
 
     body = _build_pr_body(
         task,

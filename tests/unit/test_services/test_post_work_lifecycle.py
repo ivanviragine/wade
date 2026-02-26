@@ -18,13 +18,15 @@ def _config(strategy: MergeStrategy) -> ProjectConfig:
 
 
 @patch("ghaiw.services.work_service.subprocess.run")
-@patch("ghaiw.services.work_service._cleanup_worktree")
+@patch("ghaiw.services.work_service.git_worktree.prune_worktrees")
+@patch("ghaiw.services.work_service.git_worktree.remove_worktree")
 @patch("ghaiw.services.work_service.git_pr.merge_pr")
 @patch("ghaiw.services.work_service.prompts.confirm", return_value=True)
 def test_pr_strategy_prompts_merge_on_existing_pr(
     mock_confirm: MagicMock,
     mock_merge_pr: MagicMock,
-    mock_cleanup: MagicMock,
+    mock_remove_worktree: MagicMock,
+    _mock_prune: MagicMock,
     mock_run: MagicMock,
     tmp_path: Path,
 ) -> None:
@@ -40,8 +42,9 @@ def test_pr_strategy_prompts_merge_on_existing_pr(
     confirm_msg = mock_confirm.call_args[0][0]
     assert "merge" in confirm_msg.lower()
     assert "99" in confirm_msg
+    # Worktree is removed BEFORE merge so --delete-branch can succeed
+    mock_remove_worktree.assert_called_once_with(repo_root, wt_path)
     mock_merge_pr.assert_called_once_with(repo_root=repo_root, pr_number=99, strategy="squash")
-    mock_cleanup.assert_called_once_with(repo_root, wt_path, "main")
     mock_run.assert_any_call(["git", "pull", "--quiet"], cwd=repo_root)
 
 
@@ -120,13 +123,15 @@ def test_pr_strategy_merge_failure_handles_gracefully(
 
 
 @patch("ghaiw.services.work_service.subprocess.run")
-@patch("ghaiw.services.work_service._cleanup_worktree")
+@patch("ghaiw.services.work_service.git_worktree.prune_worktrees")
+@patch("ghaiw.services.work_service.git_worktree.remove_worktree")
 @patch("ghaiw.services.work_service.git_pr.merge_pr")
 @patch("ghaiw.services.work_service.prompts.confirm", return_value=True)
 def test_pr_strategy_cleanup_and_pull_after_merge(
     _mock_confirm: MagicMock,
     _mock_merge_pr: MagicMock,
-    mock_cleanup: MagicMock,
+    mock_remove_worktree: MagicMock,
+    _mock_prune: MagicMock,
     mock_run: MagicMock,
     tmp_path: Path,
 ) -> None:
@@ -139,7 +144,8 @@ def test_pr_strategy_cleanup_and_pull_after_merge(
         repo_root, "feat/42-test", 42, wt_path, _config(MergeStrategy.PR), provider
     )
 
-    mock_cleanup.assert_called_once_with(repo_root, wt_path, "main")
+    # Worktree is removed before merge; no separate cleanup call needed after
+    mock_remove_worktree.assert_called_once_with(repo_root, wt_path)
     mock_run.assert_any_call(["git", "pull", "--quiet"], cwd=repo_root)
 
 
