@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.20.0] — 2026-02-26
+
+### Features
+
+- add back navigation to ghaiwpy init interactive wizard (c68ccd3)
+
 ## [v0.19.3] — 2026-02-26
 
 ### Documentation
