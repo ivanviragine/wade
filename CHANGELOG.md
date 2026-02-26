@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.22.0] — 2026-02-26
+
+### Features
+
+- print transcript file path before AI sessions (7730c23)
+
 ## [v0.21.0] — 2026-02-26
 
 ### Features
