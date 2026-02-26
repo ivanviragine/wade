@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.22.1] — 2026-02-26
+
+### Documentation
+
+- add critical rules to work-context prompt; fix placeholder bug (e18acfb)
+
 ## [v0.22.0] — 2026-02-26
 
 ### Features
