@@ -12,4 +12,4 @@ Done! I've created the user preferences feature with:
 - API endpoint at /api/preferences
 - Unit tests covering all CRUD operations
 
-in:12,345 out:2,456 cached:8,901
+Sonnet 4.6 in:12,345 out:2,456 cached:8,901

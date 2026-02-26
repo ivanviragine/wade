@@ -37,8 +37,6 @@ from ghaiw.models.work import MergeStrategy, SyncEvent, SyncResult, WorktreeStat
 from ghaiw.providers.base import AbstractTaskProvider
 from ghaiw.providers.registry import get_provider
 from ghaiw.services.task_service import (
-    PLAN_SUMMARY_MARKER_END,
-    PLAN_SUMMARY_MARKER_START,
     add_in_progress_label,
     add_worked_by_labels,
     remove_in_progress_label,
@@ -677,8 +675,9 @@ def start(
                     logger.exception("post_work_lifecycle.failed")
 
         # Post-exit: parse transcript, update PR body and issue with token usage.
+        detected_model: str | None = None
         if adapter is not None:
-            _post_exit_capture(
+            detected_model = _post_exit_capture(
                 transcript_path=transcript_path,
                 adapter=adapter,
                 repo_root=repo_root,
@@ -689,9 +688,8 @@ def start(
                 provider=provider,
             )
 
-        # Add worked-by labels using the model we passed to the AI tool.
-        # Transcript model_breakdown may expose internal routing models.
-        effective_model = resolved_model
+        # Use CLI-resolved model, falling back to transcript-detected model.
+        effective_model = resolved_model or detected_model
         try:
             add_worked_by_labels(provider, task.id, resolved_tool, effective_model)
         except Exception as e:
@@ -1068,17 +1066,6 @@ def _strip_impl_usage_block(body: str) -> str:
     return remove_marker_block(body, IMPL_USAGE_MARKER_START, IMPL_USAGE_MARKER_END)
 
 
-def _extract_plan_summary(body: str) -> str:
-    """Extract plan summary block from an issue body, if present."""
-    start_idx = body.find(PLAN_SUMMARY_MARKER_START)
-    end_idx = body.find(PLAN_SUMMARY_MARKER_END)
-
-    if start_idx == -1 or end_idx == -1:
-        return ""
-
-    return body[start_idx : end_idx + len(PLAN_SUMMARY_MARKER_END)]
-
-
 # ---------------------------------------------------------------------------
 # PR body composition
 # ---------------------------------------------------------------------------
@@ -1095,8 +1082,9 @@ def _build_pr_body(
     Order:
     1. Closes #N
     2. Part of #parent (if detected)
-    3. Plan summary (from issue body)
-    4. ## Summary (from PR-SUMMARY file)
+    3. ## Summary (from PR-SUMMARY file)
+
+    Plan summary stays on the issue only — not copied into the PR body.
 
     Behavioral reference: lib/work/done.sh:_work_done_via_pr()
     """
@@ -1108,12 +1096,6 @@ def _build_pr_body(
         lines.append(f"Part of #{parent_issue}")
 
     if lines:
-        lines.append("")
-
-    # Plan summary from issue body
-    plan_summary = _extract_plan_summary(task.body)
-    if plan_summary:
-        lines.append(plan_summary)
         lines.append("")
 
     # PR summary from file

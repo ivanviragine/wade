@@ -322,10 +322,12 @@ def _extract_copilot_summary(text: str) -> tuple[TokenUsage | None, list[ModelBr
 def _extract_claude_footer(text: str) -> TokenUsage | None:
     """Parse Claude Code status footer.
 
-    Format: in:614 out:94 (optional: cached:2,345)
+    Format: ``Sonnet 4.6 [] 30% in:56.0k out:17.5k``
 
     Claude Code redraws the status bar on every response, so the transcript
     may contain many occurrences.  Use the LAST match to get final session totals.
+    Also extracts the model name from the same status bar lines — display names
+    like ``Sonnet 4.6`` are normalized to API IDs like ``claude-sonnet-4-6``.
     """
     in_re = re.compile(r"in:\s?([\d,]+(?:\.\d+)?[kKmM]?)")
     out_re = re.compile(r"out:\s?([\d,]+(?:\.\d+)?[kKmM]?)")
@@ -351,11 +353,39 @@ def _extract_claude_footer(text: str) -> TokenUsage | None:
 
     total = (inp or 0) + (out or 0) + (cached or 0)
 
+    # Model detection from status bar lines containing both in: and out:
+    model_name: str | None = None
+    display_re = re.compile(r"(Sonnet|Opus|Haiku)\s+(\d+\.\d+)", re.IGNORECASE)
+    api_re = re.compile(r"(claude-(?:opus|sonnet|haiku)-\d+-\d+(?:-\d+)?)")
+    status_re = re.compile(r".*in:\s?[\d,].*out:\s?[\d,].*")
+
+    for m in status_re.finditer(text):
+        line = m.group(0)
+        dm = display_re.search(line)
+        if dm:
+            model_name = f"claude-{dm.group(1).lower()}-{dm.group(2).replace('.', '-')}"
+        else:
+            am = api_re.search(line)
+            if am:
+                model_name = am.group(1)
+
+    breakdown: list[ModelBreakdown] = []
+    if model_name:
+        breakdown = [
+            ModelBreakdown(
+                model=model_name,
+                input_tokens=inp or 0,
+                output_tokens=out or 0,
+                cached_tokens=cached or 0,
+            )
+        ]
+
     return TokenUsage(
         total_tokens=total if total > 0 else None,
         input_tokens=inp,
         output_tokens=out,
         cached_tokens=cached,
+        model_breakdown=breakdown,
     )
 
 

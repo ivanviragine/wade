@@ -14,7 +14,6 @@ from ghaiw.services.work_service import (
     IMPL_USAGE_MARKER_END,
     IMPL_USAGE_MARKER_START,
     _build_pr_body,
-    _extract_plan_summary,
     _strip_impl_usage_block,
     build_impl_usage_block,
     classify_staleness,
@@ -193,34 +192,6 @@ class TestStripImplUsageBlock:
 
 
 # ---------------------------------------------------------------------------
-# Plan summary extraction
-# ---------------------------------------------------------------------------
-
-
-class TestExtractPlanSummary:
-    def test_extracts_summary(self) -> None:
-        from ghaiw.services.task_service import (
-            PLAN_SUMMARY_MARKER_END,
-            PLAN_SUMMARY_MARKER_START,
-        )
-
-        body = (
-            "## Tasks\n- Do stuff\n\n"
-            f"{PLAN_SUMMARY_MARKER_START}\n"
-            "## Plan Summary\nTokens: 1000\n"
-            f"{PLAN_SUMMARY_MARKER_END}\n"
-        )
-        result = _extract_plan_summary(body)
-        assert "## Plan Summary" in result
-        assert "Tokens: 1000" in result
-
-    def test_no_summary(self) -> None:
-        body = "## Tasks\n- Do stuff\n"
-        result = _extract_plan_summary(body)
-        assert result == ""
-
-
-# ---------------------------------------------------------------------------
 # PR body composition
 # ---------------------------------------------------------------------------
 
@@ -252,7 +223,8 @@ class TestBuildPrBody:
         assert "## Summary" in body
         assert "OAuth support" in body
 
-    def test_with_plan_summary_in_body(self) -> None:
+    def test_plan_summary_excluded_from_pr(self) -> None:
+        """Plan summary in the issue body must NOT leak into the PR body."""
         from ghaiw.services.task_service import (
             PLAN_SUMMARY_MARKER_END,
             PLAN_SUMMARY_MARKER_START,
@@ -266,8 +238,9 @@ class TestBuildPrBody:
         )
         task = Task(id="42", title="Add auth", body=issue_body)
         body = _build_pr_body(task)
-        assert "## Plan Summary" in body
-        assert "Tokens" in body
+        assert "## Plan Summary" not in body
+        assert "Tokens" not in body
+        assert "Closes #42" in body
 
 
 # ---------------------------------------------------------------------------
