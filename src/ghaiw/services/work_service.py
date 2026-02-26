@@ -1523,7 +1523,7 @@ def _done_via_pr(
     if worktree_path and (worktree_path / "PR-SUMMARY.md").exists():
         pr_summary_path = worktree_path / "PR-SUMMARY.md"
     else:
-        tmp_path = Path(tempfile.gettempdir()) / f"PR-SUMMARY-{issue_number}.md"
+        tmp_path = Path("/tmp") / f"PR-SUMMARY-{issue_number}.md"
         if tmp_path.exists():
             pr_summary_path = tmp_path
 
