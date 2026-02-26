@@ -155,8 +155,13 @@ def run_ai_planning_session(
         prompt = f"/plan {prompt}"
 
     copy_to_clipboard(prompt)
+    prompt_file = Path(plan_dir) / "prompt.txt"
+    prompt_file.write_text(prompt)
     console.success("Copied planning prompt to clipboard.")
-    console.hint("Paste it in the AI tool to get started.")
+    preview_lines = prompt.splitlines()[:3]
+    preview = "  " + "\n  ".join(preview_lines) + "\n  …"
+    console.out.print(f"[dim]{preview}[/]")
+    console.hint(f"Paste it in the AI tool to get started.  (full prompt: {prompt_file})")
 
     # Resolve adapter
     try:
@@ -277,6 +282,7 @@ def plan(
 
     # Set up transcript capture
     transcript_path = Path(plan_dir) / ".transcript"
+    console.hint(f"Transcript: {transcript_path}")
 
     # Launch AI session
     console.empty()
