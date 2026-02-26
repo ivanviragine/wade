@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.20.1] — 2026-02-26
+
+### Bug Fixes
+
+- install skill files into new worktrees during bootstrap (5d76233)
+
+### Documentation
+
+- reconcile plan-session prompt with SKILL.md; normalize PLAN.md casing (d709d10)
+
 ## [v0.20.0] — 2026-02-26
 
 ### Features
