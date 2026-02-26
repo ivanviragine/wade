@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.17.0] — 2026-02-26
+
+### Features
+
+- pass trusted dirs to all AI tool launch sites (db6d528)
+- replace issue number text inputs with interactive arrow-key selection menus (1900a20)
+
 ## [v0.16.5] — 2026-02-26
 
 ### Bug Fixes
