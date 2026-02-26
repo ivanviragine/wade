@@ -352,7 +352,7 @@ class TestPromptModelMapping:
             easy="haiku", medium="haiku", complex="sonnet", very_complex="opus"
         )
         # User accepts all defaults (select returns default index each time)
-        mock_select.side_effect = lambda title, items, default=0: default
+        mock_select.side_effect = lambda title, items, default=0, **kw: default
         result = _prompt_model_mapping("claude", mapping, non_interactive=False)
         assert result.easy == "haiku"
         assert result.complex == "sonnet"
@@ -366,7 +366,7 @@ class TestPromptModelMapping:
             easy="haiku", medium="haiku", complex="sonnet", very_complex="opus"
         )
         # select returns last index (Custom...) each time
-        mock_select.side_effect = lambda title, items, default=0: len(items) - 1
+        mock_select.side_effect = lambda title, items, default=0, **kw: len(items) - 1
         mock_input.side_effect = ["custom-easy", "custom-med", "custom-complex", "custom-vc"]
         result = _prompt_model_mapping("claude", mapping, non_interactive=False)
         assert result.easy == "custom-easy"

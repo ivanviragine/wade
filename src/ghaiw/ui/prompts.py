@@ -90,17 +90,20 @@ def select(
     items: list[str],
     default: int = 0,
     hints: list[str] | None = None,
+    allow_back: bool = False,
 ) -> int:
     """Arrow-key select picker — display items and let the user choose one.
 
     Returns the 0-based index of the selected item.
     Returns default when stdin is not a TTY.
+    Returns -1 if allow_back is True and the user selects "← Back".
 
     Args:
         title: The prompt title.
         items: List of item labels.
         default: Default 0-based index.
         hints: Optional right-aligned hints per item (e.g. command names).
+        allow_back: If True, prepend a "← Back" option; returns -1 if chosen.
     """
     if not is_tty():
         return default
@@ -113,7 +116,18 @@ def select(
         else:
             choices.append(item)
 
-    default_choice = choices[default] if 0 <= default < len(choices) else choices[0]
+    back_label = "\u2190 Back"
+    if allow_back:
+        choices = [back_label, *choices]
+        adjusted_default = default + 1
+        if adjusted_default >= len(choices):
+            adjusted_default = 1
+    else:
+        adjusted_default = default
+
+    default_choice = (
+        choices[adjusted_default] if 0 <= adjusted_default < len(choices) else choices[0]
+    )
     result: str | None = questionary.select(
         title,
         choices=choices,
@@ -124,9 +138,13 @@ def select(
     ).ask()
     _handle_none(result)
 
-    # Map back to original index
+    if allow_back and result == back_label:
+        return -1
+
+    # Map back to original index (accounting for prepended "← Back" item)
     try:
-        return choices.index(result)  # type: ignore[arg-type]
+        idx = choices.index(result)  # type: ignore[arg-type]
+        return idx - 1 if allow_back else idx
     except ValueError:
         return default
 
