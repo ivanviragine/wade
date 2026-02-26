@@ -10,7 +10,12 @@ import yaml
 from ghaiw.models.ai import AIToolID
 from ghaiw.models.config import ComplexityModelMapping
 from ghaiw.services.init_service import (
+    GITIGNORE_ENTRIES,
+    GITIGNORE_MARKER_END,
+    GITIGNORE_MARKER_START,
     MANIFEST_FILENAME,
+    _clean_gitignore,
+    _ensure_gitignore,
     _prompt_command_overrides,
     _prompt_model_mapping,
     _prompt_project_settings,
@@ -156,6 +161,108 @@ class TestSkillInstaller:
 
 
 # ---------------------------------------------------------------------------
+# Gitignore block management tests
+# ---------------------------------------------------------------------------
+
+
+class TestGitignoreBlock:
+    """Unit tests for _ensure_gitignore and _clean_gitignore."""
+
+    # --- _ensure_gitignore ---
+
+    def test_creates_file_when_missing(self, tmp_path: Path) -> None:
+        _ensure_gitignore(tmp_path)
+        gitignore = tmp_path / ".gitignore"
+        assert gitignore.is_file()
+        content = gitignore.read_text()
+        assert GITIGNORE_MARKER_START in content
+        assert GITIGNORE_MARKER_END in content
+        for entry in GITIGNORE_ENTRIES:
+            assert entry in content
+
+    def test_appends_block_to_existing_file(self, tmp_path: Path) -> None:
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text("__pycache__/\n*.py[cod]\n")
+        _ensure_gitignore(tmp_path)
+        content = gitignore.read_text()
+        assert "__pycache__/" in content  # original preserved
+        assert GITIGNORE_MARKER_START in content
+
+    def test_idempotent_when_already_current(self, tmp_path: Path) -> None:
+        _ensure_gitignore(tmp_path)
+        mtime_after_first = (tmp_path / ".gitignore").stat().st_mtime
+        _ensure_gitignore(tmp_path)
+        mtime_after_second = (tmp_path / ".gitignore").stat().st_mtime
+        assert mtime_after_first == mtime_after_second  # file not touched
+
+    def test_replaces_stale_block(self, tmp_path: Path) -> None:
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text(
+            f"__pycache__/\n\n{GITIGNORE_MARKER_START}\nold-entry.txt\n{GITIGNORE_MARKER_END}\n"
+        )
+        _ensure_gitignore(tmp_path)
+        content = gitignore.read_text()
+        assert "old-entry.txt" not in content
+        assert "__pycache__/" in content  # user content preserved
+        for entry in GITIGNORE_ENTRIES:
+            assert entry in content
+        # Block appears exactly once
+        assert content.count(GITIGNORE_MARKER_START) == 1
+
+    def test_migrates_old_style_entries(self, tmp_path: Path) -> None:
+        """Old-style entries (no markers) are cleaned up and replaced with block."""
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text(
+            "__pycache__/\n# ghaiw managed files\n.ghaiw-managed\n.issue-context.md\nPLAN.md\n"
+        )
+        _ensure_gitignore(tmp_path)
+        content = gitignore.read_text()
+        assert GITIGNORE_MARKER_START in content
+        assert "__pycache__/" in content
+        # Old comment removed; entries now inside the block
+        assert content.count("PLAN.md") == 1
+        assert ".issue-context.md" not in content
+        assert "# ghaiw managed files" not in content
+
+    # --- _clean_gitignore ---
+
+    def test_removes_marker_block(self, tmp_path: Path) -> None:
+        _ensure_gitignore(tmp_path)
+        _clean_gitignore(tmp_path)
+        content = (tmp_path / ".gitignore").read_text()
+        assert GITIGNORE_MARKER_START not in content
+        assert GITIGNORE_MARKER_END not in content
+        for entry in GITIGNORE_ENTRIES:
+            assert entry not in content
+
+    def test_preserves_user_content_on_clean(self, tmp_path: Path) -> None:
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text("__pycache__/\n*.py[cod]\n")
+        _ensure_gitignore(tmp_path)
+        _clean_gitignore(tmp_path)
+        content = (tmp_path / ".gitignore").read_text()
+        assert "__pycache__/" in content
+        assert "*.py[cod]" in content
+
+    def test_backward_compat_removes_old_style_entries(self, tmp_path: Path) -> None:
+        """Deinit on a project inited before markers were introduced."""
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text(
+            "__pycache__/\n# ghaiw managed files\n.ghaiw-managed\n.issue-context.md\nPLAN.md\n"
+        )
+        _clean_gitignore(tmp_path)
+        content = (tmp_path / ".gitignore").read_text()
+        assert "__pycache__/" in content
+        assert ".ghaiw-managed" not in content
+        assert ".issue-context.md" not in content
+        assert "PLAN.md" not in content
+        assert "# ghaiw managed files" not in content
+
+    def test_clean_no_op_when_no_file(self, tmp_path: Path) -> None:
+        _clean_gitignore(tmp_path)  # must not raise
+
+
+# ---------------------------------------------------------------------------
 # Init service tests
 # ---------------------------------------------------------------------------
 
@@ -180,12 +287,15 @@ class TestInit:
         content = manifest.read_text()
         assert ".ghaiw.yml" in content
 
-    def test_init_creates_gitignore_entries(self, tmp_git_repo: Path) -> None:
+    def test_init_creates_gitignore_block(self, tmp_git_repo: Path) -> None:
         init(project_root=tmp_git_repo, non_interactive=True)
         gitignore = tmp_git_repo / ".gitignore"
         assert gitignore.is_file()
         content = gitignore.read_text()
-        assert ".ghaiw-managed" in content
+        assert GITIGNORE_MARKER_START in content
+        assert GITIGNORE_MARKER_END in content
+        for entry in GITIGNORE_ENTRIES:
+            assert entry in content
 
     def test_init_creates_agents_pointer(self, tmp_git_repo: Path) -> None:
         init(project_root=tmp_git_repo, non_interactive=True)
@@ -606,7 +716,20 @@ class TestDeinit:
         gitignore = tmp_git_repo / ".gitignore"
         if gitignore.is_file():
             content = gitignore.read_text()
-            assert ".ghaiw-managed" not in content
+            assert GITIGNORE_MARKER_START not in content
+            assert GITIGNORE_MARKER_END not in content
+            for entry in GITIGNORE_ENTRIES:
+                assert entry not in content
+
+    def test_deinit_removes_ghaiw_dir(self, tmp_git_repo: Path) -> None:
+        init(project_root=tmp_git_repo, non_interactive=True)
+        # Simulate ghaiw creating its database directory
+        ghaiw_dir = tmp_git_repo / ".ghaiw"
+        ghaiw_dir.mkdir(exist_ok=True)
+        (ghaiw_dir / "ghaiw.db").write_text("fake db")
+
+        deinit(project_root=tmp_git_repo, force=True)
+        assert not ghaiw_dir.exists()
 
     def test_full_lifecycle(self, tmp_git_repo: Path) -> None:
         """Test init → update → deinit full lifecycle."""

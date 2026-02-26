@@ -8,6 +8,7 @@ Behavioral reference: lib/init.sh (ghaiw_init, ghaiw_update, ghaiw_deinit)
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any, Final
 
@@ -40,13 +41,25 @@ class _BackType:
 
 _BACK: Final = _BackType()
 
-# .gitignore entries managed by ghaiw
-GITIGNORE_ENTRIES = [
-    "# ghaiw managed files",
+# Marker comments wrapping the managed block in .gitignore
+GITIGNORE_MARKER_START: Final = (
+    "# ghaiw:start — managed by ghaiw (do not edit — run `ghaiwpy update` to refresh)"
+)
+GITIGNORE_MARKER_END: Final = "# ghaiw:end"
+
+# Actual patterns placed between the markers
+GITIGNORE_ENTRIES: Final = [
+    ".ghaiw/",
     ".ghaiw-managed",
     "PLAN.md",
-    "PR_SUMMARY.md",
+    "PR-SUMMARY.md",
     "PR-SUMMARY-*.md",
+]
+
+# Entries added by older versions without markers — used for backward-compat cleanup
+_GITIGNORE_LEGACY_ENTRIES: Final = [
+    "# ghaiw managed files",
+    ".issue-context.md",
 ]
 
 MANIFEST_FILENAME = ".ghaiw-managed"
@@ -427,10 +440,10 @@ def deinit(project_root: Path | None = None, force: bool = False) -> bool:
     # Clean .gitignore
     _clean_gitignore(root)
 
-    # Remove .ghaiw directory if empty
+    # Remove .ghaiw directory (internal state: SQLite DB, audit log)
     ghaiw_dir = root / ".ghaiw"
-    if ghaiw_dir.is_dir() and not any(ghaiw_dir.iterdir()):
-        ghaiw_dir.rmdir()
+    if ghaiw_dir.is_dir():
+        shutil.rmtree(ghaiw_dir)
 
     console.panel("  All ghaiw artifacts removed.", title="ghaiwpy removed")
     return True
@@ -1105,36 +1118,85 @@ def _patch_config(
         logger.info("config.patched", path=str(config_path))
 
 
+def _gitignore_block() -> str:
+    """Build the full managed block (markers + entries)."""
+    inner = "\n".join(GITIGNORE_ENTRIES)
+    return f"{GITIGNORE_MARKER_START}\n{inner}\n{GITIGNORE_MARKER_END}\n"
+
+
 def _ensure_gitignore(project_root: Path) -> None:
-    """Add ghaiw entries to .gitignore if not already present."""
+    """Add or refresh the ghaiw-managed block in .gitignore.
+
+    Uses start/end markers so the block can be reliably located on every
+    subsequent init or update.  Existing user content is always preserved.
+
+    Migration: if the file already has old-style entries (no markers), they
+    are removed and replaced with the marker-wrapped block.
+    """
+    from ghaiw.utils.markdown import extract_marker_block, has_marker_block, remove_marker_block
+
     gitignore = project_root / ".gitignore"
+    block = _gitignore_block()
 
-    existing = ""
-    if gitignore.is_file():
-        existing = gitignore.read_text(encoding="utf-8")
+    if not gitignore.is_file():
+        gitignore.write_text(block, encoding="utf-8")
+        return
 
-    additions: list[str] = []
-    for entry in GITIGNORE_ENTRIES:
-        if entry not in existing:
-            additions.append(entry)
+    existing = gitignore.read_text(encoding="utf-8")
 
-    if additions:
-        with open(gitignore, "a", encoding="utf-8") as f:
-            if existing and not existing.endswith("\n"):
-                f.write("\n")
-            f.write("\n".join(additions) + "\n")
+    if has_marker_block(existing, GITIGNORE_MARKER_START, GITIGNORE_MARKER_END):
+        # Staleness check — skip file write if content is already current
+        inner = extract_marker_block(existing, GITIGNORE_MARKER_START, GITIGNORE_MARKER_END)
+        if inner == "\n".join(GITIGNORE_ENTRIES):
+            return
+        # Stale — replace the block in place
+        cleaned = remove_marker_block(existing, GITIGNORE_MARKER_START, GITIGNORE_MARKER_END)
+        base = cleaned.rstrip("\n")
+        gitignore.write_text((base + "\n\n" + block) if base else block, encoding="utf-8")
+        return
+
+    # No markers yet — migrate: strip old-style stray entries, then append block
+    all_legacy = set(_GITIGNORE_LEGACY_ENTRIES) | set(GITIGNORE_ENTRIES)
+    lines = existing.splitlines()
+    filtered = [line for line in lines if line not in all_legacy]
+
+    # Collapse consecutive blank lines left behind by removed entries
+    deduped: list[str] = []
+    for line in filtered:
+        if line.strip() == "" and deduped and deduped[-1].strip() == "":
+            continue
+        deduped.append(line)
+
+    base = "\n".join(deduped).rstrip("\n")
+    gitignore.write_text((base + "\n\n" + block) if base else block, encoding="utf-8")
 
 
 def _clean_gitignore(project_root: Path) -> None:
-    """Remove ghaiw entries from .gitignore."""
+    """Remove the ghaiw-managed block from .gitignore.
+
+    Primary: marker-based removal (reliable, preserves user content).
+    Fallback: line-by-line removal of known entries (backward compat for
+    projects initialized before markers were introduced).
+    """
+    from ghaiw.utils.markdown import has_marker_block, remove_marker_block
+
     gitignore = project_root / ".gitignore"
     if not gitignore.is_file():
         return
 
-    lines = gitignore.read_text(encoding="utf-8").splitlines()
-    new_lines = [line for line in lines if line not in GITIGNORE_ENTRIES]
+    existing = gitignore.read_text(encoding="utf-8")
 
-    # Remove consecutive blank lines
+    if has_marker_block(existing, GITIGNORE_MARKER_START, GITIGNORE_MARKER_END):
+        new_content = remove_marker_block(existing, GITIGNORE_MARKER_START, GITIGNORE_MARKER_END)
+        gitignore.write_text(new_content, encoding="utf-8")
+        return
+
+    # Fallback: remove individual known entries line-by-line
+    all_known = set(GITIGNORE_ENTRIES) | set(_GITIGNORE_LEGACY_ENTRIES)
+    lines = existing.splitlines()
+    new_lines = [line for line in lines if line not in all_known]
+
+    # Collapse consecutive blank lines
     cleaned: list[str] = []
     for line in new_lines:
         if line.strip() == "" and cleaned and cleaned[-1].strip() == "":
