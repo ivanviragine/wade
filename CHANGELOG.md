@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.24.5] — 2026-02-26
+
+### Bug Fixes
+
+- detect model from Claude transcripts and remove plan summary from PR body (1cfbdc0)
+
 ## [v0.24.4] — 2026-02-26
 
 ### Bug Fixes
