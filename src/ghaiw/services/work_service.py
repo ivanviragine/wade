@@ -608,6 +608,7 @@ def start(
     try:
         transcript_dir = tempfile.mkdtemp(prefix="ghaiw-work-")
         transcript_path = Path(transcript_dir) / f"transcript-{task.id}.log"
+        console.hint(f"Transcript: {transcript_path}")
     except OSError:
         logger.warning("work.transcript_dir_failed")
 
