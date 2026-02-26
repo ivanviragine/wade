@@ -18,19 +18,19 @@ from ghaiw.config.migrations import run_all_migrations
 # Helpers
 # ---------------------------------------------------------------------------
 
-_VALID_V2_CONFIG: dict = {
+_VERSIONLESS_CONFIG: dict[str, object] = {
+    "ai": {"default_tool": "claude"},
+    "project": {"main_branch": "main"},
+}
+
+_VALID_V2_CONFIG: dict[str, object] = {
     "version": 2,
     "ai": {"default_tool": "claude"},
-    "project": {"main_branch": "main", "merge_strategy": "PR"},
-}
-
-_V1_CONFIG: dict = {
-    "ai_tool": "claude",
-    "project": {"merge_strategy": "pr"},
+    "project": {"main_branch": "main"},
 }
 
 
-def _write_yaml(path: Path, data: dict) -> str:
+def _write_yaml(path: Path, data: dict[str, object]) -> str:
     """Write *data* as YAML to *path* and return the written text."""
     text = yaml.dump(data, default_flow_style=False, sort_keys=False)
     path.write_text(text, encoding="utf-8")
@@ -50,7 +50,7 @@ class TestRunAllMigrationsAtomic:
 
         with (
             patch(
-                "ghaiw.config.migrations.normalize_merge_strategy",
+                "ghaiw.config.migrations.ensure_version",
                 side_effect=RuntimeError("boom"),
             ),
             pytest.raises(RuntimeError),
@@ -81,7 +81,7 @@ class TestRunAllMigrationsAtomic:
         boom_message = "unexpected_sentinel_error_xyz"
         with (
             patch(
-                "ghaiw.config.migrations.backfill_per_command_keys",
+                "ghaiw.config.migrations.ensure_version",
                 side_effect=OSError(boom_message),
             ),
             pytest.raises(RuntimeError, match=boom_message),
@@ -91,7 +91,7 @@ class TestRunAllMigrationsAtomic:
     def test_migration_success_writes_file(self, tmp_path: Path) -> None:
         """Regression guard: successful migrations still update the file."""
         config_path = tmp_path / ".ghaiw.yml"
-        original_text = _write_yaml(config_path, _V1_CONFIG)
+        original_text = _write_yaml(config_path, _VERSIONLESS_CONFIG)
 
         result = run_all_migrations(config_path)
 
@@ -100,7 +100,6 @@ class TestRunAllMigrationsAtomic:
         assert updated_text != original_text
         migrated = yaml.safe_load(updated_text)
         assert migrated["version"] == 2
-        assert migrated["project"]["merge_strategy"] == "PR"
 
     def test_migration_failure_chained_cause(self, tmp_path: Path) -> None:
         """The RuntimeError must chain the original exception as __cause__."""
@@ -110,7 +109,7 @@ class TestRunAllMigrationsAtomic:
         original_exc = TypeError("chain_check")
         with (
             patch(
-                "ghaiw.config.migrations.normalize_model_format",
+                "ghaiw.config.migrations.ensure_version",
                 side_effect=original_exc,
             ),
             pytest.raises(RuntimeError) as exc_info,

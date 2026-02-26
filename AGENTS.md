@@ -60,6 +60,9 @@ python scripts/auto_version.py minor --dry-run # preview only
 python scripts/changelog.py                   # write CHANGELOG.md
 python scripts/changelog.py --stdout          # print to stdout
 python scripts/changelog.py --tag v1.0.0      # label unreleased as v1.0.0
+
+# Probe AI CLIs for new/removed models and diff against models.json
+./scripts/probe_models.sh
 ```
 
 ## Architecture
@@ -119,9 +122,8 @@ src/ghaiw/
 │   ├── loader.py        # Find + parse .ghaiw.yml (walk up from CWD)
 │   ├── schema.py        # Re-exports from models (Pydantic Settings)
 │   ├── defaults.py      # Hardcoded defaults per AI tool
-│   ├── migrations.py    # Config migration pipeline (v1→v2, model normalization)
-│   ├── claude_allowlist.py  # .claude/settings.json allowlist management
-│   └── legacy.py        # Legacy artifact cleanup
+│   ├── migrations.py    # Config migration pipeline (ensure version key)
+│   └── claude_allowlist.py  # .claude/settings.json allowlist management
 ├── ui/                  # Terminal UI (Rich)
 │   ├── console.py       # Console class
 │   ├── prompts.py       # confirm, input, select, menu
@@ -211,23 +213,17 @@ hooks:
 
 ### Config Migration Pipeline
 
-`config/migrations.py` provides 7 idempotent migrations run during `ghaiwpy update`:
+`config/migrations.py` provides a single migration run during `ghaiwpy update`:
 
 | # | Function | What it does |
 |---|----------|-------------|
 | 1 | `ensure_version(raw)` | Set `version: 2` if missing |
-| 2 | `migrate_deprecated_model_values(raw, ai_tool)` | Replace deprecated model names (e.g., `gemini-3-flash` -> `claude-haiku-4-5`) |
-| 3 | `migrate_flat_to_nested_models(raw, ai_tool)` | Move v1 flat `model_easy` keys to v2 nested `models.<tool>.easy` |
-| 4 | `normalize_model_format(raw, ai_tool)` | Dashes/dots based on tool (Claude=dashes, Copilot=dots) |
-| 5 | `backfill_missing_model_keys(raw, ai_tool)` | Fill missing tier keys with probed/default models |
-| 6 | `backfill_per_command_keys(raw)` | Ensure `ai.plan`, `ai.deps`, `ai.work` sections exist |
-| 7 | `normalize_merge_strategy(raw)` | Lowercase `pr` -> uppercase `PR` |
 
-`run_all_migrations(config_path)` loads YAML, runs all 7 in order, writes back only if changed. Returns `True` if the file was modified.
+`run_all_migrations(config_path)` loads YAML, runs the migration, writes back only if changed. Returns `True` if the file was modified.
 
 ### Update Flow
 
-`ghaiwpy update` performs 12 steps:
+`ghaiwpy update` performs 11 steps:
 
 1. Validate repo + config existence
 2. Self-upgrade if source version differs (see below)
@@ -236,11 +232,10 @@ hooks:
 5. Run config migration pipeline
 6. Reload config + backfill probed models
 7. Refresh skill files
-8. Clean legacy artifacts (`config/legacy.py`)
-9. Configure Claude Code allowlist (`config/claude_allowlist.py`)
-10. Configure Gemini experimental (if applicable)
-11. Refresh .gitignore + AGENTS.md pointer
-12. Rebuild manifest with version
+8. Configure Claude Code allowlist (`config/claude_allowlist.py`)
+9. Configure Gemini experimental (if applicable)
+10. Refresh .gitignore + AGENTS.md pointer
+11. Rebuild manifest with version
 
 **Self-upgrade mechanism**: When `ghaiwpy` is installed via `install.sh` (frozen venv at `~/.local/share/ghaiw/venv/`), the installer records the source repo path in `ghaiw-source.txt`. On `ghaiwpy update`, if the installed version differs from the source version, `utils/install.py:self_upgrade()` reinstalls from source and `re_exec()` restarts the process with the new code. Editable installs (`uv pip install -e .`) skip this naturally. Pass `--skip-self-upgrade` to bypass.
 

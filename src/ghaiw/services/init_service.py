@@ -180,18 +180,16 @@ def update(
     5.  Run config migration pipeline
     6.  Reload config + backfill probed models
     7.  Refresh skill files (force overwrite)
-    8.  Clean legacy artifacts
-    9.  Configure Claude Code allowlist
-    10. Configure Gemini experimental (if applicable)
-    11. Refresh .gitignore + AGENTS.md pointer
-    12. Rebuild manifest with version
+    8.  Configure Claude Code allowlist
+    9.  Configure Gemini experimental (if applicable)
+    10. Refresh .gitignore + AGENTS.md pointer
+    11. Rebuild manifest with version
 
     Never overwrites .ghaiw.yml user values — only patches missing keys
     and refreshes skill files.
     """
     from ghaiw import __version__
     from ghaiw.config.claude_allowlist import configure_allowlist
-    from ghaiw.config.legacy import cleanup_legacy_artifacts
     from ghaiw.config.migrations import run_all_migrations
 
     cwd = project_root or Path.cwd()
@@ -244,23 +242,18 @@ def update(
     installed = installer.install_skills(root, is_self_init=is_self, force=True)
     console.info(f"Updated {len(installed)} skill entries")
 
-    # Step 8: Clean legacy artifacts
-    removed = cleanup_legacy_artifacts(root)
-    if removed:
-        console.info(f"Removed {removed} legacy artifact(s)")
-
-    # Step 9: Configure Claude Code allowlist
+    # Step 8: Configure Claude Code allowlist
     configure_allowlist(root)
 
-    # Step 10: Configure Gemini experimental (if applicable)
+    # Step 9: Configure Gemini experimental (if applicable)
     if ai_tool and (ai_tool == AIToolID.GEMINI or ai_tool == "gemini"):
         _configure_gemini_experimental()
 
-    # Step 11: Refresh .gitignore + AGENTS.md pointer
+    # Step 10: Refresh .gitignore + AGENTS.md pointer
     _ensure_gitignore(root)
     pointer.ensure_pointer(root)
 
-    # Step 12: Rebuild manifest with version
+    # Step 11: Rebuild manifest with version
     _write_manifest(root, installed)
 
     console.panel("  All managed files are up to date.", title="ghaiwpy updated")
@@ -498,11 +491,7 @@ def _normalize_model(model_id: str | None) -> str | None:
         return None
     import re
 
-    from ghaiw.config.migrations import fixup_deprecated_model
-
-    # Fix deprecated/unversioned model names first
-    model_id = fixup_deprecated_model(model_id)
-    # Ensure dot notation for Claude models (4-5 → 4.5)
+    # Ensure dot notation for Claude models (claude-haiku-4-5 → claude-haiku-4.5)
     if model_id.startswith("claude-"):
         model_id = re.sub(r"(\d)-(\d)", r"\1.\2", model_id)
     return model_id

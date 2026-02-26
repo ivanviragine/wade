@@ -24,13 +24,11 @@ JSON_PATH = Path(__file__).parent.parent / "src" / "ghaiw" / "data" / "models.js
 _DOCS_URLS: dict[str, str] = {
     "claude": "https://docs.anthropic.com/en/docs/about-claude/models/overview",
     "gemini": "https://geminicli.com/docs/cli/model/",
-    "codex": "https://developers.openai.com/codex/models/",
 }
 
 _SCRAPE_PATTERNS: dict[str, str] = {
     "claude": r"claude-[a-z]+-[0-9]+[-\.][0-9]+[a-zA-Z0-9._-]*",
     "gemini": r"gemini-[0-9][.0-9]*-(flash|pro|ultra)[a-z0-9._-]*",
-    "codex": r"gpt-[a-z0-9._-]+",
 }
 
 
@@ -120,7 +118,16 @@ def probe_gemini() -> set[str]:
 
 
 def probe_codex() -> set[str]:
-    return _scrape_models("codex")
+    """Read available models from codex's local cache file (~/.codex/models_cache.json)."""
+    cache = Path.home() / ".codex" / "models_cache.json"
+    if not cache.exists():
+        return set()
+    try:
+        with open(cache, encoding="utf-8") as f:
+            data = json.load(f)
+        return {m["slug"] for m in data.get("models", []) if m.get("visibility") == "list"}
+    except Exception:
+        return set()
 
 
 def probe_opencode() -> set[str]:

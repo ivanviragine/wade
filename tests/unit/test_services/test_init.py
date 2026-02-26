@@ -665,15 +665,6 @@ class TestUpdateExtended:
             update(project_root=tmp_git_repo, skip_self_upgrade=True)
             mock_mig.assert_called_once()
 
-    def test_update_cleans_legacy_artifacts(self, tmp_git_repo: Path) -> None:
-        """update() should call cleanup_legacy_artifacts."""
-        init(project_root=tmp_git_repo, non_interactive=True)
-
-        with patch("ghaiw.config.legacy.cleanup_legacy_artifacts") as mock_clean:
-            mock_clean.return_value = 0
-            update(project_root=tmp_git_repo, skip_self_upgrade=True)
-            mock_clean.assert_called_once()
-
     def test_update_configures_allowlist(self, tmp_git_repo: Path) -> None:
         """update() should call configure_allowlist."""
         init(project_root=tmp_git_repo, non_interactive=True)

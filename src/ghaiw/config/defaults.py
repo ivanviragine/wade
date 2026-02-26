@@ -29,10 +29,10 @@ TOOL_DEFAULTS: dict[str, ComplexityModelMapping] = {
         very_complex="gemini-3-pro-preview",
     ),
     AIToolID.CODEX: ComplexityModelMapping(
-        easy="codex-mini-latest",
-        medium="codex-mini-latest",
-        complex="codex-mini-latest",
-        very_complex="codex-mini-latest",
+        easy="gpt-5.1-codex-mini",
+        medium="gpt-5.1-codex-mini",
+        complex="gpt-5.3-codex",
+        very_complex="gpt-5.3-codex",
     ),
     AIToolID.OPENCODE: ComplexityModelMapping(
         easy="anthropic/claude-haiku-4.5",
