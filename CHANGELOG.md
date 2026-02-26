@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.16.5] — 2026-02-26
+
+### Bug Fixes
+
+- recognize ai.default_model as valid config key (aa7872d)
+
 ## [v0.16.4] — 2026-02-26
 
 ### Bug Fixes
