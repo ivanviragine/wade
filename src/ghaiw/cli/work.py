@@ -47,7 +47,9 @@ def work_callback(ctx: typer.Context) -> None:
     selected = subcommands[idx]
 
     if selected == "start":
-        target = prompts.input_prompt("Issue number or plan file")
+        from ghaiw.services.task_service import prompt_task_selection
+
+        target = prompt_task_selection("Issue number or plan file")
         if target:
             from ghaiw.services.work_service import start as do_start
 
@@ -209,28 +211,14 @@ def batch(
 
     # Interactive picker if no numbers provided
     if not numbers and prompts.is_tty():
-        from ghaiw.services.task_service import list_tasks as fetch_tasks
+        from ghaiw.services.task_service import prompt_multi_task_selection
 
-        console.info("No issue numbers provided. Fetching open issues...")
-        tasks = fetch_tasks(state="open", json_mode=True)
-        if not tasks:
-            console.error("No open issues found.")
+        selected_ids = prompt_multi_task_selection("Select issues for batch work")
+        if not selected_ids:
+            console.error("No issues selected.")
             raise typer.Exit(1)
 
-        items = [f"#{t.id} — {t.title}" for t in tasks]
-        console.info("Select issues for batch work (enter numbers separated by spaces):")
-        for i, item in enumerate(items):
-            console.detail(f"  {i + 1}) {item}")
-        selection = prompts.input_prompt("Issue indices (e.g., 1 2 3) or 'all'")
-        if selection.strip().lower() == "all":
-            numbers = [int(t.id) for t in tasks]
-        else:
-            try:
-                indices = [int(x) - 1 for x in selection.split()]
-                numbers = [int(tasks[i].id) for i in indices if 0 <= i < len(tasks)]
-            except (ValueError, IndexError):
-                console.error("Invalid selection.")
-                raise typer.Exit(1) from None
+        numbers = [int(id_str) for id_str in selected_ids]
 
     if not numbers:
         console.error("Provide at least one issue number.")

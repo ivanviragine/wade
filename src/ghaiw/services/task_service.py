@@ -431,6 +431,7 @@ def list_tasks(
     state: str = "open",
     show_deps: bool = False,
     json_mode: bool = False,
+    quiet: bool = False,
 ) -> list[Task]:
     """List tasks matching the configured label and state.
 
@@ -492,6 +493,9 @@ def list_tasks(
         console.raw(json.dumps(output, indent=2))
         return tasks
 
+    if quiet:
+        return tasks
+
     if not tasks:
         console.info("No tasks found.")
         return tasks
@@ -515,6 +519,68 @@ def list_tasks(
                 console.detail(f"  Blocks: {', '.join(f'#{n}' for n in dep_info['blocks'])}")
 
     return tasks
+
+
+def prompt_task_selection(
+    prompt_msg: str = "Select an issue",
+    state: str = "open",
+    allow_manual: bool = True,
+    config: ProjectConfig | None = None,
+    provider: AbstractTaskProvider | None = None,
+) -> str | None:
+    """Interactively prompt the user to select an issue using arrow keys."""
+    from ghaiw.ui import prompts
+
+    if not prompts.is_tty():
+        return prompts.input_prompt(prompt_msg)
+
+    tasks = list_tasks(state=state, config=config, provider=provider, quiet=True)
+    if not tasks:
+        if allow_manual:
+            return prompts.input_prompt(f"{prompt_msg} (Issue number or plan file)")
+        console.info(f"No {state} tasks found.")
+        return None
+
+    items = []
+    for t in tasks:
+        state_badge = "OPEN" if t.state == TaskState.OPEN else "CLOSED"
+        items.append(f"#{t.id}  {t.title}  [{state_badge}]")
+
+    fallback = "(Enter manually...)"
+    if allow_manual:
+        items.append(fallback)
+    items.append("(Cancel)")
+
+    idx = prompts.select(prompt_msg, items)
+    if idx < len(tasks):
+        return tasks[idx].id
+    if allow_manual and items[idx] == fallback:
+        return prompts.input_prompt("Enter issue number or plan file")
+
+    return None
+
+
+def prompt_multi_task_selection(
+    prompt_msg: str = "Select issues",
+    state: str = "open",
+    config: ProjectConfig | None = None,
+    provider: AbstractTaskProvider | None = None,
+) -> list[str]:
+    """Interactively prompt the user to select multiple issues."""
+    from ghaiw.ui import prompts
+
+    if not prompts.is_tty():
+        selection = prompts.input_prompt(f"{prompt_msg} (space-separated)")
+        return selection.split() if selection else []
+
+    tasks = list_tasks(state=state, config=config, provider=provider, quiet=True)
+    if not tasks:
+        console.info(f"No {state} tasks found.")
+        return []
+
+    items = [f"#{t.id}  {t.title}" for t in tasks]
+    indices = prompts.multi_select(prompt_msg, items)
+    return [tasks[i].id for i in indices]
 
 
 def read_task(

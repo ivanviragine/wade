@@ -67,14 +67,18 @@ def task_callback(ctx: typer.Context) -> None:
         do_list()
         raise typer.Exit(0)
     elif selected == "read":
-        number = prompts.input_prompt("Issue number")
+        from ghaiw.services.task_service import prompt_task_selection
+
+        number = prompt_task_selection("Issue number")
         if number:
             from ghaiw.services.task_service import read_task
 
             task = read_task(number)
             raise typer.Exit(0 if task else 1)
     elif selected == "update":
-        number = prompts.input_prompt("Issue number")
+        from ghaiw.services.task_service import prompt_task_selection
+
+        number = prompt_task_selection("Issue number")
         if number:
             comment = prompts.input_prompt("Comment (or leave empty)")
             if comment:
@@ -83,18 +87,21 @@ def task_callback(ctx: typer.Context) -> None:
                 success = update_task(number, comment=comment)
                 raise typer.Exit(0 if success else 1)
     elif selected == "close":
-        number = prompts.input_prompt("Issue number")
+        from ghaiw.services.task_service import prompt_task_selection
+
+        number = prompt_task_selection("Issue number")
         if number:
             from ghaiw.services.task_service import close_task
 
             success = close_task(number)
             raise typer.Exit(0 if success else 1)
     elif selected == "deps":
-        numbers_str = prompts.input_prompt("Issue numbers (space-separated)")
-        if numbers_str:
+        from ghaiw.services.task_service import prompt_multi_task_selection
+
+        issue_ids = prompt_multi_task_selection("Select issues for analysis")
+        if issue_ids:
             from ghaiw.services.deps_service import analyze_deps
 
-            issue_ids = numbers_str.split()
             graph = analyze_deps(issue_numbers=issue_ids)
             raise typer.Exit(0 if graph is not None else 1)
 
@@ -252,28 +259,14 @@ def deps(
 
     # Interactive issue selection if no numbers provided
     if not numbers and prompts.is_tty():
-        from ghaiw.services.task_service import list_tasks as do_list
+        from ghaiw.services.task_service import prompt_multi_task_selection
 
-        console.info("No issue numbers provided. Fetching open issues...")
-        tasks = do_list(state="open", json_mode=True)
-        if len(tasks) < 2:
-            console.error("Need at least 2 open issues for dependency analysis.")
+        selected_ids = prompt_multi_task_selection("Select issues for dependency analysis")
+        if len(selected_ids) < 2:
+            console.error("Need at least 2 issues for dependency analysis.")
             raise typer.Exit(1)
 
-        items = [f"#{t.id} — {t.title}" for t in tasks]
-        console.info("Select issues for dependency analysis (enter numbers separated by spaces):")
-        for i, item in enumerate(items):
-            console.detail(f"  {i + 1}) {item}")
-        selection = prompts.input_prompt("Issue indices (e.g., 1 2 3) or 'all'")
-        if selection.strip().lower() == "all":
-            numbers = [int(t.id) for t in tasks]
-        else:
-            try:
-                indices = [int(x) - 1 for x in selection.split()]
-                numbers = [int(tasks[i].id) for i in indices if 0 <= i < len(tasks)]
-            except (ValueError, IndexError):
-                console.error("Invalid selection.")
-                raise typer.Exit(1) from None
+        numbers = [int(id_str) for id_str in selected_ids]
 
     if not numbers:
         console.error("Provide at least 2 issue numbers.")

@@ -84,10 +84,9 @@ def _interactive_main_menu() -> None:
     )
 
     if idx == 0:  # Start working
-        from ghaiw.services.task_service import list_tasks
+        from ghaiw.services.task_service import prompt_task_selection
 
-        list_tasks(show_deps=False)
-        target = prompts.input_prompt("Issue number", allow_empty=True)
+        target = prompt_task_selection("Issue number")
         if target:
             from ghaiw.services.work_service import start as do_start
 
