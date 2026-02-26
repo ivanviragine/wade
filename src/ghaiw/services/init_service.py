@@ -208,6 +208,9 @@ def init(
     if pointer_path:
         console.success(f"Workflow pointer in {Path(pointer_path).name}")
 
+    # Optional: configure Claude Code statusline (global ~/.claude/ setting)
+    _maybe_configure_statusline(non_interactive)
+
     # 8. Write manifest
     _write_manifest(root, installed)
     console.success("Wrote .ghaiw-managed manifest")
@@ -492,6 +495,72 @@ def _configure_gemini_experimental() -> None:
         encoding="utf-8",
     )
     logger.info("gemini.experimental_configured", path=str(settings_path))
+
+
+def _configure_statusline() -> None:
+    """Install Claude Code statusline script and register it in ~/.claude/settings.json.
+
+    Copies templates/statusline-command.sh to ~/.claude/statusline-command.sh and
+    writes ``{"statusLine": {"type": "command", ...}}`` into ~/.claude/settings.json,
+    merging non-destructively with existing content.
+    """
+    import contextlib
+    import json
+
+    from ghaiw.skills.installer import get_templates_dir
+
+    dest = Path.home() / ".claude" / "statusline-command.sh"
+    script_src = get_templates_dir() / "statusline-command.sh"
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(script_src.read_text(encoding="utf-8"), encoding="utf-8")
+
+    settings_path = Path.home() / ".claude" / "settings.json"
+    existing: dict[str, Any] = {}
+    if settings_path.is_file():
+        with contextlib.suppress(json.JSONDecodeError, OSError):
+            raw = json.loads(settings_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                existing = raw
+
+    existing["statusLine"] = {
+        "type": "command",
+        "command": "bash ~/.claude/statusline-command.sh",
+    }
+    settings_path.write_text(
+        json.dumps(existing, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    logger.info("claude.statusline_configured", path=str(dest))
+
+
+def _maybe_configure_statusline(non_interactive: bool) -> None:
+    """Prompt user to install Claude Code statusline, skipping if already configured."""
+    import contextlib
+    import json
+
+    from ghaiw.ui import prompts
+
+    settings_path = Path.home() / ".claude" / "settings.json"
+    existing: dict[str, Any] = {}
+    if settings_path.is_file():
+        with contextlib.suppress(json.JSONDecodeError, OSError):
+            raw = json.loads(settings_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                existing = raw
+
+    if "statusLine" in existing:
+        return  # Already configured — skip silently (idempotent)
+
+    if non_interactive:
+        return
+
+    if prompts.confirm(
+        "Install Claude Code statusline script (token counts + context bar)?",
+        default=True,
+    ):
+        _configure_statusline()
+        console.success("Installed ~/.claude/statusline-command.sh")
 
 
 def _select_ai_tool(
