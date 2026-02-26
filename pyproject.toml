@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ghaiw"
-version = "0.22.1"
+version = "0.22.2"
 description = "AI-agent-driven git workflow management CLI"
 readme = "README.md"
 license = "MIT"

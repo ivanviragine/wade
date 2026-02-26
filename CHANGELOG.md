@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.22.2] — 2026-02-26
+
+### Bug Fixes
+
+- marker-based .gitignore management with reliable locate/replace/remove (7fcb366)
+
 ## [v0.22.1] — 2026-02-26
 
 ### Documentation
