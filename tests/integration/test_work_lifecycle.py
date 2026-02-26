@@ -138,24 +138,23 @@ class TestWorkLifecycle:
         )
 
     def test_worktree_bootstrap_and_context(self, tmp_git_repo: Path) -> None:
-        """Bootstrap creates .issue-context.md in worktree."""
+        """Bootstrap creates PLAN.md in worktree."""
         from ghaiw.git.worktree import create_worktree
-        from ghaiw.services.work_service import write_issue_context
+        from ghaiw.services.work_service import write_plan_md
 
         wt_dir = tmp_git_repo.parent / "wt-42"
         create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
 
-        # Write issue context
         task = Task(
             id="42",
             title="Add authentication",
             body="## Tasks\n- Login page\n- OAuth\n",
             url="https://github.com/test/repo/issues/42",
         )
-        context_path = write_issue_context(wt_dir, task)
+        plan_path = write_plan_md(wt_dir, task)
 
-        assert context_path.is_file()
-        content = context_path.read_text()
+        assert plan_path.is_file()
+        content = plan_path.read_text()
         assert "# Issue #42: Add authentication" in content
         assert "Login page" in content
         assert "https://github.com/test/repo/issues/42" in content

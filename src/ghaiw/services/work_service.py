@@ -89,32 +89,10 @@ def _complexity_to_model(
     return config.get_complexity_model(ai_tool, complexity)
 
 
-def write_issue_context(worktree_path: Path, task: Task) -> Path:
-    """Write .issue-context.md to the worktree.
-
-    Behavioral reference: lib/work/bootstrap.sh:_work_write_issue_context()
-    """
-    context_path = worktree_path / ".issue-context.md"
-    lines = [
-        f"# Issue #{task.id}: {task.title}",
-        "",
-    ]
-    if task.body:
-        lines.append(task.body)
-    if task.url:
-        lines.append("")
-        lines.append(f"URL: {task.url}")
-
-    context_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    logger.info("work.context_written", path=str(context_path))
-    return context_path
-
-
 def write_plan_md(worktree_path: Path, task: Task) -> Path:
-    """Write PLAN.md to the worktree (mirrors .issue-context.md).
+    """Write PLAN.md to the worktree.
 
-    Behavioral reference: lib/work/bootstrap.sh:39 — Bash writes both
-    .issue-context.md AND PLAN.md so agents referencing PLAN.md find it.
+    Behavioral reference: lib/work/bootstrap.sh:39
     """
     plan_path = worktree_path / "PLAN.md"
     lines = [
@@ -551,7 +529,6 @@ def start(
     console.empty()
 
     # Bootstrap
-    write_issue_context(worktree_path, task)
     write_plan_md(worktree_path, task)
     bootstrap_worktree(worktree_path, config, repo_root)
 

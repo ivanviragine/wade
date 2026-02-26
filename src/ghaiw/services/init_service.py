@@ -32,7 +32,7 @@ logger = structlog.get_logger()
 GITIGNORE_ENTRIES = [
     "# ghaiw managed files",
     ".ghaiw-managed",
-    ".issue-context.md",
+    "PLAN.md",
     "PR_SUMMARY.md",
     "PR-SUMMARY-*.md",
 ]

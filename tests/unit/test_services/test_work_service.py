@@ -29,7 +29,6 @@ from ghaiw.services.work_service import (
     build_work_prompt,
     find_worktree_path,
     start,
-    write_issue_context,
 )
 
 # ---------------------------------------------------------------------------
@@ -79,29 +78,6 @@ class TestComplexityToModel:
         config = ProjectConfig()
         result = _complexity_to_model(config, "claude", None)
         assert result is None
-
-
-class TestWriteIssueContext:
-    def test_writes_context_file(self, tmp_path: Path) -> None:
-        task = Task(
-            id="42",
-            title="Add auth",
-            body="## Tasks\n- Login page\n",
-            url="https://github.com/owner/repo/issues/42",
-        )
-        path = write_issue_context(tmp_path, task)
-        assert path.is_file()
-        content = path.read_text()
-        assert "# Issue #42: Add auth" in content
-        assert "Login page" in content
-        assert "https://github.com/owner/repo/issues/42" in content
-
-    def test_writes_minimal_context(self, tmp_path: Path) -> None:
-        task = Task(id="1", title="Minimal")
-        path = write_issue_context(tmp_path, task)
-        assert path.is_file()
-        content = path.read_text()
-        assert "# Issue #1: Minimal" in content
 
 
 class TestBootstrapWorktree:
@@ -396,7 +372,6 @@ class TestWorkStart:
             patch("ghaiw.git.repo.get_repo_root", return_value=tmp_path),
             patch("ghaiw.git.worktree.list_worktrees", return_value=[]),
             patch("ghaiw.git.worktree.create_worktree") as mock_create,
-            patch("ghaiw.services.work_service.write_issue_context"),
             patch("ghaiw.services.work_service.write_plan_md"),
             patch("ghaiw.services.work_service.bootstrap_worktree"),
             patch("ghaiw.services.work_service.copy_to_clipboard"),
@@ -428,7 +403,6 @@ class TestWorkStart:
                 return_value=[{"path": str(existing_wt), "branch": branch_name}],
             ),
             patch("ghaiw.git.worktree.create_worktree") as mock_create,
-            patch("ghaiw.services.work_service.write_issue_context"),
             patch("ghaiw.services.work_service.write_plan_md"),
             patch("ghaiw.services.work_service.bootstrap_worktree"),
             patch("ghaiw.services.work_service.copy_to_clipboard"),
@@ -472,7 +446,6 @@ class TestWorkStart:
             patch("ghaiw.git.repo.get_repo_root", return_value=tmp_path),
             patch("ghaiw.git.worktree.list_worktrees", return_value=[]),
             patch("ghaiw.git.worktree.create_worktree"),
-            patch("ghaiw.services.work_service.write_issue_context"),
             patch("ghaiw.services.work_service.write_plan_md"),
             patch("ghaiw.services.work_service.bootstrap_worktree"),
             patch("ghaiw.services.work_service.copy_to_clipboard"),
@@ -500,7 +473,6 @@ class TestWorkStart:
             patch("ghaiw.git.repo.get_repo_root", return_value=tmp_path),
             patch("ghaiw.git.worktree.list_worktrees", return_value=[]),
             patch("ghaiw.git.worktree.create_worktree"),
-            patch("ghaiw.services.work_service.write_issue_context"),
             patch("ghaiw.services.work_service.write_plan_md"),
             patch("ghaiw.services.work_service.bootstrap_worktree"),
             patch("ghaiw.services.work_service.copy_to_clipboard"),
