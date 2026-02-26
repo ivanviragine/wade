@@ -349,7 +349,7 @@ def _validate_ai_section(ai: dict[str, Any], errors: list[str]) -> None:
                         f"Use one of: {', '.join(sorted(_VALID_AI_TOOLS))}"
                     )
 
-    valid_keys = {"default_tool", "plan", "deps", "work"}
+    valid_keys = {"default_tool", "default_model", "plan", "deps", "work"}
     for key in ai:
         if key not in valid_keys:
             errors.append(f"ai.{key}: unsupported key")

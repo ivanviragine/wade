@@ -158,6 +158,14 @@ class TestValidateConfig:
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("copy_to_worktree" in e and "empty" in e for e in result.errors)
 
+    def test_default_model_is_valid_ai_key(self, tmp_path: Path) -> None:
+        config = tmp_path / ".ghaiw.yml"
+        config.write_text(
+            "version: 2\nai:\n  default_tool: claude\n  default_model: claude-sonnet-4.6\n"
+        )
+        result = validate_config(tmp_path)
+        assert result.is_valid, f"Errors: {result.errors}"
+
     def test_valid_full_config(self, tmp_path: Path) -> None:
         config = tmp_path / ".ghaiw.yml"
         config.write_text(
@@ -170,6 +178,7 @@ class TestValidateConfig:
             "  merge_strategy: PR\n"
             "ai:\n"
             "  default_tool: copilot\n"
+            "  default_model: claude-sonnet-4.6\n"
             "  plan:\n"
             "    tool: claude\n"
             "    model: ''\n"
