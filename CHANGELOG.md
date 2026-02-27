@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.25.7] — 2026-02-27
+
+### Features
+
+- skip Gemini experimental.plan config if already set, prompt if not (484d1ae)
+
+### Bug Fixes
+
+- add blank line after version in interactive menu (ca70717)
+
 ## [v0.25.6] — 2026-02-27
 
 ### Bug Fixes
