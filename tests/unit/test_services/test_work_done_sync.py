@@ -144,8 +144,9 @@ class TestBuildImplUsageBlock:
         block = build_impl_usage_block(ai_tool="claude", model="claude-sonnet-4-6")
         assert IMPL_USAGE_MARKER_START in block
         assert IMPL_USAGE_MARKER_END in block
-        assert "claude" in block
-        assert "claude-sonnet-4-6" in block
+        assert "| Implementation tool | `claude` |" in block
+        assert "| Model | `claude-sonnet-4-6` |" in block
+        assert "### Usage" not in block
 
     def test_with_token_usage(self) -> None:
         usage = TokenUsage(
@@ -154,15 +155,33 @@ class TestBuildImplUsageBlock:
             output_tokens=2000,
         )
         block = build_impl_usage_block(ai_tool="claude", token_usage=usage)
-        assert "10,000" in block
-        assert "8,000" in block
-        assert "2,000" in block
+        assert "| Total tokens | **10,000** |" in block
+        assert "| Input tokens | **8,000** |" in block
+        assert "| Output tokens | **2,000** |" in block
+
+    def test_with_model_breakdown(self) -> None:
+        from ghaiw.models.ai import ModelBreakdown
+
+        usage = TokenUsage(
+            total_tokens=5000,
+            input_tokens=3400,
+            output_tokens=1100,
+            model_breakdown=[
+                ModelBreakdown(model="claude-opus-4-6", input_tokens=3000, output_tokens=1000, cached_tokens=500),
+                ModelBreakdown(model="claude-haiku-4-5", input_tokens=400, output_tokens=100, cached_tokens=0),
+            ],
+        )
+        block = build_impl_usage_block(ai_tool="claude", token_usage=usage)
+        assert "### Model Breakdown" in block
+        assert "claude-opus-4-6" in block
+        assert "claude-haiku-4-5" in block
 
     def test_minimal(self) -> None:
         block = build_impl_usage_block()
         assert IMPL_USAGE_MARKER_START in block
         assert IMPL_USAGE_MARKER_END in block
         assert "## Implementation Usage" in block
+        assert "| Metric | Value |" in block
 
 
 class TestStripImplUsageBlock:

@@ -1039,8 +1039,6 @@ def build_impl_usage_block(
         "",
         "## Implementation Usage",
         "",
-        "### Usage",
-        "",
         "| Metric | Value |",
         "| --- | --- |",
     ]
@@ -1052,17 +1050,26 @@ def build_impl_usage_block(
 
     if token_usage:
         if token_usage.total_tokens:
-            lines.append(f"| Session tokens | **{format_count(token_usage.total_tokens)}** |")
+            lines.append(f"| Total tokens | **{format_count(token_usage.total_tokens)}** |")
         if token_usage.input_tokens:
-            lines.append(f"| Session input tokens | **{format_count(token_usage.input_tokens)}** |")
+            lines.append(f"| Input tokens | **{format_count(token_usage.input_tokens)}** |")
         if token_usage.output_tokens:
-            lines.append(
-                f"| Session output tokens | **{format_count(token_usage.output_tokens)}** |"
-            )
+            lines.append(f"| Output tokens | **{format_count(token_usage.output_tokens)}** |")
         if token_usage.cached_tokens:
-            lines.append(
-                f"| Session cached input tokens | **{format_count(token_usage.cached_tokens)}** |"
-            )
+            lines.append(f"| Cached tokens | **{format_count(token_usage.cached_tokens)}** |")
+
+    # Model breakdown table
+    if token_usage and token_usage.model_breakdown:
+        lines.append("")
+        lines.append("### Model Breakdown")
+        lines.append("")
+        lines.append("| Model | Input | Output | Cached |")
+        lines.append("|-------|-------|--------|--------|")
+        for row in token_usage.model_breakdown:
+            inp = format_count(row.input_tokens)
+            out = format_count(row.output_tokens)
+            cache = format_count(row.cached_tokens)
+            lines.append(f"| {row.model} | {inp} | {out} | {cache} |")
 
     lines.append("")
     lines.append(IMPL_USAGE_MARKER_END)

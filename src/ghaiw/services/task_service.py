@@ -207,37 +207,32 @@ def build_plan_summary_block(
         "",
         "## Plan Summary",
         "",
+        "| Metric | Value |",
+        "| --- | --- |",
     ]
 
     # Tool and model
-    tool_info = []
     if ai_tool:
-        tool_info.append(f"**Planning tool:** {ai_tool}")
+        lines.append(f"| Planning tool | `{ai_tool}` |")
     if model:
-        tool_info.append(f"**Model:** {model}")
-    if tool_info:
-        lines.extend(tool_info)
-        lines.append("")
+        lines.append(f"| Model | `{model}` |")
 
-    # Usage section
-    lines.append("### Usage")
-    lines.append("")
-
+    # Token usage rows
     if total_tokens is not None and total_tokens > 0:
-        lines.append(f"- **Total tokens:** {format_count(total_tokens)}")
+        lines.append(f"| Total tokens | **{format_count(total_tokens)}** |")
         if input_tokens is not None:
-            lines.append(f"- **Input tokens:** {format_count(input_tokens)}")
+            lines.append(f"| Input tokens | **{format_count(input_tokens)}** |")
         if output_tokens is not None:
-            lines.append(f"- **Output tokens:** {format_count(output_tokens)}")
+            lines.append(f"| Output tokens | **{format_count(output_tokens)}** |")
         if cached_tokens is not None:
-            lines.append(f"- **Cached tokens:** {format_count(cached_tokens)}")
+            lines.append(f"| Cached tokens | **{format_count(cached_tokens)}** |")
         if per_issue_estimate is not None and per_issue_estimate > 0:
-            lines.append(f"- **This issue (est.):** {format_count(per_issue_estimate)}")
+            lines.append(f"| This issue (est.) | **{format_count(per_issue_estimate)}** |")
     else:
-        lines.append("Token usage: *unavailable*")
+        lines.append("| Total tokens | *unavailable* |")
 
     if premium_requests is not None and premium_requests > 0:
-        lines.append(f"- **Premium requests (est.):** {premium_requests}")
+        lines.append(f"| Premium requests (est.) | **{premium_requests}** |")
 
     # Model breakdown table
     if model_breakdown:

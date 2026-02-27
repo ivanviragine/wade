@@ -144,15 +144,20 @@ class TestPlanSummary:
         )
         assert PLAN_SUMMARY_MARKER_START in block
         assert PLAN_SUMMARY_MARKER_END in block
-        assert "12,345" in block
-        assert "**Planning tool:** claude" in block
-        assert "**Model:** claude-opus-4-6" in block
+        assert "| Metric | Value |" in block
+        assert "| Planning tool | `claude` |" in block
+        assert "| Model | `claude-opus-4-6` |" in block
+        assert "| Total tokens | **12,345** |" in block
+        assert "| Input tokens | **10,000** |" in block
+        assert "| Output tokens | **2,000** |" in block
+        assert "| Cached tokens | **345** |" in block
+        assert "### Usage" not in block
 
     def test_build_block_unavailable(self) -> None:
         block = build_plan_summary_block(
             ai_tool="copilot",
         )
-        assert "unavailable" in block
+        assert "| Total tokens | *unavailable* |" in block
 
     def test_build_block_with_breakdown(self) -> None:
         block = build_plan_summary_block(
@@ -171,16 +176,14 @@ class TestPlanSummary:
             total_tokens=5000,
             premium_requests=15,
         )
-        assert "Premium requests" in block
-        assert "15" in block
+        assert "| Premium requests (est.) | **15** |" in block
 
     def test_build_block_per_issue_estimate(self) -> None:
         block = build_plan_summary_block(
             total_tokens=10000,
             per_issue_estimate=3333,
         )
-        assert "This issue (est.)" in block
-        assert "3,333" in block
+        assert "| This issue (est.) | **3,333** |" in block
 
     def test_strip_plan_summary_removes_block(self) -> None:
         body = (
