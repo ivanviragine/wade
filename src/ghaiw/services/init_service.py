@@ -133,7 +133,7 @@ def init(
 
     # Configure Gemini experimental settings if needed
     if selected_tool and (selected_tool == AIToolID.GEMINI or selected_tool == "gemini"):
-        _configure_gemini_experimental()
+        _maybe_configure_gemini_experimental(non_interactive)
 
     # 5. Install skills
     is_self = root.resolve() == get_ghaiw_root().resolve()
@@ -437,6 +437,38 @@ def _configure_gemini_experimental() -> None:
     logger.info("gemini.experimental_configured", path=str(settings_path))
 
 
+def _maybe_configure_gemini_experimental(non_interactive: bool) -> None:
+    """Prompt user to enable Gemini experimental plan mode, skipping if already configured."""
+    import contextlib
+    import json
+
+    from ghaiw.ui import prompts
+
+    settings_path = Path.home() / ".gemini" / "settings.json"
+
+    existing: dict[str, Any] = {}
+    if settings_path.is_file():
+        with contextlib.suppress(json.JSONDecodeError, OSError):
+            raw = json.loads(settings_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                existing = raw
+
+    experimental = existing.get("experimental", {})
+    if isinstance(experimental, dict) and experimental.get("plan") is True:
+        console.detail("Gemini experimental.plan already enabled")
+        return  # Already configured
+
+    if non_interactive:
+        return
+
+    if prompts.confirm(
+        "Enable Gemini experimental.plan mode (required for planning)?",
+        default=True,
+    ):
+        _configure_gemini_experimental()
+        console.success("Enabled experimental.plan in ~/.gemini/settings.json")
+
+
 def _configure_statusline() -> None:
     """Install Claude Code statusline script and register it in ~/.claude/settings.json.
 
@@ -490,6 +522,7 @@ def _maybe_configure_statusline(non_interactive: bool) -> None:
                 existing = raw
 
     if "statusLine" in existing:
+        console.detail("Claude Code statusline already configured")
         return  # Already configured — skip silently (idempotent)
 
     if non_interactive:
