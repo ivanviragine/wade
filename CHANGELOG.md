@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.25.2] — 2026-02-27
+
+### Bug Fixes
+
+- place initial message before flags in launch command (a1b9896)
+
 ## [v0.25.1] — 2026-02-27
 
 ### Bug Fixes
