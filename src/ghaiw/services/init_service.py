@@ -260,7 +260,7 @@ def update(
     # Step 9: Configure Gemini experimental (if applicable)
     installed_tools = [str(t) for t in AbstractAITool.detect_installed()]
     if "gemini" in installed_tools:
-        _configure_gemini_experimental()
+        _maybe_configure_gemini_experimental(False)
 
     # Step 10: Refresh .gitignore + AGENTS.md pointer
     _ensure_gitignore(root)
