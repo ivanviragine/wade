@@ -363,7 +363,7 @@ def _extract_claude_footer(text: str) -> TokenUsage | None:
         line = m.group(0)
         dm = display_re.search(line)
         if dm:
-            model_name = f"claude-{dm.group(1).lower()}-{dm.group(2).replace('.', '-')}"
+            model_name = f"claude-{dm.group(1).lower()}-{dm.group(2)}"
         else:
             am = api_re.search(line)
             if am:

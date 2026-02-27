@@ -73,10 +73,13 @@ class ClaudeAdapter(AbstractAITool):
         return run_with_transcript(cmd, transcript_path, cwd=worktree_path)
 
     def parse_transcript(self, transcript_path: Path) -> TokenUsage:
-        # Delegated to transcript.py — this is a stub
         from ghaiw.ai_tools.transcript import parse_claude_transcript
 
-        return parse_claude_transcript(transcript_path)
+        usage = parse_claude_transcript(transcript_path)
+        # Standardize model IDs from Claude's dashed format to canonical dotted format
+        for breakdown in usage.model_breakdown:
+            breakdown.model = self.standardize_model_id(breakdown.model)
+        return usage
 
     def is_model_compatible(self, model: str) -> bool:
         """Claude CLI accepts only claude-* model IDs."""

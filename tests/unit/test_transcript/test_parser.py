@@ -153,7 +153,7 @@ class TestClaudeExtraction:
         assert usage.input_tokens == 1_000
         assert usage.output_tokens == 500
         assert len(usage.model_breakdown) == 1
-        assert usage.model_breakdown[0].model == "claude-sonnet-4-6"
+        assert usage.model_breakdown[0].model == "claude-sonnet-4.6"
 
     def test_model_api_format(self) -> None:
         """API-format model IDs are passed through."""
@@ -167,7 +167,7 @@ class TestClaudeExtraction:
         text = "Haiku 4.5 in:1k out:200\nSonnet 4.6 in:5k out:1k\n"
         usage = extract_token_usage_from_text(text)
         assert len(usage.model_breakdown) == 1
-        assert usage.model_breakdown[0].model == "claude-sonnet-4-6"
+        assert usage.model_breakdown[0].model == "claude-sonnet-4.6"
         # Token counts also come from last match
         assert usage.input_tokens == 5_000
         assert usage.output_tokens == 1_000
@@ -188,7 +188,7 @@ class TestClaudeExtraction:
         assert usage.total_tokens == 23_702
         assert usage.raw_transcript_path is not None
         assert len(usage.model_breakdown) == 1
-        assert usage.model_breakdown[0].model == "claude-sonnet-4-6"
+        assert usage.model_breakdown[0].model == "claude-sonnet-4.6"
 
 
 # ---------------------------------------------------------------------------

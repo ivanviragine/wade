@@ -253,12 +253,15 @@ def _post_exit_capture(
     else:
         logger.debug("work.no_pr_for_branch", branch=branch)
 
-    # Also post usage stats as a comment on the issue
+    # Embed usage stats in the issue body (consistent with plan summary)
     if issue_number and provider:
         with contextlib.suppress(Exception):
-            provider.comment_on_task(str(issue_number), usage_block)
-            console.success("Added implementation usage stats to issue.")
-            logger.info("work.impl_usage_issue_commented", issue=issue_number)
+            task = provider.read_task(str(issue_number))
+            body = _strip_impl_usage_block(task.body)
+            new_body = body.rstrip("\n") + "\n\n" + usage_block + "\n"
+            provider.update_task(str(issue_number), body=new_body)
+            console.success("Updated issue with implementation usage stats.")
+            logger.info("work.impl_usage_issue_updated", issue=issue_number)
 
     return effective_model
 
