@@ -259,6 +259,18 @@ def plan(
 
     resolved_model = _resolve_model(model, config, "plan")
 
+    # Check model compatibility early so the display reflects what will actually be used
+    if resolved_model:
+        try:
+            adapter = AbstractAITool.get(AIToolID(resolved_tool))
+            if not adapter.is_model_compatible(resolved_model):
+                console.warn(
+                    f"Model '{resolved_model}' is not compatible with {resolved_tool}; using tool default"
+                )
+                resolved_model = None
+        except (ValueError, KeyError):
+            pass
+
     console.rule("ghaiw task plan")
     console.kv("AI tool", resolved_tool)
     if resolved_model:
