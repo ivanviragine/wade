@@ -52,6 +52,9 @@ def main(
     log_setup.configure(verbose=verbose)
 
     if ctx.invoked_subcommand is not None:
+        from ghaiw.ui.console import console
+
+        console.err.print(f"  [dim]ghaiw v{ghaiw.__version__}[/]")
         return
 
     _interactive_main_menu()
