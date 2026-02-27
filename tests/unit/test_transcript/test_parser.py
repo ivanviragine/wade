@@ -181,14 +181,15 @@ class TestClaudeExtraction:
         assert usage.model_breakdown == []
 
     def test_fixture_file(self) -> None:
+        """Real Claude Code transcript with ANSI escape codes."""
         usage = parse_claude_transcript(FIXTURES / "claude_session.txt")
-        assert usage.input_tokens == 12_345
-        assert usage.output_tokens == 2_456
-        assert usage.cached_tokens == 8_901
-        assert usage.total_tokens == 23_702
+        assert usage.input_tokens == 304
+        assert usage.output_tokens == 72
+        assert usage.total_tokens == 376
+        assert usage.cached_tokens is None
         assert usage.raw_transcript_path is not None
         assert len(usage.model_breakdown) == 1
-        assert usage.model_breakdown[0].model == "claude-sonnet-4.6"
+        assert usage.model_breakdown[0].model == "claude-opus-4.6"
 
 
 # ---------------------------------------------------------------------------
@@ -231,13 +232,15 @@ class TestCopilotExtraction:
         assert premium == 2
 
     def test_fixture_file(self) -> None:
+        """Real Copilot CLI transcript with ANSI escape codes."""
         usage = parse_copilot_transcript(FIXTURES / "copilot_session.txt")
-        assert usage.input_tokens is not None
-        assert usage.output_tokens is not None
-        assert usage.premium_requests == 5
-        assert len(usage.model_breakdown) == 2
-        assert usage.model_breakdown[0].model == "gpt-4o"
-        assert usage.model_breakdown[1].model == "claude-opus-4"
+        assert usage.input_tokens == 53_700
+        assert usage.output_tokens == 86
+        assert usage.cached_tokens == 33_800
+        assert usage.total_tokens == 87_586
+        assert usage.premium_requests is None  # 0 Premium requests → None
+        assert len(usage.model_breakdown) == 1
+        assert usage.model_breakdown[0].model == "gpt-4.1"
 
 
 # ---------------------------------------------------------------------------
@@ -273,11 +276,15 @@ class TestGeminiExtraction:
         assert breakdowns[0].output_tokens == 8_901
 
     def test_fixture_file(self) -> None:
+        """Real Gemini CLI transcript with ANSI escape codes and leading whitespace."""
         usage = parse_gemini_transcript(FIXTURES / "gemini_session.txt")
-        assert usage.input_tokens == 60_234
-        assert usage.output_tokens == 11_901
-        assert usage.cached_tokens == 17_345
+        assert usage.input_tokens == 14_928
+        assert usage.output_tokens == 141
+        assert usage.cached_tokens == 5_848
+        assert usage.total_tokens == 20_917
         assert len(usage.model_breakdown) == 2
+        assert usage.model_breakdown[0].model == "gemini-2.5-flash-lite"
+        assert usage.model_breakdown[1].model == "gemini-3-flash-preview"
 
 
 # ---------------------------------------------------------------------------
@@ -303,11 +310,12 @@ class TestCodexExtraction:
         assert usage.cached_tokens is None
 
     def test_fixture_file(self) -> None:
+        """Real Codex CLI transcript with ANSI escape codes."""
         usage = parse_codex_transcript(FIXTURES / "codex_session.txt")
-        assert usage.total_tokens == 9_490
-        assert usage.input_tokens == 9_268
-        assert usage.output_tokens == 222
-        assert usage.cached_tokens == 7_296
+        assert usage.total_tokens == 5_325
+        assert usage.input_tokens == 5_213
+        assert usage.output_tokens == 112
+        assert usage.cached_tokens == 18_304
 
 
 # ---------------------------------------------------------------------------
@@ -429,8 +437,10 @@ class TestReadTranscriptExcerpt:
         assert "line 0" not in text
 
     def test_fixture_file(self) -> None:
+        """Real Claude transcript excerpt contains cleaned token counts."""
         text = read_transcript_excerpt(FIXTURES / "claude_session.txt")
-        assert "in:12,345" in text
+        assert "in:" in text
+        assert "out:" in text
 
 
 # ---------------------------------------------------------------------------

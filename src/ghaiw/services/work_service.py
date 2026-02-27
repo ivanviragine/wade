@@ -1048,15 +1048,21 @@ def build_impl_usage_block(
     if model:
         lines.append(f"| Model | `{model}` |")
 
-    if token_usage:
-        if token_usage.total_tokens:
-            lines.append(f"| Total tokens | **{format_count(token_usage.total_tokens)}** |")
+    has_tokens = token_usage and token_usage.total_tokens and token_usage.total_tokens > 0
+    if has_tokens:
+        assert token_usage is not None  # for type narrowing
+        lines.append(f"| Total tokens | **{format_count(token_usage.total_tokens)}** |")
         if token_usage.input_tokens:
             lines.append(f"| Input tokens | **{format_count(token_usage.input_tokens)}** |")
         if token_usage.output_tokens:
             lines.append(f"| Output tokens | **{format_count(token_usage.output_tokens)}** |")
         if token_usage.cached_tokens:
             lines.append(f"| Cached tokens | **{format_count(token_usage.cached_tokens)}** |")
+    else:
+        lines.append("| Total tokens | *unavailable* |")
+
+    if token_usage and token_usage.premium_requests and token_usage.premium_requests > 0:
+        lines.append(f"| Premium requests (est.) | **{token_usage.premium_requests}** |")
 
     # Model breakdown table
     if token_usage and token_usage.model_breakdown:

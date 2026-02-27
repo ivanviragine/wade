@@ -144,7 +144,7 @@ def _extract_gemini_table(text: str) -> tuple[TokenUsage | None, list[ModelBreak
     """
     # Pattern: model_name requests input_tokens cache_tokens output_tokens
     row_re = re.compile(
-        r"^"
+        r"^\s*"
         r"([a-z0-9._-]+)"  # model name
         r"\s+"
         r"(\d+)"  # request count
@@ -212,7 +212,7 @@ def _extract_copilot_summary(text: str) -> tuple[TokenUsage | None, list[ModelBr
     """
     # Per-model breakdown pattern (more specific, try first for breakdown)
     model_re = re.compile(
-        r"^"
+        r"^\s*"
         r"(\S+)"  # model name
         r"\s+"
         r"([\d,.]+[kKmM]?)\s+in,\s+"

@@ -176,6 +176,27 @@ class TestBuildImplUsageBlock:
         assert "claude-opus-4-6" in block
         assert "claude-haiku-4-5" in block
 
+    def test_with_premium_requests(self) -> None:
+        usage = TokenUsage(
+            total_tokens=87_586,
+            input_tokens=53_700,
+            output_tokens=86,
+            cached_tokens=33_800,
+            premium_requests=5,
+        )
+        block = build_impl_usage_block(ai_tool="copilot", token_usage=usage)
+        assert "| Premium requests (est.) | **5** |" in block
+        assert "| Total tokens | **87,586** |" in block
+
+    def test_unavailable_when_no_tokens(self) -> None:
+        block = build_impl_usage_block(ai_tool="opencode")
+        assert "| Total tokens | *unavailable* |" in block
+
+    def test_unavailable_when_empty_token_usage(self) -> None:
+        usage = TokenUsage()
+        block = build_impl_usage_block(ai_tool="opencode", token_usage=usage)
+        assert "| Total tokens | *unavailable* |" in block
+
     def test_minimal(self) -> None:
         block = build_impl_usage_block()
         assert IMPL_USAGE_MARKER_START in block
