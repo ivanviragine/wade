@@ -161,6 +161,7 @@ def menu(
     # Show version header via Rich before the questionary prompt
     if version:
         _console.print(f"  [dim]{version}[/]")
+        _console.print()
 
     return select(title, items, default=default, hints=hints)
 
