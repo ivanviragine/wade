@@ -43,7 +43,6 @@ from ghaiw.services.task_service import (
 )
 from ghaiw.ui import prompts
 from ghaiw.ui.console import console
-from ghaiw.utils.clipboard import copy_to_clipboard
 from ghaiw.utils.markdown import remove_marker_block
 from ghaiw.utils.terminal import (
     compose_work_title,
@@ -265,7 +264,7 @@ def _post_exit_capture(
 
 
 def build_work_prompt(task: Task, ai_tool: str | None = None) -> str:
-    """Build the clipboard prompt for a work session.
+    """Build the initial prompt for a work session.
 
     Behavioral reference: lib/work/bootstrap.sh:_work_copy_prompt()
     """
@@ -439,7 +438,7 @@ def start(
     2. Create worktree and branch
     3. Bootstrap worktree (copy files, hooks, issue context)
     4. Resolve model from complexity
-    5. Copy work prompt to clipboard
+    5. Build work prompt and pass it as initial message to the AI tool
     6. Launch AI tool (or print path if cd_only / detach)
     7. Post-exit processing
 
@@ -559,11 +558,9 @@ def start(
     with contextlib.suppress(Exception):
         provider.move_to_in_progress(task.id)
 
-    # Copy work prompt
+    # Build work prompt
     prompt = build_work_prompt(task, resolved_tool)
-    copy_to_clipboard(prompt)
-    console.success("Copied work prompt to clipboard.")
-    console.panel(prompt, title="Paste in Claude")
+    console.panel(prompt, title="Work Prompt")
 
     # cd_only mode: just print the worktree path and return (no title, no AI)
     if cd_only:
@@ -617,6 +614,7 @@ def start(
             cmd = detach_adapter.build_launch_command(
                 model=resolved_model,
                 trusted_dirs=[str(worktree_path), "/tmp"],
+                initial_message=prompt,
             )
         except (ValueError, KeyError):
             cmd = [resolved_tool]
@@ -650,6 +648,7 @@ def start(
             exit_code = adapter.launch(
                 worktree_path=worktree_path,
                 model=resolved_model,
+                prompt=prompt,
                 transcript_path=transcript_path,
                 trusted_dirs=[str(worktree_path), "/tmp"],
             )

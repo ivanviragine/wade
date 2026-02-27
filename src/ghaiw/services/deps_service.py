@@ -23,7 +23,6 @@ from ghaiw.providers.base import AbstractTaskProvider
 from ghaiw.providers.registry import get_provider
 from ghaiw.services.task_service import ensure_issue_label
 from ghaiw.ui.console import console
-from ghaiw.utils.clipboard import copy_to_clipboard
 
 logger = structlog.get_logger()
 
@@ -367,7 +366,7 @@ def _run_interactive_analysis(
 ) -> str | None:
     """Run dependency analysis interactively when headless fails.
 
-    Copies prompt to clipboard, launches AI interactively, then reads
+    Launches AI interactively with the prompt as an initial message, then reads
     the output from a temp file.
 
     Behavioral reference: lib/task/deps.sh fallback at line 194
@@ -386,9 +385,6 @@ def _run_interactive_analysis(
     output_instruction = get_deps_interactive_template().replace("{output_file}", str(output_file))
     interactive_prompt = f"{prompt}\n\n{output_instruction}"
 
-    copy_to_clipboard(interactive_prompt)
-    console.success("Copied dependency analysis prompt to clipboard.")
-    console.hint("Paste it in the AI tool to get started.")
     console.empty()
 
     # Launch AI interactively
@@ -397,6 +393,7 @@ def _run_interactive_analysis(
         adapter.launch(
             worktree_path=Path.cwd(),
             model=model,
+            prompt=interactive_prompt,
             trusted_dirs=[str(Path.cwd()), output_dir, "/tmp"],
         )
     except (ValueError, KeyError):

@@ -1,7 +1,7 @@
 """Plan service — AI-assisted planning session orchestration.
 
 Implements the two-phase planning design:
-  Phase 1: Launch AI with clipboard prompt, let it write plan files to temp dir
+  Phase 1: Launch AI with initial prompt, let it write plan files to temp dir
   Phase 2: After AI exits, detect new issues (Path A) or read plan files (Path B)
 
 Behavioral reference: lib/task/crud.sh (_task_do_plan, _task_run_ai_planning)
@@ -36,7 +36,6 @@ from ghaiw.services.task_service import (
     ensure_issue_label,
 )
 from ghaiw.ui.console import console
-from ghaiw.utils.clipboard import copy_to_clipboard
 from ghaiw.utils.process import run_with_transcript
 
 logger = structlog.get_logger()
@@ -141,12 +140,12 @@ def run_ai_planning_session(
 ) -> int:
     """Launch the AI CLI for a planning session.
 
-    Copies the plan prompt to clipboard, launches the AI tool with
+    Launches the AI tool with the plan prompt as an initial message,
     plan-mode and plan-directory permission args.
 
     Behavioral reference: _task_run_ai_planning() in crud.sh
     """
-    # Build and copy prompt
+    # Build prompt
     prompt = render_plan_prompt(plan_dir)
 
     # For Copilot/Codex, prefix with /plan
@@ -154,11 +153,9 @@ def run_ai_planning_session(
     if tool_lower in ("copilot", "codex"):
         prompt = f"/plan {prompt}"
 
-    copy_to_clipboard(prompt)
     prompt_file = Path(plan_dir) / "prompt.txt"
     prompt_file.write_text(prompt)
-    console.success("Copied planning prompt to clipboard.")
-    console.panel(prompt, title="Paste in Claude")
+    console.panel(prompt, title="Planning Prompt")
 
     # Resolve adapter
     try:
@@ -168,11 +165,12 @@ def run_ai_planning_session(
         result = subprocess.run([ai_tool], cwd=None)
         return result.returncode
 
-    # Build command with plan-mode, trusted dirs, and plan-dir permission args
+    # Build command with plan-mode, trusted dirs, plan-dir permission args, and initial prompt
     cmd = adapter.build_launch_command(
         model=model,
         plan_mode=True,
         trusted_dirs=[str(Path.cwd()), "/tmp"],
+        initial_message=prompt,
     )
     plan_dir_args = adapter.plan_dir_args(plan_dir)
     if plan_dir_args:

@@ -94,7 +94,7 @@ File naming convention:
 - Single issue: `PLAN.md`
 - Multi-issue: `PLAN-1-<slug>.md`, `PLAN-2-<slug>.md`, etc.
 
-Write plan files to `/tmp/` (or the temp dir shown in your clipboard if inside
+Write plan files to `/tmp/` (or the temp dir shown in your prompt if inside
 a `ghaiw task plan` session). **Never write plan files into the repo working
 directory** — they are session artifacts, not committed code.
 

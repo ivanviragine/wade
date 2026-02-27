@@ -282,10 +282,7 @@ class TestInteractiveFallback:
         output_file = tmp_path / "deps-output.txt"
         output_file.write_text("1 -> 2 # auth before UI\n")
 
-        with (
-            patch("ghaiw.services.deps_service.copy_to_clipboard"),
-            patch("ghaiw.services.deps_service.AbstractAITool.get") as mock_get,
-        ):
+        with patch("ghaiw.services.deps_service.AbstractAITool.get") as mock_get:
             adapter = MagicMock()
             mock_get.return_value = adapter
 
@@ -294,10 +291,7 @@ class TestInteractiveFallback:
 
     def test_returns_none_when_no_output(self, tmp_path: Path) -> None:
         """_run_interactive_analysis should return None when no output file."""
-        with (
-            patch("ghaiw.services.deps_service.copy_to_clipboard"),
-            patch("ghaiw.services.deps_service.AbstractAITool.get") as mock_get,
-        ):
+        with patch("ghaiw.services.deps_service.AbstractAITool.get") as mock_get:
             adapter = MagicMock()
             mock_get.return_value = adapter
 
@@ -306,9 +300,8 @@ class TestInteractiveFallback:
 
     def test_returns_none_for_unknown_tool(self) -> None:
         """_run_interactive_analysis returns None for unknown AI tool."""
-        with patch("ghaiw.services.deps_service.copy_to_clipboard"):
-            result = _run_interactive_analysis("nonexistent-tool", "prompt", None, None)
-            assert result is None
+        result = _run_interactive_analysis("nonexistent-tool", "prompt", None, None)
+        assert result is None
 
 
 # ---------------------------------------------------------------------------

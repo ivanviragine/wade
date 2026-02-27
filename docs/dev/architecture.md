@@ -202,13 +202,13 @@ hooks:
 All AI-interactive commands follow the same pattern:
 
 1. **Tool selection** — If no `--ai` flag is given, use the tool from config (via `ProjectConfig.get_ai_tool()`). If that's empty, prompt the user interactively via `ui/prompts.py`.
-2. **Clipboard prompt** — Copy a starter prompt to the clipboard via `utils/clipboard.py`, then print a message telling the user to paste it.
-3. **Launch AI CLI** — Execute the AI tool binary via `AbstractAITool.launch()`. The tool runs interactively in the terminal.
+2. **Initial prompt** — Build the starter prompt and display it in a console panel. It is passed directly to the AI tool as an initial message on launch (no clipboard involved).
+3. **Launch AI CLI** — Execute the AI tool binary via `AbstractAITool.launch()`. The tool runs interactively in the terminal with the prompt pre-filled.
 4. **Post-AI processing** — After the AI CLI exits, the service picks up where it left off (e.g., detecting new issues, parsing output files, capturing token usage from transcripts).
 
-Each AI tool adapter implements `capabilities()` (binary name, model flag syntax, headless flag), `launch()`, `parse_transcript()`, `is_model_compatible()`, and `build_launch_command()`. The `launch()` method accepts an optional `transcript_path: Path | None` parameter — when provided, the adapter captures session output to that file for post-session token usage extraction. When adding a new AI-interactive command, follow this existing pattern.
+Each AI tool adapter implements `capabilities()` (binary name, model flag syntax, headless flag), `initial_message_args()` (how to pass an initial message for interactive sessions), `launch()`, `parse_transcript()`, `is_model_compatible()`, and `build_launch_command()`. The `launch()` method accepts an optional `transcript_path: Path | None` parameter — when provided, the adapter captures session output to that file for post-session token usage extraction. When adding a new AI-interactive command, follow this existing pattern.
 
-**Deps interactive fallback**: When headless analysis fails (tool doesn't support `--print`/`--prompt`), `deps_service.py` falls back to interactive mode: copies the dependency prompt to clipboard, launches the AI tool interactively, then reads the output from `{plan_dir}/deps-output.txt` after exit.
+**Deps interactive fallback**: When headless analysis fails (tool doesn't support `--print`/`--prompt`), `deps_service.py` falls back to interactive mode: passes the dependency prompt as an initial message to the AI tool, then reads the output from `{plan_dir}/deps-output.txt` after exit.
 
 ## Issue Detection (Snapshot/Diff Pattern)
 

@@ -121,7 +121,7 @@ class AbstractAITool(ABC):
         Args:
             worktree_path: Directory to run in.
             model: Model ID to use (or None for tool default).
-            prompt: Optional prompt text (clipboard or headless).
+            prompt: Optional initial message passed to the tool on launch.
             detach: If True, launch in background (GUI tools).
             transcript_path: Optional path to write session transcript for
                 token usage extraction.
@@ -148,6 +148,15 @@ class AbstractAITool(ABC):
         Behavioral ref: lib/common.sh:_is_model_compatible_with_tool()
         """
         return True  # Default: allow all. Override per tool.
+
+    def initial_message_args(self, prompt: str) -> list[str]:
+        """Get CLI args to pass an initial message for an interactive session.
+
+        Default: no support (returns empty list). Override per tool.
+        Tools that support positional initial messages return [prompt].
+        Tools that require a flag return [flag, prompt].
+        """
+        return []
 
     def plan_mode_args(self) -> list[str]:
         """Get extra CLI args for native plan/approval mode.
@@ -210,6 +219,7 @@ class AbstractAITool(ABC):
         plan_mode: bool = False,
         json_schema: dict[str, Any] | None = None,
         trusted_dirs: list[str] | None = None,
+        initial_message: str | None = None,
     ) -> list[str]:
         """Build the command line for launching this tool."""
         caps = self.capabilities()
@@ -229,6 +239,9 @@ class AbstractAITool(ABC):
 
         if trusted_dirs:
             cmd.extend(self.trusted_dirs_args(trusted_dirs))
+
+        if initial_message:
+            cmd.extend(self.initial_message_args(initial_message))
 
         return cmd
 

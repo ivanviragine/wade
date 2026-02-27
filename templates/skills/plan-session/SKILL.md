@@ -29,7 +29,7 @@ dependency analysis hooks.
 
 1. **Plan the feature** with the user — analyze, break down, propose.
 2. **Present the plan(s)** to the user and ask for confirmation before writing any files.
-3. **Write plan file(s)** to the temp directory shown in your clipboard/prompt.
+3. **Write plan file(s)** to the temp directory shown in your prompt.
 4. **Stop** — suggest the user exits. ghaiw reads the files and creates GitHub Issues automatically.
 
 You do **not** create issues, implement code, run `ghaiw work start/done/sync`,

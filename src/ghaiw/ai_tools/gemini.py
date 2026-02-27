@@ -51,6 +51,10 @@ class GeminiAdapter(AbstractAITool):
             for mid in get_models_for_tool(str(self.TOOL_ID))
         ]
 
+    def initial_message_args(self, prompt: str) -> list[str]:
+        """Gemini accepts the initial message as a positional argument."""
+        return [prompt]
+
     def launch(
         self,
         worktree_path: Path,
@@ -60,7 +64,9 @@ class GeminiAdapter(AbstractAITool):
         transcript_path: Path | None = None,
         trusted_dirs: list[str] | None = None,
     ) -> int:
-        cmd = self.build_launch_command(model=model, trusted_dirs=trusted_dirs)
+        cmd = self.build_launch_command(
+            model=model, initial_message=prompt, trusted_dirs=trusted_dirs
+        )
         logger.info("ai_tool.launch", tool="gemini", model=model, cwd=str(worktree_path))
         return run_with_transcript(cmd, transcript_path, cwd=worktree_path)
 

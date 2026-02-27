@@ -21,8 +21,8 @@ dependency graphs and update issue bodies.
 
 > **Note:** `ghaiw task deps` first attempts headless analysis (AI tools that
 > support `--print`/`--prompt`). If headless fails, it falls back to interactive
-> mode: copies the analysis prompt to your clipboard, launches the AI tool, and
-> reads the output from a file after exit.
+> mode: passes the analysis prompt directly to the AI tool as an initial message,
+> then reads the output from a file after exit.
 
 ## Input
 

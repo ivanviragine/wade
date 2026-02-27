@@ -374,7 +374,6 @@ class TestWorkStart:
             patch("ghaiw.git.worktree.create_worktree") as mock_create,
             patch("ghaiw.services.work_service.write_plan_md"),
             patch("ghaiw.services.work_service.bootstrap_worktree"),
-            patch("ghaiw.services.work_service.copy_to_clipboard"),
             patch("ghaiw.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
             patch("ghaiw.services.work_service._is_inside_ai_cli", return_value=False),
         ):
@@ -405,7 +404,6 @@ class TestWorkStart:
             patch("ghaiw.git.worktree.create_worktree") as mock_create,
             patch("ghaiw.services.work_service.write_plan_md"),
             patch("ghaiw.services.work_service.bootstrap_worktree"),
-            patch("ghaiw.services.work_service.copy_to_clipboard"),
             patch("ghaiw.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
             patch("ghaiw.services.work_service._is_inside_ai_cli", return_value=False),
         ):
@@ -428,7 +426,6 @@ class TestWorkStart:
                 "ghaiw.git.worktree.create_worktree",
                 side_effect=GitError("Branch already exists"),
             ),
-            patch("ghaiw.services.work_service.copy_to_clipboard"),
         ):
             result = start("42", project_root=tmp_path)
 
@@ -448,7 +445,6 @@ class TestWorkStart:
             patch("ghaiw.git.worktree.create_worktree"),
             patch("ghaiw.services.work_service.write_plan_md"),
             patch("ghaiw.services.work_service.bootstrap_worktree"),
-            patch("ghaiw.services.work_service.copy_to_clipboard"),
             patch("ghaiw.services.work_service._is_inside_ai_cli", return_value=False),
             patch("ghaiw.ai_tools.base.AbstractAITool.get") as mock_get,
         ):
@@ -475,7 +471,6 @@ class TestWorkStart:
             patch("ghaiw.git.worktree.create_worktree"),
             patch("ghaiw.services.work_service.write_plan_md"),
             patch("ghaiw.services.work_service.bootstrap_worktree"),
-            patch("ghaiw.services.work_service.copy_to_clipboard"),
             patch("ghaiw.services.work_service._is_inside_ai_cli", return_value=True),
             patch("ghaiw.ai_tools.base.AbstractAITool.get") as mock_get,
         ):
