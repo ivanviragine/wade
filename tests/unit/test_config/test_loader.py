@@ -18,6 +18,7 @@ project:
 
 ai:
   default_tool: copilot
+  default_model: claude-haiku-4.5
   plan:
     tool: claude
     model: ""
@@ -73,6 +74,7 @@ class TestParseConfigFile:
         assert config.project.issue_label == "feature-plan"
         assert config.project.merge_strategy == "PR"
         assert config.ai.default_tool == "copilot"
+        assert config.ai.default_model == "claude-haiku-4.5"
         assert config.ai.plan.tool == "claude"
         assert config.provider.name == "github"
         assert config.hooks.post_worktree_create == "scripts/setup-worktree.sh"
@@ -97,6 +99,21 @@ class TestParseConfigFile:
         assert config.get_ai_tool("plan") == "claude"
         # Work falls back to global
         assert config.get_ai_tool("work") == "copilot"
+
+    def test_default_model_fallback(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".ghaiw.yml"
+        config_path.write_text(SAMPLE_V2_CONFIG)
+
+        config = parse_config_file(config_path)
+        # Work has no explicit model, should fall back to default_model
+        assert config.get_model("work") == "claude-haiku-4.5"
+
+    def test_no_default_model(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".ghaiw.yml"
+        config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
+
+        config = parse_config_file(config_path)
+        assert config.ai.default_model is None
 
     def test_minimal_config(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".ghaiw.yml"

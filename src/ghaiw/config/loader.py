@@ -84,6 +84,7 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
     ai_raw = raw.get("ai", {}) or {}
     ai = AIConfig(
         default_tool=ai_raw.get("default_tool"),
+        default_model=ai_raw.get("default_model"),
         plan=_parse_command_config(ai_raw.get("plan", {})),
         deps=_parse_command_config(ai_raw.get("deps", {})),
         work=_parse_command_config(ai_raw.get("work", {})),

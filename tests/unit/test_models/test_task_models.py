@@ -6,7 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from ghaiw.models.task import Complexity, Label, LabelType, PlanFile, Task, TaskState
+from ghaiw.models.task import (
+    Complexity,
+    Label,
+    LabelType,
+    PlanFile,
+    Task,
+    TaskState,
+    parse_complexity_from_body,
+)
 
 
 class TestComplexity:
@@ -47,6 +55,30 @@ class TestTask:
     def test_title_max_length(self) -> None:
         with pytest.raises(ValueError):
             Task(id="1", title="x" * 257)
+
+
+class TestParseComplexityFromBody:
+    def test_easy(self) -> None:
+        assert parse_complexity_from_body("## Complexity\neasy\n") == Complexity.EASY
+
+    def test_complex(self) -> None:
+        body = "Some intro.\n\n## Complexity\ncomplex\n\n## Tasks\n- do stuff"
+        assert parse_complexity_from_body(body) == Complexity.COMPLEX
+
+    def test_very_complex(self) -> None:
+        assert parse_complexity_from_body("## Complexity\nvery_complex\n") == Complexity.VERY_COMPLEX
+
+    def test_missing_section(self) -> None:
+        assert parse_complexity_from_body("## Tasks\n- do stuff\n") is None
+
+    def test_empty_body(self) -> None:
+        assert parse_complexity_from_body("") is None
+
+    def test_malformed_value(self) -> None:
+        assert parse_complexity_from_body("## Complexity\nunknown_level\n") is None
+
+    def test_case_insensitive_heading(self) -> None:
+        assert parse_complexity_from_body("## COMPLEXITY\neasy\n") == Complexity.EASY
 
 
 class TestPlanFile:

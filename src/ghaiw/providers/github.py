@@ -16,7 +16,7 @@ from typing import Any
 
 import structlog
 
-from ghaiw.models.task import Label, Task, TaskState
+from ghaiw.models.task import Label, Task, TaskState, parse_complexity_from_body
 from ghaiw.providers.base import AbstractTaskProvider
 from ghaiw.utils.process import CommandError, run
 
@@ -50,11 +50,14 @@ def _parse_gh_task(raw: dict[str, Any]) -> Task:
     state_str = raw.get("state", "OPEN").lower()
     state = TaskState.CLOSED if state_str == "closed" else TaskState.OPEN
 
+    body = raw.get("body", "") or ""
+
     return Task(
         id=str(raw.get("number", "")),
         title=raw.get("title", ""),
-        body=raw.get("body", "") or "",
+        body=body,
         state=state,
+        complexity=parse_complexity_from_body(body),
         labels=labels,
         url=raw.get("url", ""),
         created_at=raw.get("createdAt"),

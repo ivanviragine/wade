@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from ghaiw.models.config import ProjectConfig
-from ghaiw.models.task import Label, TaskState
+from ghaiw.models.task import Complexity, Label, TaskState
 from ghaiw.providers.github import GitHubProvider, _extract_number_from_url, _parse_gh_task
 from ghaiw.providers.registry import get_provider
 from ghaiw.utils.process import CommandError
@@ -86,6 +86,20 @@ class TestParseGhTask:
         raw = {"number": 1, "title": "t", "labels": []}
         task = _parse_gh_task(raw)
         assert task.labels == []
+
+    def test_complexity_from_body(self) -> None:
+        raw = {
+            "number": 10,
+            "title": "Add feature",
+            "body": "## Summary\nDo stuff.\n\n## Complexity\neasy\n\n## Tasks\n- a\n",
+        }
+        task = _parse_gh_task(raw)
+        assert task.complexity == Complexity.EASY
+
+    def test_no_complexity_in_body(self) -> None:
+        raw = {"number": 10, "title": "Simple", "body": "No sections here."}
+        task = _parse_gh_task(raw)
+        assert task.complexity is None
 
 
 # ---------------------------------------------------------------------------

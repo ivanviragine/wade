@@ -64,6 +64,29 @@ class Task(BaseModel):
     updated_at: datetime | None = None
 
 
+def parse_complexity_from_body(body: str) -> Complexity | None:
+    """Parse a ``## Complexity`` section from markdown body text.
+
+    Scans the body for a ``## Complexity`` heading and matches the first word
+    against known complexity levels (easy, medium, complex, very_complex).
+    """
+    in_section = False
+    for line in body.split("\n"):
+        stripped = line.strip()
+        if stripped.lower().startswith("## complexity"):
+            in_section = True
+            continue
+        if in_section:
+            if stripped.startswith("## "):
+                break  # Next section
+            text = stripped.lower()
+            if text:
+                match = re.match(r"(easy|medium|complex|very_complex)", text)
+                if match:
+                    return Complexity(match.group(1))
+    return None
+
+
 class PlanFile(BaseModel):
     """A parsed plan markdown file."""
 
@@ -116,14 +139,7 @@ class PlanFile(BaseModel):
         if current_section:
             sections[current_section] = "\n".join(current_lines).strip()
 
-        # Parse complexity from section
-        complexity = None
-        complexity_text = sections.get("complexity", "").strip().lower()
-        if complexity_text:
-            # Match the first word that looks like a complexity level
-            match = re.match(r"(easy|medium|complex|very_complex)", complexity_text)
-            if match:
-                complexity = Complexity(match.group(1))
+        complexity = parse_complexity_from_body(body)
 
         return cls(
             path=path,
