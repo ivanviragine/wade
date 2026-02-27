@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.25.5] — 2026-02-27
+
+### Features
+
+- print version header on every subcommand invocation (dd3f561)
+
 ## [v0.25.4] — 2026-02-27
 
 ### Bug Fixes
