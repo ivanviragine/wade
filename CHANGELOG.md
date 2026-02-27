@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.25.3] — 2026-02-27
+
+### Bug Fixes
+
+- check model compatibility before launching plan and deps AI sessions (7fa684e)
+
 ## [v0.25.2] — 2026-02-27
 
 ### Bug Fixes
