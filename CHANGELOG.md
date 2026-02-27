@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.25.6] — 2026-02-27
+
+### Bug Fixes
+
+- remove blank line before version header in interactive menu (5c3096d)
+
 ## [v0.25.5] — 2026-02-27
 
 ### Features
