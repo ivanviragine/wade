@@ -40,25 +40,25 @@ tests/
 
 ```bash
 # All tests (excluding live)
-uv run pytest tests/ -v --ignore=tests/live
+./scripts/test.sh
 
 # Unit tests only (fast, no git/subprocess)
-uv run pytest tests/unit/ -v
+./scripts/test.sh tests/unit/
 
 # Integration tests only (needs git, uses mock gh)
-uv run pytest tests/integration/ -v
+./scripts/test.sh tests/integration/
 
 # Specific test file
-uv run pytest tests/unit/test_services/test_work_done_sync.py -v
+./scripts/test.sh tests/unit/test_services/test_work_done_sync.py
 
 # Run tests matching a pattern
-uv run pytest tests/ -v -k "test_check"
+./scripts/test.sh -k "test_check"
 
 # With coverage
-uv run pytest tests/ --cov=ghaiw --cov-report=term-missing
+./scripts/test.sh --cov=ghaiw --cov-report=term-missing
 
 # Live GitHub tests (requires real gh auth)
-RUN_LIVE_GH_TESTS=1 uv run pytest tests/live/ -v
+RUN_LIVE_GH_TESTS=1 uv run python -m pytest tests/live/ -v
 ```
 
 ## Test Fixtures

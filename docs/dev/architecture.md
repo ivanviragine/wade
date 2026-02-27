@@ -9,23 +9,24 @@ Detailed architecture documentation for ghaiw development. For the compact overv
 uv pip install -e ".[dev]"
 
 # Run tests
-uv run pytest tests/ -v                       # all tests
-uv run pytest tests/unit/ -v                  # unit tests only
-uv run pytest tests/integration/ -v           # integration tests only
-uv run pytest tests/live/ -v                  # live GitHub tests (needs RUN_LIVE_GH_TESTS=1)
+./scripts/test.sh                                                         # all tests (excludes live)
+./scripts/test.sh tests/unit/                                             # unit tests only
+./scripts/test.sh tests/integration/                                      # integration tests only
+RUN_LIVE_GH_TESTS=1 uv run python -m pytest tests/live/ -v               # live GitHub tests
 
 # Run a single test file
-uv run pytest tests/unit/test_models/test_config.py -v
+./scripts/test.sh tests/unit/test_models/test_config.py
 
 # Run tests matching a pattern
-uv run pytest tests/ -v -k "test_pattern"
+./scripts/test.sh -k "test_pattern"
 
-# Type check
-uv run mypy src/ --strict
+# Type check + lint (both)
+./scripts/check.sh
+./scripts/check.sh --types    # mypy only
+./scripts/check.sh --lint     # ruff only
 
-# Lint + format check
-uv run ruff check src/
-uv run ruff format --check src/
+# Auto-format source
+./scripts/fmt.sh
 
 # Version bump
 python scripts/auto_version.py patch           # bug fixes, docs (0.1.0 -> 0.1.1)

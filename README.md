@@ -177,14 +177,10 @@ Skills are installed to `.claude/skills/` with symlinks from `.github/skills/`, 
 uv pip install -e ".[dev]"
 
 # Run tests
-uv run pytest tests/ -v --ignore=tests/live
+./scripts/test.sh
 
-# Type check
-uv run mypy src/ --strict
-
-# Lint
-uv run ruff check src/
-uv run ruff format --check src/
+# Type check + lint
+./scripts/check.sh
 
 # Pre-commit hooks
 pre-commit install

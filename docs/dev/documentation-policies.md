@@ -19,9 +19,8 @@ Do not skip documentation even for "small" changes — a new flag, a renamed opt
 
 Before considering any work complete, verify each item:
 
-- [ ] **Code** — implementation is done and tests pass (`uv run pytest tests/ -v --ignore=tests/live`)
-- [ ] **Types** — `uv run mypy src/ --strict` passes with no errors
-- [ ] **Lint** — `uv run ruff check src/` and `uv run ruff format --check src/` pass
+- [ ] **Code** — `./scripts/test.sh` passes
+- [ ] **Types + Lint** — `./scripts/check.sh` passes (or run both at once: `./scripts/check-all.sh`)
 - [ ] **`AGENTS.md`** — updated if architecture, conventions, design principles, or workflow changed
 - [ ] **`README.md`** — updated if user-facing behavior changed (commands, flags, config, install)
 - [ ] **`templates/skills/plan-session/SKILL.md`** / **`work-session/SKILL.md`** — updated if phase-specific session rules changed
