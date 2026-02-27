@@ -25,14 +25,21 @@ Two distinct worlds interact in this codebase. Always be clear which one you are
 
 ## Commands
 
+> **AI agents: always run the scripts below — never improvise raw `uv run pytest` / `mypy` / `ruff` calls.**
+
+| Script | Purpose |
+|--------|---------|
+| `./scripts/test.sh` | Run all tests (excludes live) |
+| `./scripts/test.sh tests/unit/` | Unit tests only |
+| `./scripts/check.sh` | Lint + type-check (both) |
+| `./scripts/check.sh --lint` | Lint + format check only |
+| `./scripts/check.sh --types` | Type check (strict mypy) only |
+| `./scripts/fmt.sh` | Auto-format source in-place |
+| `./scripts/check-all.sh` | Full checklist (test + check) |
+
 ```bash
-uv pip install -e ".[dev]"               # Install (development)
-uv run pytest tests/ -v                  # Run all tests
-uv run pytest tests/unit/ -v             # Unit tests only
-uv run mypy src/ --strict                # Type check
-uv run ruff check src/                   # Lint
-uv run ruff format --check src/          # Format check
-python scripts/auto_version.py patch     # Version bump (patch/minor/major)
+uv pip install -e ".[dev]"           # Install for development
+python scripts/auto_version.py patch # Version bump (patch/minor/major)
 ```
 
 > Full commands reference: see `docs/dev/architecture.md`
@@ -110,9 +117,8 @@ Use [Conventional Commits](https://www.conventionalcommits.org/):
 
 Before considering any work complete:
 
-- [ ] **Code** — tests pass (`uv run pytest tests/ -v --ignore=tests/live`)
-- [ ] **Types** — `uv run mypy src/ --strict` passes
-- [ ] **Lint** — `uv run ruff check src/` and `uv run ruff format --check src/` pass
+- [ ] **Code** — `./scripts/test.sh` passes
+- [ ] **Types + Lint** — `./scripts/check.sh` passes (or run both at once: `./scripts/check-all.sh`)
 - [ ] **`AGENTS.md`** — updated if architecture, conventions, or workflow changed
 - [ ] **`README.md`** — updated if user-facing behavior changed
 - [ ] **`templates/skills/`** — updated if agent-facing rules changed (plan-session for planning, work-session for implementation)

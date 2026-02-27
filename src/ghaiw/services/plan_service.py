@@ -168,9 +168,7 @@ def run_ai_planning_session(
 
     # Check model compatibility — drop model if it's not valid for this tool
     if model and not adapter.is_model_compatible(model):
-        console.warn(
-            f"Model '{model}' is not compatible with {ai_tool}; using tool default"
-        )
+        console.warn(f"Model '{model}' is not compatible with {ai_tool}; using tool default")
         model = None
 
     # Build command — plan_dir included in trusted_dirs so all flags precede the

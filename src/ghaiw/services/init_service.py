@@ -215,9 +215,7 @@ def update(
 
     config_path = find_config_file(root)
     if config_path is None:
-        console.error_with_fix(
-            "No .ghaiw.yml found", "Initialize your project first", "ghaiw init"
-        )
+        console.error_with_fix("No .ghaiw.yml found", "Initialize your project first", "ghaiw init")
         return False
 
     # Step 2: Self-upgrade if source version differs
