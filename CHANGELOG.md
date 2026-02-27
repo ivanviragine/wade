@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.25.8] — 2026-02-27
+
+### Bug Fixes
+
+- remove launch command print, show prompt preview instead of full text (98b50ac)
+
 ## [v0.25.7] — 2026-02-27
 
 ### Features
