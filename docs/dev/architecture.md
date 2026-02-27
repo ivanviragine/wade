@@ -1,0 +1,303 @@
+# Architecture Reference
+
+Detailed architecture documentation for ghaiw development. For the compact overview, see `AGENTS.md`.
+
+## Commands Reference
+
+```bash
+# Install (development)
+uv pip install -e ".[dev]"
+
+# Run tests
+uv run pytest tests/ -v                       # all tests
+uv run pytest tests/unit/ -v                  # unit tests only
+uv run pytest tests/integration/ -v           # integration tests only
+uv run pytest tests/live/ -v                  # live GitHub tests (needs RUN_LIVE_GH_TESTS=1)
+
+# Run a single test file
+uv run pytest tests/unit/test_models/test_config.py -v
+
+# Run tests matching a pattern
+uv run pytest tests/ -v -k "test_pattern"
+
+# Type check
+uv run mypy src/ --strict
+
+# Lint + format check
+uv run ruff check src/
+uv run ruff format --check src/
+
+# Version bump
+python scripts/auto_version.py patch           # bug fixes, docs (0.1.0 -> 0.1.1)
+python scripts/auto_version.py minor           # new features, flags (0.1.0 -> 0.2.0)
+python scripts/auto_version.py major           # breaking changes (0.1.0 -> 1.0.0)
+python scripts/auto_version.py minor --dry-run # preview only
+
+# Generate changelog
+python scripts/changelog.py                   # write CHANGELOG.md
+python scripts/changelog.py --stdout          # print to stdout
+python scripts/changelog.py --tag v1.0.0      # label unreleased as v1.0.0
+
+# Probe AI CLIs for new/removed models and diff against models.json
+./scripts/probe_models.sh
+```
+
+## Package Structure
+
+```
+src/ghaiw/
+├── __init__.py          # __version__
+├── __main__.py          # python -m ghaiw
+├── cli/                 # Typer commands (thin dispatch)
+│   ├── main.py          # Root app + interactive menu, subcommand registration
+│   ├── admin.py         # init, update, deinit, check, check-config, shell-init
+│   ├── task.py          # task plan/create/list/read/update/close/deps
+│   ├── work.py          # work start/done/sync/list/batch/remove/cd (interactive menu)
+│   └── autocomplete.py  # Shell autocompletion helpers
+├── models/              # Pydantic domain models (pure data, no I/O)
+│   ├── config.py        # ProjectConfig, ProjectSettings, AIConfig, ComplexityModelMapping
+│   ├── task.py          # Task, PlanFile, Complexity, Label, TaskState
+│   ├── work.py          # WorkSession, WorktreeState, SyncResult, SyncEvent, MergeStrategy
+│   ├── ai.py            # AIToolID, AIModel, ModelTier, TokenUsage, AIToolCapabilities
+│   ├── deps.py          # DependencyEdge, DependencyGraph
+│   └── events.py        # Typed event models
+├── db/                  # SQLite via SQLModel
+│   ├── engine.py        # Engine creation, WAL mode
+│   ├── tables.py        # SQLModel table definitions
+│   └── repositories.py  # Repository classes
+├── services/            # Business logic (orchestration)
+│   ├── task_service.py  # Task CRUD, plan parsing, labels
+│   ├── work_service.py  # Work session lifecycle
+│   ├── plan_service.py  # AI planning sessions
+│   ├── deps_service.py  # Dependency analysis
+│   ├── init_service.py  # Project initialization
+│   └── check_service.py # Safety checks, config validation
+├── providers/           # Task backend providers (ABC)
+│   ├── base.py          # AbstractTaskProvider
+│   ├── github.py        # GitHubProvider (gh CLI subprocess)
+│   └── registry.py      # Provider discovery
+├── ai_tools/            # AI tool adapters (ABC, self-registering)
+│   ├── base.py          # AbstractAITool with __init_subclass__ registry
+│   ├── claude.py        # ClaudeAdapter
+│   ├── copilot.py       # CopilotAdapter
+│   ├── gemini.py        # GeminiAdapter
+│   ├── codex.py         # CodexAdapter (OpenAI Codex)
+│   ├── opencode.py      # OpenCodeAdapter (multi-provider)
+│   ├── antigravity.py   # AntigravityAdapter
+│   ├── vscode.py        # VSCodeAdapter (GUI launcher)
+│   ├── transcript.py    # Shared transcript parsing
+│   └── model_utils.py   # pick_best_for_tier, has_date_suffix
+├── git/                 # Git operations (all subprocess)
+│   ├── repo.py          # Repo introspection
+│   ├── worktree.py      # Worktree create/remove/list
+│   ├── branch.py        # Branch naming, creation, deletion
+│   ├── sync.py          # Fetch + merge, conflict detection
+│   └── pr.py            # PR creation, merge
+├── skills/              # Skill file management
+│   ├── installer.py     # Install/update/remove skill files
+│   └── pointer.py       # AGENTS.md pointer insertion/detection
+├── config/              # Configuration management
+│   ├── loader.py        # Find + parse .ghaiw.yml (walk up from CWD)
+│   ├── schema.py        # Re-exports from models (Pydantic Settings)
+│   ├── defaults.py      # Hardcoded defaults per AI tool
+│   ├── migrations.py    # Config migration pipeline (ensure version key)
+│   └── claude_allowlist.py  # .claude/settings.json allowlist management
+├── ui/                  # Terminal UI (Rich)
+│   ├── console.py       # Console class
+│   ├── prompts.py       # confirm, input, select, menu
+│   └── formatters.py    # OutputFormatter (human + JSON)
+├── data/                # Bundled data files
+│   └── models.json      # AI model registry (probed from CLIs)
+├── logging/             # Structured logging
+│   ├── setup.py         # structlog configuration
+│   └── context.py       # Session context binding
+└── utils/               # Shared utilities
+    ├── clipboard.py     # Cross-platform clipboard
+    ├── terminal.py      # Tab title, TTY detection, launch_in_new_terminal
+    ├── slug.py          # Title -> URL-safe slug
+    ├── markdown.py      # Plan file parsing
+    ├── process.py       # Subprocess helpers
+    └── install.py       # Self-upgrade helpers (venv/source detection, re-exec)
+```
+
+## Command Dispatch
+
+`src/ghaiw/cli/main.py` is the root Typer application. It registers subcommand groups (`task`, `work`) and admin commands (`init`, `update`, `deinit`, `check`, `check-config`, `shell-init`). The `tasks` alias is registered as a hidden Typer group pointing to the same `task_app`. The `ghaiw` entry point (defined in `pyproject.toml` as `ghaiw.cli.main:app`) invokes the root app.
+
+CLI modules are **thin dispatch layers** — they parse flags via Typer, then call service methods. Business logic lives in `services/`, not in `cli/`.
+
+**Interactive menus**: `ghaiw work` with no subcommand shows an interactive menu (start/done/sync/list/batch/remove). `ghaiw task create` without `--plan-file` prompts interactively for title and body.
+
+**Shell integration**: `ghaiw shell-init` outputs a shell function wrapper for `eval "$(ghaiw shell-init)"` that intercepts `ghaiw work cd <n>` to perform a real `cd` in the caller's shell.
+
+## Config System
+
+`config/loader.py` walks up from CWD to find `.ghaiw.yml` and parses it via PyYAML into a `ProjectConfig` Pydantic model. The v2 config format has nested sections:
+
+```yaml
+version: 2
+project:
+  main_branch: main
+  issue_label: feature-plan
+  worktrees_dir: ../.worktrees
+  branch_prefix: feat
+  merge_strategy: PR
+ai:
+  default_tool: claude
+  plan:
+    tool: claude
+    model: ""
+  deps:
+    tool: claude
+  work:
+    tool: claude
+models:
+  claude:
+    easy: claude-haiku-4-5
+    medium: claude-haiku-4-5
+    complex: claude-sonnet-4
+    very_complex: claude-opus-4
+provider:
+  name: github
+hooks:
+  post_worktree_create: scripts/setup-worktree.sh
+  copy_to_worktree:
+    - .env
+```
+
+**Model complexity mapping**: The `models` section maps AI tool names to complexity-tiered model IDs (`easy`, `medium`, `complex`, `very_complex`). When `work start` is invoked, the service reads the `## Complexity` section from the issue body, maps it to the appropriate configured model, and passes it as `--model` to the AI tool — unless the user explicitly passed `--model` themselves.
+
+**Per-command AI tool and model overrides**: The `ai` section supports `plan`, `deps`, and `work` sub-sections, each with optional `tool` and `model` keys. The fallback chain is: CLI `--ai`/`--model` flag -> command-specific config -> global `default_tool`. This is implemented in `ProjectConfig.get_ai_tool(command)` and `ProjectConfig.get_model(command)`.
+
+## Config Migration Pipeline
+
+`config/migrations.py` provides a single migration run during `ghaiw update`:
+
+| # | Function | What it does |
+|---|----------|-------------|
+| 1 | `ensure_version(raw)` | Set `version: 2` if missing |
+
+`run_all_migrations(config_path)` loads YAML, runs the migration, writes back only if changed. Returns `True` if the file was modified.
+
+## Update Flow
+
+`ghaiw update` performs 11 steps:
+
+1. Validate repo + config existence
+2. Self-upgrade if source version differs (see below)
+3. Read old version from manifest
+4. Show version transition message
+5. Run config migration pipeline
+6. Reload config + backfill probed models
+7. Refresh skill files
+8. Configure Claude Code allowlist (`config/claude_allowlist.py`)
+9. Configure Gemini experimental (if applicable)
+10. Refresh .gitignore + AGENTS.md pointer
+11. Rebuild manifest with version
+
+**Self-upgrade mechanism**: When `ghaiw` is installed via `install.sh` (frozen venv at `~/.local/share/ghaiw/venv/`), the installer records the source repo path in `ghaiw-source.txt`. On `ghaiw update`, if the installed version differs from the source version, `utils/install.py:self_upgrade()` reinstalls from source and `re_exec()` restarts the process with the new code. Editable installs (`uv pip install -e .`) skip this naturally. Pass `--skip-self-upgrade` to bypass.
+
+## AI Interaction Pattern
+
+All AI-interactive commands follow the same pattern:
+
+1. **Tool selection** — If no `--ai` flag is given, use the tool from config (via `ProjectConfig.get_ai_tool()`). If that's empty, prompt the user interactively via `ui/prompts.py`.
+2. **Clipboard prompt** — Copy a starter prompt to the clipboard via `utils/clipboard.py`, then print a message telling the user to paste it.
+3. **Launch AI CLI** — Execute the AI tool binary via `AbstractAITool.launch()`. The tool runs interactively in the terminal.
+4. **Post-AI processing** — After the AI CLI exits, the service picks up where it left off (e.g., detecting new issues, parsing output files, capturing token usage from transcripts).
+
+Each AI tool adapter implements `capabilities()` (binary name, model flag syntax, headless flag), `launch()`, `parse_transcript()`, `is_model_compatible()`, and `build_launch_command()`. The `launch()` method accepts an optional `transcript_path: Path | None` parameter — when provided, the adapter captures session output to that file for post-session token usage extraction. When adding a new AI-interactive command, follow this existing pattern.
+
+**Deps interactive fallback**: When headless analysis fails (tool doesn't support `--print`/`--prompt`), `deps_service.py` falls back to interactive mode: copies the dependency prompt to clipboard, launches the AI tool interactively, then reads the output from `{plan_dir}/deps-output.txt` after exit.
+
+## Issue Detection (Snapshot/Diff Pattern)
+
+`task plan` uses a snapshot/diff pattern to detect issues created during an AI session (Path A — backward-compatible fallback):
+
+1. **Before AI** — Snapshot all open issue numbers with the configured label
+2. **AI runs** — The agent creates issues via `ghaiw task create` from within the AI CLI
+3. **After AI** — Compare current issue numbers against the pre-snapshot, returning only newly created ones
+
+This avoids requiring the AI to report back which issues it created — the service detects them deterministically. When no issues are detected (Path B), the service reads plan files from the session temp dir instead.
+
+## Merge Strategy
+
+`MergeStrategy` (config key `project.merge_strategy`) controls how feature branches are merged into main:
+- **`PR`** (default) — The agent runs `ghaiw work done` during its session to push the branch and create a PR via `gh pr create`. The worktree is **not** cleaned up by `work done` — it is cleaned up automatically by `work start` after the human merges the PR. When the tool exits, `work start`'s post-work prompt detects the PR and asks "Do you want to merge this PR?" — if yes, squash-merges via `gh pr merge --squash --delete-branch`.
+- **`direct`** — Merge locally into main, push, and clean up the worktree. Useful for solo projects or repos without branch protection.
+
+`ghaiw work done` handles PR creation / direct merge. The post-work lifecycle prompt handles the merge decision (PR strategy) or local merge options (direct strategy).
+
+## Determinism via Services
+
+All deterministic operations — git commands, state transitions, file manipulation, API calls — **must live in service/utility code**, never in AI agent reasoning. Agents are non-deterministic; code is deterministic. The boundary is:
+
+- **Code decides and executes** — fetch, merge, branch creation, worktree lifecycle, issue state changes. These are codified in `services/`, `git/`, `providers/` and exposed via `ghaiw <command>`.
+- **Agents interpret and decide next steps** — reading conflict diffs, choosing resolution strategies, composing commit messages, deciding whether to proceed. These are guided by skills.
+
+When adding new functionality, ask: "Can an AI agent get this wrong by reasoning about it?" If yes, put it in code. Examples:
+
+| Deterministic (code) | Non-deterministic (agent) |
+|------------------------|---------------------------|
+| `git merge main --no-edit` | Resolving merge conflicts |
+| Checking if worktree is clean | Deciding what to commit |
+| Creating branch with naming convention | Writing commit messages |
+| Emitting structured JSON events | Interpreting event output |
+
+This is why `ghaiw work sync` exists as a CLI command rather than instructions for agents to run raw git commands — the sequence (preflight -> fetch -> merge -> conflict detection -> event emission) is deterministic and must not vary between agent sessions.
+
+When ghaiw installs skills into a target project (`ghaiw init`), the skills reference `ghaiw <command>` — they do **not** bundle standalone copies of the logic. The ghaiw CLI is the single source of truth for deterministic operations.
+
+## CLI Flag Reference
+
+**`ghaiw work start`:**
+- `--detach` — Launch AI in a new terminal tab/window (non-blocking). Uses `build_launch_command()` + `launch_in_new_terminal()`.
+- `--cd` — Create worktree, print its path to stdout, and exit (no AI launch). Used internally by `ghaiw work cd`.
+
+**`ghaiw work done`:**
+- `target` (positional) — Optional issue number, worktree name, or plan file path. If a file path, creates the issue first. If a number/name, finds the worktree. If omitted, detects from current branch.
+- `--no-close` — Don't close the issue on merge.
+- `--draft` — Create PR as draft.
+- `--no-cleanup` — Keep the worktree after PR creation / direct merge.
+
+**`ghaiw work batch`:**
+- `--model` — Pass a specific AI model to all parallel sessions.
+
+**`ghaiw work remove`:**
+- `--all` — Hidden alias for `--stale` (removes all stale worktrees).
+
+**`ghaiw update`:**
+- `--skip-self-upgrade` — Skip the source-version self-upgrade check.
+
+**`ghaiw task create`:**
+- No flags required — when `--plan-file` is omitted, prompts interactively for title and body.
+
+**`ghaiw shell-init`:**
+- No flags. Outputs a shell function for `eval "$(ghaiw shell-init)"`.
+
+## Dependencies
+
+- **Python** 3.11+ (uses `StrEnum`, `|` union syntax, `from __future__ import annotations`)
+- **git** 2.20+ (worktree commands)
+- **gh CLI** — must be authenticated; needs `project` scope for board moves
+- **uv** — recommended for development (manages virtualenv and dependencies)
+
+### Python Package Dependencies
+
+Runtime:
+- `typer>=0.12` — CLI framework
+- `pydantic>=2.0` — Data validation and settings
+- `pydantic-settings>=2.0` — Env var overrides
+- `sqlmodel>=0.0.16` — SQLite ORM (SQLAlchemy + Pydantic)
+- `pyyaml>=6.0` — YAML config parsing
+- `rich>=13.0` — Terminal UI (tables, prompts, panels)
+- `questionary>=2.0` — Interactive prompts (select, confirm, input)
+- `structlog>=24.0` — Structured logging
+
+Dev:
+- `pytest>=8.0` — Test framework
+- `pytest-cov>=5.0` — Coverage reporting
+- `mypy>=1.10` — Static type checking (strict mode)
+- `ruff>=0.4` — Linting and formatting
+- `pre-commit>=3.7` — Git hook management
+- `types-PyYAML>=6.0` — Type stubs for PyYAML
