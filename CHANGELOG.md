@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.25.9] — 2026-02-27
+
+### Bug Fixes
+
+- Use maybe_configure_gemini_experimental in update as well (24cbf64)
+- embed impl usage in issue body and use dot notation for model labels (012f3a9)
+- Make Gemini experimental plan and Claude statusline optional (abc9f82)
+- parse complexity from issue body and load default_model in config (3cba16e)
+- improve plan-session exit warning to be clearer about not coding after plan mode (8b8793c)
+
+### Other Changes
+
+- Revert "chore: bump version to 0.25.9" (2754f0d)
+
 ## [v0.25.8] — 2026-02-27
 
 ### Bug Fixes
