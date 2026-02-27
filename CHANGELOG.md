@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.25.4] — 2026-02-27
+
+### Bug Fixes
+
+- run model compatibility check before displaying model in plan session (1464793)
+
 ## [v0.25.3] — 2026-02-27
 
 ### Bug Fixes
