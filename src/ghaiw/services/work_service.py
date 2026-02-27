@@ -560,7 +560,8 @@ def start(
 
     # Build work prompt
     prompt = build_work_prompt(task, resolved_tool)
-    console.panel(prompt, title="Work Prompt")
+    snippet = "\n".join(prompt.splitlines()[:5]) + "\n…"
+    console.panel(snippet, title="Work Prompt (preview)")
 
     # cd_only mode: just print the worktree path and return (no title, no AI)
     if cd_only:

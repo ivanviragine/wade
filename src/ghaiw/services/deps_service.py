@@ -468,7 +468,8 @@ def analyze_deps(
             adapter = AbstractAITool.get(AIToolID(resolved_tool))
             if not adapter.is_model_compatible(resolved_model):
                 console.warn(
-                    f"Model '{resolved_model}' is not compatible with {resolved_tool}; using tool default"
+                    f"Model '{resolved_model}' is not compatible with "
+                    f"{resolved_tool}; using tool default"
                 )
                 resolved_model = None
         except (ValueError, KeyError):

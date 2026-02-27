@@ -155,7 +155,8 @@ def run_ai_planning_session(
 
     prompt_file = Path(plan_dir) / "prompt.txt"
     prompt_file.write_text(prompt)
-    console.panel(prompt, title="Planning Prompt")
+    snippet = "\n".join(prompt.splitlines()[:5]) + "\n…"
+    console.panel(snippet, title="Planning Prompt (preview)")
 
     # Resolve adapter
     try:
@@ -265,7 +266,8 @@ def plan(
             adapter = AbstractAITool.get(AIToolID(resolved_tool))
             if not adapter.is_model_compatible(resolved_model):
                 console.warn(
-                    f"Model '{resolved_model}' is not compatible with {resolved_tool}; using tool default"
+                    f"Model '{resolved_model}' is not compatible with "
+                    f"{resolved_tool}; using tool default"
                 )
                 resolved_model = None
         except (ValueError, KeyError):
