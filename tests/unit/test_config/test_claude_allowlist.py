@@ -5,7 +5,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ghaiw.config.claude_allowlist import GHAIWPY_ALLOW_PATTERN, configure_allowlist
+from ghaiw.config.claude_allowlist import (
+    GHAIWPY_ALLOW_PATTERN,
+    configure_allowlist,
+    is_allowlist_configured,
+)
 
 
 class TestConfigureAllowlist:
@@ -175,3 +179,49 @@ class TestConfigureAllowlist:
     def test_pattern_value(self) -> None:
         """Verify the constant pattern has the expected value."""
         assert GHAIWPY_ALLOW_PATTERN == "Bash(ghaiw *)"
+
+
+class TestIsAllowlistConfigured:
+    """Tests for is_allowlist_configured()."""
+
+    def test_returns_true_when_pattern_present(self, tmp_path: Path) -> None:
+        """Returns True when Bash(ghaiw *) is in the allowlist."""
+        project_root = tmp_path / "project"
+        claude_dir = project_root / ".claude"
+        claude_dir.mkdir(parents=True)
+        settings_path = claude_dir / "settings.json"
+        settings_path.write_text(
+            '{"permissions": {"allow": ["Bash(ghaiw *)", "Read(**)"]}}\n',
+            encoding="utf-8",
+        )
+
+        assert is_allowlist_configured(project_root) is True
+
+    def test_returns_false_when_file_missing(self, tmp_path: Path) -> None:
+        """Returns False when settings.json does not exist."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        assert is_allowlist_configured(project_root) is False
+
+    def test_returns_false_when_pattern_absent(self, tmp_path: Path) -> None:
+        """Returns False when settings.json exists but pattern is not in allowlist."""
+        project_root = tmp_path / "project"
+        claude_dir = project_root / ".claude"
+        claude_dir.mkdir(parents=True)
+        settings_path = claude_dir / "settings.json"
+        settings_path.write_text(
+            '{"permissions": {"allow": ["Bash(git *)"]}}\n',
+            encoding="utf-8",
+        )
+
+        assert is_allowlist_configured(project_root) is False
+
+    def test_returns_false_for_corrupted_json(self, tmp_path: Path) -> None:
+        """Returns False when settings.json contains invalid JSON."""
+        project_root = tmp_path / "project"
+        claude_dir = project_root / ".claude"
+        claude_dir.mkdir(parents=True)
+        (claude_dir / "settings.json").write_text("{invalid!!", encoding="utf-8")
+
+        assert is_allowlist_configured(project_root) is False

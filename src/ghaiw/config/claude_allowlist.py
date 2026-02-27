@@ -21,6 +21,19 @@ logger = structlog.get_logger()
 GHAIWPY_ALLOW_PATTERN = "Bash(ghaiw *)"
 
 
+def is_allowlist_configured(project_root: Path) -> bool:
+    """Return True if Bash(ghaiw *) is present in the allowlist at project_root."""
+    settings_path = project_root / ".claude" / "settings.json"
+    if not settings_path.is_file():
+        return False
+    with contextlib.suppress(json.JSONDecodeError, OSError):
+        raw = json.loads(settings_path.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            allow = raw.get("permissions", {}).get("allow", [])
+            return isinstance(allow, list) and GHAIWPY_ALLOW_PATTERN in allow
+    return False
+
+
 def configure_allowlist(project_root: Path) -> None:
     """Add ghaiw commands to .claude/settings.json permissions allowlist.
 

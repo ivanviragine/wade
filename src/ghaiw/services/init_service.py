@@ -148,6 +148,9 @@ def init(
     if pointer_path:
         console.success(f"Workflow pointer in {Path(pointer_path).name}")
 
+    # Optional: configure Claude Code allowlist (project-level .claude/settings.json)
+    _maybe_configure_allowlist(root, non_interactive)
+
     # Optional: configure Claude Code statusline (global ~/.claude/ setting)
     _maybe_configure_statusline(non_interactive)
 
@@ -466,6 +469,26 @@ def _maybe_configure_gemini_experimental(non_interactive: bool) -> None:
     ):
         _configure_gemini_experimental()
         console.success("Enabled experimental.plan in ~/.gemini/settings.json")
+
+
+def _maybe_configure_allowlist(root: Path, non_interactive: bool) -> None:
+    """Prompt user to configure the Claude Code allowlist, skipping if already set."""
+    from ghaiw.config.claude_allowlist import configure_allowlist, is_allowlist_configured
+    from ghaiw.ui import prompts
+
+    if is_allowlist_configured(root):
+        console.detail("Claude Code allowlist already configured")
+        return
+
+    if non_interactive:
+        return
+
+    if prompts.confirm(
+        "Auto-approve ghaiw commands in Claude Code? (skips Bash approval in work sessions)",
+        default=True,
+    ):
+        configure_allowlist(root)
+        console.success("Added Bash(ghaiw *) to .claude/settings.json allowlist")
 
 
 def _configure_statusline() -> None:

@@ -108,6 +108,45 @@ class TestBootstrapWorktree:
         # Should not raise
         bootstrap_worktree(worktree, config, repo_root)
 
+    def test_propagates_allowlist_when_configured(self, tmp_path: Path) -> None:
+        """Allowlist is copied to worktree when project root has Bash(ghaiw *) configured."""
+        import json
+
+        from ghaiw.config.claude_allowlist import GHAIWPY_ALLOW_PATTERN
+
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        claude_dir = repo_root / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / "settings.json").write_text(
+            json.dumps({"permissions": {"allow": [GHAIWPY_ALLOW_PATTERN]}}) + "\n",
+            encoding="utf-8",
+        )
+
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+
+        config = ProjectConfig()
+        bootstrap_worktree(worktree, config, repo_root)
+
+        wt_settings = worktree / ".claude" / "settings.json"
+        assert wt_settings.is_file()
+        data = json.loads(wt_settings.read_text(encoding="utf-8"))
+        assert GHAIWPY_ALLOW_PATTERN in data["permissions"]["allow"]
+
+    def test_no_allowlist_propagation_when_not_configured(self, tmp_path: Path) -> None:
+        """Allowlist is NOT written to worktree when project root has no settings."""
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+
+        config = ProjectConfig()
+        bootstrap_worktree(worktree, config, repo_root)
+
+        assert not (worktree / ".claude" / "settings.json").is_file()
+
 
 class TestBuildWorkPrompt:
     def test_includes_issue_info(self) -> None:

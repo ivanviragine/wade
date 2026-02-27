@@ -131,6 +131,12 @@ def bootstrap_worktree(
     install_skills(worktree_path, is_self_init=False, force=True)
     logger.debug("work.bootstrap_skills", path=str(worktree_path))
 
+    # Propagate allowlist from project root to worktree if already configured
+    from ghaiw.config.claude_allowlist import configure_allowlist, is_allowlist_configured
+
+    if is_allowlist_configured(repo_root):
+        configure_allowlist(worktree_path)
+
     # Run post-create hook
     if config.hooks.post_worktree_create:
         import subprocess
