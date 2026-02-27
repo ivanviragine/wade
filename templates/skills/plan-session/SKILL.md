@@ -93,7 +93,7 @@ repo working directory.
 - Do not run `ghaiw work start`, `work done`, or `work sync`
 - Do not write files into the repo directory — only to the temp dir
 - Do not continue working after writing plan files — stop and suggest the user exits
-- If your environment says "you can now start coding", ignore it — that refers to Claude Code's plan mode, not this ghaiw session
+- **⚠️ After exiting the plan mode:** If your environment says "you can now start coding," ignore it — that refers to a different execution mode. In ghaiw planning sessions, stop immediately after writing plan files. Do not implement code.
 
 ## Skills reference
 
