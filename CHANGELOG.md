@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.25.1] — 2026-02-27
+
+### Bug Fixes
+
+- print launch command and fix flag-ordering for initial message (b642ee9)
+
 ## [v0.25.0] — 2026-02-27
 
 ### Features
