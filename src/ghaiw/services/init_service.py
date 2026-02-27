@@ -132,7 +132,7 @@ def init(
         console.success(f"Created {config_path.name}")
 
     # Configure Gemini experimental settings if needed
-    if selected_tool and (selected_tool == AIToolID.GEMINI or selected_tool == "gemini"):
+    if "gemini" in installed_tools:
         _maybe_configure_gemini_experimental(non_interactive)
 
     # 5. Install skills
@@ -258,7 +258,8 @@ def update(
     configure_allowlist(root)
 
     # Step 9: Configure Gemini experimental (if applicable)
-    if ai_tool and (ai_tool == AIToolID.GEMINI or ai_tool == "gemini"):
+    installed_tools = [str(t) for t in AbstractAITool.detect_installed()]
+    if "gemini" in installed_tools:
         _configure_gemini_experimental()
 
     # Step 10: Refresh .gitignore + AGENTS.md pointer
