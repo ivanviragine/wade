@@ -90,6 +90,8 @@ def run_with_transcript(
 
     Behavioral reference: lib/task/tokens.sh:_task_run_with_transcript()
     """
+    print(f"  $ {' '.join(shlex.quote(c) for c in cmd)}")
+
     if transcript_path is None or not shutil.which("script"):
         result = subprocess.run(cmd, cwd=cwd)
         return result.returncode

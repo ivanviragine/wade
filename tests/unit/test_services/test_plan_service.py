@@ -281,14 +281,13 @@ class TestTranscriptWiring:
             assert mock_rwt.call_args[0][1] is None
 
     def test_includes_plan_dir_args(self, tmp_path: Path) -> None:
-        """run_ai_planning_session should include plan_dir_args from adapter."""
+        """run_ai_planning_session should pass plan_dir inside trusted_dirs to build_launch_command."""
         with (
             patch("ghaiw.services.plan_service.AbstractAITool.get") as mock_get,
             patch("ghaiw.services.plan_service.run_with_transcript") as mock_rwt,
         ):
             adapter = MagicMock()
             adapter.build_launch_command.return_value = ["copilot", "--model", "test"]
-            adapter.plan_dir_args.return_value = ["--add-dir", str(tmp_path)]
             mock_get.return_value = adapter
             mock_rwt.return_value = 0
 
@@ -297,6 +296,5 @@ class TestTranscriptWiring:
                 plan_dir=str(tmp_path),
             )
 
-            cmd = mock_rwt.call_args[0][0]
-            assert "--add-dir" in cmd
-            assert str(tmp_path) in cmd
+            call_kwargs = adapter.build_launch_command.call_args.kwargs
+            assert str(tmp_path) in call_kwargs["trusted_dirs"]

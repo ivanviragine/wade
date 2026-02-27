@@ -165,17 +165,15 @@ def run_ai_planning_session(
         result = subprocess.run([ai_tool], cwd=None)
         return result.returncode
 
-    # Build command with plan-mode, trusted dirs, plan-dir permission args, and initial prompt
+    # Build command — plan_dir included in trusted_dirs so all flags precede the
+    # initial_message positional arg (many CLIs stop flag-parsing after a positional).
     cmd = adapter.build_launch_command(
         model=model,
         plan_mode=True,
-        trusted_dirs=[str(Path.cwd()), "/tmp"],
+        trusted_dirs=[str(Path.cwd()), "/tmp", plan_dir],
         initial_message=prompt,
     )
-    plan_dir_args = adapter.plan_dir_args(plan_dir)
-    if plan_dir_args:
-        cmd.extend(plan_dir_args)
-        console.info(f"Plan directory: {plan_dir}")
+    console.info(f"Plan directory: {plan_dir}")
 
     console.empty()
     logger.info(
