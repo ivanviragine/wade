@@ -225,6 +225,11 @@ class AbstractAITool(ABC):
         caps = self.capabilities()
         cmd = [caps.binary]
 
+        # Initial message comes first so it is the first positional arg seen by
+        # the tool's parser (before any flags that could interfere).
+        if initial_message:
+            cmd.extend(self.initial_message_args(initial_message))
+
         if model and caps.supports_model_flag:
             cmd.extend([caps.model_flag, self.normalize_model_format(model)])
 
@@ -239,9 +244,6 @@ class AbstractAITool(ABC):
 
         if trusted_dirs:
             cmd.extend(self.trusted_dirs_args(trusted_dirs))
-
-        if initial_message:
-            cmd.extend(self.initial_message_args(initial_message))
 
         return cmd
 
