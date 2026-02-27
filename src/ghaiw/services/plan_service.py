@@ -165,6 +165,13 @@ def run_ai_planning_session(
         result = subprocess.run([ai_tool], cwd=None)
         return result.returncode
 
+    # Check model compatibility — drop model if it's not valid for this tool
+    if model and not adapter.is_model_compatible(model):
+        console.warn(
+            f"Model '{model}' is not compatible with {ai_tool}; using tool default"
+        )
+        model = None
+
     # Build command — plan_dir included in trusted_dirs so all flags precede the
     # initial_message positional arg (many CLIs stop flag-parsing after a positional).
     cmd = adapter.build_launch_command(

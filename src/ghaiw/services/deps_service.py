@@ -462,6 +462,18 @@ def analyze_deps(
 
     resolved_model = model or config.get_model("deps")
 
+    # Check model compatibility — drop model if it's not valid for this tool
+    if resolved_model:
+        try:
+            adapter = AbstractAITool.get(AIToolID(resolved_tool))
+            if not adapter.is_model_compatible(resolved_model):
+                console.warn(
+                    f"Model '{resolved_model}' is not compatible with {resolved_tool}; using tool default"
+                )
+                resolved_model = None
+        except (ValueError, KeyError):
+            pass
+
     console.rule("ghaiw task deps")
     console.kv("Issues", str(len(issue_numbers)))
     console.kv("AI tool", resolved_tool)

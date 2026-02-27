@@ -298,3 +298,71 @@ class TestTranscriptWiring:
 
             call_kwargs = adapter.build_launch_command.call_args.kwargs
             assert str(tmp_path) in call_kwargs["trusted_dirs"]
+
+
+# ---------------------------------------------------------------------------
+# Model compatibility tests
+# ---------------------------------------------------------------------------
+
+
+class TestModelCompatibility:
+    def test_incompatible_model_is_dropped(self, tmp_path: Path) -> None:
+        """When the resolved model is incompatible with the tool, it must be dropped."""
+        with (
+            patch("ghaiw.services.plan_service.AbstractAITool.get") as mock_get,
+            patch("ghaiw.services.plan_service.run_with_transcript") as mock_rwt,
+        ):
+            adapter = MagicMock()
+            adapter.is_model_compatible.return_value = False
+            adapter.build_launch_command.return_value = ["codex"]
+            mock_get.return_value = adapter
+            mock_rwt.return_value = 0
+
+            run_ai_planning_session(
+                ai_tool="codex",
+                plan_dir=str(tmp_path),
+                model="claude-haiku-4-5-20251001",
+            )
+
+            call_kwargs = adapter.build_launch_command.call_args.kwargs
+            assert call_kwargs["model"] is None
+
+    def test_compatible_model_is_kept(self, tmp_path: Path) -> None:
+        """When the resolved model is compatible with the tool, it is passed through."""
+        with (
+            patch("ghaiw.services.plan_service.AbstractAITool.get") as mock_get,
+            patch("ghaiw.services.plan_service.run_with_transcript") as mock_rwt,
+        ):
+            adapter = MagicMock()
+            adapter.is_model_compatible.return_value = True
+            adapter.build_launch_command.return_value = ["codex", "--model", "codex-mini-latest"]
+            mock_get.return_value = adapter
+            mock_rwt.return_value = 0
+
+            run_ai_planning_session(
+                ai_tool="codex",
+                plan_dir=str(tmp_path),
+                model="codex-mini-latest",
+            )
+
+            call_kwargs = adapter.build_launch_command.call_args.kwargs
+            assert call_kwargs["model"] == "codex-mini-latest"
+
+    def test_no_model_skips_compatibility_check(self, tmp_path: Path) -> None:
+        """When model is None, is_model_compatible is not called."""
+        with (
+            patch("ghaiw.services.plan_service.AbstractAITool.get") as mock_get,
+            patch("ghaiw.services.plan_service.run_with_transcript") as mock_rwt,
+        ):
+            adapter = MagicMock()
+            adapter.build_launch_command.return_value = ["codex"]
+            mock_get.return_value = adapter
+            mock_rwt.return_value = 0
+
+            run_ai_planning_session(
+                ai_tool="codex",
+                plan_dir=str(tmp_path),
+                model=None,
+            )
+
+            adapter.is_model_compatible.assert_not_called()
