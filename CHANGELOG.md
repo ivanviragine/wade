@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.25.0] — 2026-02-27
+
+### Features
+
+- pass initial message via CLI instead of clipboard (22cc3aa)
+
+### Documentation
+
+- restructure AGENTS.md into progressive disclosure architecture (1c7f862)
+
+### Chores
+
+- rename ghaiw-py -> ghaiw across all files (00aa37f)
+
 ## [v0.24.6] — 2026-02-26
 
 ### Refactoring
