@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.0.3] — 2026-02-28
+
+### Bug Fixes
+
+- prevent infinite re-exec loop in self-upgrade (777a061)
+
 ## [v1.0.2] — 2026-02-28
 
 ### Refactoring
