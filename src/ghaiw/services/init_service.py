@@ -674,7 +674,7 @@ def _prompt_project_settings(
     if non_interactive:
         return defaults
 
-    console.rule("Project settings")
+    console.rule("Project")
 
     merge_options = ["PR", "direct"]
     merge_default = (
@@ -711,7 +711,7 @@ def _prompt_model_mapping(
     if non_interactive:
         return mapping
 
-    console.rule("Model complexity mapping")
+    console.rule("Models")
 
     # Backfill missing tiers: tool defaults first, then Claude defaults
     tool_defaults = get_defaults(tool) if tool else ComplexityModelMapping()
@@ -851,14 +851,16 @@ def _prompt_work_setup(
 
     from ghaiw.ui import prompts
 
-    console.rule("Implementation work")
+    console.rule("Implementation")
 
     skip_label = "Skip (use default)"
     tool_options = (installed_tools if installed_tools else ["claude", "copilot", "gemini"]) + [
         skip_label
     ]
 
-    idx = prompts.select("AI tool for implementation work", tool_options)
+    idx = prompts.select(
+        "AI tool for implementation work", tool_options, default=len(tool_options) - 1
+    )
     work_tool = None if tool_options[idx] == skip_label else tool_options[idx]
 
     current_effective = work_tool or default_tool
@@ -890,7 +892,7 @@ def _prompt_command_overrides(
     if non_interactive:
         return {"plan": {}, "deps": {}}
 
-    console.rule("Per-command AI tool overrides")
+    console.rule("Command overrides")
 
     # Build selectable list: installed tools + "Skip (use default)"
     skip_label = "Skip (use default)"
@@ -902,7 +904,9 @@ def _prompt_command_overrides(
     result: dict[str, dict[str, str]] = {"plan": {}, "deps": {}}
     tool_for_cmd: list[str | None] = [None] * len(cmd_pairs)
     for cmd_idx, (cmd_name, label) in enumerate(cmd_pairs):
-        idx = prompts.select(f"AI tool for {label.lower()}", tool_options)
+        idx = prompts.select(
+            f"AI tool for {label.lower()}", tool_options, default=len(tool_options) - 1
+        )
         selected_tool = tool_options[idx]
         tool_for_cmd[cmd_idx] = None if selected_tool == skip_label else selected_tool
         result[cmd_name] = {}
