@@ -265,10 +265,13 @@ def update(
 def _maybe_self_upgrade() -> bool:
     """Upgrade ghaiw using the detected package manager, then re-exec.
 
+    Checks PyPI first — only upgrades if a newer version is actually available.
     If upgrade is applied, calls re_exec() which replaces this process.
-    Returns True if an upgrade was triggered, False if skipped.
+    Returns True if an upgrade was triggered, False if skipped or up to date.
     """
+    from ghaiw import __version__
     from ghaiw.utils.install import InstallMethod, detect_install_method, re_exec, self_upgrade
+    from ghaiw.utils.update_check import check_for_update
 
     method = detect_install_method()
 
@@ -277,6 +280,10 @@ def _maybe_self_upgrade() -> bool:
         return False
 
     console.step("Checking for ghaiw updates...")
+
+    latest = check_for_update(__version__)
+    if not latest:
+        return False  # Already at the latest version
 
     if self_upgrade():
         console.success("ghaiw upgraded — restarting...")
