@@ -13,7 +13,7 @@ Turn GitHub Issues into isolated, AI-powered development sessions.
   gh auth login     # follow the prompts
   gh auth status    # verify it worked
   ```
-- One or more AI CLI tools: `claude`, `copilot`, `gemini`, `codex`
+- One or more AI CLI tools: [Claude Code](https://claude.ai/download), [GitHub Copilot](https://githubnext.com/projects/copilot-cli), [Google Gemini](https://ai.google.dev/gemini-api/docs/gemini-cli), [OpenAI Codex](https://github.com/openai/codex)
 
 ## Installation
 
@@ -151,10 +151,10 @@ models:
 
 | Tool | Binary |
 |------|--------|
-| Claude Code | `claude` |
-| GitHub Copilot | `copilot` |
-| Google Gemini | `gemini` |
-| OpenAI Codex | `codex` |
+| [Claude Code](https://claude.ai/download) | `claude` |
+| [GitHub Copilot](https://githubnext.com/projects/copilot-cli) | `copilot` |
+| [Google Gemini](https://ai.google.dev/gemini-api/docs/gemini-cli) | `gemini` |
+| [OpenAI Codex](https://github.com/openai/codex) | `codex` |
 
 ## Shell Integration
 
