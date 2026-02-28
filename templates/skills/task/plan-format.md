@@ -47,7 +47,8 @@ What to build / change.
 | `very_complex` | Large feature, cross-cutting concern, or architecture change (>600 LOC) |
 
 `ghaiw implement-task` maps these to model names configured in `.ghaiw.yml`
-(`model_easy`, `model_medium`, `model_complex`, `model_very_complex`).
+(`models.<tool>.easy`, `models.<tool>.medium`, `models.<tool>.complex`,
+`models.<tool>.very_complex`).
 If the complexity field is absent or no model is configured, the default
 model for the AI tool is used.
 

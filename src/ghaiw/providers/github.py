@@ -2,8 +2,6 @@
 
 All GitHub interactions go through the gh CLI binary, which handles
 authentication, pagination, rate limits, and token refresh transparently.
-
-Behavioral reference: lib/task/crud.sh, lib/task/labels.sh, lib/work/done.sh
 """
 
 from __future__ import annotations

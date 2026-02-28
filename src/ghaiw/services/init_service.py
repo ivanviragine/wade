@@ -2,8 +2,6 @@
 
 Orchestrates: AI tool detection, config generation, skill installation,
 AGENTS.md pointer, .gitignore entries, and .ghaiw-managed manifest.
-
-Behavioral reference: lib/init.sh (ghaiw_init, ghaiw_update, ghaiw_deinit)
 """
 
 from __future__ import annotations
@@ -103,20 +101,26 @@ def init(
 
     # Interactive wizard — all prompts before any writes
     project_settings = _prompt_project_settings(root, non_interactive)
-    selected_tool = _select_ai_tool(ai_tool, non_interactive)
+    selected_tool, default_model = _prompt_ai_section(ai_tool, non_interactive)
     work_setup = _prompt_work_setup(selected_tool, installed_tools, non_interactive)
     command_overrides = _prompt_command_overrides(
-        installed_tools, non_interactive, default_model=work_setup["default_model"]
+        installed_tools, non_interactive, default_model=default_model
     )
     _prompt_claude_code_settings(root, non_interactive)
     if "gemini" in installed_tools:
         _maybe_configure_gemini_experimental(non_interactive)
 
+    # Write phase
+    if not non_interactive:
+        console.rule("Initing")
+
     # Generate config
     config_path = root / ".ghaiw.yml"
     if config_path.exists():
         console.info("Config .ghaiw.yml already exists — patching missing values")
-        _patch_config(config_path, selected_tool, work_setup["model_mapping"])
+        _patch_config(
+            config_path, selected_tool, work_setup["model_mapping"], default_model=default_model
+        )
     else:
         _write_config(
             config_path,
@@ -124,7 +128,7 @@ def init(
             work_setup["model_mapping"],
             project_settings=project_settings,
             work_tool=work_setup["tool"],
-            default_model=work_setup["default_model"],
+            default_model=default_model,
             command_overrides=command_overrides,
         )
         console.success(f"Created {config_path.name}")
@@ -388,8 +392,6 @@ def _configure_gemini_experimental() -> None:
 
     Writes {"experimental":{"plan":true}} to ~/.gemini/settings.json,
     merging non-destructively with existing content.
-
-    Behavioral ref: lib/init.sh:_init_configure_gemini_experimental()
     """
     import contextlib
     import json
@@ -436,6 +438,9 @@ def _maybe_configure_gemini_experimental(non_interactive: bool) -> None:
             if isinstance(raw, dict):
                 existing = raw
 
+    if not non_interactive:
+        console.rule("Gemini")
+
     experimental = existing.get("experimental", {})
     if isinstance(experimental, dict) and experimental.get("plan") is True:
         console.detail("Gemini experimental.plan already enabled")
@@ -443,8 +448,6 @@ def _maybe_configure_gemini_experimental(non_interactive: bool) -> None:
 
     if non_interactive:
         return
-
-    console.rule("Gemini")
 
     if prompts.confirm(
         "Enable Gemini experimental.plan mode (required for planning)?",
@@ -581,8 +584,7 @@ def _select_ai_tool(
         console.info(f"Using AI tool: {tool}")
         return tool
 
-    # Interactive: show menu with Skip option
-    console.rule("AI")
+    # Interactive: show menu with Skip option (rule shown by _prompt_ai_section)
     skip_label = "Skip (configure later)"
     items = [str(t) for t in installed] + [skip_label]
     idx = prompts.select("Select default AI tool", items)
@@ -593,6 +595,27 @@ def _select_ai_tool(
     selected = installed[idx]
     console.success(f"Selected AI tool: {selected}")
     return str(selected)
+
+
+def _prompt_ai_section(
+    ai_tool: str | None,
+    non_interactive: bool,
+) -> tuple[str | None, str | None]:
+    """Run the AI wizard section: select default tool then default model.
+
+    The rule is shown here (before any detection messages) so both the
+    single-tool and multi-tool cases are grouped under the same header.
+
+    Returns ``(selected_tool, default_model)``.
+    """
+    if not non_interactive:
+        console.rule("AI")
+    selected_tool = _select_ai_tool(ai_tool, non_interactive)
+    if non_interactive or not selected_tool:
+        return selected_tool, None
+    mapping = _resolve_models(selected_tool)
+    default_model = _prompt_default_model(selected_tool, mapping, non_interactive=False)
+    return selected_tool, default_model
 
 
 def _resolve_models(tool: str | None) -> ComplexityModelMapping:
@@ -823,21 +846,18 @@ def _prompt_work_setup(
     installed_tools: list[str],
     non_interactive: bool,
 ) -> dict[str, Any]:
-    """Prompt for all implementation-work configuration as a single cohesive unit.
+    """Prompt for implementation-work tool and per-complexity model overrides.
 
-    Covers: work tool selection, default fallback model, and complexity model
-    mapping.  The default model is prompted BEFORE the per-complexity tiers so
-    the user knows what the fallback is when they choose to skip individual
-    tiers.  Pre-selection uses the tool's hardcoded complex-tier default.
+    The default tool and default model are set in the AI section. This section
+    only handles implementation-specific overrides that fall back to those defaults.
 
     Returns a dict with keys:
         ``tool``          - work-specific tool override, or None (use default_tool)
         ``model_mapping`` - ComplexityModelMapping for the effective tool
-        ``default_model`` - fallback model ID, or None if skipped
     """
     if non_interactive:
         mapping = _resolve_models(default_tool)
-        return {"tool": None, "model_mapping": mapping, "default_model": None}
+        return {"tool": None, "model_mapping": mapping}
 
     from ghaiw.ui import prompts
 
@@ -855,12 +875,9 @@ def _prompt_work_setup(
 
     current_effective = work_tool or default_tool
     mapping = _resolve_models(current_effective)
-
-    default_model = _prompt_default_model(current_effective, mapping, non_interactive=False)
-
     mapping = _prompt_model_mapping(current_effective, mapping, non_interactive=False)
 
-    return {"tool": work_tool, "model_mapping": mapping, "default_model": default_model}
+    return {"tool": work_tool, "model_mapping": mapping}
 
 
 def _prompt_command_overrides(
@@ -1016,6 +1033,7 @@ def _patch_config(
     config_path: Path,
     ai_tool: str | None,
     model_mapping: ComplexityModelMapping,
+    default_model: str | None = None,
 ) -> None:
     """Patch missing values into an existing config without overwriting."""
     try:
@@ -1033,10 +1051,14 @@ def _patch_config(
         raw["version"] = 2
         changed = True
 
-    # Patch AI tool if missing
+    # Patch AI tool and default model if missing
     ai = raw.get("ai", {}) or {}
     if ai_tool and not ai.get("default_tool"):
         ai["default_tool"] = str(ai_tool)
+        raw["ai"] = ai
+        changed = True
+    if default_model and not ai.get("default_model"):
+        ai["default_model"] = default_model
         raw["ai"] = ai
         changed = True
 

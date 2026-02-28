@@ -1,7 +1,4 @@
-"""Hardcoded defaults per AI tool — fallback when probing fails.
-
-Behavioral reference: lib/init.sh:_init_set_model_defaults_for_tool()
-"""
+"""Hardcoded defaults per AI tool — fallback when probing fails."""
 
 from __future__ import annotations
 

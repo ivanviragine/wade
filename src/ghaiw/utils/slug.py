@@ -1,7 +1,4 @@
-"""Title → URL-safe slug conversion.
-
-Behavioral reference: lib/common.sh:_slugify()
-"""
+"""Title → URL-safe slug conversion."""
 
 from __future__ import annotations
 

@@ -30,7 +30,8 @@ def db_engine(tmp_path: Path):  # type: ignore[return]
     db_path = tmp_path / ".ghaiw" / "ghaiw.db"
     engine = create_db_engine(db_path)
     init_db(engine)
-    return engine
+    yield engine
+    engine.dispose()
 
 
 class TestWriteTransactions:

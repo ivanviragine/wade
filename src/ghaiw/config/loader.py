@@ -1,7 +1,4 @@
-"""Configuration loader — find + parse .ghaiw.yml (walk up from CWD).
-
-Behavioral reference: lib/common.sh:_load_config()
-"""
+"""Configuration loader — find + parse .ghaiw.yml (walk up from CWD)."""
 
 from __future__ import annotations
 

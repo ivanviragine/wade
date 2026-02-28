@@ -160,9 +160,8 @@ ghaiw work done
 ```
 
 `ghaiw work done` handles pushing the branch, updating the existing draft PR
-(appending a summary and marking it ready), and triggering auto-versioning
-(if enabled). The worktree is **not** deleted — it is cleaned up automatically
-by `implement-task` after the human merges the PR.
+(appending a summary and marking it ready). The worktree is **not** deleted —
+it is cleaned up automatically by `implement-task` after the human merges the PR.
 
 This is a **mandatory** final step. If `ghaiw work done` fails, debug and
 fix the error — do NOT bypass it.

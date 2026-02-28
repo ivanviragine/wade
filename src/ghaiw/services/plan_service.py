@@ -3,8 +3,6 @@
 Implements the two-phase planning design:
   Phase 1: Launch AI with initial prompt, let it write plan files to temp dir
   Phase 2: After AI exits, detect new issues (Path A) or read plan files (Path B)
-
-Behavioral reference: lib/task/crud.sh (_task_do_plan, _task_run_ai_planning)
 """
 
 from __future__ import annotations
@@ -245,8 +243,6 @@ def plan(
     Two-path design:
       Path A: Issues created during AI session (detected via snapshot/diff)
       Path B: Plan files written to temp dir → issues created from files
-
-    Behavioral reference: lib/task/crud.sh:_task_do_plan()
     """
     config = load_config(project_root)
     provider = get_provider(config)
@@ -552,10 +548,7 @@ def _finalize_issues(
     model: str | None = None,
     usage: TokenUsage | None = None,
 ) -> None:
-    """Finalize newly created issues: token summaries, labels, hints.
-
-    Behavioral reference: lib/task/crud.sh:_task_plan_finalize_issues()
-    """
+    """Finalize newly created issues: token summaries, labels, hints."""
     # Apply token usage to issue bodies
     if usage:
         apply_plan_token_usage(

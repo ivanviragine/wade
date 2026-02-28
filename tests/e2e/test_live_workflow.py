@@ -112,44 +112,33 @@ class TestLiveCheckConfig:
 
 
 class TestLiveTaskLifecycle:
-    """Test issue creation and listing via ghaiw.
+    """Test issue lifecycle via ghaiw task read/list/close.
 
-    These tests create real GitHub issues and close them.
+    Issues are created via gh CLI and exercised through ghaiw commands.
     """
 
-    def test_task_create_and_close(self, tmp_path: Path) -> None:
-        """Create an issue from a plan file, then close it."""
-        plan = tmp_path / "test-PLAN.md"
-        plan.write_text(
-            """\
-# E2E test issue — auto-cleanup
-
-## Complexity
-
-easy
-
-## Description
-
-This is an automated test issue created by ghaiw E2E tests.
-It should be closed automatically. If you see this, the test may
-have failed to clean up.
-
-## Tasks
-
-- [ ] This issue is for automated testing only
-"""
-        )
-
-        # Create issue
-        result = _ghaiw("task", "create", "--plan-file", str(plan), "--no-start")
-
-        if result.returncode != 0:
-            pytest.fail(f"task create failed (exit {result.returncode}): {result.stderr}")
-
-        # Extract issue number from output
+    def test_task_lifecycle(self) -> None:
+        """Create an issue via gh, exercise ghaiw read/close."""
         import re
 
-        match = re.search(r"#(\d+)", result.stdout + result.stderr)
+        # Create issue directly via gh (ghaiw new-task is interactive)
+        result = _run(
+            [
+                "gh",
+                "issue",
+                "create",
+                "--title",
+                "E2E test issue — auto-cleanup",
+                "--body",
+                "Automated test issue from ghaiw E2E tests.",
+                "--label",
+                "easy",
+            ]
+        )
+        if result.returncode != 0:
+            pytest.fail(f"gh issue create failed (exit {result.returncode}): {result.stderr}")
+
+        match = re.search(r"/issues/(\d+)", result.stdout + result.stderr)
         if not match:
             pytest.fail(f"Could not extract issue number from: {result.stdout}")
 

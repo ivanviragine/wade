@@ -1,10 +1,8 @@
 """Claude Code .claude/settings.json allowlist management.
 
 Configures the Claude Code permission allowlist to include `ghaiw` commands,
-so agents can run `ghaiw work done`, `ghaiw task create`, etc. without
+so agents can run `ghaiw work done`, `ghaiw new-task`, etc. without
 manual approval.
-
-Behavioral reference: Bash ghaiw_update() allowlist step
 """
 
 from __future__ import annotations

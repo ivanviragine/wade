@@ -9,7 +9,7 @@ import typer
 from ghaiw.cli.autocomplete import complete_ai_tools, complete_models
 
 task_app = typer.Typer(
-    help="GitHub Issue CRUD.",
+    help="GitHub Issue management.",
     invoke_without_command=True,
 )
 

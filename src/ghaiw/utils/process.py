@@ -87,8 +87,6 @@ def run_with_transcript(
     Uses the `script` utility (BSD on macOS, GNU on Linux) to record the
     interactive session. Falls back to plain subprocess.run when transcript_path
     is None or `script` is not available.
-
-    Behavioral reference: lib/task/tokens.sh:_task_run_with_transcript()
     """
     if transcript_path is None or not shutil.which("script"):
         result = subprocess.run(cmd, cwd=cwd)

@@ -143,10 +143,7 @@ class AbstractAITool(ABC):
         raise NotImplementedError
 
     def is_model_compatible(self, model: str) -> bool:
-        """Check if a model ID is valid for this tool.
-
-        Behavioral ref: lib/common.sh:_is_model_compatible_with_tool()
-        """
+        """Check if a model ID is valid for this tool."""
         return True  # Default: allow all. Override per tool.
 
     def initial_message_args(self, prompt: str) -> list[str]:
@@ -159,17 +156,11 @@ class AbstractAITool(ABC):
         return []
 
     def plan_mode_args(self) -> list[str]:
-        """Get extra CLI args for native plan/approval mode.
-
-        Behavioral ref: lib/common.sh:_tool_plan_mode_args()
-        """
+        """Get extra CLI args for native plan/approval mode."""
         return []  # Default: no plan mode support
 
     def plan_dir_args(self, plan_dir: str) -> list[str]:
-        """Get extra CLI args to grant write access to a plan output directory.
-
-        Behavioral ref: lib/common.sh:_tool_plan_dir_permission_args()
-        """
+        """Get extra CLI args to grant write access to a plan output directory."""
         return []  # Default: no plan dir support
 
     def trusted_dirs_args(self, dirs: list[str]) -> list[str]:
@@ -249,10 +240,7 @@ class AbstractAITool(ABC):
 
 
 def pick_best_model(models: list[AIModel]) -> AIModel | None:
-    """Pick the best model from a list — prefer aliases (no date suffix).
-
-    Behavioral reference: lib/init.sh:_init_pick_best_model()
-    """
+    """Pick the best model from a list — prefer aliases (no date suffix)."""
     if not models:
         return None
 

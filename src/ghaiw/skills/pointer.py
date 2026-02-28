@@ -8,8 +8,6 @@ The block is wrapped in HTML comment markers for robust detection:
     ## Git Workflow
     ...
     <!-- ghaiw:pointer:end -->
-
-Behavioral reference: lib/init.sh (_append_agents_pointer, _pointer_*)
 """
 
 from __future__ import annotations

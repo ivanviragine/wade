@@ -2,9 +2,6 @@
 
 Orchestrates: worktree creation, bootstrap, AI tool launch, PR/merge,
 sync, list, batch topology.
-
-Behavioral reference: lib/work/bootstrap.sh, lib/work/terminal.sh,
-lib/work/done.sh, lib/work/sync.sh
 """
 
 from __future__ import annotations
@@ -58,7 +55,6 @@ logger = structlog.get_logger()
 IMPL_USAGE_MARKER_START = "<!-- ghaiw:impl-usage:start -->"
 IMPL_USAGE_MARKER_END = "<!-- ghaiw:impl-usage:end -->"
 
-
 # ---------------------------------------------------------------------------
 # Bootstrap helpers
 # ---------------------------------------------------------------------------
@@ -77,10 +73,7 @@ def _complexity_to_model(
     ai_tool: str,
     complexity: str | None,
 ) -> str | None:
-    """Map task complexity to model ID from config.
-
-    Behavioral reference: lib/work/bootstrap.sh:_work_complexity_to_model()
-    """
+    """Map task complexity to model ID from config."""
     if not complexity:
         return None
     return config.get_complexity_model(ai_tool, complexity)
@@ -121,10 +114,7 @@ def bootstrap_worktree(
     config: ProjectConfig,
     repo_root: Path,
 ) -> None:
-    """Run post-creation bootstrap: copy files, install skills, run hooks.
-
-    Behavioral reference: lib/work/bootstrap.sh:_work_bootstrap_worktree()
-    """
+    """Run post-creation bootstrap: copy files, install skills, run hooks."""
     # Copy configured files
     for filename in config.hooks.copy_to_worktree:
         src = repo_root / filename
@@ -177,8 +167,6 @@ def _is_inside_ai_cli() -> bool:
     When an AI agent calls ``ghaiw implement-task`` from within its own
     session, we must not launch another AI instance (infinite nesting).
     Instead, create the worktree and print the path.
-
-    Behavioral reference: lib/work/terminal.sh:_is_inside_ai_cli()
     """
     # Claude Code sets CLAUDE_CODE=1 or CLAUDE_CODE_ENTRYPOINT
     if os.environ.get("CLAUDE_CODE") or os.environ.get("CLAUDE_CODE_ENTRYPOINT"):
@@ -321,8 +309,6 @@ def _post_exit_capture(
 
     Returns the primary model detected from the transcript (for worked-model label),
     or the explicitly passed model if no breakdown is available.
-
-    Behavioral reference: lib/work/terminal.sh:_work_post_exit_capture()
     """
     if not transcript_path or not transcript_path.is_file():
         return None
@@ -393,10 +379,7 @@ def _post_exit_capture(
 
 
 def build_work_prompt(task: Task, ai_tool: str | None = None) -> str:
-    """Build the initial prompt for a work session.
-
-    Behavioral reference: lib/work/bootstrap.sh:_work_copy_prompt()
-    """
+    """Build the initial prompt for a work session."""
     from ghaiw.skills.installer import get_templates_dir
 
     template_path = get_templates_dir() / "prompts" / "work-context.md"
@@ -559,8 +542,6 @@ def start(
     cd_only: bool = False,
 ) -> bool:
     """Start a work session on an issue.
-
-    Behavioral reference: lib/work/terminal.sh:_work_do_start()
 
     Steps:
     1. Read the issue from the provider
@@ -932,8 +913,6 @@ def batch(
     Dependent chains: only the first issue in each chain is launched; the
     remaining chain members are printed in order for manual sequential
     execution (one cannot work on a dependent issue before its blocker is done).
-
-    Behavioral reference: lib/work/terminal.sh:_work_do_batch()
     """
     config = load_config(project_root)
     cwd = project_root or Path.cwd()
@@ -1047,10 +1026,7 @@ def find_worktree_path(
     target: str,
     project_root: Path | None = None,
 ) -> Path | None:
-    """Find the worktree path for a given issue number or branch name.
-
-    Behavioral reference: lib/work/done.sh:_work_find_worktree_by_name()
-    """
+    """Find the worktree path for a given issue number or branch name."""
     cwd = project_root or Path.cwd()
     try:
         repo_root = git_repo.get_repo_root(cwd)
@@ -1112,10 +1088,7 @@ def _resolve_worktree_from_plan(
 
 
 def extract_issue_from_branch(branch: str) -> str | None:
-    """Extract the issue number from a branch name like ``feat/42-slug``.
-
-    Behavioral reference: lib/work/done.sh:_work_extract_issue_from_branch()
-    """
+    """Extract the issue number from a branch name like ``feat/42-slug``."""
     m = re.search(r"/(\d+)", branch)
     return m.group(1) if m else None
 
@@ -1133,8 +1106,6 @@ def classify_staleness(
     provider: AbstractTaskProvider | None = None,
 ) -> WorktreeState:
     """Classify a worktree's staleness.
-
-    Behavioral reference: lib/work/done.sh:_work_staleness()
 
     Returns one of:
     - ACTIVE — issue is open or could not determine
@@ -1200,10 +1171,7 @@ def build_impl_usage_block(
     model: str | None = None,
     token_usage: TokenUsage | None = None,
 ) -> str:
-    """Build the ## Implementation Usage section for PR body.
-
-    Behavioral reference: lib/work/done.sh:_work_build_impl_usage_block()
-    """
+    """Build the ## Implementation Usage section for PR body."""
     from ghaiw.ai_tools.transcript import format_count
 
     lines = [
@@ -1279,8 +1247,6 @@ def _build_pr_body(
     3. ## Summary (from PR-SUMMARY file)
 
     Plan summary stays on the issue only — not copied into the PR body.
-
-    Behavioral reference: lib/work/done.sh:_work_done_via_pr()
     """
     lines: list[str] = []
 
@@ -1315,8 +1281,6 @@ def sync(
     project_root: Path | None = None,
 ) -> SyncResult:
     """Sync current branch with main.
-
-    Behavioral reference: lib/work/sync.sh:_work_do_sync()
 
     Flow:
     1. Pre-flight checks (in git repo, not on main, clean worktree)
@@ -1518,8 +1482,6 @@ def done(
     project_root: Path | None = None,
 ) -> bool:
     """Complete work session — create PR or merge directly.
-
-    Behavioral reference: lib/work/done.sh:_work_do_done()
 
     Detects current branch, extracts issue number, reads merge strategy
     from config, and delegates to _done_via_pr or _done_via_direct.
@@ -1818,10 +1780,7 @@ def _done_via_direct(
     config: ProjectConfig,
     no_cleanup: bool = False,
 ) -> bool:
-    """Merge directly into main and clean up.
-
-    Behavioral reference: lib/work/done.sh:_work_done_via_direct()
-    """
+    """Merge directly into main and clean up."""
     provider = get_provider(config)
 
     # Sync first
@@ -1902,8 +1861,6 @@ def list_sessions(
     project_root: Path | None = None,
 ) -> list[dict[str, Any]]:
     """List active work sessions / worktrees.
-
-    Behavioral reference: lib/work/done.sh:_work_do_list()
 
     Returns a list of dicts with worktree info (path, branch, issue, staleness).
     """
@@ -2012,8 +1969,6 @@ def remove(
 ) -> bool:
     """Remove a worktree.
 
-    Behavioral reference: lib/work/done.sh:_work_do_remove()
-
     Modes:
     - target: remove a specific worktree by issue number or name
     - stale: remove all stale (non-active) worktrees
@@ -2109,10 +2064,7 @@ def _remove_stale(repo_root: Path, main_branch: str, force: bool) -> bool:
 
 
 def _cleanup_worktree(repo_root: Path, wt_path: Path, main_branch: str) -> bool:
-    """Remove a single worktree and its branch.
-
-    Behavioral reference: lib/worktree.sh:_worktree_cleanup()
-    """
+    """Remove a single worktree and its branch."""
     console.step(f"Removing worktree: {wt_path}")
 
     # Find the branch name for this worktree

@@ -1,6 +1,5 @@
 """Cross-platform clipboard operations via subprocess.
 
-Behavioral reference: lib/common.sh:_clipboard_copy()
 No pyperclip dependency — uses native commands directly.
 """
 

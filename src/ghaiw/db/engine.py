@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
-from sqlalchemy import event, text
+from sqlalchemy import Engine, event, text
 from sqlmodel import Session, SQLModel, create_engine
 
 # Current schema version — increment when tables change
 SCHEMA_VERSION = 1
 
 # Module-level engine cache (one per db path)
-_engines: dict[str, object] = {}
+_engines: dict[str, Engine] = {}
 
 
-def create_db_engine(db_path: Path) -> object:
+def create_db_engine(db_path: Path) -> Engine:
     """Create a SQLite engine with WAL mode and busy timeout.
 
     Args:
@@ -33,7 +34,7 @@ def create_db_engine(db_path: Path) -> object:
 
     # Enable WAL mode and busy timeout on every connection
     @event.listens_for(engine, "connect")
-    def _set_sqlite_pragmas(dbapi_conn, connection_record):  # type: ignore[no-untyped-def]
+    def _set_sqlite_pragmas(dbapi_conn: Any, connection_record: Any) -> None:
         cursor = dbapi_conn.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA busy_timeout=30000")
@@ -43,7 +44,7 @@ def create_db_engine(db_path: Path) -> object:
     return engine
 
 
-def init_db(engine: object) -> None:
+def init_db(engine: Engine) -> None:
     """Create all tables and set schema version.
 
     Safe to call multiple times — SQLModel.metadata.create_all is idempotent.
@@ -51,10 +52,10 @@ def init_db(engine: object) -> None:
     # Import tables to register them with SQLModel metadata
     import ghaiw.db.tables  # noqa: F401
 
-    SQLModel.metadata.create_all(engine)  # type: ignore[arg-type]
+    SQLModel.metadata.create_all(engine)
 
     # Set schema version if not already set
-    with Session(engine) as session:  # type: ignore[arg-type]
+    with Session(engine) as session:
         # Create schema version table if needed
         session.exec(  # type: ignore[call-overload]
             text("CREATE TABLE IF NOT EXISTS _schema_version (version INTEGER NOT NULL)")
@@ -68,7 +69,7 @@ def init_db(engine: object) -> None:
         session.commit()
 
 
-def get_or_create_engine(project_root: Path) -> object:
+def get_or_create_engine(project_root: Path) -> Engine:
     """Get or create a cached engine for a project.
 
     The database is stored at `<project_root>/.ghaiw/ghaiw.db`.

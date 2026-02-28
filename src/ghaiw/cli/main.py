@@ -196,7 +196,7 @@ from ghaiw.cli.admin import admin_app  # noqa: E402
 from ghaiw.cli.task import task_app  # noqa: E402
 from ghaiw.cli.work import work_app  # noqa: E402
 
-app.add_typer(task_app, name="task", help="GitHub Issue CRUD.")
+app.add_typer(task_app, name="task", help="GitHub Issue management.")
 app.add_typer(task_app, name="tasks", hidden=True)  # alias
 app.add_typer(work_app, name="work", help="Work session lifecycle.")
 

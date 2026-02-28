@@ -108,7 +108,7 @@ For each plan, create a lightweight issue via `ghaiw new-task` (interactive)
 with the issue title and a brief description.
 
 The full plan content goes to a draft PR (created automatically by
-`ghaiw implement-task`), not the issue body. Issues are lightweight tickets.
+`ghaiw plan-task`), not the issue body. Issues are lightweight tickets.
 
 Collect the issue number and URL from each creation.
 

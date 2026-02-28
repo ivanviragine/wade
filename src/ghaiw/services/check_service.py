@@ -1,7 +1,4 @@
-"""Check service — worktree safety and config validation.
-
-Behavioral reference: lib/check.sh
-"""
+"""Check service — worktree safety and config validation."""
 
 from __future__ import annotations
 
@@ -174,7 +171,6 @@ def check_worktree(cwd: Path | None = None) -> CheckResult:
 # ---------------------------------------------------------------------------
 # Config validation
 # ---------------------------------------------------------------------------
-
 
 # Valid AI tool names for config validation
 _VALID_AI_TOOLS = {t.value for t in AIToolID}

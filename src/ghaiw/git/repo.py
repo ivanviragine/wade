@@ -185,7 +185,6 @@ def get_dirty_status(path: Path) -> dict[str, int]:
     """Get detailed dirty working tree status.
 
     Returns a dict with counts for staged, unstaged, and untracked files.
-    Behavioral reference: lib/work/terminal.sh dirty worktree diagnostics.
     """
     result = _run_git("status", "--porcelain", cwd=path)
     staged = 0

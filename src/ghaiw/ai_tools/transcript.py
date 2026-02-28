@@ -2,8 +2,6 @@
 
 Supports: Claude, Copilot, Gemini, Codex, and a generic fallback.
 Each AI tool has a distinct output format for reporting token usage.
-
-Behavioral reference: lib/task/tokens.sh (734 lines)
 """
 
 from __future__ import annotations
@@ -24,8 +22,6 @@ def parse_token_count(raw: str) -> int | None:
 
     Handles formats: "12,345", "1.2k", "2m", "614", "1_234", " 1,234 "
     Returns None if the input is not parseable.
-
-    Behavioral reference: lib/task/tokens.sh:_task_parse_token_count()
     """
     if not raw:
         return None
@@ -63,8 +59,6 @@ def format_count(n: int | None) -> str:
 
     1234567 → "1,234,567"
     None → ""
-
-    Behavioral reference: lib/task/tokens.sh:_task_format_count()
     """
     if n is None:
         return ""
@@ -82,8 +76,6 @@ def read_transcript_excerpt(transcript_path: Path, max_lines: int = 400) -> str:
     AI CLI session footers (with token summaries) appear near the end.
     Reading only the tail avoids false positives from earlier discussion
     and keeps parsing fast.
-
-    Behavioral reference: lib/task/tokens.sh:_task_read_transcript_excerpt()
     """
     if not transcript_path.is_file():
         return ""
@@ -518,8 +510,6 @@ def extract_token_usage_from_text(text: str) -> TokenUsage:
     3. Claude footer format
     4. Codex footer format
     5. Generic keyword-based fallback
-
-    Behavioral reference: lib/task/tokens.sh:_task_extract_token_usage_from_text()
     """
     if not text.strip():
         return TokenUsage()
@@ -556,8 +546,6 @@ def extract_model_breakdown_from_text(text: str) -> list[ModelBreakdown]:
     """Extract per-model token breakdown from transcript text.
 
     Tries Gemini table format, then Copilot per-model format.
-
-    Behavioral reference: lib/task/tokens.sh:_task_extract_model_breakdown_from_text()
     """
     if not text.strip():
         return []
@@ -579,8 +567,6 @@ def extract_premium_requests_from_text(text: str) -> int | None:
     """Extract Copilot premium request estimates from transcript text.
 
     Prefers "Total usage est." line; falls back to first match.
-
-    Behavioral reference: lib/task/tokens.sh:_task_extract_premium_requests_from_text()
     """
     premium_re = re.compile(
         r"(\d+(?:\.\d+)?)\s+premium\s+requests?",
@@ -666,8 +652,6 @@ def allocate_tokens(
     For multi-issue plans, tokens are allocated based on each issue's
     body line count relative to the total. The last issue gets the
     remainder to ensure exact sum.
-
-    Behavioral reference: lib/task/tokens.sh:_task_allocate_token_estimates()
     """
     n = len(line_counts)
     if n == 0:

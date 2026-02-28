@@ -1,6 +1,5 @@
 """Console class — all terminal message functions.
 
-Rich-based equivalent of lib/ui.sh from the Bash version.
 All output respects Rich markup and goes to the appropriate stream
 (stdout for info, stderr for errors/warnings).
 """
@@ -76,7 +75,7 @@ _theme = Theme(
 
 
 class Console:
-    """Unified CLI output — mirrors the _ui_* functions from lib/ui.sh."""
+    """Unified CLI output."""
 
     # Symbol constants (matching Bash _UI_* constants)
     OK = "\u2713"  # ✓

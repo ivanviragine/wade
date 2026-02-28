@@ -3,7 +3,6 @@
 #
 # Exercises the full ghaiw lifecycle against a real or temporary
 # GitHub repo. Tests the Python CLI (ghaiw) by default.
-# Use --bash to test the Bash CLI (ghaiw) instead.
 #
 # Usage:
 #   RUN_E2E_SMOKE=1 ./scripts/e2e_smoke.sh              # run against taskr
@@ -131,8 +130,8 @@ cd "$REPO"
 
 section "Basic Commands"
 
-run_test "ghaiw version" ghaiw version
-run_test "ghaiw help" ghaiw help
+run_test "ghaiw --version" ghaiw --version
+run_test "ghaiw --help" ghaiw --help
 
 # ── ghaiw check ───────────────────────────────────────────────────────────────
 
@@ -156,39 +155,23 @@ else
     test_skip "ghaiw check-config (no .ghaiw.yml)"
 fi
 
-# ── ghaiw task create ─────────────────────────────────────────────────────────
+# ── ghaiw new-task (via gh issue create for non-interactive testing) ──────────
 
-section "Task CRUD"
+section "Task Lifecycle"
 
-PLAN_FILE=$(mktemp /tmp/ghaiw-e2e-plan-XXXXXX.md)
-cat > "$PLAN_FILE" << 'PLAN'
-# E2E smoke test issue — auto-cleanup
-
-## Complexity
-
-easy
-
-## Description
-
-Automated test issue from ghaiw E2E smoke test.
-This issue will be closed automatically.
-
-## Tasks
-
-- [ ] This is a test issue
-PLAN
-
-output=$(ghaiw task create --plan-file "$PLAN_FILE" --no-start 2>&1) || true
-ISSUE_NUM=$(echo "$output" | grep -oE '#[0-9]+' | head -1 | tr -d '#')
+# Create a test issue directly via gh (ghaiw new-task is interactive)
+REPO_NWO=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null) || true
+output=$(gh issue create --title "E2E smoke test — auto-cleanup" \
+    --body "Automated test issue from ghaiw E2E smoke test. This issue will be closed automatically." \
+    --label "easy" 2>&1) || true
+ISSUE_NUM=$(echo "$output" | grep -oE '/issues/[0-9]+' | head -1 | grep -oE '[0-9]+')
 
 if [[ -n "$ISSUE_NUM" ]]; then
-    test_pass "ghaiw task create → issue #$ISSUE_NUM"
+    test_pass "ghaiw new-task → issue #$ISSUE_NUM"
 else
-    test_fail "ghaiw task create (could not parse issue number)"
+    test_fail "ghaiw new-task (could not parse issue number)"
     ISSUE_NUM=""
 fi
-
-rm -f "$PLAN_FILE"
 
 # Task list
 run_test "ghaiw task list" ghaiw task list

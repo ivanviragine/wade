@@ -1,7 +1,4 @@
-"""Skill file installer — copy/symlink skill templates to target projects.
-
-Behavioral reference: lib/init.sh (skill installation in ghaiw_init/ghaiw_update)
-"""
+"""Skill file installer — copy/symlink skill templates to target projects."""
 
 from __future__ import annotations
 

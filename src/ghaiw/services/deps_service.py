@@ -2,8 +2,6 @@
 
 Orchestrates: building context from issues, running AI analysis (headless),
 parsing edges, applying cross-references, and creating tracking issues.
-
-Behavioral reference: lib/task/deps.sh
 """
 
 from __future__ import annotations
@@ -23,9 +21,9 @@ from ghaiw.providers.base import AbstractTaskProvider
 from ghaiw.providers.registry import get_provider
 from ghaiw.services.task_service import ensure_issue_label
 from ghaiw.ui.console import console
+from ghaiw.utils.process import CommandError, run
 
 logger = structlog.get_logger()
-
 
 # ---------------------------------------------------------------------------
 # Prompt template
@@ -339,15 +337,10 @@ def run_headless_analysis(
     )
 
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
+        result = run(cmd, check=False, timeout=120)
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout
-    except (subprocess.TimeoutExpired, OSError) as e:
+    except (subprocess.TimeoutExpired, CommandError) as e:
         logger.warning("deps.headless_failed", tool=ai_tool, error=str(e))
 
     return None
@@ -368,8 +361,6 @@ def _run_interactive_analysis(
 
     Launches AI interactively with the prompt as an initial message, then reads
     the output from a temp file.
-
-    Behavioral reference: lib/task/deps.sh fallback at line 194
     """
     import tempfile
 
@@ -433,14 +424,12 @@ def analyze_deps(
 ) -> DependencyGraph | None:
     """Analyze dependencies between issues.
 
-    Behavioral reference: lib/task/deps.sh:_task_do_deps()
-
     Steps:
     1. Build context from issue details
     2. Run AI analysis (headless preferred, interactive fallback)
     3. Parse edges
     4. Apply cross-references to issues
-    5. Create tracking issue (3+ issues auto, 2 issues offered)
+    5. Create tracking issue (2+ issues)
 
     Returns the DependencyGraph, or None on failure.
     """

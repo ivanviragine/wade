@@ -141,11 +141,10 @@ models:
 
 | Skill | Purpose |
 |-------|---------|
-| `workflow` | Session rules — worktree safety, commit conventions |
-| `task` | GitHub issue creation |
-| `sync` | Branch sync and conflict resolution |
+| `task` | GitHub issue creation and plan format |
+| `plan-session` | Planning session rules and workflow |
+| `work-session` | Implementation session rules and workflow |
 | `deps` | Dependency analysis between issues |
-| `pr-summary` | PR description writing |
 
 ## Supported AI Tools
 

@@ -1,6 +1,5 @@
 """Model utility functions — tier classification, date suffix detection.
 
-Behavioral reference: lib/init.sh:_init_probe_models_for_tool(),
 _init_scrape_models_for_tool(), _init_list_available_models_from_tool()
 """
 
@@ -119,8 +118,6 @@ def classify_tier_universal(model_id: str) -> ModelTier:
     Note: uses component-level matching to avoid false positives like
     "gemini" matching "mini". Keywords must appear as distinct components
     separated by '-' or '.'.
-
-    Behavioral ref: lib/init.sh lines 780-788
     """
     lower = model_id.lower()
     if any(_has_component(lower, kw) for kw in ("haiku", "flash", "spark", "mini")):

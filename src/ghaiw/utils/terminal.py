@@ -1,7 +1,4 @@
-"""Terminal utilities — tab title, TTY detection, terminal launch.
-
-Behavioral reference: lib/common.sh:_set_terminal_title(), _start_title_keeper()
-"""
+"""Terminal utilities — tab title, TTY detection, terminal launch."""
 
 from __future__ import annotations
 
@@ -38,7 +35,6 @@ def compose_work_title(issue_id: str, issue_title: str) -> str:
     """Compose a terminal title for a work session.
 
     Format: "ghaiw work #42 — Feature Name"
-    Behavioral ref: lib/work/terminal.sh:_work_compose_title()
     """
     max_title = 50
     title = issue_title[:max_title] + "..." if len(issue_title) > max_title else issue_title
@@ -51,8 +47,6 @@ def start_title_keeper(title: str, interval: float = 2.0) -> None:
     Some tools (AI CLIs) may overwrite the terminal title during their session.
     This background thread re-sets it every ``interval`` seconds via stderr
     (so it works even when stdout is captured/piped).
-
-    Behavioral ref: lib/common.sh:_start_title_keeper()
     """
     global _title_keeper_thread, _title_keeper_running
 

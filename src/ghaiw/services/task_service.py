@@ -2,8 +2,6 @@
 
 Orchestrates: issue creation from plan files, list/read/update/close,
 label ensure/add/remove for planned-by/worked-by metadata.
-
-Behavioral reference: lib/task/crud.sh, lib/task/labels.sh
 """
 
 from __future__ import annotations
@@ -31,7 +29,6 @@ LABEL_COLOR_COMPLEXITY = "C5DEF5"  # Pale blue
 LABEL_COLOR_PLANNED = "BFD4F2"  # Light blue
 LABEL_COLOR_WORKED = "D4C5F9"  # Light purple
 LABEL_COLOR_DEFAULT = "D3D3D3"  # Gray
-
 
 # ---------------------------------------------------------------------------
 # Label helpers
@@ -128,10 +125,7 @@ def add_planned_by_labels(
     ai_tool: str | None = None,
     model: str | None = None,
 ) -> None:
-    """Add planned-by labels (tool + optional model) to a task.
-
-    Behavioral reference: lib/task/labels.sh:_task_add_planned_by_labels()
-    """
+    """Add planned-by labels (tool + optional model) to a task."""
     if not ai_tool:
         return
 
@@ -166,10 +160,7 @@ def add_worked_by_labels(
     ai_tool: str | None = None,
     model: str | None = None,
 ) -> None:
-    """Add worked-by labels (tool + optional model) to a task.
-
-    Behavioral reference: lib/task/labels.sh:_task_add_worked_by_labels()
-    """
+    """Add worked-by labels (tool + optional model) to a task."""
     if not ai_tool:
         return
 
@@ -222,10 +213,7 @@ def build_plan_summary_block(
     per_issue_estimate: int | None = None,
     model_breakdown: list[dict[str, Any]] | None = None,
 ) -> str:
-    """Build the plan summary markdown block.
-
-    Behavioral reference: lib/task/tokens.sh:_task_build_plan_summary_block()
-    """
+    """Build the plan summary markdown block."""
     from ghaiw.ai_tools.transcript import format_count
 
     lines = [
@@ -295,8 +283,6 @@ def apply_plan_token_usage(
     """Annotate issues with token usage summaries.
 
     For multi-issue plans, tokens are allocated proportionally by body line count.
-
-    Behavioral reference: lib/task/tokens.sh:_task_apply_plan_token_usage()
     """
     from ghaiw.ai_tools.transcript import allocate_tokens
 
@@ -357,10 +343,7 @@ def create_interactive(
     config: ProjectConfig | None = None,
     provider: AbstractTaskProvider | None = None,
 ) -> Task | None:
-    """Create a GitHub Issue interactively — prompt for title and body.
-
-    Behavioral reference: lib/task/crud.sh:_task_create_interactive()
-    """
+    """Create a GitHub Issue interactively — prompt for title and body."""
     import sys
 
     from ghaiw.ui import prompts
@@ -411,10 +394,7 @@ def create_from_plan_file(
     config: ProjectConfig | None = None,
     provider: AbstractTaskProvider | None = None,
 ) -> Task | None:
-    """Create a GitHub Issue from a plan markdown file.
-
-    Behavioral reference: lib/task/crud.sh:_task_create_from_file()
-    """
+    """Create a GitHub Issue from a plan markdown file."""
     config = config or load_config()
     provider = provider or get_provider(config)
 
@@ -454,10 +434,7 @@ def list_tasks(
     json_mode: bool = False,
     quiet: bool = False,
 ) -> list[Task]:
-    """List tasks matching the configured label and state.
-
-    Behavioral reference: lib/task/crud.sh:_task_do_list()
-    """
+    """List tasks matching the configured label and state."""
     config = config or load_config()
     provider = provider or get_provider(config)
 
@@ -610,10 +587,7 @@ def read_task(
     provider: AbstractTaskProvider | None = None,
     json_mode: bool = False,
 ) -> Task | None:
-    """Read a single task.
-
-    Behavioral reference: lib/task/crud.sh:_task_do_read()
-    """
+    """Read a single task."""
     config = config or load_config()
     provider = provider or get_provider(config)
 
@@ -659,10 +633,7 @@ def update_task(
     config: ProjectConfig | None = None,
     provider: AbstractTaskProvider | None = None,
 ) -> bool:
-    """Update a task's body and/or add a comment.
-
-    Behavioral reference: lib/task/crud.sh:_task_do_update()
-    """
+    """Update a task's body and/or add a comment."""
     config = config or load_config()
     provider = provider or get_provider(config)
 
@@ -702,10 +673,7 @@ def close_task(
     config: ProjectConfig | None = None,
     provider: AbstractTaskProvider | None = None,
 ) -> bool:
-    """Close a task with optional comment.
-
-    Behavioral reference: lib/task/crud.sh:_task_do_close()
-    """
+    """Close a task with optional comment."""
     config = config or load_config()
     provider = provider or get_provider(config)
 

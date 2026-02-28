@@ -23,7 +23,8 @@ def db_engine(tmp_path: Path):
     db_path = tmp_path / ".ghaiw" / "ghaiw.db"
     engine = create_db_engine(db_path)
     init_db(engine)
-    return engine
+    yield engine
+    engine.dispose()
 
 
 class TestEngine:
@@ -33,6 +34,7 @@ class TestEngine:
         assert db_path.parent.exists()
         init_db(engine)
         assert db_path.exists()
+        engine.dispose()
 
     def test_init_db_idempotent(self, db_engine) -> None:
         # Should not raise on second call
@@ -47,12 +49,15 @@ class TestEngine:
         engine = create_db_engine(db_path)
         init_db(engine)
 
-        # Create a connection and check PRAGMA busy_timeout
-        with Session(engine) as session:  # type: ignore[arg-type]
-            result = session.exec(text("PRAGMA busy_timeout"))  # type: ignore[call-overload]
-            timeout_ms = result.first()
-            # SQLite PRAGMA busy_timeout returns milliseconds (as a tuple)
-            assert timeout_ms[0] == 30000, f"Expected 30000ms, got {timeout_ms[0]}ms"
+        try:
+            # Create a connection and check PRAGMA busy_timeout
+            with Session(engine) as session:
+                result = session.exec(text("PRAGMA busy_timeout"))  # type: ignore[call-overload]
+                timeout_ms = result.first()
+                # SQLite PRAGMA busy_timeout returns milliseconds (as a tuple)
+                assert timeout_ms[0] == 30000, f"Expected 30000ms, got {timeout_ms[0]}ms"
+        finally:
+            engine.dispose()
 
     def test_engine_wal_mode_enabled(self, tmp_path: Path) -> None:
         """Verify WAL mode is enabled (regression guard)."""
@@ -63,12 +68,15 @@ class TestEngine:
         engine = create_db_engine(db_path)
         init_db(engine)
 
-        # Create a connection and check PRAGMA journal_mode
-        with Session(engine) as session:  # type: ignore[arg-type]
-            result = session.exec(text("PRAGMA journal_mode"))  # type: ignore[call-overload]
-            mode = result.first()
-            # SQLite PRAGMA journal_mode returns mode as a tuple
-            assert mode[0] == "wal", f"Expected WAL mode, got {mode[0]}"
+        try:
+            # Create a connection and check PRAGMA journal_mode
+            with Session(engine) as session:
+                result = session.exec(text("PRAGMA journal_mode"))  # type: ignore[call-overload]
+                mode = result.first()
+                # SQLite PRAGMA journal_mode returns mode as a tuple
+                assert mode[0] == "wal", f"Expected WAL mode, got {mode[0]}"
+        finally:
+            engine.dispose()
 
 
 class TestTaskRepository:
