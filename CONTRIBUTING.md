@@ -2,6 +2,15 @@
 
 ## Development Setup
 
+**Prerequisites:** [gh CLI](https://cli.github.com/) must be installed and authenticated — ghaiw shells out to it for all GitHub operations.
+
+```bash
+gh auth login     # first-time setup
+gh auth status    # verify it worked
+```
+
+Then clone and install:
+
 ```bash
 git clone https://github.com/ivanviragine/ghaiw.git
 cd ghaiw

@@ -8,7 +8,11 @@ Turn GitHub Issues into isolated, AI-powered development sessions.
 
 - Python 3.11+
 - git 2.20+
-- [gh CLI](https://cli.github.com/) (authenticated)
+- [gh CLI](https://cli.github.com/) — install it, then authenticate:
+  ```bash
+  gh auth login     # follow the prompts
+  gh auth status    # verify it worked
+  ```
 - One or more AI CLI tools: `claude`, `copilot`, `gemini`, `codex`
 
 ## Installation
