@@ -476,13 +476,11 @@ def _post_work_lifecycle_direct(
     provider: AbstractTaskProvider,
 ) -> None:
     main_branch = config.project.main_branch or "main"
-    result = subprocess.run(
-        ["git", "rev-list", "--count", f"{main_branch}..{branch}"],
-        capture_output=True,
-        text=True,
-        cwd=repo_root,
-    )
-    ahead = int(result.stdout.strip() or "0")
+    try:
+        ahead = git_branch.commits_ahead(repo_root, branch, main_branch)
+    except GitError:
+        console.warn("Could not determine commit count; skipping post-work lifecycle.")
+        return
 
     if ahead == 0:
         if not prompts.confirm("Branch has no new commits. Delete empty worktree?", default=False):
@@ -984,9 +982,8 @@ def _build_graph_from_issues(
     config: ProjectConfig,
 ) -> DependencyGraph | None:
     """Try to build a dependency graph from issue body cross-references."""
-    import re
-
     from ghaiw.models.deps import DependencyEdge, DependencyGraph
+    from ghaiw.models.task import parse_dependency_refs
 
     provider = get_provider(config)
     edges: list[DependencyEdge] = []
@@ -999,18 +996,10 @@ def _build_graph_from_issues(
             logger.debug("batch.issue_read_failed", issue_num=num, exc_info=True)
             continue
 
-        # Parse "Depends on: #X, #Y" from issue body
-        match = re.search(
-            r"\*\*Depends on:\*\*\s*(.*?)$",
-            task.body,
-            re.MULTILINE,
-        )
-        if match:
-            deps_str = match.group(1)
-            for dep_match in re.finditer(r"#(\d+)", deps_str):
-                dep_id = dep_match.group(1)
-                if dep_id in valid_set:
-                    edges.append(DependencyEdge(from_task=dep_id, to_task=num))
+        refs = parse_dependency_refs(task.body)
+        for dep_id in refs["depends_on"]:
+            if dep_id in valid_set:
+                edges.append(DependencyEdge(from_task=dep_id, to_task=num))
 
     if edges:
         return DependencyGraph(edges=edges)
@@ -1600,6 +1589,7 @@ def done(
             close_issue=not no_close,
             config=config,
             no_cleanup=no_cleanup,
+            worktree_path=wt_path,
         )
     else:
         return _done_via_pr(
@@ -1779,6 +1769,7 @@ def _done_via_direct(
     close_issue: bool,
     config: ProjectConfig,
     no_cleanup: bool = False,
+    worktree_path: Path | None = None,
 ) -> bool:
     """Merge directly into main and clean up."""
     provider = get_provider(config)
@@ -1824,8 +1815,11 @@ def _done_via_direct(
     if not no_cleanup:
         console.step("Cleaning up worktree...")
         try:
-            git_branch.delete_branch(repo_root, branch, force=True)
-            git_worktree.prune_worktrees(repo_root)
+            if worktree_path:
+                _cleanup_worktree(repo_root, worktree_path, main_branch)
+            else:
+                git_branch.delete_branch(repo_root, branch, force=True)
+                git_worktree.prune_worktrees(repo_root)
             console.success("Worktree cleaned up.")
         except Exception as e:
             choice = prompts.select(
@@ -1834,8 +1828,11 @@ def _done_via_direct(
             )
             if choice == 0:  # Retry
                 try:
-                    git_branch.delete_branch(repo_root, branch, force=True)
-                    git_worktree.prune_worktrees(repo_root)
+                    if worktree_path:
+                        _cleanup_worktree(repo_root, worktree_path, main_branch)
+                    else:
+                        git_branch.delete_branch(repo_root, branch, force=True)
+                        git_worktree.prune_worktrees(repo_root)
                     console.success("Worktree cleaned up.")
                 except Exception:
                     logger.warning("worktree.cleanup_skipped", reason="retry_failed", exc_info=True)

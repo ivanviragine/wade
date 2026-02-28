@@ -59,10 +59,7 @@ def build_context(
     provider: AbstractTaskProvider,
     issue_numbers: list[str],
 ) -> str:
-    """Build a context string with issue details for AI consumption.
-
-    Behavioral reference: _task_build_deps_context()
-    """
+    """Build a context string with issue details for AI consumption."""
     lines: list[str] = []
     for num in issue_numbers:
         try:
@@ -102,8 +99,6 @@ def parse_deps_output(
     valid_numbers: set[str],
 ) -> list[DependencyEdge]:
     """Parse dependency edges from AI output text.
-
-    Behavioral reference: _task_parse_deps_output()
 
     Args:
         text: Raw AI output containing "X -> Y # reason" lines.
@@ -149,10 +144,7 @@ def parse_deps_output(
 
 
 def output_is_parseable(text: str) -> bool:
-    """Check if AI output contains parseable dependency edges or "no deps".
-
-    Behavioral reference: _task_deps_output_is_parseable()
-    """
+    """Check if AI output contains parseable dependency edges or "no deps"."""
     if "# No dependencies found" in text:
         return True
     return bool(_ARROW_RE.search(text))
@@ -216,8 +208,6 @@ def apply_deps_to_issues(
 ) -> int:
     """Update each issue body with dependency cross-references.
 
-    Behavioral reference: _task_apply_deps()
-
     Returns number of successfully updated issues.
     """
     updated = 0
@@ -253,8 +243,6 @@ def create_tracking_issue(
     task_titles: dict[str, str],
 ) -> str | None:
     """Create a tracking issue with execution plan and dependency graph.
-
-    Behavioral reference: _task_create_tracking_issue()
 
     Returns the tracking issue ID, or None on failure.
     """
@@ -317,8 +305,6 @@ def run_headless_analysis(
     """Run dependency analysis in headless mode.
 
     Returns the AI output text, or None if headless is not supported.
-
-    Behavioral reference: _task_run_ai_deps_headless()
     """
     try:
         adapter = AbstractAITool.get(AIToolID(ai_tool))

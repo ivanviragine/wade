@@ -61,10 +61,7 @@ def _resolve_ai_tool(
     config: ProjectConfig,
     command: str = "plan",
 ) -> str | None:
-    """Resolve AI tool from args → config → detection.
-
-    Behavioral reference: _prompt_ai_tool_for_command() in common.sh
-    """
+    """Resolve AI tool from args → config → detection."""
     if ai_tool:
         return ai_tool
 
@@ -98,10 +95,7 @@ def _resolve_model(
 
 
 def discover_plan_files(plan_dir: Path) -> list[Path]:
-    """Find .md files in the plan directory, sorted by name.
-
-    Behavioral reference: _task_convert_plan_to_issues() file discovery
-    """
+    """Find .md files in the plan directory, sorted by name."""
     if not plan_dir.is_dir():
         return []
     return sorted(plan_dir.glob("*.md"))
@@ -111,7 +105,6 @@ def validate_plan_files(plan_dir: Path) -> list[PlanFile]:
     """Discover and validate plan files from a directory.
 
     Returns only files with valid '# Title' headings.
-    Behavioral reference: _task_convert_plan_to_issues()
     """
     valid: list[PlanFile] = []
     md_files = discover_plan_files(plan_dir)
@@ -142,7 +135,6 @@ def run_ai_planning_session(
     Launches the AI tool with the plan prompt as an initial message,
     plan-mode and plan-directory permission args.
 
-    Behavioral reference: _task_run_ai_planning() in crud.sh
     """
     # Build prompt
     prompt = render_plan_prompt(plan_dir)

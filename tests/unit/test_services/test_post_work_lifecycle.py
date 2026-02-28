@@ -150,13 +150,12 @@ def test_pr_strategy_cleanup_and_pull_after_merge(
 
 
 @patch("ghaiw.services.work_service.prompts.confirm", return_value=False)
-@patch("ghaiw.services.work_service.subprocess.run")
+@patch("ghaiw.services.work_service.git_branch.commits_ahead", return_value=0)
 def test_direct_strategy_zero_ahead_offers_delete(
-    mock_run: MagicMock,
+    _mock_ahead: MagicMock,
     mock_confirm: MagicMock,
     tmp_path: Path,
 ) -> None:
-    mock_run.return_value = MagicMock(stdout="0", returncode=0)
     provider = MagicMock()
 
     _post_work_lifecycle(
@@ -173,13 +172,12 @@ def test_direct_strategy_zero_ahead_offers_delete(
 
 
 @patch("ghaiw.services.work_service.prompts.select", return_value=2)
-@patch("ghaiw.services.work_service.subprocess.run")
+@patch("ghaiw.services.work_service.git_branch.commits_ahead", return_value=3)
 def test_direct_strategy_commits_ahead_shows_menu(
-    mock_run: MagicMock,
+    _mock_ahead: MagicMock,
     mock_select: MagicMock,
     tmp_path: Path,
 ) -> None:
-    mock_run.return_value = MagicMock(stdout="3", returncode=0)
     provider = MagicMock()
 
     _post_work_lifecycle(
@@ -201,7 +199,9 @@ def test_direct_strategy_commits_ahead_shows_menu(
 @patch("ghaiw.services.work_service._cleanup_worktree")
 @patch("ghaiw.services.work_service.prompts.select", return_value=1)
 @patch("ghaiw.services.work_service.subprocess.run")
+@patch("ghaiw.services.work_service.git_branch.commits_ahead", return_value=3)
 def test_direct_strategy_merge_and_close(
+    _mock_ahead: MagicMock,
     mock_run: MagicMock,
     _mock_select: MagicMock,
     mock_cleanup: MagicMock,
@@ -209,12 +209,6 @@ def test_direct_strategy_merge_and_close(
 ) -> None:
     repo_root = tmp_path / "repo"
     wt_path = tmp_path / "wt"
-    mock_run.side_effect = [
-        MagicMock(stdout="3", returncode=0),
-        MagicMock(returncode=0),
-        MagicMock(returncode=0),
-        MagicMock(returncode=0),
-    ]
     provider = MagicMock()
 
     _post_work_lifecycle(
@@ -245,7 +239,10 @@ def test_direct_strategy_merge_and_close(
 @patch("ghaiw.services.work_service.get_provider")
 @patch("ghaiw.services.work_service.load_config")
 @patch("ghaiw.services.work_service.git_pr.get_pr_for_branch", return_value=None)
-@patch("ghaiw.services.work_service.bootstrap_draft_pr", return_value={"number": 1, "url": "http://test"})
+@patch(
+    "ghaiw.services.work_service.bootstrap_draft_pr",
+    return_value={"number": 1, "url": "http://test"},
+)
 @patch("ghaiw.services.work_service.prompts")
 def test_lifecycle_skipped_in_detach_mode(
     mock_prompts: MagicMock,
@@ -299,7 +296,10 @@ def test_lifecycle_skipped_in_detach_mode(
 @patch("ghaiw.services.work_service.get_provider")
 @patch("ghaiw.services.work_service.load_config")
 @patch("ghaiw.services.work_service.git_pr.get_pr_for_branch", return_value=None)
-@patch("ghaiw.services.work_service.bootstrap_draft_pr", return_value={"number": 1, "url": "http://test"})
+@patch(
+    "ghaiw.services.work_service.bootstrap_draft_pr",
+    return_value={"number": 1, "url": "http://test"},
+)
 @patch("ghaiw.services.work_service.prompts")
 def test_lifecycle_runs_after_ai_crash(
     mock_prompts: MagicMock,

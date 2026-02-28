@@ -231,3 +231,29 @@ class TestDoneViaDirectCleanup:
         mock_logger.warning.assert_called_once_with(
             "worktree.cleanup_skipped", reason="retry_failed", exc_info=True
         )
+
+    def test_worktree_path_uses_cleanup_worktree(self) -> None:
+        """When worktree_path is provided, _cleanup_worktree() is called."""
+        wt_path = Path("/fake/worktree")
+        with ExitStack() as stack:
+            _enter_base_patches(stack)
+            mock_cleanup = stack.enter_context(
+                patch("ghaiw.services.work_service._cleanup_worktree")
+            )
+            mock_delete = stack.enter_context(
+                patch("ghaiw.services.work_service.git_branch.delete_branch")
+            )
+
+            result = _done_via_direct(
+                repo_root=_REPO,
+                branch=_BRANCH,
+                issue_number=_ISSUE,
+                main_branch=_MAIN,
+                close_issue=False,
+                config=_make_config(),
+                worktree_path=wt_path,
+            )
+
+        assert result is True
+        mock_cleanup.assert_called_once_with(_REPO, wt_path, _MAIN)
+        mock_delete.assert_not_called()

@@ -1,17 +1,16 @@
-"""Live E2E tests against the real taskr GitHub repo.
+"""Live E2E tests against a real GitHub repo.
 
 These tests require:
   - gh CLI authenticated
   - RUN_LIVE_E2E=1 environment variable
   - Network access
-  - The taskr repo at ~/Documents/workspace/taskr (or TASKR_REPO env var)
+  - A test repo at ~/Documents/workspace/ghaiw-e2e (or E2E_REPO env var)
   - ghaiw CLI installed and in PATH
 
-They exercise real ghaiw commands against the taskr GitHub project.
+They exercise real ghaiw commands against a GitHub project.
 Run with: RUN_LIVE_E2E=1 uv run pytest tests/e2e/test_live_workflow.py -v
 
-WARNING: These tests create and close real GitHub issues. Run
-./scripts/reset.sh in taskr afterward to clean up.
+WARNING: These tests create and close real GitHub issues.
 """
 
 from __future__ import annotations
@@ -22,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-TASKR_REPO = Path(os.environ.get("TASKR_REPO", os.path.expanduser("~/Documents/workspace/taskr")))
+E2E_REPO = Path(os.environ.get("E2E_REPO", os.path.expanduser("~/Documents/workspace/ghaiw-e2e")))
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("RUN_LIVE_E2E") != "1",
@@ -34,7 +33,7 @@ def _run(cmd: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess
     """Run a command and return the result."""
     return subprocess.run(
         cmd,
-        cwd=cwd or TASKR_REPO,
+        cwd=cwd or E2E_REPO,
         capture_output=True,
         text=True,
         timeout=60,
@@ -47,12 +46,12 @@ def _ghaiw(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[s
 
 
 @pytest.fixture(autouse=True)
-def require_taskr_repo() -> None:
-    """Skip if taskr repo doesn't exist."""
-    if not TASKR_REPO.is_dir():
-        pytest.skip(f"taskr repo not found at {TASKR_REPO}")
-    if not (TASKR_REPO / ".git").is_dir():
-        pytest.skip(f"{TASKR_REPO} is not a git repo")
+def require_e2e_repo() -> None:
+    """Skip if E2E repo doesn't exist."""
+    if not E2E_REPO.is_dir():
+        pytest.skip(f"E2E repo not found at {E2E_REPO}")
+    if not (E2E_REPO / ".git").is_dir():
+        pytest.skip(f"{E2E_REPO} is not a git repo")
 
 
 @pytest.fixture(autouse=True)
@@ -87,7 +86,7 @@ class TestLiveGhaiwVersion:
 
 
 class TestLiveCheck:
-    """Test ghaiw check against real taskr repo."""
+    """Test ghaiw check against real E2E repo."""
 
     def test_check_main_checkout(self) -> None:
         """ghaiw check on main branch exits 2 and reports IN_MAIN_CHECKOUT."""
@@ -99,12 +98,12 @@ class TestLiveCheck:
 
 
 class TestLiveCheckConfig:
-    """Test ghaiw check-config against real taskr repo."""
+    """Test ghaiw check-config against real E2E repo."""
 
     def test_check_config_if_exists(self) -> None:
         """Validate config if .ghaiw.yml exists."""
-        if not (TASKR_REPO / ".ghaiw.yml").is_file():
-            pytest.skip("No .ghaiw.yml in taskr")
+        if not (E2E_REPO / ".ghaiw.yml").is_file():
+            pytest.skip("No .ghaiw.yml in E2E repo")
 
         result = _ghaiw("check-config")
         # 0 = valid, 3 = invalid config

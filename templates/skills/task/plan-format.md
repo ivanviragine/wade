@@ -34,7 +34,7 @@ What to build / change.
 | **Body** | Everything after the title heading becomes the draft PR plan content. The issue gets a lightweight summary. |
 | **Label** | Applied automatically from `.ghaiw.yml` config (`issue_label`). |
 | **Complexity** | Optional `## Complexity` section with one value: `easy`, `medium`, `complex`, or `very_complex`. Applied as a `complexity:X` label on the issue. Used by `ghaiw implement-task` to auto-select the AI model. |
-| **Plan Summary** | When issues are created through `ghaiw plan-task`, ghaiw appends a managed `## Plan Summary` section with `### Usage` to the GitHub issue body after creation. If available from the AI CLI output, the summary includes session total/input/output/cached token counts, estimated premium requests, and a `### Model Breakdown` table for per-model usage. |
+| **Plan Summary** | When issues are created through `ghaiw plan-task`, ghaiw appends a managed `## Plan Summary` section to the GitHub issue body after creation. If available from the AI CLI output, the summary includes a `### Model Breakdown` table for per-model token usage. |
 | **Sections** | Context, Proposed Solution, Tasks, and Acceptance Criteria are recommended but not enforced. |
 
 ## Complexity values

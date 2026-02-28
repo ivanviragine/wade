@@ -154,10 +154,10 @@ ai:
     tool: claude
 models:
   claude:
-    easy: claude-haiku-4-5
-    medium: claude-haiku-4-5
-    complex: claude-sonnet-4
-    very_complex: claude-opus-4
+    easy: claude-haiku-4.5
+    medium: claude-haiku-4.5
+    complex: claude-sonnet-4.6
+    very_complex: claude-opus-4.6
 provider:
   name: github
 hooks:
@@ -259,7 +259,7 @@ When ghaiw installs skills into a target project (`ghaiw init`), the skills refe
 - `target` (positional) — Optional issue number, worktree name, or plan file path. If a file path, creates the issue first. If a number/name, finds the worktree. If omitted, detects from current branch.
 - `--no-close` — Don't close the issue on merge.
 - `--draft` — Create PR as draft.
-- `--no-cleanup` — Keep the worktree after PR creation / direct merge.
+- `--no-cleanup` — Keep the worktree after direct merge (no effect in PR strategy, which already preserves worktrees).
 
 **`ghaiw work batch`:**
 - `--model` — Pass a specific AI model to all parallel sessions.

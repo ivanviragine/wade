@@ -205,7 +205,6 @@ class GitHubProvider(AbstractTaskProvider):
     def ensure_label(self, label: Label) -> None:
         """Ensure a label exists, creating it if needed.
 
-        Uses the check-then-create pattern from Bash:
         1. Search for the label name
         2. If not found, create it (handling "already exists" race condition)
         """

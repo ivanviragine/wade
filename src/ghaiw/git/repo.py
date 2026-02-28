@@ -181,6 +181,21 @@ def get_remote_url(path: Path) -> str | None:
     return url if url else None
 
 
+def get_git_dir(path: Path) -> str | None:
+    """Return the git directory for *path*, or None on failure.
+
+    Args:
+        path: Any directory inside the repo.
+
+    Returns:
+        The git directory path string, or None if not in a repo.
+    """
+    result = _run_git("rev-parse", "--git-dir", cwd=path, check=False)
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
 def get_dirty_status(path: Path) -> dict[str, int]:
     """Get detailed dirty working tree status.
 

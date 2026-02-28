@@ -144,11 +144,7 @@ def check_worktree(cwd: Path | None = None) -> CheckResult:
         branch = "DETACHED"
 
     if repo.is_worktree(path):
-        # Get the git dir for worktree info
-        from ghaiw.git.repo import _run_git
-
-        git_dir_result = _run_git("rev-parse", "--git-dir", cwd=path, check=False)
-        git_dir = git_dir_result.stdout.strip() if git_dir_result.returncode == 0 else None
+        git_dir = repo.get_git_dir(path)
 
         logger.info("check.in_worktree", branch=branch, toplevel=toplevel)
         return CheckResult(

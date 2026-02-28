@@ -104,6 +104,27 @@ def parse_complexity_from_labels(labels: list[Label]) -> Complexity | None:
     return None
 
 
+_DEP_LINE_RE = re.compile(r"\*\*Depends on:\*\*\s*(.*?)$", re.MULTILINE)
+_BLOCK_LINE_RE = re.compile(r"\*\*Blocks:\*\*\s*(.*?)$", re.MULTILINE)
+_ISSUE_REF_RE = re.compile(r"#(\d+)")
+
+
+def parse_dependency_refs(body: str) -> dict[str, list[str]]:
+    """Parse ``**Depends on:**`` and ``**Blocks:**`` issue refs from markdown body.
+
+    Returns a dict with ``depends_on`` and ``blocks`` keys, each a list of
+    issue number strings (without ``#`` prefix).
+    """
+    result: dict[str, list[str]] = {"depends_on": [], "blocks": []}
+    dep_match = _DEP_LINE_RE.search(body)
+    if dep_match:
+        result["depends_on"] = _ISSUE_REF_RE.findall(dep_match.group(1))
+    block_match = _BLOCK_LINE_RE.search(body)
+    if block_match:
+        result["blocks"] = _ISSUE_REF_RE.findall(block_match.group(1))
+    return result
+
+
 class PlanFile(BaseModel):
     """A parsed plan markdown file."""
 

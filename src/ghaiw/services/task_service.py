@@ -460,19 +460,13 @@ def list_tasks(
     # Build dependency info if requested
     deps_map: dict[str, dict[str, list[str]]] = {}
     if show_deps and tasks:
-        import re
+        from ghaiw.models.task import parse_dependency_refs
 
         for task in tasks:
-            deps_info: dict[str, list[str]] = {"depends_on": [], "blocks": []}
             if task.body:
-                dep_match = re.search(r"\*\*Depends on:\*\*\s*(.*?)$", task.body, re.MULTILINE)
-                if dep_match:
-                    deps_info["depends_on"] = re.findall(r"#(\d+)", dep_match.group(1))
-                block_match = re.search(r"\*\*Blocks:\*\*\s*(.*?)$", task.body, re.MULTILINE)
-                if block_match:
-                    deps_info["blocks"] = re.findall(r"#(\d+)", block_match.group(1))
-            if deps_info["depends_on"] or deps_info["blocks"]:
-                deps_map[task.id] = deps_info
+                deps_info = parse_dependency_refs(task.body)
+                if deps_info["depends_on"] or deps_info["blocks"]:
+                    deps_map[task.id] = deps_info
 
     if json_mode:
         import json

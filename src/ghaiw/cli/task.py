@@ -198,9 +198,8 @@ def deps(
 
     # --check mode: validate existing dependencies without re-running AI
     if check:
-        import re
-
         from ghaiw.config.loader import load_config
+        from ghaiw.models.task import parse_dependency_refs
         from ghaiw.providers.registry import get_provider
 
         config = load_config()
@@ -212,32 +211,19 @@ def deps(
         for issue_id in issue_ids:
             try:
                 task = provider.read_task(issue_id)
-                dep_match = re.search(
-                    r"\*\*Depends on:\*\*\s*(.*?)$",
-                    task.body,
-                    re.MULTILINE,
-                )
-                if dep_match:
-                    dep_refs = re.findall(r"#(\d+)", dep_match.group(1))
-                    for ref in dep_refs:
-                        if ref not in valid_set:
-                            console.warn(f"#{issue_id} depends on #{ref} (not in analyzed set)")
-                            all_valid = False
-                        else:
-                            console.detail(f"#{issue_id} → #{ref} (valid)")
-                block_match = re.search(
-                    r"\*\*Blocks:\*\*\s*(.*?)$",
-                    task.body,
-                    re.MULTILINE,
-                )
-                if block_match:
-                    block_refs = re.findall(r"#(\d+)", block_match.group(1))
-                    for ref in block_refs:
-                        if ref not in valid_set:
-                            console.warn(f"#{issue_id} blocks #{ref} (not in analyzed set)")
-                            all_valid = False
-                        else:
-                            console.detail(f"#{issue_id} blocks #{ref} (valid)")
+                refs = parse_dependency_refs(task.body)
+                for ref in refs["depends_on"]:
+                    if ref not in valid_set:
+                        console.warn(f"#{issue_id} depends on #{ref} (not in analyzed set)")
+                        all_valid = False
+                    else:
+                        console.detail(f"#{issue_id} → #{ref} (valid)")
+                for ref in refs["blocks"]:
+                    if ref not in valid_set:
+                        console.warn(f"#{issue_id} blocks #{ref} (not in analyzed set)")
+                        all_valid = False
+                    else:
+                        console.detail(f"#{issue_id} blocks #{ref} (valid)")
             except Exception as e:
                 console.warn(f"Could not read #{issue_id}: {e}")
                 all_valid = False

@@ -5,7 +5,7 @@
 # GitHub repo. Tests the Python CLI (ghaiw) by default.
 #
 # Usage:
-#   RUN_E2E_SMOKE=1 ./scripts/e2e_smoke.sh              # run against taskr
+#   RUN_E2E_SMOKE=1 ./scripts/e2e_smoke.sh              # run against default repo
 #   RUN_E2E_SMOKE=1 ./scripts/e2e_smoke.sh --repo <path> # custom repo
 #
 # Requires:
@@ -29,7 +29,7 @@ SKIP=0
 
 # ── Parse args ────────────────────────────────────────────────────────────────
 
-REPO="${TASKR_REPO:-$HOME/Documents/workspace/taskr}"
+REPO="${E2E_REPO:-$HOME/Documents/workspace/ghaiw-e2e}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -155,11 +155,11 @@ else
     test_skip "ghaiw check-config (no .ghaiw.yml)"
 fi
 
-# ── ghaiw new-task (via gh issue create for non-interactive testing) ──────────
+# ── Issue creation (via gh issue create — ghaiw new-task is interactive) ──────
 
 section "Task Lifecycle"
 
-# Create a test issue directly via gh (ghaiw new-task is interactive)
+# Create a test issue directly via gh because ghaiw new-task is interactive
 REPO_NWO=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null) || true
 output=$(gh issue create --title "E2E smoke test — auto-cleanup" \
     --body "Automated test issue from ghaiw E2E smoke test. This issue will be closed automatically." \
@@ -167,9 +167,9 @@ output=$(gh issue create --title "E2E smoke test — auto-cleanup" \
 ISSUE_NUM=$(echo "$output" | grep -oE '/issues/[0-9]+' | head -1 | grep -oE '[0-9]+')
 
 if [[ -n "$ISSUE_NUM" ]]; then
-    test_pass "ghaiw new-task → issue #$ISSUE_NUM"
+    test_pass "issue create → #$ISSUE_NUM"
 else
-    test_fail "ghaiw new-task (could not parse issue number)"
+    test_fail "issue create (could not parse issue number)"
     ISSUE_NUM=""
 fi
 

@@ -95,7 +95,7 @@ Each issue gets its own git worktree so you can work on multiple tasks in parall
 |---------|-------------|
 | `ghaiw work sync` | Sync feature branch with main |
 | `ghaiw work done` | Push branch and create PR |
-| `ghaiw work done --no-cleanup` | Create PR but keep the worktree |
+| `ghaiw work done --no-cleanup` | Keep the worktree after direct merge |
 | `ghaiw work list` | List active worktrees |
 | `ghaiw work batch <N> <M> ...` | Start parallel sessions for multiple issues |
 | `ghaiw work remove <N>` | Remove a worktree |
