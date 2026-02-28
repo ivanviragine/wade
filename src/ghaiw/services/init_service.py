@@ -98,21 +98,19 @@ def init(
         )
         return False
 
-    from ghaiw import __version__
-
-    console.rule("ghaiw init")
-    console.info(f"ghaiw {__version__}")
-
     # Compute installed tools once — doesn't depend on any wizard step
     installed_tools = [str(t) for t in AbstractAITool.detect_installed()]
 
-    # Interactive wizard
-    selected_tool = _select_ai_tool(ai_tool, non_interactive)
+    # Interactive wizard — all prompts before any writes
     project_settings = _prompt_project_settings(root, non_interactive)
+    selected_tool = _select_ai_tool(ai_tool, non_interactive)
     work_setup = _prompt_work_setup(selected_tool, installed_tools, non_interactive)
     command_overrides = _prompt_command_overrides(
         installed_tools, non_interactive, default_model=work_setup["default_model"]
     )
+    _prompt_claude_code_settings(root, non_interactive)
+    if "gemini" in installed_tools:
+        _maybe_configure_gemini_experimental(non_interactive)
 
     # Generate config
     config_path = root / ".ghaiw.yml"
@@ -131,10 +129,6 @@ def init(
         )
         console.success(f"Created {config_path.name}")
 
-    # Configure Gemini experimental settings if needed
-    if "gemini" in installed_tools:
-        _maybe_configure_gemini_experimental(non_interactive)
-
     # 5. Install skills
     is_self = root.resolve() == get_ghaiw_root().resolve()
     installed = installer.install_skills(root, is_self_init=is_self)
@@ -147,12 +141,6 @@ def init(
     pointer_path = pointer.ensure_pointer(root)
     if pointer_path:
         console.success(f"Workflow pointer in {Path(pointer_path).name}")
-
-    # Optional: configure Claude Code allowlist (project-level .claude/settings.json)
-    _maybe_configure_allowlist(root, non_interactive)
-
-    # Optional: configure Claude Code statusline (global ~/.claude/ setting)
-    _maybe_configure_statusline(non_interactive)
 
     # 8. Write manifest
     _write_manifest(root, installed)
@@ -449,6 +437,8 @@ def _maybe_configure_gemini_experimental(non_interactive: bool) -> None:
     if non_interactive:
         return
 
+    console.rule("Gemini")
+
     if prompts.confirm(
         "Enable Gemini experimental.plan mode (required for planning)?",
         default=True,
@@ -544,6 +534,14 @@ def _maybe_configure_statusline(non_interactive: bool) -> None:
         console.success("Installed ~/.claude/statusline-command.sh")
 
 
+def _prompt_claude_code_settings(root: Path, non_interactive: bool) -> None:
+    """Prompt for Claude Code-specific settings: allowlist and statusline."""
+    if not non_interactive:
+        console.rule("Claude Code")
+    _maybe_configure_allowlist(root, non_interactive)
+    _maybe_configure_statusline(non_interactive)
+
+
 def _select_ai_tool(
     requested: str | None,
     non_interactive: bool,
@@ -577,6 +575,7 @@ def _select_ai_tool(
         return tool
 
     # Interactive: show menu with Skip option
+    console.rule("AI")
     skip_label = "Skip (configure later)"
     items = [str(t) for t in installed] + [skip_label]
     idx = prompts.select("Select default AI tool", items)
@@ -696,8 +695,6 @@ def _prompt_model_mapping(
 
     if non_interactive:
         return mapping
-
-    console.rule("Models")
 
     # Backfill missing tiers: tool defaults first, then Claude defaults
     tool_defaults = get_defaults(tool) if tool else ComplexityModelMapping()
@@ -821,10 +818,10 @@ def _prompt_work_setup(
 ) -> dict[str, Any]:
     """Prompt for all implementation-work configuration as a single cohesive unit.
 
-    Covers: work tool selection, complexity model mapping for that tool, and
-    the default fallback model.  The default model is prompted AFTER the
-    complexity mapping so the pre-selected value reflects the user's just-chosen
-    ``mapping.complex`` tier rather than a hardcoded default.
+    Covers: work tool selection, default fallback model, and complexity model
+    mapping.  The default model is prompted BEFORE the per-complexity tiers so
+    the user knows what the fallback is when they choose to skip individual
+    tiers.  Pre-selection uses the tool's hardcoded complex-tier default.
 
     Returns a dict with keys:
         ``tool``          - work-specific tool override, or None (use default_tool)
@@ -852,9 +849,9 @@ def _prompt_work_setup(
     current_effective = work_tool or default_tool
     mapping = _resolve_models(current_effective)
 
-    mapping = _prompt_model_mapping(current_effective, mapping, non_interactive=False)
-
     default_model = _prompt_default_model(current_effective, mapping, non_interactive=False)
+
+    mapping = _prompt_model_mapping(current_effective, mapping, non_interactive=False)
 
     return {"tool": work_tool, "model_mapping": mapping, "default_model": default_model}
 
@@ -878,21 +875,18 @@ def _prompt_command_overrides(
     if non_interactive:
         return {"plan": {}, "deps": {}}
 
-    console.rule("Command overrides")
-
     # Build selectable list: installed tools + "Skip (use default)"
     skip_label = "Skip (use default)"
     tool_options = (installed_tools if installed_tools else ["claude", "copilot", "gemini"]) + [
         skip_label
     ]
 
-    cmd_pairs = [("plan", "Planning tasks"), ("deps", "Dependency analysis")]
+    cmd_triples = [("plan", "AI tool", "Planning"), ("deps", "AI tool", "Dependency analysis")]
     result: dict[str, dict[str, str]] = {"plan": {}, "deps": {}}
-    tool_for_cmd: list[str | None] = [None] * len(cmd_pairs)
-    for cmd_idx, (cmd_name, label) in enumerate(cmd_pairs):
-        idx = prompts.select(
-            f"AI tool for {label.lower()}", tool_options, default=len(tool_options) - 1
-        )
+    tool_for_cmd: list[str | None] = [None] * len(cmd_triples)
+    for cmd_idx, (cmd_name, prompt_label, section) in enumerate(cmd_triples):
+        console.rule(section)
+        idx = prompts.select(prompt_label, tool_options, default=len(tool_options) - 1)
         selected_tool = tool_options[idx]
         tool_for_cmd[cmd_idx] = None if selected_tool == skip_label else selected_tool
         result[cmd_name] = {}
@@ -919,13 +913,13 @@ def _prompt_command_overrides(
                 model_options.index(model_default) if model_default in model_options else 0
             )
             chosen_idx = prompts.select(
-                f"  Model for {label.lower()}", model_options, default=default_idx
+                f"  Model for {section.lower()}", model_options, default=default_idx
             )
 
             chosen = model_options[chosen_idx]
             if chosen == custom_label:
                 chosen = prompts.input_prompt(
-                    f"  Model for {label.lower()} (model ID)", model_default
+                    f"  Model for {section.lower()} (model ID)", model_default
                 )
             if chosen and chosen != skip_model_label:
                 result[cmd_name]["model"] = chosen
