@@ -759,7 +759,7 @@ class TestReadManifestVersion:
         manifest.write_text("# Managed by ghaiw 0.1.0\n.ghaiw.yml\n")
         assert _read_manifest_version(tmp_path) == "0.1.0"
 
-    def test_parses_ghaiw_version(self, tmp_path: Path) -> None:
+    def test_parses_ghaiw_version_other_value(self, tmp_path: Path) -> None:
         manifest = tmp_path / MANIFEST_FILENAME
         manifest.write_text("# Managed by ghaiw 3.14.0\n.ghaiw.yml\n")
         assert _read_manifest_version(tmp_path) == "3.14.0"

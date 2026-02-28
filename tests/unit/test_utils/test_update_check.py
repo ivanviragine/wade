@@ -6,7 +6,7 @@ import io
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -20,7 +20,6 @@ from ghaiw.utils.update_check import (
     check_for_update,
     maybe_print_update_hint,
 )
-
 
 # ---------------------------------------------------------------------------
 # _is_newer
@@ -99,7 +98,7 @@ class TestCheckForUpdate:
     def test_returns_none_when_already_current(self, tmp_path: Path) -> None:
         """Returns None when PyPI reports same version as installed."""
         cache_file = tmp_path / "update-check.json"
-        now = datetime.now(timezone.utc).timestamp()
+        now = datetime.now(UTC).timestamp()
         cache_file.write_text(
             json.dumps({"timestamp": now, "latest_version": "1.0.0"}), encoding="utf-8"
         )
@@ -111,7 +110,7 @@ class TestCheckForUpdate:
     def test_returns_latest_when_newer_cached(self, tmp_path: Path) -> None:
         """Returns latest version string when fresh cache shows newer version."""
         cache_file = tmp_path / "update-check.json"
-        now = datetime.now(timezone.utc).timestamp()
+        now = datetime.now(UTC).timestamp()
         cache_file.write_text(
             json.dumps({"timestamp": now, "latest_version": "1.1.0"}), encoding="utf-8"
         )
@@ -123,7 +122,7 @@ class TestCheckForUpdate:
     def test_fetches_when_cache_stale(self, tmp_path: Path) -> None:
         """Fetches from PyPI when cache is older than CHECK_INTERVAL_SECS."""
         cache_file = tmp_path / "update-check.json"
-        stale_ts = datetime.now(timezone.utc).timestamp() - CHECK_INTERVAL_SECS - 1
+        stale_ts = datetime.now(UTC).timestamp() - CHECK_INTERVAL_SECS - 1
         cache_file.write_text(
             json.dumps({"timestamp": stale_ts, "latest_version": "1.0.0"}), encoding="utf-8"
         )
@@ -149,7 +148,7 @@ class TestCheckForUpdate:
     def test_uses_fresh_cache_without_network(self, tmp_path: Path) -> None:
         """Fresh cache is used without making a network call."""
         cache_file = tmp_path / "update-check.json"
-        now = datetime.now(timezone.utc).timestamp()
+        now = datetime.now(UTC).timestamp()
         cache_file.write_text(
             json.dumps({"timestamp": now, "latest_version": "2.0.0"}), encoding="utf-8"
         )
@@ -201,7 +200,9 @@ class TestMaybePrintUpdateHint:
 
         mock_check.assert_not_called()
 
-    def test_prints_nag_when_update_available(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_prints_nag_when_update_available(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """Prints a nag message to stderr when a newer version is found."""
         with (
             patch.dict(os.environ, {}, clear=True),

@@ -66,7 +66,9 @@ class TestParseComplexityFromBody:
         assert parse_complexity_from_body(body) == Complexity.COMPLEX
 
     def test_very_complex(self) -> None:
-        assert parse_complexity_from_body("## Complexity\nvery_complex\n") == Complexity.VERY_COMPLEX
+        assert (
+            parse_complexity_from_body("## Complexity\nvery_complex\n") == Complexity.VERY_COMPLEX
+        )
 
     def test_missing_section(self) -> None:
         assert parse_complexity_from_body("## Tasks\n- do stuff\n") is None

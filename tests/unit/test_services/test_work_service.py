@@ -416,7 +416,10 @@ class TestWorkStart:
             patch("ghaiw.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
             patch("ghaiw.services.work_service._is_inside_ai_cli", return_value=False),
             patch("ghaiw.git.pr.get_pr_for_branch", return_value=None),
-            patch("ghaiw.services.work_service.bootstrap_draft_pr", return_value={"number": 1, "url": "http://test"}),
+            patch(
+                "ghaiw.services.work_service.bootstrap_draft_pr",
+                return_value={"number": 1, "url": "http://test"},
+            ),
             patch("ghaiw.services.work_service.prompts") as mock_prompts,
         ):
             mock_prompts.is_tty.return_value = False
@@ -450,7 +453,10 @@ class TestWorkStart:
             patch("ghaiw.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
             patch("ghaiw.services.work_service._is_inside_ai_cli", return_value=False),
             patch("ghaiw.git.pr.get_pr_for_branch", return_value=None),
-            patch("ghaiw.services.work_service.bootstrap_draft_pr", return_value={"number": 1, "url": "http://test"}),
+            patch(
+                "ghaiw.services.work_service.bootstrap_draft_pr",
+                return_value={"number": 1, "url": "http://test"},
+            ),
             patch("ghaiw.services.work_service.prompts") as mock_prompts,
         ):
             mock_prompts.is_tty.return_value = False
@@ -474,7 +480,10 @@ class TestWorkStart:
                 side_effect=GitError("Branch already exists"),
             ),
             patch("ghaiw.git.pr.get_pr_for_branch", return_value=None),
-            patch("ghaiw.services.work_service.bootstrap_draft_pr", return_value={"number": 1, "url": "http://test"}),
+            patch(
+                "ghaiw.services.work_service.bootstrap_draft_pr",
+                return_value={"number": 1, "url": "http://test"},
+            ),
             patch("ghaiw.services.work_service.prompts") as mock_prompts,
         ):
             mock_prompts.is_tty.return_value = False
@@ -499,7 +508,10 @@ class TestWorkStart:
             patch("ghaiw.services.work_service._is_inside_ai_cli", return_value=False),
             patch("ghaiw.ai_tools.base.AbstractAITool.get") as mock_get,
             patch("ghaiw.git.pr.get_pr_for_branch", return_value=None),
-            patch("ghaiw.services.work_service.bootstrap_draft_pr", return_value={"number": 1, "url": "http://test"}),
+            patch(
+                "ghaiw.services.work_service.bootstrap_draft_pr",
+                return_value={"number": 1, "url": "http://test"},
+            ),
             patch("ghaiw.services.work_service.prompts") as mock_prompts,
         ):
             mock_prompts.is_tty.return_value = False
@@ -529,7 +541,10 @@ class TestWorkStart:
             patch("ghaiw.services.work_service._is_inside_ai_cli", return_value=True),
             patch("ghaiw.ai_tools.base.AbstractAITool.get") as mock_get,
             patch("ghaiw.git.pr.get_pr_for_branch", return_value=None),
-            patch("ghaiw.services.work_service.bootstrap_draft_pr", return_value={"number": 1, "url": "http://test"}),
+            patch(
+                "ghaiw.services.work_service.bootstrap_draft_pr",
+                return_value={"number": 1, "url": "http://test"},
+            ),
             patch("ghaiw.services.work_service.prompts") as mock_prompts,
         ):
             mock_prompts.is_tty.return_value = False

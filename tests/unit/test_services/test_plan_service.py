@@ -281,7 +281,8 @@ class TestTranscriptWiring:
             assert mock_rwt.call_args[0][1] is None
 
     def test_includes_plan_dir_args(self, tmp_path: Path) -> None:
-        """run_ai_planning_session should pass plan_dir inside trusted_dirs to build_launch_command."""
+        """run_ai_planning_session should pass plan_dir inside trusted_dirs
+        to build_launch_command."""
         with (
             patch("ghaiw.services.plan_service.AbstractAITool.get") as mock_get,
             patch("ghaiw.services.plan_service.run_with_transcript") as mock_rwt,

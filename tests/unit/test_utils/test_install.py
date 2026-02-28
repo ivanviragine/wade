@@ -13,7 +13,6 @@ from ghaiw.utils.install import (
     self_upgrade,
 )
 
-
 # ---------------------------------------------------------------------------
 # detect_install_method
 # ---------------------------------------------------------------------------
@@ -126,7 +125,9 @@ class TestSelfUpgrade:
 
     def test_editable_returns_false(self) -> None:
         """When EDITABLE, skip silently and return False."""
-        with patch("ghaiw.utils.install.detect_install_method", return_value=InstallMethod.EDITABLE):
+        with patch(
+            "ghaiw.utils.install.detect_install_method", return_value=InstallMethod.EDITABLE
+        ):
             result = self_upgrade()
 
         assert result is False

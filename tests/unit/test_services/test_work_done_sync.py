@@ -167,8 +167,12 @@ class TestBuildImplUsageBlock:
             input_tokens=3400,
             output_tokens=1100,
             model_breakdown=[
-                ModelBreakdown(model="claude-opus-4-6", input_tokens=3000, output_tokens=1000, cached_tokens=500),
-                ModelBreakdown(model="claude-haiku-4-5", input_tokens=400, output_tokens=100, cached_tokens=0),
+                ModelBreakdown(
+                    model="claude-opus-4-6", input_tokens=3000, output_tokens=1000, cached_tokens=500
+                ),
+                ModelBreakdown(
+                    model="claude-haiku-4-5", input_tokens=400, output_tokens=100, cached_tokens=0
+                ),
             ],
         )
         block = build_impl_usage_block(ai_tool="claude", token_usage=usage)
