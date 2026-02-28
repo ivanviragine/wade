@@ -13,7 +13,7 @@ Turn GitHub Issues into isolated, AI-powered development sessions.
   gh auth login     # follow the prompts
   gh auth status    # verify it worked
   ```
-- One or more AI CLI tools: [Claude Code](https://claude.ai/download), [GitHub Copilot](https://githubnext.com/projects/copilot-cli), [Google Gemini](https://ai.google.dev/gemini-api/docs/gemini-cli), [OpenAI Codex](https://github.com/openai/codex)
+- One or more AI CLI tools: [Claude Code](https://claude.com/product/claude-code), [GitHub Copilot](https://github.com/features/copilot/cli), [Google Gemini](https://geminicli.com/), [OpenAI Codex](https://developers.openai.com/codex/cli/), [OpenCode](https://opencode.ai/), [VS Code](https://github.com/features/copilot/ai-code-editor), or [Antigravity](https://antigravity.google/)
 
 ## Installation
 
@@ -151,10 +151,13 @@ models:
 
 | Tool | Binary |
 |------|--------|
-| [Claude Code](https://claude.ai/download) | `claude` |
-| [GitHub Copilot](https://githubnext.com/projects/copilot-cli) | `copilot` |
-| [Google Gemini](https://ai.google.dev/gemini-api/docs/gemini-cli) | `gemini` |
-| [OpenAI Codex](https://github.com/openai/codex) | `codex` |
+| [Claude Code](https://claude.com/product/claude-code) | `claude` |
+| [GitHub Copilot](https://github.com/features/copilot/cli) | `copilot` |
+| [Google Gemini](https://geminicli.com/) | `gemini` |
+| [OpenAI Codex](https://developers.openai.com/codex/cli/) | `codex` |
+| [OpenCode](https://opencode.ai/) | `opencode` |
+| [VS Code](https://github.com/features/copilot/ai-code-editor) | `code` |
+| [Antigravity](https://antigravity.google/) | `antigravity` |
 
 ## Shell Integration
 
