@@ -1,29 +1,20 @@
-─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[1B[39m[22m  [36m~/Documents/workspace/ghaiw[38;2;153;153;153m [33m(main)[38;2;153;153;153m [2m[[22m[34m144de606[38;2;153;153;153m[2m][22m [2m|[22m [35mOpus 4.6[38;2;153;153;153m [2m[[22m[32m█░░░░░░░░░[38;2;153;153;153m[2m][22m [2m11% in:[22m[36m301[38;2;153;153;153m [2mout:[22m[36m34[39m                                                                                                                            [1B                                                                                                                                                                                                                     [1B                                                                                                                                                                                                                     [1B                                                                                                                                                                                                                     [2A[?2026l]0;✳ Test Connection Check]0;✳ Test Connection Check[?2026h[81C[1A[36m4[5C72[39m
-[?2026l[?2026h[2C[3A[2mcan you give me an overview of this project?[22m
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[1B[39m[22m  [36m~/Documents/workspace/ghaiw[38;2;153;153;153m [33m(main)[38;2;153;153;153m [2m[[22m[34m144de606[38;2;153;153;153m[2m][22m [2m|[22m [35mOpus 4.6[38;2;153;153;153m [2m[[22m[32m█░░░░░░░░░[38;2;153;153;153m[2m][22m [2m11% in:[22m[36m301[38;2;153;153;153m [2mout:[22m[36m34[39m                                                                                                                            [1B                                                                                                                                                                                                                     [1B                                                                                                                                                                                                                     [1B                                                                                                                                                                                                                     [2A[?2026l]0;✳ Test Connection Check]0;✳ Test Connection Check[?2026h[81C[1A[36m4[5C72[39m
+[?2026l[?2026h[2C[3A[2mcan you give me an overview of this project?[22m
 
 
-[?2026l[?2026h[2C[3A[7mc[27m
+[?2026l[?2026h[2C[3A[7mc[27m
 
 
-[?2026l[?2026h[2C[3A/[7m [27m                                          
+[?2026l[?2026h[2C[3A/[7m [27m
 
 
-[?2026l[?2026h[2C[1A[38;2;177;185;249m/statusline             Set up Claude Code's status line UI[39m                            
-[2C[38;2;153;153;153m/init[19CInitialize[1Ca[1Cnew[1CCLAUDE.md[1Cfile[1Cwith[1Ccodebase[1Cdocumentation[39m
-[2C[38;2;153;153;153m/add-dir[16CAdd[1Ca[1Cnew[1Cworking[1Cdirectory[39m
-[2C[38;2;153;153;153m/agents[17CManage[1Cagent[1Cconfigurations[39m
-[2C[38;2;153;153;153m/chrome[17CClaude[1Cin[1CChrome[1C(Beta)[1Csettings[39m
-[2C[38;2;153;153;153m/clear[18CClear[1Cconversation[1Chistory[1Cand[1Cfree[1Cup[1Ccontext[39m
-[?2026l[?2026h[3C[8Ae[7m [27m
-
-
-
-
-
-
-
-[?2026l[?2026h[3C[6A[38;2;177;185;249mextra-usage[12CConfigure extra usage [1Co keep working when limits are hit[3C[1B[38;2;153;153;153mexport[17CExport th[2Ccurrent conversat[1Con[1Cto a[1Cfil[1C or clipboard[39m     [3C[1B[38;2;153;153;153mexit   [16CExit th[1C REPL[39m              [3C[1B[38;2;153;153;153mstatu[1Cline[13CSet up[1CClaude Code's s[1Catu[1C line UI[3C[1Binit  [17CInitial[1Cze a new[1CCLAUDE.md f[1Cle with codebase documentation[3C[1Bremote-env[14Configure the default remote environment for [1Celeport sessions[39m
-[?2026l[?2026h[4C[8Ax[7m [27m
+[?2026l[?2026h[2C[1A[38;2;177;185;249m/statusline             Set up Claude Code's status line UI[39m
+[2C[38;2;153;153;153m/init[19CInitialize[1Ca[1Cnew[1CCLAUDE.md[1Cfile[1Cwith[1Ccodebase[1Cdocumentation[39m
+[2C[38;2;153;153;153m/add-dir[16CAdd[1Ca[1Cnew[1Cworking[1Cdirectory[39m
+[2C[38;2;153;153;153m/agents[17CManage[1Cagent[1Cconfigurations[39m
+[2C[38;2;153;153;153m/chrome[17CClaude[1Cin[1CChrome[1C(Beta)[1Csettings[39m
+[2C[38;2;153;153;153m/clear[18CClear[1Cconversation[1Chistory[1Cand[1Cfree[1Cup[1Ccontext[39m
+[?2026l[?2026h[3C[8Ae[7m [27m
 
 
 
@@ -31,8 +22,8 @@
 
 
 
-[?2026l[?2026h[5C[5A[38;2;153;153;153mit  [19Cit [1Che REPL[39m                                         [5C[1B[38;2;153;153;153mport[19Cpor[1C the current conversation to a file or clipboard[3C[1Bcon[1Cext   [13CVisualize current contex[1C usage as a colored grid[3C[1Bclear[18CClear conversation history[1Cand free up context[39m             [3C[1B[38;2;153;153;153mco[1Cpact   [14Clear conversation history but keep a summa[1Cy in c[1Cn[1Cext. Optional: /compact [instructions for summarization][39m
-[?2026l[?2026h[5C[8Ai[7m [27m
+[?2026l[?2026h[3C[6A[38;2;177;185;249mextra-usage[12CConfigure extra usage [1Co keep working when limits are hit[3C[1B[38;2;153;153;153mexport[17CExport th[2Ccurrent conversat[1Con[1Cto a[1Cfil[1C or clipboard[39m     [3C[1B[38;2;153;153;153mexit   [16CExit th[1C REPL[39m              [3C[1B[38;2;153;153;153mstatu[1Cline[13CSet up[1CClaude Code's s[1Catu[1C line UI[3C[1Binit  [17CInitial[1Cze a new[1CCLAUDE.md f[1Cle with codebase documentation[3C[1Bremote-env[14Configure the default remote environment for [1Celeport sessions[39m
+[?2026l[?2026h[4C[8Ax[7m [27m
 
 
 
@@ -40,17 +31,26 @@
 
 
 
-[?2026l[?2026h[2K[1A[2K[1A[2K[1A[2K[1A[2K[G[1A[5C[1A[38;2;177;185;249mit       [12CExit the REPL[39m                                            [1B                                                                                                                                                                                                                     [1B                                                                                                                                                                                                                     [1B                                                                                                                                                                                                                     [1B                                                                                                                                                                                                                     [1B                                                                                                                                                                                                                     [4A[?2026l[?2026h[2C[3A[38;2;177;185;249m/exit[39m[7m [27m
+[?2026l[?2026h[5C[5A[38;2;153;153;153mit  [19Cit [1Che REPL[39m                                         [5C[1B[38;2;153;153;153mport[19Cpor[1C the current conversation to a file or clipboard[3C[1Bcon[1Cext   [13CVisualize current contex[1C usage as a colored grid[3C[1Bclear[18CClear conversation history[1Cand free up context[39m             [3C[1B[38;2;153;153;153mco[1Cpact   [14Clear conversation history but keep a summa[1Cy in c[1Cn[1Cext. Optional: /compact [instructions for summarization][39m
+[?2026l[?2026h[5C[8Ai[7m [27m
 
 
-[?2026l[?2026h[2C[38;2;153;153;153m/extra-usage[12CConfigure[1Cextra[1Cusage[1Cto[1Ckeep[1Cworking[1Cwhen[1Climits[1Care[1Chit[39m
-[2C[38;2;153;153;153m/context[16CVisualize[1Ccurrent[1Ccontext[1Cusage[1Cas[1Ca[1Ccolored[1Cgrid[39m
-[2C[38;2;153;153;153m/memory[17CEdit[1CClaude[1Cmemory[1Cfiles[39m
-[2C[38;2;153;153;153m/vim[20CToggle[1Cbetween[1CVim[1Cand[1CNormal[1Cediting[1Cmodes[39m
-[2C[38;2;153;153;153m/clear[18CClear[1Cconversation[1Chistory[1Cand[1Cfree[1Cup[1Ccontext[39m
-[?2026l[?2026h[9A[48;2;55;55;55m[38;2;80;80;80m❯ [38;2;255;255;255m/exit  [39m[49m                                                                                                                                                                                                            [1B        [1B[38;2;215;119;87m*[39m [38;2;234;158;126mForging…[38;2;215;119;87m [39m                                                                                                                                                                                                          [2C[1B⎿  [38;2;153;153;153mTip: You have free guest passes to share · [38;2;215;119;87m/passes[2C[1B[39m                                                                                 [1B[2m[38;2;136;136;136m─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[1B[22m[38;2;153;153;153m❯ [39m[7m [27m                                               [1B[2m[38;2;136;136;136m─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[2C[1B[22m[36m~/Documents/workspace/ghaiw[38;2;153;153;153m [33m(main)[38;2;153;153;153m [2m[[22m[34m144de606[38;2;153;153;153m[2m][22m [2m|[22m [35mOpus 4.6[38;2;153;153;153m [2m[[22m[32m█░░░░░░░░░[38;2;153;153;153m[2m][22m [2m11% in:[22m[36m304[38;2;153;153;153m [2mout:[22m[36m72[39m
-[?2026l]0;✳ Test Connection Check[?2026h[2K[1A[2K[G[1A[8C[7A [1B[38;2;255;255;255m  ⎿  [39mBye![1B [1C         [1B[2m[38;2;136;136;136m─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[1B[39m[22m❯ [7m [2B[27m  [36m~/Documents/workspace/ghaiw[38;2;153;153;153m [33m(main)[38;2;153;153;153m [2m[[22m[34m144de606[38;2;153;153;153m[2m][22m [2m|[22m [35mOpus 4.6[38;2;153;153;153m [2m[[22m[32m█░░░░░░░░░[38;2;153;153;153m[2m][22m [2m11% in:[22m[36m304[38;2;153;153;153m [2mout:[22m[36m72[1B[39m                                                                                                                                                                                                                     [1B                                                                                                                                                                                                                     [1A[?2026l]0;✳ Test Connection Check]0;✳ Test Connection Check[?2026h[191C[1A[38;2;153;153;153mChecking for updates[39m
-[?2026l[?2026h[79C[1A[36m599[5C85[39m
+
+
+
+
+
+[?2026l[?2026h[2K[1A[2K[1A[2K[1A[2K[1A[2K[G[1A[5C[1A[38;2;177;185;249mit       [12CExit the REPL[39m                                            [1B                                                                                                                                                                                                                     [1B                                                                                                                                                                                                                     [1B                                                                                                                                                                                                                     [1B                                                                                                                                                                                                                     [1B                                                                                                                                                                                                                     [4A[?2026l[?2026h[2C[3A[38;2;177;185;249m/exit[39m[7m [27m
+
+
+[?2026l[?2026h[2C[38;2;153;153;153m/extra-usage[12CConfigure[1Cextra[1Cusage[1Cto[1Ckeep[1Cworking[1Cwhen[1Climits[1Care[1Chit[39m
+[2C[38;2;153;153;153m/context[16CVisualize[1Ccurrent[1Ccontext[1Cusage[1Cas[1Ca[1Ccolored[1Cgrid[39m
+[2C[38;2;153;153;153m/memory[17CEdit[1CClaude[1Cmemory[1Cfiles[39m
+[2C[38;2;153;153;153m/vim[20CToggle[1Cbetween[1CVim[1Cand[1CNormal[1Cediting[1Cmodes[39m
+[2C[38;2;153;153;153m/clear[18CClear[1Cconversation[1Chistory[1Cand[1Cfree[1Cup[1Ccontext[39m
+[?2026l[?2026h[9A[48;2;55;55;55m[38;2;80;80;80m❯ [38;2;255;255;255m/exit  [39m[49m                                                                                                                                                                                                            [1B        [1B[38;2;215;119;87m*[39m [38;2;234;158;126mForging…[38;2;215;119;87m [39m                                                                                                                                                                                                          [2C[1B⎿  [38;2;153;153;153mTip: You have free guest passes to share · [38;2;215;119;87m/passes[2C[1B[39m                                                                                 [1B[2m[38;2;136;136;136m─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[1B[22m[38;2;153;153;153m❯ [39m[7m [27m                                               [1B[2m[38;2;136;136;136m─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[2C[1B[22m[36m~/Documents/workspace/ghaiw[38;2;153;153;153m [33m(main)[38;2;153;153;153m [2m[[22m[34m144de606[38;2;153;153;153m[2m][22m [2m|[22m [35mOpus 4.6[38;2;153;153;153m [2m[[22m[32m█░░░░░░░░░[38;2;153;153;153m[2m][22m [2m11% in:[22m[36m304[38;2;153;153;153m [2mout:[22m[36m72[39m
+[?2026l]0;✳ Test Connection Check[?2026h[2K[1A[2K[G[1A[8C[7A [1B[38;2;255;255;255m  ⎿  [39mBye![1B [1C         [1B[2m[38;2;136;136;136m─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[1B[39m[22m❯ [7m [2B[27m  [36m~/Documents/workspace/ghaiw[38;2;153;153;153m [33m(main)[38;2;153;153;153m [2m[[22m[34m144de606[38;2;153;153;153m[2m][22m [2m|[22m [35mOpus 4.6[38;2;153;153;153m [2m[[22m[32m█░░░░░░░░░[38;2;153;153;153m[2m][22m [2m11% in:[22m[36m304[38;2;153;153;153m [2mout:[22m[36m72[1B[39m                                                                                                                                                                                                                     [1B                                                                                                                                                                                                                     [1A[?2026l]0;✳ Test Connection Check]0;✳ Test Connection Check[?2026h[191C[1A[38;2;153;153;153mChecking for updates[39m
+[?2026l[?2026h[79C[1A[36m599[5C85[39m
 [?2026l[<u[?1004l[?2004l[?25h]9;4;0;[2m[22m
 [2mResume this session with:[22m
 [2mclaude --resume 144de606-0d30-4543-aa72-a68b78a48c7a[22m
