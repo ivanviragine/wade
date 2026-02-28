@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.0.2] — 2026-02-28
+
+### Refactoring
+
+- rework init wizard flow and section names (87abb47)
+
 ## [v1.0.1] — 2026-02-28
 
 ### Features
