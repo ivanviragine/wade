@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.0.1] — 2026-02-28
+
+### Features
+
+- frictionless install and seamless updates for open-source release (db6d710)
+
+### Bug Fixes
+
+- default init AI tool selects to "Skip" and shorten section names (be4682c)
+
+### Documentation
+
+- fix AI tool links and add missing tools (opencode, vscode, antigravity) (8541462)
+- add links to AI tool homepages in README (dc00931)
+- add gh CLI auth instructions for users and contributors (aaaef0a)
+- rewrite README for users, move contributor content to CONTRIBUTING.md (c0f2360)
+
+### Tests
+
+- fix ruff E501/F811/I001/UP017 lint errors in test files (0053c13)
+
+### Chores
+
+- fix trailing whitespace in transcript fixtures (a6283d4)
+
 ## [v1.0.0] — 2026-02-28
 
 ### Features
