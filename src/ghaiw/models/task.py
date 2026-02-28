@@ -32,6 +32,7 @@ class LabelType(StrEnum):
 
     ISSUE_LABEL = "issue_label"
     IN_PROGRESS = "in_progress"
+    COMPLEXITY = "complexity"
     PLANNED_BY = "planned_by"
     PLANNED_MODEL = "planned_model"
     WORKED_BY = "worked_by"
@@ -84,6 +85,22 @@ def parse_complexity_from_body(body: str) -> Complexity | None:
                 match = re.match(r"(easy|medium|complex|very_complex)", text)
                 if match:
                     return Complexity(match.group(1))
+    return None
+
+
+def parse_complexity_from_labels(labels: list[Label]) -> Complexity | None:
+    """Extract complexity from a ``complexity:X`` label.
+
+    Scans labels for one matching ``complexity:<value>`` where value is a
+    known :class:`Complexity` member.  Returns the first match or ``None``.
+    """
+    for label in labels:
+        if label.name.startswith("complexity:"):
+            value = label.name.removeprefix("complexity:")
+            try:
+                return Complexity(value)
+            except ValueError:
+                continue
     return None
 
 

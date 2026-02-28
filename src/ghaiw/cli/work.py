@@ -1,4 +1,4 @@
-"""Work subcommands — start, done, sync, list, batch, remove, cd."""
+"""Work subcommands — done, sync, list, batch, remove, cd."""
 
 from __future__ import annotations
 
@@ -24,7 +24,6 @@ def work_callback(ctx: typer.Context) -> None:
     from ghaiw.ui.console import console
 
     menu_items = [
-        "Start a work session",
         "Finalize work (create PR or merge)",
         "Sync branch with main",
         "List active work sessions",
@@ -32,7 +31,6 @@ def work_callback(ctx: typer.Context) -> None:
         "Remove a worktree",
     ]
     hints = [
-        "work start",
         "work done",
         "work sync",
         "work list",
@@ -40,22 +38,15 @@ def work_callback(ctx: typer.Context) -> None:
         "work remove",
     ]
 
+    console.hint("Use `ghaiw implement-task <N>` to start a work session.")
+
     idx = prompts.menu("ghaiw work", menu_items, hints=hints)
 
     # Map menu selection to subcommand invocations
-    subcommands = ["start", "done", "sync", "list", "batch", "remove"]
+    subcommands = ["done", "sync", "list", "batch", "remove"]
     selected = subcommands[idx]
 
-    if selected == "start":
-        from ghaiw.services.task_service import prompt_task_selection
-
-        target = prompt_task_selection("Issue number or plan file")
-        if target:
-            from ghaiw.services.work_service import start as do_start
-
-            success = do_start(target=target)
-            raise typer.Exit(0 if success else 1)
-    elif selected == "done":
+    if selected == "done":
         from ghaiw.services.work_service import done as do_done
 
         success = do_done()
@@ -82,42 +73,6 @@ def work_callback(ctx: typer.Context) -> None:
             raise typer.Exit(0 if success else 1)
 
     raise typer.Exit(0)
-
-
-@work_app.command()
-def start(
-    target: str = typer.Argument(..., help="Issue number or plan file path."),
-    ai: list[str] | None = typer.Option(  # noqa: B008
-        None, "--ai", help="AI tool to use.", autocompletion=complete_ai_tools
-    ),
-    model: str | None = typer.Option(
-        None, "--model", help="AI model to use.", autocompletion=complete_models
-    ),
-    detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
-    cd_only: bool = typer.Option(
-        False, "--cd", help="Create worktree and print path (no AI launch)."
-    ),
-) -> None:
-    """Start a work session on an issue."""
-    from ghaiw.services.work_service import start as do_start
-    from ghaiw.ui import prompts
-
-    # Resolve multiple --ai flags to a single value
-    selected_ai: str | None = None
-    if ai and len(ai) > 1:
-        idx = prompts.select("Select AI tool", ai)
-        selected_ai = ai[idx]
-    elif ai and len(ai) == 1:
-        selected_ai = ai[0]
-
-    success = do_start(
-        target=target,
-        ai_tool=selected_ai,
-        model=model,
-        detach=detach,
-        cd_only=cd_only,
-    )
-    raise typer.Exit(0 if success else 1)
 
 
 @work_app.command()

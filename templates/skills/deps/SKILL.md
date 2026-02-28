@@ -15,7 +15,7 @@ dependency graphs and update issue bodies.
 
 ## When to activate
 
-- After `ghaiw task plan` creates multiple issues
+- After `ghaiw plan-task` creates multiple issues
 - When `ghaiw task deps` is run on existing issues
 - When the user asks to analyze dependencies between issues
 

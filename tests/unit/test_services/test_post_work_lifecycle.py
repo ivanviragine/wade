@@ -244,7 +244,13 @@ def test_direct_strategy_merge_and_close(
 @patch("ghaiw.services.work_service._resolve_target")
 @patch("ghaiw.services.work_service.get_provider")
 @patch("ghaiw.services.work_service.load_config")
+@patch("ghaiw.services.work_service.git_pr.get_pr_for_branch", return_value=None)
+@patch("ghaiw.services.work_service.bootstrap_draft_pr", return_value={"number": 1, "url": "http://test"})
+@patch("ghaiw.services.work_service.prompts")
 def test_lifecycle_skipped_in_detach_mode(
+    mock_prompts: MagicMock,
+    _mock_bootstrap_pr: MagicMock,
+    _mock_get_pr: MagicMock,
     mock_load_config: MagicMock,
     _mock_get_provider: MagicMock,
     mock_resolve_target: MagicMock,
@@ -263,6 +269,7 @@ def test_lifecycle_skipped_in_detach_mode(
     mock_load_config.return_value = _config(MergeStrategy.PR)
     mock_get_repo_root.return_value = tmp_path
     mock_resolve_target.return_value = Task(id="42", title="Test")
+    mock_prompts.is_tty.return_value = False
     adapter = MagicMock()
     adapter.build_launch_command.return_value = ["claude"]
     mock_get_adapter.return_value = adapter
@@ -291,7 +298,13 @@ def test_lifecycle_skipped_in_detach_mode(
 @patch("ghaiw.services.work_service.AbstractAITool.get")
 @patch("ghaiw.services.work_service.get_provider")
 @patch("ghaiw.services.work_service.load_config")
+@patch("ghaiw.services.work_service.git_pr.get_pr_for_branch", return_value=None)
+@patch("ghaiw.services.work_service.bootstrap_draft_pr", return_value={"number": 1, "url": "http://test"})
+@patch("ghaiw.services.work_service.prompts")
 def test_lifecycle_runs_after_ai_crash(
+    mock_prompts: MagicMock,
+    _mock_bootstrap_pr: MagicMock,
+    _mock_get_pr: MagicMock,
     mock_load_config: MagicMock,
     _mock_get_provider: MagicMock,
     mock_get_adapter: MagicMock,
@@ -315,6 +328,7 @@ def test_lifecycle_runs_after_ai_crash(
     mock_load_config.return_value = _config(MergeStrategy.PR)
     mock_get_repo_root.return_value = tmp_path
     mock_resolve_target.return_value = Task(id="42", title="Test")
+    mock_prompts.is_tty.return_value = False
     adapter = MagicMock()
     adapter.is_model_compatible.return_value = True
     adapter.launch.side_effect = RuntimeError("ai crashed")

@@ -65,17 +65,17 @@ def _interactive_main_menu() -> None:
     from ghaiw.ui import prompts
 
     menu_items = [
-        "Start working on a task",
+        "Implement a task",
         "List active worktrees",
         "Create a new task",
         "Plan tasks with AI",
         "Show help",
     ]
     hints = [
-        "work start",
+        "implement-task",
         "work list",
-        "task create",
-        "task plan",
+        "new-task",
+        "plan-task",
         "--help",
     ]
 
@@ -86,7 +86,7 @@ def _interactive_main_menu() -> None:
         version=f"ghaiw v{ghaiw.__version__}",
     )
 
-    if idx == 0:  # Start working
+    if idx == 0:  # Implement task
         from ghaiw.services.task_service import prompt_task_selection
 
         target = prompt_task_selection("Issue number")
@@ -114,12 +114,83 @@ def _interactive_main_menu() -> None:
     raise typer.Exit(0)
 
 
+# --- Top-level commands (clean break) ---
+
+from ghaiw.cli.autocomplete import complete_ai_tools, complete_models  # noqa: E402
+
+
+@app.command("plan-task")
+def plan_task_cmd(
+    ai: str | None = typer.Option(
+        None, "--ai", help="AI tool to use for planning.", autocompletion=complete_ai_tools
+    ),
+    model: str | None = typer.Option(
+        None, "--model", help="AI model to use.", autocompletion=complete_models
+    ),
+) -> None:
+    """Plan tasks with AI — creates lightweight issues + draft PRs."""
+    from ghaiw.services.plan_service import plan as do_plan
+
+    success = do_plan(ai_tool=ai, model=model)
+    raise typer.Exit(0 if success else 1)
+
+
+@app.command("new-task")
+def new_task_cmd() -> None:
+    """Create a new GitHub Issue interactively."""
+    from ghaiw.services.task_service import create_interactive
+    from ghaiw.ui.console import console
+
+    task = create_interactive()
+    if task:
+        console.empty()
+        console.info("When you're ready to implement, run:")
+        console.detail(f"ghaiw implement-task {task.id}")
+    raise typer.Exit(0 if task else 1)
+
+
+@app.command("implement-task")
+def implement_task_cmd(
+    target: str = typer.Argument(..., help="Issue number."),
+    ai: list[str] | None = typer.Option(  # noqa: B008
+        None, "--ai", help="AI tool to use.", autocompletion=complete_ai_tools
+    ),
+    model: str | None = typer.Option(
+        None, "--model", help="AI model to use.", autocompletion=complete_models
+    ),
+    detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
+    cd_only: bool = typer.Option(
+        False, "--cd", help="Create worktree and print path (no AI launch)."
+    ),
+) -> None:
+    """Start an implementation session on an issue — detects draft PR plans."""
+    from ghaiw.services.work_service import start as do_start
+    from ghaiw.ui import prompts
+
+    # Resolve multiple --ai flags to a single value
+    selected_ai: str | None = None
+    if ai and len(ai) > 1:
+        idx = prompts.select("Select AI tool", ai)
+        selected_ai = ai[idx]
+    elif ai and len(ai) == 1:
+        selected_ai = ai[0]
+
+    success = do_start(
+        target=target,
+        ai_tool=selected_ai,
+        model=model,
+        detach=detach,
+        cd_only=cd_only,
+    )
+    raise typer.Exit(0 if success else 1)
+
+
 # Register subcommand groups
 from ghaiw.cli.admin import admin_app  # noqa: E402
 from ghaiw.cli.task import task_app  # noqa: E402
 from ghaiw.cli.work import work_app  # noqa: E402
 
-app.add_typer(task_app, name="task", help="GitHub Issue CRUD + AI planning.")
+app.add_typer(task_app, name="task", help="GitHub Issue CRUD.")
 app.add_typer(task_app, name="tasks", hidden=True)  # alias
 app.add_typer(work_app, name="work", help="Work session lifecycle.")
 

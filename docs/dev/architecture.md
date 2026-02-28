@@ -52,8 +52,8 @@ src/ghaiw/
 ├── cli/                 # Typer commands (thin dispatch)
 │   ├── main.py          # Root app + interactive menu, subcommand registration
 │   ├── admin.py         # init, update, deinit, check, check-config, shell-init
-│   ├── task.py          # task plan/create/list/read/update/close/deps
-│   ├── work.py          # work start/done/sync/list/batch/remove/cd (interactive menu)
+│   ├── task.py          # task list/read/update/close/deps
+│   ├── work.py          # work done/sync/list/batch/remove/cd (interactive menu)
 │   └── autocomplete.py  # Shell autocompletion helpers
 ├── models/              # Pydantic domain models (pure data, no I/O)
 │   ├── config.py        # ProjectConfig, ProjectSettings, AIConfig, ComplexityModelMapping
@@ -127,7 +127,7 @@ src/ghaiw/
 
 CLI modules are **thin dispatch layers** — they parse flags via Typer, then call service methods. Business logic lives in `services/`, not in `cli/`.
 
-**Interactive menus**: `ghaiw work` with no subcommand shows an interactive menu (start/done/sync/list/batch/remove). `ghaiw task create` without `--plan-file` prompts interactively for title and body.
+**Interactive menus**: `ghaiw work` with no subcommand shows an interactive menu (done/sync/list/batch/remove). `ghaiw new-task` prompts interactively for title and body. Top-level commands `plan-task`, `new-task`, and `implement-task` are registered directly on the root app.
 
 **Shell integration**: `ghaiw shell-init` outputs a shell function wrapper for `eval "$(ghaiw shell-init)"` that intercepts `ghaiw work cd <n>` to perform a real `cd` in the caller's shell.
 
@@ -166,7 +166,7 @@ hooks:
     - .env
 ```
 
-**Model complexity mapping**: The `models` section maps AI tool names to complexity-tiered model IDs (`easy`, `medium`, `complex`, `very_complex`). When `work start` is invoked, the service reads the `## Complexity` section from the issue body, maps it to the appropriate configured model, and passes it as `--model` to the AI tool — unless the user explicitly passed `--model` themselves.
+**Model complexity mapping**: The `models` section maps AI tool names to complexity-tiered model IDs (`easy`, `medium`, `complex`, `very_complex`). When `implement-task` is invoked, the service reads the `complexity:X` label from the issue (falling back to `## Complexity` in the body), maps it to the appropriate configured model, and passes it as `--model` to the AI tool — unless the user explicitly passed `--model` themselves.
 
 **Per-command AI tool and model overrides**: The `ai` section supports `plan`, `deps`, and `work` sub-sections, each with optional `tool` and `model` keys. The fallback chain is: CLI `--ai`/`--model` flag -> command-specific config -> global `default_tool`. This is implemented in `ProjectConfig.get_ai_tool(command)` and `ProjectConfig.get_model(command)`.
 
@@ -213,18 +213,18 @@ Each AI tool adapter implements `capabilities()` (binary name, model flag syntax
 
 ## Issue Detection (Snapshot/Diff Pattern)
 
-`task plan` uses a snapshot/diff pattern to detect issues created during an AI session (Path A — backward-compatible fallback):
+`plan-task` uses a snapshot/diff pattern to detect issues created during an AI session (Path A — fallback):
 
 1. **Before AI** — Snapshot all open issue numbers with the configured label
-2. **AI runs** — The agent creates issues via `ghaiw task create` from within the AI CLI
+2. **AI runs** — The agent creates issues via `ghaiw new-task` from within the AI CLI
 3. **After AI** — Compare current issue numbers against the pre-snapshot, returning only newly created ones
 
-This avoids requiring the AI to report back which issues it created — the service detects them deterministically. When no issues are detected (Path B), the service reads plan files from the session temp dir instead.
+This avoids requiring the AI to report back which issues it created — the service detects them deterministically. When no issues are detected (Path B), the service reads plan files from the session temp dir and creates lightweight issues + draft PRs.
 
 ## Merge Strategy
 
 `MergeStrategy` (config key `project.merge_strategy`) controls how feature branches are merged into main:
-- **`PR`** (default) — The agent runs `ghaiw work done` during its session to push the branch and create a PR via `gh pr create`. The worktree is **not** cleaned up by `work done` — it is cleaned up automatically by `work start` after the human merges the PR. When the tool exits, `work start`'s post-work prompt detects the PR and asks "Do you want to merge this PR?" — if yes, squash-merges via `gh pr merge --squash --delete-branch`.
+- **`PR`** (default) — The agent runs `ghaiw work done` during its session to push the branch and update the existing draft PR (or create one if missing). The worktree is **not** cleaned up by `work done` — it is cleaned up automatically by `implement-task` after the human merges the PR. When the tool exits, `implement-task`'s post-work prompt detects the PR and asks "Do you want to merge this PR?" — if yes, squash-merges via `gh pr merge --squash --delete-branch`.
 - **`direct`** — Merge locally into main, push, and clean up the worktree. Useful for solo projects or repos without branch protection.
 
 `ghaiw work done` handles PR creation / direct merge. The post-work lifecycle prompt handles the merge decision (PR strategy) or local merge options (direct strategy).
@@ -251,7 +251,7 @@ When ghaiw installs skills into a target project (`ghaiw init`), the skills refe
 
 ## CLI Flag Reference
 
-**`ghaiw work start`:**
+**`ghaiw implement-task`:**
 - `--detach` — Launch AI in a new terminal tab/window (non-blocking). Uses `build_launch_command()` + `launch_in_new_terminal()`.
 - `--cd` — Create worktree, print its path to stdout, and exit (no AI launch). Used internally by `ghaiw work cd`.
 
@@ -270,8 +270,8 @@ When ghaiw installs skills into a target project (`ghaiw init`), the skills refe
 **`ghaiw update`:**
 - `--skip-self-upgrade` — Skip the source-version self-upgrade check.
 
-**`ghaiw task create`:**
-- No flags required — when `--plan-file` is omitted, prompts interactively for title and body.
+**`ghaiw new-task`:**
+- No flags required — prompts interactively for title and body.
 
 **`ghaiw shell-init`:**
 - No flags. Outputs a shell function for `eval "$(ghaiw shell-init)"`.

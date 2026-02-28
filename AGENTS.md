@@ -108,7 +108,7 @@ When developing ghaiw, **only touch the left column**. Always edit `templates/sk
 - **Functions**: `snake_case` — `_` prefix for private helpers
 - **Constants**: `UPPER_SNAKE_CASE`
 - **Enums**: `StrEnum` for string-valued enums
-- **CLI commands**: match Bash ghaiw commands (`ghaiw task plan`, `ghaiw work start`)
+- **CLI commands**: top-level commands (`ghaiw plan-task`, `ghaiw implement-task`)
 
 ### Commits
 
@@ -149,7 +149,7 @@ prompt for full session rules.
 
 Critical rules you must always follow:
 
-1. Never create GitHub Issues via `gh issue create` — use `ghaiw task create`
+1. Never create GitHub Issues via `gh issue create` — use `ghaiw new-task`
    or read @.claude/skills/task/SKILL.md
 2. Never create PRs manually (`gh pr create`) or push branches directly — use
    `ghaiw work done`

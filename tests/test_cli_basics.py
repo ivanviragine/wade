@@ -36,28 +36,38 @@ class TestHelp:
     def test_task_help(self) -> None:
         result = runner.invoke(app, ["task", "--help"])
         assert result.exit_code == 0
-        assert "plan" in result.output
-        assert "create" in result.output
         assert "list" in result.output
+        assert "read" in result.output
+        # plan and create are now top-level commands, not under task
+        assert "plan" not in result.output
+        assert "create" not in result.output
 
     def test_work_help(self) -> None:
         result = runner.invoke(app, ["work", "--help"])
         assert result.exit_code == 0
-        assert "start" in result.output
         assert "done" in result.output
         assert "sync" in result.output
+        # start is now top-level implement-task, not under work
+        assert "start" not in result.output
+
+    def test_top_level_commands_in_help(self) -> None:
+        result = runner.invoke(app, ["--help"])
+        assert result.exit_code == 0
+        assert "plan-task" in result.output
+        assert "new-task" in result.output
+        assert "implement-task" in result.output
 
 
 class TestCommandBehaviorWithoutContext:
     """Verify subcommand exit codes and output when run without git/gh context."""
 
-    def test_task_plan_exits_without_ai(self) -> None:
-        # task plan exits 1 when no AI tool / gh available
-        result = runner.invoke(app, ["task", "plan"])
+    def test_plan_task_exits_without_ai(self) -> None:
+        # plan-task exits 1 when no AI tool / gh available
+        result = runner.invoke(app, ["plan-task"])
         assert result.exit_code == 1
 
-    def test_task_create_requires_plan_file(self) -> None:
-        result = runner.invoke(app, ["task", "create"])
+    def test_new_task_requires_title(self) -> None:
+        result = runner.invoke(app, ["new-task"])
         assert result.exit_code == 1
         assert "Title is required" in result.output
 

@@ -30,11 +30,12 @@ from ghaiw.models.task import PlanFile
 from ghaiw.providers.base import AbstractTaskProvider
 from ghaiw.providers.registry import get_provider
 from ghaiw.services.task_service import (
+    add_complexity_label,
     add_planned_by_labels,
     apply_plan_token_usage,
-    create_from_plan_file,
     ensure_issue_label,
 )
+from ghaiw.services.work_service import bootstrap_draft_pr
 from ghaiw.ui.console import console
 from ghaiw.utils.process import run_with_transcript
 
@@ -271,10 +272,20 @@ def plan(
         except (ValueError, KeyError):
             pass
 
-    console.rule("ghaiw task plan")
+    console.rule("ghaiw plan-task")
     console.kv("AI tool", resolved_tool)
     if resolved_model:
         console.kv("Model", resolved_model)
+
+    # Resolve repo root for draft PR creation
+    from ghaiw.git import repo as git_repo
+
+    cwd = project_root or Path.cwd()
+    try:
+        repo_root = git_repo.get_repo_root(cwd)
+    except Exception:
+        console.warn("Not in a git repo — draft PRs will not be created.")
+        repo_root = None
 
     # Ensure task label exists
     ensure_issue_label(provider, config.project.issue_label)
@@ -319,6 +330,14 @@ def plan(
 
     if new_issue_numbers:
         console.success(f"Detected {len(new_issue_numbers)} new issue(s)")
+        # Bootstrap draft PRs for issues created during AI session
+        if repo_root is not None:
+            _bootstrap_draft_prs_for_issues(
+                provider=provider,
+                config=config,
+                issue_numbers=new_issue_numbers,
+                repo_root=repo_root,
+            )
         _finalize_issues(
             provider=provider,
             config=config,
@@ -339,6 +358,7 @@ def plan(
             provider=provider,
             config=config,
             plan_files=plan_files,
+            repo_root=repo_root,
         )
         if created_numbers:
             _finalize_issues(
@@ -360,25 +380,168 @@ def plan(
     return False
 
 
+def _build_lightweight_issue_body(plan: PlanFile) -> str:
+    """Extract a brief context from the plan for the lightweight issue body.
+
+    Takes the first ~500 characters of the ``## Context / Problem`` section
+    (or falls back to the first paragraph of the full body).
+    """
+    # Try to find a context section
+    for key in ("context / problem", "context", "problem"):
+        if key in plan.sections:
+            text = plan.sections[key].strip()
+            if len(text) > 500:
+                # Truncate at sentence boundary if possible
+                cut = text[:500].rfind(". ")
+                text = text[: cut + 1] if cut > 250 else text[:500] + "…"
+            return text
+
+    # Fallback: first paragraph of the body
+    paragraphs = plan.body.split("\n\n")
+    if paragraphs:
+        text = paragraphs[0].strip()
+        if text.startswith("## "):
+            # Skip the heading, take the next paragraph
+            text = paragraphs[1].strip() if len(paragraphs) > 1 else ""
+        if len(text) > 500:
+            cut = text[:500].rfind(". ")
+            text = text[: cut + 1] if cut > 250 else text[:500] + "…"
+        return text
+
+    return ""
+
+
 def _create_issues_from_plans(
     provider: AbstractTaskProvider,
     config: ProjectConfig,
     plan_files: list[PlanFile],
+    repo_root: Path | None = None,
 ) -> list[str]:
-    """Create GitHub issues from validated plan files.
+    """Create lightweight GitHub issues + draft PRs from validated plan files.
+
+    Each plan file produces:
+    1. A lightweight issue (title + brief context)
+    2. A ``complexity:X`` label
+    3. A draft PR with the full plan content
 
     Returns list of created issue numbers.
     """
+    from ghaiw.git import repo as git_repo
+
     created: list[str] = []
+
+    # Resolve repo root for draft PR creation
+    if repo_root is None:
+        try:
+            repo_root = git_repo.get_repo_root(Path.cwd())
+        except Exception:
+            console.warn("Not in a git repo — skipping draft PR creation.")
+            repo_root = None
+
     for plan in plan_files:
-        task = create_from_plan_file(
-            plan_file=plan.path,
-            config=config,
-            provider=provider,
-        )
-        if task:
-            created.append(task.id)
+        # Build lightweight body
+        brief_body = _build_lightweight_issue_body(plan)
+
+        # Create the issue with lightweight body
+        console.step(f"Creating issue: {plan.title}")
+        try:
+            task = provider.create_task(
+                title=plan.title,
+                body=brief_body,
+                labels=[config.project.issue_label],
+            )
+            console.success(f"Created {console.issue_ref(task.id, task.title)}")
+        except Exception as e:
+            console.error(f"Failed to create issue: {e}")
+            continue
+
+        # Add complexity label
+        if plan.complexity:
+            try:
+                add_complexity_label(provider, task.id, plan.complexity)
+            except Exception as e:
+                logger.warning("plan.complexity_label_failed", error=str(e))
+
+        # Bootstrap draft PR with full plan content
+        if repo_root is not None:
+            pr_info = bootstrap_draft_pr(
+                issue_number=task.id,
+                issue_title=task.title,
+                plan_body=plan.body,
+                config=config,
+                repo_root=repo_root,
+            )
+            if pr_info:
+                pr_number = pr_info.get("number", "?")
+                pr_url = pr_info.get("url", "")
+                console.success(f"Draft PR #{pr_number}: {pr_url}")
+
+                # Update issue body with PR link
+                updated_body = brief_body.rstrip("\n") + f"\n\n**Full plan**: PR #{pr_number}"
+                try:
+                    provider.update_task(task.id, body=updated_body)
+                except Exception as e:
+                    logger.warning("plan.pr_link_update_failed", error=str(e))
+            else:
+                console.warn(f"Could not create draft PR for #{task.id}")
+
+        created.append(task.id)
+
     return created
+
+
+def _bootstrap_draft_prs_for_issues(
+    provider: AbstractTaskProvider,
+    config: ProjectConfig,
+    issue_numbers: list[str],
+    repo_root: Path,
+) -> None:
+    """Bootstrap draft PRs for issues that were created during AI session (Path A).
+
+    For each issue, reads its current body and uses it as the plan content
+    for the draft PR. Also adds complexity labels from the issue body.
+    """
+    from ghaiw.models.task import parse_complexity_from_body
+
+    for issue_id in issue_numbers:
+        try:
+            task = provider.read_task(issue_id)
+        except Exception:
+            logger.warning("plan.issue_read_failed_for_pr", issue_id=issue_id)
+            continue
+
+        # Add complexity label if complexity is detectable
+        complexity = parse_complexity_from_body(task.body) if task.body else None
+        if complexity:
+            try:
+                add_complexity_label(provider, issue_id, complexity)
+            except Exception as e:
+                logger.warning("plan.complexity_label_failed", error=str(e))
+
+        # Bootstrap draft PR with the issue body as plan content
+        plan_body = task.body or f"Implements #{issue_id}: {task.title}"
+        pr_info = bootstrap_draft_pr(
+            issue_number=issue_id,
+            issue_title=task.title,
+            plan_body=plan_body,
+            config=config,
+            repo_root=repo_root,
+        )
+        if pr_info:
+            pr_number = pr_info.get("number", "?")
+            pr_url = pr_info.get("url", "")
+            console.success(f"Draft PR #{pr_number} for #{issue_id}: {pr_url}")
+
+            # Update issue body: make it lightweight (remove full plan, add PR link)
+            brief_body = task.body[:500] if task.body else ""
+            if len(task.body or "") > 500:
+                cut = brief_body.rfind(". ")
+                brief_body = brief_body[: cut + 1] if cut > 250 else brief_body + "…"
+            updated_body = brief_body.rstrip("\n") + f"\n\n**Full plan**: PR #{pr_number}"
+            try:
+                provider.update_task(issue_id, body=updated_body)
+            except Exception as e:
+                logger.warning("plan.pr_link_update_failed", error=str(e))
 
 
 def _finalize_issues(
@@ -458,9 +621,9 @@ def _finalize_issues(
 
     # Hint for next steps
     console.empty()
-    console.info("When you're ready to start, run:")
+    console.info("When you're ready to implement, run:")
     if issue_numbers:
-        console.detail(f"ghaiw work start {issue_numbers[0]}")
+        console.detail(f"ghaiw implement-task {issue_numbers[0]}")
 
 
 def _cleanup_plan_dir(plan_dir: str) -> None:

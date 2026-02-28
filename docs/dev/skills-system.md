@@ -67,8 +67,8 @@ Skill templates are Markdown files installed to an inited project's `.claude/ski
 Skills are organized into **phase skills** (one per session type) and **task skills** (on-demand reference):
 
 1. **AGENTS.md pointer** — `ghaiw init` reads `templates/agents-pointer.md` and inserts its content into the target project's `AGENTS.md`. It directs agents to read the skill referenced in their clipboard prompt. **To change what gets injected into inited projects, edit `templates/agents-pointer.md`** — not this repo's own `## Git Workflow` section, which is only the self-installed copy for this repo.
-2. **`templates/skills/plan-session/SKILL.md`** — Self-contained rules for planning sessions (`ghaiw task plan`). Covers plan file format, complexity tagging, session boundaries. No implementation rules.
-3. **`templates/skills/work-session/SKILL.md`** — Self-contained rules for implementation sessions (`ghaiw work start`). Covers worktree safety, commit conventions, syncing, PR summaries, and session closing. No planning rules.
+2. **`templates/skills/plan-session/SKILL.md`** — Self-contained rules for planning sessions (`ghaiw plan-task`). Covers plan file format, complexity tagging, session boundaries. No implementation rules.
+3. **`templates/skills/work-session/SKILL.md`** — Self-contained rules for implementation sessions (`ghaiw implement-task`). Covers worktree safety, commit conventions, syncing, PR summaries, and session closing. No planning rules.
 4. **`templates/skills/task/SKILL.md`** — On-demand skill for standalone issue creation outside of planning sessions.
 5. **`templates/skills/deps/SKILL.md`** — On-demand skill for dependency analysis.
 

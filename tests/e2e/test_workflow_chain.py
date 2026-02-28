@@ -414,47 +414,6 @@ class TestCheckConfigCommand:
 class TestTaskCommands:
     """Test `ghaiw task` subcommands via CLI subprocess."""
 
-    def test_task_create_from_plan(
-        self, e2e_repo: Path, mock_gh_cli: dict[str, Any], tmp_path: Path
-    ) -> None:
-        """ghaiw task create --plan-file --no-start creates an issue."""
-        plan = tmp_path / "PLAN.md"
-        plan.write_text(
-            """\
-# Add search feature
-
-## Complexity
-
-easy
-
-## Description
-
-Add a search command to find tasks by keyword.
-
-## Tasks
-
-- [ ] Implement search logic
-- [ ] Add CLI command
-- [ ] Write tests
-"""
-        )
-
-        result = _run(
-            ["task", "create", "--plan-file", str(plan), "--no-start"],
-            cwd=e2e_repo,
-        )
-
-        assert result.returncode == 0
-        # Should mention the created issue number
-        combined = result.stdout + result.stderr
-        assert "#1" in combined or "issues/1" in combined
-
-        # Verify mock gh was called with expected arguments
-        _assert_gh_called_with(
-            mock_gh_cli["log_file"],
-            ["issue", "create", "--title"],
-        )
-
     def test_task_list(self, e2e_repo: Path, mock_gh_cli: dict[str, Any]) -> None:
         """ghaiw task list exits 0."""
         result = _run(["task", "list"], cwd=e2e_repo)

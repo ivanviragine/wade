@@ -1,4 +1,4 @@
-"""Task subcommands — plan, create, list, read, update, close, deps."""
+"""Task subcommands — list, read, update, close, deps."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import typer
 from ghaiw.cli.autocomplete import complete_ai_tools, complete_models
 
 task_app = typer.Typer(
-    help="GitHub Issue CRUD + AI planning.",
+    help="GitHub Issue CRUD.",
     invoke_without_command=True,
 )
 
@@ -24,8 +24,6 @@ def task_callback(ctx: typer.Context) -> None:
     from ghaiw.ui.console import console
 
     menu_items = [
-        "Plan tasks with AI",
-        "Create a GitHub Issue",
         "List GitHub Issues",
         "Read a GitHub Issue",
         "Update a GitHub Issue",
@@ -33,8 +31,6 @@ def task_callback(ctx: typer.Context) -> None:
         "Analyze dependencies",
     ]
     hints = [
-        "task plan",
-        "task create",
         "task list",
         "task read",
         "task update",
@@ -42,26 +38,14 @@ def task_callback(ctx: typer.Context) -> None:
         "task deps",
     ]
 
+    console.hint("Use `ghaiw plan-task` to plan or `ghaiw new-task` to create issues.")
+
     idx = prompts.menu("ghaiw task", menu_items, hints=hints)
 
-    subcommands = ["plan", "create", "list", "read", "update", "close", "deps"]
+    subcommands = ["list", "read", "update", "close", "deps"]
     selected = subcommands[idx]
 
-    if selected == "plan":
-        from ghaiw.services.plan_service import plan as do_plan
-
-        success = do_plan()
-        raise typer.Exit(0 if success else 1)
-    elif selected == "create":
-        from ghaiw.services.task_service import create_interactive
-
-        task = create_interactive()
-        if task:
-            console.empty()
-            console.info("When you're ready to start, run:")
-            console.detail(f"ghaiw work start {task.id}")
-        raise typer.Exit(0 if task else 1)
-    elif selected == "list":
+    if selected == "list":
         from ghaiw.services.task_service import list_tasks as do_list
 
         do_list()
@@ -104,68 +88,6 @@ def task_callback(ctx: typer.Context) -> None:
 
             graph = analyze_deps(issue_numbers=issue_ids)
             raise typer.Exit(0 if graph is not None else 1)
-
-    raise typer.Exit(0)
-
-
-@task_app.command()
-def plan(
-    ai: str | None = typer.Option(
-        None, "--ai", help="AI tool to use for planning.", autocompletion=complete_ai_tools
-    ),
-    model: str | None = typer.Option(
-        None, "--model", help="AI model to use.", autocompletion=complete_models
-    ),
-) -> None:
-    """Run an AI-assisted planning session."""
-    from ghaiw.services.plan_service import plan as do_plan
-
-    success = do_plan(ai_tool=ai, model=model)
-    raise typer.Exit(0 if success else 1)
-
-
-@task_app.command()
-def create(
-    plan_file: str | None = typer.Option(None, "--plan-file", help="Path to plan markdown file."),
-    no_start: bool = typer.Option(False, "--no-start", help="Skip interactive work-start prompt."),
-    ai: str | None = typer.Option(
-        None, "--ai", help="AI tool (for labeling).", autocompletion=complete_ai_tools
-    ),
-    model: str | None = typer.Option(
-        None, "--model", help="AI model (for labeling).", autocompletion=complete_models
-    ),
-) -> None:
-    """Create a GitHub Issue from a plan file or interactively."""
-    from ghaiw.services.task_service import (
-        add_planned_by_labels,
-        create_from_plan_file,
-        create_interactive,
-    )
-    from ghaiw.ui.console import console
-
-    if plan_file:
-        task = create_from_plan_file(Path(plan_file).expanduser())
-    else:
-        # Interactive mode — prompt for title and body
-        task = create_interactive()
-
-    if not task:
-        raise typer.Exit(1)
-
-    # Add planned-by labels if AI tool is specified
-    if ai and task:
-        from ghaiw.config.loader import load_config
-        from ghaiw.providers.registry import get_provider
-
-        config = load_config()
-        provider = get_provider(config)
-        add_planned_by_labels(provider, task.id, ai, model)
-
-    # Show next-step hint
-    if not no_start:
-        console.empty()
-        console.info("When you're ready to start, run:")
-        console.detail(f"ghaiw work start {task.id}")
 
     raise typer.Exit(0)
 

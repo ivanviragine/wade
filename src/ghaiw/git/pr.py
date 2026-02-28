@@ -185,7 +185,7 @@ def update_pr_body(repo_root: Path, pr_number: int, body: str) -> bool:
     return result.returncode == 0
 
 
-def get_pr_for_branch(repo_root: Path, branch: str) -> dict[str, str | int] | None:
+def get_pr_for_branch(repo_root: Path, branch: str) -> dict[str, str | int | bool] | None:
     """Find an open PR for the given branch.
 
     Args:
@@ -193,15 +193,15 @@ def get_pr_for_branch(repo_root: Path, branch: str) -> dict[str, str | int] | No
         branch: Branch name to search for.
 
     Returns:
-        Dict with "number" (int), "url" (str), "title" (str), and
-        "state" (str) keys, or None if no PR exists.
+        Dict with "number" (int), "url" (str), "title" (str),
+        "state" (str), and "isDraft" (bool) keys, or None if no PR exists.
     """
     result = _run_gh(
         "pr",
         "view",
         branch,
         "--json",
-        "number,url,title,state",
+        "number,url,title,state,isDraft",
         cwd=repo_root,
         check=False,
     )
@@ -214,6 +214,57 @@ def get_pr_for_branch(repo_root: Path, branch: str) -> dict[str, str | int] | No
             "url": data["url"],
             "title": data.get("title", ""),
             "state": data.get("state", ""),
+            "isDraft": data.get("isDraft", False),
         }
     except (json.JSONDecodeError, KeyError):
         return None
+
+
+def get_pr_body(repo_root: Path, pr_number: int) -> str | None:
+    """Fetch the body of a pull request.
+
+    Args:
+        repo_root: Repository root directory.
+        pr_number: PR number to fetch.
+
+    Returns:
+        The PR body as a string, or None if the PR cannot be found.
+    """
+    result = _run_gh(
+        "pr",
+        "view",
+        str(pr_number),
+        "--json",
+        "body",
+        cwd=repo_root,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    try:
+        data = json.loads(result.stdout)
+        body: str = data.get("body", "")
+        return body
+    except (json.JSONDecodeError, KeyError):
+        return None
+
+
+def mark_pr_ready(repo_root: Path, pr_number: int) -> bool:
+    """Mark a draft PR as ready for review.
+
+    Args:
+        repo_root: Repository root directory.
+        pr_number: PR number to mark ready.
+
+    Returns:
+        True if the operation succeeded, False otherwise.
+    """
+    log.info("pr.ready", pr_number=pr_number)
+    result = _run_gh(
+        "pr",
+        "ready",
+        str(pr_number),
+        cwd=repo_root,
+        check=False,
+    )
+    return result.returncode == 0

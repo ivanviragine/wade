@@ -15,7 +15,7 @@ import structlog
 
 from ghaiw.config.loader import load_config
 from ghaiw.models.config import ProjectConfig
-from ghaiw.models.task import Label, LabelType, PlanFile, Task, TaskState
+from ghaiw.models.task import Complexity, Label, LabelType, PlanFile, Task, TaskState
 from ghaiw.providers.base import AbstractTaskProvider
 from ghaiw.providers.registry import get_provider
 from ghaiw.ui.console import console
@@ -27,6 +27,7 @@ logger = structlog.get_logger()
 
 LABEL_COLOR_ISSUE = "0E8A16"  # Green
 LABEL_COLOR_IN_PROGRESS = "FBCA04"  # Yellow
+LABEL_COLOR_COMPLEXITY = "C5DEF5"  # Pale blue
 LABEL_COLOR_PLANNED = "BFD4F2"  # Light blue
 LABEL_COLOR_WORKED = "D4C5F9"  # Light purple
 LABEL_COLOR_DEFAULT = "D3D3D3"  # Gray
@@ -46,6 +47,7 @@ def _label_for_type(
     color_map = {
         LabelType.ISSUE_LABEL: LABEL_COLOR_ISSUE,
         LabelType.IN_PROGRESS: LABEL_COLOR_IN_PROGRESS,
+        LabelType.COMPLEXITY: LABEL_COLOR_COMPLEXITY,
         LabelType.PLANNED_BY: LABEL_COLOR_PLANNED,
         LabelType.PLANNED_MODEL: LABEL_COLOR_PLANNED,
         LabelType.WORKED_BY: LABEL_COLOR_WORKED,
@@ -94,6 +96,30 @@ def remove_in_progress_label(
 ) -> None:
     """Remove in-progress label from a task."""
     provider.remove_label(task_id, "in-progress")
+
+
+def ensure_complexity_label(
+    provider: AbstractTaskProvider,
+    complexity: Complexity,
+) -> None:
+    """Ensure a ``complexity:X`` label exists. Create if missing."""
+    label = _label_for_type(
+        LabelType.COMPLEXITY,
+        f"complexity:{complexity.value}",
+        f"Task complexity: {complexity.value}",
+    )
+    provider.ensure_label(label)
+
+
+def add_complexity_label(
+    provider: AbstractTaskProvider,
+    task_id: str,
+    complexity: Complexity,
+) -> None:
+    """Apply a ``complexity:X`` label to a task."""
+    ensure_complexity_label(provider, complexity)
+    provider.add_label(task_id, f"complexity:{complexity.value}")
+    logger.info("labels.complexity", task_id=task_id, complexity=complexity.value)
 
 
 def add_planned_by_labels(

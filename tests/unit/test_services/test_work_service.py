@@ -400,7 +400,7 @@ class TestWorkStart:
         return ProjectConfig(project=ProjectSettings(main_branch="main"))
 
     def test_creates_worktree(self, tmp_path: Path) -> None:
-        """Happy path: no existing worktree → create_worktree called, returns True."""
+        """Happy path: no existing worktree, no draft PR → create_worktree called, returns True."""
         task = self._make_task()
         mock_provider = MagicMock()
         mock_provider.read_task.return_value = task
@@ -415,7 +415,11 @@ class TestWorkStart:
             patch("ghaiw.services.work_service.bootstrap_worktree"),
             patch("ghaiw.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
             patch("ghaiw.services.work_service._is_inside_ai_cli", return_value=False),
+            patch("ghaiw.git.pr.get_pr_for_branch", return_value=None),
+            patch("ghaiw.services.work_service.bootstrap_draft_pr", return_value={"number": 1, "url": "http://test"}),
+            patch("ghaiw.services.work_service.prompts") as mock_prompts,
         ):
+            mock_prompts.is_tty.return_value = False
             result = start("42", project_root=tmp_path)
             assert result is True
             mock_create.assert_called_once()
@@ -445,7 +449,11 @@ class TestWorkStart:
             patch("ghaiw.services.work_service.bootstrap_worktree"),
             patch("ghaiw.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
             patch("ghaiw.services.work_service._is_inside_ai_cli", return_value=False),
+            patch("ghaiw.git.pr.get_pr_for_branch", return_value=None),
+            patch("ghaiw.services.work_service.bootstrap_draft_pr", return_value={"number": 1, "url": "http://test"}),
+            patch("ghaiw.services.work_service.prompts") as mock_prompts,
         ):
+            mock_prompts.is_tty.return_value = False
             result = start("42", project_root=tmp_path)
             assert result is True
             mock_create.assert_not_called()
@@ -465,7 +473,11 @@ class TestWorkStart:
                 "ghaiw.git.worktree.create_worktree",
                 side_effect=GitError("Branch already exists"),
             ),
+            patch("ghaiw.git.pr.get_pr_for_branch", return_value=None),
+            patch("ghaiw.services.work_service.bootstrap_draft_pr", return_value={"number": 1, "url": "http://test"}),
+            patch("ghaiw.services.work_service.prompts") as mock_prompts,
         ):
+            mock_prompts.is_tty.return_value = False
             result = start("42", project_root=tmp_path)
 
         assert result is False
@@ -486,7 +498,11 @@ class TestWorkStart:
             patch("ghaiw.services.work_service.bootstrap_worktree"),
             patch("ghaiw.services.work_service._is_inside_ai_cli", return_value=False),
             patch("ghaiw.ai_tools.base.AbstractAITool.get") as mock_get,
+            patch("ghaiw.git.pr.get_pr_for_branch", return_value=None),
+            patch("ghaiw.services.work_service.bootstrap_draft_pr", return_value={"number": 1, "url": "http://test"}),
+            patch("ghaiw.services.work_service.prompts") as mock_prompts,
         ):
+            mock_prompts.is_tty.return_value = False
             result = start("42", project_root=tmp_path, cd_only=True)
             assert result is True
             mock_get.assert_not_called()
@@ -512,7 +528,11 @@ class TestWorkStart:
             patch("ghaiw.services.work_service.bootstrap_worktree"),
             patch("ghaiw.services.work_service._is_inside_ai_cli", return_value=True),
             patch("ghaiw.ai_tools.base.AbstractAITool.get") as mock_get,
+            patch("ghaiw.git.pr.get_pr_for_branch", return_value=None),
+            patch("ghaiw.services.work_service.bootstrap_draft_pr", return_value={"number": 1, "url": "http://test"}),
+            patch("ghaiw.services.work_service.prompts") as mock_prompts,
         ):
+            mock_prompts.is_tty.return_value = False
             result = start("42", project_root=tmp_path)
             assert result is True
             mock_get.assert_not_called()
@@ -566,7 +586,7 @@ class TestWorkBatch:
         assert result is True
         assert mock_launch.call_count == 1  # Only the first in the chain
         launched_cmd = mock_launch.call_args[0][0]
-        assert launched_cmd[:4] == ["ghaiw", "work", "start", "1"]
+        assert launched_cmd[:3] == ["ghaiw", "implement-task", "1"]
 
     def test_warns_on_terminal_failure(self, tmp_path: Path) -> None:
         """One terminal fails → warns but continues and counts successful launches."""

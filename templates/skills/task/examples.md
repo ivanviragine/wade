@@ -34,7 +34,7 @@ Add a `GET /api/health` endpoint returning `{ "status": "ok", "version": "..." }
 ```
 
 ```bash
-ghaiw task create --plan-file PLAN.md
+ghaiw new-task
 # Created issue #42: Add health check endpoint
 ```
 
@@ -65,10 +65,10 @@ notification settings.
 ### Issue creation
 
 ```bash
-ghaiw task create --plan-file plan-1-schema-and-api.md
+ghaiw new-task
 # Created issue #50: Add user preferences schema and API
 
-ghaiw task create --plan-file plan-2-ui-panel.md
+ghaiw new-task
 # Created issue #51: Add preferences UI panel
 ```
 
@@ -86,7 +86,7 @@ Add the ability for users to save and manage display and notification preference
 ```
 
 ```bash
-ghaiw task create --plan-file plan-epic-preferences.md
+ghaiw new-task
 # Created issue #52: Epic: User preferences feature
 ```
 
@@ -100,7 +100,7 @@ Created 3 issues:
 
 ### 3. Auto-dependency analysis (multi-issue plans)
 
-When `ghaiw task plan` creates 2+ issues, it automatically runs `ghaiw task deps`
+When `ghaiw plan-task` creates 2+ issues, it automatically runs `ghaiw task deps`
 to analyze dependencies. It updates each issue and creates a tracking issue:
 
 ```

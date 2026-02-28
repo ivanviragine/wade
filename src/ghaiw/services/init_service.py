@@ -170,7 +170,7 @@ def init(
             console.detail(err)
 
     console.panel(
-        "  Project initialized. Run [bold]ghaiw task plan[/] to get started.",
+        "  Project initialized. Run [bold]ghaiw plan-task[/] to get started.",
         title="ghaiw initialized",
     )
     return True

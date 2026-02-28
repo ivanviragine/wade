@@ -50,6 +50,43 @@ def create_worktree(
     return worktree_path
 
 
+def checkout_existing_branch_worktree(
+    repo_root: Path,
+    branch_name: str,
+    worktree_dir: Path,
+) -> Path:
+    """Create a worktree that checks out an existing branch.
+
+    Unlike :func:`create_worktree`, this does **not** create a new branch.
+    The branch must already exist (locally or as a remote tracking branch).
+
+    Args:
+        repo_root: Root of the main repository checkout.
+        branch_name: Existing branch to check out.
+        worktree_dir: Directory where the worktree will be created.
+
+    Returns:
+        Absolute path to the created worktree directory.
+
+    Raises:
+        GitError: If the worktree could not be created or the branch does not exist.
+    """
+    worktree_path = worktree_dir.resolve()
+    log.info(
+        "worktree.checkout_existing",
+        branch=branch_name,
+        worktree=str(worktree_path),
+    )
+    _run_git(
+        "worktree",
+        "add",
+        str(worktree_path),
+        branch_name,
+        cwd=repo_root,
+    )
+    return worktree_path
+
+
 def remove_worktree(repo_root: Path, worktree_path: Path, force: bool = True) -> None:
     """Remove a linked worktree and clean up its administrative files.
 

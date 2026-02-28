@@ -20,7 +20,7 @@ start.
 ## Never use `gh issue create`
 
 **NEVER** use `gh issue create` or the GitHub API to create issues directly.
-Always use `ghaiw task create` (or `ghaiw task create --plan-file`).
+Always use `ghaiw new-task` for interactive issue creation.
 Using `gh` directly bypasses label enforcement, snapshot/diff detection, and
 dependency analysis hooks.
 
@@ -31,13 +31,13 @@ Run `ghaiw check` as your **first action**:
 - `IN_WORKTREE` — you may proceed with work (code changes, commits, etc.)
 - `IN_MAIN_CHECKOUT` — **editing any source file is forbidden, even before
   committing**. Tell the human to create a worktree first via
-  `ghaiw work start`.
+  `ghaiw implement-task`.
 - `NOT_IN_GIT_REPO` — you are not inside a git repository.
 
 ## Worktree safety
 
 All **code changes** (edits, new files, commits) **must** happen in a worktree.
-The human creates worktrees via `ghaiw work start` (single issue) or
+The human creates worktrees via `ghaiw implement-task` (single issue) or
 `ghaiw work batch` (multiple issues in parallel). **Never** create worktrees
 yourself.
 
@@ -159,9 +159,10 @@ ghaiw work sync --json
 ghaiw work done
 ```
 
-`ghaiw work done` handles pushing the branch, creating the PR (or merging),
-and triggering auto-versioning (if enabled). The worktree is **not** deleted —
-it is cleaned up automatically by `work start` after the human merges the PR.
+`ghaiw work done` handles pushing the branch, updating the existing draft PR
+(appending a summary and marking it ready), and triggering auto-versioning
+(if enabled). The worktree is **not** deleted — it is cleaned up automatically
+by `implement-task` after the human merges the PR.
 
 This is a **mandatory** final step. If `ghaiw work done` fails, debug and
 fix the error — do NOT bypass it.
@@ -184,9 +185,8 @@ If you finalize a plan or feature spec during a work session, you **must**
 create a GitHub Issue from it:
 
 1. Write the plan file (to `/tmp/`, never into the repo)
-2. Create the issue via `ghaiw task create --plan-file <path>` or
-   `ghaiw task create` (interactive)
-3. List the created issues and show `ghaiw work start <number>` as a hint.
+2. Create the issue via `ghaiw new-task` (interactive)
+3. List the created issues and show `ghaiw implement-task <number>` as a hint.
    Do **not** run the command yourself — the human starts work sessions.
 
 ## Skills reference

@@ -4,7 +4,7 @@ description: >
   Create one or more GitHub issues via ghaiw — for a single bug/feature OR a
   full plan/PRD breakdown. Assesses scope, proposes single or multi-issue
   breakdown with reasoning, gets user confirmation, writes plan files, creates
-  issues via ghaiw task create, and informs the user of next steps. ALL steps
+  issues via ghaiw new-task, and informs the user of next steps. ALL steps
   are mandatory — do not stop after planning. Use whenever the user asks to
   create a GitHub issue, regardless of scope.
 ---
@@ -12,11 +12,11 @@ description: >
 # Plan → Issues
 
 Convert a finished plan, PRD, or feature spec into one or more PR-sized GitHub
-issues using the project's \`ghaiw\` infrastructure.
+issues using the project's `ghaiw` infrastructure.
 
-> **Never use `gh issue create` directly.** Always use `ghaiw task create` or
-> `ghaiw task create --plan-file`. Using `gh` directly bypasses label
-> enforcement, snapshot/diff detection, and dependency analysis hooks.
+> **Never use `gh issue create` directly.** Always use `ghaiw new-task`.
+> Using `gh` directly bypasses label enforcement, snapshot/diff detection,
+> and dependency analysis hooks.
 
 ## When to activate
 
@@ -80,43 +80,35 @@ Wait for explicit confirmation before proceeding.
 
 ## Step 4: Write plan files
 
-For each confirmed issue, write a `.md` file in the format that
-`ghaiw task create --plan-file` expects.
+For each confirmed issue, write a `.md` file in the plan format.
 
 See [plan-format.md](plan-format.md) for the exact format.
 
 **Include a `## Complexity` section** in every plan file with one of:
 `easy`, `medium`, `complex`, or `very_complex` (based on your LOC/scope
-estimate from Step 1). This lets `ghaiw work start` automatically select
-the appropriate AI model for the implementation session.
+estimate from Step 1). This lets `ghaiw implement-task` automatically select
+the appropriate AI model for the implementation session. The complexity is
+also applied as a `complexity:X` label on the issue.
 
 File naming convention:
 - Single issue: `PLAN.md`
 - Multi-issue: `PLAN-1-<slug>.md`, `PLAN-2-<slug>.md`, etc.
 
 Write plan files to `/tmp/` (or the temp dir shown in your prompt if inside
-a `ghaiw task plan` session). **Never write plan files into the repo working
+a `ghaiw plan-task` session). **Never write plan files into the repo working
 directory** — they are session artifacts, not committed code.
 
 ## Step 5: Create issues
 
 > **Note:** Issue creation is the *output* of this skill, not code implementation.
-> Do not call `exit_plan_mode` before running `ghaiw task create` — user
+> Do not call `exit_plan_mode` before running `ghaiw new-task` — user
 > confirmation in Step 3 is sufficient, even when running inside `[[PLAN]]` mode.
 
-For each plan file, run:
+For each plan, create a lightweight issue via `ghaiw new-task` (interactive)
+with the issue title and a brief description.
 
-```bash
-ghaiw task create --plan-file <path-to-plan-file> --no-start
-```
-
-The `--no-start` flag suppresses the interactive "start working?" prompt — the
-agent handles that decision itself in Step 7.
-
-The script handles:
-- Title extraction from the `# Heading`
-- Body formatting
-- Label from `.ghaiw.yml` config
+The full plan content goes to a draft PR (created automatically by
+`ghaiw implement-task`), not the issue body. Issues are lightweight tickets.
 
 Collect the issue number and URL from each creation.
 
@@ -131,18 +123,18 @@ When **2 issues** are created, offer first:
 
 > "Want me to create an epic issue linking both sub-issues?"
 
-Write an epic `.md` file with:
+Write an epic with:
 - `# Epic: <overall feature title>`
 - Brief summary of the feature
 - Checklist linking each sub-issue: `- [ ] #<number> — <title>`
 
-Create it via `ghaiw task create --plan-file <epic-file>`.
+Create it via `ghaiw new-task`.
 
 ## Step 7: Inform the user — MANDATORY
 
 **Do not skip this step.** After creating issues you must always inform the user
 of what was created and how to start working. Do NOT offer to run
-`ghaiw work start` yourself or present it as a selectable option — the human
+`ghaiw implement-task` yourself or present it as a selectable option — the human
 starts work sessions when they are ready.
 
 After creating all issues, list them clearly:
@@ -159,19 +151,15 @@ Then show the next-step hint so the user knows how to proceed:
 
 > When you're ready to start, run:
 > ```
-> ghaiw work start <number>
+> ghaiw implement-task <number>
 > ```
-> For example: `ghaiw work start 42`
+> For example: `ghaiw implement-task 42`
 
 **Do NOT run this command yourself.** Do NOT ask the user to pick an issue and
 then run it on their behalf. Simply inform them and end the session.
 
 **End the session after this step.** Do not wait for further input or offer
 additional actions. The human will start the work session when ready.
-
-**Shortcut:** If the user asked to create issues from a plan file, they can also
-skip issue creation entirely and run `ghaiw work start <plan-file>` directly —
-this creates the issue **and** starts the work session in one step.
 
 
 ## Working on a sub-issue (child of a tracking/epic)
@@ -225,9 +213,7 @@ If you are working on the tracking issue itself (not a specific child):
 ## Rules
 
 - **Never create issues without user confirmation** (Step 3 is mandatory).
-- **Always use `ghaiw task create`** — never construct `gh issue create` commands manually.
-  - From a plan file: `ghaiw task create --plan-file <path>`
-  - Interactively (no plan file): `ghaiw task create` (prompts for title + body)
+- **Always use `ghaiw new-task`** — never construct `gh issue create` commands manually.
 - **Every plan file must have a `# Title`** as the first heading (the script requires it).
 - Keep issue titles concise and actionable (max 256 chars).
 - Each issue should be independently implementable (even if there are dependencies).

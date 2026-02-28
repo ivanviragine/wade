@@ -86,18 +86,27 @@ def _complexity_to_model(
     return config.get_complexity_model(ai_tool, complexity)
 
 
-def write_plan_md(worktree_path: Path, task: Task) -> Path:
+def write_plan_md(
+    worktree_path: Path,
+    task: Task,
+    plan_content: str | None = None,
+) -> Path:
     """Write PLAN.md to the worktree.
 
-    Behavioral reference: lib/work/bootstrap.sh:39
+    Args:
+        worktree_path: Worktree directory.
+        task: Task with metadata (id, title, url).
+        plan_content: Optional plan content to use instead of task.body.
+            When provided (e.g. extracted from a draft PR), this takes priority.
     """
     plan_path = worktree_path / "PLAN.md"
     lines = [
         f"# Issue #{task.id}: {task.title}",
         "",
     ]
-    if task.body:
-        lines.append(task.body)
+    body = plan_content if plan_content is not None else task.body
+    if body:
+        lines.append(body)
     if task.url:
         lines.append("")
         lines.append(f"URL: {task.url}")
@@ -165,7 +174,7 @@ def bootstrap_worktree(
 def _is_inside_ai_cli() -> bool:
     """Detect if we are running inside an AI CLI session.
 
-    When an AI agent calls ``ghaiw work start`` from within its own
+    When an AI agent calls ``ghaiw implement-task`` from within its own
     session, we must not launch another AI instance (infinite nesting).
     Instead, create the worktree and print the path.
 
@@ -185,6 +194,117 @@ def _is_inside_ai_cli() -> bool:
         return True
     # Generic: ghaiw sets this when launching an AI tool
     return bool(os.environ.get("GHAIW_IN_AI_SESSION"))
+
+
+# ---------------------------------------------------------------------------
+# Draft PR bootstrap (shared by plan and work flows)
+# ---------------------------------------------------------------------------
+
+PLAN_MARKER_START = "<!-- ghaiw:plan:start -->"
+PLAN_MARKER_END = "<!-- ghaiw:plan:end -->"
+
+
+def _build_draft_pr_body(plan_body: str, issue_number: str) -> str:
+    """Format draft PR body with plan content in markers."""
+    lines = [
+        f"Implements #{issue_number}",
+        "",
+        PLAN_MARKER_START,
+        "",
+        plan_body,
+        "",
+        PLAN_MARKER_END,
+    ]
+    return "\n".join(lines)
+
+
+def extract_plan_from_pr_body(pr_body: str) -> str | None:
+    """Extract plan content from between plan markers in a PR body.
+
+    Returns the content between markers, or None if markers are not found.
+    """
+    start_idx = pr_body.find(PLAN_MARKER_START)
+    end_idx = pr_body.find(PLAN_MARKER_END)
+    if start_idx == -1 or end_idx == -1 or end_idx <= start_idx:
+        return None
+    content = pr_body[start_idx + len(PLAN_MARKER_START) : end_idx]
+    return content.strip()
+
+
+def bootstrap_draft_pr(
+    issue_number: str,
+    issue_title: str,
+    plan_body: str,
+    config: ProjectConfig,
+    repo_root: Path,
+) -> dict[str, str | int] | None:
+    """Create branch + push + draft PR for an issue.
+
+    Reusable by both plan and work flows. Idempotent — if the branch and
+    PR already exist, returns the existing PR info.
+
+    Args:
+        issue_number: GitHub issue number.
+        issue_title: Issue title (used for branch name and PR title).
+        plan_body: Plan content to embed in the draft PR body.
+        config: Project configuration.
+        repo_root: Repository root directory.
+
+    Returns:
+        Dict with "number" (int) and "url" (str) keys, or None on failure.
+    """
+    # Generate deterministic branch name
+    branch_name = git_branch.make_branch_name(
+        config.project.branch_prefix,
+        int(issue_number),
+        issue_title,
+    )
+
+    # Check if PR already exists for this branch
+    existing_pr = git_pr.get_pr_for_branch(repo_root, branch_name)
+    if existing_pr:
+        logger.info(
+            "bootstrap_draft_pr.existing",
+            branch=branch_name,
+            pr=existing_pr["number"],
+        )
+        return existing_pr
+
+    # Create branch from main (if not exists)
+    main_branch = config.project.main_branch or git_repo.detect_main_branch(repo_root)
+    if not git_branch.branch_exists(repo_root, branch_name):
+        git_branch.create_branch(repo_root, branch_name, main_branch)
+        logger.info("bootstrap_draft_pr.branch_created", branch=branch_name)
+
+    # Push branch to origin
+    try:
+        git_repo._run_git("push", "-u", "origin", branch_name, cwd=repo_root)
+    except GitError as e:
+        console.error(f"Failed to push branch: {e}")
+        return None
+
+    # Build draft PR body with plan markers
+    body = _build_draft_pr_body(plan_body, issue_number)
+
+    # Create draft PR
+    try:
+        pr_info = git_pr.create_pr(
+            repo_root=repo_root,
+            title=issue_title,
+            body=body,
+            base=main_branch,
+            head=branch_name,
+            draft=True,
+        )
+        logger.info(
+            "bootstrap_draft_pr.created",
+            branch=branch_name,
+            pr=pr_info.get("number"),
+        )
+        return pr_info
+    except Exception as e:
+        console.error(f"Failed to create draft PR: {e}")
+        return None
 
 
 def _post_exit_capture(
@@ -478,7 +598,7 @@ def start(
     if not task:
         return False
 
-    console.rule(f"work start #{task.id}")
+    console.rule(f"implement-task #{task.id}")
     console.kv("Issue", console.issue_ref(task.id, task.title))
 
     # Resolve AI tool
@@ -516,7 +636,7 @@ def start(
     # Resolve main branch
     main_branch = config.project.main_branch or git_repo.detect_main_branch(repo_root)
 
-    # Create worktree
+    # Generate deterministic branch name
     branch_name = git_branch.make_branch_name(
         config.project.branch_prefix,
         int(task.id),
@@ -526,6 +646,41 @@ def start(
     worktrees_dir = _resolve_worktrees_dir(config, repo_root)
     repo_name = repo_root.name
     worktree_path = worktrees_dir / repo_name / branch_name.replace("/", "-")
+
+    # Check for existing draft PR (from plan-task flow)
+    existing_pr = git_pr.get_pr_for_branch(repo_root, branch_name)
+    plan_content: str | None = None
+
+    if existing_pr:
+        console.info(f"Found existing PR #{existing_pr['number']} for this task")
+        # Extract plan content from PR body
+        pr_body = git_pr.get_pr_body(repo_root, int(existing_pr["number"]))
+        if pr_body:
+            plan_content = extract_plan_from_pr_body(pr_body)
+            if plan_content:
+                console.detail("Plan content extracted from draft PR")
+    else:
+        # No draft PR — warn and prompt
+        console.warn("This task has no plan attached.")
+        if prompts.is_tty():
+            choices = ["Plan first (recommended)", "Proceed without plan"]
+            idx = prompts.select("How would you like to proceed?", choices)
+            if idx == 0:
+                console.info("Run `ghaiw plan-task` to create a plan first.")
+                return True  # Early exit — user chose to plan
+        # Proceed: bootstrap a draft PR with the issue body
+        console.step("Bootstrapping draft PR...")
+        pr_info = bootstrap_draft_pr(
+            issue_number=task.id,
+            issue_title=task.title,
+            plan_body=task.body or f"Implements #{task.id}: {task.title}",
+            config=config,
+            repo_root=repo_root,
+        )
+        if pr_info:
+            console.success(f"Draft PR #{pr_info.get('number')}: {pr_info.get('url')}")
+        else:
+            console.warn("Could not create draft PR — proceeding anyway")
 
     # Reuse the worktree if the branch already exists (idempotent re-run)
     existing_wt = next(
@@ -540,6 +695,23 @@ def start(
     if existing_wt:
         worktree_path = existing_wt
         console.info(f"Reusing existing worktree: {worktree_path}")
+    elif existing_pr:
+        # Draft PR exists → branch already exists remotely, check it out
+        try:
+            # Ensure local branch tracks remote
+            if not git_branch.branch_exists(repo_root, branch_name):
+                git_repo._run_git("fetch", "origin", f"{branch_name}:{branch_name}", cwd=repo_root)
+            with console.status("Creating worktree..."):
+                git_worktree.checkout_existing_branch_worktree(
+                    repo_root=repo_root,
+                    branch_name=branch_name,
+                    worktree_dir=worktree_path,
+                )
+            console.kv("Worktree", str(branch_name))
+            console.kv("Path", str(worktree_path))
+        except GitError as e:
+            console.error(f"Failed to create worktree: {e}")
+            return False
     else:
         try:
             with console.status("Creating worktree..."):
@@ -558,7 +730,7 @@ def start(
     console.empty()
 
     # Bootstrap
-    write_plan_md(worktree_path, task)
+    write_plan_md(worktree_path, task, plan_content=plan_content)
     bootstrap_worktree(worktree_path, config, repo_root)
 
     # Add in-progress label and move to in-progress on project board (both non-critical)
@@ -792,7 +964,7 @@ def batch(
 
     # Launch independent issues in parallel terminals
     for issue_id in independent:
-        cmd = ["ghaiw", "work", "start", issue_id]
+        cmd = ["ghaiw", "implement-task", issue_id]
         if resolved_tool:
             cmd.extend(["--ai", resolved_tool])
         if model:
@@ -808,7 +980,7 @@ def batch(
     for chain in chains:
         console.info(f"Dependency chain: {' → '.join(f'#{n}' for n in chain)}")
         first_id = chain[0]
-        cmd = ["ghaiw", "work", "start", first_id]
+        cmd = ["ghaiw", "implement-task", first_id]
         if resolved_tool:
             cmd.extend(["--ai", resolved_tool])
         if model:
@@ -1490,11 +1662,16 @@ def _done_via_pr(
     config: ProjectConfig,
     worktree_path: Path | None = None,
 ) -> bool:
-    """Create a PR and finalize work.
+    """Finalize work — update existing draft PR or create a new one.
 
-    Behavioral reference: lib/work/done.sh:_work_done_via_pr()
+    In the new workflow, a draft PR should already exist (created by plan-task
+    or implement-task). This function:
+    1. Pushes the branch
+    2. Appends PR-SUMMARY content to the existing PR body
+    3. Marks the draft PR as ready for review
     """
     provider = get_provider(config)
+    pr_url = ""
 
     # Read issue for title and body
     try:
@@ -1512,16 +1689,9 @@ def _done_via_pr(
         console.error(f"Push failed: {e}")
         return False
 
-    # Detect parent tracking issue
-    parent_issue: str | None = None
-    try:
-        parent_issue = provider.find_parent_issue(issue_number, label=config.project.issue_label)
-        if parent_issue:
-            console.detail(f"Detected parent tracking issue: #{parent_issue}")
-    except Exception:
-        logger.debug("work.parent_issue_detection_failed", exc_info=True)
+    # Check for existing PR (expected from plan-task or implement-task bootstrap)
+    existing_pr = git_pr.get_pr_for_branch(repo_root, branch)
 
-    # Build PR body
     # Resolve PR-SUMMARY.md path: check worktree first, then fall back to /tmp
     pr_summary_path: Path | None = None
     if worktree_path and (worktree_path / "PR-SUMMARY.md").exists():
@@ -1535,29 +1705,97 @@ def _done_via_pr(
         console.warn("No PR-SUMMARY file found — PR description will have no summary.")
         console.detail(f"Expected: /tmp/PR-SUMMARY-{issue_number}.md")
 
-    body = _build_pr_body(
-        task,
-        pr_summary_path=pr_summary_path,
-        close_issue=close_issue,
-        parent_issue=parent_issue,
-    )
+    if existing_pr:
+        # Update existing PR: append summary
+        pr_number = int(existing_pr["number"])
+        pr_url = str(existing_pr.get("url", ""))
+        console.step(f"Updating existing PR #{pr_number}...")
 
-    # Create PR
-    console.step("Creating pull request...")
-    try:
-        pr_info = git_pr.create_pr(
-            repo_root=repo_root,
-            title=task.title,
-            body=body,
-            base=main_branch,
-            head=branch,
-            draft=draft,
+        # Read current PR body and append summary
+        current_body = git_pr.get_pr_body(repo_root, pr_number) or ""
+
+        # Build summary section
+        summary_section = ""
+        if pr_summary_path and pr_summary_path.is_file():
+            summary_content = pr_summary_path.read_text(encoding="utf-8").strip()
+            if summary_content:
+                summary_section = f"\n\n## Summary\n\n{summary_content}"
+
+        # Detect parent tracking issue
+        parent_issue: str | None = None
+        try:
+            parent_issue = provider.find_parent_issue(
+                issue_number, label=config.project.issue_label
+            )
+            if parent_issue:
+                console.detail(f"Detected parent tracking issue: #{parent_issue}")
+        except Exception:
+            logger.debug("work.parent_issue_detection_failed", exc_info=True)
+
+        # Build updated body: keep existing content, add close reference + summary
+        close_ref = f"Closes #{issue_number}" if close_issue else ""
+        parent_ref = f"\nPart of #{parent_issue}" if parent_issue else ""
+        refs = close_ref + parent_ref
+
+        # Strip existing "Implements #N" line if we're adding "Closes #N"
+        updated_body = current_body
+        if close_ref:
+            updated_body = re.sub(
+                rf"^Implements\s+#{re.escape(issue_number)}\s*\n?",
+                "",
+                updated_body,
+                flags=re.MULTILINE,
+            )
+            updated_body = refs + "\n\n" + updated_body.lstrip("\n")
+        updated_body = updated_body.rstrip("\n") + summary_section + "\n"
+
+        if git_pr.update_pr_body(repo_root, pr_number, updated_body):
+            console.success("PR body updated with summary.")
+
+        # Mark draft as ready
+        is_draft = existing_pr.get("isDraft", False)
+        if is_draft:
+            if git_pr.mark_pr_ready(repo_root, pr_number):
+                console.success("PR marked as ready for review.")
+            else:
+                console.warn("Could not mark PR as ready — do it manually.")
+    else:
+        # No existing PR — create one (fallback)
+        console.warn("No existing draft PR found — creating new PR.")
+
+        # Detect parent tracking issue
+        parent_issue = None
+        try:
+            parent_issue = provider.find_parent_issue(
+                issue_number, label=config.project.issue_label
+            )
+            if parent_issue:
+                console.detail(f"Detected parent tracking issue: #{parent_issue}")
+        except Exception:
+            logger.debug("work.parent_issue_detection_failed", exc_info=True)
+
+        body = _build_pr_body(
+            task,
+            pr_summary_path=pr_summary_path,
+            close_issue=close_issue,
+            parent_issue=parent_issue,
         )
-        pr_url = pr_info.get("url", "")
-        console.success(f"PR created: {pr_url}")
-    except Exception as e:
-        console.error(f"PR creation failed: {e}")
-        return False
+
+        console.step("Creating pull request...")
+        try:
+            pr_info = git_pr.create_pr(
+                repo_root=repo_root,
+                title=task.title,
+                body=body,
+                base=main_branch,
+                head=branch,
+                draft=draft,
+            )
+            pr_url = str(pr_info.get("url", ""))
+            console.success(f"PR created: {pr_url}")
+        except Exception as e:
+            console.error(f"PR creation failed: {e}")
+            return False
 
     # Remove in-progress label
     with contextlib.suppress(Exception):

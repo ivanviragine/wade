@@ -30,10 +30,10 @@ uv pip install .
 ghaiw init
 
 # 2. Plan a feature (launches AI for planning)
-ghaiw task plan
+ghaiw plan-task
 
 # 3. Start working on an issue (creates worktree + launches AI)
-ghaiw work start 42
+ghaiw implement-task 42
 
 # 4. Sync with main before finishing
 ghaiw work sync
@@ -56,13 +56,20 @@ ghaiw work done
 | `ghaiw check-config` | Validate `.ghaiw.yml` configuration |
 | `ghaiw shell-init` | Output shell function wrapper (see Shell Integration below) |
 
+### Top-Level Commands
+
+| Command | Description |
+|---------|-------------|
+| `ghaiw plan-task` | Launch AI planning session — creates lightweight issues + draft PRs |
+| `ghaiw new-task` | Create a GitHub issue interactively (prompts for title + body) |
+| `ghaiw implement-task <N>` | Create worktree and start AI session for issue N |
+| `ghaiw implement-task <N> --detach` | Start AI session in a new terminal tab |
+| `ghaiw implement-task <N> --cd` | Create worktree and print path (no AI launch) |
+
 ### Task Management
 
 | Command | Description |
 |---------|-------------|
-| `ghaiw task plan` | Launch AI planning session |
-| `ghaiw task create` | Create a GitHub issue interactively (prompts for title + body) |
-| `ghaiw task create --plan-file <path>` | Create a GitHub issue from a plan markdown file |
 | `ghaiw task list` | List open issues with the configured label |
 | `ghaiw task read <N>` | Display issue details |
 | `ghaiw task close <N>` | Close an issue |
@@ -73,9 +80,6 @@ ghaiw work done
 | Command | Description |
 |---------|-------------|
 | `ghaiw work` | Interactive menu (no args) |
-| `ghaiw work start <N>` | Create worktree and start AI session for issue N |
-| `ghaiw work start <N> --detach` | Start AI session in a new terminal tab |
-| `ghaiw work start <N> --cd` | Create worktree and print path (no AI launch) |
 | `ghaiw work sync` | Sync feature branch with main (fetch + merge) |
 | `ghaiw work done` | Push branch and create PR (or direct merge) |
 | `ghaiw work done [target]` | Finalize a specific issue, worktree, or plan file |
@@ -144,7 +148,7 @@ models:
 
 ### Complexity-to-Model Mapping
 
-Issues include a `## Complexity` section (`easy`, `medium`, `complex`, `very_complex`). When `ghaiw work start` launches an AI tool, it automatically selects the configured model for that complexity level.
+Issues include a `complexity:X` label (`easy`, `medium`, `complex`, `very_complex`). When `ghaiw implement-task` launches an AI tool, it automatically selects the configured model for that complexity level.
 
 ## Agent Skills
 

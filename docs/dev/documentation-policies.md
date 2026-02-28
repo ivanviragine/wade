@@ -37,7 +37,7 @@ After completing any task, reflect on whether you encountered any friction durin
 **At the end of every session, ask yourself:**
 
 1. **Did I hit a bug or unexpected behavior?**
-   - Describe it to the user and **offer** to create a GitHub Issue (`ghaiw task create`)
+   - Describe it to the user and **offer** to create a GitHub Issue (`ghaiw new-task`)
    - Do not silently work around it — surface it so it can be tracked and fixed
 
 2. **Did I hit a doc gap or architecture misunderstanding?**
