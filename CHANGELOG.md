@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.0.5] — 2026-02-28
+
+### Bug Fixes
+
+- address code review findings — worktree cleanup, error handling, layering, docs (b0b4627)
+
 ## [v1.0.4] — 2026-02-28
 
 ### Bug Fixes
