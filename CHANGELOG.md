@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.0.0] — 2026-02-28
+
+### Features
+
+- move plans to draft PRs and rename primary commands (9179146)
+- add optional allowlist prompt in init and auto-propagate to worktrees (8d4995d)
+
+### Bug Fixes
+
+- use real transcripts in parser tests and fix regex bugs (6e4ed38)
+
+### Documentation
+
+- update all docs to use dev scripts instead of raw uv run calls (ed3cc76)
+- Make prompt stronger about using auto_version.py (d8a7720)
+
+### Refactoring
+
+- normalize token usage blocks to consistent table format (551318c)
+
+### Chores
+
+- add dev scripts and update AGENTS.md to mandate their use (09ffacb)
+
 ## [v0.25.9] — 2026-02-27
 
 ### Bug Fixes
