@@ -1,21 +1,11 @@
 #!/usr/bin/env bash
-# install.sh — Install ghaiw (Python ghaiw CLI) using uv into a venv.
+# install.sh — Install ghaiw from PyPI using uv tool.
 #
 # Usage:
-#   ./install.sh              # Install to default location (~/.local/bin)
-#   ./install.sh /usr/local   # Install to custom prefix
-#
-# Installs the `ghaiw` CLI using uv into a frozen venv.
-# Requires: uv (https://docs.astral.sh/uv/) — installs it if missing.
-# Python 3.11+ is fetched automatically by uv if not available.
+#   curl -LsSf https://raw.githubusercontent.com/ivanviragine/ghaiw/main/install.sh | sh
+#   ./install.sh
 
 set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PREFIX="${1:-$HOME/.local}"
-BIN_DIR="${PREFIX}/bin"
-VENV_DIR="${PREFIX}/share/ghaiw/venv"
-MIN_PYTHON="3.11"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -29,57 +19,32 @@ error() { echo -e "${RED}[✗]${NC} $*" >&2; }
 # ─── Ensure uv ────────────────────────────────────────────────────────────────
 
 if ! command -v uv &>/dev/null; then
-    warn "uv not found. Installing uv..."
+    warn "uv not found — installing uv..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="$HOME/.local/bin:$PATH"
+    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 fi
 
 info "uv $(uv --version) found"
 
-# ─── Install ─────────────────────────────────────────────────────────────────
-
-info "Creating virtual environment at ${VENV_DIR}..."
-mkdir -p "$(dirname "$VENV_DIR")"
-
-# Let uv find or download a suitable Python (>= 3.11).
-# This works even if the system python3 is too old — uv manages its own.
-uv venv "$VENV_DIR" --python ">=${MIN_PYTHON}" --clear
-
-PYTHON_VERSION="$("$VENV_DIR/bin/python" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
-info "Python ${PYTHON_VERSION} (managed by uv)"
+# ─── Install ──────────────────────────────────────────────────────────────────
 
 info "Installing ghaiw..."
-uv pip install --python "$VENV_DIR/bin/python" "$SCRIPT_DIR"
+uv tool install ghaiw
 
-# Record source repo path for self-upgrade support
-echo "$SCRIPT_DIR" > "$VENV_DIR/ghaiw-source.txt"
-info "Recorded source path for self-upgrade"
+# ─── Verify ───────────────────────────────────────────────────────────────────
 
-info "Creating symlink..."
-mkdir -p "$BIN_DIR"
-ln -sf "$VENV_DIR/bin/ghaiw" "$BIN_DIR/ghaiw"
-
-# ─── Install git hooks ───────────────────────────────────────────────────────
-
-HOOKS_SCRIPT="${SCRIPT_DIR}/scripts/install-hooks.sh"
-if [[ -x "$HOOKS_SCRIPT" ]] && git -C "$SCRIPT_DIR" rev-parse --is-inside-work-tree &>/dev/null; then
-    info "Installing git hooks..."
-    bash "$HOOKS_SCRIPT"
-fi
-
-# ─── Verify ──────────────────────────────────────────────────────────────────
-
-if "$BIN_DIR/ghaiw" --version &>/dev/null; then
+if command -v ghaiw &>/dev/null; then
     info "ghaiw installed successfully!"
     echo ""
-    echo "  ghaiw $("$BIN_DIR/ghaiw" --version 2>/dev/null || echo '(version check failed)')"
-    echo "  Binary: ${BIN_DIR}/ghaiw"
+    echo "  $(ghaiw --version)"
     echo ""
-    if [[ ":$PATH:" != *":${BIN_DIR}:"* ]]; then
-        warn "Add ${BIN_DIR} to your PATH:"
-        echo "  export PATH=\"${BIN_DIR}:\$PATH\""
-    fi
+    echo "  To get started:  ghaiw init"
+    echo "  To upgrade:      ghaiw update"
+    echo ""
 else
-    error "Installation failed — ghaiw binary not working."
-    exit 1
+    warn "ghaiw binary not found in PATH — you may need to add uv's bin directory:"
+    echo ""
+    echo '  export PATH="$HOME/.local/bin:$PATH"'
+    echo ""
+    echo "  Then restart your shell and run: ghaiw --version"
 fi

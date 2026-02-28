@@ -72,15 +72,20 @@ def main() -> None:
     # Parse args
     args = sys.argv[1:]
     dry_run = "--dry-run" in args
-    args = [a for a in args if a != "--dry-run"]
+    push = "--push" in args
+    args = [a for a in args if a not in ("--dry-run", "--push")]
 
     if not args or args[0] not in ("patch", "minor", "major"):
-        print("Usage: python scripts/auto_version.py <patch|minor|major> [--dry-run]")
+        print("Usage: python scripts/auto_version.py <patch|minor|major> [--dry-run] [--push]")
         print()
         print("Bump types (semver):")
         print("  patch  — bug fixes, docs, minor tweaks          (0.1.0 → 0.1.1)")
         print("  minor  — new features, non-breaking changes     (0.1.0 → 0.2.0)")
         print("  major  — breaking changes, major rework         (0.1.0 → 1.0.0)")
+        print()
+        print("Options:")
+        print("  --dry-run  Preview the version bump without making any changes")
+        print("  --push     Push commit and tag to origin after bumping")
         sys.exit(1)
 
     bump_type = args[0]
@@ -135,9 +140,17 @@ def main() -> None:
             check=True,
         )
         print(f"Committed and tagged v{new}")
-        print()
-        print("To publish:")
-        print("  git push && git push --tags")
+
+        if push:
+            subprocess.run(["git", "push"], cwd=ROOT_DIR, check=True)
+            subprocess.run(["git", "push", "--tags"], cwd=ROOT_DIR, check=True)
+            print()
+            print(f"Pushed v{new} — release.yml will create a draft GitHub Release.")
+            print("Go to GitHub → Releases, review the draft, and click Publish to trigger PyPI.")
+        else:
+            print()
+            print("To publish:")
+            print("  git push && git push --tags")
     else:
         print("Not in a git repo — skipped commit/tag")
 

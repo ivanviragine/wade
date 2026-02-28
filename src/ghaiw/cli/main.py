@@ -40,7 +40,10 @@ def main(
     ),
 ) -> None:
     """ghaiw — AI-agent-driven git workflow management CLI."""
+    import atexit
+
     from ghaiw.utils.terminal import set_terminal_title
+    from ghaiw.utils.update_check import maybe_print_update_hint
 
     set_terminal_title("ghaiw")
 
@@ -50,6 +53,9 @@ def main(
     import ghaiw.logging.setup as log_setup
 
     log_setup.configure(verbose=verbose)
+
+    # Register background update nag — fires after command output, before shell prompt.
+    atexit.register(maybe_print_update_hint, ghaiw.__version__, ctx.invoked_subcommand)
 
     if ctx.invoked_subcommand is not None:
         from ghaiw.ui.console import console

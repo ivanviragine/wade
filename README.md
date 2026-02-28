@@ -4,16 +4,22 @@ Python CLI toolkit for managing AI-assisted software development workflows. Wrap
 
 ## Installation
 
+**Recommended (one-liner, no clone needed):**
+
 ```bash
-# Using the install script (recommended — sets up uv venv + symlink)
-./install.sh
-./install.sh ~/.local    # non-interactive, installs to ~/.local/bin
+curl -LsSf https://raw.githubusercontent.com/ivanviragine/ghaiw/main/install.sh | sh
+```
 
-# Or with pip
-pip install .
+**With uv directly:**
 
-# Or with uv directly
-uv pip install .
+```bash
+uv tool install ghaiw
+```
+
+**With pipx:**
+
+```bash
+pipx install ghaiw
 ```
 
 ## Requirements
@@ -101,16 +107,20 @@ eval "$(ghaiw shell-init)"
 
 This installs a shell function that intercepts `ghaiw work cd <N>` and performs a real `cd` into the worktree directory in your current shell.
 
-## Self-Upgrade
-
-When installed via `./install.sh` (frozen venv), `ghaiw update` automatically checks if the source repo has a newer version and reinstalls itself before proceeding with project updates. This ensures you always run the latest code without manual reinstalls.
+## Upgrading
 
 ```bash
-# Skip self-upgrade (e.g., in CI or when testing)
+ghaiw update
+```
+
+`ghaiw update` detects how ghaiw was installed (`uv tool`, `pipx`, or Homebrew) and runs the appropriate upgrade command, then refreshes all managed project files.
+
+```bash
+# Skip self-upgrade check (e.g., in CI)
 ghaiw update --skip-self-upgrade
 ```
 
-Editable installs (`uv pip install -e ".[dev]"`) skip self-upgrade automatically since code changes are reflected immediately.
+Editable installs (`uv pip install -e ".[dev]"`) skip self-upgrade automatically. To suppress the background update nag, set `GHAIW_NO_UPDATE_CHECK=1`.
 
 ## Configuration
 

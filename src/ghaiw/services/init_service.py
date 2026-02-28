@@ -188,8 +188,8 @@ def update(
     """Update managed files to the latest ghaiw version.
 
     Steps:
-    1.  Validate repo + config existence
-    2.  Self-upgrade if source version differs
+    1.  Self-upgrade check (runs before project validation)
+    2.  Validate repo + config existence
     3.  Read old version from manifest
     4.  Show version transition
     5.  Run config migration pipeline
@@ -209,7 +209,12 @@ def update(
 
     cwd = project_root or Path.cwd()
 
-    # Step 1: Validate repo + config
+    # Step 1: Self-upgrade check — runs before project validation so `ghaiw update` works standalone
+    if not skip_self_upgrade and _maybe_self_upgrade():
+        # re_exec() was called — this line is never reached
+        pass  # pragma: no cover
+
+    # Step 2: Validate repo + config
     try:
         root = repo.get_repo_root(cwd)
     except GitError:
@@ -220,11 +225,6 @@ def update(
     if config_path is None:
         console.error_with_fix("No .ghaiw.yml found", "Initialize your project first", "ghaiw init")
         return False
-
-    # Step 2: Self-upgrade if source version differs
-    if not skip_self_upgrade and _maybe_self_upgrade():
-        # re_exec() was called — this line is never reached
-        pass  # pragma: no cover
 
     console.rule("ghaiw update")
 
@@ -275,37 +275,23 @@ def update(
 
 
 def _maybe_self_upgrade() -> bool:
-    """Check if a source-version upgrade is available and apply it.
+    """Upgrade ghaiw using the detected package manager, then re-exec.
 
     If upgrade is applied, calls re_exec() which replaces this process.
-    Returns True if an upgrade was detected (but re_exec already ran),
-    False if no upgrade was needed.
+    Returns True if an upgrade was triggered, False if skipped.
     """
-    from ghaiw.utils.install import (
-        get_installed_version,
-        get_source_repo_path,
-        get_source_version,
-        re_exec,
-        self_upgrade,
-    )
+    from ghaiw.utils.install import InstallMethod, detect_install_method, re_exec, self_upgrade
 
-    source = get_source_repo_path()
-    if not source:
-        return False  # Editable install or no source marker
+    method = detect_install_method()
 
-    source_ver = get_source_version(source)
-    if not source_ver:
+    if method in (InstallMethod.EDITABLE, InstallMethod.UNKNOWN):
+        logger.info("_maybe_self_upgrade.skipped", method=str(method))
         return False
 
-    installed_ver = get_installed_version()
-    if source_ver == installed_ver:
-        return False  # Already up to date
+    console.step("Checking for ghaiw updates...")
 
-    console.info(f"Source version {source_ver} differs from installed {installed_ver}")
-    console.step("Self-upgrading from source...")
-
-    if self_upgrade(source):
-        console.success(f"Upgraded to {source_ver} — restarting...")
+    if self_upgrade():
+        console.success("ghaiw upgraded — restarting...")
         re_exec()  # Does not return
         return True  # pragma: no cover
 

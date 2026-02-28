@@ -1,237 +1,60 @@
-"""Tests for self-upgrade helpers — venv detection, version parsing, upgrade, re-exec."""
+"""Tests for self-upgrade helpers — install method detection, upgrade, re-exec."""
 
 from __future__ import annotations
 
 import subprocess
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from ghaiw.utils.install import (
+    InstallMethod,
+    detect_install_method,
     get_installed_version,
-    get_source_repo_path,
-    get_source_version,
-    get_venv_dir,
     re_exec,
     self_upgrade,
 )
 
-# ---------------------------------------------------------------------------
-# get_venv_dir
-# ---------------------------------------------------------------------------
-
-
-class TestGetVenvDir:
-    def test_returns_path_when_in_venv(self, tmp_path: Path) -> None:
-        """When sys.prefix points to a directory with bin/python and pyvenv.cfg, return it."""
-        # Arrange
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
-        (bin_dir / "python").write_text("#!/usr/bin/env python3\n")
-        (tmp_path / "pyvenv.cfg").write_text("home = /usr/bin\n")
-
-        # Act
-        with patch("ghaiw.utils.install.sys") as mock_sys:
-            mock_sys.prefix = str(tmp_path)
-            result = get_venv_dir()
-
-        # Assert
-        assert result == tmp_path
-
-    def test_returns_none_when_no_pyvenv_cfg(self, tmp_path: Path) -> None:
-        """When pyvenv.cfg is missing, we are not in a venv."""
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
-        (bin_dir / "python").write_text("#!/usr/bin/env python3\n")
-
-        with patch("ghaiw.utils.install.sys") as mock_sys:
-            mock_sys.prefix = str(tmp_path)
-            result = get_venv_dir()
-
-        assert result is None
-
-    def test_returns_none_when_no_bin_python(self, tmp_path: Path) -> None:
-        """When bin/python is missing, we are not in a venv."""
-        (tmp_path / "pyvenv.cfg").write_text("home = /usr/bin\n")
-
-        with patch("ghaiw.utils.install.sys") as mock_sys:
-            mock_sys.prefix = str(tmp_path)
-            result = get_venv_dir()
-
-        assert result is None
-
-    def test_returns_none_when_neither_exist(self, tmp_path: Path) -> None:
-        """When both bin/python and pyvenv.cfg are missing, return None."""
-        with patch("ghaiw.utils.install.sys") as mock_sys:
-            mock_sys.prefix = str(tmp_path)
-            result = get_venv_dir()
-
-        assert result is None
-
-    def test_returns_none_when_bin_python_is_directory(self, tmp_path: Path) -> None:
-        """When bin/python exists but is a directory (not a file), return None."""
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
-        (bin_dir / "python").mkdir()  # directory, not file
-        (tmp_path / "pyvenv.cfg").write_text("home = /usr/bin\n")
-
-        with patch("ghaiw.utils.install.sys") as mock_sys:
-            mock_sys.prefix = str(tmp_path)
-            result = get_venv_dir()
-
-        assert result is None
-
 
 # ---------------------------------------------------------------------------
-# get_source_repo_path
+# detect_install_method
 # ---------------------------------------------------------------------------
 
 
-class TestGetSourceRepoPath:
-    def test_returns_path_from_marker_file(self, tmp_path: Path) -> None:
-        """When ghaiw-source.txt exists and points to a real directory, return it."""
-        # Arrange — set up a fake venv
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
-        (bin_dir / "python").write_text("#!/usr/bin/env python3\n")
-        (tmp_path / "pyvenv.cfg").write_text("home = /usr/bin\n")
-
-        source_dir = tmp_path / "source-repo"
-        source_dir.mkdir()
-        (tmp_path / "ghaiw-source.txt").write_text(str(source_dir) + "\n")
-
-        # Act
+class TestDetectInstallMethod:
+    def test_detects_uv_tool_linux(self) -> None:
+        """sys.executable in ~/.local/share/uv/tools/ → UV_TOOL."""
         with patch("ghaiw.utils.install.sys") as mock_sys:
-            mock_sys.prefix = str(tmp_path)
-            result = get_source_repo_path()
+            mock_sys.executable = "/home/user/.local/share/uv/tools/ghaiw/bin/python"
+            assert detect_install_method() == InstallMethod.UV_TOOL
 
-        # Assert
-        assert result == source_dir
-
-    def test_returns_none_when_marker_missing(self, tmp_path: Path) -> None:
-        """When ghaiw-source.txt does not exist, return None."""
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
-        (bin_dir / "python").write_text("#!/usr/bin/env python3\n")
-        (tmp_path / "pyvenv.cfg").write_text("home = /usr/bin\n")
-
+    def test_detects_uv_tool_macos(self) -> None:
+        """macOS uv tool path also contains /.local/share/uv/tools/."""
         with patch("ghaiw.utils.install.sys") as mock_sys:
-            mock_sys.prefix = str(tmp_path)
-            result = get_source_repo_path()
+            mock_sys.executable = "/Users/user/.local/share/uv/tools/ghaiw/bin/python3.11"
+            assert detect_install_method() == InstallMethod.UV_TOOL
 
-        assert result is None
-
-    def test_returns_none_when_source_dir_does_not_exist(self, tmp_path: Path) -> None:
-        """When ghaiw-source.txt points to a non-existent directory, return None."""
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
-        (bin_dir / "python").write_text("#!/usr/bin/env python3\n")
-        (tmp_path / "pyvenv.cfg").write_text("home = /usr/bin\n")
-
-        nonexistent = tmp_path / "does-not-exist"
-        (tmp_path / "ghaiw-source.txt").write_text(str(nonexistent) + "\n")
-
+    def test_detects_pipx(self) -> None:
+        """sys.executable in /.local/pipx/venvs/ → PIPX."""
         with patch("ghaiw.utils.install.sys") as mock_sys:
-            mock_sys.prefix = str(tmp_path)
-            result = get_source_repo_path()
+            mock_sys.executable = "/home/user/.local/pipx/venvs/ghaiw/bin/python"
+            assert detect_install_method() == InstallMethod.PIPX
 
-        assert result is None
-
-    def test_returns_none_when_not_in_venv(self, tmp_path: Path) -> None:
-        """When get_venv_dir returns None, return None without reading marker."""
-        with patch("ghaiw.utils.install.get_venv_dir", return_value=None):
-            result = get_source_repo_path()
-
-        assert result is None
-
-    def test_strips_whitespace_from_marker(self, tmp_path: Path) -> None:
-        """Whitespace and newlines in ghaiw-source.txt are stripped."""
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
-        (bin_dir / "python").write_text("#!/usr/bin/env python3\n")
-        (tmp_path / "pyvenv.cfg").write_text("home = /usr/bin\n")
-
-        source_dir = tmp_path / "source-repo"
-        source_dir.mkdir()
-        (tmp_path / "ghaiw-source.txt").write_text(f"  {source_dir}  \n\n")
-
+    def test_detects_brew(self) -> None:
+        """sys.executable in /homebrew/ → BREW."""
         with patch("ghaiw.utils.install.sys") as mock_sys:
-            mock_sys.prefix = str(tmp_path)
-            result = get_source_repo_path()
+            mock_sys.executable = "/opt/homebrew/Cellar/ghaiw/1.0.0/libexec/bin/python3"
+            assert detect_install_method() == InstallMethod.BREW
 
-        assert result == source_dir
+    def test_detects_editable(self) -> None:
+        """sys.executable in /.venv/ → EDITABLE."""
+        with patch("ghaiw.utils.install.sys") as mock_sys:
+            mock_sys.executable = "/home/user/projects/ghaiw/.venv/bin/python"
+            assert detect_install_method() == InstallMethod.EDITABLE
 
-
-# ---------------------------------------------------------------------------
-# get_source_version
-# ---------------------------------------------------------------------------
-
-
-class TestGetSourceVersion:
-    def test_parses_double_quoted_version(self, tmp_path: Path) -> None:
-        """Extracts version from __version__ = "X.Y.Z"."""
-        init_file = tmp_path / "src" / "ghaiw" / "__init__.py"
-        init_file.parent.mkdir(parents=True)
-        init_file.write_text('"""ghaiw."""\n\n__version__ = "1.2.3"\n')
-
-        result = get_source_version(tmp_path)
-
-        assert result == "1.2.3"
-
-    def test_parses_single_quoted_version(self, tmp_path: Path) -> None:
-        """Extracts version from __version__ = 'X.Y.Z'."""
-        init_file = tmp_path / "src" / "ghaiw" / "__init__.py"
-        init_file.parent.mkdir(parents=True)
-        init_file.write_text("__version__ = '0.9.1'\n")
-
-        result = get_source_version(tmp_path)
-
-        assert result == "0.9.1"
-
-    def test_parses_version_with_extra_spaces(self, tmp_path: Path) -> None:
-        """Handles extra whitespace around the = sign."""
-        init_file = tmp_path / "src" / "ghaiw" / "__init__.py"
-        init_file.parent.mkdir(parents=True)
-        init_file.write_text('__version__   =   "2.0.0"\n')
-
-        result = get_source_version(tmp_path)
-
-        assert result == "2.0.0"
-
-    def test_returns_none_for_missing_file(self, tmp_path: Path) -> None:
-        """When __init__.py does not exist, return None."""
-        result = get_source_version(tmp_path)
-
-        assert result is None
-
-    def test_returns_none_for_missing_version_line(self, tmp_path: Path) -> None:
-        """When __init__.py exists but has no __version__, return None."""
-        init_file = tmp_path / "src" / "ghaiw" / "__init__.py"
-        init_file.parent.mkdir(parents=True)
-        init_file.write_text('"""ghaiw — no version here."""\n\nname = "ghaiw"\n')
-
-        result = get_source_version(tmp_path)
-
-        assert result is None
-
-    def test_returns_none_for_malformed_version(self, tmp_path: Path) -> None:
-        """When __version__ is present but not in a parseable format, return None."""
-        init_file = tmp_path / "src" / "ghaiw" / "__init__.py"
-        init_file.parent.mkdir(parents=True)
-        init_file.write_text("__version__ = compute_version()\n")
-
-        result = get_source_version(tmp_path)
-
-        assert result is None
-
-    def test_parses_prerelease_version(self, tmp_path: Path) -> None:
-        """Handles pre-release versions like 1.0.0a1."""
-        init_file = tmp_path / "src" / "ghaiw" / "__init__.py"
-        init_file.parent.mkdir(parents=True)
-        init_file.write_text('__version__ = "1.0.0a1"\n')
-
-        result = get_source_version(tmp_path)
-
-        assert result == "1.0.0a1"
+    def test_detects_unknown(self) -> None:
+        """Unrecognised path → UNKNOWN."""
+        with patch("ghaiw.utils.install.sys") as mock_sys:
+            mock_sys.executable = "/usr/local/bin/python3"
+            assert detect_install_method() == InstallMethod.UNKNOWN
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +72,7 @@ class TestGetInstalledVersion:
         assert result == __version__
 
     def test_returns_string(self) -> None:
-        """The return value is always a string."""
+        """The return value is always a non-empty string."""
         result = get_installed_version()
 
         assert isinstance(result, str)
@@ -262,211 +85,90 @@ class TestGetInstalledVersion:
 
 
 class TestSelfUpgrade:
-    def test_uv_success(self, tmp_path: Path) -> None:
-        """When uv is available and succeeds, return True without trying pip."""
-        # Arrange — fake venv
-        venv = tmp_path / "venv"
-        bin_dir = venv / "bin"
-        bin_dir.mkdir(parents=True)
-        (bin_dir / "python").write_text("#!/usr/bin/env python3\n")
-        (venv / "pyvenv.cfg").write_text("home = /usr/bin\n")
-
-        source = tmp_path / "source"
-        source.mkdir()
-
-        uv_result = MagicMock(returncode=0)
-
+    def test_uv_tool_calls_uv_tool_upgrade(self) -> None:
+        """When UV_TOOL, runs `uv tool upgrade ghaiw`."""
+        ok_result = MagicMock(returncode=0)
         with (
-            patch("ghaiw.utils.install.get_venv_dir", return_value=venv),
-            patch("ghaiw.utils.install.shutil.which", return_value="/usr/local/bin/uv"),
-            patch("ghaiw.utils.install.subprocess.run", return_value=uv_result) as mock_run,
+            patch("ghaiw.utils.install.detect_install_method", return_value=InstallMethod.UV_TOOL),
+            patch("ghaiw.utils.install.subprocess.run", return_value=ok_result) as mock_run,
         ):
-            result = self_upgrade(source)
-
-        # Assert
-        assert result is True
-        mock_run.assert_called_once()
-        args = mock_run.call_args[0][0]
-        assert args[0] == "uv"
-        assert "pip" in args
-        assert "install" in args
-        assert "--python" in args
-        assert str(bin_dir / "python") in args
-        assert str(source) in args
-
-    def test_uv_fails_then_pip_succeeds(self, tmp_path: Path) -> None:
-        """When uv fails but pip succeeds, return True."""
-        venv = tmp_path / "venv"
-        bin_dir = venv / "bin"
-        bin_dir.mkdir(parents=True)
-        (bin_dir / "python").write_text("#!/usr/bin/env python3\n")
-        (venv / "pyvenv.cfg").write_text("home = /usr/bin\n")
-
-        source = tmp_path / "source"
-        source.mkdir()
-
-        uv_result = MagicMock(returncode=1, stderr="uv error")
-        pip_result = MagicMock(returncode=0)
-
-        call_count = 0
-
-        def mock_subprocess_run(cmd: list[str], **kwargs: object) -> MagicMock:
-            nonlocal call_count
-            call_count += 1
-            if cmd[0] == "uv":
-                return uv_result
-            return pip_result
-
-        with (
-            patch("ghaiw.utils.install.get_venv_dir", return_value=venv),
-            patch("ghaiw.utils.install.shutil.which", return_value="/usr/local/bin/uv"),
-            patch("ghaiw.utils.install.subprocess.run", side_effect=mock_subprocess_run),
-        ):
-            result = self_upgrade(source)
+            result = self_upgrade()
 
         assert result is True
-        assert call_count == 2
+        cmd = mock_run.call_args[0][0]
+        assert cmd == ["uv", "tool", "upgrade", "ghaiw"]
 
-    def test_both_fail(self, tmp_path: Path) -> None:
-        """When both uv and pip fail, return False."""
-        venv = tmp_path / "venv"
-        bin_dir = venv / "bin"
-        bin_dir.mkdir(parents=True)
-        (bin_dir / "python").write_text("#!/usr/bin/env python3\n")
-        (venv / "pyvenv.cfg").write_text("home = /usr/bin\n")
-
-        source = tmp_path / "source"
-        source.mkdir()
-
-        failed_result = MagicMock(returncode=1, stderr="install error")
-
+    def test_pipx_calls_pipx_upgrade(self) -> None:
+        """When PIPX, runs `pipx upgrade ghaiw`."""
+        ok_result = MagicMock(returncode=0)
         with (
-            patch("ghaiw.utils.install.get_venv_dir", return_value=venv),
-            patch("ghaiw.utils.install.shutil.which", return_value="/usr/local/bin/uv"),
-            patch("ghaiw.utils.install.subprocess.run", return_value=failed_result),
+            patch("ghaiw.utils.install.detect_install_method", return_value=InstallMethod.PIPX),
+            patch("ghaiw.utils.install.subprocess.run", return_value=ok_result) as mock_run,
         ):
-            result = self_upgrade(source)
+            result = self_upgrade()
+
+        assert result is True
+        cmd = mock_run.call_args[0][0]
+        assert cmd == ["pipx", "upgrade", "ghaiw"]
+
+    def test_brew_calls_brew_upgrade(self) -> None:
+        """When BREW, runs `brew upgrade ghaiw`."""
+        ok_result = MagicMock(returncode=0)
+        with (
+            patch("ghaiw.utils.install.detect_install_method", return_value=InstallMethod.BREW),
+            patch("ghaiw.utils.install.subprocess.run", return_value=ok_result) as mock_run,
+        ):
+            result = self_upgrade()
+
+        assert result is True
+        cmd = mock_run.call_args[0][0]
+        assert cmd == ["brew", "upgrade", "ghaiw"]
+
+    def test_editable_returns_false(self) -> None:
+        """When EDITABLE, skip silently and return False."""
+        with patch("ghaiw.utils.install.detect_install_method", return_value=InstallMethod.EDITABLE):
+            result = self_upgrade()
 
         assert result is False
 
-    def test_no_uv_pip_succeeds(self, tmp_path: Path) -> None:
-        """When uv is not available, skip uv and use pip directly."""
-        venv = tmp_path / "venv"
-        bin_dir = venv / "bin"
-        bin_dir.mkdir(parents=True)
-        (bin_dir / "python").write_text("#!/usr/bin/env python3\n")
-        (venv / "pyvenv.cfg").write_text("home = /usr/bin\n")
-
-        source = tmp_path / "source"
-        source.mkdir()
-
-        pip_result = MagicMock(returncode=0)
-
-        with (
-            patch("ghaiw.utils.install.get_venv_dir", return_value=venv),
-            patch("ghaiw.utils.install.shutil.which", return_value=None),
-            patch("ghaiw.utils.install.subprocess.run", return_value=pip_result) as mock_run,
-        ):
-            result = self_upgrade(source)
-
-        assert result is True
-        mock_run.assert_called_once()
-        args = mock_run.call_args[0][0]
-        assert args[0] == str(bin_dir / "python")
-        assert "-m" in args
-        assert "pip" in args
-        assert "install" in args
-        assert str(source) in args
-
-    def test_no_venv_returns_false(self, tmp_path: Path) -> None:
-        """When not in a venv, return False immediately."""
-        source = tmp_path / "source"
-        source.mkdir()
-
-        with patch("ghaiw.utils.install.get_venv_dir", return_value=None):
-            result = self_upgrade(source)
+    def test_unknown_returns_false(self) -> None:
+        """When UNKNOWN, skip silently and return False."""
+        with patch("ghaiw.utils.install.detect_install_method", return_value=InstallMethod.UNKNOWN):
+            result = self_upgrade()
 
         assert result is False
 
-    def test_uv_timeout_falls_back_to_pip(self, tmp_path: Path) -> None:
-        """When uv times out, fall back to pip."""
-        venv = tmp_path / "venv"
-        bin_dir = venv / "bin"
-        bin_dir.mkdir(parents=True)
-        (bin_dir / "python").write_text("#!/usr/bin/env python3\n")
-        (venv / "pyvenv.cfg").write_text("home = /usr/bin\n")
-
-        source = tmp_path / "source"
-        source.mkdir()
-
-        pip_result = MagicMock(returncode=0)
-
-        call_count = 0
-
-        def mock_subprocess_run(cmd: list[str], **kwargs: object) -> MagicMock:
-            nonlocal call_count
-            call_count += 1
-            if cmd[0] == "uv":
-                raise subprocess.TimeoutExpired(cmd=cmd, timeout=120)
-            return pip_result
-
+    def test_command_failure_returns_false(self) -> None:
+        """When the upgrade command exits non-zero, return False."""
+        fail_result = MagicMock(returncode=1, stderr="error")
         with (
-            patch("ghaiw.utils.install.get_venv_dir", return_value=venv),
-            patch("ghaiw.utils.install.shutil.which", return_value="/usr/local/bin/uv"),
-            patch("ghaiw.utils.install.subprocess.run", side_effect=mock_subprocess_run),
+            patch("ghaiw.utils.install.detect_install_method", return_value=InstallMethod.UV_TOOL),
+            patch("ghaiw.utils.install.subprocess.run", return_value=fail_result),
         ):
-            result = self_upgrade(source)
+            result = self_upgrade()
 
-        assert result is True
-        assert call_count == 2
+        assert result is False
 
-    def test_uv_os_error_falls_back_to_pip(self, tmp_path: Path) -> None:
-        """When uv raises OSError, fall back to pip."""
-        venv = tmp_path / "venv"
-        bin_dir = venv / "bin"
-        bin_dir.mkdir(parents=True)
-        (bin_dir / "python").write_text("#!/usr/bin/env python3\n")
-        (venv / "pyvenv.cfg").write_text("home = /usr/bin\n")
-
-        source = tmp_path / "source"
-        source.mkdir()
-
-        pip_result = MagicMock(returncode=0)
-
-        def mock_subprocess_run(cmd: list[str], **kwargs: object) -> MagicMock:
-            if cmd[0] == "uv":
-                raise OSError("uv binary corrupted")
-            return pip_result
-
+    def test_timeout_returns_false(self) -> None:
+        """When the upgrade command times out, return False."""
         with (
-            patch("ghaiw.utils.install.get_venv_dir", return_value=venv),
-            patch("ghaiw.utils.install.shutil.which", return_value="/usr/local/bin/uv"),
-            patch("ghaiw.utils.install.subprocess.run", side_effect=mock_subprocess_run),
+            patch("ghaiw.utils.install.detect_install_method", return_value=InstallMethod.UV_TOOL),
+            patch(
+                "ghaiw.utils.install.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(cmd=["uv"], timeout=120),
+            ),
         ):
-            result = self_upgrade(source)
+            result = self_upgrade()
 
-        assert result is True
+        assert result is False
 
-    def test_pip_timeout_returns_false(self, tmp_path: Path) -> None:
-        """When pip also times out, return False."""
-        venv = tmp_path / "venv"
-        bin_dir = venv / "bin"
-        bin_dir.mkdir(parents=True)
-        (bin_dir / "python").write_text("#!/usr/bin/env python3\n")
-        (venv / "pyvenv.cfg").write_text("home = /usr/bin\n")
-
-        source = tmp_path / "source"
-        source.mkdir()
-
-        def mock_subprocess_run(cmd: list[str], **kwargs: object) -> MagicMock:
-            raise subprocess.TimeoutExpired(cmd=cmd, timeout=120)
-
+    def test_os_error_returns_false(self) -> None:
+        """When the upgrade command raises OSError, return False."""
         with (
-            patch("ghaiw.utils.install.get_venv_dir", return_value=venv),
-            patch("ghaiw.utils.install.shutil.which", return_value="/usr/local/bin/uv"),
-            patch("ghaiw.utils.install.subprocess.run", side_effect=mock_subprocess_run),
+            patch("ghaiw.utils.install.detect_install_method", return_value=InstallMethod.UV_TOOL),
+            patch("ghaiw.utils.install.subprocess.run", side_effect=OSError("not found")),
         ):
-            result = self_upgrade(source)
+            result = self_upgrade()
 
         assert result is False
 
