@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.0.9] — 2026-03-01
+
+### Bug Fixes
+
+- harden terminal cleanup, summary stripping, init validation, and work start (2e5447c)
+
 ## [v1.0.8] — 2026-03-01
 
 ### Tests
