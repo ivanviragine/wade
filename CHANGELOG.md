@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.0.7] — 2026-02-28
+
+### Bug Fixes
+
+- remove GHAIW_WORK_MODEL env var and fix summary ordering in PR body (a84957d)
+
 ## [v1.0.6] — 2026-02-28
 
 ### Bug Fixes
