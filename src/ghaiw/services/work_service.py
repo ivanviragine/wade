@@ -586,9 +586,8 @@ def start(
         elif installed:
             resolved_tool = installed[0].value
 
-    # Resolve model: env var override + shared resolution + complexity mapping
-    env_model = os.environ.get("GHAIW_WORK_MODEL")
-    resolved_model = env_model or resolve_model(model, config, "work")
+    # Resolve model: shared resolution + complexity mapping
+    resolved_model = resolve_model(model, config, "work")
     if not resolved_model and resolved_tool and task.complexity:
         resolved_model = _complexity_to_model(config, resolved_tool, task.complexity.value)
 
@@ -1705,7 +1704,18 @@ def _done_via_pr(
         # Use the impl-usage HTML marker as a hard boundary so that freeform
         # summary content (which may contain ## subheadings) is fully removed.
         updated_body = _strip_summary_section(updated_body)
-        updated_body = updated_body.rstrip("\n") + summary_section + "\n"
+        # Insert summary before any impl-usage block so ordering stays
+        # consistent: content → summary → impl-usage.
+        if summary_section:
+            marker_pos = updated_body.find(IMPL_USAGE_MARKER_START)
+            if marker_pos != -1:
+                before = updated_body[:marker_pos].rstrip("\n")
+                after = updated_body[marker_pos:]
+                updated_body = before + summary_section + "\n\n" + after + "\n"
+            else:
+                updated_body = updated_body.rstrip("\n") + summary_section + "\n"
+        else:
+            updated_body = updated_body.rstrip("\n") + "\n"
 
         if git_pr.update_pr_body(repo_root, pr_number, updated_body):
             console.success("PR body updated with summary.")
