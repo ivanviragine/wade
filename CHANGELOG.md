@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.0.8] — 2026-03-01
+
+### Tests
+
+- add regression tests for summary ordering in PR body updates (f3e18a8)
+
 ## [v1.0.7] — 2026-02-28
 
 ### Bug Fixes
