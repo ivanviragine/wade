@@ -1207,11 +1207,11 @@ def _strip_impl_usage_block(body: str) -> str:
 def _strip_summary_section(body: str) -> str:
     """Remove an existing ``## Summary`` section from a PR body.
 
-    The summary is always appended at the end, but the body may also contain
-    an implementation-usage block delimited by HTML comment markers.  We use
-    that marker as a hard boundary so freeform summary content (which may
-    itself contain ``## `` subheadings) is fully removed without eating into
-    the impl-usage block.
+    The body may contain an implementation-usage block delimited by HTML
+    comment markers.  We use that marker as a hard boundary so freeform
+    summary content (which may itself contain ``## `` subheadings) is fully
+    removed without eating into the impl-usage block.  The caller then
+    re-inserts the new summary *before* any impl-usage block.
     """
     idx = body.find("\n## Summary\n")
     if idx == -1:

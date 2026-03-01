@@ -15,6 +15,7 @@ from ghaiw.services.work_service import (
     IMPL_USAGE_MARKER_START,
     _build_pr_body,
     _strip_impl_usage_block,
+    _strip_summary_section,
     build_impl_usage_block,
     classify_staleness,
     extract_issue_from_branch,
@@ -698,3 +699,103 @@ class TestRemove:
         ):
             result = remove(project_root=tmp_git_repo)
             assert not result
+
+
+# ---------------------------------------------------------------------------
+# Summary section stripping and ordering
+# ---------------------------------------------------------------------------
+
+
+class TestStripSummarySection:
+    def test_removes_summary_at_end(self) -> None:
+        body = "Some content\n\n## Summary\n\nSummary text here.\n"
+        result = _strip_summary_section(body)
+        assert "## Summary" not in result
+        assert "Some content" in result
+
+    def test_preserves_impl_usage_block(self) -> None:
+        body = (
+            "Some content\n\n"
+            "## Summary\n\nOld summary.\n\n"
+            f"{IMPL_USAGE_MARKER_START}\nusage data\n{IMPL_USAGE_MARKER_END}\n"
+        )
+        result = _strip_summary_section(body)
+        assert "## Summary" not in result
+        assert IMPL_USAGE_MARKER_START in result
+        assert "usage data" in result
+
+    def test_no_summary_returns_unchanged(self) -> None:
+        body = "Just some content.\n"
+        assert _strip_summary_section(body) == body
+
+    def test_summary_with_subheadings_fully_removed(self) -> None:
+        body = (
+            "PR description\n\n"
+            "## Summary\n\nIntro.\n\n## Details\n\nMore detail.\n\n"
+            f"{IMPL_USAGE_MARKER_START}\ndata\n{IMPL_USAGE_MARKER_END}\n"
+        )
+        result = _strip_summary_section(body)
+        assert "Intro" not in result
+        assert "## Details" not in result
+        assert "More detail" not in result
+        assert IMPL_USAGE_MARKER_START in result
+
+
+class TestSummaryOrdering:
+    """Summary must appear before impl-usage block in the final PR body."""
+
+    def test_summary_inserted_before_impl_usage(self) -> None:
+        """When existing body has an impl-usage block, new summary goes before it."""
+        existing_body = (
+            "Closes #42\n\n"
+            "## Tasks\n- Login\n\n"
+            f"{IMPL_USAGE_MARKER_START}\nusage\n{IMPL_USAGE_MARKER_END}\n"
+        )
+        summary_section = "\n\n## Summary\n\nNew summary content."
+
+        # Simulate the logic from _done_via_pr
+        updated_body = _strip_summary_section(existing_body)
+        marker_pos = updated_body.find(IMPL_USAGE_MARKER_START)
+        assert marker_pos != -1, "impl-usage block should be preserved"
+
+        before = updated_body[:marker_pos].rstrip("\n")
+        after = updated_body[marker_pos:]
+        final = before + summary_section + "\n\n" + after + "\n"
+
+        summary_pos = final.find("## Summary")
+        impl_pos = final.find(IMPL_USAGE_MARKER_START)
+        assert summary_pos < impl_pos, (
+            f"Summary (at {summary_pos}) must come before impl-usage (at {impl_pos})"
+        )
+
+    def test_summary_appended_when_no_impl_usage(self) -> None:
+        """When no impl-usage block exists, summary goes at the end."""
+        existing_body = "Closes #42\n\n## Tasks\n- Login\n"
+        summary_section = "\n\n## Summary\n\nNew summary content."
+
+        updated_body = _strip_summary_section(existing_body)
+        final = updated_body.rstrip("\n") + summary_section + "\n"
+
+        assert final.endswith("New summary content.\n")
+
+    def test_repeated_done_replaces_summary_idempotently(self) -> None:
+        """Running work done twice replaces the old summary, keeps ordering."""
+        body_with_summary = (
+            "Closes #42\n\n"
+            "## Tasks\n- Login\n\n"
+            "## Summary\n\nFirst summary.\n\n"
+            f"{IMPL_USAGE_MARKER_START}\nusage\n{IMPL_USAGE_MARKER_END}\n"
+        )
+        new_summary = "\n\n## Summary\n\nSecond summary."
+
+        stripped = _strip_summary_section(body_with_summary)
+        assert "First summary" not in stripped
+
+        marker_pos = stripped.find(IMPL_USAGE_MARKER_START)
+        before = stripped[:marker_pos].rstrip("\n")
+        after = stripped[marker_pos:]
+        final = before + new_summary + "\n\n" + after + "\n"
+
+        assert "Second summary" in final
+        assert "First summary" not in final
+        assert final.find("## Summary") < final.find(IMPL_USAGE_MARKER_START)
