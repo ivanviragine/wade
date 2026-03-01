@@ -121,7 +121,7 @@ def launch_in_new_terminal(
             import tempfile
 
             with tempfile.NamedTemporaryFile(
-                prefix="ghaiw-", dir="/tmp", suffix="", delete=False, mode="w"
+                prefix="ghaiw-", suffix="", delete=False, mode="w"
             ) as f:
                 tmp_path = f.name
                 f.write(f"#!/usr/bin/env bash\ncd '{cwd or '.'}'\nexec {cmd_str}\n")

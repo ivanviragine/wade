@@ -33,6 +33,7 @@ from ghaiw.models.task import Task
 from ghaiw.models.work import MergeStrategy, SyncEvent, SyncResult, WorktreeState
 from ghaiw.providers.base import AbstractTaskProvider
 from ghaiw.providers.registry import get_provider
+from ghaiw.services.ai_resolution import resolve_ai_tool, resolve_model
 from ghaiw.services.task_service import (
     add_in_progress_label,
     add_worked_by_labels,
@@ -66,6 +67,19 @@ def _resolve_worktrees_dir(config: ProjectConfig, repo_root: Path) -> Path:
     if Path(wt_dir).is_absolute():
         return Path(wt_dir)
     return (repo_root / wt_dir).resolve()
+
+
+def _format_dirty_details(cwd: Path) -> str:
+    """Build a human-readable summary of dirty working tree status."""
+    dirty = git_repo.get_dirty_status(cwd)
+    parts: list[str] = []
+    if dirty["staged"]:
+        parts.append(f"{dirty['staged']} staged")
+    if dirty["unstaged"]:
+        parts.append(f"{dirty['unstaged']} unstaged")
+    if dirty["untracked"]:
+        parts.append(f"{dirty['untracked']} untracked")
+    return ", ".join(parts) if parts else "dirty"
 
 
 def _complexity_to_model(
@@ -338,19 +352,8 @@ def _post_exit_capture(
     if pr_info:
         pr_number = int(pr_info["number"])
         try:
-            result = git_pr._run_gh(
-                "pr",
-                "view",
-                str(pr_number),
-                "--json",
-                "body",
-                cwd=repo_root,
-                check=False,
-            )
-            if result.returncode == 0:
-                import json as json_mod
-
-                current_body = json_mod.loads(result.stdout).get("body", "")
+            current_body = git_pr.get_pr_body(repo_root, pr_number)
+            if current_body is not None:
                 cleaned_body = _strip_impl_usage_block(current_body)
                 new_body = cleaned_body.rstrip("\n") + "\n\n" + usage_block + "\n"
                 if git_pr.update_pr_body(repo_root, pr_number, new_body):
@@ -446,17 +449,8 @@ def _post_work_lifecycle_pr(
         git_pr.merge_pr(repo_root=repo_root, pr_number=int(pr_number), strategy="squash")
     except Exception as e:
         logger.error("pr_merge.failed", pr_number=pr_number, error=str(e))
-        # Try to clean up remote branch
-        with contextlib.suppress(Exception):
-            subprocess.run(
-                ["git", "push", "origin", "--delete", branch],
-                check=True,
-                capture_output=True,
-                cwd=repo_root,
-            )
-        # Try to clean up local branch (worktree already removed above)
-        with contextlib.suppress(Exception):
-            git_branch.delete_branch(repo_root, branch, force=True)
+        console.error(f"PR merge failed: {e}")
+        console.hint(f"Branch '{branch}' preserved — retry or clean up manually.")
         return
 
     with contextlib.suppress(Exception):
@@ -580,8 +574,9 @@ def start(
     console.rule(f"implement-task #{task.id}")
     console.kv("Issue", console.issue_ref(task.id, task.title))
 
-    # Resolve AI tool
-    resolved_tool = ai_tool or config.get_ai_tool("work")
+    # Resolve AI tool (shared resolution + work-specific TTY prompt)
+    # auto_detect=False so multi-tool TTY selection still fires below
+    resolved_tool = resolve_ai_tool(ai_tool, config, "work", auto_detect=False)
     if not resolved_tool:
         installed = AbstractAITool.detect_installed()
         if installed and len(installed) > 1 and prompts.is_tty():
@@ -590,20 +585,12 @@ def start(
             resolved_tool = tool_names[idx]
         elif installed:
             resolved_tool = installed[0].value
-        else:
-            resolved_tool = None
 
-    # Resolve model: CLI flag → env var override → complexity mapping
-    resolved_model = model
-    if not resolved_model:
-        env_model = os.environ.get("GHAIW_WORK_MODEL")
-        if env_model:
-            resolved_model = env_model
+    # Resolve model: env var override + shared resolution + complexity mapping
+    env_model = os.environ.get("GHAIW_WORK_MODEL")
+    resolved_model = env_model or resolve_model(model, config, "work")
     if not resolved_model and resolved_tool and task.complexity:
         resolved_model = _complexity_to_model(config, resolved_tool, task.complexity.value)
-    # Final fallback: ai.work.model or ai.default_model from config
-    if not resolved_model:
-        resolved_model = config.get_model("work")
 
     if resolved_tool:
         console.kv("AI tool", resolved_tool)
@@ -762,7 +749,7 @@ def start(
     # Set up transcript capture
     transcript_path: Path | None = None
     try:
-        transcript_dir = tempfile.mkdtemp(prefix="ghaiw-work-", dir="/tmp")
+        transcript_dir = tempfile.mkdtemp(prefix="ghaiw-work-")
         transcript_path = Path(transcript_dir) / f"transcript-{task.id}.log"
         console.hint(f"Transcript: {transcript_path}")
     except OSError:
@@ -774,7 +761,7 @@ def start(
             detach_adapter = AbstractAITool.get(AIToolID(resolved_tool))
             cmd = detach_adapter.build_launch_command(
                 model=resolved_model,
-                trusted_dirs=[str(worktree_path), "/tmp"],
+                trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
                 initial_message=prompt,
             )
         except (ValueError, KeyError):
@@ -811,7 +798,7 @@ def start(
                 model=resolved_model,
                 prompt=prompt,
                 transcript_path=transcript_path,
-                trusted_dirs=[str(worktree_path), "/tmp"],
+                trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
             )
             logger.info("work.ai_exited", exit_code=exit_code, tool=resolved_tool)
         except (ValueError, KeyError):
@@ -1032,8 +1019,9 @@ def find_worktree_path(
         if f"/{target}-" in wt_branch or wt_branch.endswith(f"/{target}"):
             return Path(wt_path)
 
-        # Match by worktree directory name
-        if target in Path(wt_path).name:
+        # Match by worktree directory name (boundary-aware to avoid
+        # target="1" matching "feat-10-something")
+        if re.search(rf"(?:^|-){re.escape(target)}(?:-|$)", Path(wt_path).name):
             return Path(wt_path)
 
     return None
@@ -1217,6 +1205,35 @@ def _strip_impl_usage_block(body: str) -> str:
     return remove_marker_block(body, IMPL_USAGE_MARKER_START, IMPL_USAGE_MARKER_END)
 
 
+def _strip_summary_section(body: str) -> str:
+    """Remove an existing ``## Summary`` section from a PR body.
+
+    The summary is always appended at the end, but the body may also contain
+    an implementation-usage block delimited by HTML comment markers.  We use
+    that marker as a hard boundary so freeform summary content (which may
+    itself contain ``## `` subheadings) is fully removed without eating into
+    the impl-usage block.
+    """
+    idx = body.find("\n## Summary\n")
+    if idx == -1:
+        # Also check at the very start of the string
+        if body.startswith("## Summary\n"):
+            idx = 0
+        else:
+            return body
+
+    before = body[:idx]
+
+    # Find the next structural boundary after the summary heading
+    marker_idx = body.find(IMPL_USAGE_MARKER_START, idx)
+    after = body[marker_idx:] if marker_idx != -1 else ""
+
+    result = before.rstrip("\n")
+    if after:
+        result = result + "\n\n" + after
+    return result if result else ""
+
+
 # ---------------------------------------------------------------------------
 # PR body composition
 # ---------------------------------------------------------------------------
@@ -1335,15 +1352,7 @@ def sync(
 
     # Check clean — with detailed diagnostics
     if not git_repo.is_clean(cwd):
-        dirty = git_repo.get_dirty_status(cwd)
-        detail_parts = []
-        if dirty["staged"]:
-            detail_parts.append(f"{dirty['staged']} staged")
-        if dirty["unstaged"]:
-            detail_parts.append(f"{dirty['unstaged']} unstaged")
-        if dirty["untracked"]:
-            detail_parts.append(f"{dirty['untracked']} untracked")
-        detail_str = ", ".join(detail_parts) if detail_parts else "dirty"
+        detail_str = _format_dirty_details(cwd)
         emit("error", reason="dirty_worktree", details=detail_str)
         if not json_output:
             console.error_with_fix(
@@ -1417,15 +1426,15 @@ def sync(
     merge_result = git_sync.merge_branch(repo_root, merge_ref)
 
     if merge_result.success:
-        emit("merged", commits_merged=merge_result.commits_merged or behind)
+        emit("merged", commits_merged=behind)
         if not json_output:
-            console.success(f"Merged {merge_result.commits_merged or behind} commit(s).")
+            console.success(f"Merged {behind} commit(s).")
         emit("done", branch=current, main=resolved_main)
         return SyncResult(
             success=True,
             current_branch=current,
             main_branch=resolved_main,
-            commits_merged=merge_result.commits_merged or behind,
+            commits_merged=behind,
             events=events,
         )
 
@@ -1552,15 +1561,7 @@ def done(
 
     # Check clean
     if not git_repo.is_clean(cwd):
-        dirty = git_repo.get_dirty_status(cwd)
-        detail_parts = []
-        if dirty["staged"]:
-            detail_parts.append(f"{dirty['staged']} staged")
-        if dirty["unstaged"]:
-            detail_parts.append(f"{dirty['unstaged']} unstaged")
-        if dirty["untracked"]:
-            detail_parts.append(f"{dirty['untracked']} untracked")
-        detail_str = ", ".join(detail_parts) if detail_parts else "dirty"
+        detail_str = _format_dirty_details(cwd)
         console.error_with_fix(
             f"Working tree is dirty ({detail_str})",
             "Commit or stash your changes first",
@@ -1644,18 +1645,19 @@ def _done_via_pr(
     # Check for existing PR (expected from plan-task or implement-task bootstrap)
     existing_pr = git_pr.get_pr_for_branch(repo_root, branch)
 
-    # Resolve PR-SUMMARY.md path: check worktree first, then fall back to /tmp
+    # Resolve PR-SUMMARY.md path: check worktree first, then fall back to temp dir
     pr_summary_path: Path | None = None
     if worktree_path and (worktree_path / "PR-SUMMARY.md").exists():
         pr_summary_path = worktree_path / "PR-SUMMARY.md"
     else:
-        tmp_path = Path("/tmp") / f"PR-SUMMARY-{issue_number}.md"
+        tmp_path = Path(tempfile.gettempdir()) / f"PR-SUMMARY-{issue_number}.md"
         if tmp_path.exists():
             pr_summary_path = tmp_path
 
     if pr_summary_path is None:
         console.warn("No PR-SUMMARY file found — PR description will have no summary.")
-        console.detail(f"Expected: /tmp/PR-SUMMARY-{issue_number}.md")
+        expected = Path(tempfile.gettempdir()) / f"PR-SUMMARY-{issue_number}.md"
+        console.detail(f"Expected: {expected}")
 
     if existing_pr:
         # Update existing PR: append summary
@@ -1699,6 +1701,10 @@ def _done_via_pr(
                 flags=re.MULTILINE,
             )
             updated_body = refs + "\n\n" + updated_body.lstrip("\n")
+        # Strip any existing ## Summary section to avoid duplication on retry.
+        # Use the impl-usage HTML marker as a hard boundary so that freeform
+        # summary content (which may contain ## subheadings) is fully removed.
+        updated_body = _strip_summary_section(updated_body)
         updated_body = updated_body.rstrip("\n") + summary_section + "\n"
 
         if git_pr.update_pr_body(repo_root, pr_number, updated_body):
@@ -2076,6 +2082,7 @@ def _cleanup_worktree(repo_root: Path, wt_path: Path, main_branch: str) -> bool:
         git_worktree.remove_worktree(repo_root, wt_path)
     except GitError as e:
         console.warn(f"Worktree removal failed: {e}")
+        return False
 
     if branch_name and branch_name != main_branch:
         with contextlib.suppress(GitError):

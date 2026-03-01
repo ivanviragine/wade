@@ -115,7 +115,7 @@ class GitHubProvider(AbstractTaskProvider):
         cmd = ["gh", "issue", "create", "--title", title]
 
         # Write body to temp file to handle multiline content safely
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, dir="/tmp") as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write(body)
             body_file = f.name
 
@@ -168,7 +168,7 @@ class GitHubProvider(AbstractTaskProvider):
     ) -> Task:
         """Update an issue's title and/or body."""
         if body is not None:
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, dir="/tmp") as f:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
                 f.write(body)
                 body_file = f.name
             try:
@@ -290,7 +290,7 @@ class GitHubProvider(AbstractTaskProvider):
         draft: bool = False,
     ) -> str:
         """Create a pull request via gh pr create. Returns the PR URL."""
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, dir="/tmp") as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write(body)
             body_file = f.name
 
@@ -351,7 +351,7 @@ class GitHubProvider(AbstractTaskProvider):
 
     def update_pr_body(self, pr_number: str, body: str) -> None:
         """Update a PR's body text."""
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, dir="/tmp") as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write(body)
             body_file = f.name
 

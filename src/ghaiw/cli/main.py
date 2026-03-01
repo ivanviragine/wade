@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import sys
+
 import typer
 
 import ghaiw
+from ghaiw.config.loader import ConfigError
 
 app = typer.Typer(
     name="ghaiw",
@@ -13,6 +16,15 @@ app = typer.Typer(
     invoke_without_command=True,
     add_completion=True,
 )
+
+
+def cli_main() -> None:
+    """Console entrypoint — wraps ``app()`` to catch ConfigError gracefully."""
+    try:
+        app()
+    except ConfigError as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
 
 
 def version_callback(value: bool) -> None:

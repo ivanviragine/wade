@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 
 import structlog
@@ -19,6 +20,7 @@ from ghaiw.models.config import ProjectConfig
 from ghaiw.models.deps import DependencyEdge, DependencyGraph
 from ghaiw.providers.base import AbstractTaskProvider
 from ghaiw.providers.registry import get_provider
+from ghaiw.services.ai_resolution import resolve_ai_tool, resolve_model
 from ghaiw.services.task_service import ensure_issue_label
 from ghaiw.ui.console import console
 from ghaiw.utils.process import CommandError, run
@@ -319,7 +321,7 @@ def run_headless_analysis(
     cmd = adapter.build_launch_command(
         model=model,
         prompt=prompt,
-        trusted_dirs=[str(Path.cwd()), "/tmp"],
+        trusted_dirs=[str(Path.cwd()), tempfile.gettempdir()],
     )
 
     try:
@@ -348,14 +350,12 @@ def _run_interactive_analysis(
     Launches AI interactively with the prompt as an initial message, then reads
     the output from a temp file.
     """
-    import tempfile
-
     from ghaiw.ai_tools.base import AbstractAITool
     from ghaiw.models.ai import AIToolID
 
     # Set up output file for the AI to write results to
     created_tmp = plan_dir is None
-    output_dir = plan_dir or tempfile.mkdtemp(prefix="ghaiw-deps-", dir="/tmp")
+    output_dir = plan_dir or tempfile.mkdtemp(prefix="ghaiw-deps-")
     output_file = Path(output_dir) / "deps-output.txt"
 
     # Append output instruction to prompt
@@ -371,7 +371,7 @@ def _run_interactive_analysis(
             worktree_path=Path.cwd(),
             model=model,
             prompt=interactive_prompt,
-            trusted_dirs=[str(Path.cwd()), output_dir, "/tmp"],
+            trusted_dirs=[str(Path.cwd()), output_dir, tempfile.gettempdir()],
         )
     except (ValueError, KeyError):
         console.warn(f"Unknown AI tool: {ai_tool}")
@@ -427,15 +427,12 @@ def analyze_deps(
         return None
 
     # Resolve AI tool
-    resolved_tool = ai_tool or config.get_ai_tool("deps")
-    if not resolved_tool:
-        installed = AbstractAITool.detect_installed()
-        resolved_tool = installed[0].value if installed else None
+    resolved_tool = resolve_ai_tool(ai_tool, config, "deps")
     if not resolved_tool:
         console.error("No AI tool available for dependency analysis.")
         return None
 
-    resolved_model = model or config.get_model("deps")
+    resolved_model = resolve_model(model, config, "deps")
 
     # Check model compatibility — drop model if it's not valid for this tool
     if resolved_model:

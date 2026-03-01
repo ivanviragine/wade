@@ -1,5 +1,5 @@
 """Allow running ghaiw as `python -m ghaiw`."""
 
-from ghaiw.cli.main import app
+from ghaiw.cli.main import cli_main
 
-app()
+cli_main()

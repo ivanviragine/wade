@@ -40,8 +40,7 @@ SECTIONS: list[tuple[str, str]] = [
 
 # Pre-compiled regex patterns for each prefix
 PREFIX_PATTERNS: dict[str, re.Pattern[str]] = {
-    prefix: re.compile(rf"^{prefix}(\([^)]*\))?\!?:\s*(.+)$")
-    for prefix, _ in SECTIONS
+    prefix: re.compile(rf"^{prefix}(\([^)]*\))?\!?:\s*(.+)$") for prefix, _ in SECTIONS
 }
 
 
@@ -108,11 +107,7 @@ def format_range(commit_range: str) -> str:
             output_parts.extend(items)
 
     # Unmatched commits → "Other Changes"
-    other = [
-        f"- {subject} ({sha})"
-        for subject, sha in commits
-        if subject not in matched_subjects
-    ]
+    other = [f"- {subject} ({sha})" for subject, sha in commits if subject not in matched_subjects]
     if other:
         output_parts.append("\n### Other Changes\n")
         output_parts.extend(other)

@@ -9,9 +9,8 @@ import pytest
 
 from ghaiw.models.config import AIConfig, ProjectConfig
 from ghaiw.models.task import PlanFile
+from ghaiw.services.ai_resolution import resolve_ai_tool, resolve_model
 from ghaiw.services.plan_service import (
-    _resolve_ai_tool,
-    _resolve_model,
     discover_plan_files,
     get_plan_prompt_template,
     render_plan_prompt,
@@ -46,12 +45,12 @@ class TestPromptTemplate:
 class TestResolveAITool:
     def test_explicit_arg_wins(self) -> None:
         config = ProjectConfig(ai=AIConfig(default_tool="copilot"))
-        result = _resolve_ai_tool("claude", config)
+        result = resolve_ai_tool("claude", config)
         assert result == "claude"
 
     def test_config_fallback(self) -> None:
         config = ProjectConfig(ai=AIConfig(default_tool="copilot"))
-        result = _resolve_ai_tool(None, config)
+        result = resolve_ai_tool(None, config)
         assert result == "copilot"
 
     def test_detection_fallback(self) -> None:
@@ -60,33 +59,33 @@ class TestResolveAITool:
             from ghaiw.models.ai import AIToolID
 
             mock.return_value = [AIToolID.CLAUDE]
-            result = _resolve_ai_tool(None, config)
+            result = resolve_ai_tool(None, config)
             assert result == "claude"
 
     def test_no_tool_available(self) -> None:
         config = ProjectConfig()
         with patch("ghaiw.services.plan_service.AbstractAITool.detect_installed") as mock:
             mock.return_value = []
-            result = _resolve_ai_tool(None, config)
+            result = resolve_ai_tool(None, config)
             assert result is None
 
 
 class TestResolveModel:
     def test_explicit_arg(self) -> None:
         config = ProjectConfig()
-        result = _resolve_model("claude-opus-4-6", config)
+        result = resolve_model("claude-opus-4-6", config)
         assert result == "claude-opus-4-6"
 
     def test_config_fallback(self) -> None:
         from ghaiw.models.config import AICommandConfig
 
         config = ProjectConfig(ai=AIConfig(plan=AICommandConfig(model="claude-sonnet-4-6")))
-        result = _resolve_model(None, config, "plan")
+        result = resolve_model(None, config, "plan")
         assert result == "claude-sonnet-4-6"
 
     def test_no_model(self) -> None:
         config = ProjectConfig()
-        result = _resolve_model(None, config)
+        result = resolve_model(None, config)
         assert result is None
 
 

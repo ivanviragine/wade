@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -71,8 +72,8 @@ class TestPrSummaryPathResolution:
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
 
-        # Create /tmp version
-        tmp_summary = Path("/tmp") / "PR-SUMMARY-42.md"
+        # Create temp dir version
+        tmp_summary = Path(tempfile.gettempdir()) / "PR-SUMMARY-42.md"
         tmp_summary.write_text("Fixed bug in login flow.\n")
 
         task = Task(id="42", title="Add auth", body="## Tasks\n- Login\n")
@@ -128,8 +129,8 @@ class TestPrSummaryPathResolution:
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
 
-        # Create /tmp version (should be ignored)
-        tmp_summary = Path("/tmp") / "PR-SUMMARY-42.md"
+        # Create temp dir version (should be ignored)
+        tmp_summary = Path(tempfile.gettempdir()) / "PR-SUMMARY-42.md"
         tmp_summary.write_text("Tmp version: This should NOT be used.\n")
 
         task = Task(id="42", title="Add auth", body="## Tasks\n- Login\n")

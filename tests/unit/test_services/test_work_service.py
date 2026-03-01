@@ -259,6 +259,16 @@ class TestFindWorktreePath:
         path = find_worktree_path("999", project_root=tmp_git_repo)
         assert path is None
 
+    def test_does_not_match_substring_of_issue_number(self, tmp_git_repo: Path) -> None:
+        """target="1" must NOT match a worktree for issue 10."""
+        from ghaiw.git.worktree import create_worktree
+
+        wt_dir = tmp_git_repo.parent / "feat-10-something"
+        create_worktree(tmp_git_repo, "feat/10-something", wt_dir, "main")
+
+        path = find_worktree_path("1", project_root=tmp_git_repo)
+        assert path is None
+
 
 # ---------------------------------------------------------------------------
 # Command assembly tests — verify exact subprocess.run cmd lists

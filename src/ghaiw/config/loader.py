@@ -20,6 +20,10 @@ from ghaiw.models.config import (
 CONFIG_FILENAME = ".ghaiw.yml"
 
 
+class ConfigError(Exception):
+    """Raised when .ghaiw.yml cannot be parsed or has invalid structure."""
+
+
 def find_config_file(start: Path | None = None) -> Path | None:
     """Walk up from start (or CWD) looking for .ghaiw.yml.
 
@@ -53,14 +57,21 @@ def load_config(start: Path | None = None) -> ProjectConfig:
 
 def parse_config_file(config_path: Path) -> ProjectConfig:
     """Parse a .ghaiw.yml file into a ProjectConfig."""
-    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    try:
+        raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as e:
+        raise ConfigError(f"Invalid YAML in {config_path}: {e}") from e
+
     if not isinstance(raw, dict):
         return ProjectConfig(
             config_path=str(config_path),
             project_root=str(config_path.parent),
         )
 
-    return _build_config(raw, config_path)
+    try:
+        return _build_config(raw, config_path)
+    except (KeyError, TypeError, ValueError) as e:
+        raise ConfigError(f"Invalid config structure in {config_path}: {e}") from e
 
 
 def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:

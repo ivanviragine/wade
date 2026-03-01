@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ghaiw.config.loader import find_config_file, load_config, parse_config_file
+import pytest
+
+from ghaiw.config.loader import ConfigError, find_config_file, load_config, parse_config_file
 
 SAMPLE_V2_CONFIG = """\
 version: 2
@@ -138,6 +140,22 @@ class TestParseConfigFile:
         config = parse_config_file(config_path)
         assert config.config_path == str(config_path)
         assert config.project_root == str(tmp_path)
+
+
+class TestParseConfigFileErrors:
+    def test_malformed_yaml_raises_config_error(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".ghaiw.yml"
+        config_path.write_text(":\n  - [\ninvalid: yaml: content\n")
+
+        with pytest.raises(ConfigError, match="Invalid YAML"):
+            parse_config_file(config_path)
+
+    def test_config_error_includes_file_path(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".ghaiw.yml"
+        config_path.write_text(":\n  - [\n")
+
+        with pytest.raises(ConfigError, match=str(config_path)):
+            parse_config_file(config_path)
 
 
 class TestLoadConfig:

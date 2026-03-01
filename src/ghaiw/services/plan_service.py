@@ -27,6 +27,7 @@ from ghaiw.models.config import ProjectConfig
 from ghaiw.models.task import PlanFile
 from ghaiw.providers.base import AbstractTaskProvider
 from ghaiw.providers.registry import get_provider
+from ghaiw.services.ai_resolution import resolve_ai_tool, resolve_model
 from ghaiw.services.task_service import (
     add_complexity_label,
     add_planned_by_labels,
@@ -54,39 +55,6 @@ def render_plan_prompt(plan_dir: str) -> str:
     """Render the plan prompt template with the plan directory."""
     template = get_plan_prompt_template()
     return template.replace("{plan_dir}", plan_dir)
-
-
-def _resolve_ai_tool(
-    ai_tool: str | None,
-    config: ProjectConfig,
-    command: str = "plan",
-) -> str | None:
-    """Resolve AI tool from args → config → detection."""
-    if ai_tool:
-        return ai_tool
-
-    # Config fallback chain: command-specific → global default
-    config_tool = config.get_ai_tool(command)
-    if config_tool:
-        return config_tool
-
-    # Detect installed tools
-    installed = AbstractAITool.detect_installed()
-    if installed:
-        return installed[0].value
-
-    return None
-
-
-def _resolve_model(
-    model: str | None,
-    config: ProjectConfig,
-    command: str = "plan",
-) -> str | None:
-    """Resolve model from args → config."""
-    if model:
-        return model
-    return config.get_model(command)
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +135,7 @@ def run_ai_planning_session(
     cmd = adapter.build_launch_command(
         model=model,
         plan_mode=True,
-        trusted_dirs=[str(Path.cwd()), "/tmp", plan_dir],
+        trusted_dirs=[str(Path.cwd()), tempfile.gettempdir(), plan_dir],
         initial_message=prompt,
     )
     console.info(f"Plan directory: {plan_dir}")
@@ -207,7 +175,7 @@ def _warn_token_extraction(transcript_path: Path | None) -> None:
         console.warn("Session transcript was not captured — token usage unavailable.")
         return
 
-    fd, debug_path_str = tempfile.mkstemp(prefix="ghaiw-transcript-", suffix=".txt", dir="/tmp")
+    fd, debug_path_str = tempfile.mkstemp(prefix="ghaiw-transcript-", suffix=".txt")
     os.close(fd)
     debug_path = Path(debug_path_str)
     try:
@@ -240,12 +208,12 @@ def plan(
     provider = get_provider(config)
 
     # Resolve AI tool and model
-    resolved_tool = _resolve_ai_tool(ai_tool, config, "plan")
+    resolved_tool = resolve_ai_tool(ai_tool, config, "plan")
     if not resolved_tool:
         console.error("No AI tool specified and none detected. Use --ai <tool>.")
         return False
 
-    resolved_model = _resolve_model(model, config, "plan")
+    resolved_model = resolve_model(model, config, "plan")
 
     # Check model compatibility early so the display reflects what will actually be used
     if resolved_model:
@@ -279,7 +247,7 @@ def plan(
     ensure_issue_label(provider, config.project.issue_label)
 
     # Create temp directory for plan files
-    plan_dir = tempfile.mkdtemp(prefix="ghaiw-plan-", dir="/tmp")
+    plan_dir = tempfile.mkdtemp(prefix="ghaiw-plan-")
 
     # Snapshot current issue numbers (for Path A detection)
     before_snapshot = provider.snapshot_task_numbers(

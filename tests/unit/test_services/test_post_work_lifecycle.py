@@ -95,7 +95,7 @@ def test_pr_strategy_user_declines_merge(
 @patch("ghaiw.services.work_service.subprocess.run")
 @patch("ghaiw.services.work_service.git_pr.merge_pr")
 @patch("ghaiw.services.work_service.prompts.confirm", return_value=True)
-def test_pr_strategy_merge_failure_handles_gracefully(
+def test_pr_strategy_merge_failure_preserves_branch(
     _mock_confirm: MagicMock,
     mock_merge_pr: MagicMock,
     mock_run: MagicMock,
@@ -114,12 +114,12 @@ def test_pr_strategy_merge_failure_handles_gracefully(
         provider,
     )
 
-    mock_run.assert_any_call(
-        ["git", "push", "origin", "--delete", "feat/42-test"],
-        check=True,
-        capture_output=True,
-        cwd=tmp_path / "repo",
-    )
+    # Branch should NOT be deleted on merge failure
+    for call in mock_run.call_args_list:
+        args = call[0][0] if call[0] else call[1].get("args", [])
+        assert not (isinstance(args, list) and "push" in args and "--delete" in args), (
+            "Branch should be preserved on merge failure"
+        )
 
 
 @patch("ghaiw.services.work_service.subprocess.run")
