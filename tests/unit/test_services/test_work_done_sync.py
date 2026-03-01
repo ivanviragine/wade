@@ -728,6 +728,14 @@ class TestStripSummarySection:
         body = "Just some content.\n"
         assert _strip_summary_section(body) == body
 
+    def test_adjacent_heading_after_summary_preserved(self) -> None:
+        """Heading immediately after ## Summary (no blank line) must not be dropped."""
+        body = "Closes #1\n\n## Summary\n## Tasks\n- a\n"
+        result = _strip_summary_section(body)
+        assert "## Tasks" in result
+        assert "- a" in result
+        assert "## Summary" not in result
+
     def test_summary_with_subheadings_fully_removed(self) -> None:
         body = (
             "PR description\n\n"

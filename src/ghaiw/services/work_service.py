@@ -175,8 +175,10 @@ def bootstrap_worktree(
                 )
 
 
-def _is_inside_ai_cli() -> bool:
-    """Detect if we are running inside an AI CLI session.
+def _detect_ai_cli_env() -> str | None:
+    """Detect which AI CLI session we are running inside, if any.
+
+    Returns the env-var name that triggered detection, or ``None``.
 
     When an AI agent calls ``ghaiw implement-task`` from within its own
     session, we must not launch another AI instance (infinite nesting).
@@ -184,18 +186,17 @@ def _is_inside_ai_cli() -> bool:
     """
     # Claude Code sets CLAUDE_CODE=1 or CLAUDE_CODE_ENTRYPOINT
     if os.environ.get("CLAUDE_CODE") or os.environ.get("CLAUDE_CODE_ENTRYPOINT"):
-        return True
+        return "CLAUDE_CODE"
     # Copilot CLI
     if os.environ.get("COPILOT_CLI"):
-        return True
+        return "COPILOT_CLI"
     # Gemini CLI
     if os.environ.get("GEMINI_CLI"):
-        return True
+        return "GEMINI_CLI"
     # Codex CLI
     if os.environ.get("CODEX_CLI"):
-        return True
-    # Generic: ghaiw sets this when launching an AI tool
-    return bool(os.environ.get("GHAIW_IN_AI_SESSION"))
+        return "CODEX_CLI"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -680,12 +681,20 @@ def start(
     else:
         try:
             with console.status("Creating worktree..."):
-                git_worktree.create_worktree(
-                    repo_root=repo_root,
-                    branch_name=branch_name,
-                    worktree_dir=worktree_path,
-                    base_branch=main_branch,
-                )
+                if git_branch.branch_exists(repo_root, branch_name):
+                    # Branch exists locally but no worktree — reuse it
+                    git_worktree.checkout_existing_branch_worktree(
+                        repo_root=repo_root,
+                        branch_name=branch_name,
+                        worktree_dir=worktree_path,
+                    )
+                else:
+                    git_worktree.create_worktree(
+                        repo_root=repo_root,
+                        branch_name=branch_name,
+                        worktree_dir=worktree_path,
+                        base_branch=main_branch,
+                    )
             console.kv("Worktree", str(branch_name))
             console.kv("Path", str(worktree_path))
         except GitError as e:
@@ -716,18 +725,8 @@ def start(
 
     # AI-initiated start guard: if we're inside an AI CLI session,
     # don't launch another AI tool — just print the worktree path.
-    if _is_inside_ai_cli():
-        detected_env = (
-            "CLAUDE_CODE"
-            if os.environ.get("CLAUDE_CODE") or os.environ.get("CLAUDE_CODE_ENTRYPOINT")
-            else "COPILOT_CLI"
-            if os.environ.get("COPILOT_CLI")
-            else "GEMINI_CLI"
-            if os.environ.get("GEMINI_CLI")
-            else "CODEX_CLI"
-            if os.environ.get("CODEX_CLI")
-            else "GHAIW_IN_AI_SESSION"
-        )
+    detected_env = _detect_ai_cli_env()
+    if detected_env:
         logger.info(
             "work.ai_launch_skipped",
             reason="inside_ai_cli",
@@ -1223,9 +1222,18 @@ def _strip_summary_section(body: str) -> str:
 
     before = body[:idx]
 
-    # Find the next structural boundary after the summary heading
+    # Find the next structural boundary after the summary heading.
+    # Prefer the impl-usage HTML marker; fall back to the next ## heading.
     marker_idx = body.find(IMPL_USAGE_MARKER_START, idx)
-    after = body[marker_idx:] if marker_idx != -1 else ""
+    if marker_idx != -1:
+        after = body[marker_idx:]
+    else:
+        # No impl-usage marker — look for next ## heading after the summary title
+        summary_title_end = idx + len("\n## Summary\n")
+        if body.startswith("## Summary\n"):
+            summary_title_end = len("## Summary\n")
+        next_heading = re.search(r"(?:^|\n)## ", body[summary_title_end:])
+        after = body[summary_title_end + next_heading.start() :] if next_heading else ""
 
     result = before.rstrip("\n")
     if after:
@@ -1532,11 +1540,20 @@ def done(
     if wt_path is not None:
         cwd = wt_path
 
-    # If target specifies a worktree, navigate to it
+    # If target specifies a worktree, navigate to it and extract issue number
     if target and wt_path is None:
         wt_path = find_worktree_path(target, project_root=repo_root)
         if wt_path:
             cwd = wt_path
+            # Replace non-numeric target with the issue number from the branch
+            if not target.isdigit():
+                try:
+                    wt_branch = git_repo.get_current_branch(wt_path)
+                    extracted = extract_issue_from_branch(wt_branch)
+                    if extracted:
+                        target = extracted
+                except GitError:
+                    pass
 
     # If running from inside a linked worktree with no explicit target,
     # use cwd as the worktree path so PR-SUMMARY.md lookup works.
@@ -1895,6 +1912,7 @@ def list_sessions(
 
     worktrees = git_worktree.list_worktrees(repo_root)
     sessions: list[dict[str, Any]] = []
+    provider_inst = get_provider(config)
 
     # The first worktree is the main checkout — skip unless --all
     for i, wt in enumerate(worktrees):
@@ -1910,8 +1928,6 @@ def list_sessions(
         if not issue_number and not show_all:
             continue
 
-        # Classify staleness (also fetches issue state)
-        provider_inst = get_provider(config)
         staleness = classify_staleness(
             repo_root=repo_root,
             branch=wt_branch,

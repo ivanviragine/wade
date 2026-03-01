@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 import yaml
 
 from ghaiw.models.ai import AIToolID
@@ -343,9 +344,9 @@ class TestSelectAITool:
         result = _select_ai_tool("claude", non_interactive=False)
         assert result == "claude"
 
-    def test_unknown_tool_warns_and_returns(self) -> None:
-        result = _select_ai_tool("unknown-tool", non_interactive=False)
-        assert result == "unknown-tool"
+    def test_unknown_tool_raises_value_error(self) -> None:
+        with pytest.raises(ValueError, match="Unknown AI tool"):
+            _select_ai_tool("unknown-tool", non_interactive=False)
 
     @patch("ghaiw.services.init_service.AbstractAITool.detect_installed")
     def test_no_tools_returns_none(self, mock_detect: MagicMock) -> None:

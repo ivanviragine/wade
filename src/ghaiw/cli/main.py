@@ -59,7 +59,7 @@ def main(
 
     set_terminal_title("ghaiw")
 
-    # Always configure logging (defaults to INFO level, stderr output).
+    # Always configure logging (defaults to ERROR level, stderr output).
     # Without this, structlog's default PrintLogger writes to stdout
     # and doesn't filter by level — polluting --json output.
     import ghaiw.logging.setup as log_setup

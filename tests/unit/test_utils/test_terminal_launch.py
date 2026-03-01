@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import sys
 from unittest.mock import Mock
 
@@ -103,7 +104,7 @@ def test_gnome_terminal_not_on_macos(monkeypatch: pytest.MonkeyPatch) -> None:
 
     launch_in_new_terminal(["python", "-V"], cwd="/tmp")
 
-    popen_calls = [call.args[0][0] for call in popen_mock.call_args_list]
+    popen_calls = [c.args[0][0] for c in popen_mock.call_args_list]
     assert "gnome-terminal" not in popen_calls
 
 
@@ -128,7 +129,7 @@ def test_ghostty_macos_uses_applescript(monkeypatch: pytest.MonkeyPatch) -> None
     assert run_args[0] == "osascript"
     assert run_args[1] == "-e"
     assert 'tell application "Ghostty"' in run_args[2]
-    popen_calls = [call.args[0][0] for call in popen_mock.call_args_list]
+    popen_calls = [c.args[0][0] for c in popen_mock.call_args_list]
     assert "ghostty" not in popen_calls
 
 
@@ -187,3 +188,86 @@ def test_ghostty_macos_temp_script_created(monkeypatch: pytest.MonkeyPatch) -> N
     script = written[0]
     assert script.startswith("#!/usr/bin/env bash")
     assert "exec" in script
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS-specific Ghostty fallback behavior")
+def test_ghostty_macos_fallback_cleans_temp_script(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When AppleScript fails, tmp_path is cleaned up before the open -na fallback."""
+    monkeypatch.setenv("TERM_PROGRAM", "ghostty")
+    monkeypatch.delenv("TMUX", raising=False)
+    monkeypatch.setattr("ghaiw.utils.terminal.shutil.which", lambda _: "/opt/homebrew/bin/ghostty")
+
+    class _Tmp:
+        name = "/tmp/ghaiw-ghostty-test"
+
+        def __enter__(self) -> _Tmp:
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+        def write(self, data: str) -> int:
+            return len(data)
+
+    monkeypatch.setattr("tempfile.NamedTemporaryFile", lambda **_: _Tmp())
+    chmod_mock = Mock()
+    monkeypatch.setattr("ghaiw.utils.terminal.os.chmod", chmod_mock)
+
+    # AppleScript fails, then fallback succeeds
+    def _run_side_effect(*args: object, **kwargs: object) -> Mock:
+        cmd = args[0]
+        if isinstance(cmd, list) and cmd[0] == "osascript":
+            raise subprocess.CalledProcessError(1, "osascript")
+        return Mock()
+
+    monkeypatch.setattr("ghaiw.utils.terminal.subprocess.run", _run_side_effect)
+
+    unlink_mock = Mock()
+    monkeypatch.setattr("ghaiw.utils.terminal._safe_unlink", unlink_mock)
+
+    result = launch_in_new_terminal(["python", "-V"], cwd="/tmp")
+
+    assert result is True
+    unlink_mock.assert_called_once_with("/tmp/ghaiw-ghostty-test")
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS-specific Ghostty fallback behavior")
+def test_ghostty_macos_both_fail_cleans_temp_script(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When both AppleScript and open -na fallback fail, tmp_path is still cleaned up."""
+    monkeypatch.setenv("TERM_PROGRAM", "ghostty")
+    monkeypatch.delenv("TMUX", raising=False)
+    monkeypatch.setattr("ghaiw.utils.terminal.shutil.which", lambda _: "/opt/homebrew/bin/ghostty")
+
+    class _Tmp:
+        name = "/tmp/ghaiw-ghostty-test"
+
+        def __enter__(self) -> _Tmp:
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+        def write(self, data: str) -> int:
+            return len(data)
+
+    monkeypatch.setattr("tempfile.NamedTemporaryFile", lambda **_: _Tmp())
+    chmod_mock = Mock()
+    monkeypatch.setattr("ghaiw.utils.terminal.os.chmod", chmod_mock)
+
+    # Both AppleScript and fallback fail
+    def _run_side_effect(*args: object, **kwargs: object) -> Mock:
+        cmd = args[0]
+        if isinstance(cmd, list):
+            raise subprocess.CalledProcessError(1, cmd[0])
+        return Mock()
+
+    monkeypatch.setattr("ghaiw.utils.terminal.subprocess.run", _run_side_effect)
+
+    unlink_mock = Mock()
+    monkeypatch.setattr("ghaiw.utils.terminal._safe_unlink", unlink_mock)
+
+    # Falls through to Terminal.app path, which also fails — overall returns False
+    result = launch_in_new_terminal(["python", "-V"], cwd="/tmp")
+
+    assert result is False
+    unlink_mock.assert_any_call("/tmp/ghaiw-ghostty-test")

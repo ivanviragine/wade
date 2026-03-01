@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shlex
 import shutil
@@ -79,6 +80,12 @@ def stop_title_keeper() -> None:
         _title_keeper_thread = None
 
 
+def _safe_unlink(path: str) -> None:
+    """Remove a file, ignoring errors if it's already gone."""
+    with contextlib.suppress(OSError):
+        os.unlink(path)
+
+
 def detect_terminal() -> str | None:
     """Detect the current terminal emulator.
 
@@ -144,9 +151,13 @@ keystroke "{tmp_path}"
 key code 36"""
             try:
                 subprocess.run(["osascript", "-e", osa], check=True, capture_output=True)
-                threading.Timer(15, lambda: os.unlink(tmp_path)).start()
+                t = threading.Timer(15, lambda: _safe_unlink(tmp_path))
+                t.daemon = True
+                t.start()
                 return True
             except subprocess.CalledProcessError:
+                # Fallback doesn't use the temp script — clean it up
+                _safe_unlink(tmp_path)
                 try:
                     subprocess.run(
                         [
@@ -191,7 +202,7 @@ key code 36"""
             tmux_cmd.extend(["-n", title])
         if cwd:
             tmux_cmd.extend(["-c", cwd])
-        tmux_cmd.append(" ".join(command))
+        tmux_cmd.append(" ".join(shlex.quote(str(c)) for c in command))
         try:
             subprocess.run(tmux_cmd, check=True, capture_output=True)
             return True
@@ -211,18 +222,31 @@ key code 36"""
             pass
 
     if sys.platform == "darwin":
-        # Use osascript to open a new Terminal.app window
-        cmd_str = " ".join(command)
-        osa_script = f'tell application "Terminal" to do script "cd {cwd or "."} && {cmd_str}"'
+        # Use a temp script to avoid AppleScript string quoting issues
+        # (shlex.quote can produce '"'"' which breaks do script "..." parsing)
+        import tempfile
+
+        cmd_str = " ".join(shlex.quote(str(c)) for c in command)
+        with tempfile.NamedTemporaryFile(
+            prefix="ghaiw-term-", suffix=".sh", delete=False, mode="w"
+        ) as f:
+            tmp_script = f.name
+            f.write(f"#!/usr/bin/env bash\ncd {shlex.quote(cwd or '.')}\nexec {cmd_str}\n")
+        os.chmod(tmp_script, 0o755)
+        osa_script = f'tell application "Terminal" to do script "{tmp_script}"'
         try:
             subprocess.run(
                 ["osascript", "-e", osa_script],
                 check=True,
                 capture_output=True,
             )
+            # Clean up temp script after a delay to let Terminal.app read it
+            t = threading.Timer(15, lambda: _safe_unlink(tmp_script))
+            t.daemon = True
+            t.start()
             return True
         except subprocess.CalledProcessError:
-            pass
+            _safe_unlink(tmp_script)
 
     if terminal == "gnome-terminal" and sys.platform != "darwin" and shutil.which("gnome-terminal"):
         cmd_str = " ".join(shlex.quote(str(c)) for c in command)

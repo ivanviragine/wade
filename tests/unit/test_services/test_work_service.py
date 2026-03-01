@@ -424,7 +424,7 @@ class TestWorkStart:
             patch("ghaiw.services.work_service.write_plan_md"),
             patch("ghaiw.services.work_service.bootstrap_worktree"),
             patch("ghaiw.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
-            patch("ghaiw.services.work_service._is_inside_ai_cli", return_value=False),
+            patch("ghaiw.services.work_service._detect_ai_cli_env", return_value=None),
             patch("ghaiw.git.pr.get_pr_for_branch", return_value=None),
             patch(
                 "ghaiw.services.work_service.bootstrap_draft_pr",
@@ -461,7 +461,7 @@ class TestWorkStart:
             patch("ghaiw.services.work_service.write_plan_md"),
             patch("ghaiw.services.work_service.bootstrap_worktree"),
             patch("ghaiw.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
-            patch("ghaiw.services.work_service._is_inside_ai_cli", return_value=False),
+            patch("ghaiw.services.work_service._detect_ai_cli_env", return_value=None),
             patch("ghaiw.git.pr.get_pr_for_branch", return_value=None),
             patch(
                 "ghaiw.services.work_service.bootstrap_draft_pr",
@@ -515,7 +515,7 @@ class TestWorkStart:
             patch("ghaiw.git.worktree.create_worktree"),
             patch("ghaiw.services.work_service.write_plan_md"),
             patch("ghaiw.services.work_service.bootstrap_worktree"),
-            patch("ghaiw.services.work_service._is_inside_ai_cli", return_value=False),
+            patch("ghaiw.services.work_service._detect_ai_cli_env", return_value=None),
             patch("ghaiw.ai_tools.base.AbstractAITool.get") as mock_get,
             patch("ghaiw.git.pr.get_pr_for_branch", return_value=None),
             patch(
@@ -535,7 +535,7 @@ class TestWorkStart:
     def test_inside_ai_cli_skips_launch(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """_is_inside_ai_cli()=True → AI tool .get()/.launch() not called, path printed."""
+        """AI env detected → AI tool not called, path printed."""
         task = self._make_task()
         mock_provider = MagicMock()
         mock_provider.read_task.return_value = task
@@ -548,7 +548,7 @@ class TestWorkStart:
             patch("ghaiw.git.worktree.create_worktree"),
             patch("ghaiw.services.work_service.write_plan_md"),
             patch("ghaiw.services.work_service.bootstrap_worktree"),
-            patch("ghaiw.services.work_service._is_inside_ai_cli", return_value=True),
+            patch("ghaiw.services.work_service._detect_ai_cli_env", return_value="CLAUDE_CODE"),
             patch("ghaiw.ai_tools.base.AbstractAITool.get") as mock_get,
             patch("ghaiw.git.pr.get_pr_for_branch", return_value=None),
             patch(

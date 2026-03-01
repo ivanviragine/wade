@@ -86,6 +86,11 @@ class AbstractTaskProvider(ABC):
         """Get current task IDs (for pre/post AI session diff)."""
 
     # --- PR operations (optional — not all providers have PRs) ---
+    # NOTE: These exist on the provider interface for future provider
+    # implementations.  The main work-service flow uses ``git.pr`` directly
+    # (which accepts an explicit ``repo_root``).  Provider and git layers
+    # cannot share code (architecture constraint), so the implementations
+    # are intentionally parallel.
 
     def create_pr(
         self,

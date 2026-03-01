@@ -101,7 +101,11 @@ def init(
 
     # Interactive wizard — all prompts before any writes
     project_settings = _prompt_project_settings(root, non_interactive)
-    selected_tool, default_model = _prompt_ai_section(ai_tool, non_interactive)
+    try:
+        selected_tool, default_model = _prompt_ai_section(ai_tool, non_interactive)
+    except ValueError as exc:
+        console.error(str(exc))
+        return False
     work_setup = _prompt_work_setup(selected_tool, installed_tools, non_interactive)
     command_overrides = _prompt_command_overrides(
         installed_tools, non_interactive, default_model=default_model
@@ -564,8 +568,8 @@ def _select_ai_tool(
             AIToolID(requested)
             return requested
         except ValueError:
-            console.warn(f"Unknown AI tool: {requested}")
-            return requested
+            valid = ", ".join(e.value for e in AIToolID)
+            raise ValueError(f"Unknown AI tool: {requested!r} (valid: {valid})") from None
 
     # Detect installed tools
     installed = AbstractAITool.detect_installed()

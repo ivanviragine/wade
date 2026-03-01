@@ -157,7 +157,7 @@ def output_is_parseable(text: str) -> bool:
 # ---------------------------------------------------------------------------
 
 _DEPS_SECTION_RE = re.compile(
-    r"## Dependencies\n.*?(?=\n## [^D]|\Z)",
+    r"## Dependencies\n.*?(?=\n## (?!Dependencies\n)|\Z)",
     re.DOTALL,
 )
 
