@@ -590,291 +590,301 @@ def start(
         console.error_with_fix("Not inside a git repository", "Navigate to your project directory")
         return False
 
-    # Read the issue
-    task = _resolve_target(target, provider, config)
-    if not task:
-        return False
-
-    console.rule(f"implement-task #{task.id}")
-    console.kv("Issue", console.issue_ref(task.id, task.title))
-
-    # Resolve AI tool (shared resolution + work-specific TTY prompt)
-    # auto_detect=False so multi-tool TTY selection still fires below
-    resolved_tool = resolve_ai_tool(ai_tool, config, "work", auto_detect=False)
-    if not resolved_tool:
-        installed = AbstractAITool.detect_installed()
-        if installed and len(installed) > 1 and prompts.is_tty():
-            tool_names = [str(t) for t in installed]
-            idx = prompts.select("Select AI tool", tool_names)
-            resolved_tool = tool_names[idx]
-        elif installed:
-            resolved_tool = installed[0].value
-
-    # Resolve model: shared resolution + complexity mapping
-    resolved_model = resolve_model(model, config, "work")
-    if not resolved_model and resolved_tool and task.complexity:
-        resolved_model = _complexity_to_model(config, resolved_tool, task.complexity.value)
-
-    if resolved_tool:
-        console.kv("AI tool", resolved_tool)
-    if task.complexity:
-        console.kv("Complexity", task.complexity.value)
-    if resolved_model:
-        console.kv("Model", resolved_model)
-
-    # Resolve main branch
-    main_branch = config.project.main_branch or git_repo.detect_main_branch(repo_root)
-
-    # Generate deterministic branch name
-    branch_name = git_branch.make_branch_name(
-        config.project.branch_prefix,
-        int(task.id),
-        task.title,
-    )
-
-    worktrees_dir = _resolve_worktrees_dir(config, repo_root)
-    repo_name = repo_root.name
-    worktree_path = worktrees_dir / repo_name / branch_name.replace("/", "-")
-
-    # Check for existing draft PR (from plan-task flow)
-    existing_pr = git_pr.get_pr_for_branch(repo_root, branch_name)
-    plan_content: str | None = None
-
-    if existing_pr:
-        console.info(f"Found existing PR #{existing_pr['number']} for this task")
-        # Extract plan content from PR body
-        pr_body = git_pr.get_pr_body(repo_root, int(existing_pr["number"]))
-        if pr_body:
-            plan_content = extract_plan_from_pr_body(pr_body)
-            if plan_content:
-                console.detail("Plan content extracted from draft PR")
-    else:
-        # No draft PR — warn and prompt
-        console.warn("This task has no plan attached.")
-        if prompts.is_tty():
-            choices = ["Plan first (recommended)", "Proceed without plan"]
-            idx = prompts.select("How would you like to proceed?", choices)
-            if idx == 0:
-                console.info("Run `wade plan-task` to create a plan first.")
-                return True  # Early exit — user chose to plan
-        # Proceed: bootstrap a draft PR with the issue body
-        console.step("Bootstrapping draft PR...")
-        pr_info = bootstrap_draft_pr(
-            issue_number=task.id,
-            issue_title=task.title,
-            plan_body=task.body or f"Implements #{task.id}: {task.title}",
-            config=config,
-            repo_root=repo_root,
-        )
-        if pr_info:
-            console.success(f"Draft PR #{pr_info.get('number')}: {pr_info.get('url')}")
-        else:
-            console.warn("Could not create draft PR — proceeding anyway")
-
-    # Reuse the worktree if the branch already exists (idempotent re-run)
-    existing_wt = next(
-        (
-            Path(wt["path"])
-            for wt in git_worktree.list_worktrees(repo_root)
-            if wt.get("branch") == branch_name
-        ),
-        None,
-    )
-
-    if existing_wt:
-        worktree_path = existing_wt
-        console.info(f"Reusing existing worktree: {worktree_path}")
-    elif existing_pr:
-        # Draft PR exists → branch already exists remotely, check it out
-        try:
-            # Ensure local branch tracks remote
-            if not git_branch.branch_exists(repo_root, branch_name):
-                git_repo._run_git("fetch", "origin", f"{branch_name}:{branch_name}", cwd=repo_root)
-            with console.status("Creating worktree..."):
-                git_worktree.checkout_existing_branch_worktree(
-                    repo_root=repo_root,
-                    branch_name=branch_name,
-                    worktree_dir=worktree_path,
-                )
-            console.kv("Worktree", str(branch_name))
-            console.kv("Path", str(worktree_path))
-        except GitError as e:
-            console.error(f"Failed to create worktree: {e}")
+    # When cd_only, redirect all status output to stderr so stdout stays
+    # clean for the machine-readable worktree path.
+    _original_out = console.out
+    if cd_only:
+        console.out = console.err
+    try:
+        # Read the issue
+        task = _resolve_target(target, provider, config)
+        if not task:
             return False
-    else:
-        try:
-            with console.status("Creating worktree..."):
-                if git_branch.branch_exists(repo_root, branch_name):
-                    # Branch exists locally but no worktree — reuse it
+
+        console.rule(f"implement-task #{task.id}")
+        console.kv("Issue", console.issue_ref(task.id, task.title))
+
+        # Resolve AI tool (shared resolution + work-specific TTY prompt)
+        # auto_detect=False so multi-tool TTY selection still fires below
+        resolved_tool = resolve_ai_tool(ai_tool, config, "work", auto_detect=False)
+        if not resolved_tool:
+            installed = AbstractAITool.detect_installed()
+            if installed and len(installed) > 1 and prompts.is_tty():
+                tool_names = [str(t) for t in installed]
+                idx = prompts.select("Select AI tool", tool_names)
+                resolved_tool = tool_names[idx]
+            elif installed:
+                resolved_tool = installed[0].value
+
+        # Resolve model: shared resolution + complexity mapping
+        resolved_model = resolve_model(model, config, "work")
+        if not resolved_model and resolved_tool and task.complexity:
+            resolved_model = _complexity_to_model(config, resolved_tool, task.complexity.value)
+
+        if resolved_tool:
+            console.kv("AI tool", resolved_tool)
+        if task.complexity:
+            console.kv("Complexity", task.complexity.value)
+        if resolved_model:
+            console.kv("Model", resolved_model)
+
+        # Resolve main branch
+        main_branch = config.project.main_branch or git_repo.detect_main_branch(repo_root)
+
+        # Generate deterministic branch name
+        branch_name = git_branch.make_branch_name(
+            config.project.branch_prefix,
+            int(task.id),
+            task.title,
+        )
+
+        worktrees_dir = _resolve_worktrees_dir(config, repo_root)
+        repo_name = repo_root.name
+        worktree_path = worktrees_dir / repo_name / branch_name.replace("/", "-")
+
+        # Check for existing draft PR (from plan-task flow)
+        existing_pr = git_pr.get_pr_for_branch(repo_root, branch_name)
+        plan_content: str | None = None
+
+        if existing_pr:
+            console.info(f"Found existing PR #{existing_pr['number']} for this task")
+            # Extract plan content from PR body
+            pr_body = git_pr.get_pr_body(repo_root, int(existing_pr["number"]))
+            if pr_body:
+                plan_content = extract_plan_from_pr_body(pr_body)
+                if plan_content:
+                    console.detail("Plan content extracted from draft PR")
+        else:
+            # No draft PR — warn and prompt
+            console.warn("This task has no plan attached.")
+            if prompts.is_tty():
+                choices = ["Plan first (recommended)", "Proceed without plan"]
+                idx = prompts.select("How would you like to proceed?", choices)
+                if idx == 0:
+                    console.info("Run `wade plan-task` to create a plan first.")
+                    return True  # Early exit — user chose to plan
+            # Proceed: bootstrap a draft PR with the issue body
+            console.step("Bootstrapping draft PR...")
+            pr_info = bootstrap_draft_pr(
+                issue_number=task.id,
+                issue_title=task.title,
+                plan_body=task.body or f"Implements #{task.id}: {task.title}",
+                config=config,
+                repo_root=repo_root,
+            )
+            if pr_info:
+                console.success(f"Draft PR #{pr_info.get('number')}: {pr_info.get('url')}")
+            else:
+                console.warn("Could not create draft PR — proceeding anyway")
+
+        # Reuse the worktree if the branch already exists (idempotent re-run)
+        existing_wt = next(
+            (
+                Path(wt["path"])
+                for wt in git_worktree.list_worktrees(repo_root)
+                if wt.get("branch") == branch_name
+            ),
+            None,
+        )
+
+        if existing_wt:
+            worktree_path = existing_wt
+            console.info(f"Reusing existing worktree: {worktree_path}")
+        elif existing_pr:
+            # Draft PR exists → branch already exists remotely, check it out
+            try:
+                # Ensure local branch tracks remote
+                if not git_branch.branch_exists(repo_root, branch_name):
+                    git_repo._run_git(
+                        "fetch", "origin", f"{branch_name}:{branch_name}", cwd=repo_root
+                    )
+                with console.status("Creating worktree..."):
                     git_worktree.checkout_existing_branch_worktree(
                         repo_root=repo_root,
                         branch_name=branch_name,
                         worktree_dir=worktree_path,
                     )
-                else:
-                    git_worktree.create_worktree(
-                        repo_root=repo_root,
-                        branch_name=branch_name,
-                        worktree_dir=worktree_path,
-                        base_branch=main_branch,
-                    )
-            console.kv("Worktree", str(branch_name))
-            console.kv("Path", str(worktree_path))
-        except GitError as e:
-            console.error(f"Failed to create worktree: {e}")
-            return False
+                console.kv("Worktree", str(branch_name))
+                console.kv("Path", str(worktree_path))
+            except GitError as e:
+                console.error(f"Failed to create worktree: {e}")
+                return False
+        else:
+            try:
+                with console.status("Creating worktree..."):
+                    if git_branch.branch_exists(repo_root, branch_name):
+                        # Branch exists locally but no worktree — reuse it
+                        git_worktree.checkout_existing_branch_worktree(
+                            repo_root=repo_root,
+                            branch_name=branch_name,
+                            worktree_dir=worktree_path,
+                        )
+                    else:
+                        git_worktree.create_worktree(
+                            repo_root=repo_root,
+                            branch_name=branch_name,
+                            worktree_dir=worktree_path,
+                            base_branch=main_branch,
+                        )
+                console.kv("Worktree", str(branch_name))
+                console.kv("Path", str(worktree_path))
+            except GitError as e:
+                console.error(f"Failed to create worktree: {e}")
+                return False
 
-    console.empty()
+        console.empty()
 
-    # Bootstrap
-    write_plan_md(worktree_path, task, plan_content=plan_content)
-    bootstrap_worktree(worktree_path, config, repo_root)
+        # Bootstrap
+        write_plan_md(worktree_path, task, plan_content=plan_content)
+        bootstrap_worktree(worktree_path, config, repo_root)
 
-    # Add in-progress label and move to in-progress on project board (both non-critical)
-    with contextlib.suppress(Exception):
-        add_in_progress_label(provider, task.id)
-    with contextlib.suppress(Exception):
-        provider.move_to_in_progress(task.id)
+        # Add in-progress label and move to in-progress on project board (both non-critical)
+        with contextlib.suppress(Exception):
+            add_in_progress_label(provider, task.id)
+        with contextlib.suppress(Exception):
+            provider.move_to_in_progress(task.id)
 
-    # Build work prompt
-    prompt = build_work_prompt(task, resolved_tool)
-    snippet = "\n".join(prompt.splitlines()[:5]) + "\n…"
-    console.panel(snippet, title="Work Prompt (preview)")
+        # Build work prompt
+        prompt = build_work_prompt(task, resolved_tool)
+        snippet = "\n".join(prompt.splitlines()[:5]) + "\n…"
+        console.panel(snippet, title="Work Prompt (preview)")
 
-    # cd_only mode: just print the worktree path and return (no title, no AI)
-    if cd_only:
-        print(str(worktree_path))
-        return True
-
-    # AI-initiated start guard: if we're inside an AI CLI session,
-    # don't launch another AI tool — just print the worktree path.
-    detected_env = _detect_ai_cli_env()
-    if detected_env:
-        logger.info(
-            "work.ai_launch_skipped",
-            reason="inside_ai_cli",
-            env_var=detected_env,
-        )
-        console.info(
-            f"Skipping AI launch: already inside AI session (detected via {detected_env})."
-        )
-        console.detail(f"Worktree ready at: {worktree_path}")
-        print(str(worktree_path))
-        return True
-
-    # Set terminal title
-    work_title = compose_work_title(task.id, task.title)
-    set_terminal_title(work_title)
-    start_title_keeper(work_title)
-
-    # Set up transcript capture
-    transcript_path: Path | None = None
-    try:
-        transcript_dir = tempfile.mkdtemp(prefix="wade-work-")
-        transcript_path = Path(transcript_dir) / f"transcript-{task.id}.log"
-        console.hint(f"Transcript: {transcript_path}")
-    except OSError:
-        logger.warning("work.transcript_dir_failed")
-
-    # Detach mode: launch AI tool in a new terminal, don't block
-    if detach and resolved_tool:
-        try:
-            detach_adapter = AbstractAITool.get(AIToolID(resolved_tool))
-            cmd = detach_adapter.build_launch_command(
-                model=resolved_model,
-                trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
-                initial_message=prompt,
-            )
-        except (ValueError, KeyError):
-            cmd = [resolved_tool]
-
-        console.step(f"Launching {resolved_tool} in new terminal...")
-        if launch_in_new_terminal(cmd, cwd=str(worktree_path), title=work_title):
-            console.success(f"Detached AI session for #{task.id}")
+        # cd_only mode: just print the worktree path and return (no title, no AI)
+        if cd_only:
+            print(str(worktree_path))
             return True
-        console.warn("Could not launch in new terminal — falling back to inline")
-        # Fall through to inline launch below
 
-    # Launch AI tool (inline)
-    if not detach and resolved_tool:
-        console.step(f"Launching {resolved_tool}...")
+        # AI-initiated start guard: if we're inside an AI CLI session,
+        # don't launch another AI tool — just print the worktree path.
+        detected_env = _detect_ai_cli_env()
+        if detected_env:
+            logger.info(
+                "work.ai_launch_skipped",
+                reason="inside_ai_cli",
+                env_var=detected_env,
+            )
+            console.info(
+                f"Skipping AI launch: already inside AI session (detected via {detected_env})."
+            )
+            console.detail(f"Worktree ready at: {worktree_path}")
+            print(str(worktree_path))
+            return True
 
-        adapter: AbstractAITool | None = None
-        launch_completed = False
+        # Set terminal title
+        work_title = compose_work_title(task.id, task.title)
+        set_terminal_title(work_title)
+        start_title_keeper(work_title)
+
+        # Set up transcript capture
+        transcript_path: Path | None = None
         try:
-            adapter = AbstractAITool.get(AIToolID(resolved_tool))
+            transcript_dir = tempfile.mkdtemp(prefix="wade-work-")
+            transcript_path = Path(transcript_dir) / f"transcript-{task.id}.log"
+            console.hint(f"Transcript: {transcript_path}")
+        except OSError:
+            logger.warning("work.transcript_dir_failed")
 
-            # Check model compatibility
-            if resolved_model and not adapter.is_model_compatible(resolved_model):
-                console.warn(
-                    f"Model '{resolved_model}' is not compatible with {resolved_tool}; "
-                    "using tool default"
+        # Detach mode: launch AI tool in a new terminal, don't block
+        if detach and resolved_tool:
+            try:
+                detach_adapter = AbstractAITool.get(AIToolID(resolved_tool))
+                cmd = detach_adapter.build_launch_command(
+                    model=resolved_model,
+                    trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
+                    initial_message=prompt,
                 )
-                resolved_model = None
+            except (ValueError, KeyError):
+                cmd = [resolved_tool]
 
-            if resolved_model:
-                console.detail(f"Model: {resolved_model}")
+            console.step(f"Launching {resolved_tool} in new terminal...")
+            if launch_in_new_terminal(cmd, cwd=str(worktree_path), title=work_title):
+                console.success(f"Detached AI session for #{task.id}")
+                return True
+            console.warn("Could not launch in new terminal — falling back to inline")
+            # Fall through to inline launch below
 
-            exit_code = adapter.launch(
-                worktree_path=worktree_path,
-                model=resolved_model,
-                prompt=prompt,
-                transcript_path=transcript_path,
-                trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
-            )
-            launch_completed = True
-            logger.info("work.ai_exited", exit_code=exit_code, tool=resolved_tool)
-        except (ValueError, KeyError):
-            console.warn(f"Unknown AI tool: {resolved_tool}")
-        except Exception as e:
-            console.warn(f"AI tool launch failed: {e}")
-        finally:
-            stop_title_keeper()
+        # Launch AI tool (inline)
+        if not detach and resolved_tool:
+            console.step(f"Launching {resolved_tool}...")
 
-            if launch_completed:
-                try:
-                    _post_work_lifecycle(
-                        repo_root=repo_root,
-                        branch=branch_name,
-                        issue_number=task.id,
-                        worktree_path=worktree_path,
-                        config=config,
-                        provider=provider,
+            adapter: AbstractAITool | None = None
+            launch_completed = False
+            try:
+                adapter = AbstractAITool.get(AIToolID(resolved_tool))
+
+                # Check model compatibility
+                if resolved_model and not adapter.is_model_compatible(resolved_model):
+                    console.warn(
+                        f"Model '{resolved_model}' is not compatible with {resolved_tool}; "
+                        "using tool default"
                     )
-                except Exception:
-                    logger.exception("post_work_lifecycle.failed")
+                    resolved_model = None
 
-        # Post-exit: parse transcript, update PR body and issue with token usage.
-        detected_model: str | None = None
-        if adapter is not None:
-            detected_model = _post_exit_capture(
-                transcript_path=transcript_path,
-                adapter=adapter,
-                repo_root=repo_root,
-                branch=branch_name,
-                ai_tool=resolved_tool,
-                model=resolved_model,
-                issue_number=task.id,
-                provider=provider,
-            )
+                if resolved_model:
+                    console.detail(f"Model: {resolved_model}")
 
-        # Use CLI-resolved model, falling back to transcript-detected model.
-        effective_model = resolved_model or detected_model
-        try:
-            add_worked_by_labels(provider, task.id, resolved_tool, effective_model)
-        except Exception as e:
-            console.warn(f"Could not apply worked-by labels: {e}")
-            logger.warning("work.worked_by_labels_failed", error=str(e))
-    elif not resolved_tool:
-        console.info("No AI tool configured. Worktree ready for manual work.")
-        console.detail(f"cd {worktree_path}")
+                exit_code = adapter.launch(
+                    worktree_path=worktree_path,
+                    model=resolved_model,
+                    prompt=prompt,
+                    transcript_path=transcript_path,
+                    trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
+                )
+                launch_completed = True
+                logger.info("work.ai_exited", exit_code=exit_code, tool=resolved_tool)
+            except (ValueError, KeyError):
+                console.warn(f"Unknown AI tool: {resolved_tool}")
+            except Exception as e:
+                console.warn(f"AI tool launch failed: {e}")
+            finally:
+                stop_title_keeper()
 
-    lines = []
-    lines.append(f"  Worktree   {console.git_ref(branch_name)}")
-    lines.append(f"  Issue      {console.issue_ref(task.id, task.title)}")
-    console.panel("\n".join(lines), title="Work session complete")
+                if launch_completed:
+                    try:
+                        _post_work_lifecycle(
+                            repo_root=repo_root,
+                            branch=branch_name,
+                            issue_number=task.id,
+                            worktree_path=worktree_path,
+                            config=config,
+                            provider=provider,
+                        )
+                    except Exception:
+                        logger.exception("post_work_lifecycle.failed")
 
-    return True
+            # Post-exit: parse transcript, update PR body and issue with token usage.
+            detected_model: str | None = None
+            if adapter is not None:
+                detected_model = _post_exit_capture(
+                    transcript_path=transcript_path,
+                    adapter=adapter,
+                    repo_root=repo_root,
+                    branch=branch_name,
+                    ai_tool=resolved_tool,
+                    model=resolved_model,
+                    issue_number=task.id,
+                    provider=provider,
+                )
+
+            # Use CLI-resolved model, falling back to transcript-detected model.
+            effective_model = resolved_model or detected_model
+            try:
+                add_worked_by_labels(provider, task.id, resolved_tool, effective_model)
+            except Exception as e:
+                console.warn(f"Could not apply worked-by labels: {e}")
+                logger.warning("work.worked_by_labels_failed", error=str(e))
+        elif not resolved_tool:
+            console.info("No AI tool configured. Worktree ready for manual work.")
+            console.detail(f"cd {worktree_path}")
+
+        lines = []
+        lines.append(f"  Worktree   {console.git_ref(branch_name)}")
+        lines.append(f"  Issue      {console.issue_ref(task.id, task.title)}")
+        console.panel("\n".join(lines), title="Work session complete")
+
+        return True
+    finally:
+        console.out = _original_out
 
 
 def _resolve_target(
@@ -1067,7 +1077,7 @@ def _resolve_worktree_from_plan(
 
     from wade.utils.slug import slugify
 
-    slug = slugify(title)
+    slug = slugify(title, max_length=50)
 
     wt_path = find_worktree_path(slug, project_root=project_root)
     if not wt_path:
@@ -1859,7 +1869,8 @@ def _done_via_direct(
         git_sync.fetch_origin(repo_root)
 
     try:
-        merge_result = git_sync.merge_branch(repo_root, main_branch)
+        sync_cwd = worktree_path if worktree_path and worktree_path.is_dir() else repo_root
+        merge_result = git_sync.merge_branch(sync_cwd, main_branch)
         if not merge_result.success:
             console.error("Merge conflicts detected. Resolve them first.")
             return False

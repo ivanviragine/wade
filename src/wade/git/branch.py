@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import structlog
 
 from wade.git.repo import _run_git
+from wade.utils.slug import slugify
 
 log = structlog.get_logger(__name__)
 
@@ -25,31 +25,8 @@ def make_branch_name(prefix: str, issue_number: int, title: str) -> str:
     Returns:
         A valid git branch name.
     """
-    slug = _slugify(title, max_length=50)
+    slug = slugify(title, max_length=50)
     return f"{prefix}/{issue_number}-{slug}"
-
-
-def _slugify(text: str, max_length: int = 50) -> str:
-    """Convert a title string to a branch-safe slug.
-
-    - Lowercases everything
-    - Replaces non-alphanumeric characters with hyphens
-    - Collapses consecutive hyphens
-    - Strips leading/trailing hyphens
-    - Truncates to max_length (at a word boundary when possible)
-    """
-    slug = text.lower()
-    slug = re.sub(r"[^a-z0-9]+", "-", slug)
-    slug = re.sub(r"-{2,}", "-", slug)
-    slug = slug.strip("-")
-
-    if len(slug) > max_length:
-        # Try to truncate at a hyphen boundary
-        truncated = slug[:max_length]
-        last_hyphen = truncated.rfind("-")
-        slug = truncated[:last_hyphen] if last_hyphen > max_length // 2 else truncated.rstrip("-")
-
-    return slug
 
 
 def branch_exists(repo_root: Path, branch_name: str) -> bool:
