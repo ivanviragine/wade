@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.0.12] — 2026-03-02
+
+### Documentation
+
+- rewrite README with user-facing value proposition and before/after workflow (1c82035)
+
 ## [v1.0.11] — 2026-03-02
 
 ### Chores
