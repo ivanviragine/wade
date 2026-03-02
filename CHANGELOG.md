@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.1.2] — 2026-03-02
+
+### Bug Fixes
+
+- standardize session-scoped file creation and fix draft PR on empty branch (0b908ac)
+
 ## [v1.1.1] — 2026-03-02
 
 ### Bug Fixes
