@@ -80,6 +80,13 @@ class CodexAdapter(AbstractAITool):
         """Codex uses --add-dir for plan directory access."""
         return ["--add-dir", plan_dir]
 
+    def trusted_dirs_args(self, dirs: list[str]) -> list[str]:
+        """Codex requires workspace-write sandbox mode for --add-dir to take effect."""
+        result = ["--sandbox", "workspace-write"]
+        for d in dirs:
+            result.extend(self.plan_dir_args(d))
+        return result
+
     def is_model_compatible(self, model: str) -> bool:
         """Codex accepts codex-*, gpt-*, and o<digit>* model IDs."""
         lower = model.lower()
