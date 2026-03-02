@@ -1,19 +1,18 @@
 # WADE — Workflow for AI-Driven Engineering
 
-Turn GitHub Issues into isolated, AI-powered development sessions.
+Turn GitHub Issues into isolated, AI-powered development sessions — with one command.
 
-`wade init` wires your project once. After that, a single command creates a git worktree, launches your AI tool with full issue context, and hands you a PR when you're done — no manual branch juggling, no lost context, no forgotten ticket numbers.
+## The Problem
 
-## Requirements
+Working with AI coding tools is powerful, but the workflow around them is still manual:
 
-- Python 3.11+
-- git 2.20+
-- [gh CLI](https://cli.github.com/) — install it, then authenticate:
-  ```bash
-  gh auth login     # follow the prompts
-  gh auth status    # verify it worked
-  ```
-- One or more AI CLI tools: [Claude Code](https://claude.com/product/claude-code), [GitHub Copilot](https://github.com/features/copilot/cli), [Google Gemini](https://geminicli.com/), [OpenAI Codex](https://developers.openai.com/codex/cli/), [OpenCode](https://opencode.ai/), [VS Code](https://github.com/features/copilot/ai-code-editor), or [Antigravity](https://antigravity.google/)
+| Without WADE | With WADE |
+|---|---|
+| Copy-paste issue details into AI chat | AI reads the issue automatically |
+| Create branch, remember naming convention | `wade implement-task 42` handles it |
+| One task at a time (or messy stash juggling) | Parallel tasks in isolated git worktrees |
+| Manually write PR, link issue, clean up branch | `wade work done` — one command |
+| Re-explain project conventions to AI every time | Skills teach your AI how your project works |
 
 ## Installation
 
@@ -21,17 +20,56 @@ Turn GitHub Issues into isolated, AI-powered development sessions.
 curl -LsSf https://raw.githubusercontent.com/ivanviragine/wade/main/install.sh | sh
 ```
 
-Or with uv / pipx:
+Requires [gh CLI](https://cli.github.com/) (authenticated) and at least one AI coding tool. Everything else — including Python — is managed automatically by `uv`.
+
+```bash
+# Verify gh is authenticated
+gh auth login     # follow the prompts
+gh auth status    # confirm it worked
+```
+
+Or install manually:
 
 ```bash
 uv tool install wade
 pipx install wade
 ```
 
+## How It Works
+
+**Before WADE** — starting work on GitHub Issue #42:
+
+```bash
+git fetch origin && git checkout main && git pull
+git checkout -b feat/issue-42-user-auth
+# copy issue title + description into AI chat
+# explain branching conventions, test locations, linters to run...
+```
+
+**With WADE** — same thing:
+
+```bash
+wade implement-task 42
+```
+
+That one command creates an isolated git worktree, opens your AI tool with the issue title, description, labels, and all project context pre-loaded. The AI already knows your project conventions — `wade init` installs Skill files that teach it.
+
+Working on multiple issues simultaneously:
+
+```bash
+wade work batch 42 43 44   # three worktrees, three AI sessions, zero stashing
+```
+
+Done with an issue:
+
+```bash
+wade work done   # pushes branch, opens PR linked to the issue, cleans up worktree
+```
+
 ## Quick Start
 
 ```bash
-# Wire up your project (one-time)
+# Wire up your project once
 wade init
 
 # Plan features with AI — creates issues + draft PRs
@@ -47,20 +85,9 @@ wade work sync
 wade work done
 ```
 
-## The Workflow
-
-```
-plan-task          →   GitHub Issue + draft PR (AI writes the plan)
-implement-task 42  →   worktree + AI session (isolated per issue)
-work sync          →   fetch + merge main into your branch
-work done          →   push + PR (or direct merge)
-```
-
-Each issue gets its own git worktree so you can work on multiple tasks in parallel without stashing or switching branches.
-
 ## Commands
 
-### Project Setup
+### Setup
 
 | Command | Description |
 |---------|-------------|
@@ -70,24 +97,25 @@ Each issue gets its own git worktree so you can work on multiple tasks in parall
 | `wade check` | Check worktree status |
 | `wade check-config` | Validate `.wade.yml` |
 
-### Core Commands
+### Planning & Issues
 
 | Command | Description |
 |---------|-------------|
 | `wade plan-task` | AI planning session — creates issues + draft PRs |
 | `wade new-task` | Create a GitHub issue interactively |
-| `wade implement-task <N>` | Create worktree and start AI session for issue N |
-| `wade implement-task <N> --detach` | Launch AI in a new terminal tab |
-| `wade implement-task <N> --cd` | Create worktree, print path (no AI launch) |
-
-### Task Management
-
-| Command | Description |
-|---------|-------------|
 | `wade task list` | List open issues |
 | `wade task read <N>` | Show issue details |
 | `wade task close <N>` | Close an issue |
 | `wade task deps <N> <M> ...` | Analyze dependencies between issues |
+
+### Implementation
+
+| Command | Description |
+|---------|-------------|
+| `wade implement-task <N>` | Create worktree and start AI session for issue N |
+| `wade implement-task <N> --detach` | Launch AI in a new terminal tab |
+| `wade implement-task <N> --cd` | Create worktree, print path (no AI launch) |
+| `wade work batch <N> <M> ...` | Start parallel sessions for multiple issues |
 
 ### Work Sessions
 
@@ -97,14 +125,13 @@ Each issue gets its own git worktree so you can work on multiple tasks in parall
 | `wade work done` | Push branch and create PR |
 | `wade work done --no-cleanup` | Keep the worktree after direct merge |
 | `wade work list` | List active worktrees |
-| `wade work batch <N> <M> ...` | Start parallel sessions for multiple issues |
 | `wade work remove <N>` | Remove a worktree |
 | `wade work remove --stale` | Remove all stale worktrees |
 | `wade work cd <N>` | `cd` into a worktree (requires shell integration) |
 
 ## Configuration
 
-WADE uses a `.wade.yml` file in your project root, created by `wade init`:
+`wade init` creates a `.wade.yml` in your project root:
 
 ```yaml
 version: 2
@@ -131,20 +158,9 @@ models:
     very_complex: claude-opus-4-6
 ```
 
-**Merge strategies:** `PR` (default) pushes the branch and opens a Pull Request; `direct` merges into main locally.
+**Merge strategies:** `PR` pushes the branch and opens a Pull Request; `direct` merges into main locally.
 
 **Complexity-based models:** Issues carry a `complexity` label (`easy`, `medium`, `complex`, `very_complex`). `wade implement-task` picks the right model automatically.
-
-## Agent Skills
-
-`wade init` installs Skill files into `.claude/skills/` (with symlinks for Copilot, Gemini, and Codex) that teach your AI agent the workflow:
-
-| Skill | Purpose |
-|-------|---------|
-| `task` | GitHub issue creation and plan format |
-| `plan-session` | Planning session rules and workflow |
-| `work-session` | Implementation session rules and workflow |
-| `deps` | Dependency analysis between issues |
 
 ## Supported AI Tools
 
@@ -158,6 +174,19 @@ models:
 | [VS Code](https://github.com/features/copilot/ai-code-editor) | `code` |
 | [Antigravity](https://antigravity.google/) | `antigravity` |
 
+## Agent Skills
+
+`wade init` installs Skill files into `.claude/skills/` that teach your AI agent the workflow:
+
+| Skill | Purpose |
+|-------|---------|
+| `task` | GitHub issue creation and plan format |
+| `plan-session` | Planning session rules and workflow |
+| `work-session` | Implementation session rules and workflow |
+| `deps` | Dependency analysis between issues |
+
+Skills work with Claude Code natively. Symlinks are created for Copilot, Gemini, and Codex.
+
 ## Shell Integration
 
 Add to your shell profile to enable `wade work cd`:
@@ -166,7 +195,7 @@ Add to your shell profile to enable `wade work cd`:
 eval "$(wade shell-init)"
 ```
 
-This lets `wade work cd <N>` actually change your shell's directory into the worktree. Without it, the command just prints the path.
+This lets `wade work cd <N>` change your shell's directory into the worktree. Without it, the command just prints the path.
 
 Tab completion:
 
@@ -181,6 +210,10 @@ wade update
 ```
 
 Detects your install method (`uv tool`, `pipx`, Homebrew) and upgrades automatically, then refreshes all managed project files.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
