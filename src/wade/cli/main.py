@@ -70,9 +70,10 @@ def main(
     atexit.register(maybe_print_update_hint, wade.__version__, ctx.invoked_subcommand)
 
     if ctx.invoked_subcommand is not None:
-        from wade.ui.console import console
+        if ctx.invoked_subcommand != "shell-init":
+            from wade.ui.console import console
 
-        console.err.print(f"  [dim]wade v{wade.__version__}[/]")
+            console.err.print(f"  [dim]wade v{wade.__version__}[/]")
         return
 
     _interactive_main_menu()
