@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.1.1] — 2026-03-02
+
+### Bug Fixes
+
+- suppress version banner for shell-init subcommand (7b0326e)
+
 ## [v1.1.0] — 2026-03-02
 
 ### Features
