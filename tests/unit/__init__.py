@@ -1,1 +1,1 @@
-"""Unit tests for ghaiw."""
+"""Unit tests for wade."""

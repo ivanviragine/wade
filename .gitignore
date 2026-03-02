@@ -25,8 +25,8 @@ env/
 htmlcov/
 .mypy_cache/
 
-# ghaiw runtime (per-project, gitignored)
-.ghaiw/
+# wade runtime (per-project, gitignored)
+.wade/
 
 # OS
 .DS_Store

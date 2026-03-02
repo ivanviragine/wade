@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-> **Quick Summary**: Fix 9 verified parity bugs where Python ghaiw diverges from Bash ghaiw behavior, covering dependency partitioning, AI model probing, post-work lifecycle, terminal launch support, multi-shell init, and PR-SUMMARY path resolution.
+> **Quick Summary**: Fix 9 verified parity bugs where Python wade diverges from Bash wade behavior, covering dependency partitioning, AI model probing, post-work lifecycle, terminal launch support, multi-shell init, and PR-SUMMARY path resolution.
 >
 > **Deliverables**:
 > - BUG-001: Correct connected-component partitioning in `DependencyGraph.partition()`
@@ -24,7 +24,7 @@
 ## Context
 
 ### Original Request
-Fix all parity bugs identified in the Bash-to-Python comparative analysis report (`.sisyphus/plans/bash-to-python-analysis.md` §5). These are cases where Python ghaiw diverges from documented Bash ghaiw behavior in a way that produces incorrect results.
+Fix all parity bugs identified in the Bash-to-Python comparative analysis report (`.sisyphus/plans/bash-to-python-analysis.md` §5). These are cases where Python wade diverges from documented Bash wade behavior in a way that produces incorrect results.
 
 ### Interview Summary
 **Key Discussions**:
@@ -55,7 +55,7 @@ Fix all parity bugs identified in the Bash-to-Python comparative analysis report
 ## Work Objectives
 
 ### Core Objective
-Bring Python ghaiw to full behavioral parity with Bash ghaiw for 9 identified divergences, verified via TDD.
+Bring Python wade to full behavioral parity with Bash wade for 9 identified divergences, verified via TDD.
 
 ### Concrete Deliverables
 - 9 bug fixes across 6 Python modules
@@ -110,7 +110,7 @@ Every task MUST include agent-executed QA scenarios.
 Evidence saved to `.sisyphus/evidence/task-{N}-{scenario-slug}.{ext}`.
 
 - **Model/Service logic**: Use Bash (`uv run pytest`) — run specific test, assert PASS
-- **CLI commands**: Use Bash (`uv run python -m ghaiw.cli.main`) — invoke command, check output
+- **CLI commands**: Use Bash (`uv run python -m wade.cli.main`) — invoke command, check output
 - **Terminal utilities**: Use Bash — construct command, verify output format
 
 ---
@@ -179,7 +179,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   - Write test `test_probe_copilot_models_returns_full_names()` that asserts `probe_copilot_models()` returns full model names like `"claude-sonnet-4.6"`, NOT bare prefixes like `"claude"`
   - Write test `test_probe_regex_non_capturing_group()` that directly tests the regex pattern against sample `copilot model list` output
   - Run tests → expect FAIL (RED)
-  - **GREEN**: In `src/ghaiw/ai_tools/model_utils.py:191`, change the capturing group `(claude|gpt|gemini|codex|o[0-9])` to non-capturing: `(?:claude|gpt|gemini|codex|o[0-9])`
+  - **GREEN**: In `src/wade/ai_tools/model_utils.py:191`, change the capturing group `(claude|gpt|gemini|codex|o[0-9])` to non-capturing: `(?:claude|gpt|gemini|codex|o[0-9])`
   - Run tests → expect PASS (GREEN)
   - **REFACTOR**: Consider using `re.finditer()` with `.group(0)` instead of `re.findall()` for clarity, if it improves readability
 
@@ -202,8 +202,8 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   **References**:
 
   **Pattern References**:
-  - `src/ghaiw/ai_tools/model_utils.py:180-200` — `probe_copilot_models()` function with the buggy regex at line 191. The function runs `copilot model list` and uses `re.findall()` to extract model names from the output
-  - `src/ghaiw/ai_tools/model_utils.py:170-178` — `probe_claude_models()` for comparison pattern — uses simpler regex without this issue
+  - `src/wade/ai_tools/model_utils.py:180-200` — `probe_copilot_models()` function with the buggy regex at line 191. The function runs `copilot model list` and uses `re.findall()` to extract model names from the output
+  - `src/wade/ai_tools/model_utils.py:170-178` — `probe_claude_models()` for comparison pattern — uses simpler regex without this issue
 
   **Test References**:
   - `tests/unit/test_ai_tools/` — directory for AI tool tests. Check if it exists; if not, create it with `__init__.py`
@@ -248,7 +248,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
 
   **Commit**: YES
   - Message: `fix(ai): correct copilot model probing regex to use non-capturing group`
-  - Files: `src/ghaiw/ai_tools/model_utils.py`, `tests/unit/test_ai_tools/test_model_probing.py`
+  - Files: `src/wade/ai_tools/model_utils.py`, `tests/unit/test_ai_tools/test_model_probing.py`
   - Pre-commit: `uv run pytest tests/unit/test_ai_tools/test_model_probing.py -v`
 
 - [ ] 2. BUG-001: Fix DependencyGraph.partition() to compute connected components
@@ -261,7 +261,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   - Write test `test_no_edges()`: Given no edges and tasks [A,B,C], `partition()` returns `([A,B,C], [])` — all independent
   - Write test `test_single_node_with_edge_target_outside_set()`: Given edge A→X and tasks [A] (X not in set), `partition()` returns `([A], [])` — A is independent
   - Run tests → expect first test FAILS (RED), others may pass
-  - **GREEN**: Rewrite `partition()` in `src/ghaiw/models/deps.py:118-126`:
+  - **GREEN**: Rewrite `partition()` in `src/wade/models/deps.py:118-126`:
     1. Filter edges to only those where both endpoints are in the task set
     2. Build adjacency list (undirected) from filtered edges
     3. BFS/DFS from each unvisited node to find connected components
@@ -289,9 +289,9 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   **References**:
 
   **Pattern References**:
-  - `src/ghaiw/models/deps.py:118-126` — current `partition()` implementation. The bug: it builds a single `chain` by walking ALL edges linearly, instead of grouping by connected component
-  - `src/ghaiw/models/deps.py:95-116` — `topo_sort()` method. DO NOT MODIFY, but call it per-component in the new `partition()`
-  - `src/ghaiw/models/deps.py:80-93` — `DependencyGraph` class definition with `edges: list[DependencyEdge]` field. Edges have `from_task: str` and `to_task: str`
+  - `src/wade/models/deps.py:118-126` — current `partition()` implementation. The bug: it builds a single `chain` by walking ALL edges linearly, instead of grouping by connected component
+  - `src/wade/models/deps.py:95-116` — `topo_sort()` method. DO NOT MODIFY, but call it per-component in the new `partition()`
+  - `src/wade/models/deps.py:80-93` — `DependencyGraph` class definition with `edges: list[DependencyEdge]` field. Edges have `from_task: str` and `to_task: str`
 
   **Test References**:
   - `tests/unit/test_models/` — directory for model tests. Existing tests here can show patterns for testing Pydantic models
@@ -347,7 +347,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
 
   **Commit**: YES
   - Message: `fix(models): implement connected-component partitioning in DependencyGraph`
-  - Files: `src/ghaiw/models/deps.py`, `tests/unit/test_models/test_deps_partition.py`
+  - Files: `src/wade/models/deps.py`, `tests/unit/test_models/test_deps_partition.py`
   - Pre-commit: `uv run pytest tests/unit/test_models/test_deps_partition.py -v`
 
 - [ ] 3. BUG-006: Fix PR-SUMMARY.md path to check worktree first
@@ -358,7 +358,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   - Write test `test_pr_summary_fallback_to_tmp()`: When `PR-SUMMARY.md` does NOT exist in worktree, falls back to `/tmp/PR-SUMMARY-{issue}.md`
   - Write test `test_pr_summary_worktree_takes_precedence()`: When BOTH exist, worktree version is used
   - Run tests → expect FAIL (RED)
-  - **GREEN**: In `src/ghaiw/services/work_service.py`, modify `_done_via_pr()` around line 1188:
+  - **GREEN**: In `src/wade/services/work_service.py`, modify `_done_via_pr()` around line 1188:
     1. Resolve the worktree path for this branch (from `git worktree list` or the `wt_path` already resolved in `done()`)
     2. Check `worktree_path / "PR-SUMMARY.md"` first
     3. If not found, fall back to `Path(f"/tmp/PR-SUMMARY-{issue_number}.md")`
@@ -384,9 +384,9 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   **References**:
 
   **Pattern References**:
-  - `src/ghaiw/services/work_service.py:1188` — current hardcoded path: `Path(f"/tmp/PR-SUMMARY-{issue_number}.md")`. This is the line to change
-  - `src/ghaiw/services/work_service.py:1080-1100` — `done()` function resolves `wt_path` at line 1094. This path should be passed to `_done_via_pr()`
-  - `src/ghaiw/services/work_service.py:1147-1155` — `_done_via_pr()` signature. May need to add `worktree_path: Path | None` parameter
+  - `src/wade/services/work_service.py:1188` — current hardcoded path: `Path(f"/tmp/PR-SUMMARY-{issue_number}.md")`. This is the line to change
+  - `src/wade/services/work_service.py:1080-1100` — `done()` function resolves `wt_path` at line 1094. This path should be passed to `_done_via_pr()`
+  - `src/wade/services/work_service.py:1147-1155` — `_done_via_pr()` signature. May need to add `worktree_path: Path | None` parameter
 
   **Bash Reference**:
   - `lib/work/done.sh` — Bash looks for PR-SUMMARY.md in worktree CWD first, since the AI agent writes it there during the work session
@@ -431,7 +431,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
 
   **Commit**: YES
   - Message: `fix(work): check worktree first for PR-SUMMARY.md before /tmp fallback`
-  - Files: `src/ghaiw/services/work_service.py`, `tests/unit/test_services/test_pr_summary_path.py`
+  - Files: `src/wade/services/work_service.py`, `tests/unit/test_services/test_pr_summary_path.py`
   - Pre-commit: `uv run pytest tests/unit/test_services/test_pr_summary_path.py -v`
 
 ---
@@ -445,7 +445,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   - Write test `test_multiple_ai_shows_selection()`: When multiple `--ai` values given, an interactive selection prompt is shown (mock `ui/prompts.py:select()`)
   - Write test `test_no_ai_flag_auto_detects()`: When no `--ai` given, auto-detects first installed tool (current behavior preserved)
   - Run tests → expect FAIL for multi-flag tests (RED)
-  - **GREEN**: In `src/ghaiw/cli/work.py:76`:
+  - **GREEN**: In `src/wade/cli/work.py:76`:
     1. Change `ai: str | None = typer.Option(None, "--ai", ...)` to `ai: list[str] | None = typer.Option(None, "--ai", ...)`
     2. In the `start` command handler, if `len(ai) > 1`: call `ui_prompts.select()` to let user pick one
     3. If `len(ai) == 1`: use that tool directly (current behavior)
@@ -470,9 +470,9 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   **References**:
 
   **Pattern References**:
-  - `src/ghaiw/cli/work.py:76` — current `--ai` flag definition: `ai: str | None = typer.Option(None, "--ai", ...)`. Change type to `list[str] | None`
-  - `src/ghaiw/cli/work.py:80-120` — `start()` command handler where `ai` value is used. The tool resolution logic starts around here
-  - `src/ghaiw/ui/prompts.py` — `select()` function for interactive selection when multiple tools given
+  - `src/wade/cli/work.py:76` — current `--ai` flag definition: `ai: str | None = typer.Option(None, "--ai", ...)`. Change type to `list[str] | None`
+  - `src/wade/cli/work.py:80-120` — `start()` command handler where `ai` value is used. The tool resolution logic starts around here
+  - `src/wade/ui/prompts.py` — `select()` function for interactive selection when multiple tools given
 
   **Bash Reference**:
   - `lib/work/sync.sh:38-52` — Bash accepts multiple `--ai` flags, builds array, then shows selection menu if >1
@@ -519,7 +519,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
 
   **Commit**: YES
   - Message: `fix(cli): accept multiple --ai flags with interactive selection`
-  - Files: `src/ghaiw/cli/work.py`, `tests/unit/test_cli/test_work_ai_flags.py`
+  - Files: `src/wade/cli/work.py`, `tests/unit/test_cli/test_work_ai_flags.py`
   - Pre-commit: `uv run pytest tests/unit/test_cli/test_work_ai_flags.py -v`
 
 - [ ] 5. BUG-005: Make shell-init output bash/zsh/fish syntax
@@ -528,17 +528,17 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   - **RED**: Create test file `tests/unit/test_cli/test_shell_init.py`
   - Write test `test_bash_output_default()`: When `$SHELL` is `/bin/bash` or unset, output contains bash function syntax with `[[ ]]`
   - Write test `test_zsh_output()`: When `$SHELL` is `/bin/zsh`, output contains zsh-compatible function syntax
-  - Write test `test_fish_output()`: When `$SHELL` is `/usr/bin/fish`, output contains `function ghaiw ... end` Fish syntax
+  - Write test `test_fish_output()`: When `$SHELL` is `/usr/bin/fish`, output contains `function wade ... end` Fish syntax
   - Write test `test_shell_flag_overrides_env()`: When `--shell fish` passed, output is Fish regardless of `$SHELL`
   - Write test `test_bash_output_unchanged()`: The Bash output must match current behavior exactly (no regression)
   - Run tests → expect zsh/fish tests FAIL (RED)
-  - **GREEN**: In `src/ghaiw/cli/admin.py:87-105`:
+  - **GREEN**: In `src/wade/cli/admin.py:87-105`:
     1. Add `--shell` option: `shell: str | None = typer.Option(None, "--shell", help="Target shell: bash, zsh, fish")`
     2. Detect shell: `detected = shell or os.environ.get("SHELL", "/bin/bash")`
     3. Map detected shell to output generator:
        - `/bin/bash` or `/bin/zsh` or anything with `bash`/`zsh` → bash/zsh function (current output — `[[ ]]` works in both)
-       - `/usr/bin/fish` or anything with `fish` → Fish function syntax: `function ghaiw ... end`
-    4. Fish syntax must handle `ghaiw work cd` interception like bash version but using Fish idioms: `set -l`, `builtin cd`, `eval`
+       - `/usr/bin/fish` or anything with `fish` → Fish function syntax: `function wade ... end`
+    4. Fish syntax must handle `wade work cd` interception like bash version but using Fish idioms: `set -l`, `builtin cd`, `eval`
   - Run tests → expect PASS (GREEN)
 
   **Must NOT do**:
@@ -560,18 +560,18 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   **References**:
 
   **Pattern References**:
-  - `src/ghaiw/cli/admin.py:87-105` — current `shell_init()` function. Outputs a hardcoded bash function string. This is the function to modify
-  - `src/ghaiw/ui/prompts.py` — NOT needed for this task (shell-init outputs text, doesn't prompt)
+  - `src/wade/cli/admin.py:87-105` — current `shell_init()` function. Outputs a hardcoded bash function string. This is the function to modify
+  - `src/wade/ui/prompts.py` — NOT needed for this task (shell-init outputs text, doesn't prompt)
 
   **Bash Reference**:
-  - Bash ghaiw had multi-shell in older versions. The key difference is Fish's function syntax:
+  - Bash wade had multi-shell in older versions. The key difference is Fish's function syntax:
     ```fish
-    function ghaiw
+    function wade
       if test (count $argv) -ge 2; and test "$argv[1]" = "work"; and test "$argv[2]" = "cd"
-        set -l dir (command ghaiw work cd $argv[3..])
+        set -l dir (command wade work cd $argv[3..])
         and builtin cd $dir
       else
-        command ghaiw $argv
+        command wade $argv
       end
     end
     ```
@@ -599,7 +599,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
     Steps:
       1. Run `uv run pytest tests/unit/test_cli/test_shell_init.py::test_bash_output_unchanged -v`
       2. Assert PASSED
-      3. Test verifies output contains `function ghaiw()`, `[[ ]]`, `local`
+      3. Test verifies output contains `function wade()`, `[[ ]]`, `local`
     Expected Result: Bash function syntax unchanged
     Failure Indicators: Missing bash keywords or changed function structure
     Evidence: .sisyphus/evidence/task-5-bash-output.txt
@@ -610,7 +610,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
     Steps:
       1. Run `uv run pytest tests/unit/test_cli/test_shell_init.py::test_fish_output -v`
       2. Assert PASSED
-      3. Test verifies output contains `function ghaiw`, `end`, `set -l`, `test`
+      3. Test verifies output contains `function wade`, `end`, `set -l`, `test`
     Expected Result: Fish-native function syntax
     Failure Indicators: Bash syntax in output (e.g., `[[ ]]`, `local`)
     Evidence: .sisyphus/evidence/task-5-fish-output.txt
@@ -628,7 +628,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
 
   **Commit**: YES
   - Message: `fix(cli): make shell-init output bash/zsh/fish syntax based on detected shell`
-  - Files: `src/ghaiw/cli/admin.py`, `tests/unit/test_cli/test_shell_init.py`
+  - Files: `src/wade/cli/admin.py`, `tests/unit/test_cli/test_shell_init.py`
   - Pre-commit: `uv run pytest tests/unit/test_cli/test_shell_init.py -v`
 
 - [ ] 6. BUG-004: Add iTerm2 AppleScript launch for --detach mode
@@ -639,7 +639,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   - Write test `test_iterm2_launch_command()`: When terminal is `"iterm2"` on macOS, `launch_in_new_terminal()` calls `osascript` with iTerm2 AppleScript: `tell application "iTerm2" to create window with default profile command "cd '{cwd}' && {cmd}"`
   - Write test `test_iterm2_launch_before_terminal_app()`: iTerm2 is tried BEFORE Terminal.app fallback
   - Run tests → expect iterm2 launch tests FAIL (RED)
-  - **GREEN**: In `src/ghaiw/utils/terminal.py`, add iTerm2 launch block between tmux and Terminal.app sections (around line 147):
+  - **GREEN**: In `src/wade/utils/terminal.py`, add iTerm2 launch block between tmux and Terminal.app sections (around line 147):
     1. Check `if terminal == "iterm2" and sys.platform == "darwin":`
     2. Build AppleScript: `tell application "iTerm2" to create window with default profile command "cd '{cwd}' && {cmd_str}"`
     3. Execute via `subprocess.run(["osascript", "-e", osa_script], check=True, capture_output=True)`
@@ -665,9 +665,9 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   **References**:
 
   **Pattern References**:
-  - `src/ghaiw/utils/terminal.py:108-162` — `launch_in_new_terminal()` function. iTerm2 block should be added between the tmux block (line 134-145) and the Terminal.app block (line 147-159)
-  - `src/ghaiw/utils/terminal.py:95-96` — detection code for iTerm2 (already works: `if "iterm" in term_program: return "iterm2"`)
-  - `src/ghaiw/utils/terminal.py:147-159` — Terminal.app AppleScript pattern to follow as a template for the iTerm2 block
+  - `src/wade/utils/terminal.py:108-162` — `launch_in_new_terminal()` function. iTerm2 block should be added between the tmux block (line 134-145) and the Terminal.app block (line 147-159)
+  - `src/wade/utils/terminal.py:95-96` — detection code for iTerm2 (already works: `if "iterm" in term_program: return "iterm2"`)
+  - `src/wade/utils/terminal.py:147-159` — Terminal.app AppleScript pattern to follow as a template for the iTerm2 block
 
   **Bash Reference**:
   - `lib/work/terminal.sh:67-69` — iTerm2 AppleScript: `osascript -e "tell application \"iTerm2\" to create window with default profile command \"cd '${working_dir}' && ${title_prefix}${cmd}\""` — simpler than Ghostty (no menu click needed), just creates a window with command
@@ -714,7 +714,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
 
   **Commit**: YES (groups with T7, T8 — commit after all three terminal tasks)
   - Message: `fix(utils): add iTerm2 AppleScript launch for detach mode`
-  - Files: `src/ghaiw/utils/terminal.py`, `tests/unit/test_utils/test_terminal_launch.py`
+  - Files: `src/wade/utils/terminal.py`, `tests/unit/test_utils/test_terminal_launch.py`
   - Pre-commit: `uv run pytest tests/unit/test_utils/test_terminal_launch.py -v`
 
 - [ ] 7. BUG-007: Add gnome-terminal detection and launch support
@@ -725,7 +725,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   - Write test `test_gnome_terminal_launch_command()`: When gnome-terminal is available, `launch_in_new_terminal()` calls `subprocess.Popen(["gnome-terminal", "--", "bash", "-c", "cd '{cwd}' && {cmd}; exec bash"])`
   - Write test `test_gnome_terminal_not_on_macos()`: gnome-terminal is NOT tried on macOS (only Linux)
   - Run tests → expect FAIL (RED)
-  - **GREEN**: In `src/ghaiw/utils/terminal.py`:
+  - **GREEN**: In `src/wade/utils/terminal.py`:
     1. In `detect_terminal()` (around line 105), add gnome-terminal detection:
        ```python
        if shutil.which("gnome-terminal"):
@@ -766,8 +766,8 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   **References**:
 
   **Pattern References**:
-  - `src/ghaiw/utils/terminal.py:87-105` — `detect_terminal()` function. gnome-terminal detection should be added after tmux (line 103) and before the final `return None` (line 105)
-  - `src/ghaiw/utils/terminal.py:108-162` — `launch_in_new_terminal()`. gnome-terminal block goes after Terminal.app macOS block, before the final logger.warning
+  - `src/wade/utils/terminal.py:87-105` — `detect_terminal()` function. gnome-terminal detection should be added after tmux (line 103) and before the final `return None` (line 105)
+  - `src/wade/utils/terminal.py:108-162` — `launch_in_new_terminal()`. gnome-terminal block goes after Terminal.app macOS block, before the final logger.warning
 
   **Bash Reference**:
   - `lib/work/terminal.sh:82-84` — gnome-terminal launch: `gnome-terminal -- bash -c "cd '${working_dir}' && ${title_prefix}${cmd}; exec bash"` — note the `; exec bash` to keep terminal open after command exits
@@ -813,7 +813,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
 
   **Commit**: YES (groups with T6, T8 — commit after all three terminal tasks)
   - Message: `fix(utils): add gnome-terminal detection and launch support`
-  - Files: `src/ghaiw/utils/terminal.py`, `tests/unit/test_utils/test_terminal_launch.py`
+  - Files: `src/wade/utils/terminal.py`, `tests/unit/test_utils/test_terminal_launch.py`
   - Pre-commit: `uv run pytest tests/unit/test_utils/test_terminal_launch.py -v`
 
 - [ ] 8. BUG-008: Fix Ghostty macOS to use AppleScript instead of subprocess
@@ -824,9 +824,9 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   - Write test `test_ghostty_linux_uses_subprocess()`: When terminal is `"ghostty"` on Linux, uses `ghostty +new-window -e bash -c "..."` (current behavior is close but needs `+new-window`)
   - Write test `test_ghostty_macos_temp_script_created()`: On macOS, a temp launcher script is created with correct cd + exec content
   - Run tests → expect macOS tests FAIL (RED)
-  - **GREEN**: In `src/ghaiw/utils/terminal.py`, replace the Ghostty launch block (lines 121-132):
+  - **GREEN**: In `src/wade/utils/terminal.py`, replace the Ghostty launch block (lines 121-132):
     1. Add platform check: `if sys.platform == "darwin"`:
-       - Create temp script file via `tempfile.NamedTemporaryFile(prefix="ghaiw-", dir="/tmp", suffix="", delete=False, mode="w")`
+       - Create temp script file via `tempfile.NamedTemporaryFile(prefix="wade-", dir="/tmp", suffix="", delete=False, mode="w")`
        - Write launcher content: `#!/usr/bin/env bash\ncd {cwd}\nexec {cmd_str}\n`
        - If title provided, add `printf '\\033]0;{title}\\007'` before exec
        - Make executable: `os.chmod(tmp_path, 0o755)`
@@ -880,7 +880,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   **References**:
 
   **Pattern References**:
-  - `src/ghaiw/utils/terminal.py:121-132` — current Ghostty launch block. Uses `["ghostty", "-e", cmd_str]` on ALL platforms — needs platform split
+  - `src/wade/utils/terminal.py:121-132` — current Ghostty launch block. Uses `["ghostty", "-e", cmd_str]` on ALL platforms — needs platform split
 
   **Bash Reference**:
   - `lib/work/terminal.sh:20-64` — full Ghostty launch code. macOS path (lines 21-57): temp script + AppleScript menu click + keystroke + delayed cleanup. Linux path (lines 58-63): `ghostty +new-window -e bash -c "..."`
@@ -927,7 +927,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
 
   **Commit**: YES (groups with T6, T7 — commit after all three terminal tasks)
   - Message: `fix(utils): use AppleScript for Ghostty macOS launch`
-  - Files: `src/ghaiw/utils/terminal.py`, `tests/unit/test_utils/test_terminal_launch.py`
+  - Files: `src/wade/utils/terminal.py`, `tests/unit/test_utils/test_terminal_launch.py`
   - Pre-commit: `uv run pytest tests/unit/test_utils/test_terminal_launch.py -v`
 
 - [ ] 9. BUG-003: Implement post-work lifecycle prompt after AI tool exits
@@ -945,7 +945,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   - Write test `test_lifecycle_skipped_in_detach_mode()`: Function not called when `--detach` is True
   - Write test `test_lifecycle_runs_after_ai_crash()`: Even if AI tool exits with non-zero, lifecycle still runs (it's in a finally/always block)
   - Run tests → expect ALL FAIL (RED)
-  - **GREEN**: In `src/ghaiw/services/work_service.py`:
+  - **GREEN**: In `src/wade/services/work_service.py`:
     1. Create standalone function `_post_work_lifecycle(repo_root: Path, branch: str, issue_number: int | None, config: ProjectConfig, provider: AbstractTaskProvider) -> None`
     2. Place it near `_cleanup_worktree()` (around line 1500+) for locality
     3. **PR strategy** implementation (when `config.project.merge_strategy == MergeStrategy.PR`):
@@ -1004,13 +1004,13 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   **References**:
 
   **Pattern References**:
-  - `src/ghaiw/services/work_service.py:439-465` — `start()` method's AI launch section. The lifecycle call should go AFTER line 454 (where AI tool returns), inside the `if not detach` block
-  - `src/ghaiw/services/work_service.py:1500-1537` — `_cleanup_worktree()` function. Call this for worktree cleanup, do not reimplement
-  - `src/ghaiw/services/work_service.py:1147-1200` — `_done_via_pr()` for reference on how PR operations are structured. Do NOT call this function — use primitives directly
-  - `src/ghaiw/services/work_service.py:1270-1310` — `_done_via_direct()` for reference on direct merge pattern
-  - `src/ghaiw/git/pr.py` — PR operations: `get_pr_number_for_branch()`, `merge_pr()`, `delete_remote_branch()`
-  - `src/ghaiw/providers/github.py` — `get_pr_for_branch()`, `close_task()`
-  - `src/ghaiw/ui/prompts.py` — `confirm()` for Y/N prompts, `select()` for menu selection
+  - `src/wade/services/work_service.py:439-465` — `start()` method's AI launch section. The lifecycle call should go AFTER line 454 (where AI tool returns), inside the `if not detach` block
+  - `src/wade/services/work_service.py:1500-1537` — `_cleanup_worktree()` function. Call this for worktree cleanup, do not reimplement
+  - `src/wade/services/work_service.py:1147-1200` — `_done_via_pr()` for reference on how PR operations are structured. Do NOT call this function — use primitives directly
+  - `src/wade/services/work_service.py:1270-1310` — `_done_via_direct()` for reference on direct merge pattern
+  - `src/wade/git/pr.py` — PR operations: `get_pr_number_for_branch()`, `merge_pr()`, `delete_remote_branch()`
+  - `src/wade/providers/github.py` — `get_pr_for_branch()`, `close_task()`
+  - `src/wade/ui/prompts.py` — `confirm()` for Y/N prompts, `select()` for menu selection
 
   **Bash Reference**:
   - `lib/worktree.sh:122-268` — `_worktree_post_work_lifecycle()`. Full implementation:
@@ -1020,7 +1020,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
 
   **Test References**:
   - `tests/unit/test_services/` — service test files showing mock patterns with `@patch`
-  - `tests/conftest.py` — `tmp_git_repo` and `tmp_ghaiw_project` fixtures for git repo setup
+  - `tests/conftest.py` — `tmp_git_repo` and `tmp_wade_project` fixtures for git repo setup
 
   **WHY Each Reference Matters**:
   - `work_service.py:439-465` — the CALL SITE. Must understand the control flow to insert lifecycle correctly
@@ -1109,7 +1109,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
 
   **Commit**: YES
   - Message: `fix(work): implement post-work lifecycle prompt after AI tool exits`
-  - Files: `src/ghaiw/services/work_service.py`, `tests/unit/test_services/test_post_work_lifecycle.py`
+  - Files: `src/wade/services/work_service.py`, `tests/unit/test_services/test_post_work_lifecycle.py`
   - Pre-commit: `uv run pytest tests/unit/test_services/test_post_work_lifecycle.py -v`
 
 ---

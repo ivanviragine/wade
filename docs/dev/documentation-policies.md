@@ -9,8 +9,8 @@ Every change **must** include documentation updates as part of the implementatio
 1. **`AGENTS.md`** — Update if the change affects architecture, commands, conventions, design principles, or development workflow.
 2. **`README.md`** — Update if the change affects user-facing behavior: new commands, flags, install steps, configuration options, or supported tools.
 3. **`templates/skills/plan-session/SKILL.md`** / **`templates/skills/work-session/SKILL.md`** — *(inited-project artifacts)* Update if the change affects phase-specific session rules (planning rules in plan-session, implementation rules in work-session).
-4. **`templates/skills/`** (task, deps) — *(inited-project artifacts)* Update if the change affects how AI agents in inited projects should use ghaiw commands. This is where command references, flags, workflows, and examples belong.
-5. **`templates/agents-pointer.md`** — *(inited-project artifact)* The pointer text that `ghaiw init` injects into target projects' `AGENTS.md`. Update this when the critical inline rules or pointer wording changes. **This is not the same as this repo's own `## Git Workflow` section** — that is the self-installed copy, written once by `ghaiw init` and never overwritten by `ghaiw update`.
+4. **`templates/skills/`** (task, deps) — *(inited-project artifacts)* Update if the change affects how AI agents in inited projects should use wade commands. This is where command references, flags, workflows, and examples belong.
+5. **`templates/agents-pointer.md`** — *(inited-project artifact)* The pointer text that `wade init` injects into target projects' `AGENTS.md`. Update this when the critical inline rules or pointer wording changes. **This is not the same as this repo's own `## Git Workflow` section** — that is the self-installed copy, written once by `wade init` and never overwritten by `wade update`.
 6. **`docs/dev/`** — Update the relevant supplementary doc if the change affects architecture details, testing patterns, extension guides, or skills system internals.
 
 Do not skip documentation even for "small" changes — a new flag, a renamed option, or a changed default all need docs updates. Documentation is part of "done", not a separate task.
@@ -37,7 +37,7 @@ After completing any task, reflect on whether you encountered any friction durin
 **At the end of every session, ask yourself:**
 
 1. **Did I hit a bug or unexpected behavior?**
-   - Describe it to the user and **offer** to create a GitHub Issue (`ghaiw new-task`)
+   - Describe it to the user and **offer** to create a GitHub Issue (`wade new-task`)
    - Do not silently work around it — surface it so it can be tracked and fixed
 
 2. **Did I hit a doc gap or architecture misunderstanding?**

@@ -12,7 +12,7 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-from ghaiw.config.migrations import run_all_migrations
+from wade.config.migrations import run_all_migrations
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -45,12 +45,12 @@ def _write_yaml(path: Path, data: dict[str, object]) -> str:
 class TestRunAllMigrationsAtomic:
     def test_migration_failure_restores_file(self, tmp_path: Path) -> None:
         """If any migration raises, the original file bytes must be unchanged."""
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         original_text = _write_yaml(config_path, _VALID_V2_CONFIG)
 
         with (
             patch(
-                "ghaiw.config.migrations.ensure_version",
+                "wade.config.migrations.ensure_version",
                 side_effect=RuntimeError("boom"),
             ),
             pytest.raises(RuntimeError),
@@ -61,12 +61,12 @@ class TestRunAllMigrationsAtomic:
 
     def test_migration_failure_raises_runtime_error(self, tmp_path: Path) -> None:
         """RuntimeError must be raised and its message must contain 'restored'."""
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         _write_yaml(config_path, _VALID_V2_CONFIG)
 
         with (
             patch(
-                "ghaiw.config.migrations.ensure_version",
+                "wade.config.migrations.ensure_version",
                 side_effect=ValueError("bad version"),
             ),
             pytest.raises(RuntimeError, match="restored"),
@@ -75,13 +75,13 @@ class TestRunAllMigrationsAtomic:
 
     def test_migration_failure_message_contains_original_error(self, tmp_path: Path) -> None:
         """The RuntimeError message must embed the original exception text."""
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         _write_yaml(config_path, _VALID_V2_CONFIG)
 
         boom_message = "unexpected_sentinel_error_xyz"
         with (
             patch(
-                "ghaiw.config.migrations.ensure_version",
+                "wade.config.migrations.ensure_version",
                 side_effect=OSError(boom_message),
             ),
             pytest.raises(RuntimeError, match=boom_message),
@@ -90,7 +90,7 @@ class TestRunAllMigrationsAtomic:
 
     def test_migration_success_writes_file(self, tmp_path: Path) -> None:
         """Regression guard: successful migrations still update the file."""
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         original_text = _write_yaml(config_path, _VERSIONLESS_CONFIG)
 
         result = run_all_migrations(config_path)
@@ -103,13 +103,13 @@ class TestRunAllMigrationsAtomic:
 
     def test_migration_failure_chained_cause(self, tmp_path: Path) -> None:
         """The RuntimeError must chain the original exception as __cause__."""
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         _write_yaml(config_path, _VALID_V2_CONFIG)
 
         original_exc = TypeError("chain_check")
         with (
             patch(
-                "ghaiw.config.migrations.ensure_version",
+                "wade.config.migrations.ensure_version",
                 side_effect=original_exc,
             ),
             pytest.raises(RuntimeError) as exc_info,

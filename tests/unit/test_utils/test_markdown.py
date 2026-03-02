@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ghaiw.utils.markdown import (
+from wade.utils.markdown import (
     extract_all_sections,
     extract_marker_block,
     extract_section,
@@ -53,8 +53,8 @@ class TestExtractAllSections:
 
 
 class TestMarkerBlock:
-    START = "<!-- ghaiw:start -->"
-    END = "<!-- ghaiw:end -->"
+    START = "<!-- wade:start -->"
+    END = "<!-- wade:end -->"
 
     def test_has_markers(self) -> None:
         content = f"before\n{self.START}\nmiddle\n{self.END}\nafter"

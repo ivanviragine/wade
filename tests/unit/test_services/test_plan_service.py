@@ -7,10 +7,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ghaiw.models.config import AIConfig, ProjectConfig
-from ghaiw.models.task import PlanFile
-from ghaiw.services.ai_resolution import resolve_ai_tool, resolve_model
-from ghaiw.services.plan_service import (
+from wade.models.config import AIConfig, ProjectConfig
+from wade.models.task import PlanFile
+from wade.services.ai_resolution import resolve_ai_tool, resolve_model
+from wade.services.plan_service import (
     discover_plan_files,
     get_plan_prompt_template,
     render_plan_prompt,
@@ -31,8 +31,8 @@ class TestPromptTemplate:
         assert "{plan_dir}" in template
 
     def test_render_with_plan_dir(self) -> None:
-        rendered = render_plan_prompt("/tmp/ghaiw-plan-abc123")
-        assert "/tmp/ghaiw-plan-abc123" in rendered
+        rendered = render_plan_prompt("/tmp/wade-plan-abc123")
+        assert "/tmp/wade-plan-abc123" in rendered
         assert "{plan_dir}" not in rendered
         assert "# Goal" in rendered
 
@@ -55,8 +55,8 @@ class TestResolveAITool:
 
     def test_detection_fallback(self) -> None:
         config = ProjectConfig()
-        with patch("ghaiw.services.plan_service.AbstractAITool.detect_installed") as mock:
-            from ghaiw.models.ai import AIToolID
+        with patch("wade.services.plan_service.AbstractAITool.detect_installed") as mock:
+            from wade.models.ai import AIToolID
 
             mock.return_value = [AIToolID.CLAUDE]
             result = resolve_ai_tool(None, config)
@@ -64,7 +64,7 @@ class TestResolveAITool:
 
     def test_no_tool_available(self) -> None:
         config = ProjectConfig()
-        with patch("ghaiw.services.plan_service.AbstractAITool.detect_installed") as mock:
+        with patch("wade.services.plan_service.AbstractAITool.detect_installed") as mock:
             mock.return_value = []
             result = resolve_ai_tool(None, config)
             assert result is None
@@ -77,7 +77,7 @@ class TestResolveModel:
         assert result == "claude-opus-4-6"
 
     def test_config_fallback(self) -> None:
-        from ghaiw.models.config import AICommandConfig
+        from wade.models.config import AICommandConfig
 
         config = ProjectConfig(ai=AIConfig(plan=AICommandConfig(model="claude-sonnet-4-6")))
         result = resolve_model(None, config, "plan")
@@ -216,8 +216,8 @@ class TestTranscriptWiring:
         transcript = tmp_path / ".transcript"
 
         with (
-            patch("ghaiw.services.plan_service.AbstractAITool.get") as mock_get,
-            patch("ghaiw.services.plan_service.run_with_transcript") as mock_rwt,
+            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
+            patch("wade.services.plan_service.run_with_transcript") as mock_rwt,
         ):
             adapter = MagicMock()
             adapter.build_launch_command.return_value = ["claude", "--permission-mode", "plan"]
@@ -240,8 +240,8 @@ class TestTranscriptWiring:
         transcript = tmp_path / ".transcript"
 
         with (
-            patch("ghaiw.services.plan_service.AbstractAITool.get") as mock_get,
-            patch("ghaiw.services.plan_service.run_with_transcript") as mock_rwt,
+            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
+            patch("wade.services.plan_service.run_with_transcript") as mock_rwt,
         ):
             adapter = MagicMock()
             adapter.build_launch_command.return_value = ["claude", "--permission-mode", "plan"]
@@ -261,8 +261,8 @@ class TestTranscriptWiring:
     def test_no_transcript_path_passes_none(self, tmp_path: Path) -> None:
         """When transcript_path is None, run_with_transcript receives None."""
         with (
-            patch("ghaiw.services.plan_service.AbstractAITool.get") as mock_get,
-            patch("ghaiw.services.plan_service.run_with_transcript") as mock_rwt,
+            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
+            patch("wade.services.plan_service.run_with_transcript") as mock_rwt,
         ):
             adapter = MagicMock()
             adapter.build_launch_command.return_value = ["claude", "--permission-mode", "plan"]
@@ -283,8 +283,8 @@ class TestTranscriptWiring:
         """run_ai_planning_session should pass plan_dir inside trusted_dirs
         to build_launch_command."""
         with (
-            patch("ghaiw.services.plan_service.AbstractAITool.get") as mock_get,
-            patch("ghaiw.services.plan_service.run_with_transcript") as mock_rwt,
+            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
+            patch("wade.services.plan_service.run_with_transcript") as mock_rwt,
         ):
             adapter = MagicMock()
             adapter.build_launch_command.return_value = ["copilot", "--model", "test"]
@@ -309,8 +309,8 @@ class TestModelCompatibility:
     def test_incompatible_model_is_dropped(self, tmp_path: Path) -> None:
         """When the resolved model is incompatible with the tool, it must be dropped."""
         with (
-            patch("ghaiw.services.plan_service.AbstractAITool.get") as mock_get,
-            patch("ghaiw.services.plan_service.run_with_transcript") as mock_rwt,
+            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
+            patch("wade.services.plan_service.run_with_transcript") as mock_rwt,
         ):
             adapter = MagicMock()
             adapter.is_model_compatible.return_value = False
@@ -330,8 +330,8 @@ class TestModelCompatibility:
     def test_compatible_model_is_kept(self, tmp_path: Path) -> None:
         """When the resolved model is compatible with the tool, it is passed through."""
         with (
-            patch("ghaiw.services.plan_service.AbstractAITool.get") as mock_get,
-            patch("ghaiw.services.plan_service.run_with_transcript") as mock_rwt,
+            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
+            patch("wade.services.plan_service.run_with_transcript") as mock_rwt,
         ):
             adapter = MagicMock()
             adapter.is_model_compatible.return_value = True
@@ -351,8 +351,8 @@ class TestModelCompatibility:
     def test_no_model_skips_compatibility_check(self, tmp_path: Path) -> None:
         """When model is None, is_model_compatible is not called."""
         with (
-            patch("ghaiw.services.plan_service.AbstractAITool.get") as mock_get,
-            patch("ghaiw.services.plan_service.run_with_transcript") as mock_rwt,
+            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
+            patch("wade.services.plan_service.run_with_transcript") as mock_rwt,
         ):
             adapter = MagicMock()
             adapter.build_launch_command.return_value = ["codex"]

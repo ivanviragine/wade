@@ -1,6 +1,6 @@
 """Tests for branch name slugification."""
 
-from ghaiw.git.branch import _slugify
+from wade.git.branch import _slugify
 
 
 def test_slugify_ascii_unchanged() -> None:

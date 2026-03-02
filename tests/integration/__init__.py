@@ -1,1 +1,1 @@
-"""Integration tests for ghaiw."""
+"""Integration tests for wade."""

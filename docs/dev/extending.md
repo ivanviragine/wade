@@ -1,10 +1,10 @@
-# Extending ghaiw
+# Extending WADE
 
 Step-by-step guides for common extension tasks. For architecture context, see `docs/dev/architecture.md`.
 
 ## Adding a New Subcommand to `task`
 
-The task CLI is in `src/ghaiw/cli/task.py`, business logic in `src/ghaiw/services/task_service.py`. When adding a new subcommand:
+The task CLI is in `src/wade/cli/task.py`, business logic in `src/wade/services/task_service.py`. When adding a new subcommand:
 
 1. **Implement the service method** — Add the business logic in `task_service.py` (or a new service if warranted)
 2. **Wire the CLI** — Add a Typer command function in `cli/task.py` with appropriate options/arguments
@@ -16,7 +16,7 @@ The task CLI is in `src/ghaiw/cli/task.py`, business logic in `src/ghaiw/service
 
 Thanks to `__init_subclass__` auto-registration, adding a new AI tool requires only one file:
 
-1. Create `src/ghaiw/ai_tools/<tool_name>.py`
+1. Create `src/wade/ai_tools/<tool_name>.py`
 2. Define a class that inherits from `AbstractAITool` and sets `TOOL_ID`
 3. Implement the required abstract methods: `capabilities()`, `get_models()`, `launch()`, `parse_transcript()`
 4. Optionally override `is_model_compatible()`, `plan_mode_args()`, `normalize_model_format()`
@@ -27,16 +27,16 @@ No modification to `base.py`, services, or CLI is needed.
 
 ## Adding a New Provider
 
-The provider system uses `AbstractTaskProvider` ABC (`src/ghaiw/providers/base.py`) with `GitHubProvider` as the current implementation. Unlike AI tools (which use `__init_subclass__` auto-registration), providers use a simple factory function. To add a new provider (e.g., Linear, Jira):
+The provider system uses `AbstractTaskProvider` ABC (`src/wade/providers/base.py`) with `GitHubProvider` as the current implementation. Unlike AI tools (which use `__init_subclass__` auto-registration), providers use a simple factory function. To add a new provider (e.g., Linear, Jira):
 
-1. Create `src/ghaiw/providers/<provider_name>.py`
+1. Create `src/wade/providers/<provider_name>.py`
 2. Implement all abstract methods from `AbstractTaskProvider`
 3. Add the provider ID to `ProviderID` enum in `models/config.py`
 4. Add an `elif` branch in `providers/registry.py:get_provider()` to return the new provider
 
 ## Version Bumping
 
-Version lives in `src/ghaiw/__init__.py` (`__version__`) and `pyproject.toml` (`version`). Use `scripts/auto_version.py` to bump it:
+Version lives in `src/wade/__init__.py` (`__version__`) and `pyproject.toml` (`version`). Use `scripts/auto_version.py` to bump it:
 
 ```bash
 python scripts/auto_version.py patch           # bug fixes, docs (0.1.0 -> 0.1.1)

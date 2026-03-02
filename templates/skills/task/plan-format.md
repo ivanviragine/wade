@@ -1,6 +1,6 @@
 # Plan File Format
 
-Reference for the `.md` format used by `ghaiw plan-task` to create issues and draft PRs.
+Reference for the `.md` format used by `wade plan-task` to create issues and draft PRs.
 
 ## Structure
 
@@ -32,9 +32,9 @@ What to build / change.
 |---------|------|
 | **Title** | First `# Heading` line becomes the GitHub issue title. Required. Max 256 chars (truncated with a warning if exceeded). |
 | **Body** | Everything after the title heading becomes the draft PR plan content. The issue gets a lightweight summary. |
-| **Label** | Applied automatically from `.ghaiw.yml` config (`issue_label`). |
-| **Complexity** | Optional `## Complexity` section with one value: `easy`, `medium`, `complex`, or `very_complex`. Applied as a `complexity:X` label on the issue. Used by `ghaiw implement-task` to auto-select the AI model. |
-| **Plan Summary** | When issues are created through `ghaiw plan-task`, ghaiw appends a managed `## Plan Summary` section to the GitHub issue body after creation. If available from the AI CLI output, the summary includes a `### Model Breakdown` table for per-model token usage. |
+| **Label** | Applied automatically from `.wade.yml` config (`issue_label`). |
+| **Complexity** | Optional `## Complexity` section with one value: `easy`, `medium`, `complex`, or `very_complex`. Applied as a `complexity:X` label on the issue. Used by `wade implement-task` to auto-select the AI model. |
+| **Plan Summary** | When issues are created through `wade plan-task`, wade appends a managed `## Plan Summary` section to the GitHub issue body after creation. If available from the AI CLI output, the summary includes a `### Model Breakdown` table for per-model token usage. |
 | **Sections** | Context, Proposed Solution, Tasks, and Acceptance Criteria are recommended but not enforced. |
 
 ## Complexity values
@@ -46,7 +46,7 @@ What to build / change.
 | `complex` | Multi-file feature or significant refactor (300-600 LOC) |
 | `very_complex` | Large feature, cross-cutting concern, or architecture change (>600 LOC) |
 
-`ghaiw implement-task` maps these to model names configured in `.ghaiw.yml`
+`wade implement-task` maps these to model names configured in `.wade.yml`
 (`models.<tool>.easy`, `models.<tool>.medium`, `models.<tool>.complex`,
 `models.<tool>.very_complex`).
 If the complexity field is absent or no model is configured, the default

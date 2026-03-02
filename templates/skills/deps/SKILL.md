@@ -3,23 +3,23 @@ name: deps
 description: >
   Analyze a set of GitHub issues and identify dependency relationships between
   them. Reads issue titles and bodies, determines execution order, and outputs
-  a structured dependency file that ghaiw uses to generate Mermaid diagrams
+  a structured dependency file that wade uses to generate Mermaid diagrams
   and update issue bodies. Use when multiple related issues need ordering.
 ---
 
 # Dependency Analysis
 
 Analyze a set of GitHub issues and determine the dependency relationships
-between them. Output a structured file that `ghaiw` will use to generate
+between them. Output a structured file that `wade` will use to generate
 dependency graphs and update issue bodies.
 
 ## When to activate
 
-- After `ghaiw plan-task` creates multiple issues
-- When `ghaiw task deps` is run on existing issues
+- After `wade plan-task` creates multiple issues
+- When `wade task deps` is run on existing issues
 - When the user asks to analyze dependencies between issues
 
-> **Note:** `ghaiw task deps` first attempts headless analysis (AI tools that
+> **Note:** `wade task deps` first attempts headless analysis (AI tools that
 > support `--print`/`--prompt`). If headless fails, it falls back to interactive
 > mode: passes the analysis prompt directly to the AI tool as an initial message,
 > then reads the output from a file after exit.
@@ -72,15 +72,15 @@ Rules:
 - The graph must be a DAG (no cycles)
 - If no dependencies exist, write only: `# No dependencies found`
 
-> **Note:** In the Mermaid diagram that ghaiw generates from this file, arrows are
+> **Note:** In the Mermaid diagram that wade generates from this file, arrows are
 > rendered in the conventional DAG direction: **dependent → dependency** (e.g., `42 --> 41`
 > means issue 42 depends on 41). This is the reverse of the `A -> B` notation above, which
-> is only the internal file format used to communicate with ghaiw.
+> is only the internal file format used to communicate with wade.
 
 ## Step 3: Confirm completion
 
 After writing the file, tell the user:
-> "Dependency file written to `<path>`. Exit this session so ghaiw can apply
+> "Dependency file written to `<path>`. Exit this session so wade can apply
 > the dependencies to the issues."
 
 ## Rules

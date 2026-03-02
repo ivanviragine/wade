@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ghaiw.services.check_service import (
+from wade.services.check_service import (
     CheckExitCode,
     CheckStatus,
     ConfigExitCode,
@@ -67,10 +67,10 @@ class TestValidateConfig:
         assert not result.is_valid
         output = result.format_output()
         assert "CONFIG_NOT_FOUND" in output
-        assert "ghaiw init" in output
+        assert "wade init" in output
 
     def test_valid_config(self, tmp_path: Path) -> None:
-        config = tmp_path / ".ghaiw.yml"
+        config = tmp_path / ".wade.yml"
         config.write_text("version: 2\nproject:\n  main_branch: main\n  merge_strategy: PR\n")
         result = validate_config(tmp_path)
         assert result.exit_code == ConfigExitCode.VALID
@@ -80,26 +80,26 @@ class TestValidateConfig:
         assert f"path={config}" in output
 
     def test_empty_config_is_valid(self, tmp_path: Path) -> None:
-        config = tmp_path / ".ghaiw.yml"
+        config = tmp_path / ".wade.yml"
         config.write_text("")
         result = validate_config(tmp_path)
         assert result.is_valid
 
     def test_minimal_version_only(self, tmp_path: Path) -> None:
-        config = tmp_path / ".ghaiw.yml"
+        config = tmp_path / ".wade.yml"
         config.write_text("version: 2\n")
         result = validate_config(tmp_path)
         assert result.is_valid
 
     def test_invalid_version(self, tmp_path: Path) -> None:
-        config = tmp_path / ".ghaiw.yml"
+        config = tmp_path / ".wade.yml"
         config.write_text("version: 99\n")
         result = validate_config(tmp_path)
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("version" in e for e in result.errors)
 
     def test_invalid_merge_strategy(self, tmp_path: Path) -> None:
-        config = tmp_path / ".ghaiw.yml"
+        config = tmp_path / ".wade.yml"
         config.write_text("version: 2\nproject:\n  merge_strategy: squash\n")
         result = validate_config(tmp_path)
         assert result.exit_code == ConfigExitCode.INVALID
@@ -107,42 +107,42 @@ class TestValidateConfig:
         assert any("PR" in e and "direct" in e for e in result.errors)
 
     def test_invalid_ai_tool(self, tmp_path: Path) -> None:
-        config = tmp_path / ".ghaiw.yml"
+        config = tmp_path / ".wade.yml"
         config.write_text("version: 2\nai:\n  default_tool: chatgpt\n")
         result = validate_config(tmp_path)
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("default_tool" in e for e in result.errors)
 
     def test_invalid_command_tool(self, tmp_path: Path) -> None:
-        config = tmp_path / ".ghaiw.yml"
+        config = tmp_path / ".wade.yml"
         config.write_text("version: 2\nai:\n  plan:\n    tool: chatgpt\n")
         result = validate_config(tmp_path)
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("ai.plan.tool" in e for e in result.errors)
 
     def test_unsupported_top_level_key(self, tmp_path: Path) -> None:
-        config = tmp_path / ".ghaiw.yml"
+        config = tmp_path / ".wade.yml"
         config.write_text("version: 2\nunknown_key: value\n")
         result = validate_config(tmp_path)
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("unsupported key" in e for e in result.errors)
 
     def test_invalid_models_tool(self, tmp_path: Path) -> None:
-        config = tmp_path / ".ghaiw.yml"
+        config = tmp_path / ".wade.yml"
         config.write_text("version: 2\nmodels:\n  chatgpt:\n    easy: gpt-4\n")
         result = validate_config(tmp_path)
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("models.chatgpt" in e for e in result.errors)
 
     def test_invalid_complexity_key(self, tmp_path: Path) -> None:
-        config = tmp_path / ".ghaiw.yml"
+        config = tmp_path / ".wade.yml"
         config.write_text("version: 2\nmodels:\n  claude:\n    ultra: claude-ultra\n")
         result = validate_config(tmp_path)
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("models.claude.ultra" in e for e in result.errors)
 
     def test_empty_models_block(self, tmp_path: Path) -> None:
-        config = tmp_path / ".ghaiw.yml"
+        config = tmp_path / ".wade.yml"
         config.write_text("version: 2\nmodels:\n")
         result = validate_config(tmp_path)
         # Empty models parsed as None by YAML, not as empty dict
@@ -152,14 +152,14 @@ class TestValidateConfig:
         assert result.is_valid
 
     def test_empty_copy_to_worktree(self, tmp_path: Path) -> None:
-        config = tmp_path / ".ghaiw.yml"
+        config = tmp_path / ".wade.yml"
         config.write_text("version: 2\nhooks:\n  copy_to_worktree: []\n")
         result = validate_config(tmp_path)
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("copy_to_worktree" in e and "empty" in e for e in result.errors)
 
     def test_default_model_is_valid_ai_key(self, tmp_path: Path) -> None:
-        config = tmp_path / ".ghaiw.yml"
+        config = tmp_path / ".wade.yml"
         config.write_text(
             "version: 2\nai:\n  default_tool: claude\n  default_model: claude-sonnet-4.6\n"
         )
@@ -167,7 +167,7 @@ class TestValidateConfig:
         assert result.is_valid, f"Errors: {result.errors}"
 
     def test_valid_full_config(self, tmp_path: Path) -> None:
-        config = tmp_path / ".ghaiw.yml"
+        config = tmp_path / ".wade.yml"
         config.write_text(
             "version: 2\n"
             "project:\n"
@@ -199,14 +199,14 @@ class TestValidateConfig:
         assert result.is_valid, f"Errors: {result.errors}"
 
     def test_invalid_yaml(self, tmp_path: Path) -> None:
-        config = tmp_path / ".ghaiw.yml"
+        config = tmp_path / ".wade.yml"
         config.write_text("{{invalid yaml::")
         result = validate_config(tmp_path)
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("YAML" in e or "parse" in e for e in result.errors)
 
     def test_output_format_invalid(self, tmp_path: Path) -> None:
-        config = tmp_path / ".ghaiw.yml"
+        config = tmp_path / ".wade.yml"
         config.write_text("version: 99\n")
         result = validate_config(tmp_path)
         output = result.format_output()

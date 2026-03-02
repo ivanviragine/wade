@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ghaiw.ai_tools.transcript import (
+from wade.ai_tools.transcript import (
     allocate_tokens,
     extract_model_breakdown_from_text,
     extract_premium_requests_from_text,

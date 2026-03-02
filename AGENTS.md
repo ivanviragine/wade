@@ -1,11 +1,11 @@
 # AGENTS.md
 
-This file provides guidance to AI agents working on the ghaiw codebase.
+This file provides guidance to AI agents working on the WADE codebase.
 For detailed reference on specific topics, see `docs/dev/`.
 
 ## Project Overview
 
-**ghaiw** (Git + AI Workflow) is a Python CLI toolkit for AI-agent-driven git workflow management. It wraps `gh` CLI and native git to manage GitHub Issues as tasks, git worktrees for isolated development, branch safety checks, and installable Agent Skill files. CLI entry point: **`ghaiw`**.
+**WADE** (Workflow for AI-Driven Engineering) is a Python CLI toolkit for AI-agent-driven git workflow management. It wraps `gh` CLI and native git to manage GitHub Issues as tasks, git worktrees for isolated development, branch safety checks, and installable Agent Skill files. CLI entry point: **`wade`**.
 
 ## Terminology
 
@@ -13,15 +13,15 @@ Two distinct worlds interact in this codebase. Always be clear which one you are
 
 | Term | Meaning |
 |------|---------|
-| **the ghaiw repo** / **this project** | This source repository — `src/ghaiw/`, `templates/`, `tests/`, `scripts/` |
-| **inited project** / **target project** | Any third-party repo that has run `ghaiw init` to adopt the workflow |
-| **skill templates** | Markdown files in `templates/skills/` — the source of truth, part of the ghaiw repo |
-| **installed skills** | Copies (or symlinks) of skill templates placed in a project's `.claude/skills/` by `ghaiw init` |
-| **AGENTS.md pointer** | A short `## Git Workflow` block that `ghaiw init` injects into an inited project's `AGENTS.md` |
+| **the WADE repo** / **this project** | This source repository — `src/wade/`, `templates/`, `tests/`, `scripts/` |
+| **inited project** / **target project** | Any third-party repo that has run `wade init` to adopt the workflow |
+| **skill templates** | Markdown files in `templates/skills/` — the source of truth, part of the WADE repo |
+| **installed skills** | Copies (or symlinks) of skill templates placed in a project's `.claude/skills/` by `wade init` |
+| **AGENTS.md pointer** | A short `## Git Workflow` block that `wade init` injects into an inited project's `AGENTS.md` |
 
-**This `AGENTS.md` governs development of ghaiw itself.** Skills, the pointer, and the progressive disclosure architecture are all *outputs* of ghaiw — artifacts installed into inited projects, not rules for developing ghaiw.
+**This `AGENTS.md` governs development of WADE itself.** Skills, the pointer, and the progressive disclosure architecture are all *outputs* of WADE — artifacts installed into inited projects, not rules for developing WADE.
 
-**ghaiw uses its own workflow.** This repo is itself an inited project. Follow the `## Git Workflow` pointer at the bottom and the phase-specific skill referenced in your clipboard prompt.
+**WADE uses its own workflow.** This repo is itself an inited project. Follow the `## Git Workflow` pointer at the bottom and the phase-specific skill referenced in your clipboard prompt.
 
 ## Commands
 
@@ -88,14 +88,14 @@ All deterministic operations — git commands, state transitions, file manipulat
 
 Everything in this repo exists in one of two worlds:
 
-| ghaiw repo (source) | Inited project (output) |
+| WADE repo (source) | Inited project (output) |
 |---------------------|------------------------|
-| `src/ghaiw/` | installed `ghaiw` binary |
+| `src/wade/` | installed `wade` binary |
 | `templates/skills/<name>/SKILL.md` | `.claude/skills/<name>/SKILL.md` |
 | `templates/agents-pointer.md` | `## Git Workflow` block in target `AGENTS.md` |
 | `AGENTS.md` (this file) | target project's own `AGENTS.md` |
 
-When developing ghaiw, **only touch the left column**. Always edit `templates/skills/<name>/SKILL.md` directly — never edit files inside `.claude/skills/` (those are symlinks in this repo, copies in inited projects).
+When developing WADE, **only touch the left column**. Always edit `templates/skills/<name>/SKILL.md` directly — never edit files inside `.claude/skills/` (those are symlinks in this repo, copies in inited projects).
 
 > Skills system deep dive (symlinks, pointer markers, installation lifecycle): see `docs/dev/skills-system.md`
 
@@ -108,7 +108,7 @@ When developing ghaiw, **only touch the left column**. Always edit `templates/sk
 - **Functions**: `snake_case` — `_` prefix for private helpers
 - **Constants**: `UPPER_SNAKE_CASE`
 - **Enums**: `StrEnum` for string-valued enums
-- **CLI commands**: top-level commands (`ghaiw plan-task`, `ghaiw implement-task`)
+- **CLI commands**: top-level commands (`wade plan-task`, `wade implement-task`)
 
 ### Commits
 
@@ -138,10 +138,10 @@ Read these on-demand when working in a specific area:
 | Modifying architecture, config, or commands | `docs/dev/architecture.md` |
 | Adding an AI tool, provider, or subcommand | `docs/dev/extending.md` |
 | Writing or running tests | `docs/dev/testing.md` |
-| Working on skills, pointer system, or `ghaiw init` | `docs/dev/skills-system.md` |
+| Working on skills, pointer system, or `wade init` | `docs/dev/skills-system.md` |
 | Updating documentation policies | `docs/dev/documentation-policies.md` |
 
-<!-- ghaiw:pointer:start -->
+<!-- wade:pointer:start -->
 ## Git Workflow
 
 **First action every session** — read the skill referenced in your clipboard
@@ -149,8 +149,8 @@ prompt for full session rules.
 
 Critical rules you must always follow:
 
-1. Never create GitHub Issues via `gh issue create` — use `ghaiw new-task`
+1. Never create GitHub Issues via `gh issue create` — use `wade new-task`
    or read @.claude/skills/task/SKILL.md
 2. Never create PRs manually (`gh pr create`) or push branches directly — use
-   `ghaiw work done`
-<!-- ghaiw:pointer:end -->
+   `wade work done`
+<!-- wade:pointer:end -->

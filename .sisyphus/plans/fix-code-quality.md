@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-> **Quick Summary**: Fix 11 code quality issues in Python ghaiw that are unrelated to Bash parity but represent real bugs, silent failure modes, and robustness gaps. Covers error handling, concurrency safety, timeout protection, and defensive programming.
+> **Quick Summary**: Fix 11 code quality issues in Python wade that are unrelated to Bash parity but represent real bugs, silent failure modes, and robustness gaps. Covers error handling, concurrency safety, timeout protection, and defensive programming.
 >
 > **Deliverables**:
 > - CQ-001: `get_conflicted_files()` raises on subprocess error instead of returning empty list
@@ -10,7 +10,7 @@
 > - CQ-003: Bootstrap hook subprocess gets 60-second timeout
 > - CQ-004: Config migration pipeline is atomic — aborts all on failure, leaves file unchanged
 > - CQ-005: `_get_ai_tool()` validates unknown values instead of silently coercing
-> - CQ-006: SQLite `busy_timeout` set to 30000ms (30s) for parallel `ghaiw` safety
+> - CQ-006: SQLite `busy_timeout` set to 30000ms (30s) for parallel `wade` safety
 > - CQ-007: All DB write operations (INSERT/UPDATE/DELETE) wrapped in explicit transactions
 > - CQ-008: `__init_subclass__` warns on duplicate `TOOL_ID` registration instead of silently overwriting
 > - CQ-009: `remove_worktree()` parameterized with `force: bool = True` (default preserves behavior)
@@ -33,8 +33,8 @@ Fix all code quality issues identified in the Bash-to-Python comparative analysi
 - Test strategy: Tests-after (implement fix first, then add tests verifying the new behavior)
 - CQ-003 timeout: **60 seconds** — long enough for real setup scripts (npm install, brew, etc.), short enough to fail fast on hangs
 - CQ-004 migration failure: **Atomic** — abort all migrations, leave file unchanged. A half-migrated config is worse than an unmigrated one.
-- CQ-006 busy_timeout: **30000ms (30s)** — NOT configurable. Hardcoded. Enables safe parallel `ghaiw` invocations in different terminals.
-- CQ-007 scope: **Writes only** (INSERT/UPDATE/DELETE). SQLite WAL mode already gives safe concurrent reads; wrapping writes prevents races between parallel `ghaiw` instances.
+- CQ-006 busy_timeout: **30000ms (30s)** — NOT configurable. Hardcoded. Enables safe parallel `wade` invocations in different terminals.
+- CQ-007 scope: **Writes only** (INSERT/UPDATE/DELETE). SQLite WAL mode already gives safe concurrent reads; wrapping writes prevents races between parallel `wade` instances.
 - CQ-009: Parameterize `remove_worktree(force: bool = True)` — default `True` preserves all existing behavior. Only one caller: `_cleanup_worktree()` at `work_service.py:1525`.
 - CQ-010: Prompt user to retry or skip (not silent log, not hard abort).
 - CQ-011: Replace Unicode with `-` not `?`. Do NOT add `unidecode` dependency.
@@ -53,7 +53,7 @@ Fix all code quality issues identified in the Bash-to-Python comparative analysi
 ## Work Objectives
 
 ### Core Objective
-Improve robustness, error visibility, and concurrency safety of Python ghaiw by fixing 11 code quality issues, verified via tests-after approach.
+Improve robustness, error visibility, and concurrency safety of Python wade by fixing 11 code quality issues, verified via tests-after approach.
 
 ### Concrete Deliverables
 - 11 targeted fixes across 9 Python modules
@@ -110,7 +110,7 @@ Evidence saved to `.sisyphus/evidence/cq-task-{N}-{scenario-slug}.{ext}`.
 - **Logging**: Use `caplog` fixture — assert log message and level
 - **Timeout**: Use `unittest.mock.patch` to simulate subprocess timeout — assert `TimeoutExpired` is caught and re-raised
 - **Transactions**: Use SQLite directly — assert partial writes are rolled back on failure
-- **CLI output**: Use `uv run python -m ghaiw.cli.main` — invoke command, check output
+- **CLI output**: Use `uv run python -m wade.cli.main` — invoke command, check output
 
 ---
 
@@ -181,7 +181,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
 - [ ] 1. CQ-008: Warn on duplicate TOOL_ID registration
 
   **What to do**:
-  - **FIX**: In `src/ghaiw/ai_tools/base.py`, in `__init_subclass__`, before writing to `_registry`, check if `TOOL_ID` already exists. If it does, emit a `warnings.warn(f"TOOL_ID '{cls.TOOL_ID}' already registered by {_registry[cls.TOOL_ID].__name__}; overwriting with {cls.__name__}", stacklevel=2)` and then overwrite (preserve existing overwrite behavior, just make it visible).
+  - **FIX**: In `src/wade/ai_tools/base.py`, in `__init_subclass__`, before writing to `_registry`, check if `TOOL_ID` already exists. If it does, emit a `warnings.warn(f"TOOL_ID '{cls.TOOL_ID}' already registered by {_registry[cls.TOOL_ID].__name__}; overwriting with {cls.__name__}", stacklevel=2)` and then overwrite (preserve existing overwrite behavior, just make it visible).
   - Add `import warnings` at the top of the file (alphabetical order within stdlib imports).
   - **TEST**: Create `tests/unit/test_ai_tools/test_base_registry.py`. Write `test_duplicate_tool_id_warns()` that registers two classes with the same `TOOL_ID` and asserts `warnings.warn` was called with the expected message. Write `test_duplicate_tool_id_overwrites()` that asserts the second registration wins (existing behavior preserved).
   - Run `uv run pytest tests/unit/test_ai_tools/test_base_registry.py -v` → expect PASS.
@@ -192,7 +192,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   - Do not change the registry data structure
 
   **Reference**:
-  - `src/ghaiw/ai_tools/base.py:35-38` — `__init_subclass__` implementation
+  - `src/wade/ai_tools/base.py:35-38` — `__init_subclass__` implementation
 
   **Recommended Agent Profile**:
   - **Category**: `quick`
@@ -212,8 +212,8 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
 - [ ] 2. CQ-011: Fix Unicode replacement in `_slugify()`
 
   **What to do**:
-  - **FIX**: In `src/ghaiw/git/branch.py`, in `_slugify()`, find the line that replaces non-ASCII characters with `?`. Change the replacement character from `"?"` to `"-"`. The fix is a one-character change in the `re.sub` or `encode/decode` call.
-  - Read `src/ghaiw/git/branch.py:32-52` first to understand the exact implementation before editing.
+  - **FIX**: In `src/wade/git/branch.py`, in `_slugify()`, find the line that replaces non-ASCII characters with `?`. Change the replacement character from `"?"` to `"-"`. The fix is a one-character change in the `re.sub` or `encode/decode` call.
+  - Read `src/wade/git/branch.py:32-52` first to understand the exact implementation before editing.
   - **TEST**: Create `tests/unit/test_git/test_branch_slugify.py` (or add to existing if it exists). Write `test_slugify_unicode_becomes_dash()` that calls `_slugify("café feature")` and asserts the result contains `-` not `?`. Write `test_slugify_ascii_unchanged()` that asserts ASCII-only strings are unchanged.
   - Run `uv run pytest tests/unit/test_git/ -v` → expect PASS.
   - Run `uv run pytest tests/ -v --ignore=tests/live` → expect ALL PASS.
@@ -223,7 +223,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   - Do not change the overall slugify logic — only the replacement character
 
   **Reference**:
-  - `src/ghaiw/git/branch.py:32-52` — `_slugify()` implementation
+  - `src/wade/git/branch.py:32-52` — `_slugify()` implementation
 
   **Recommended Agent Profile**:
   - **Category**: `quick`
@@ -243,8 +243,8 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
 - [ ] 3. CQ-006: Set SQLite `busy_timeout` to 30000ms
 
   **What to do**:
-  - **FIX**: In `src/ghaiw/db/engine.py:35-41`, find where the SQLite engine is created. Add `connect_args={"timeout": 30}` to the `create_engine()` call. SQLAlchemy's SQLite dialect accepts `timeout` in seconds (not milliseconds) — use `30` (seconds = 30000ms).
-  - Read `src/ghaiw/db/engine.py` first to understand the exact `create_engine()` call signature before editing.
+  - **FIX**: In `src/wade/db/engine.py:35-41`, find where the SQLite engine is created. Add `connect_args={"timeout": 30}` to the `create_engine()` call. SQLAlchemy's SQLite dialect accepts `timeout` in seconds (not milliseconds) — use `30` (seconds = 30000ms).
+  - Read `src/wade/db/engine.py` first to understand the exact `create_engine()` call signature before editing.
   - **TEST**: Create `tests/unit/test_db/test_engine.py` (or add to existing). Write `test_engine_busy_timeout_is_30s()` that inspects the engine's `connect_args` and asserts `timeout == 30`. Write `test_engine_wal_mode_enabled()` to verify WAL mode is still set (regression guard).
   - Run `uv run pytest tests/unit/test_db/ -v` → expect PASS.
   - Run `uv run pytest tests/ -v --ignore=tests/live` → expect ALL PASS.
@@ -254,7 +254,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   - Do not change WAL mode or any other engine settings
 
   **Reference**:
-  - `src/ghaiw/db/engine.py:35-41` — `create_engine()` call
+  - `src/wade/db/engine.py:35-41` — `create_engine()` call
 
   **Recommended Agent Profile**:
   - **Category**: `quick`
@@ -274,9 +274,9 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
 - [ ] 4. CQ-005: Validate unknown values in `_get_ai_tool()`
 
   **What to do**:
-  - **FIX**: In `src/ghaiw/config/migrations.py:33-44`, in `_get_ai_tool()`, after reading the `ai.default_tool` value from the raw config dict, validate it against the known `AIToolID` enum values. If the value is not a valid `AIToolID`, raise a `ValueError(f"Unknown AI tool '{value}' in config. Valid values: {[t.value for t in AIToolID]}")` instead of silently coercing/returning it.
-  - Read `src/ghaiw/config/migrations.py:33-44` and `src/ghaiw/models/ai.py` (for `AIToolID`) before editing.
-  - Import `AIToolID` from `src/ghaiw/models/ai.py` if not already imported (add in alphabetical order within local imports).
+  - **FIX**: In `src/wade/config/migrations.py:33-44`, in `_get_ai_tool()`, after reading the `ai.default_tool` value from the raw config dict, validate it against the known `AIToolID` enum values. If the value is not a valid `AIToolID`, raise a `ValueError(f"Unknown AI tool '{value}' in config. Valid values: {[t.value for t in AIToolID]}")` instead of silently coercing/returning it.
+  - Read `src/wade/config/migrations.py:33-44` and `src/wade/models/ai.py` (for `AIToolID`) before editing.
+  - Import `AIToolID` from `src/wade/models/ai.py` if not already imported (add in alphabetical order within local imports).
   - **TEST**: Create `tests/unit/test_config/test_migrations_validation.py` (or add to existing). Write `test_get_ai_tool_valid_value()` that passes a known tool ID and asserts it returns correctly. Write `test_get_ai_tool_unknown_value_raises()` that passes `"unknown_tool"` and asserts `ValueError` is raised with the expected message. Write `test_get_ai_tool_missing_key_returns_default()` that passes a config with no `ai.default_tool` and asserts a sensible default is returned (check existing behavior first).
   - Run `uv run pytest tests/unit/test_config/ -v` → expect PASS.
   - Run `uv run pytest tests/ -v --ignore=tests/live` → expect ALL PASS.
@@ -286,8 +286,8 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   - Do not change behavior for valid values or missing keys — only add validation for unknown values
 
   **Reference**:
-  - `src/ghaiw/config/migrations.py:33-44` — `_get_ai_tool()` implementation
-  - `src/ghaiw/models/ai.py` — `AIToolID` enum
+  - `src/wade/config/migrations.py:33-44` — `_get_ai_tool()` implementation
+  - `src/wade/models/ai.py` — `AIToolID` enum
 
   **Recommended Agent Profile**:
   - **Category**: `quick`
@@ -307,8 +307,8 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
 - [ ] 5. CQ-001: `get_conflicted_files()` raises on subprocess error
 
   **What to do**:
-  - **FIX**: In `src/ghaiw/git/sync.py:103-109`, in `get_conflicted_files()`, find the `except` block that catches subprocess errors and returns `[]`. Change it to re-raise the exception (or raise a new `GitError` / `subprocess.CalledProcessError`) so callers know the command failed. Do NOT silently return an empty list on error — that hides real failures.
-  - Read `src/ghaiw/git/sync.py:103-109` first to understand the exact exception handling before editing.
+  - **FIX**: In `src/wade/git/sync.py:103-109`, in `get_conflicted_files()`, find the `except` block that catches subprocess errors and returns `[]`. Change it to re-raise the exception (or raise a new `GitError` / `subprocess.CalledProcessError`) so callers know the command failed. Do NOT silently return an empty list on error — that hides real failures.
+  - Read `src/wade/git/sync.py:103-109` first to understand the exact exception handling before editing.
   - Check if a `GitError` or similar custom exception class exists in the codebase (`grep` for `class GitError` or `class GitException`). If it exists, use it. If not, re-raise the original `subprocess.CalledProcessError`.
   - **TEST**: Create `tests/unit/test_git/test_sync_conflicted_files.py` (or add to existing). Write `test_get_conflicted_files_raises_on_subprocess_error()` that mocks `subprocess.run` to raise `CalledProcessError` and asserts the exception propagates (not swallowed). Write `test_get_conflicted_files_returns_list_on_success()` that mocks a successful run and asserts the correct file list is returned (regression guard).
   - Run `uv run pytest tests/unit/test_git/ -v` → expect PASS.
@@ -319,7 +319,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   - Do not catch and swallow the error in a new way
 
   **Reference**:
-  - `src/ghaiw/git/sync.py:103-109` — `get_conflicted_files()` error handling
+  - `src/wade/git/sync.py:103-109` — `get_conflicted_files()` error handling
 
   **Recommended Agent Profile**:
   - **Category**: `quick`
@@ -339,11 +339,11 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
 - [ ] 6. CQ-002: Log specific exceptions in `get_pr_for_branch()`
 
   **What to do**:
-  - **FIX**: In `src/ghaiw/providers/github.py:326-336`, in `get_pr_for_branch()`, find the broad `except Exception` block that silently swallows all errors. Replace it with specific exception handling:
+  - **FIX**: In `src/wade/providers/github.py:326-336`, in `get_pr_for_branch()`, find the broad `except Exception` block that silently swallows all errors. Replace it with specific exception handling:
     - Catch `subprocess.CalledProcessError` separately — log at WARNING level: `logger.warning("get_pr_for_branch failed", branch=branch, error=str(e))`
     - Catch `json.JSONDecodeError` separately — log at WARNING level: `logger.warning("get_pr_for_branch: invalid JSON response", branch=branch, error=str(e))`
     - Re-raise any other unexpected exceptions (do not catch bare `Exception`)
-  - Read `src/ghaiw/providers/github.py:326-336` first to understand the exact exception handling.
+  - Read `src/wade/providers/github.py:326-336` first to understand the exact exception handling.
   - Check how `logger` is set up in this file (likely `structlog.get_logger()`).
   - **TEST**: Create `tests/unit/test_providers/test_github_pr.py` (or add to existing). Write `test_get_pr_for_branch_logs_on_subprocess_error()` using `caplog` to assert a WARNING is logged when `subprocess.run` raises `CalledProcessError`. Write `test_get_pr_for_branch_logs_on_json_error()` using `caplog` to assert a WARNING is logged on `JSONDecodeError`. Write `test_get_pr_for_branch_returns_none_on_known_errors()` to assert `None` is returned (not raised) for the two known error types.
   - Run `uv run pytest tests/unit/test_providers/ -v` → expect PASS.
@@ -355,7 +355,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   - Do not catch bare `Exception` — only the two specific types
 
   **Reference**:
-  - `src/ghaiw/providers/github.py:326-336` — `get_pr_for_branch()` error handling
+  - `src/wade/providers/github.py:326-336` — `get_pr_for_branch()` error handling
 
   **Recommended Agent Profile**:
   - **Category**: `quick`
@@ -376,8 +376,8 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
 - [ ] 7. CQ-009: Parameterize `remove_worktree()` with `force: bool = True`
 
   **What to do**:
-  - **FIX**: In `src/ghaiw/git/worktree.py:53-70`, in `remove_worktree()`, add a `force: bool = True` parameter. When `force=True`, keep the existing `--force` flag in the git command. When `force=False`, omit `--force`. Default is `True` to preserve all existing behavior.
-  - Read `src/ghaiw/git/worktree.py:53-70` first to understand the exact function signature and git command construction.
+  - **FIX**: In `src/wade/git/worktree.py:53-70`, in `remove_worktree()`, add a `force: bool = True` parameter. When `force=True`, keep the existing `--force` flag in the git command. When `force=False`, omit `--force`. Default is `True` to preserve all existing behavior.
+  - Read `src/wade/git/worktree.py:53-70` first to understand the exact function signature and git command construction.
   - Verify the only caller is `_cleanup_worktree()` at `work_service.py:1525` — do NOT change that call site (it relies on the default `force=True`).
   - **TEST**: Create `tests/unit/test_git/test_worktree_remove.py` (or add to existing). Write `test_remove_worktree_default_uses_force()` that mocks `subprocess.run` and asserts `--force` is in the command when called with default args. Write `test_remove_worktree_force_false_omits_flag()` that asserts `--force` is NOT in the command when `force=False`. Write `test_remove_worktree_existing_caller_unaffected()` that calls `remove_worktree(path)` (no `force` arg) and asserts `--force` is still used (regression guard for existing callers).
   - Run `uv run pytest tests/unit/test_git/ -v` → expect PASS.
@@ -388,8 +388,8 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   - Do not update the call site in `work_service.py` — it should continue to work unchanged
 
   **Reference**:
-  - `src/ghaiw/git/worktree.py:53-70` — `remove_worktree()` implementation
-  - `src/ghaiw/services/work_service.py:1525` — only caller (`_cleanup_worktree()`)
+  - `src/wade/git/worktree.py:53-70` — `remove_worktree()` implementation
+  - `src/wade/services/work_service.py:1525` — only caller (`_cleanup_worktree()`)
 
   **Recommended Agent Profile**:
   - **Category**: `quick`
@@ -409,9 +409,9 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
 - [ ] 8. CQ-010: Prompt user on cleanup failure in `_done_via_direct()`
 
   **What to do**:
-  - **FIX**: In `src/ghaiw/services/work_service.py:1278-1285`, in `_done_via_direct()`, find the cleanup call that silently ignores failures. Wrap it in a try/except. On failure, use `ui/prompts.py` to prompt the user: `"Worktree cleanup failed: {error}. What would you like to do?"` with choices `["Retry", "Skip (leave worktree in place)"]`. If "Retry", attempt cleanup again once. If "Skip", log a warning and continue.
-  - Read `src/ghaiw/services/work_service.py:1278-1285` first to understand the exact cleanup call.
-  - Read `src/ghaiw/ui/prompts.py` to understand the available prompt functions (likely `select()` or `menu()`).
+  - **FIX**: In `src/wade/services/work_service.py:1278-1285`, in `_done_via_direct()`, find the cleanup call that silently ignores failures. Wrap it in a try/except. On failure, use `ui/prompts.py` to prompt the user: `"Worktree cleanup failed: {error}. What would you like to do?"` with choices `["Retry", "Skip (leave worktree in place)"]`. If "Retry", attempt cleanup again once. If "Skip", log a warning and continue.
+  - Read `src/wade/services/work_service.py:1278-1285` first to understand the exact cleanup call.
+  - Read `src/wade/ui/prompts.py` to understand the available prompt functions (likely `select()` or `menu()`).
   - Import the prompt function if not already imported (alphabetical order within local imports).
   - **TEST**: Create `tests/unit/test_services/test_done_via_direct_cleanup.py`. Write `test_cleanup_failure_prompts_user()` that mocks `remove_worktree` to raise an exception and asserts the prompt function is called. Write `test_cleanup_failure_retry_succeeds()` that mocks the first call to fail and the second to succeed, asserts cleanup is called twice. Write `test_cleanup_failure_skip_logs_warning()` that mocks the prompt to return "Skip" and asserts a warning is logged and the function continues without raising.
   - Run `uv run pytest tests/unit/test_services/ -v` → expect PASS.
@@ -423,8 +423,8 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   - Do not change the overall `_done_via_direct()` flow for the success path
 
   **Reference**:
-  - `src/ghaiw/services/work_service.py:1278-1285` — cleanup call in `_done_via_direct()`
-  - `src/ghaiw/ui/prompts.py` — available prompt functions
+  - `src/wade/services/work_service.py:1278-1285` — cleanup call in `_done_via_direct()`
+  - `src/wade/ui/prompts.py` — available prompt functions
 
   **Recommended Agent Profile**:
   - **Category**: `unspecified-high`
@@ -446,8 +446,8 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
 - [ ] 9. CQ-003: Add 60-second timeout to bootstrap hook subprocess
 
   **What to do**:
-  - **FIX**: In `src/ghaiw/services/work_service.py:130-147`, in `bootstrap_worktree()`, find the `subprocess.run()` call that executes the `post_worktree_create` hook. Add `timeout=60` to that call. Catch `subprocess.TimeoutExpired` and raise a descriptive error: `raise RuntimeError(f"Bootstrap hook timed out after 60 seconds: {hook_path}")`.
-  - Read `src/ghaiw/services/work_service.py:130-147` first to understand the exact subprocess call.
+  - **FIX**: In `src/wade/services/work_service.py:130-147`, in `bootstrap_worktree()`, find the `subprocess.run()` call that executes the `post_worktree_create` hook. Add `timeout=60` to that call. Catch `subprocess.TimeoutExpired` and raise a descriptive error: `raise RuntimeError(f"Bootstrap hook timed out after 60 seconds: {hook_path}")`.
+  - Read `src/wade/services/work_service.py:130-147` first to understand the exact subprocess call.
   - Add `import subprocess` if not already imported (it likely is — check first).
   - **TEST**: Create `tests/unit/test_services/test_bootstrap_hook_timeout.py` (or add to existing). Write `test_bootstrap_hook_timeout_raises()` that mocks `subprocess.run` to raise `subprocess.TimeoutExpired` and asserts `RuntimeError` is raised with the expected message. Write `test_bootstrap_hook_success_unaffected()` that mocks a successful run and asserts no exception is raised (regression guard).
   - Run `uv run pytest tests/unit/test_services/ -v` → expect PASS.
@@ -459,7 +459,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   - Do not add timeout to any other subprocess calls in the file
 
   **Reference**:
-  - `src/ghaiw/services/work_service.py:130-147` — `bootstrap_worktree()` subprocess call
+  - `src/wade/services/work_service.py:130-147` — `bootstrap_worktree()` subprocess call
 
   **Recommended Agent Profile**:
   - **Category**: `quick`
@@ -479,8 +479,8 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
 - [ ] 10. CQ-004: Make config migration pipeline atomic
 
   **What to do**:
-  - **FIX**: In `src/ghaiw/config/migrations.py`, in `run_all_migrations()` (the function that runs all 7 migrations and writes back to file), wrap the entire migration sequence in a try/except. Before running any migrations, read the original file content into a variable. If any migration raises an exception, write the original content back to the file (restore), then re-raise the exception with a descriptive message: `raise RuntimeError(f"Migration failed at step {step_name}; config file restored to original. Error: {e}") from e`.
-  - Read `src/ghaiw/config/migrations.py:257-296` first to understand the exact `run_all_migrations()` implementation.
+  - **FIX**: In `src/wade/config/migrations.py`, in `run_all_migrations()` (the function that runs all 7 migrations and writes back to file), wrap the entire migration sequence in a try/except. Before running any migrations, read the original file content into a variable. If any migration raises an exception, write the original content back to the file (restore), then re-raise the exception with a descriptive message: `raise RuntimeError(f"Migration failed at step {step_name}; config file restored to original. Error: {e}") from e`.
+  - Read `src/wade/config/migrations.py:257-296` first to understand the exact `run_all_migrations()` implementation.
   - The restore must happen BEFORE re-raising — use `finally` block or explicit except+restore+raise pattern.
   - **TEST**: Create `tests/unit/test_config/test_migrations_atomic.py`. Write `test_migration_failure_restores_file()` that mocks one migration step to raise an exception and asserts the config file content is unchanged after the call. Write `test_migration_success_writes_file()` that runs all migrations successfully and asserts the file is updated (regression guard). Write `test_migration_failure_raises_runtime_error()` that asserts `RuntimeError` is raised with the step name in the message.
   - Run `uv run pytest tests/unit/test_config/ -v` → expect PASS.
@@ -492,7 +492,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   - Do not suppress the exception — always re-raise after restoring
 
   **Reference**:
-  - `src/ghaiw/config/migrations.py:257-296` — `run_all_migrations()` implementation
+  - `src/wade/config/migrations.py:257-296` — `run_all_migrations()` implementation
 
   **Recommended Agent Profile**:
   - **Category**: `unspecified-high`
@@ -513,8 +513,8 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
 - [ ] 11. CQ-007: Wrap DB write operations in explicit transactions
 
   **What to do**:
-  - **FIX**: In `src/ghaiw/db/repositories.py:27-32` and throughout the repository classes, find all write operations (INSERT, UPDATE, DELETE — i.e., `session.add()`, `session.delete()`, `session.exec()` with INSERT/UPDATE/DELETE statements). Wrap each write operation in an explicit `with session.begin():` context manager (or use `session.begin()` / `session.commit()` / `session.rollback()` explicitly). Read operations (`session.exec()` with SELECT, `session.get()`) do NOT need transaction wrapping.
-  - Read `src/ghaiw/db/repositories.py` fully before editing to understand all repository methods and their current transaction handling.
+  - **FIX**: In `src/wade/db/repositories.py:27-32` and throughout the repository classes, find all write operations (INSERT, UPDATE, DELETE — i.e., `session.add()`, `session.delete()`, `session.exec()` with INSERT/UPDATE/DELETE statements). Wrap each write operation in an explicit `with session.begin():` context manager (or use `session.begin()` / `session.commit()` / `session.rollback()` explicitly). Read operations (`session.exec()` with SELECT, `session.get()`) do NOT need transaction wrapping.
+  - Read `src/wade/db/repositories.py` fully before editing to understand all repository methods and their current transaction handling.
   - Check if SQLModel sessions already auto-commit — if they do, the fix may be to add explicit `session.begin()` blocks to ensure atomicity.
   - **TEST**: Create `tests/unit/test_db/test_repository_transactions.py`. Write `test_write_is_atomic_on_failure()` that mocks a mid-write failure and asserts the partial write is rolled back (no partial state in DB). Write `test_read_does_not_use_transaction()` that asserts read operations work without `session.begin()` (regression guard). Write `test_concurrent_writes_do_not_corrupt()` that simulates two writes and asserts both complete correctly (uses the 30s timeout from CQ-006).
   - Run `uv run pytest tests/unit/test_db/ -v` → expect PASS.
@@ -526,8 +526,8 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   - Do not change the session creation logic in `db/engine.py`
 
   **Reference**:
-  - `src/ghaiw/db/repositories.py:27-32` — repository CRUD operations
-  - `src/ghaiw/db/engine.py` — session/engine creation (already fixed by Task 3)
+  - `src/wade/db/repositories.py:27-32` — repository CRUD operations
+  - `src/wade/db/engine.py` — session/engine creation (already fixed by Task 3)
 
   **Recommended Agent Profile**:
   - **Category**: `unspecified-high`

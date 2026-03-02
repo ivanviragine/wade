@@ -28,7 +28,7 @@ You won't create the issues or implement the feature.
 
 You *won't proceed with implementation*: you'll plan, include the headers,
 write the file(s), and stop (suggest the user to exit).
-After exiting, `ghaiw` will read the file(s) and create GitHub issue(s) automatically.
+After exiting, `wade` will read the file(s) and create GitHub issue(s) automatically.
 
 # Regarding complexity
 

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# e2e_smoke.sh — Automated end-to-end smoke test for ghaiw.
+# e2e_smoke.sh — Automated end-to-end smoke test for wade.
 #
-# Exercises the full ghaiw lifecycle against a real or temporary
-# GitHub repo. Tests the Python CLI (ghaiw) by default.
+# Exercises the full wade lifecycle against a real or temporary
+# GitHub repo. Tests the Python CLI (wade) by default.
 #
 # Usage:
 #   RUN_E2E_SMOKE=1 ./scripts/e2e_smoke.sh              # run against default repo
 #   RUN_E2E_SMOKE=1 ./scripts/e2e_smoke.sh --repo <path> # custom repo
 #
 # Requires:
-#   - ghaiw CLI installed and in PATH
+#   - wade CLI installed and in PATH
 #   - gh CLI authenticated
 #   - RUN_E2E_SMOKE=1 environment variable
 
@@ -29,7 +29,7 @@ SKIP=0
 
 # ── Parse args ────────────────────────────────────────────────────────────────
 
-REPO="${E2E_REPO:-$HOME/Documents/workspace/ghaiw-e2e}"
+REPO="${E2E_REPO:-$HOME/Documents/workspace/wade-e2e}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -89,7 +89,7 @@ run_test() {
 
 echo -e "${BOLD}${CYAN}"
 echo "╔══════════════════════════════════════════════════════════╗"
-echo "║           ghaiw E2E Smoke Test                          ║"
+echo "║           wade E2E Smoke Test                          ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 echo -e "Target repo: ${BOLD}$REPO${NC}"
@@ -99,12 +99,12 @@ echo ""
 
 section "Prerequisites"
 
-if ! command -v ghaiw &>/dev/null; then
-    test_fail "ghaiw CLI found in PATH"
-    echo -e "  ${RED}Install ghaiw first: ./install.sh${NC}"
+if ! command -v wade &>/dev/null; then
+    test_fail "wade CLI found in PATH"
+    echo -e "  ${RED}Install wade first: ./install.sh${NC}"
     exit 1
 fi
-test_pass "ghaiw CLI found: $(which ghaiw)"
+test_pass "wade CLI found: $(which wade)"
 
 if ! command -v gh &>/dev/null; then
     test_fail "gh CLI found in PATH"
@@ -126,43 +126,43 @@ test_pass "Target repo is a git repository"
 
 cd "$REPO"
 
-# ── ghaiw version/help ───────────────────────────────────────────────────────
+# ── wade version/help ───────────────────────────────────────────────────────
 
 section "Basic Commands"
 
-run_test "ghaiw --version" ghaiw --version
-run_test "ghaiw --help" ghaiw --help
+run_test "wade --version" wade --version
+run_test "wade --help" wade --help
 
-# ── ghaiw check ───────────────────────────────────────────────────────────────
+# ── wade check ───────────────────────────────────────────────────────────────
 
 section "Check"
 
 # Should be on main
 git checkout main &>/dev/null 2>&1 || true
 
-output=$(ghaiw check 2>&1) || true
+output=$(wade check 2>&1) || true
 if echo "$output" | grep -qE "IN_MAIN_CHECKOUT|IN_WORKTREE"; then
-    test_pass "ghaiw check returns valid status"
+    test_pass "wade check returns valid status"
 else
-    test_fail "ghaiw check returns valid status"
+    test_fail "wade check returns valid status"
 fi
 
-# ── ghaiw check-config ────────────────────────────────────────────────────────
+# ── wade check-config ────────────────────────────────────────────────────────
 
-if [[ -f .ghaiw.yml ]]; then
-    run_test "ghaiw check-config validates config" ghaiw check-config
+if [[ -f .wade.yml ]]; then
+    run_test "wade check-config validates config" wade check-config
 else
-    test_skip "ghaiw check-config (no .ghaiw.yml)"
+    test_skip "wade check-config (no .wade.yml)"
 fi
 
-# ── Issue creation (via gh issue create — ghaiw new-task is interactive) ──────
+# ── Issue creation (via gh issue create — wade new-task is interactive) ──────
 
 section "Task Lifecycle"
 
-# Create a test issue directly via gh because ghaiw new-task is interactive
+# Create a test issue directly via gh because wade new-task is interactive
 REPO_NWO=$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null) || true
 output=$(gh issue create --title "E2E smoke test — auto-cleanup" \
-    --body "Automated test issue from ghaiw E2E smoke test. This issue will be closed automatically." \
+    --body "Automated test issue from wade E2E smoke test. This issue will be closed automatically." \
     --label "easy" 2>&1) || true
 ISSUE_NUM=$(echo "$output" | grep -oE '/issues/[0-9]+' | head -1 | grep -oE '[0-9]+')
 
@@ -174,11 +174,11 @@ else
 fi
 
 # Task list
-run_test "ghaiw task list" ghaiw task list
+run_test "wade task list" wade task list
 
 # Task read (if we created one)
 if [[ -n "$ISSUE_NUM" ]]; then
-    run_test "ghaiw task read #$ISSUE_NUM" ghaiw task read "$ISSUE_NUM"
+    run_test "wade task read #$ISSUE_NUM" wade task read "$ISSUE_NUM"
 fi
 
 # ── Cleanup: close test issue ────────────────────────────────────────────────
@@ -186,7 +186,7 @@ fi
 section "Cleanup"
 
 if [[ -n "$ISSUE_NUM" ]]; then
-    if ghaiw task close "$ISSUE_NUM" &>/dev/null; then
+    if wade task close "$ISSUE_NUM" &>/dev/null; then
         test_pass "Closed test issue #$ISSUE_NUM"
     else
         # Fallback to gh

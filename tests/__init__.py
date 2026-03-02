@@ -1,1 +1,1 @@
-"""Test suite for ghaiw."""
+"""Test suite for wade."""

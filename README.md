@@ -1,8 +1,8 @@
-# ghaiw
+# WADE — Workflow for AI-Driven Engineering
 
 Turn GitHub Issues into isolated, AI-powered development sessions.
 
-`ghaiw init` wires your project once. After that, a single command creates a git worktree, launches your AI tool with full issue context, and hands you a PR when you're done — no manual branch juggling, no lost context, no forgotten ticket numbers.
+`wade init` wires your project once. After that, a single command creates a git worktree, launches your AI tool with full issue context, and hands you a PR when you're done — no manual branch juggling, no lost context, no forgotten ticket numbers.
 
 ## Requirements
 
@@ -18,33 +18,33 @@ Turn GitHub Issues into isolated, AI-powered development sessions.
 ## Installation
 
 ```bash
-curl -LsSf https://raw.githubusercontent.com/ivanviragine/ghaiw/main/install.sh | sh
+curl -LsSf https://raw.githubusercontent.com/ivanviragine/wade/main/install.sh | sh
 ```
 
 Or with uv / pipx:
 
 ```bash
-uv tool install ghaiw
-pipx install ghaiw
+uv tool install wade
+pipx install wade
 ```
 
 ## Quick Start
 
 ```bash
 # Wire up your project (one-time)
-ghaiw init
+wade init
 
 # Plan features with AI — creates issues + draft PRs
-ghaiw plan-task
+wade plan-task
 
 # Start working on an issue
-ghaiw implement-task 42
+wade implement-task 42
 
 # Sync with main mid-work
-ghaiw work sync
+wade work sync
 
 # Ship — push branch and open PR
-ghaiw work done
+wade work done
 ```
 
 ## The Workflow
@@ -64,47 +64,47 @@ Each issue gets its own git worktree so you can work on multiple tasks in parall
 
 | Command | Description |
 |---------|-------------|
-| `ghaiw init` | Initialize ghaiw in the current project |
-| `ghaiw update` | Upgrade ghaiw and refresh managed project files |
-| `ghaiw deinit` | Remove ghaiw from the project |
-| `ghaiw check` | Check worktree status |
-| `ghaiw check-config` | Validate `.ghaiw.yml` |
+| `wade init` | Initialize WADE in the current project |
+| `wade update` | Upgrade WADE and refresh managed project files |
+| `wade deinit` | Remove WADE from the project |
+| `wade check` | Check worktree status |
+| `wade check-config` | Validate `.wade.yml` |
 
 ### Core Commands
 
 | Command | Description |
 |---------|-------------|
-| `ghaiw plan-task` | AI planning session — creates issues + draft PRs |
-| `ghaiw new-task` | Create a GitHub issue interactively |
-| `ghaiw implement-task <N>` | Create worktree and start AI session for issue N |
-| `ghaiw implement-task <N> --detach` | Launch AI in a new terminal tab |
-| `ghaiw implement-task <N> --cd` | Create worktree, print path (no AI launch) |
+| `wade plan-task` | AI planning session — creates issues + draft PRs |
+| `wade new-task` | Create a GitHub issue interactively |
+| `wade implement-task <N>` | Create worktree and start AI session for issue N |
+| `wade implement-task <N> --detach` | Launch AI in a new terminal tab |
+| `wade implement-task <N> --cd` | Create worktree, print path (no AI launch) |
 
 ### Task Management
 
 | Command | Description |
 |---------|-------------|
-| `ghaiw task list` | List open issues |
-| `ghaiw task read <N>` | Show issue details |
-| `ghaiw task close <N>` | Close an issue |
-| `ghaiw task deps <N> <M> ...` | Analyze dependencies between issues |
+| `wade task list` | List open issues |
+| `wade task read <N>` | Show issue details |
+| `wade task close <N>` | Close an issue |
+| `wade task deps <N> <M> ...` | Analyze dependencies between issues |
 
 ### Work Sessions
 
 | Command | Description |
 |---------|-------------|
-| `ghaiw work sync` | Sync feature branch with main |
-| `ghaiw work done` | Push branch and create PR |
-| `ghaiw work done --no-cleanup` | Keep the worktree after direct merge |
-| `ghaiw work list` | List active worktrees |
-| `ghaiw work batch <N> <M> ...` | Start parallel sessions for multiple issues |
-| `ghaiw work remove <N>` | Remove a worktree |
-| `ghaiw work remove --stale` | Remove all stale worktrees |
-| `ghaiw work cd <N>` | `cd` into a worktree (requires shell integration) |
+| `wade work sync` | Sync feature branch with main |
+| `wade work done` | Push branch and create PR |
+| `wade work done --no-cleanup` | Keep the worktree after direct merge |
+| `wade work list` | List active worktrees |
+| `wade work batch <N> <M> ...` | Start parallel sessions for multiple issues |
+| `wade work remove <N>` | Remove a worktree |
+| `wade work remove --stale` | Remove all stale worktrees |
+| `wade work cd <N>` | `cd` into a worktree (requires shell integration) |
 
 ## Configuration
 
-ghaiw uses a `.ghaiw.yml` file in your project root, created by `ghaiw init`:
+WADE uses a `.wade.yml` file in your project root, created by `wade init`:
 
 ```yaml
 version: 2
@@ -133,11 +133,11 @@ models:
 
 **Merge strategies:** `PR` (default) pushes the branch and opens a Pull Request; `direct` merges into main locally.
 
-**Complexity-based models:** Issues carry a `complexity` label (`easy`, `medium`, `complex`, `very_complex`). `ghaiw implement-task` picks the right model automatically.
+**Complexity-based models:** Issues carry a `complexity` label (`easy`, `medium`, `complex`, `very_complex`). `wade implement-task` picks the right model automatically.
 
 ## Agent Skills
 
-`ghaiw init` installs Skill files into `.claude/skills/` (with symlinks for Copilot, Gemini, and Codex) that teach your AI agent the workflow:
+`wade init` installs Skill files into `.claude/skills/` (with symlinks for Copilot, Gemini, and Codex) that teach your AI agent the workflow:
 
 | Skill | Purpose |
 |-------|---------|
@@ -160,24 +160,24 @@ models:
 
 ## Shell Integration
 
-Add to your shell profile to enable `ghaiw work cd`:
+Add to your shell profile to enable `wade work cd`:
 
 ```bash
-eval "$(ghaiw shell-init)"
+eval "$(wade shell-init)"
 ```
 
-This lets `ghaiw work cd <N>` actually change your shell's directory into the worktree. Without it, the command just prints the path.
+This lets `wade work cd <N>` actually change your shell's directory into the worktree. Without it, the command just prints the path.
 
 Tab completion:
 
 ```bash
-ghaiw --install-completion bash   # or zsh / fish
+wade --install-completion bash   # or zsh / fish
 ```
 
 ## Upgrading
 
 ```bash
-ghaiw update
+wade update
 ```
 
 Detects your install method (`uv tool`, `pipx`, Homebrew) and upgrades automatically, then refreshes all managed project files.

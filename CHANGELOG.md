@@ -26,7 +26,7 @@ The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
 ### Bug Fixes
 
-- remove GHAIW_WORK_MODEL env var and fix summary ordering in PR body (a84957d)
+- remove WADE_WORK_MODEL env var and fix summary ordering in PR body (a84957d)
 
 ## [v1.0.6] — 2026-02-28
 

@@ -53,8 +53,8 @@ jobs:
         run: uv sync --all-extras
       - name: Configure git
         run: |
-          git config --global user.email "test@ghaiw.dev"
-          git config --global user.name "ghaiw test"
+          git config --global user.email "test@wade.dev"
+          git config --global user.name "wade test"
           git config --global init.defaultBranch main
       - name: Run unit tests
         run: uv run pytest tests/unit/ -v --tb=short

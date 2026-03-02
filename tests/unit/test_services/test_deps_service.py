@@ -5,10 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from ghaiw.models.config import ProjectConfig, ProjectSettings
-from ghaiw.models.deps import DependencyEdge, DependencyGraph
-from ghaiw.models.task import Task
-from ghaiw.services.deps_service import (
+from wade.models.config import ProjectConfig, ProjectSettings
+from wade.models.deps import DependencyEdge, DependencyGraph
+from wade.models.task import Task
+from wade.services.deps_service import (
     _run_interactive_analysis,
     apply_deps_to_issues,
     build_context,
@@ -282,7 +282,7 @@ class TestInteractiveFallback:
         output_file = tmp_path / "deps-output.txt"
         output_file.write_text("1 -> 2 # auth before UI\n")
 
-        with patch("ghaiw.services.deps_service.AbstractAITool.get") as mock_get:
+        with patch("wade.services.deps_service.AbstractAITool.get") as mock_get:
             adapter = MagicMock()
             mock_get.return_value = adapter
 
@@ -291,7 +291,7 @@ class TestInteractiveFallback:
 
     def test_returns_none_when_no_output(self, tmp_path: Path) -> None:
         """_run_interactive_analysis should return None when no output file."""
-        with patch("ghaiw.services.deps_service.AbstractAITool.get") as mock_get:
+        with patch("wade.services.deps_service.AbstractAITool.get") as mock_get:
             adapter = MagicMock()
             mock_get.return_value = adapter
 
@@ -316,7 +316,7 @@ class TestHeadlessCommandAssembly:
         """Claude headless should use --print flag with capture_output=True."""
         prompt = "Analyze deps between #1 and #2"
 
-        with patch("ghaiw.services.deps_service.subprocess.run") as mock_run:
+        with patch("wade.services.deps_service.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="1 -> 2 # reason\n")
             result = run_headless_analysis("claude", prompt, "claude-haiku-4-5")
 
@@ -335,7 +335,7 @@ class TestHeadlessCommandAssembly:
         """Copilot headless should use --prompt flag."""
         prompt = "Analyze deps"
 
-        with patch("ghaiw.services.deps_service.subprocess.run") as mock_run:
+        with patch("wade.services.deps_service.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="1 -> 2\n")
             run_headless_analysis("copilot", prompt, "claude-sonnet-4.6")
 
@@ -346,14 +346,14 @@ class TestHeadlessCommandAssembly:
 
     def test_gemini_returns_none_no_headless(self) -> None:
         """Gemini has no headless support — should return None without calling subprocess."""
-        with patch("ghaiw.services.deps_service.subprocess.run") as mock_run:
+        with patch("wade.services.deps_service.subprocess.run") as mock_run:
             result = run_headless_analysis("gemini", "prompt", "gemini-2.5-pro")
             assert result is None
             mock_run.assert_not_called()
 
     def test_codex_returns_none_no_headless(self) -> None:
         """Codex has no headless support — should return None without calling subprocess."""
-        with patch("ghaiw.services.deps_service.subprocess.run") as mock_run:
+        with patch("wade.services.deps_service.subprocess.run") as mock_run:
             result = run_headless_analysis("codex", "prompt", "o4-mini")
             assert result is None
             mock_run.assert_not_called()
@@ -362,7 +362,7 @@ class TestHeadlessCommandAssembly:
         """TimeoutExpired should be caught and return None gracefully."""
         import subprocess as sp
 
-        with patch("ghaiw.services.deps_service.subprocess.run") as mock_run:
+        with patch("wade.services.deps_service.subprocess.run") as mock_run:
             mock_run.side_effect = sp.TimeoutExpired(cmd=["claude"], timeout=120)
             result = run_headless_analysis("claude", "prompt", "claude-haiku-4-5")
             assert result is None

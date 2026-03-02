@@ -34,7 +34,7 @@ Add a `GET /api/health` endpoint returning `{ "status": "ok", "version": "..." }
 ```
 
 ```bash
-ghaiw new-task
+wade new-task
 # Created issue #42: Add health check endpoint
 ```
 
@@ -65,10 +65,10 @@ notification settings.
 ### Issue creation
 
 ```bash
-ghaiw new-task
+wade new-task
 # Created issue #50: Add user preferences schema and API
 
-ghaiw new-task
+wade new-task
 # Created issue #51: Add preferences UI panel
 ```
 
@@ -86,7 +86,7 @@ Add the ability for users to save and manage display and notification preference
 ```
 
 ```bash
-ghaiw new-task
+wade new-task
 # Created issue #52: Epic: User preferences feature
 ```
 
@@ -100,7 +100,7 @@ Created 3 issues:
 
 ### 3. Auto-dependency analysis (multi-issue plans)
 
-When `ghaiw plan-task` creates 2+ issues, it automatically runs `ghaiw task deps`
+When `wade plan-task` creates 2+ issues, it automatically runs `wade task deps`
 to analyze dependencies. It updates each issue and creates a tracking issue:
 
 ```
@@ -127,6 +127,6 @@ Individual issues get lightweight cross-references ("Depends on" / "Blocks") onl
 You can also run dependency analysis manually:
 
 ```bash
-ghaiw task deps               # select issues interactively
-ghaiw task deps --ai claude   # override AI tool
+wade task deps               # select issues interactively
+wade task deps --ai claude   # override AI tool
 ```

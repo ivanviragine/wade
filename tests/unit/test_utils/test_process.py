@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ghaiw.utils.process import CommandError, run, run_silent, run_with_transcript
+from wade.utils.process import CommandError, run, run_silent, run_with_transcript
 
 
 class TestRun:
@@ -42,7 +42,7 @@ class TestRunSilent:
 class TestRunWithTranscript:
     def test_no_transcript_path_runs_cmd_directly(self, tmp_path: Path) -> None:
         """When transcript_path is None, run the command without script."""
-        with patch("ghaiw.utils.process.subprocess.run") as mock_run:
+        with patch("wade.utils.process.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             result = run_with_transcript(["echo", "hi"], transcript_path=None)
         assert result == 0
@@ -52,8 +52,8 @@ class TestRunWithTranscript:
         """When `script` binary is missing, fall back to plain subprocess.run."""
         transcript = tmp_path / ".transcript"
         with (
-            patch("ghaiw.utils.process.shutil.which", return_value=None),
-            patch("ghaiw.utils.process.subprocess.run") as mock_run,
+            patch("wade.utils.process.shutil.which", return_value=None),
+            patch("wade.utils.process.subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0)
             result = run_with_transcript(["echo", "hi"], transcript_path=transcript)
@@ -64,8 +64,8 @@ class TestRunWithTranscript:
         """When script --version succeeds (GNU), use: script -q -c 'cmd' transcript."""
         transcript = tmp_path / ".transcript"
         with (
-            patch("ghaiw.utils.process.shutil.which", return_value="/usr/bin/script"),
-            patch("ghaiw.utils.process.subprocess.run") as mock_run,
+            patch("wade.utils.process.shutil.which", return_value="/usr/bin/script"),
+            patch("wade.utils.process.subprocess.run") as mock_run,
         ):
             # First call: script --version (returncode=0 → GNU)
             # Second call: actual script invocation
@@ -91,8 +91,8 @@ class TestRunWithTranscript:
         """When script --version fails (BSD), use: script -q transcript cmd..."""
         transcript = tmp_path / ".transcript"
         with (
-            patch("ghaiw.utils.process.shutil.which", return_value="/usr/bin/script"),
-            patch("ghaiw.utils.process.subprocess.run") as mock_run,
+            patch("wade.utils.process.shutil.which", return_value="/usr/bin/script"),
+            patch("wade.utils.process.subprocess.run") as mock_run,
         ):
             # First call: script --version (returncode=1 → BSD)
             # Second call: actual script invocation
@@ -120,8 +120,8 @@ class TestRunWithTranscript:
         cwd = tmp_path / "work"
         cwd.mkdir()
         with (
-            patch("ghaiw.utils.process.shutil.which", return_value=None),
-            patch("ghaiw.utils.process.subprocess.run") as mock_run,
+            patch("wade.utils.process.shutil.which", return_value=None),
+            patch("wade.utils.process.subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0)
             run_with_transcript(["true"], transcript_path=None, cwd=cwd)
@@ -131,8 +131,8 @@ class TestRunWithTranscript:
         """The exit code from the script invocation is returned."""
         transcript = tmp_path / ".transcript"
         with (
-            patch("ghaiw.utils.process.shutil.which", return_value="/usr/bin/script"),
-            patch("ghaiw.utils.process.subprocess.run") as mock_run,
+            patch("wade.utils.process.shutil.which", return_value="/usr/bin/script"),
+            patch("wade.utils.process.subprocess.run") as mock_run,
         ):
             mock_run.side_effect = [
                 MagicMock(returncode=1),  # BSD script --version

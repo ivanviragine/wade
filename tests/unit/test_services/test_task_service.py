@@ -7,9 +7,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ghaiw.models.config import ProjectConfig, ProjectSettings
-from ghaiw.models.task import Task, TaskState
-from ghaiw.services.task_service import (
+from wade.models.config import ProjectConfig, ProjectSettings
+from wade.models.task import Task, TaskState
+from wade.services.task_service import (
     LABEL_COLOR_IN_PROGRESS,
     LABEL_COLOR_ISSUE,
     LABEL_COLOR_PLANNED,
@@ -294,7 +294,7 @@ class TestListTasks:
         self, mock_provider: MagicMock, config: ProjectConfig
     ) -> None:
         """state='closed' must pass TaskState.CLOSED to provider."""
-        from ghaiw.models.task import TaskState
+        from wade.models.task import TaskState
 
         list_tasks(config=config, provider=mock_provider, state="closed")
         call_kwargs = mock_provider.list_tasks.call_args.kwargs

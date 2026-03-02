@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import pytest
 
-from ghaiw.ai_tools import AbstractAITool
-from ghaiw.ai_tools.base import pick_best_model
-from ghaiw.ai_tools.model_utils import (
+from wade.ai_tools import AbstractAITool
+from wade.ai_tools.base import pick_best_model
+from wade.ai_tools.model_utils import (
     classify_tier_claude,
     classify_tier_codex,
     classify_tier_gemini,
     classify_tier_universal,
     has_date_suffix,
 )
-from ghaiw.models.ai import AIModel, AIToolID, AIToolType, ModelTier
+from wade.models.ai import AIModel, AIToolID, AIToolType, ModelTier
 
 
 class TestSelfRegistration:

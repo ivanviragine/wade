@@ -8,8 +8,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ghaiw.models.config import HooksConfig, ProjectConfig, ProjectSettings
-from ghaiw.services.work_service import bootstrap_worktree
+from wade.models.config import HooksConfig, ProjectConfig, ProjectSettings
+from wade.services.work_service import bootstrap_worktree
 
 
 class TestBootstrapHookTimeout:

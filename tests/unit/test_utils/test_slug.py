@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ghaiw.utils.slug import slugify
+from wade.utils.slug import slugify
 
 
 class TestSlugify:

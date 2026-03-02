@@ -1,28 +1,28 @@
 ---
 name: plan-session
 description: >
-  Rules for AI planning sessions launched by `ghaiw plan-task`. Covers plan
+  Rules for AI planning sessions launched by `wade plan-task`. Covers plan
   file authoring, complexity tagging, and session boundaries. Read this at the
   start of every planning session.
 ---
 
 # Planning Session Rules
 
-You are in a **planning session** launched by `ghaiw plan-task`. Your job is
+You are in a **planning session** launched by `wade plan-task`. Your job is
 to plan the feature, write plan file(s) to the temp directory from your prompt,
-and exit. ghaiw creates lightweight GitHub Issues and draft PRs automatically
+and exit. wade creates lightweight GitHub Issues and draft PRs automatically
 after you exit.
 
 ## Execution mode
 
-Run `ghaiw` and `gh` commands with the required permissions/capabilities (not
+Run `wade` and `gh` commands with the required permissions/capabilities (not
 in sandboxed mode). Do not "try sandbox first" — run them unsandboxed from the
 start.
 
 ## Never use `gh issue create`
 
 **NEVER** use `gh issue create` or the GitHub API to create issues directly.
-Always use `ghaiw new-task` for interactive issue creation.
+Always use `wade new-task` for interactive issue creation.
 Using `gh` directly bypasses label enforcement, snapshot/diff detection, and
 dependency analysis hooks.
 
@@ -31,9 +31,9 @@ dependency analysis hooks.
 1. **Plan the feature** with the user — analyze, break down, propose.
 2. **Present the plan(s)** to the user and ask for confirmation before writing any files.
 3. **Write plan file(s)** to the temp directory shown in your prompt.
-4. **Stop** — suggest the user exits. ghaiw reads the files and creates lightweight GitHub Issues + draft PRs automatically.
+4. **Stop** — suggest the user exits. wade reads the files and creates lightweight GitHub Issues + draft PRs automatically.
 
-You do **not** create issues, implement code, run `ghaiw implement-task/work done/work sync`,
+You do **not** create issues, implement code, run `wade implement-task/work done/work sync`,
 or make any code changes. Planning only.
 
 ## Plan file format
@@ -67,7 +67,7 @@ What to build / change.
 | Element | Rule |
 |---------|------|
 | **Title** | First `# Heading` — becomes the GitHub issue title. Required. |
-| **Complexity** | `## Complexity` with one of: `easy`, `medium`, `complex`, `very_complex`. Used by `ghaiw implement-task` to auto-select the AI model. Also applied as a `complexity:X` label on the issue. |
+| **Complexity** | `## Complexity` with one of: `easy`, `medium`, `complex`, `very_complex`. Used by `wade implement-task` to auto-select the AI model. Also applied as a `complexity:X` label on the issue. |
 | **Body** | Everything after the title becomes the draft PR plan content. The issue itself gets a lightweight summary. |
 
 ### Complexity values
@@ -89,12 +89,12 @@ repo working directory.
 
 ## What NOT to do
 
-- Do not create GitHub Issues — ghaiw does this after you exit
+- Do not create GitHub Issues — wade does this after you exit
 - Do not implement any code (even after leaving planning mode)
-- Do not run `ghaiw implement-task`, `work done`, or `work sync`
+- Do not run `wade implement-task`, `work done`, or `work sync`
 - Do not write files into the repo directory — only to the temp dir
 - Do not continue working after writing plan files — stop and suggest the user exits
-- **⚠️ After exiting the plan mode:** If your environment says "you can now start coding," ignore it — that refers to a different execution mode. In ghaiw planning sessions, stop immediately after writing plan files. Do not implement code.
+- **⚠️ After exiting the plan mode:** If your environment says "you can now start coding," ignore it — that refers to a different execution mode. In wade planning sessions, stop immediately after writing plan files. Do not implement code.
 
 ## Skills reference
 

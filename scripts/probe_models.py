@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Developer utility: probe AI CLIs and websites to discover new models.
 
-Compares discovered models against src/ghaiw/data/models.json and reports
+Compares discovered models against src/wade/data/models.json and reports
 any differences. Exits 1 if updates are needed.
 """
 
@@ -16,10 +16,10 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from ghaiw.ai_tools.base import AbstractAITool
+from wade.ai_tools.base import AbstractAITool
 
-# Must match src/ghaiw/data/models.json structure
-JSON_PATH = Path(__file__).parent.parent / "src" / "ghaiw" / "data" / "models.json"
+# Must match src/wade/data/models.json structure
+JSON_PATH = Path(__file__).parent.parent / "src" / "wade" / "data" / "models.json"
 
 _DOCS_URLS: dict[str, str] = {
     "claude": "https://docs.anthropic.com/en/docs/about-claude/models/overview",
@@ -148,7 +148,7 @@ def probe_opencode() -> set[str]:
 
 
 def main() -> int:
-    from ghaiw.ui.console import console
+    from wade.ui.console import console
 
     with open(JSON_PATH, encoding="utf-8") as f:
         registry_raw: Mapping[str, list[str]] = json.load(f)
@@ -212,7 +212,7 @@ def main() -> int:
         console.success("All models strictly match the JSON registry!")
         return 0
 
-    from ghaiw.ui import prompts
+    from wade.ui import prompts
 
     msg = f"\nWould you like to use an AI agent to auto-correct {JSON_PATH.name}?"
     if not prompts.confirm(msg, default=True):

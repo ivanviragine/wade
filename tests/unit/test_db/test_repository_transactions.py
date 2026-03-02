@@ -16,18 +16,18 @@ from pathlib import Path
 import pytest
 from sqlmodel import Session, select
 
-from ghaiw.db.engine import create_db_engine, init_db
-from ghaiw.db.repositories import (
+from wade.db.engine import create_db_engine, init_db
+from wade.db.repositories import (
     AuditLogRepository,
     TaskRepository,
 )
-from ghaiw.db.tables import AuditLogRecord, TaskRecord
+from wade.db.tables import AuditLogRecord, TaskRecord
 
 
 @pytest.fixture
 def db_engine(tmp_path: Path):  # type: ignore[return]
     """Create a fresh, isolated test database engine."""
-    db_path = tmp_path / ".ghaiw" / "ghaiw.db"
+    db_path = tmp_path / ".wade" / "wade.db"
     engine = create_db_engine(db_path)
     init_db(engine)
     yield engine

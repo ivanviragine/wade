@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from ghaiw.models.config import (
+from wade.models.config import (
     AICommandConfig,
     AIConfig,
     ComplexityModelMapping,
     ProjectConfig,
 )
-from ghaiw.models.work import MergeStrategy
+from wade.models.work import MergeStrategy
 
 
 class TestProjectConfig:

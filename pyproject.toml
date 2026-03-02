@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "ghaiw"
+name = "wade"
 version = "1.0.10"
-description = "AI-agent-driven git workflow management CLI"
+description = "WADE — Workflow for AI-Driven Engineering"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -45,17 +45,17 @@ dev = [
 ]
 
 [project.scripts]
-ghaiw = "ghaiw.cli.main:cli_main"
+wade = "wade.cli.main:cli_main"
 
 [project.urls]
-Homepage = "https://github.com/ivanviragine/ghaiw"
-Repository = "https://github.com/ivanviragine/ghaiw"
+Homepage = "https://github.com/ivanviragine/wade"
+Repository = "https://github.com/ivanviragine/wade"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/ghaiw"]
+packages = ["src/wade"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"templates" = "ghaiw/templates"
+"templates" = "wade/templates"
 
 [tool.ruff]
 target-version = "py311"
@@ -95,5 +95,5 @@ filterwarnings = [
 ]
 
 [tool.coverage.run]
-source = ["ghaiw"]
+source = ["wade"]
 omit = ["tests/*"]

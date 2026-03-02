@@ -1,4 +1,4 @@
-"""Shared test fixtures for ghaiw test suite."""
+"""Shared test fixtures for wade test suite."""
 
 from __future__ import annotations
 
@@ -44,12 +44,12 @@ def tmp_git_repo(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def tmp_ghaiw_project(tmp_git_repo: Path) -> Path:
-    """Create a temporary git repo with a .ghaiw.yml config file.
+def tmp_wade_project(tmp_git_repo: Path) -> Path:
+    """Create a temporary git repo with a .wade.yml config file.
 
     Returns the path to the repo root.
     """
-    config = tmp_git_repo / ".ghaiw.yml"
+    config = tmp_git_repo / ".wade.yml"
     config.write_text(
         """\
 version: 2
@@ -71,9 +71,9 @@ ai:
 @pytest.fixture
 def monkeypatch_env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
     """Provide monkeypatch with common env var cleanup."""
-    # Clear any GHAIW_ env vars that might leak from the test runner's environment
+    # Clear any WADE_ env vars that might leak from the test runner's environment
     for key in list(os.environ):
-        if key.startswith("GHAIW_"):
+        if key.startswith("WADE_"):
             monkeypatch.delenv(key, raising=False)
     return monkeypatch
 

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from ghaiw.config.loader import ConfigError, find_config_file, load_config, parse_config_file
+from wade.config.loader import ConfigError, find_config_file, load_config, parse_config_file
 
 SAMPLE_V2_CONFIG = """\
 version: 2
@@ -50,12 +50,12 @@ hooks:
 
 class TestFindConfigFile:
     def test_finds_in_current(self, tmp_path: Path) -> None:
-        config = tmp_path / ".ghaiw.yml"
+        config = tmp_path / ".wade.yml"
         config.write_text("version: 2\n")
         assert find_config_file(tmp_path) == config
 
     def test_finds_in_parent(self, tmp_path: Path) -> None:
-        config = tmp_path / ".ghaiw.yml"
+        config = tmp_path / ".wade.yml"
         config.write_text("version: 2\n")
         child = tmp_path / "src" / "app"
         child.mkdir(parents=True)
@@ -67,7 +67,7 @@ class TestFindConfigFile:
 
 class TestParseConfigFile:
     def test_full_v2_config(self, tmp_path: Path) -> None:
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         config_path.write_text(SAMPLE_V2_CONFIG)
 
         config = parse_config_file(config_path)
@@ -83,7 +83,7 @@ class TestParseConfigFile:
         assert config.hooks.copy_to_worktree == [".env"]
 
     def test_model_mapping(self, tmp_path: Path) -> None:
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         config_path.write_text(SAMPLE_V2_CONFIG)
 
         config = parse_config_file(config_path)
@@ -93,7 +93,7 @@ class TestParseConfigFile:
         assert mapping.very_complex == "claude-opus-4.6"
 
     def test_command_override_fallback(self, tmp_path: Path) -> None:
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         config_path.write_text(SAMPLE_V2_CONFIG)
 
         config = parse_config_file(config_path)
@@ -103,7 +103,7 @@ class TestParseConfigFile:
         assert config.get_ai_tool("work") == "copilot"
 
     def test_default_model_fallback(self, tmp_path: Path) -> None:
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         config_path.write_text(SAMPLE_V2_CONFIG)
 
         config = parse_config_file(config_path)
@@ -111,14 +111,14 @@ class TestParseConfigFile:
         assert config.get_model("work") == "claude-haiku-4.5"
 
     def test_no_default_model(self, tmp_path: Path) -> None:
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
 
         config = parse_config_file(config_path)
         assert config.ai.default_model is None
 
     def test_minimal_config(self, tmp_path: Path) -> None:
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         config_path.write_text("version: 2\n")
 
         config = parse_config_file(config_path)
@@ -127,14 +127,14 @@ class TestParseConfigFile:
         assert config.ai.default_tool is None
 
     def test_empty_file(self, tmp_path: Path) -> None:
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         config_path.write_text("")
 
         config = parse_config_file(config_path)
         assert config.version == 2  # Default
 
     def test_config_path_stored(self, tmp_path: Path) -> None:
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         config_path.write_text("version: 2\n")
 
         config = parse_config_file(config_path)
@@ -144,14 +144,14 @@ class TestParseConfigFile:
 
 class TestParseConfigFileErrors:
     def test_malformed_yaml_raises_config_error(self, tmp_path: Path) -> None:
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         config_path.write_text(":\n  - [\ninvalid: yaml: content\n")
 
         with pytest.raises(ConfigError, match="Invalid YAML"):
             parse_config_file(config_path)
 
     def test_config_error_includes_file_path(self, tmp_path: Path) -> None:
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         config_path.write_text(":\n  - [\n")
 
         with pytest.raises(ConfigError, match=str(config_path)):
@@ -160,7 +160,7 @@ class TestParseConfigFileErrors:
 
 class TestLoadConfig:
     def test_loads_from_cwd(self, tmp_path: Path, monkeypatch) -> None:
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         config_path.write_text("version: 2\nproject:\n  issue_label: custom\n")
 
         config = load_config(tmp_path)

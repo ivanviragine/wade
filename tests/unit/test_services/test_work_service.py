@@ -7,19 +7,19 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ghaiw.ai_tools.base import AbstractAITool
-from ghaiw.ai_tools.claude import ClaudeAdapter
-from ghaiw.ai_tools.codex import CodexAdapter
-from ghaiw.ai_tools.copilot import CopilotAdapter
-from ghaiw.ai_tools.gemini import GeminiAdapter
-from ghaiw.git.repo import GitError
-from ghaiw.models.config import (
+from wade.ai_tools.base import AbstractAITool
+from wade.ai_tools.claude import ClaudeAdapter
+from wade.ai_tools.codex import CodexAdapter
+from wade.ai_tools.copilot import CopilotAdapter
+from wade.ai_tools.gemini import GeminiAdapter
+from wade.git.repo import GitError
+from wade.models.config import (
     HooksConfig,
     ProjectConfig,
     ProjectSettings,
 )
-from ghaiw.models.task import Task
-from ghaiw.services.work_service import (
+from wade.models.task import Task
+from wade.services.work_service import (
     _build_graph_from_issues,
     _complexity_to_model,
     _resolve_target,
@@ -54,14 +54,14 @@ class TestResolveWorktreesDir:
 
 class TestComplexityToModel:
     def test_maps_easy(self) -> None:
-        from ghaiw.models.config import ComplexityModelMapping
+        from wade.models.config import ComplexityModelMapping
 
         config = ProjectConfig(models={"claude": ComplexityModelMapping(easy="claude-haiku-4-5")})
         result = _complexity_to_model(config, "claude", "easy")
         assert result == "claude-haiku-4-5"
 
     def test_maps_complex(self) -> None:
-        from ghaiw.models.config import ComplexityModelMapping
+        from wade.models.config import ComplexityModelMapping
 
         config = ProjectConfig(
             models={"claude": ComplexityModelMapping(complex="claude-sonnet-4-6")}
@@ -109,17 +109,17 @@ class TestBootstrapWorktree:
         bootstrap_worktree(worktree, config, repo_root)
 
     def test_propagates_allowlist_when_configured(self, tmp_path: Path) -> None:
-        """Allowlist is copied to worktree when project root has Bash(ghaiw *) configured."""
+        """Allowlist is copied to worktree when project root has Bash(wade *) configured."""
         import json
 
-        from ghaiw.config.claude_allowlist import GHAIWPY_ALLOW_PATTERN
+        from wade.config.claude_allowlist import WADE_ALLOW_PATTERN
 
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
         claude_dir = repo_root / ".claude"
         claude_dir.mkdir()
         (claude_dir / "settings.json").write_text(
-            json.dumps({"permissions": {"allow": [GHAIWPY_ALLOW_PATTERN]}}) + "\n",
+            json.dumps({"permissions": {"allow": [WADE_ALLOW_PATTERN]}}) + "\n",
             encoding="utf-8",
         )
 
@@ -132,7 +132,7 @@ class TestBootstrapWorktree:
         wt_settings = worktree / ".claude" / "settings.json"
         assert wt_settings.is_file()
         data = json.loads(wt_settings.read_text(encoding="utf-8"))
-        assert GHAIWPY_ALLOW_PATTERN in data["permissions"]["allow"]
+        assert WADE_ALLOW_PATTERN in data["permissions"]["allow"]
 
     def test_no_allowlist_propagation_when_not_configured(self, tmp_path: Path) -> None:
         """Allowlist is NOT written to worktree when project root has no settings."""
@@ -217,7 +217,7 @@ class TestBuildGraphFromIssues:
             ),
         ]
 
-        with patch("ghaiw.services.work_service.get_provider", return_value=provider):
+        with patch("wade.services.work_service.get_provider", return_value=provider):
             config = ProjectConfig()
             graph = _build_graph_from_issues(["1", "2"], config)
             assert graph is not None
@@ -232,7 +232,7 @@ class TestBuildGraphFromIssues:
             Task(id="2", title="B", body="Also no deps"),
         ]
 
-        with patch("ghaiw.services.work_service.get_provider", return_value=provider):
+        with patch("wade.services.work_service.get_provider", return_value=provider):
             config = ProjectConfig()
             graph = _build_graph_from_issues(["1", "2"], config)
             assert graph is None
@@ -246,7 +246,7 @@ class TestBuildGraphFromIssues:
 class TestFindWorktreePath:
     def test_finds_by_issue_number(self, tmp_git_repo: Path) -> None:
         # Create a worktree to find
-        from ghaiw.git.worktree import create_worktree
+        from wade.git.worktree import create_worktree
 
         wt_dir = tmp_git_repo.parent / "wt-42"
         create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
@@ -261,7 +261,7 @@ class TestFindWorktreePath:
 
     def test_does_not_match_substring_of_issue_number(self, tmp_git_repo: Path) -> None:
         """target="1" must NOT match a worktree for issue 10."""
-        from ghaiw.git.worktree import create_worktree
+        from wade.git.worktree import create_worktree
 
         wt_dir = tmp_git_repo.parent / "feat-10-something"
         create_worktree(tmp_git_repo, "feat/10-something", wt_dir, "main")
@@ -284,8 +284,8 @@ class TestWorkLaunchCommandAssembly:
         transcript = tmp_path / "transcript.jsonl"
 
         with (
-            patch("ghaiw.utils.process.shutil.which", return_value=None),
-            patch("ghaiw.utils.process.subprocess.run") as mock_run,
+            patch("wade.utils.process.shutil.which", return_value=None),
+            patch("wade.utils.process.subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0)
             adapter.launch(
@@ -305,7 +305,7 @@ class TestWorkLaunchCommandAssembly:
         """Claude launch without transcript_path should NOT include --output-file."""
         adapter = ClaudeAdapter()
 
-        with patch("ghaiw.utils.process.subprocess.run") as mock_run:
+        with patch("wade.utils.process.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             adapter.launch(
                 worktree_path=tmp_path,
@@ -319,8 +319,8 @@ class TestWorkLaunchCommandAssembly:
         adapter = CopilotAdapter()
 
         with (
-            patch("ghaiw.utils.process.shutil.which", return_value=None),
-            patch("ghaiw.utils.process.subprocess.run") as mock_run,
+            patch("wade.utils.process.shutil.which", return_value=None),
+            patch("wade.utils.process.subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0)
             adapter.launch(
@@ -339,7 +339,7 @@ class TestWorkLaunchCommandAssembly:
         """Gemini launch should use 'gemini' binary with --model."""
         adapter = GeminiAdapter()
 
-        with patch("ghaiw.utils.process.subprocess.run") as mock_run:
+        with patch("wade.utils.process.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             adapter.launch(
                 worktree_path=tmp_path,
@@ -356,8 +356,8 @@ class TestWorkLaunchCommandAssembly:
         adapter = CodexAdapter()
 
         with (
-            patch("ghaiw.utils.process.shutil.which", return_value=None),
-            patch("ghaiw.utils.process.subprocess.run") as mock_run,
+            patch("wade.utils.process.shutil.which", return_value=None),
+            patch("wade.utils.process.subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0)
             adapter.launch(
@@ -380,8 +380,8 @@ class TestWorkLaunchCommandAssembly:
         ]
         for adapter in adapters:
             with (
-                patch("ghaiw.utils.process.shutil.which", return_value=None),
-                patch("ghaiw.utils.process.subprocess.run") as mock_run,
+                patch("wade.utils.process.shutil.which", return_value=None),
+                patch("wade.utils.process.subprocess.run") as mock_run,
             ):
                 mock_run.return_value = MagicMock(returncode=0)
                 adapter.launch(
@@ -416,21 +416,21 @@ class TestWorkStart:
         mock_provider.read_task.return_value = task
 
         with (
-            patch("ghaiw.services.work_service.load_config", return_value=self._make_config()),
-            patch("ghaiw.services.work_service.get_provider", return_value=mock_provider),
-            patch("ghaiw.git.repo.get_repo_root", return_value=tmp_path),
-            patch("ghaiw.git.worktree.list_worktrees", return_value=[]),
-            patch("ghaiw.git.worktree.create_worktree") as mock_create,
-            patch("ghaiw.services.work_service.write_plan_md"),
-            patch("ghaiw.services.work_service.bootstrap_worktree"),
-            patch("ghaiw.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
-            patch("ghaiw.services.work_service._detect_ai_cli_env", return_value=None),
-            patch("ghaiw.git.pr.get_pr_for_branch", return_value=None),
+            patch("wade.services.work_service.load_config", return_value=self._make_config()),
+            patch("wade.services.work_service.get_provider", return_value=mock_provider),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch("wade.git.worktree.list_worktrees", return_value=[]),
+            patch("wade.git.worktree.create_worktree") as mock_create,
+            patch("wade.services.work_service.write_plan_md"),
+            patch("wade.services.work_service.bootstrap_worktree"),
+            patch("wade.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
+            patch("wade.services.work_service._detect_ai_cli_env", return_value=None),
+            patch("wade.git.pr.get_pr_for_branch", return_value=None),
             patch(
-                "ghaiw.services.work_service.bootstrap_draft_pr",
+                "wade.services.work_service.bootstrap_draft_pr",
                 return_value={"number": 1, "url": "http://test"},
             ),
-            patch("ghaiw.services.work_service.prompts") as mock_prompts,
+            patch("wade.services.work_service.prompts") as mock_prompts,
         ):
             mock_prompts.is_tty.return_value = False
             result = start("42", project_root=tmp_path)
@@ -439,7 +439,7 @@ class TestWorkStart:
 
     def test_reuses_existing_worktree(self, tmp_path: Path) -> None:
         """Idempotency: list_worktrees returns matching branch → create_worktree NOT called."""
-        from ghaiw.git.branch import make_branch_name
+        from wade.git.branch import make_branch_name
 
         task = self._make_task()
         branch_name = make_branch_name("feat", int(task.id), task.title)
@@ -450,24 +450,24 @@ class TestWorkStart:
         mock_provider.read_task.return_value = task
 
         with (
-            patch("ghaiw.services.work_service.load_config", return_value=self._make_config()),
-            patch("ghaiw.services.work_service.get_provider", return_value=mock_provider),
-            patch("ghaiw.git.repo.get_repo_root", return_value=tmp_path),
+            patch("wade.services.work_service.load_config", return_value=self._make_config()),
+            patch("wade.services.work_service.get_provider", return_value=mock_provider),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
             patch(
-                "ghaiw.git.worktree.list_worktrees",
+                "wade.git.worktree.list_worktrees",
                 return_value=[{"path": str(existing_wt), "branch": branch_name}],
             ),
-            patch("ghaiw.git.worktree.create_worktree") as mock_create,
-            patch("ghaiw.services.work_service.write_plan_md"),
-            patch("ghaiw.services.work_service.bootstrap_worktree"),
-            patch("ghaiw.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
-            patch("ghaiw.services.work_service._detect_ai_cli_env", return_value=None),
-            patch("ghaiw.git.pr.get_pr_for_branch", return_value=None),
+            patch("wade.git.worktree.create_worktree") as mock_create,
+            patch("wade.services.work_service.write_plan_md"),
+            patch("wade.services.work_service.bootstrap_worktree"),
+            patch("wade.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
+            patch("wade.services.work_service._detect_ai_cli_env", return_value=None),
+            patch("wade.git.pr.get_pr_for_branch", return_value=None),
             patch(
-                "ghaiw.services.work_service.bootstrap_draft_pr",
+                "wade.services.work_service.bootstrap_draft_pr",
                 return_value={"number": 1, "url": "http://test"},
             ),
-            patch("ghaiw.services.work_service.prompts") as mock_prompts,
+            patch("wade.services.work_service.prompts") as mock_prompts,
         ):
             mock_prompts.is_tty.return_value = False
             result = start("42", project_root=tmp_path)
@@ -481,20 +481,20 @@ class TestWorkStart:
         mock_provider.read_task.return_value = task
 
         with (
-            patch("ghaiw.services.work_service.load_config", return_value=self._make_config()),
-            patch("ghaiw.services.work_service.get_provider", return_value=mock_provider),
-            patch("ghaiw.git.repo.get_repo_root", return_value=tmp_path),
-            patch("ghaiw.git.worktree.list_worktrees", return_value=[]),
+            patch("wade.services.work_service.load_config", return_value=self._make_config()),
+            patch("wade.services.work_service.get_provider", return_value=mock_provider),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch("wade.git.worktree.list_worktrees", return_value=[]),
             patch(
-                "ghaiw.git.worktree.create_worktree",
+                "wade.git.worktree.create_worktree",
                 side_effect=GitError("Branch already exists"),
             ),
-            patch("ghaiw.git.pr.get_pr_for_branch", return_value=None),
+            patch("wade.git.pr.get_pr_for_branch", return_value=None),
             patch(
-                "ghaiw.services.work_service.bootstrap_draft_pr",
+                "wade.services.work_service.bootstrap_draft_pr",
                 return_value={"number": 1, "url": "http://test"},
             ),
-            patch("ghaiw.services.work_service.prompts") as mock_prompts,
+            patch("wade.services.work_service.prompts") as mock_prompts,
         ):
             mock_prompts.is_tty.return_value = False
             result = start("42", project_root=tmp_path)
@@ -508,21 +508,21 @@ class TestWorkStart:
         mock_provider.read_task.return_value = task
 
         with (
-            patch("ghaiw.services.work_service.load_config", return_value=self._make_config()),
-            patch("ghaiw.services.work_service.get_provider", return_value=mock_provider),
-            patch("ghaiw.git.repo.get_repo_root", return_value=tmp_path),
-            patch("ghaiw.git.worktree.list_worktrees", return_value=[]),
-            patch("ghaiw.git.worktree.create_worktree"),
-            patch("ghaiw.services.work_service.write_plan_md"),
-            patch("ghaiw.services.work_service.bootstrap_worktree"),
-            patch("ghaiw.services.work_service._detect_ai_cli_env", return_value=None),
-            patch("ghaiw.ai_tools.base.AbstractAITool.get") as mock_get,
-            patch("ghaiw.git.pr.get_pr_for_branch", return_value=None),
+            patch("wade.services.work_service.load_config", return_value=self._make_config()),
+            patch("wade.services.work_service.get_provider", return_value=mock_provider),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch("wade.git.worktree.list_worktrees", return_value=[]),
+            patch("wade.git.worktree.create_worktree"),
+            patch("wade.services.work_service.write_plan_md"),
+            patch("wade.services.work_service.bootstrap_worktree"),
+            patch("wade.services.work_service._detect_ai_cli_env", return_value=None),
+            patch("wade.ai_tools.base.AbstractAITool.get") as mock_get,
+            patch("wade.git.pr.get_pr_for_branch", return_value=None),
             patch(
-                "ghaiw.services.work_service.bootstrap_draft_pr",
+                "wade.services.work_service.bootstrap_draft_pr",
                 return_value={"number": 1, "url": "http://test"},
             ),
-            patch("ghaiw.services.work_service.prompts") as mock_prompts,
+            patch("wade.services.work_service.prompts") as mock_prompts,
         ):
             mock_prompts.is_tty.return_value = False
             result = start("42", project_root=tmp_path, cd_only=True)
@@ -541,21 +541,21 @@ class TestWorkStart:
         mock_provider.read_task.return_value = task
 
         with (
-            patch("ghaiw.services.work_service.load_config", return_value=self._make_config()),
-            patch("ghaiw.services.work_service.get_provider", return_value=mock_provider),
-            patch("ghaiw.git.repo.get_repo_root", return_value=tmp_path),
-            patch("ghaiw.git.worktree.list_worktrees", return_value=[]),
-            patch("ghaiw.git.worktree.create_worktree"),
-            patch("ghaiw.services.work_service.write_plan_md"),
-            patch("ghaiw.services.work_service.bootstrap_worktree"),
-            patch("ghaiw.services.work_service._detect_ai_cli_env", return_value="CLAUDE_CODE"),
-            patch("ghaiw.ai_tools.base.AbstractAITool.get") as mock_get,
-            patch("ghaiw.git.pr.get_pr_for_branch", return_value=None),
+            patch("wade.services.work_service.load_config", return_value=self._make_config()),
+            patch("wade.services.work_service.get_provider", return_value=mock_provider),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch("wade.git.worktree.list_worktrees", return_value=[]),
+            patch("wade.git.worktree.create_worktree"),
+            patch("wade.services.work_service.write_plan_md"),
+            patch("wade.services.work_service.bootstrap_worktree"),
+            patch("wade.services.work_service._detect_ai_cli_env", return_value="CLAUDE_CODE"),
+            patch("wade.ai_tools.base.AbstractAITool.get") as mock_get,
+            patch("wade.git.pr.get_pr_for_branch", return_value=None),
             patch(
-                "ghaiw.services.work_service.bootstrap_draft_pr",
+                "wade.services.work_service.bootstrap_draft_pr",
                 return_value={"number": 1, "url": "http://test"},
             ),
-            patch("ghaiw.services.work_service.prompts") as mock_prompts,
+            patch("wade.services.work_service.prompts") as mock_prompts,
         ):
             mock_prompts.is_tty.return_value = False
             result = start("42", project_root=tmp_path)
@@ -577,11 +577,11 @@ class TestWorkBatch:
     def test_launches_independent_issues(self, tmp_path: Path) -> None:
         """No deps graph → all issues launched in separate terminals."""
         with (
-            patch("ghaiw.services.work_service.load_config", return_value=ProjectConfig()),
-            patch("ghaiw.git.repo.get_repo_root", return_value=tmp_path),
-            patch("ghaiw.services.work_service._build_graph_from_issues", return_value=None),
+            patch("wade.services.work_service.load_config", return_value=ProjectConfig()),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch("wade.services.work_service._build_graph_from_issues", return_value=None),
             patch(
-                "ghaiw.services.work_service.launch_in_new_terminal", return_value=True
+                "wade.services.work_service.launch_in_new_terminal", return_value=True
             ) as mock_launch,
         ):
             result = batch(["1", "2", "3"], project_root=tmp_path)
@@ -596,14 +596,14 @@ class TestWorkBatch:
         mock_graph.partition.return_value = ([], [["1", "2", "3"]])
 
         with (
-            patch("ghaiw.services.work_service.load_config", return_value=ProjectConfig()),
-            patch("ghaiw.git.repo.get_repo_root", return_value=tmp_path),
+            patch("wade.services.work_service.load_config", return_value=ProjectConfig()),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
             patch(
-                "ghaiw.services.work_service._build_graph_from_issues",
+                "wade.services.work_service._build_graph_from_issues",
                 return_value=mock_graph,
             ),
             patch(
-                "ghaiw.services.work_service.launch_in_new_terminal", return_value=True
+                "wade.services.work_service.launch_in_new_terminal", return_value=True
             ) as mock_launch,
         ):
             result = batch(["1", "2", "3"], project_root=tmp_path)
@@ -611,16 +611,16 @@ class TestWorkBatch:
         assert result is True
         assert mock_launch.call_count == 1  # Only the first in the chain
         launched_cmd = mock_launch.call_args[0][0]
-        assert launched_cmd[:3] == ["ghaiw", "implement-task", "1"]
+        assert launched_cmd[:3] == ["wade", "implement-task", "1"]
 
     def test_warns_on_terminal_failure(self, tmp_path: Path) -> None:
         """One terminal fails → warns but continues and counts successful launches."""
         with (
-            patch("ghaiw.services.work_service.load_config", return_value=ProjectConfig()),
-            patch("ghaiw.git.repo.get_repo_root", return_value=tmp_path),
-            patch("ghaiw.services.work_service._build_graph_from_issues", return_value=None),
+            patch("wade.services.work_service.load_config", return_value=ProjectConfig()),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch("wade.services.work_service._build_graph_from_issues", return_value=None),
             patch(
-                "ghaiw.services.work_service.launch_in_new_terminal",
+                "wade.services.work_service.launch_in_new_terminal",
                 side_effect=[False, True],
             ) as mock_launch,
         ):
@@ -632,10 +632,10 @@ class TestWorkBatch:
     def test_returns_false_when_none_launched(self, tmp_path: Path) -> None:
         """All launch_in_new_terminal calls fail → batch() returns False."""
         with (
-            patch("ghaiw.services.work_service.load_config", return_value=ProjectConfig()),
-            patch("ghaiw.git.repo.get_repo_root", return_value=tmp_path),
-            patch("ghaiw.services.work_service._build_graph_from_issues", return_value=None),
-            patch("ghaiw.services.work_service.launch_in_new_terminal", return_value=False),
+            patch("wade.services.work_service.load_config", return_value=ProjectConfig()),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch("wade.services.work_service._build_graph_from_issues", return_value=None),
+            patch("wade.services.work_service.launch_in_new_terminal", return_value=False),
         ):
             result = batch(["1", "2"], project_root=tmp_path)
 

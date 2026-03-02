@@ -8,11 +8,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ghaiw.models.config import ProjectConfig
-from ghaiw.models.task import Complexity, Label, TaskState
-from ghaiw.providers.github import GitHubProvider, _extract_number_from_url, _parse_gh_task
-from ghaiw.providers.registry import get_provider
-from ghaiw.utils.process import CommandError
+from wade.models.config import ProjectConfig
+from wade.models.task import Complexity, Label, TaskState
+from wade.providers.github import GitHubProvider, _extract_number_from_url, _parse_gh_task
+from wade.providers.registry import get_provider
+from wade.utils.process import CommandError
 
 # ---------------------------------------------------------------------------
 # Helper fixtures
@@ -108,7 +108,7 @@ class TestParseGhTask:
 
 
 class TestListTasks:
-    @patch("ghaiw.providers.github.run")
+    @patch("wade.providers.github.run")
     def test_list_open_issues(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         issues_json = json.dumps(
             [
@@ -131,7 +131,7 @@ class TestListTasks:
         assert "--state" in cmd
         assert "open" in cmd
 
-    @patch("ghaiw.providers.github.run")
+    @patch("wade.providers.github.run")
     def test_list_with_exclude(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         mock_run.return_value = _make_completed("[]")
         provider.list_tasks(exclude_labels=["in-progress", "blocked"])
@@ -144,7 +144,7 @@ class TestListTasks:
 
 
 class TestCreateTask:
-    @patch("ghaiw.providers.github.run")
+    @patch("wade.providers.github.run")
     def test_create_issue(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         mock_run.return_value = _make_completed("https://github.com/owner/repo/issues/42\n")
 
@@ -163,7 +163,7 @@ class TestCreateTask:
         assert "--body-file" in cmd
         assert "--label" in cmd
 
-    @patch("ghaiw.providers.github.run")
+    @patch("wade.providers.github.run")
     def test_create_without_labels(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         mock_run.return_value = _make_completed("https://github.com/owner/repo/issues/1\n")
         task = provider.create_task(title="Simple", body="body")
@@ -173,7 +173,7 @@ class TestCreateTask:
 
 
 class TestReadTask:
-    @patch("ghaiw.providers.github.run")
+    @patch("wade.providers.github.run")
     def test_read_issue(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         raw = {
             "number": 42,
@@ -192,7 +192,7 @@ class TestReadTask:
 
 
 class TestUpdateTask:
-    @patch("ghaiw.providers.github.run")
+    @patch("wade.providers.github.run")
     def test_update_body(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         # First call: edit, second call: read_task
         read_response = json.dumps(
@@ -209,7 +209,7 @@ class TestUpdateTask:
         provider.update_task("42", body="new body")
         assert mock_run.call_count == 2  # edit + read
 
-    @patch("ghaiw.providers.github.run")
+    @patch("wade.providers.github.run")
     def test_update_title(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         read_response = json.dumps(
             {
@@ -227,7 +227,7 @@ class TestUpdateTask:
 
 
 class TestCloseTask:
-    @patch("ghaiw.providers.github.run")
+    @patch("wade.providers.github.run")
     def test_close(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         read_response = json.dumps(
             {
@@ -247,7 +247,7 @@ class TestCloseTask:
 
 
 class TestCommentOnTask:
-    @patch("ghaiw.providers.github.run")
+    @patch("wade.providers.github.run")
     def test_comment(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         mock_run.return_value = _make_completed("")
 
@@ -264,7 +264,7 @@ class TestCommentOnTask:
 
 
 class TestEnsureLabel:
-    @patch("ghaiw.providers.github.run")
+    @patch("wade.providers.github.run")
     def test_label_already_exists(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         mock_run.return_value = _make_completed("feature-plan\n")
 
@@ -274,7 +274,7 @@ class TestEnsureLabel:
         # Should only call list, not create
         assert mock_run.call_count == 1
 
-    @patch("ghaiw.providers.github.run")
+    @patch("wade.providers.github.run")
     def test_label_created(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         # First call: list (no match), second call: create
         mock_run.side_effect = [
@@ -291,7 +291,7 @@ class TestEnsureLabel:
         assert "new-label" in create_cmd
         assert "--color" in create_cmd
 
-    @patch("ghaiw.providers.github.run")
+    @patch("wade.providers.github.run")
     def test_label_race_condition(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         """Test that "already exists" error during creation is non-fatal."""
         mock_run.side_effect = [
@@ -305,7 +305,7 @@ class TestEnsureLabel:
 
 
 class TestAddLabel:
-    @patch("ghaiw.providers.github.run")
+    @patch("wade.providers.github.run")
     def test_add_success(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         mock_run.return_value = _make_completed("")
         provider.add_label("42", "in-progress")
@@ -314,7 +314,7 @@ class TestAddLabel:
         assert "--add-label" in cmd
         assert "in-progress" in cmd
 
-    @patch("ghaiw.providers.github.run")
+    @patch("wade.providers.github.run")
     def test_add_failure_nonfatal(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         """Label add failures are logged but not raised."""
         mock_run.side_effect = CommandError(["gh"], 1, "not found")
@@ -323,7 +323,7 @@ class TestAddLabel:
 
 
 class TestRemoveLabel:
-    @patch("ghaiw.providers.github.run")
+    @patch("wade.providers.github.run")
     def test_remove_success(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         mock_run.return_value = _make_completed("")
         provider.remove_label("42", "in-progress")
@@ -331,7 +331,7 @@ class TestRemoveLabel:
         cmd = mock_run.call_args[0][0]
         assert "--remove-label" in cmd
 
-    @patch("ghaiw.providers.github.run")
+    @patch("wade.providers.github.run")
     def test_remove_failure_nonfatal(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         mock_run.side_effect = CommandError(["gh"], 1, "label not on issue")
         provider.remove_label("42", "nonexistent")
@@ -343,7 +343,7 @@ class TestRemoveLabel:
 
 
 class TestSnapshotTaskNumbers:
-    @patch("ghaiw.providers.github.run")
+    @patch("wade.providers.github.run")
     def test_snapshot(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         issues_json = json.dumps(
             [
@@ -364,7 +364,7 @@ class TestSnapshotTaskNumbers:
 
 
 class TestCreatePR:
-    @patch("ghaiw.git.pr.create_pr")
+    @patch("wade.git.pr.create_pr")
     def test_create_pr(self, mock_create: MagicMock, provider: GitHubProvider) -> None:
         mock_create.return_value = {"url": "https://github.com/owner/repo/pull/5"}
 
@@ -381,7 +381,7 @@ class TestCreatePR:
         assert call_kwargs["base"] == "main"
         assert call_kwargs["head"] is None
 
-    @patch("ghaiw.git.pr.create_pr")
+    @patch("wade.git.pr.create_pr")
     def test_create_draft_pr(self, mock_create: MagicMock, provider: GitHubProvider) -> None:
         mock_create.return_value = {"url": "https://github.com/owner/repo/pull/6"}
 
@@ -391,7 +391,7 @@ class TestCreatePR:
         call_kwargs = mock_create.call_args[1]
         assert call_kwargs["draft"] is True
 
-    @patch("ghaiw.git.pr.create_pr")
+    @patch("wade.git.pr.create_pr")
     def test_create_pr_with_head_branch(
         self, mock_create: MagicMock, provider: GitHubProvider
     ) -> None:
@@ -405,7 +405,7 @@ class TestCreatePR:
 
 
 class TestMergePR:
-    @patch("ghaiw.git.pr.merge_pr")
+    @patch("wade.git.pr.merge_pr")
     def test_merge_squash(self, mock_merge: MagicMock, provider: GitHubProvider) -> None:
         provider.merge_pr("5", strategy="squash")
 
@@ -415,7 +415,7 @@ class TestMergePR:
         assert call_kwargs["strategy"] == "squash"
         assert call_kwargs["delete_branch"] is True
 
-    @patch("ghaiw.git.pr.merge_pr")
+    @patch("wade.git.pr.merge_pr")
     def test_merge_delegates_to_git_pr(
         self, mock_merge: MagicMock, provider: GitHubProvider
     ) -> None:
@@ -426,7 +426,7 @@ class TestMergePR:
         assert call_kwargs["pr_number"] == 10
         assert call_kwargs["strategy"] == "rebase"
 
-    @patch("ghaiw.git.pr.merge_pr")
+    @patch("wade.git.pr.merge_pr")
     def test_merge_no_delete_branch(self, mock_merge: MagicMock, provider: GitHubProvider) -> None:
         provider.merge_pr("7", strategy="squash", delete_branch=False)
 
@@ -442,7 +442,7 @@ class TestMergePR:
 
 
 class TestGetRepoNwo:
-    @patch("ghaiw.providers.github.run")
+    @patch("wade.providers.github.run")
     def test_nwo(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         mock_run.return_value = _make_completed("owner/repo\n")
         assert provider.get_repo_nwo() == "owner/repo"
@@ -454,7 +454,7 @@ class TestGetRepoNwo:
 
 
 class TestFindParentIssue:
-    @patch("ghaiw.providers.github.run")
+    @patch("wade.providers.github.run")
     def test_found_with_hash(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         issues = [
             {"number": 10, "body": "## Tasks\n- [ ] #42\n- [ ] #43"},
@@ -465,7 +465,7 @@ class TestFindParentIssue:
         parent = provider.find_parent_issue("42", label="feature-plan")
         assert parent == "10"
 
-    @patch("ghaiw.providers.github.run")
+    @patch("wade.providers.github.run")
     def test_found_without_hash(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         issues = [
             {"number": 10, "body": "## Tasks\n- [ ] 42. Add feature"},
@@ -475,7 +475,7 @@ class TestFindParentIssue:
         parent = provider.find_parent_issue("42")
         assert parent == "10"
 
-    @patch("ghaiw.providers.github.run")
+    @patch("wade.providers.github.run")
     def test_not_found(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         issues = [
             {"number": 10, "body": "No checklist here"},
@@ -485,7 +485,7 @@ class TestFindParentIssue:
         parent = provider.find_parent_issue("42")
         assert parent is None
 
-    @patch("ghaiw.providers.github.run")
+    @patch("wade.providers.github.run")
     def test_checked_items_not_matched(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         """Already-checked items should not match (pattern expects [ ])."""
         issues = [
@@ -503,7 +503,7 @@ class TestFindParentIssue:
 
 
 class TestMoveToInProgress:
-    @patch("ghaiw.providers.github.run")
+    @patch("wade.providers.github.run")
     def test_calls_gh_api_graphql(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         """move_to_in_progress should call gh api graphql and return True on success."""
         nwo_response = _make_completed("owner/repo\n")
@@ -557,7 +557,7 @@ class TestMoveToInProgress:
         assert "field_id=field-id" in mutation_args
         assert "option_id=opt-id" in mutation_args
 
-    @patch("ghaiw.providers.github.run")
+    @patch("wade.providers.github.run")
     def test_returns_false_on_gh_failure(
         self, mock_run: MagicMock, provider: GitHubProvider
     ) -> None:

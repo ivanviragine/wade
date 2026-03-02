@@ -1,6 +1,6 @@
 # Architecture Reference
 
-Detailed architecture documentation for ghaiw development. For the compact overview, see `AGENTS.md`.
+Detailed architecture documentation for WADE development. For the compact overview, see `AGENTS.md`.
 
 ## Commands Reference
 
@@ -46,9 +46,9 @@ python scripts/changelog.py --tag v1.0.0      # label unreleased as v1.0.0
 ## Package Structure
 
 ```
-src/ghaiw/
+src/wade/
 ├── __init__.py          # __version__
-├── __main__.py          # python -m ghaiw
+├── __main__.py          # python -m wade
 ├── cli/                 # Typer commands (thin dispatch)
 │   ├── main.py          # Root app + interactive menu, subcommand registration
 │   ├── admin.py         # init, update, deinit, check, check-config, shell-init
@@ -98,7 +98,7 @@ src/ghaiw/
 │   ├── installer.py     # Install/update/remove skill files
 │   └── pointer.py       # AGENTS.md pointer insertion/detection
 ├── config/              # Configuration management
-│   ├── loader.py        # Find + parse .ghaiw.yml (walk up from CWD)
+│   ├── loader.py        # Find + parse .wade.yml (walk up from CWD)
 │   ├── schema.py        # Re-exports from models (Pydantic Settings)
 │   ├── defaults.py      # Hardcoded defaults per AI tool
 │   ├── migrations.py    # Config migration pipeline (ensure version key)
@@ -123,17 +123,17 @@ src/ghaiw/
 
 ## Command Dispatch
 
-`src/ghaiw/cli/main.py` is the root Typer application. It registers subcommand groups (`task`, `work`) and admin commands (`init`, `update`, `deinit`, `check`, `check-config`, `shell-init`). The `tasks` alias is registered as a hidden Typer group pointing to the same `task_app`. The `ghaiw` entry point (defined in `pyproject.toml` as `ghaiw.cli.main:cli_main`) invokes the root app.
+`src/wade/cli/main.py` is the root Typer application. It registers subcommand groups (`task`, `work`) and admin commands (`init`, `update`, `deinit`, `check`, `check-config`, `shell-init`). The `tasks` alias is registered as a hidden Typer group pointing to the same `task_app`. The `wade` entry point (defined in `pyproject.toml` as `wade.cli.main:cli_main`) invokes the root app.
 
 CLI modules are **thin dispatch layers** — they parse flags via Typer, then call service methods. Business logic lives in `services/`, not in `cli/`.
 
-**Interactive menus**: `ghaiw work` with no subcommand shows an interactive menu (done/sync/list/batch/remove). `ghaiw new-task` prompts interactively for title and body. Top-level commands `plan-task`, `new-task`, and `implement-task` are registered directly on the root app.
+**Interactive menus**: `wade work` with no subcommand shows an interactive menu (done/sync/list/batch/remove). `wade new-task` prompts interactively for title and body. Top-level commands `plan-task`, `new-task`, and `implement-task` are registered directly on the root app.
 
-**Shell integration**: `ghaiw shell-init` outputs a shell function wrapper for `eval "$(ghaiw shell-init)"` that intercepts `ghaiw work cd <n>` to perform a real `cd` in the caller's shell.
+**Shell integration**: `wade shell-init` outputs a shell function wrapper for `eval "$(wade shell-init)"` that intercepts `wade work cd <n>` to perform a real `cd` in the caller's shell.
 
 ## Config System
 
-`config/loader.py` walks up from CWD to find `.ghaiw.yml` and parses it via PyYAML into a `ProjectConfig` Pydantic model. The v2 config format has nested sections:
+`config/loader.py` walks up from CWD to find `.wade.yml` and parses it via PyYAML into a `ProjectConfig` Pydantic model. The v2 config format has nested sections:
 
 ```yaml
 version: 2
@@ -172,7 +172,7 @@ hooks:
 
 ## Config Migration Pipeline
 
-`config/migrations.py` provides a single migration run during `ghaiw update`:
+`config/migrations.py` provides a single migration run during `wade update`:
 
 | # | Function | What it does |
 |---|----------|-------------|
@@ -182,7 +182,7 @@ hooks:
 
 ## Update Flow
 
-`ghaiw update` performs 11 steps:
+`wade update` performs 11 steps:
 
 1. Validate repo + config existence
 2. Self-upgrade if source version differs (see below)
@@ -196,7 +196,7 @@ hooks:
 10. Refresh .gitignore + AGENTS.md pointer
 11. Rebuild manifest with version
 
-**Self-upgrade mechanism**: When `ghaiw` is installed via `install.sh` (frozen venv at `~/.local/share/ghaiw/venv/`), the installer records the source repo path in `ghaiw-source.txt`. On `ghaiw update`, if the installed version differs from the source version, `utils/install.py:self_upgrade()` reinstalls from source and `re_exec()` restarts the process with the new code. Editable installs (`uv pip install -e .`) skip this naturally. Pass `--skip-self-upgrade` to bypass.
+**Self-upgrade mechanism**: When `wade` is installed via `install.sh` (frozen venv at `~/.local/share/wade/venv/`), the installer records the source repo path in `wade-source.txt`. On `wade update`, if the installed version differs from the source version, `utils/install.py:self_upgrade()` reinstalls from source and `re_exec()` restarts the process with the new code. Editable installs (`uv pip install -e .`) skip this naturally. Pass `--skip-self-upgrade` to bypass.
 
 ## AI Interaction Pattern
 
@@ -216,7 +216,7 @@ Each AI tool adapter implements `capabilities()` (binary name, model flag syntax
 `plan-task` uses a snapshot/diff pattern to detect issues created during an AI session (Path A — fallback):
 
 1. **Before AI** — Snapshot all open issue numbers with the configured label
-2. **AI runs** — The agent creates issues via `ghaiw new-task` from within the AI CLI
+2. **AI runs** — The agent creates issues via `wade new-task` from within the AI CLI
 3. **After AI** — Compare current issue numbers against the pre-snapshot, returning only newly created ones
 
 This avoids requiring the AI to report back which issues it created — the service detects them deterministically. When no issues are detected (Path B), the service reads plan files from the session temp dir and creates lightweight issues + draft PRs.
@@ -224,16 +224,16 @@ This avoids requiring the AI to report back which issues it created — the serv
 ## Merge Strategy
 
 `MergeStrategy` (config key `project.merge_strategy`) controls how feature branches are merged into main:
-- **`PR`** (default) — The agent runs `ghaiw work done` during its session to push the branch and update the existing draft PR (or create one if missing). The worktree is **not** cleaned up by `work done` — it is cleaned up automatically by `implement-task` after the human merges the PR. When the tool exits, `implement-task`'s post-work prompt detects the PR and asks "Do you want to merge this PR?" — if yes, squash-merges via `gh pr merge --squash --delete-branch`.
+- **`PR`** (default) — The agent runs `wade work done` during its session to push the branch and update the existing draft PR (or create one if missing). The worktree is **not** cleaned up by `work done` — it is cleaned up automatically by `implement-task` after the human merges the PR. When the tool exits, `implement-task`'s post-work prompt detects the PR and asks "Do you want to merge this PR?" — if yes, squash-merges via `gh pr merge --squash --delete-branch`.
 - **`direct`** — Merge locally into main, push, and clean up the worktree. Useful for solo projects or repos without branch protection.
 
-`ghaiw work done` handles PR creation / direct merge. The post-work lifecycle prompt handles the merge decision (PR strategy) or local merge options (direct strategy).
+`wade work done` handles PR creation / direct merge. The post-work lifecycle prompt handles the merge decision (PR strategy) or local merge options (direct strategy).
 
 ## Determinism via Services
 
 All deterministic operations — git commands, state transitions, file manipulation, API calls — **must live in service/utility code**, never in AI agent reasoning. Agents are non-deterministic; code is deterministic. The boundary is:
 
-- **Code decides and executes** — fetch, merge, branch creation, worktree lifecycle, issue state changes. These are codified in `services/`, `git/`, `providers/` and exposed via `ghaiw <command>`.
+- **Code decides and executes** — fetch, merge, branch creation, worktree lifecycle, issue state changes. These are codified in `services/`, `git/`, `providers/` and exposed via `wade <command>`.
 - **Agents interpret and decide next steps** — reading conflict diffs, choosing resolution strategies, composing commit messages, deciding whether to proceed. These are guided by skills.
 
 When adding new functionality, ask: "Can an AI agent get this wrong by reasoning about it?" If yes, put it in code. Examples:
@@ -245,36 +245,36 @@ When adding new functionality, ask: "Can an AI agent get this wrong by reasoning
 | Creating branch with naming convention | Writing commit messages |
 | Emitting structured JSON events | Interpreting event output |
 
-This is why `ghaiw work sync` exists as a CLI command rather than instructions for agents to run raw git commands — the sequence (preflight -> fetch -> merge -> conflict detection -> event emission) is deterministic and must not vary between agent sessions.
+This is why `wade work sync` exists as a CLI command rather than instructions for agents to run raw git commands — the sequence (preflight -> fetch -> merge -> conflict detection -> event emission) is deterministic and must not vary between agent sessions.
 
-When ghaiw installs skills into a target project (`ghaiw init`), the skills reference `ghaiw <command>` — they do **not** bundle standalone copies of the logic. The ghaiw CLI is the single source of truth for deterministic operations.
+When wade installs skills into a target project (`wade init`), the skills reference `wade <command>` — they do **not** bundle standalone copies of the logic. The wade CLI is the single source of truth for deterministic operations.
 
 ## CLI Flag Reference
 
-**`ghaiw implement-task`:**
+**`wade implement-task`:**
 - `--detach` — Launch AI in a new terminal tab/window (non-blocking). Uses `build_launch_command()` + `launch_in_new_terminal()`.
-- `--cd` — Create worktree, print its path to stdout, and exit (no AI launch). Used internally by `ghaiw work cd`.
+- `--cd` — Create worktree, print its path to stdout, and exit (no AI launch). Used internally by `wade work cd`.
 
-**`ghaiw work done`:**
+**`wade work done`:**
 - `target` (positional) — Optional issue number, worktree name, or plan file path. If a file path, creates the issue first. If a number/name, finds the worktree. If omitted, detects from current branch.
 - `--no-close` — Don't close the issue on merge.
 - `--draft` — Create PR as draft.
 - `--no-cleanup` — Keep the worktree after direct merge (no effect in PR strategy, which already preserves worktrees).
 
-**`ghaiw work batch`:**
+**`wade work batch`:**
 - `--model` — Pass a specific AI model to all parallel sessions.
 
-**`ghaiw work remove`:**
+**`wade work remove`:**
 - `--all` — Hidden alias for `--stale` (removes all stale worktrees).
 
-**`ghaiw update`:**
+**`wade update`:**
 - `--skip-self-upgrade` — Skip the source-version self-upgrade check.
 
-**`ghaiw new-task`:**
+**`wade new-task`:**
 - No flags required — prompts interactively for title and body.
 
-**`ghaiw shell-init`:**
-- No flags. Outputs a shell function for `eval "$(ghaiw shell-init)"`.
+**`wade shell-init`:**
+- No flags. Outputs a shell function for `eval "$(wade shell-init)"`.
 
 ## Dependencies
 

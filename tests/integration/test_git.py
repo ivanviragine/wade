@@ -1,4 +1,4 @@
-"""Integration tests for the ghaiw.git layer.
+"""Integration tests for the wade.git layer.
 
 These tests exercise real git operations against temporary repositories
 created by the ``tmp_git_repo`` fixture from conftest.py.
@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from ghaiw.git import (
+from wade.git import (
     GitError,
     branch_exists,
     commits_ahead,
@@ -31,7 +31,7 @@ from ghaiw.git import (
     prune_worktrees,
     remove_worktree,
 )
-from ghaiw.git.sync import abort_merge, merge_branch
+from wade.git.sync import abort_merge, merge_branch
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -8,8 +8,8 @@ from typing import ClassVar
 
 import pytest
 
-from ghaiw.ai_tools.base import AbstractAITool
-from ghaiw.models.ai import AIModel, AIToolCapabilities, AIToolID, AIToolType, TokenUsage
+from wade.ai_tools.base import AbstractAITool
+from wade.models.ai import AIModel, AIToolCapabilities, AIToolID, AIToolType, TokenUsage
 
 
 class TestDuplicateToolIDWarning:

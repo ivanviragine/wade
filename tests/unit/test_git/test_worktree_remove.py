@@ -3,7 +3,7 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from ghaiw.git.worktree import remove_worktree
+from wade.git.worktree import remove_worktree
 
 
 def test_remove_worktree_default_uses_force(tmp_path: Path) -> None:
@@ -13,7 +13,7 @@ def test_remove_worktree_default_uses_force(tmp_path: Path) -> None:
     repo_root.mkdir()
     worktree_path.mkdir()
 
-    with patch("ghaiw.git.worktree._run_git") as mock_run_git:
+    with patch("wade.git.worktree._run_git") as mock_run_git:
         remove_worktree(repo_root, worktree_path)
 
         # Verify _run_git was called with --force
@@ -32,7 +32,7 @@ def test_remove_worktree_force_false_omits_flag(tmp_path: Path) -> None:
     repo_root.mkdir()
     worktree_path.mkdir()
 
-    with patch("ghaiw.git.worktree._run_git") as mock_run_git:
+    with patch("wade.git.worktree._run_git") as mock_run_git:
         remove_worktree(repo_root, worktree_path, force=False)
 
         # Verify _run_git was called without --force
@@ -51,7 +51,7 @@ def test_remove_worktree_force_true_explicit(tmp_path: Path) -> None:
     repo_root.mkdir()
     worktree_path.mkdir()
 
-    with patch("ghaiw.git.worktree._run_git") as mock_run_git:
+    with patch("wade.git.worktree._run_git") as mock_run_git:
         remove_worktree(repo_root, worktree_path, force=True)
 
         # Verify _run_git was called with --force

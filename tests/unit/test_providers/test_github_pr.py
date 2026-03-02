@@ -6,8 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ghaiw.git.repo import GitError
-from ghaiw.providers.github import GitHubProvider
+from wade.git.repo import GitError
+from wade.providers.github import GitHubProvider
 
 
 @pytest.fixture
@@ -19,7 +19,7 @@ def provider() -> GitHubProvider:
 class TestGetPrForBranch:
     """Tests for get_pr_for_branch() delegating to git/pr.py."""
 
-    @patch("ghaiw.git.pr.get_pr_for_branch")
+    @patch("wade.git.pr.get_pr_for_branch")
     def test_get_pr_for_branch_returns_pr_on_success(
         self, mock_get_pr: MagicMock, provider: GitHubProvider
     ) -> None:
@@ -39,7 +39,7 @@ class TestGetPrForBranch:
         assert result is not None
         assert result["number"] == 42
 
-    @patch("ghaiw.git.pr.get_pr_for_branch", return_value=None)
+    @patch("wade.git.pr.get_pr_for_branch", return_value=None)
     def test_get_pr_for_branch_returns_none_when_no_pr(
         self, _mock_get_pr: MagicMock, provider: GitHubProvider
     ) -> None:
@@ -47,7 +47,7 @@ class TestGetPrForBranch:
         result = provider.get_pr_for_branch("feature-branch")
         assert result is None
 
-    @patch("ghaiw.git.pr.get_pr_for_branch")
+    @patch("wade.git.pr.get_pr_for_branch")
     def test_get_pr_for_branch_propagates_errors(
         self, mock_get_pr: MagicMock, provider: GitHubProvider
     ) -> None:

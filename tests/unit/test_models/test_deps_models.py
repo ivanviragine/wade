@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from ghaiw.models.deps import DependencyEdge, DependencyGraph
+from wade.models.deps import DependencyEdge, DependencyGraph
 
 
 class TestTopoSort:

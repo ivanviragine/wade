@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# install.sh — Install ghaiw from PyPI using uv tool.
+# install.sh — Install WADE from PyPI using uv tool.
 #
 # Usage:
-#   curl -LsSf https://raw.githubusercontent.com/ivanviragine/ghaiw/main/install.sh | sh
+#   curl -LsSf https://raw.githubusercontent.com/ivanviragine/wade/main/install.sh | sh
 #   ./install.sh
 
 set -euo pipefail
@@ -28,23 +28,23 @@ info "uv $(uv --version) found"
 
 # ─── Install ──────────────────────────────────────────────────────────────────
 
-info "Installing ghaiw..."
-uv tool install ghaiw
+info "Installing WADE..."
+uv tool install wade
 
 # ─── Verify ───────────────────────────────────────────────────────────────────
 
-if command -v ghaiw &>/dev/null; then
-    info "ghaiw installed successfully!"
+if command -v wade &>/dev/null; then
+    info "WADE installed successfully!"
     echo ""
-    echo "  $(ghaiw --version)"
+    echo "  $(wade --version)"
     echo ""
-    echo "  To get started:  ghaiw init"
-    echo "  To upgrade:      ghaiw update"
+    echo "  To get started:  wade init"
+    echo "  To upgrade:      wade update"
     echo ""
 else
-    warn "ghaiw binary not found in PATH — you may need to add uv's bin directory:"
+    warn "wade binary not found in PATH — you may need to add uv's bin directory:"
     echo ""
     echo '  export PATH="$HOME/.local/bin:$PATH"'
     echo ""
-    echo "  Then restart your shell and run: ghaiw --version"
+    echo "  Then restart your shell and run: wade --version"
 fi

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ghaiw.models.deps import DependencyEdge, DependencyGraph
+from wade.models.deps import DependencyEdge, DependencyGraph
 
 
 def test_disconnected_subgraphs_form_separate_chains() -> None:

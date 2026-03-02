@@ -6,21 +6,21 @@ from pathlib import Path
 
 import pytest
 
-from ghaiw.db.engine import create_db_engine, init_db
-from ghaiw.db.repositories import (
+from wade.db.engine import create_db_engine, init_db
+from wade.db.repositories import (
     AuditLogRepository,
     SessionRepository,
     TaskRepository,
     TokenUsageRepository,
     WorktreeRepository,
 )
-from ghaiw.db.tables import SessionRecord, TaskRecord, TokenUsageRecord, WorktreeRecord
+from wade.db.tables import SessionRecord, TaskRecord, TokenUsageRecord, WorktreeRecord
 
 
 @pytest.fixture
 def db_engine(tmp_path: Path):
     """Create a test database engine."""
-    db_path = tmp_path / ".ghaiw" / "ghaiw.db"
+    db_path = tmp_path / ".wade" / "wade.db"
     engine = create_db_engine(db_path)
     init_db(engine)
     yield engine
@@ -29,7 +29,7 @@ def db_engine(tmp_path: Path):
 
 class TestEngine:
     def test_create_engine(self, tmp_path: Path) -> None:
-        db_path = tmp_path / ".ghaiw" / "ghaiw.db"
+        db_path = tmp_path / ".wade" / "wade.db"
         engine = create_db_engine(db_path)
         assert db_path.parent.exists()
         init_db(engine)
@@ -45,7 +45,7 @@ class TestEngine:
         from sqlalchemy import text
         from sqlmodel import Session
 
-        db_path = tmp_path / ".ghaiw" / "ghaiw.db"
+        db_path = tmp_path / ".wade" / "wade.db"
         engine = create_db_engine(db_path)
         init_db(engine)
 
@@ -64,7 +64,7 @@ class TestEngine:
         from sqlalchemy import text
         from sqlmodel import Session
 
-        db_path = tmp_path / ".ghaiw" / "ghaiw.db"
+        db_path = tmp_path / ".wade" / "wade.db"
         engine = create_db_engine(db_path)
         init_db(engine)
 

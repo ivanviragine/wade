@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ghaiw.utils.update_check import (
+from wade.utils.update_check import (
     CHECK_INTERVAL_SECS,
     _is_newer,
     _load_cache,
@@ -55,7 +55,7 @@ class TestCacheRoundtrip:
     def test_save_and_load(self, tmp_path: Path) -> None:
         """A saved cache is correctly loaded back."""
         cache_file = tmp_path / "update-check.json"
-        with patch("ghaiw.utils.update_check.CACHE_FILE", cache_file):
+        with patch("wade.utils.update_check.CACHE_FILE", cache_file):
             _save_cache("1.2.3", 1000.0)
             result = _load_cache()
 
@@ -66,7 +66,7 @@ class TestCacheRoundtrip:
     def test_load_returns_none_when_missing(self, tmp_path: Path) -> None:
         """Returns None when cache file doesn't exist."""
         cache_file = tmp_path / "nonexistent.json"
-        with patch("ghaiw.utils.update_check.CACHE_FILE", cache_file):
+        with patch("wade.utils.update_check.CACHE_FILE", cache_file):
             result = _load_cache()
 
         assert result is None
@@ -75,7 +75,7 @@ class TestCacheRoundtrip:
         """Returns None when cache file contains invalid JSON."""
         cache_file = tmp_path / "update-check.json"
         cache_file.write_text("not json!", encoding="utf-8")
-        with patch("ghaiw.utils.update_check.CACHE_FILE", cache_file):
+        with patch("wade.utils.update_check.CACHE_FILE", cache_file):
             result = _load_cache()
 
         assert result is None
@@ -83,7 +83,7 @@ class TestCacheRoundtrip:
     def test_save_creates_parent_dirs(self, tmp_path: Path) -> None:
         """_save_cache creates parent directories if needed."""
         cache_file = tmp_path / "deeply" / "nested" / "update-check.json"
-        with patch("ghaiw.utils.update_check.CACHE_FILE", cache_file):
+        with patch("wade.utils.update_check.CACHE_FILE", cache_file):
             _save_cache("1.0.0", 0.0)
 
         assert cache_file.is_file()
@@ -102,7 +102,7 @@ class TestCheckForUpdate:
         cache_file.write_text(
             json.dumps({"timestamp": now, "latest_version": "1.0.0"}), encoding="utf-8"
         )
-        with patch("ghaiw.utils.update_check.CACHE_FILE", cache_file):
+        with patch("wade.utils.update_check.CACHE_FILE", cache_file):
             result = check_for_update("1.0.0")
 
         assert result is None
@@ -114,7 +114,7 @@ class TestCheckForUpdate:
         cache_file.write_text(
             json.dumps({"timestamp": now, "latest_version": "1.1.0"}), encoding="utf-8"
         )
-        with patch("ghaiw.utils.update_check.CACHE_FILE", cache_file):
+        with patch("wade.utils.update_check.CACHE_FILE", cache_file):
             result = check_for_update("1.0.0")
 
         assert result == "1.1.0"
@@ -127,8 +127,8 @@ class TestCheckForUpdate:
             json.dumps({"timestamp": stale_ts, "latest_version": "1.0.0"}), encoding="utf-8"
         )
         with (
-            patch("ghaiw.utils.update_check.CACHE_FILE", cache_file),
-            patch("ghaiw.utils.update_check._fetch_latest_version", return_value="1.2.0"),
+            patch("wade.utils.update_check.CACHE_FILE", cache_file),
+            patch("wade.utils.update_check._fetch_latest_version", return_value="1.2.0"),
         ):
             result = check_for_update("1.0.0")
 
@@ -138,8 +138,8 @@ class TestCheckForUpdate:
         """Returns None when PyPI fetch fails and cache is empty."""
         cache_file = tmp_path / "update-check.json"
         with (
-            patch("ghaiw.utils.update_check.CACHE_FILE", cache_file),
-            patch("ghaiw.utils.update_check._fetch_latest_version", return_value=None),
+            patch("wade.utils.update_check.CACHE_FILE", cache_file),
+            patch("wade.utils.update_check._fetch_latest_version", return_value=None),
         ):
             result = check_for_update("1.0.0")
 
@@ -153,8 +153,8 @@ class TestCheckForUpdate:
             json.dumps({"timestamp": now, "latest_version": "2.0.0"}), encoding="utf-8"
         )
         with (
-            patch("ghaiw.utils.update_check.CACHE_FILE", cache_file),
-            patch("ghaiw.utils.update_check._fetch_latest_version") as mock_fetch,
+            patch("wade.utils.update_check.CACHE_FILE", cache_file),
+            patch("wade.utils.update_check._fetch_latest_version") as mock_fetch,
         ):
             result = check_for_update("1.0.0")
 
@@ -169,10 +169,10 @@ class TestCheckForUpdate:
 
 class TestMaybePrintUpdateHint:
     def test_suppressed_by_env_var(self, tmp_path: Path) -> None:
-        """GHAIW_NO_UPDATE_CHECK=1 suppresses the nag."""
+        """WADE_NO_UPDATE_CHECK=1 suppresses the nag."""
         with (
-            patch.dict(os.environ, {"GHAIW_NO_UPDATE_CHECK": "1"}),
-            patch("ghaiw.utils.update_check.check_for_update") as mock_check,
+            patch.dict(os.environ, {"WADE_NO_UPDATE_CHECK": "1"}),
+            patch("wade.utils.update_check.check_for_update") as mock_check,
         ):
             maybe_print_update_hint("1.0.0", "task")
 
@@ -182,7 +182,7 @@ class TestMaybePrintUpdateHint:
         """Nag is suppressed when the invoked subcommand is 'update'."""
         with (
             patch.dict(os.environ, {}, clear=True),
-            patch("ghaiw.utils.update_check.check_for_update") as mock_check,
+            patch("wade.utils.update_check.check_for_update") as mock_check,
             patch("sys.stderr", MagicMock(isatty=lambda: True)),
         ):
             maybe_print_update_hint("1.0.0", "update")
@@ -193,7 +193,7 @@ class TestMaybePrintUpdateHint:
         """Nag is suppressed when stderr is not a TTY (e.g., CI / piped)."""
         with (
             patch.dict(os.environ, {}, clear=True),
-            patch("ghaiw.utils.update_check.check_for_update") as mock_check,
+            patch("wade.utils.update_check.check_for_update") as mock_check,
             patch.object(sys, "stderr", io.StringIO()),  # StringIO has isatty() → False
         ):
             maybe_print_update_hint("1.0.0", "task")
@@ -206,7 +206,7 @@ class TestMaybePrintUpdateHint:
         """Prints a nag message to stderr when a newer version is found."""
         with (
             patch.dict(os.environ, {}, clear=True),
-            patch("ghaiw.utils.update_check.check_for_update", return_value="1.1.0"),
+            patch("wade.utils.update_check.check_for_update", return_value="1.1.0"),
             patch("sys.stderr") as mock_stderr,
         ):
             mock_stderr.isatty.return_value = True
@@ -215,13 +215,13 @@ class TestMaybePrintUpdateHint:
         mock_stderr.write.assert_called()
         output = "".join(call.args[0] for call in mock_stderr.write.call_args_list)
         assert "1.1.0" in output
-        assert "ghaiw update" in output
+        assert "wade update" in output
 
     def test_silent_when_no_update(self, tmp_path: Path) -> None:
         """Prints nothing when already on the latest version."""
         with (
             patch.dict(os.environ, {}, clear=True),
-            patch("ghaiw.utils.update_check.check_for_update", return_value=None),
+            patch("wade.utils.update_check.check_for_update", return_value=None),
             patch("sys.stderr") as mock_stderr,
         ):
             mock_stderr.isatty.return_value = True
@@ -235,7 +235,7 @@ class TestMaybePrintUpdateHint:
             patch.dict(os.environ, {}, clear=True),
             patch("sys.stderr") as mock_stderr,
             patch(
-                "ghaiw.utils.update_check.check_for_update",
+                "wade.utils.update_check.check_for_update",
                 side_effect=RuntimeError("network error"),
             ),
         ):

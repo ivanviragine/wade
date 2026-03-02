@@ -8,7 +8,7 @@ from pathlib import Path
 class TestSkillInstallation:
     def test_install_copies_skill_files(self, tmp_git_repo: Path) -> None:
         """Skill installer copies template files to project."""
-        from ghaiw.skills.installer import install_skills
+        from wade.skills.installer import install_skills
 
         installed = install_skills(tmp_git_repo)
         assert len(installed) > 0
@@ -19,7 +19,7 @@ class TestSkillInstallation:
 
     def test_install_creates_cross_tool_symlinks(self, tmp_git_repo: Path) -> None:
         """Cross-tool directories are symlinked to .claude/skills."""
-        from ghaiw.skills.installer import install_skills
+        from wade.skills.installer import install_skills
 
         install_skills(tmp_git_repo)
 
@@ -29,7 +29,7 @@ class TestSkillInstallation:
 
     def test_install_idempotent(self, tmp_git_repo: Path) -> None:
         """Running install twice leaves the same on-disk state."""
-        from ghaiw.skills.installer import install_skills
+        from wade.skills.installer import install_skills
 
         install_skills(tmp_git_repo)
         skills_dir = tmp_git_repo / ".claude" / "skills"
@@ -50,7 +50,7 @@ class TestSkillInstallation:
 
     def test_uninstall_removes_skills(self, tmp_git_repo: Path) -> None:
         """Uninstall removes skill directories."""
-        from ghaiw.skills.installer import install_skills, remove_skills
+        from wade.skills.installer import install_skills, remove_skills
 
         install_skills(tmp_git_repo)
         remove_skills(tmp_git_repo)

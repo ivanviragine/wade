@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from ghaiw.config.migrations import ensure_version, run_all_migrations
+from wade.config.migrations import ensure_version, run_all_migrations
 
 # ---------------------------------------------------------------------------
 # ensure_version
@@ -46,7 +46,7 @@ class TestEnsureVersion:
 
 class TestRunAllMigrations:
     def test_adds_version_to_versionless_config(self, tmp_path: Path) -> None:
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         config_path.write_text(
             yaml.dump({"ai": {"default_tool": "claude"}}, default_flow_style=False)
         )
@@ -56,7 +56,7 @@ class TestRunAllMigrations:
         assert migrated["version"] == 2
 
     def test_already_versioned_returns_false(self, tmp_path: Path) -> None:
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         config_path.write_text(
             yaml.dump({"version": 2, "ai": {"default_tool": "claude"}}, default_flow_style=False)
         )
@@ -64,7 +64,7 @@ class TestRunAllMigrations:
         assert result is False
 
     def test_invalid_yaml_returns_false(self, tmp_path: Path) -> None:
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         config_path.write_text("{ invalid yaml: [")
         result = run_all_migrations(config_path)
         assert result is False
@@ -75,7 +75,7 @@ class TestRunAllMigrations:
         assert result is False
 
     def test_empty_file(self, tmp_path: Path) -> None:
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         config_path.write_text("")
         result = run_all_migrations(config_path)
         assert result is True
@@ -83,7 +83,7 @@ class TestRunAllMigrations:
         assert migrated["version"] == 2
 
     def test_non_dict_yaml_rejected(self, tmp_path: Path) -> None:
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         config_path.write_text("just a string\n")
         result = run_all_migrations(config_path)
         assert result is False
@@ -91,7 +91,7 @@ class TestRunAllMigrations:
         assert config_path.read_text(encoding="utf-8") == "just a string\n"
 
     def test_file_not_modified_when_no_changes(self, tmp_path: Path) -> None:
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         content = yaml.dump(
             {"version": 2, "ai": {"default_tool": "claude"}}, default_flow_style=False
         )

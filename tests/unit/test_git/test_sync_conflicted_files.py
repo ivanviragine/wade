@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ghaiw.git.repo import GitError
-from ghaiw.git.sync import get_conflicted_files
+from wade.git.repo import GitError
+from wade.git.sync import get_conflicted_files
 
 
 def test_get_conflicted_files_raises_on_subprocess_error(tmp_path: Path) -> None:
@@ -16,7 +16,7 @@ def test_get_conflicted_files_raises_on_subprocess_error(tmp_path: Path) -> None
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
 
-    with patch("ghaiw.git.sync._run_git") as mock_run_git:
+    with patch("wade.git.sync._run_git") as mock_run_git:
         # Mock a failed git command
         mock_result = MagicMock()
         mock_result.returncode = 128
@@ -37,7 +37,7 @@ def test_get_conflicted_files_returns_list_on_success(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
 
-    with patch("ghaiw.git.sync._run_git") as mock_run_git:
+    with patch("wade.git.sync._run_git") as mock_run_git:
         # Mock a successful git command with conflict output
         mock_result = MagicMock()
         mock_result.returncode = 0
@@ -54,7 +54,7 @@ def test_get_conflicted_files_empty_on_no_conflicts(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
 
-    with patch("ghaiw.git.sync._run_git") as mock_run_git:
+    with patch("wade.git.sync._run_git") as mock_run_git:
         # Mock a successful git command with no output
         mock_result = MagicMock()
         mock_result.returncode = 0
@@ -71,7 +71,7 @@ def test_get_conflicted_files_filters_empty_lines(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
 
-    with patch("ghaiw.git.sync._run_git") as mock_run_git:
+    with patch("wade.git.sync._run_git") as mock_run_git:
         # Mock output with trailing newlines and blank lines
         mock_result = MagicMock()
         mock_result.returncode = 0
@@ -89,7 +89,7 @@ def test_get_conflicted_files_calls_git_with_correct_args(tmp_path: Path) -> Non
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
 
-    with patch("ghaiw.git.sync._run_git") as mock_run_git:
+    with patch("wade.git.sync._run_git") as mock_run_git:
         mock_result = MagicMock()
         mock_result.returncode = 0
         mock_result.stdout = ""

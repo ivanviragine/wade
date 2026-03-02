@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from ghaiw.models.task import (
+from wade.models.task import (
     Complexity,
     Label,
     LabelType,

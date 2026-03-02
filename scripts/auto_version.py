@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""ghaiw version bump — deterministic semver version management.
+"""wade version bump — deterministic semver version management.
 
 Usage: python scripts/auto_version.py <patch|minor|major> [--dry-run]
 
-Updates __version__ in src/ghaiw/__init__.py and version in pyproject.toml
+Updates __version__ in src/wade/__init__.py and version in pyproject.toml
 to the next semver value. Optionally commits and tags the release.
 """
 
@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
-INIT_FILE = ROOT_DIR / "src" / "ghaiw" / "__init__.py"
+INIT_FILE = ROOT_DIR / "src" / "wade" / "__init__.py"
 PYPROJECT_FILE = ROOT_DIR / "pyproject.toml"
 
 

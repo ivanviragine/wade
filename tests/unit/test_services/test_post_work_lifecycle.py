@@ -4,10 +4,10 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from ghaiw.models.config import AIConfig, ProjectConfig, ProjectSettings
-from ghaiw.models.task import Task
-from ghaiw.models.work import MergeStrategy
-from ghaiw.services.work_service import _post_work_lifecycle, start
+from wade.models.config import AIConfig, ProjectConfig, ProjectSettings
+from wade.models.task import Task
+from wade.models.work import MergeStrategy
+from wade.services.work_service import _post_work_lifecycle, start
 
 
 def _config(strategy: MergeStrategy) -> ProjectConfig:
@@ -17,14 +17,14 @@ def _config(strategy: MergeStrategy) -> ProjectConfig:
     )
 
 
-@patch("ghaiw.services.work_service.subprocess.run")
-@patch("ghaiw.services.work_service.git_worktree.prune_worktrees")
-@patch("ghaiw.services.work_service.git_worktree.remove_worktree")
-@patch("ghaiw.services.work_service.git_pr.merge_pr")
-@patch("ghaiw.services.work_service.git_repo.is_clean", return_value=True)
-@patch("ghaiw.services.work_service.prompts.confirm", return_value=True)
+@patch("wade.services.work_service.subprocess.run")
+@patch("wade.services.work_service.git_worktree.prune_worktrees")
+@patch("wade.services.work_service.git_worktree.remove_worktree")
+@patch("wade.services.work_service.git_pr.merge_pr")
+@patch("wade.services.work_service.git_repo.is_clean", return_value=True)
+@patch("wade.services.work_service.prompts.confirm", return_value=True)
 @patch(
-    "ghaiw.services.work_service.git_pr.get_pr_for_branch",
+    "wade.services.work_service.git_pr.get_pr_for_branch",
     return_value={"number": 99, "url": "https://example/pr/99"},
 )
 def test_pr_strategy_prompts_merge_on_existing_pr(
@@ -55,9 +55,9 @@ def test_pr_strategy_prompts_merge_on_existing_pr(
     mock_run.assert_any_call(["git", "pull", "--quiet"], cwd=repo_root)
 
 
-@patch("ghaiw.services.work_service.git_pr.merge_pr")
-@patch("ghaiw.services.work_service.prompts.confirm")
-@patch("ghaiw.services.work_service.git_pr.get_pr_for_branch", return_value=None)
+@patch("wade.services.work_service.git_pr.merge_pr")
+@patch("wade.services.work_service.prompts.confirm")
+@patch("wade.services.work_service.git_pr.get_pr_for_branch", return_value=None)
 def test_pr_strategy_no_pr_warns_and_returns(
     _mock_get_pr: MagicMock,
     mock_confirm: MagicMock,
@@ -78,10 +78,10 @@ def test_pr_strategy_no_pr_warns_and_returns(
     mock_merge_pr.assert_not_called()
 
 
-@patch("ghaiw.services.work_service.git_pr.merge_pr")
-@patch("ghaiw.services.work_service.prompts.confirm", return_value=False)
+@patch("wade.services.work_service.git_pr.merge_pr")
+@patch("wade.services.work_service.prompts.confirm", return_value=False)
 @patch(
-    "ghaiw.services.work_service.git_pr.get_pr_for_branch",
+    "wade.services.work_service.git_pr.get_pr_for_branch",
     return_value={"number": 99, "url": "https://example/pr/99"},
 )
 def test_pr_strategy_user_declines_merge(
@@ -104,11 +104,11 @@ def test_pr_strategy_user_declines_merge(
     mock_merge_pr.assert_not_called()
 
 
-@patch("ghaiw.services.work_service.subprocess.run")
-@patch("ghaiw.services.work_service.git_pr.merge_pr")
-@patch("ghaiw.services.work_service.prompts.confirm", return_value=True)
+@patch("wade.services.work_service.subprocess.run")
+@patch("wade.services.work_service.git_pr.merge_pr")
+@patch("wade.services.work_service.prompts.confirm", return_value=True)
 @patch(
-    "ghaiw.services.work_service.git_pr.get_pr_for_branch",
+    "wade.services.work_service.git_pr.get_pr_for_branch",
     return_value={"number": 99, "url": "https://example/pr/99"},
 )
 def test_pr_strategy_merge_failure_preserves_branch(
@@ -138,12 +138,12 @@ def test_pr_strategy_merge_failure_preserves_branch(
         )
 
 
-@patch("ghaiw.services.work_service.subprocess.run")
-@patch("ghaiw.services.work_service.git_pr.merge_pr")
-@patch("ghaiw.services.work_service.git_repo.is_clean", return_value=True)
-@patch("ghaiw.services.work_service.prompts.confirm", return_value=True)
+@patch("wade.services.work_service.subprocess.run")
+@patch("wade.services.work_service.git_pr.merge_pr")
+@patch("wade.services.work_service.git_repo.is_clean", return_value=True)
+@patch("wade.services.work_service.prompts.confirm", return_value=True)
 @patch(
-    "ghaiw.services.work_service.git_pr.get_pr_for_branch",
+    "wade.services.work_service.git_pr.get_pr_for_branch",
     return_value={"number": 99, "url": "https://example/pr/99"},
 )
 def test_pr_strategy_merge_failure_restores_branch(
@@ -178,14 +178,14 @@ def test_pr_strategy_merge_failure_restores_branch(
     )
 
 
-@patch("ghaiw.services.work_service.subprocess.run")
-@patch("ghaiw.services.work_service.git_worktree.prune_worktrees")
-@patch("ghaiw.services.work_service.git_worktree.remove_worktree")
-@patch("ghaiw.services.work_service.git_pr.merge_pr")
-@patch("ghaiw.services.work_service.git_repo.is_clean", return_value=True)
-@patch("ghaiw.services.work_service.prompts.confirm", return_value=True)
+@patch("wade.services.work_service.subprocess.run")
+@patch("wade.services.work_service.git_worktree.prune_worktrees")
+@patch("wade.services.work_service.git_worktree.remove_worktree")
+@patch("wade.services.work_service.git_pr.merge_pr")
+@patch("wade.services.work_service.git_repo.is_clean", return_value=True)
+@patch("wade.services.work_service.prompts.confirm", return_value=True)
 @patch(
-    "ghaiw.services.work_service.git_pr.get_pr_for_branch",
+    "wade.services.work_service.git_pr.get_pr_for_branch",
     return_value={"number": 99, "url": "https://example/pr/99"},
 )
 def test_pr_strategy_cleanup_and_pull_after_merge(
@@ -212,8 +212,8 @@ def test_pr_strategy_cleanup_and_pull_after_merge(
     mock_run.assert_any_call(["git", "pull", "--quiet"], cwd=repo_root)
 
 
-@patch("ghaiw.services.work_service.prompts.confirm", return_value=False)
-@patch("ghaiw.services.work_service.git_branch.commits_ahead", return_value=0)
+@patch("wade.services.work_service.prompts.confirm", return_value=False)
+@patch("wade.services.work_service.git_branch.commits_ahead", return_value=0)
 def test_direct_strategy_zero_ahead_offers_delete(
     _mock_ahead: MagicMock,
     mock_confirm: MagicMock,
@@ -234,8 +234,8 @@ def test_direct_strategy_zero_ahead_offers_delete(
     assert "delete" in mock_confirm.call_args[0][0].lower()
 
 
-@patch("ghaiw.services.work_service.prompts.select", return_value=2)
-@patch("ghaiw.services.work_service.git_branch.commits_ahead", return_value=3)
+@patch("wade.services.work_service.prompts.select", return_value=2)
+@patch("wade.services.work_service.git_branch.commits_ahead", return_value=3)
 def test_direct_strategy_commits_ahead_shows_menu(
     _mock_ahead: MagicMock,
     mock_select: MagicMock,
@@ -259,10 +259,10 @@ def test_direct_strategy_commits_ahead_shows_menu(
     assert "Skip" in joined
 
 
-@patch("ghaiw.services.work_service._cleanup_worktree")
-@patch("ghaiw.services.work_service.prompts.select", return_value=1)
-@patch("ghaiw.services.work_service.subprocess.run")
-@patch("ghaiw.services.work_service.git_branch.commits_ahead", return_value=3)
+@patch("wade.services.work_service._cleanup_worktree")
+@patch("wade.services.work_service.prompts.select", return_value=1)
+@patch("wade.services.work_service.subprocess.run")
+@patch("wade.services.work_service.git_branch.commits_ahead", return_value=3)
 def test_direct_strategy_merge_and_close(
     _mock_ahead: MagicMock,
     mock_run: MagicMock,
@@ -288,25 +288,25 @@ def test_direct_strategy_merge_and_close(
     provider.close_task.assert_called_once_with("42")
 
 
-@patch("ghaiw.services.work_service.write_plan_md")
-@patch("ghaiw.services.work_service._post_work_lifecycle")
-@patch("ghaiw.services.work_service.launch_in_new_terminal", return_value=True)
-@patch("ghaiw.services.work_service.AbstractAITool.get")
-@patch("ghaiw.services.work_service._detect_ai_cli_env", return_value=None)
-@patch("ghaiw.services.work_service.add_in_progress_label")
-@patch("ghaiw.services.work_service.bootstrap_worktree")
-@patch("ghaiw.services.work_service.git_worktree.list_worktrees", return_value=[])
-@patch("ghaiw.services.work_service.git_worktree.create_worktree")
-@patch("ghaiw.services.work_service.git_repo.get_repo_root")
-@patch("ghaiw.services.work_service._resolve_target")
-@patch("ghaiw.services.work_service.get_provider")
-@patch("ghaiw.services.work_service.load_config")
-@patch("ghaiw.services.work_service.git_pr.get_pr_for_branch", return_value=None)
+@patch("wade.services.work_service.write_plan_md")
+@patch("wade.services.work_service._post_work_lifecycle")
+@patch("wade.services.work_service.launch_in_new_terminal", return_value=True)
+@patch("wade.services.work_service.AbstractAITool.get")
+@patch("wade.services.work_service._detect_ai_cli_env", return_value=None)
+@patch("wade.services.work_service.add_in_progress_label")
+@patch("wade.services.work_service.bootstrap_worktree")
+@patch("wade.services.work_service.git_worktree.list_worktrees", return_value=[])
+@patch("wade.services.work_service.git_worktree.create_worktree")
+@patch("wade.services.work_service.git_repo.get_repo_root")
+@patch("wade.services.work_service._resolve_target")
+@patch("wade.services.work_service.get_provider")
+@patch("wade.services.work_service.load_config")
+@patch("wade.services.work_service.git_pr.get_pr_for_branch", return_value=None)
 @patch(
-    "ghaiw.services.work_service.bootstrap_draft_pr",
+    "wade.services.work_service.bootstrap_draft_pr",
     return_value={"number": 1, "url": "http://test"},
 )
-@patch("ghaiw.services.work_service.prompts")
+@patch("wade.services.work_service.prompts")
 def test_lifecycle_skipped_in_detach_mode(
     mock_prompts: MagicMock,
     _mock_bootstrap_pr: MagicMock,
@@ -340,30 +340,30 @@ def test_lifecycle_skipped_in_detach_mode(
     mock_lifecycle.assert_not_called()
 
 
-@patch("ghaiw.services.work_service.write_plan_md")
-@patch("ghaiw.services.work_service._post_work_lifecycle")
-@patch("ghaiw.services.work_service.add_worked_by_labels")
-@patch("ghaiw.services.work_service._post_exit_capture")
-@patch("ghaiw.services.work_service.stop_title_keeper")
-@patch("ghaiw.services.work_service.start_title_keeper")
-@patch("ghaiw.services.work_service.set_terminal_title")
-@patch("ghaiw.services.work_service.compose_work_title", return_value="title")
-@patch("ghaiw.services.work_service._detect_ai_cli_env", return_value=None)
-@patch("ghaiw.services.work_service.add_in_progress_label")
-@patch("ghaiw.services.work_service.bootstrap_worktree")
-@patch("ghaiw.services.work_service.git_worktree.list_worktrees", return_value=[])
-@patch("ghaiw.services.work_service.git_worktree.create_worktree")
-@patch("ghaiw.services.work_service.git_repo.get_repo_root")
-@patch("ghaiw.services.work_service._resolve_target")
-@patch("ghaiw.services.work_service.AbstractAITool.get")
-@patch("ghaiw.services.work_service.get_provider")
-@patch("ghaiw.services.work_service.load_config")
-@patch("ghaiw.services.work_service.git_pr.get_pr_for_branch", return_value=None)
+@patch("wade.services.work_service.write_plan_md")
+@patch("wade.services.work_service._post_work_lifecycle")
+@patch("wade.services.work_service.add_worked_by_labels")
+@patch("wade.services.work_service._post_exit_capture")
+@patch("wade.services.work_service.stop_title_keeper")
+@patch("wade.services.work_service.start_title_keeper")
+@patch("wade.services.work_service.set_terminal_title")
+@patch("wade.services.work_service.compose_work_title", return_value="title")
+@patch("wade.services.work_service._detect_ai_cli_env", return_value=None)
+@patch("wade.services.work_service.add_in_progress_label")
+@patch("wade.services.work_service.bootstrap_worktree")
+@patch("wade.services.work_service.git_worktree.list_worktrees", return_value=[])
+@patch("wade.services.work_service.git_worktree.create_worktree")
+@patch("wade.services.work_service.git_repo.get_repo_root")
+@patch("wade.services.work_service._resolve_target")
+@patch("wade.services.work_service.AbstractAITool.get")
+@patch("wade.services.work_service.get_provider")
+@patch("wade.services.work_service.load_config")
+@patch("wade.services.work_service.git_pr.get_pr_for_branch", return_value=None)
 @patch(
-    "ghaiw.services.work_service.bootstrap_draft_pr",
+    "wade.services.work_service.bootstrap_draft_pr",
     return_value={"number": 1, "url": "http://test"},
 )
-@patch("ghaiw.services.work_service.prompts")
+@patch("wade.services.work_service.prompts")
 def test_lifecycle_skipped_after_ai_crash(
     mock_prompts: MagicMock,
     _mock_bootstrap_pr: MagicMock,

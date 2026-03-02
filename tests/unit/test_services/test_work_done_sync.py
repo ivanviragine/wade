@@ -5,12 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from ghaiw.git.repo import GitError
-from ghaiw.models.ai import TokenUsage
-from ghaiw.models.config import ProjectConfig, ProjectSettings
-from ghaiw.models.task import Task, TaskState
-from ghaiw.models.work import WorktreeState
-from ghaiw.services.work_service import (
+from wade.git.repo import GitError
+from wade.models.ai import TokenUsage
+from wade.models.config import ProjectConfig, ProjectSettings
+from wade.models.task import Task, TaskState
+from wade.models.work import WorktreeState
+from wade.services.work_service import (
     IMPL_USAGE_MARKER_END,
     IMPL_USAGE_MARKER_START,
     _apply_pr_refs,
@@ -53,7 +53,7 @@ class TestExtractIssueFromBranch:
 
 class TestClassifyStaleness:
     def test_active_when_issue_open(self, tmp_git_repo: Path) -> None:
-        from ghaiw.git.worktree import create_worktree
+        from wade.git.worktree import create_worktree
 
         branch = "feat/42-test"
         wt_dir = tmp_git_repo.parent / "wt-42"
@@ -73,7 +73,7 @@ class TestClassifyStaleness:
 
     def test_active_when_provider_fails(self, tmp_git_repo: Path) -> None:
         """Fail-safe: if we can't read the issue, treat as active."""
-        from ghaiw.git.worktree import create_worktree
+        from wade.git.worktree import create_worktree
 
         branch = "feat/42-test"
         wt_dir = tmp_git_repo.parent / "wt-42"
@@ -93,7 +93,7 @@ class TestClassifyStaleness:
 
     def test_stale_empty_no_commits(self, tmp_git_repo: Path) -> None:
         """Branch with no commits ahead of main is stale_empty."""
-        from ghaiw.git.worktree import create_worktree
+        from wade.git.worktree import create_worktree
 
         branch = "feat/42-test"
         wt_dir = tmp_git_repo.parent / "wt-42"
@@ -111,7 +111,7 @@ class TestClassifyStaleness:
         """Branch with commits ahead of main is active."""
         import subprocess
 
-        from ghaiw.git.worktree import create_worktree
+        from wade.git.worktree import create_worktree
 
         branch = "feat/42-test"
         wt_dir = tmp_git_repo.parent / "wt-42"
@@ -162,7 +162,7 @@ class TestBuildImplUsageBlock:
         assert "| Output tokens | **2,000** |" in block
 
     def test_with_model_breakdown(self) -> None:
-        from ghaiw.models.ai import ModelBreakdown
+        from wade.models.ai import ModelBreakdown
 
         usage = TokenUsage(
             total_tokens=5000,
@@ -275,7 +275,7 @@ class TestBuildPrBody:
 
     def test_plan_summary_excluded_from_pr(self) -> None:
         """Plan summary in the issue body must NOT leak into the PR body."""
-        from ghaiw.services.task_service import (
+        from wade.services.task_service import (
             PLAN_SUMMARY_MARKER_END,
             PLAN_SUMMARY_MARKER_START,
         )
@@ -335,15 +335,15 @@ class TestExistingPrBodyUpdate:
 
 class TestSync:
     def test_not_in_git_repo(self) -> None:
-        from ghaiw.services.work_service import sync
+        from wade.services.work_service import sync
 
         with (
             patch(
-                "ghaiw.services.work_service.load_config",
+                "wade.services.work_service.load_config",
                 return_value=ProjectConfig(),
             ),
             patch(
-                "ghaiw.services.work_service.git_repo.get_repo_root",
+                "wade.services.work_service.git_repo.get_repo_root",
                 side_effect=GitError("not a repo"),
             ),
         ):
@@ -352,10 +352,10 @@ class TestSync:
             assert any(e.event == "error" for e in result.events)
 
     def test_on_main_branch(self, tmp_git_repo: Path) -> None:
-        from ghaiw.services.work_service import sync
+        from wade.services.work_service import sync
 
         with patch(
-            "ghaiw.services.work_service.load_config",
+            "wade.services.work_service.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -373,7 +373,7 @@ class TestSync:
         """Feature branch that's already up to date with main."""
         import subprocess
 
-        from ghaiw.services.work_service import sync
+        from wade.services.work_service import sync
 
         # Create and checkout feature branch
         subprocess.run(
@@ -384,7 +384,7 @@ class TestSync:
         )
 
         with patch(
-            "ghaiw.services.work_service.load_config",
+            "wade.services.work_service.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -397,7 +397,7 @@ class TestSync:
         """Dry run mode reports commits behind without merging."""
         import subprocess
 
-        from ghaiw.services.work_service import sync
+        from wade.services.work_service import sync
 
         # Create feature branch
         subprocess.run(
@@ -437,7 +437,7 @@ class TestSync:
         )
 
         with patch(
-            "ghaiw.services.work_service.load_config",
+            "wade.services.work_service.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -450,7 +450,7 @@ class TestSync:
         """Successful merge of main into feature branch."""
         import subprocess
 
-        from ghaiw.services.work_service import sync
+        from wade.services.work_service import sync
 
         # Create feature branch
         subprocess.run(
@@ -490,7 +490,7 @@ class TestSync:
         )
 
         with patch(
-            "ghaiw.services.work_service.load_config",
+            "wade.services.work_service.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -503,7 +503,7 @@ class TestSync:
         """Sync fails with dirty worktree."""
         import subprocess
 
-        from ghaiw.services.work_service import sync
+        from wade.services.work_service import sync
 
         # Create and checkout feature branch
         subprocess.run(
@@ -517,7 +517,7 @@ class TestSync:
         (tmp_git_repo / "dirty.txt").write_text("dirty\n")
 
         with patch(
-            "ghaiw.services.work_service.load_config",
+            "wade.services.work_service.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -534,7 +534,7 @@ class TestSync:
         """JSON output mode emits structured events."""
         import subprocess
 
-        from ghaiw.services.work_service import sync
+        from wade.services.work_service import sync
 
         subprocess.run(
             ["git", "checkout", "-b", "feat/42-test"],
@@ -544,7 +544,7 @@ class TestSync:
         )
 
         with patch(
-            "ghaiw.services.work_service.load_config",
+            "wade.services.work_service.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -562,15 +562,15 @@ class TestSync:
 
 class TestDone:
     def test_not_in_git_repo(self) -> None:
-        from ghaiw.services.work_service import done
+        from wade.services.work_service import done
 
         with (
             patch(
-                "ghaiw.services.work_service.load_config",
+                "wade.services.work_service.load_config",
                 return_value=ProjectConfig(),
             ),
             patch(
-                "ghaiw.services.work_service.git_repo.get_repo_root",
+                "wade.services.work_service.git_repo.get_repo_root",
                 side_effect=GitError("not a repo"),
             ),
         ):
@@ -579,11 +579,11 @@ class TestDone:
 
     def test_no_issue_in_branch(self, tmp_git_repo: Path) -> None:
         """Branch without issue number fails."""
-        from ghaiw.services.work_service import done
+        from wade.services.work_service import done
 
         # We're on 'main' which has no issue number
         with patch(
-            "ghaiw.services.work_service.load_config",
+            "wade.services.work_service.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -599,14 +599,14 @@ class TestDone:
 
 class TestListSessions:
     def test_lists_worktrees(self, tmp_git_repo: Path) -> None:
-        from ghaiw.git.worktree import create_worktree
+        from wade.git.worktree import create_worktree
 
         # Create a worktree
         wt_dir = tmp_git_repo.parent / "wt-42"
         create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
 
         with patch(
-            "ghaiw.services.work_service.load_config",
+            "wade.services.work_service.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -618,7 +618,7 @@ class TestListSessions:
 
     def test_empty_when_no_worktrees(self, tmp_git_repo: Path) -> None:
         with patch(
-            "ghaiw.services.work_service.load_config",
+            "wade.services.work_service.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -627,13 +627,13 @@ class TestListSessions:
             assert len(sessions) == 0
 
     def test_json_output(self, tmp_git_repo: Path) -> None:
-        from ghaiw.git.worktree import create_worktree
+        from wade.git.worktree import create_worktree
 
         wt_dir = tmp_git_repo.parent / "wt-42"
         create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
 
         with patch(
-            "ghaiw.services.work_service.load_config",
+            "wade.services.work_service.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -643,7 +643,7 @@ class TestListSessions:
 
     def test_show_all_includes_main(self, tmp_git_repo: Path) -> None:
         with patch(
-            "ghaiw.services.work_service.load_config",
+            "wade.services.work_service.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -660,14 +660,14 @@ class TestListSessions:
 
 class TestRemove:
     def test_remove_by_target(self, tmp_git_repo: Path) -> None:
-        from ghaiw.git.worktree import create_worktree
-        from ghaiw.services.work_service import remove
+        from wade.git.worktree import create_worktree
+        from wade.services.work_service import remove
 
         wt_dir = tmp_git_repo.parent / "wt-42"
         create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
 
         with patch(
-            "ghaiw.services.work_service.load_config",
+            "wade.services.work_service.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -677,10 +677,10 @@ class TestRemove:
             assert not wt_dir.exists()
 
     def test_remove_unknown_target(self, tmp_git_repo: Path) -> None:
-        from ghaiw.services.work_service import remove
+        from wade.services.work_service import remove
 
         with patch(
-            "ghaiw.services.work_service.load_config",
+            "wade.services.work_service.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -690,14 +690,14 @@ class TestRemove:
 
     def test_remove_stale_no_force(self, tmp_git_repo: Path) -> None:
         """Without --force, stale removal just previews."""
-        from ghaiw.git.worktree import create_worktree
-        from ghaiw.services.work_service import remove
+        from wade.git.worktree import create_worktree
+        from wade.services.work_service import remove
 
         wt_dir = tmp_git_repo.parent / "wt-42"
         create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
 
         with patch(
-            "ghaiw.services.work_service.load_config",
+            "wade.services.work_service.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -709,14 +709,14 @@ class TestRemove:
             assert wt_dir.exists()
 
     def test_remove_stale_with_force(self, tmp_git_repo: Path) -> None:
-        from ghaiw.git.worktree import create_worktree
-        from ghaiw.services.work_service import remove
+        from wade.git.worktree import create_worktree
+        from wade.services.work_service import remove
 
         wt_dir = tmp_git_repo.parent / "wt-42"
         create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
 
         with patch(
-            "ghaiw.services.work_service.load_config",
+            "wade.services.work_service.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -726,10 +726,10 @@ class TestRemove:
             assert not wt_dir.exists()
 
     def test_remove_no_args(self, tmp_git_repo: Path) -> None:
-        from ghaiw.services.work_service import remove
+        from wade.services.work_service import remove
 
         with patch(
-            "ghaiw.services.work_service.load_config",
+            "wade.services.work_service.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),

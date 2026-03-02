@@ -1,1 +1,1 @@
-"""End-to-end tests for the full ghaiw workflow chain."""
+"""End-to-end tests for the full wade workflow chain."""

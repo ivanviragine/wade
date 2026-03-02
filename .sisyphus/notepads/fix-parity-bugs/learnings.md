@@ -23,14 +23,14 @@
 - Import order: alphabetical within groups, never rearrange existing
 
 ### Key File Locations
-- `src/ghaiw/ai_tools/model_utils.py` — BUG-002 (regex fix at line 191)
-- `src/ghaiw/models/deps.py` — BUG-001 (partition() at lines 118-126)
-- `src/ghaiw/services/work_service.py` — BUG-006 (PR-SUMMARY path ~line 1188), BUG-003 (post-work lifecycle)
-- `src/ghaiw/cli/work.py` — BUG-009 (--ai flag at line 76)
-- `src/ghaiw/cli/admin.py` — BUG-005 (shell-init at lines 87-105)
-- `src/ghaiw/utils/terminal.py` — BUG-004 (iTerm2), BUG-007 (gnome-terminal), BUG-008 (Ghostty macOS)
-- `src/ghaiw/git/pr.py` — PR primitives used by BUG-003
-- `src/ghaiw/ui/prompts.py` — confirm() and select() used by BUG-003, BUG-009
+- `src/wade/ai_tools/model_utils.py` — BUG-002 (regex fix at line 191)
+- `src/wade/models/deps.py` — BUG-001 (partition() at lines 118-126)
+- `src/wade/services/work_service.py` — BUG-006 (PR-SUMMARY path ~line 1188), BUG-003 (post-work lifecycle)
+- `src/wade/cli/work.py` — BUG-009 (--ai flag at line 76)
+- `src/wade/cli/admin.py` — BUG-005 (shell-init at lines 87-105)
+- `src/wade/utils/terminal.py` — BUG-004 (iTerm2), BUG-007 (gnome-terminal), BUG-008 (Ghostty macOS)
+- `src/wade/git/pr.py` — PR primitives used by BUG-003
+- `src/wade/ui/prompts.py` — confirm() and select() used by BUG-003, BUG-009
 
 ### [2026-02-24] BUG-001 partition fix
 - `DependencyGraph.partition()` must scope edges to the requested task set before grouping
@@ -66,7 +66,7 @@
 ### BUG-009: Multiple --ai Flags (COMPLETED)
 
 #### Implementation
-- Modified `src/ghaiw/cli/work.py`:
+- Modified `src/wade/cli/work.py`:
   - Changed `ai` parameter type from `str | None` to `list[str] | None` (line 76)
   - Added logic in `start()` to handle multiple values:
     - If >1 value: call `prompts.select()` to let user choose
@@ -121,9 +121,9 @@
 - Verification passed: targeted pytest (10/10), `mypy --strict`, and `ruff check src/`
 
 ### SG-002: `work done --plan <file>` parity fix [2026-02-24]
-- Added `_resolve_worktree_from_plan(plan_file, project_root)` to `work_service.py`; it reads the first heading, slugifies with `ghaiw.utils.slug.slugify`, resolves via `find_worktree_path`, and returns `(worktree_path, branch, issue_number_or_none)`.
+- Added `_resolve_worktree_from_plan(plan_file, project_root)` to `work_service.py`; it reads the first heading, slugifies with `wade.utils.slug.slugify`, resolves via `find_worktree_path`, and returns `(worktree_path, branch, issue_number_or_none)`.
 - Extended `work_service.done()` with `plan_file: Path | None = None` and inserted the plan-resolution branch before existing positional target plan-file handling.
 - Preserved the critical behavior split: positional `done file.md` still creates a new issue; `done --plan file.md` now resolves an existing worktree by title slug.
-- Added `--plan` option to `ghaiw.cli.work.done` and passed it to service as `plan_file=Path(plan)`.
+- Added `--plan` option to `wade.cli.work.done` and passed it to service as `plan_file=Path(plan)`.
 - Added `tests/unit/test_services/test_done_plan_flag.py` with 9 tests covering helper logic, done delegation/error handling, CLI wiring, and help exposure.
 - Verification passed: `uv run pytest tests/unit/test_services/test_done_plan_flag.py -v` (9 passed), `uv run mypy src/ --strict` (0 errors), `uv run ruff check src/` (clean), and LSP diagnostics reported no errors on changed files.

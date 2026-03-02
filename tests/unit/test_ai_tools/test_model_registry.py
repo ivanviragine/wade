@@ -1,8 +1,8 @@
 """Tests for the static model registry and adapter get_models() behavior."""
 
-from ghaiw.ai_tools import AbstractAITool
-from ghaiw.data import MODELS, get_models_for_tool
-from ghaiw.models.ai import AIToolID
+from wade.ai_tools import AbstractAITool
+from wade.data import MODELS, get_models_for_tool
+from wade.models.ai import AIToolID
 
 
 class TestModelRegistry:

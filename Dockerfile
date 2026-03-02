@@ -30,8 +30,8 @@ RUN uv venv /app/.venv && \
 ENV PATH="/app/.venv/bin:$PATH"
 
 # Configure git for tests
-RUN git config --global user.email "test@ghaiw.dev" && \
-    git config --global user.name "ghaiw test" && \
+RUN git config --global user.email "test@wade.dev" && \
+    git config --global user.name "wade test" && \
     git config --global init.defaultBranch main
 
 CMD ["pytest", "tests/", "-v", "--ignore=tests/live"]

@@ -1,8 +1,8 @@
-# Contributing to ghaiw
+# Contributing to WADE
 
 ## Development Setup
 
-**Prerequisites:** [gh CLI](https://cli.github.com/) must be installed and authenticated — ghaiw shells out to it for all GitHub operations.
+**Prerequisites:** [gh CLI](https://cli.github.com/) must be installed and authenticated — WADE shells out to it for all GitHub operations.
 
 ```bash
 gh auth login     # first-time setup
@@ -12,8 +12,8 @@ gh auth status    # verify it worked
 Then clone and install:
 
 ```bash
-git clone https://github.com/ivanviragine/ghaiw.git
-cd ghaiw
+git clone https://github.com/ivanviragine/wade.git
+cd wade
 uv pip install -e ".[dev]"
 ```
 
@@ -94,5 +94,5 @@ Add `--dry-run` to preview without making changes.
 | Architecture, config, commands | `docs/dev/architecture.md` |
 | Adding AI tools, providers, subcommands | `docs/dev/extending.md` |
 | Writing and running tests | `docs/dev/testing.md` |
-| Skills system and `ghaiw init` | `docs/dev/skills-system.md` |
+| Skills system and `wade init` | `docs/dev/skills-system.md` |
 | Documentation policies | `docs/dev/documentation-policies.md` |

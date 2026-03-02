@@ -1,6 +1,6 @@
 """Tests for terminal utilities."""
 
-from ghaiw.utils.terminal import (
+from wade.utils.terminal import (
     compose_work_title,
     start_title_keeper,
     stop_title_keeper,
@@ -10,7 +10,7 @@ from ghaiw.utils.terminal import (
 class TestComposeWorkTitle:
     def test_basic(self) -> None:
         result = compose_work_title("42", "Add search command")
-        assert "ghaiw work" in result
+        assert "wade work" in result
         assert "#42" in result
         assert "Add search command" in result
 

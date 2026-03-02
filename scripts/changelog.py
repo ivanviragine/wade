@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ghaiw changelog generator — builds CHANGELOG.md from conventional commits.
+"""wade changelog generator — builds CHANGELOG.md from conventional commits.
 
 Usage: python scripts/changelog.py [--stdout] [--tag vX.Y.Z]
 

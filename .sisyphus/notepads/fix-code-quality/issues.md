@@ -6,10 +6,10 @@
 ## [2026-02-24] CQ-006 Complete
 
 ### Implementation
-- Modified `src/ghaiw/db/engine.py`:
+- Modified `src/wade/db/engine.py`:
   - Added `"timeout": 30` to `connect_args` in `create_engine()` call (line 31)
   - Updated PRAGMA busy_timeout from 5000ms to 30000ms (line 39)
-  - Both changes ensure 30-second timeout for parallel ghaiw safety
+  - Both changes ensure 30-second timeout for parallel wade safety
 
 ### Tests Added
 - `test_engine_busy_timeout_is_30s()` — Verifies PRAGMA busy_timeout returns 30000ms
@@ -31,8 +31,8 @@
 ## [2026-02-24] CQ-005 Complete
 
 ### Implementation
-- Modified `src/ghaiw/config/migrations.py`:
-  - Added import: `from ghaiw.models.ai import AIToolID` (alphabetically ordered)
+- Modified `src/wade/config/migrations.py`:
+  - Added import: `from wade.models.ai import AIToolID` (alphabetically ordered)
   - Updated `_get_ai_tool()` to validate string AI tool values against `AIToolID` enum
   - Validation only applies to string values (preserves backward compatibility for numeric values)
   - Raises `ValueError` with sorted list of valid tools when unknown string value is encountered
@@ -66,7 +66,7 @@
 ## [2026-02-24] CQ-001 Complete
 
 ### Implementation
-- Modified `src/ghaiw/git/sync.py`:
+- Modified `src/wade/git/sync.py`:
   - Changed `get_conflicted_files()` to raise `GitError` on subprocess failure (exit code != 0)
   - Previously returned empty list `[]` on error, now raises exception
   - Error message includes git command, exit code, and stderr output
@@ -81,7 +81,7 @@
   5. `test_get_conflicted_files_calls_git_with_correct_args()` — verifies correct git args
 
 ### Bug Fix (Incidental)
-- Fixed pre-existing indentation error in `src/ghaiw/git/worktree.py` line 54
+- Fixed pre-existing indentation error in `src/wade/git/worktree.py` line 54
   - Docstring for `remove_worktree()` was not indented, causing SyntaxError
   - This was blocking test collection
 
@@ -94,7 +94,7 @@
 - ✅ No regressions in existing tests
 
 ### Notes
-- Used existing `GitError` class from `ghaiw.git.repo` (no new exceptions needed)
+- Used existing `GitError` class from `wade.git.repo` (no new exceptions needed)
 - Error message formatted to fit 100-char line limit (split across 3 lines)
 - Tests use mocking to avoid actual git subprocess calls
 - Incidental fix to worktree.py was necessary to unblock test collection
@@ -102,7 +102,7 @@
 ## [2026-02-24] CQ-002 Complete
 
 ### Implementation
-- Modified `src/ghaiw/providers/github.py`:
+- Modified `src/wade/providers/github.py`:
   - Replaced broad `except CommandError` with two specific exception handlers
   - `except CommandError as e:` → logs WARNING with branch and error details, returns None
   - `except json.JSONDecodeError as e:` → logs WARNING with branch and error details, returns None
@@ -120,8 +120,8 @@
 - ✅ All 4 new tests pass
 - ✅ All 43 provider tests pass (no regressions)
 - ✅ `uv run mypy src/ --strict` → 0 errors
-- ✅ `uv run ruff check src/ghaiw/providers/github.py` → 0 issues
-- ✅ `uv run ruff format --check src/ghaiw/providers/github.py` → 0 issues
+- ✅ `uv run ruff check src/wade/providers/github.py` → 0 issues
+- ✅ `uv run ruff format --check src/wade/providers/github.py` → 0 issues
 
 ### Notes
 - Replaced silent broad exception handling with specific, logged exceptions
@@ -133,7 +133,7 @@
 ## [2026-02-24] CQ-009: Add force parameter to remove_worktree()
 
 ### Implementation
-- Added `force: bool = True` parameter to `remove_worktree()` in `src/ghaiw/git/worktree.py`
+- Added `force: bool = True` parameter to `remove_worktree()` in `src/wade/git/worktree.py`
 - When `force=True` (default): includes `--force` in git command
 - When `force=False`: omits `--force` from git command
 - Updated docstring to document the new parameter
@@ -149,8 +149,8 @@
 ### Verification
 - ✅ `uv run pytest tests/unit/test_git/ -q --tb=short` → 17/17 PASS (no regressions)
 - ✅ `uv run mypy src/ --strict` → 0 errors
-- ✅ `uv run ruff check src/ghaiw/git/worktree.py tests/unit/test_git/test_worktree_remove.py` → 0 errors
-- ✅ `uv run ruff format --check src/ghaiw/git/worktree.py tests/unit/test_git/test_worktree_remove.py` → 0 issues
+- ✅ `uv run ruff check src/wade/git/worktree.py tests/unit/test_git/test_worktree_remove.py` → 0 errors
+- ✅ `uv run ruff format --check src/wade/git/worktree.py tests/unit/test_git/test_worktree_remove.py` → 0 issues
 - ✅ Call site at `work_service.py:1525` unchanged — uses default `force=True`, preserving all existing behavior
 
 ### Key Insight
@@ -173,7 +173,7 @@ Default parameter `force=True` ensures backward compatibility — all existing c
 
 ### Verification
 - ✅ All 4 new tests PASS
-- ✅ `uv run mypy src/ghaiw/services/work_service.py --strict` → 0 errors
+- ✅ `uv run mypy src/wade/services/work_service.py --strict` → 0 errors
 - ✅ `uv run ruff check` → All checks passed
 - ✅ `uv run ruff format --check` → 2 files already formatted
 - ✅ No new dependencies added
@@ -192,7 +192,7 @@ The timeout is enforced at the subprocess level, preventing hung hooks from bloc
 - After editing `migrations.py` via the Edit tool, `ruff format --check` flagged one formatting change (trailing whitespace / blank line inside the new try block). Always run `uv run ruff format src/` after edits, then re-verify.
 
 ### Test patterns confirmed
-- `unittest.mock.patch` (string target `"ghaiw.config.migrations.<func>"`) correctly intercepts the module-level functions called inside the lambdas in `run_all_migrations`, because lambdas close over the name, not the value. Patching the module attribute replaces what the lambda resolves to at call time.
+- `unittest.mock.patch` (string target `"wade.config.migrations.<func>"`) correctly intercepts the module-level functions called inside the lambdas in `run_all_migrations`, because lambdas close over the name, not the value. Patching the module attribute replaces what the lambda resolves to at call time.
 - `pytest.raises(RuntimeError, match="restored")` works for substring matching.
 - 5 tests total (3 required + 2 bonus): restore, RuntimeError message, error chaining (__cause__), success writes file, error message embeds original exception text.
 

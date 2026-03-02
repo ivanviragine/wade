@@ -6,7 +6,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from ghaiw.utils.terminal import detect_terminal, launch_in_new_terminal
+from wade.utils.terminal import detect_terminal, launch_in_new_terminal
 
 
 def test_iterm2_detected(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -20,10 +20,10 @@ def test_iterm2_detected(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_iterm2_launch_command(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TERM_PROGRAM", "iTerm.app")
     monkeypatch.delenv("TMUX", raising=False)
-    monkeypatch.setattr("ghaiw.utils.terminal.shutil.which", lambda _: None)
+    monkeypatch.setattr("wade.utils.terminal.shutil.which", lambda _: None)
 
     run_mock = Mock(return_value=Mock())
-    monkeypatch.setattr("ghaiw.utils.terminal.subprocess.run", run_mock)
+    monkeypatch.setattr("wade.utils.terminal.subprocess.run", run_mock)
 
     result = launch_in_new_terminal(["python", "-V"], cwd="/tmp")
 
@@ -39,10 +39,10 @@ def test_iterm2_launch_command(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_iterm2_launch_before_terminal_app(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TERM_PROGRAM", "iTerm.app")
     monkeypatch.delenv("TMUX", raising=False)
-    monkeypatch.setattr("ghaiw.utils.terminal.shutil.which", lambda _: None)
+    monkeypatch.setattr("wade.utils.terminal.shutil.which", lambda _: None)
 
     run_mock = Mock(return_value=Mock())
-    monkeypatch.setattr("ghaiw.utils.terminal.subprocess.run", run_mock)
+    monkeypatch.setattr("wade.utils.terminal.subprocess.run", run_mock)
 
     result = launch_in_new_terminal(["python", "-V"], cwd="/tmp")
 
@@ -60,7 +60,7 @@ def test_gnome_terminal_detected(monkeypatch: pytest.MonkeyPatch) -> None:
     def _which(name: str) -> str | None:
         return "/usr/bin/gnome-terminal" if name == "gnome-terminal" else None
 
-    monkeypatch.setattr("ghaiw.utils.terminal.shutil.which", _which)
+    monkeypatch.setattr("wade.utils.terminal.shutil.which", _which)
 
     assert detect_terminal() == "gnome-terminal"
 
@@ -68,15 +68,15 @@ def test_gnome_terminal_detected(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_gnome_terminal_launch_command(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("TERM_PROGRAM", raising=False)
     monkeypatch.delenv("TMUX", raising=False)
-    monkeypatch.setattr("ghaiw.utils.terminal.sys.platform", "linux")
+    monkeypatch.setattr("wade.utils.terminal.sys.platform", "linux")
 
     def _which(name: str) -> str | None:
         return "/usr/bin/gnome-terminal" if name == "gnome-terminal" else None
 
-    monkeypatch.setattr("ghaiw.utils.terminal.shutil.which", _which)
+    monkeypatch.setattr("wade.utils.terminal.shutil.which", _which)
 
     popen_mock = Mock(return_value=Mock())
-    monkeypatch.setattr("ghaiw.utils.terminal.subprocess.Popen", popen_mock)
+    monkeypatch.setattr("wade.utils.terminal.subprocess.Popen", popen_mock)
 
     result = launch_in_new_terminal(["python", "-V"], cwd="/tmp")
 
@@ -90,17 +90,17 @@ def test_gnome_terminal_launch_command(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_gnome_terminal_not_on_macos(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("TERM_PROGRAM", raising=False)
     monkeypatch.delenv("TMUX", raising=False)
-    monkeypatch.setattr("ghaiw.utils.terminal.sys.platform", "darwin")
+    monkeypatch.setattr("wade.utils.terminal.sys.platform", "darwin")
 
     def _which(name: str) -> str | None:
         return "/usr/bin/gnome-terminal" if name == "gnome-terminal" else None
 
-    monkeypatch.setattr("ghaiw.utils.terminal.shutil.which", _which)
+    monkeypatch.setattr("wade.utils.terminal.shutil.which", _which)
 
     popen_mock = Mock(return_value=Mock())
     run_mock = Mock(return_value=Mock())
-    monkeypatch.setattr("ghaiw.utils.terminal.subprocess.Popen", popen_mock)
-    monkeypatch.setattr("ghaiw.utils.terminal.subprocess.run", run_mock)
+    monkeypatch.setattr("wade.utils.terminal.subprocess.Popen", popen_mock)
+    monkeypatch.setattr("wade.utils.terminal.subprocess.run", run_mock)
 
     launch_in_new_terminal(["python", "-V"], cwd="/tmp")
 
@@ -112,15 +112,15 @@ def test_gnome_terminal_not_on_macos(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_ghostty_macos_uses_applescript(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TERM_PROGRAM", "ghostty")
     monkeypatch.delenv("TMUX", raising=False)
-    monkeypatch.setattr("ghaiw.utils.terminal.shutil.which", lambda _: "/opt/homebrew/bin/ghostty")
+    monkeypatch.setattr("wade.utils.terminal.shutil.which", lambda _: "/opt/homebrew/bin/ghostty")
 
     run_mock = Mock(return_value=Mock())
     popen_mock = Mock(return_value=Mock())
     timer_mock = Mock()
     timer_mock.return_value.start = Mock()
-    monkeypatch.setattr("ghaiw.utils.terminal.subprocess.run", run_mock)
-    monkeypatch.setattr("ghaiw.utils.terminal.subprocess.Popen", popen_mock)
-    monkeypatch.setattr("ghaiw.utils.terminal.threading.Timer", timer_mock)
+    monkeypatch.setattr("wade.utils.terminal.subprocess.run", run_mock)
+    monkeypatch.setattr("wade.utils.terminal.subprocess.Popen", popen_mock)
+    monkeypatch.setattr("wade.utils.terminal.threading.Timer", timer_mock)
 
     result = launch_in_new_terminal(["python", "-V"], cwd="/tmp")
 
@@ -137,11 +137,11 @@ def test_ghostty_macos_uses_applescript(monkeypatch: pytest.MonkeyPatch) -> None
 def test_ghostty_linux_uses_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TERM_PROGRAM", "ghostty")
     monkeypatch.delenv("TMUX", raising=False)
-    monkeypatch.setattr("ghaiw.utils.terminal.sys.platform", "linux")
-    monkeypatch.setattr("ghaiw.utils.terminal.shutil.which", lambda _: "/usr/bin/ghostty")
+    monkeypatch.setattr("wade.utils.terminal.sys.platform", "linux")
+    monkeypatch.setattr("wade.utils.terminal.shutil.which", lambda _: "/usr/bin/ghostty")
 
     popen_mock = Mock(return_value=Mock())
-    monkeypatch.setattr("ghaiw.utils.terminal.subprocess.Popen", popen_mock)
+    monkeypatch.setattr("wade.utils.terminal.subprocess.Popen", popen_mock)
 
     result = launch_in_new_terminal(["python", "-V"], cwd="/tmp")
 
@@ -154,12 +154,12 @@ def test_ghostty_linux_uses_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_ghostty_macos_temp_script_created(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TERM_PROGRAM", "ghostty")
     monkeypatch.delenv("TMUX", raising=False)
-    monkeypatch.setattr("ghaiw.utils.terminal.shutil.which", lambda _: "/opt/homebrew/bin/ghostty")
+    monkeypatch.setattr("wade.utils.terminal.shutil.which", lambda _: "/opt/homebrew/bin/ghostty")
 
     written: list[str] = []
 
     class _Tmp:
-        name = "/tmp/ghaiw-test"
+        name = "/tmp/wade-test"
 
         def __enter__(self) -> _Tmp:
             return self
@@ -176,9 +176,9 @@ def test_ghostty_macos_temp_script_created(monkeypatch: pytest.MonkeyPatch) -> N
     run_mock = Mock(return_value=Mock())
     timer_mock = Mock()
     timer_mock.return_value.start = Mock()
-    monkeypatch.setattr("ghaiw.utils.terminal.os.chmod", chmod_mock)
-    monkeypatch.setattr("ghaiw.utils.terminal.subprocess.run", run_mock)
-    monkeypatch.setattr("ghaiw.utils.terminal.threading.Timer", timer_mock)
+    monkeypatch.setattr("wade.utils.terminal.os.chmod", chmod_mock)
+    monkeypatch.setattr("wade.utils.terminal.subprocess.run", run_mock)
+    monkeypatch.setattr("wade.utils.terminal.threading.Timer", timer_mock)
 
     result = launch_in_new_terminal(["python", "-V"], cwd="/tmp")
 
@@ -195,10 +195,10 @@ def test_ghostty_macos_fallback_cleans_temp_script(monkeypatch: pytest.MonkeyPat
     """When AppleScript fails, tmp_path is cleaned up before the open -na fallback."""
     monkeypatch.setenv("TERM_PROGRAM", "ghostty")
     monkeypatch.delenv("TMUX", raising=False)
-    monkeypatch.setattr("ghaiw.utils.terminal.shutil.which", lambda _: "/opt/homebrew/bin/ghostty")
+    monkeypatch.setattr("wade.utils.terminal.shutil.which", lambda _: "/opt/homebrew/bin/ghostty")
 
     class _Tmp:
-        name = "/tmp/ghaiw-ghostty-test"
+        name = "/tmp/wade-ghostty-test"
 
         def __enter__(self) -> _Tmp:
             return self
@@ -211,7 +211,7 @@ def test_ghostty_macos_fallback_cleans_temp_script(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr("tempfile.NamedTemporaryFile", lambda **_: _Tmp())
     chmod_mock = Mock()
-    monkeypatch.setattr("ghaiw.utils.terminal.os.chmod", chmod_mock)
+    monkeypatch.setattr("wade.utils.terminal.os.chmod", chmod_mock)
 
     # AppleScript fails, then fallback succeeds
     def _run_side_effect(*args: object, **kwargs: object) -> Mock:
@@ -220,15 +220,15 @@ def test_ghostty_macos_fallback_cleans_temp_script(monkeypatch: pytest.MonkeyPat
             raise subprocess.CalledProcessError(1, "osascript")
         return Mock()
 
-    monkeypatch.setattr("ghaiw.utils.terminal.subprocess.run", _run_side_effect)
+    monkeypatch.setattr("wade.utils.terminal.subprocess.run", _run_side_effect)
 
     unlink_mock = Mock()
-    monkeypatch.setattr("ghaiw.utils.terminal._safe_unlink", unlink_mock)
+    monkeypatch.setattr("wade.utils.terminal._safe_unlink", unlink_mock)
 
     result = launch_in_new_terminal(["python", "-V"], cwd="/tmp")
 
     assert result is True
-    unlink_mock.assert_called_once_with("/tmp/ghaiw-ghostty-test")
+    unlink_mock.assert_called_once_with("/tmp/wade-ghostty-test")
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS-specific Ghostty fallback behavior")
@@ -236,10 +236,10 @@ def test_ghostty_macos_both_fail_cleans_temp_script(monkeypatch: pytest.MonkeyPa
     """When both AppleScript and open -na fallback fail, tmp_path is still cleaned up."""
     monkeypatch.setenv("TERM_PROGRAM", "ghostty")
     monkeypatch.delenv("TMUX", raising=False)
-    monkeypatch.setattr("ghaiw.utils.terminal.shutil.which", lambda _: "/opt/homebrew/bin/ghostty")
+    monkeypatch.setattr("wade.utils.terminal.shutil.which", lambda _: "/opt/homebrew/bin/ghostty")
 
     class _Tmp:
-        name = "/tmp/ghaiw-ghostty-test"
+        name = "/tmp/wade-ghostty-test"
 
         def __enter__(self) -> _Tmp:
             return self
@@ -252,7 +252,7 @@ def test_ghostty_macos_both_fail_cleans_temp_script(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr("tempfile.NamedTemporaryFile", lambda **_: _Tmp())
     chmod_mock = Mock()
-    monkeypatch.setattr("ghaiw.utils.terminal.os.chmod", chmod_mock)
+    monkeypatch.setattr("wade.utils.terminal.os.chmod", chmod_mock)
 
     # Both AppleScript and fallback fail
     def _run_side_effect(*args: object, **kwargs: object) -> Mock:
@@ -261,13 +261,13 @@ def test_ghostty_macos_both_fail_cleans_temp_script(monkeypatch: pytest.MonkeyPa
             raise subprocess.CalledProcessError(1, cmd[0])
         return Mock()
 
-    monkeypatch.setattr("ghaiw.utils.terminal.subprocess.run", _run_side_effect)
+    monkeypatch.setattr("wade.utils.terminal.subprocess.run", _run_side_effect)
 
     unlink_mock = Mock()
-    monkeypatch.setattr("ghaiw.utils.terminal._safe_unlink", unlink_mock)
+    monkeypatch.setattr("wade.utils.terminal._safe_unlink", unlink_mock)
 
     # Falls through to Terminal.app path, which also fails — overall returns False
     result = launch_in_new_terminal(["python", "-V"], cwd="/tmp")
 
     assert result is False
-    unlink_mock.assert_any_call("/tmp/ghaiw-ghostty-test")
+    unlink_mock.assert_any_call("/tmp/wade-ghostty-test")

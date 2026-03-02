@@ -6,8 +6,8 @@ from unittest.mock import patch
 
 from typer.testing import CliRunner
 
-import ghaiw
-from ghaiw.cli.main import app
+import wade
+from wade.cli.main import app
 
 runner = CliRunner()
 
@@ -16,20 +16,20 @@ class TestVersion:
     def test_version_flag(self) -> None:
         result = runner.invoke(app, ["--version"])
         assert result.exit_code == 0
-        assert "ghaiw" in result.output
-        assert ghaiw.__version__ in result.output
+        assert "wade" in result.output
+        assert wade.__version__ in result.output
 
     def test_version_short_flag(self) -> None:
         result = runner.invoke(app, ["-V"])
         assert result.exit_code == 0
-        assert ghaiw.__version__ in result.output
+        assert wade.__version__ in result.output
 
 
 class TestHelp:
     def test_root_help(self) -> None:
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
-        assert "ghaiw" in result.output
+        assert "wade" in result.output
         assert "task" in result.output
         assert "work" in result.output
 
@@ -71,7 +71,7 @@ class TestCommandBehaviorWithoutContext:
         assert result.exit_code == 1
         assert "Title is required" in result.output
 
-    @patch("ghaiw.services.task_service.list_tasks", return_value=[])
+    @patch("wade.services.task_service.list_tasks", return_value=[])
     def test_task_list_exits(self, mock_list: patch) -> None:
         # task list exits 0 when no tasks are found
         result = runner.invoke(app, ["task", "list"])
@@ -88,25 +88,25 @@ class TestCommandBehaviorWithoutContext:
         result = runner.invoke(app, ["work", "sync"])
         assert result.exit_code == 4
 
-    @patch("ghaiw.git.worktree.list_worktrees", return_value=[])
+    @patch("wade.git.worktree.list_worktrees", return_value=[])
     def test_work_list_exits(self, mock_wt: patch) -> None:
         # work list gracefully handles missing git context — returns empty list
         result = runner.invoke(app, ["work", "list"])
         assert result.exit_code == 0
-        assert "No active ghaiw worktrees" in result.output
+        assert "No active wade worktrees" in result.output
 
 
 class TestInteractiveMenu:
-    """Verify that ghaiw with no args invokes the interactive menu."""
+    """Verify that wade with no args invokes the interactive menu."""
 
     def test_no_args_invokes_menu(self) -> None:
-        """Running ghaiw with no subcommand should call _interactive_main_menu."""
-        with patch("ghaiw.cli.main._interactive_main_menu") as mock_menu:
+        """Running wade with no subcommand should call _interactive_main_menu."""
+        with patch("wade.cli.main._interactive_main_menu") as mock_menu:
             runner.invoke(app, [])
             mock_menu.assert_called_once()
 
     def test_help_selection_exits_cleanly(self) -> None:
         """Selecting 'Show help' (index 4) from the menu should exit 0."""
-        with patch("ghaiw.ui.prompts.menu", return_value=4):
+        with patch("wade.ui.prompts.menu", return_value=4):
             result = runner.invoke(app, [])
             assert result.exit_code == 0

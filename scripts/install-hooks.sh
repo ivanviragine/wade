@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install ghaiw git hooks into .git/hooks/ for this repository.
+# Install wade git hooks into .git/hooks/ for this repository.
 #
 # Usage: ./scripts/install-hooks.sh [--force]
 #

@@ -1,12 +1,12 @@
 # Testing Guide
 
-ghaiw uses **pytest** exclusively for all test suites.
+WADE uses **pytest** exclusively for all test suites.
 
 ## Test Organization
 
 ```
 tests/
-├── conftest.py              # Shared fixtures (tmp_git_repo, tmp_ghaiw_project, mock_gh)
+├── conftest.py              # Shared fixtures (tmp_git_repo, tmp_wade_project, mock_gh)
 ├── test_cli_basics.py       # Basic CLI command tests (help, version)
 ├── unit/                    # Pure logic, no subprocess, no git
 │   ├── test_models/         # Pydantic model tests
@@ -55,7 +55,7 @@ tests/
 ./scripts/test.sh -k "test_check"
 
 # With coverage
-./scripts/test.sh --cov=ghaiw --cov-report=term-missing
+./scripts/test.sh --cov=wade --cov-report=term-missing
 
 # Live GitHub tests (requires real gh auth)
 RUN_LIVE_GH_TESTS=1 uv run python -m pytest tests/live/ -v
@@ -68,8 +68,8 @@ Key fixtures in `tests/conftest.py`:
 | Fixture | Description |
 |---------|-------------|
 | `tmp_git_repo` | Fresh git repo with initial commit and `main` branch |
-| `tmp_ghaiw_project` | Git repo with `.ghaiw.yml` config file (extends `tmp_git_repo`) |
-| `monkeypatch_env` | Clears all `GHAIW_*` env vars to prevent test runner leakage |
+| `tmp_wade_project` | Git repo with `.wade.yml` config file (extends `tmp_git_repo`) |
+| `monkeypatch_env` | Clears all `WADE_*` env vars to prevent test runner leakage |
 | `mock_gh` | Creates a mock `gh` CLI binary that logs invocations; returns path to log file |
 
 ## Writing New Tests
@@ -83,10 +83,10 @@ New tests belong in the appropriate subdirectory. Use existing test files as ref
 from pathlib import Path
 import pytest
 
-def test_feature_does_something(tmp_ghaiw_project: Path) -> None:
+def test_feature_does_something(tmp_wade_project: Path) -> None:
     """Feature X should produce expected output."""
     # Arrange
-    config_path = tmp_ghaiw_project / ".ghaiw.yml"
+    config_path = tmp_wade_project / ".wade.yml"
 
     # Act
     result = some_function(config_path)
@@ -98,9 +98,9 @@ def test_feature_does_something(tmp_ghaiw_project: Path) -> None:
 
 **Testing with mock gh CLI:**
 ```python
-def test_issue_creation(tmp_ghaiw_project: Path, mock_gh: Path) -> None:
+def test_issue_creation(tmp_wade_project: Path, mock_gh: Path) -> None:
     """Creating an issue should invoke gh CLI correctly."""
-    result = create_issue(tmp_ghaiw_project, title="Test issue")
+    result = create_issue(tmp_wade_project, title="Test issue")
 
     assert result.number == 1
     # Verify gh was called with expected args
@@ -118,4 +118,4 @@ def test_issue_creation(tmp_ghaiw_project: Path, mock_gh: Path) -> None:
 - For `--json` modes, parse stdout as JSON and fail if any non-JSON line appears.
 - Pure functions (parsing, formatting, model validation) can and should be tested without mocks.
 
-**When to skip re-running tests after `ghaiw work sync`:** If the sync merge only brings in changes to documentation or template files (`templates/`, `docs/`, `README.md`, `AGENTS.md`, `CHANGELOG.md`), there is no need to re-run tests. Re-run tests after sync when the merged changes touch `src/`, `scripts/`, or `tests/`.
+**When to skip re-running tests after `wade work sync`:** If the sync merge only brings in changes to documentation or template files (`templates/`, `docs/`, `README.md`, `AGENTS.md`, `CHANGELOG.md`), there is no need to re-run tests. Re-run tests after sync when the merged changes touch `src/`, `scripts/`, or `tests/`.

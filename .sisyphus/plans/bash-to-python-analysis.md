@@ -1,16 +1,16 @@
-# ghaiw: Bash → Python Comparative Analysis Report
+# wade: Bash → Python Comparative Analysis Report
 
 ## 1. Scope & Definitions
 
 ### What Was Compared
 
-| Dimension | Bash (`ghaiw`) | Python (`ghaiw`) |
+| Dimension | Bash (`wade`) | Python (`wade`) |
 |-----------|----------------|---------------------|
 | **Version** | v3.14.0 | 0.5.0 (dev) |
 | **Source files** | 19 shell scripts | 50+ Python modules |
 | **Lines of code** | ~6,600+ | ~8,000+ |
-| **Entry point** | `ghaiw` (shell function) | `ghaiw` (Typer CLI) |
-| **Location** | `~/Documents/workspace/ghaiw/` | `~/Documents/workspace/ghaiw/` |
+| **Entry point** | `wade` (shell function) | `wade` (Typer CLI) |
+| **Location** | `~/Documents/workspace/wade/` | `~/Documents/workspace/wade/` |
 
 ### Classification Rules
 
@@ -140,7 +140,7 @@ These are deliberate improvements in the Python version, not bugs:
 
 ### BUG-001: DependencyGraph.partition() — single chain instead of connected components
 
-- **File**: `src/ghaiw/models/deps.py:118-126`
+- **File**: `src/wade/models/deps.py:118-126`
 - **Severity**: HIGH | **Confidence**: HIGH | **Effort**: M
 - **Expected**: `partition([A,B,C,D])` with edges A→B, C→D should return `([], [[A,B], [C,D]])` — two independent connected components
 - **Actual**: Returns `([], [[A,B,C,D]])` — all dependent tasks lumped into one chain. The algorithm walks edges linearly instead of computing connected components via BFS/DFS
@@ -149,7 +149,7 @@ These are deliberate improvements in the Python version, not bugs:
 
 ### BUG-002: Copilot model probing returns bare prefixes instead of full model names
 
-- **File**: `src/ghaiw/ai_tools/model_utils.py:191`
+- **File**: `src/wade/ai_tools/model_utils.py:191`
 - **Severity**: HIGH | **Confidence**: HIGH | **Effort**: S
 - **Expected**: `probe_copilot_models()` returns `["claude-sonnet-4.6", "gpt-5.3-codex"]`
 - **Actual**: Returns `["claude", "gpt", "gemini"]` due to `re.findall()` capture-group semantics
@@ -158,7 +158,7 @@ These are deliberate improvements in the Python version, not bugs:
 
 ### BUG-003: No post-work lifecycle prompt after AI tool exits
 
-- **File**: `src/ghaiw/services/work_service.py:439-465`
+- **File**: `src/wade/services/work_service.py:439-465`
 - **Severity**: HIGH | **Confidence**: HIGH | **Effort**: L
 - **Expected**: After AI tool exits, prompt user: "Do you want to merge this PR?" (Bash `_worktree_post_work_lifecycle()` in `lib/work.sh:180-260`)
 - **Actual**: After AI exits, silently captures transcript, adds labels, prints a banner, and returns `True`. User must manually run `work done` and then manually merge
@@ -167,7 +167,7 @@ These are deliberate improvements in the Python version, not bugs:
 
 ### BUG-004: iTerm2 detected but no AppleScript launch code
 
-- **File**: `src/ghaiw/utils/terminal.py:95-96` (detection), `108-162` (launch — no iTerm2 case)
+- **File**: `src/wade/utils/terminal.py:95-96` (detection), `108-162` (launch — no iTerm2 case)
 - **Severity**: MEDIUM | **Confidence**: HIGH | **Effort**: M
 - **Expected**: When iTerm2 is detected via `$TERM_PROGRAM`, use AppleScript to open a new tab and execute the command (Bash: `lib/work/terminal.sh:48-58`)
 - **Actual**: iTerm2 is in the detection list but has no corresponding case in `launch_in_new_terminal()`. Falls through to generic Terminal.app osascript, which opens a Terminal.app window instead of an iTerm2 tab
@@ -175,7 +175,7 @@ These are deliberate improvements in the Python version, not bugs:
 
 ### BUG-005: shell-init outputs Bash-only syntax
 
-- **File**: `src/ghaiw/cli/admin.py:87-105`
+- **File**: `src/wade/cli/admin.py:87-105`
 - **Severity**: MEDIUM | **Confidence**: HIGH | **Effort**: M
 - **Expected**: Shell-agnostic or multi-shell output (bash/zsh/fish), since README recommends adding to `.bashrc`, `.zshrc`, etc.
 - **Actual**: Uses `[[ ]]` (Bash-only test), `${1:-}` (Bash-only default), and other Bashisms. Fails in zsh (partially), fish (completely), and POSIX sh
@@ -183,7 +183,7 @@ These are deliberate improvements in the Python version, not bugs:
 
 ### BUG-006: PR-SUMMARY.md path differs from Bash convention
 
-- **File**: `src/ghaiw/services/work_service.py:1188`
+- **File**: `src/wade/services/work_service.py:1188`
 - **Severity**: MEDIUM | **Confidence**: HIGH | **Effort**: S
 - **Expected**: Look for `PR-SUMMARY.md` in the worktree directory (where AI agents write it during `work done`)
 - **Actual**: Looks for `/tmp/PR-SUMMARY-{issue_number}.md`
@@ -192,7 +192,7 @@ These are deliberate improvements in the Python version, not bugs:
 
 ### BUG-007: Missing gnome-terminal support
 
-- **File**: `src/ghaiw/utils/terminal.py:87-105`
+- **File**: `src/wade/utils/terminal.py:87-105`
 - **Severity**: MEDIUM | **Confidence**: HIGH | **Effort**: M
 - **Expected**: Detect and launch `gnome-terminal` for `--detach` mode (Bash: `lib/work/terminal.sh:72-74`)
 - **Actual**: `gnome-terminal` is not in the detection list and has no launch handling. Linux users with GNOME will get a "no terminal found" error when using `--detach`
@@ -200,7 +200,7 @@ These are deliberate improvements in the Python version, not bugs:
 
 ### BUG-008: Ghostty macOS uses Linux subprocess approach
 
-- **File**: `src/ghaiw/utils/terminal.py:125`
+- **File**: `src/wade/utils/terminal.py:125`
 - **Severity**: LOW | **Confidence**: HIGH | **Effort**: M
 - **Expected**: On macOS, use AppleScript to create a new Ghostty tab (Bash: `lib/work/terminal.sh:60-66`)
 - **Actual**: Uses `ghostty -e` subprocess launch (Linux approach). On macOS, this opens a new window instead of a tab in the existing Ghostty instance
@@ -208,7 +208,7 @@ These are deliberate improvements in the Python version, not bugs:
 
 ### BUG-009: `work start --ai` doesn't accept multiple values for selection
 
-- **File**: `src/ghaiw/cli/work.py:76`
+- **File**: `src/wade/cli/work.py:76`
 - **Severity**: LOW | **Confidence**: HIGH | **Effort**: S
 - **Expected**: Accept multiple `--ai` flags (e.g., `--ai claude --ai copilot`) and present an interactive selection menu (Bash: `lib/work.sh:38-52`)
 - **Actual**: Accepts single `str | None`. When omitted, auto-picks first installed tool without prompting
@@ -222,7 +222,7 @@ These are deliberate improvements in the Python version, not bugs:
 
 ### SG-001: Sync exit code for "already up-to-date"
 
-- **File**: `src/ghaiw/cli/work.py:120-139`
+- **File**: `src/wade/cli/work.py:120-139`
 - **Severity**: LOW | **Confidence**: MEDIUM | **Effort**: S
 - **Bash behavior**: Uses exit code 4 specifically for "already up-to-date" (distinct from success)
 - **Python behavior**: Returns exit code 0 for both successful merge and already-up-to-date
@@ -231,7 +231,7 @@ These are deliberate improvements in the Python version, not bugs:
 
 ### SG-002: `work done --plan <file>` flag vs argument detection
 
-- **File**: `src/ghaiw/cli/work.py:160-180` (Python), `lib/work/done.sh:15-25` (Bash)
+- **File**: `src/wade/cli/work.py:160-180` (Python), `lib/work/done.sh:15-25` (Bash)
 - **Severity**: LOW | **Confidence**: MEDIUM | **Effort**: S
 - **Bash behavior**: Has explicit `--plan` flag that accepts a plan file path
 - **Python behavior**: The `target` positional argument auto-detects if the value is a file path and treats it as a plan file
@@ -246,7 +246,7 @@ These are deliberate improvements in the Python version, not bugs:
 
 ### CQ-001: `get_conflicted_files()` silently returns empty list on git error
 
-- **File**: `src/ghaiw/git/sync.py:103-109`
+- **File**: `src/wade/git/sync.py:103-109`
 - **Severity**: HIGH | **Confidence**: HIGH | **Effort**: S
 - **Issue**: If `git diff --name-only --diff-filter=U` fails (e.g., corrupt index), the function catches the exception and returns `[]` — making it appear there are no conflicts
 - **Impact**: Merge conflicts could be silently ignored, leading to broken code being committed
@@ -254,7 +254,7 @@ These are deliberate improvements in the Python version, not bugs:
 
 ### CQ-002: `get_pr_for_branch()` catches all `CommandError` silently
 
-- **File**: `src/ghaiw/providers/github.py:326-336`
+- **File**: `src/wade/providers/github.py:326-336`
 - **Severity**: HIGH | **Confidence**: HIGH | **Effort**: S
 - **Issue**: Any `gh pr view` failure (network error, auth expired, rate limit) is caught and treated as "no PR exists"
 - **Impact**: Legitimate errors are hidden. User may be told "no PR" when in reality the API call failed
@@ -262,7 +262,7 @@ These are deliberate improvements in the Python version, not bugs:
 
 ### CQ-003: No subprocess timeout in `bootstrap_worktree()` hook execution
 
-- **File**: `src/ghaiw/services/work_service.py:130-147`
+- **File**: `src/wade/services/work_service.py:130-147`
 - **Severity**: MEDIUM | **Confidence**: HIGH | **Effort**: S
 - **Issue**: `post_worktree_create` hook scripts are executed via `subprocess.run()` without a timeout
 - **Impact**: A hanging hook script will block `work start` indefinitely with no way to recover
@@ -270,15 +270,15 @@ These are deliberate improvements in the Python version, not bugs:
 
 ### CQ-004: Config migrations have no rollback mechanism
 
-- **File**: `src/ghaiw/config/migrations.py:257-296`
+- **File**: `src/wade/config/migrations.py:257-296`
 - **Severity**: MEDIUM | **Confidence**: HIGH | **Effort**: M
-- **Issue**: `run_all_migrations()` modifies `.ghaiw.yml` in-place. If a migration partially fails or produces invalid YAML, the original is lost
+- **Issue**: `run_all_migrations()` modifies `.wade.yml` in-place. If a migration partially fails or produces invalid YAML, the original is lost
 - **Impact**: Users could end up with a broken config and no recovery path
-- **Fix direction**: Write `.ghaiw.yml.bak` before running migrations. On failure, restore from backup
+- **Fix direction**: Write `.wade.yml.bak` before running migrations. On failure, restore from backup
 
 ### CQ-005: `_get_ai_tool()` coerces to `str()` without validation
 
-- **File**: `src/ghaiw/config/migrations.py:33-44`
+- **File**: `src/wade/config/migrations.py:33-44`
 - **Severity**: MEDIUM | **Confidence**: MEDIUM | **Effort**: S
 - **Issue**: `str(raw.get("ai", {}).get("default_tool", ""))` will coerce `None`, `0`, `True`, etc. to their string representations without validation
 - **Impact**: Invalid config values become string garbage instead of raising a clear error
@@ -286,7 +286,7 @@ These are deliberate improvements in the Python version, not bugs:
 
 ### CQ-006: SQLite `busy_timeout=5000` may be too short for concurrent batch
 
-- **File**: `src/ghaiw/db/engine.py:35-41`
+- **File**: `src/wade/db/engine.py:35-41`
 - **Severity**: MEDIUM | **Confidence**: MEDIUM | **Effort**: S
 - **Issue**: `work batch` launches multiple AI sessions concurrently, each writing to the same SQLite database. 5 seconds may not be enough under heavy contention
 - **Impact**: Rare `database is locked` errors during batch sessions
@@ -294,7 +294,7 @@ These are deliberate improvements in the Python version, not bugs:
 
 ### CQ-007: No transaction isolation in repository CRUD
 
-- **File**: `src/ghaiw/db/repositories.py:27-32`
+- **File**: `src/wade/db/repositories.py:27-32`
 - **Severity**: MEDIUM | **Confidence**: MEDIUM | **Effort**: M
 - **Issue**: Repository methods use individual session operations without explicit transaction boundaries. Compound operations (read-modify-write) are not atomic
 - **Impact**: Concurrent worktree sessions could create race conditions on shared state
@@ -302,7 +302,7 @@ These are deliberate improvements in the Python version, not bugs:
 
 ### CQ-008: `__init_subclass__` silently overwrites duplicate TOOL_IDs
 
-- **File**: `src/ghaiw/ai_tools/base.py:35-38`
+- **File**: `src/wade/ai_tools/base.py:35-38`
 - **Severity**: LOW | **Confidence**: HIGH | **Effort**: S
 - **Issue**: If two AI tool classes declare the same `TOOL_ID`, the second silently overwrites the first in `_registry`
 - **Impact**: Debugging nightmare if someone accidentally duplicates a TOOL_ID
@@ -310,7 +310,7 @@ These are deliberate improvements in the Python version, not bugs:
 
 ### CQ-009: `remove_worktree()` always uses `--force`
 
-- **File**: `src/ghaiw/git/worktree.py:53-70`
+- **File**: `src/wade/git/worktree.py:53-70`
 - **Severity**: MEDIUM | **Confidence**: HIGH | **Effort**: S
 - **Issue**: Every worktree removal uses `git worktree remove --force`, even when the worktree is clean
 - **Impact**: Uncommitted work could be silently destroyed. The `--force` flag should be opt-in, not default
@@ -318,7 +318,7 @@ These are deliberate improvements in the Python version, not bugs:
 
 ### CQ-010: `_done_via_direct()` silently ignores cleanup failures
 
-- **File**: `src/ghaiw/services/work_service.py:1278-1285`
+- **File**: `src/wade/services/work_service.py:1278-1285`
 - **Severity**: MEDIUM | **Confidence**: HIGH | **Effort**: S
 - **Issue**: After direct merge, worktree cleanup failures (e.g., locked files) are caught and ignored
 - **Impact**: Stale worktrees accumulate without the user knowing. Branch may also not be deleted
@@ -326,7 +326,7 @@ These are deliberate improvements in the Python version, not bugs:
 
 ### CQ-011: Branch `_slugify()` replaces Unicode with hyphens
 
-- **File**: `src/ghaiw/git/branch.py:32-52`
+- **File**: `src/wade/git/branch.py:32-52`
 - **Severity**: LOW | **Confidence**: MEDIUM | **Effort**: S
 - **Issue**: Unicode characters in issue titles (common for i18n projects) are stripped to hyphens, potentially creating colliding branch names
 - **Impact**: Two issues with different Unicode titles could map to the same branch name
@@ -357,7 +357,7 @@ These three bugs affect core workflow correctness:
 
 8. Fix `get_conflicted_files()` to propagate errors instead of returning empty list.
 9. Add subprocess timeouts to `bootstrap_worktree()` hook execution.
-10. Add config migration rollback (backup `.ghaiw.yml.bak` before migration).
+10. Add config migration rollback (backup `.wade.yml.bak` before migration).
 
 ### Architecture Suggestions (Non-Urgent)
 

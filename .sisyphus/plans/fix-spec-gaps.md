@@ -2,10 +2,10 @@
 
 ## TL;DR
 
-> **Quick Summary**: Add explicit `--plan <file>` flag to `ghaiw work done` to match Bash interface. The flag resolves a plan file's title to find the matching worktree, then runs `done` against it — distinct from the positional `target` argument which creates a new issue from the file.
+> **Quick Summary**: Add explicit `--plan <file>` flag to `wade work done` to match Bash interface. The flag resolves a plan file's title to find the matching worktree, then runs `done` against it — distinct from the positional `target` argument which creates a new issue from the file.
 >
 > **Deliverables**:
-> - `--plan <file>` flag on `ghaiw work done` CLI command
+> - `--plan <file>` flag on `wade work done` CLI command
 > - Service function `_resolve_worktree_from_plan(plan_file: Path) -> tuple[Path, str, str | None]` in `work_service.py`
 > - TDD test coverage for both CLI wiring and service logic
 >
@@ -18,7 +18,7 @@
 ## Context
 
 ### Original Request
-Fix spec gap SG-002: Bash `ghaiw work done` accepts an explicit `--plan <file>` flag that resolves a plan file's title to find the matching worktree, then runs `done` against it. Python's `ghaiw work done` only has a positional `target` argument.
+Fix spec gap SG-002: Bash `wade work done` accepts an explicit `--plan <file>` flag that resolves a plan file's title to find the matching worktree, then runs `done` against it. Python's `wade work done` only has a positional `target` argument.
 
 ### Interview Summary
 **Key Discussions**:
@@ -43,7 +43,7 @@ Fix spec gap SG-002: Bash `ghaiw work done` accepts an explicit `--plan <file>` 
 ## Work Objectives
 
 ### Core Objective
-Add `--plan <file>` flag to `ghaiw work done` that resolves a plan file to its matching worktree, matching the Bash `ghaiw work done --plan <file>` interface.
+Add `--plan <file>` flag to `wade work done` that resolves a plan file to its matching worktree, matching the Bash `wade work done --plan <file>` interface.
 
 ### Concrete Deliverables
 - `--plan` flag in `cli/work.py` `done` command
@@ -55,8 +55,8 @@ Add `--plan <file>` flag to `ghaiw work done` that resolves a plan file to its m
 - [ ] `uv run mypy src/ --strict` — 0 errors
 - [ ] `uv run ruff check src/` — 0 errors
 - [ ] `uv run ruff format --check src/` — 0 errors
-- [ ] `ghaiw work done --plan path/to/PLAN.md` resolves worktree and runs done
-- [ ] `ghaiw work done --help` shows `--plan` in options
+- [ ] `wade work done --plan path/to/PLAN.md` resolves worktree and runs done
+- [ ] `wade work done --help` shows `--plan` in options
 
 ### Must Have
 - `--plan <file>` flag on `work done` command
@@ -135,7 +135,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   - Write test `test_resolve_plan_no_matching_worktree_errors()`: When no worktree matches the slug, returns clear error
   - Write test `test_resolve_plan_file_not_found_errors()`: When plan file doesn't exist, returns clear error
   - Run tests → expect FAIL (RED)
-  - **GREEN**: In `src/ghaiw/services/work_service.py`, add function:
+  - **GREEN**: In `src/wade/services/work_service.py`, add function:
     ```python
     def _resolve_worktree_from_plan(
         plan_file: Path,
@@ -163,14 +163,14 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
         title = match.group(1).strip()
 
         # Slugify and find worktree
-        from ghaiw.utils.slug import slugify
+        from wade.utils.slug import slugify
         slug = slugify(title)
 
         wt_path = find_worktree_path(slug, project_root=project_root)
         if not wt_path:
             raise ValueError(
                 f"No worktree found matching plan title '{title}' (slug: {slug}). "
-                "Check active worktrees with: ghaiw work list"
+                "Check active worktrees with: wade work list"
             )
 
         # Extract branch and issue from worktree
@@ -202,9 +202,9 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   **References**:
 
   **Pattern References**:
-  - `src/ghaiw/services/work_service.py:1040-1050` — `find_worktree_path()` function. Call this for worktree lookup by slug
-  - `src/ghaiw/utils/slug.py` — `slugify()` function for title-to-slug conversion
-  - `src/ghaiw/services/work_service.py:1078-1088` — existing plan file handling in `done()` (creates issue). Our function is DIFFERENT — it finds an existing worktree
+  - `src/wade/services/work_service.py:1040-1050` — `find_worktree_path()` function. Call this for worktree lookup by slug
+  - `src/wade/utils/slug.py` — `slugify()` function for title-to-slug conversion
+  - `src/wade/services/work_service.py:1078-1088` — existing plan file handling in `done()` (creates issue). Our function is DIFFERENT — it finds an existing worktree
 
   **Bash Reference**:
   - `lib/work/done.sh:763-806` — `_work_do_done_for_plan()`: reads first line, extracts `# Title`, slugifies, calls `_work_find_worktree_by_slug()`, then delegates to `_work_do_done()` with the resolved issue number
@@ -251,7 +251,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
 
   **Commit**: YES
   - Message: `feat(work): add _resolve_worktree_from_plan() for --plan flag support`
-  - Files: `src/ghaiw/services/work_service.py`, `tests/unit/test_services/test_done_plan_flag.py`
+  - Files: `src/wade/services/work_service.py`, `tests/unit/test_services/test_done_plan_flag.py`
   - Pre-commit: `uv run pytest tests/unit/test_services/test_done_plan_flag.py -v`
 
 - [ ] 2. Wire --plan flag into CLI done command and service done()
@@ -264,7 +264,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   - Write test `test_cli_plan_flag_passes_to_service()`: CLI `done --plan /tmp/PLAN.md` passes `plan_file=Path("/tmp/PLAN.md")` to service `done()`
   - Run tests → expect FAIL (RED)
   - **GREEN**:
-    1. In `src/ghaiw/cli/work.py`, add `--plan` option to `done` command:
+    1. In `src/wade/cli/work.py`, add `--plan` option to `done` command:
        ```python
        @work_app.command()
        def done(
@@ -276,7 +276,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
        ) -> None:
        ```
        Pass `plan_file=Path(plan_file) if plan_file else None` to `do_done()`
-    2. In `src/ghaiw/services/work_service.py`, update `done()` signature:
+    2. In `src/wade/services/work_service.py`, update `done()` signature:
        ```python
        def done(
            target: str | None = None,
@@ -325,9 +325,9 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   **References**:
 
   **Pattern References**:
-  - `src/ghaiw/cli/work.py:90-101` — current `done` command definition. Add `--plan` option here
-  - `src/ghaiw/services/work_service.py:1050-1120` — `done()` function. Add `plan_file` parameter and resolution logic at the top
-  - `src/ghaiw/services/work_service.py:1078-1088` — existing plan-file-as-target handling. Our `--plan` path is DIFFERENT and comes BEFORE this
+  - `src/wade/cli/work.py:90-101` — current `done` command definition. Add `--plan` option here
+  - `src/wade/services/work_service.py:1050-1120` — `done()` function. Add `plan_file` parameter and resolution logic at the top
+  - `src/wade/services/work_service.py:1078-1088` — existing plan-file-as-target handling. Our `--plan` path is DIFFERENT and comes BEFORE this
 
   **Bash Reference**:
   - `lib/work/sync.sh:371-393` — Bash `done)` case: parses `--plan` flag, calls `_work_do_done_for_plan()` when plan_file is set, otherwise falls through to normal done logic
@@ -345,7 +345,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   - [ ] `done()` service function accepts `plan_file: Path | None`
   - [ ] Plan file resolution happens before normal target handling
   - [ ] `uv run pytest tests/unit/test_services/test_done_plan_flag.py -v` → PASS (9 tests total, 0 failures)
-  - [ ] `ghaiw work done --help` shows `--plan` option
+  - [ ] `wade work done --help` shows `--plan` option
 
   **QA Scenarios (MANDATORY):**
 
@@ -375,10 +375,10 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
     Evidence: .sisyphus/evidence/task-2-plan-flag-error.txt
 
   Scenario: --plan shows in help output
-    Tool: Bash (ghaiw work done --help)
-    Preconditions: ghaiw installed
+    Tool: Bash (wade work done --help)
+    Preconditions: wade installed
     Steps:
-      1. Run `uv run python -m ghaiw.cli.main work done --help`
+      1. Run `uv run python -m wade.cli.main work done --help`
       2. Check output contains "--plan"
       3. Check output contains "Plan file to resolve worktree from"
     Expected Result: --plan flag visible in help output
@@ -388,7 +388,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
 
   **Commit**: YES
   - Message: `feat(work): add --plan flag to work done for worktree resolution by plan title`
-  - Files: `src/ghaiw/cli/work.py`, `src/ghaiw/services/work_service.py`, `tests/unit/test_services/test_done_plan_flag.py`
+  - Files: `src/wade/cli/work.py`, `src/wade/services/work_service.py`, `tests/unit/test_services/test_done_plan_flag.py`
   - Pre-commit: `uv run pytest tests/unit/test_services/test_done_plan_flag.py -v`
 
 ---
@@ -406,7 +406,7 @@ Wave FINAL (After ALL tasks — independent review, 4 parallel):
   Output: `Mypy [PASS/FAIL] | Ruff [PASS/FAIL] | Tests [N pass/N fail] | VERDICT`
 
 - [ ] F3. **Real Manual QA** — `unspecified-high`
-  Execute EVERY QA scenario from EVERY task. Test `ghaiw work done --help` shows `--plan`. Save evidence to `.sisyphus/evidence/final-qa/`.
+  Execute EVERY QA scenario from EVERY task. Test `wade work done --help` shows `--plan`. Save evidence to `.sisyphus/evidence/final-qa/`.
   Output: `Scenarios [N/N pass] | VERDICT`
 
 - [ ] F4. **Scope Fidelity Check** — `deep`
@@ -432,11 +432,11 @@ uv run pytest tests/ -v --ignore=tests/live   # Expected: ALL PASS, 0 failures
 uv run mypy src/ --strict                      # Expected: Success, 0 errors
 uv run ruff check src/                         # Expected: 0 errors
 uv run ruff format --check src/                # Expected: 0 reformatted
-uv run python -m ghaiw.cli.main work done --help  # Expected: --plan flag visible
+uv run python -m wade.cli.main work done --help  # Expected: --plan flag visible
 ```
 
 ### Final Checklist
-- [ ] `--plan <file>` flag present on `ghaiw work done`
+- [ ] `--plan <file>` flag present on `wade work done`
 - [ ] Plan file title extraction works
 - [ ] Worktree resolution by slug works
 - [ ] Positional target behavior unchanged

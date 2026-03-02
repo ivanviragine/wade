@@ -8,9 +8,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-from ghaiw.models.ai import AIToolID
-from ghaiw.models.config import ComplexityModelMapping
-from ghaiw.services.init_service import (
+from wade.models.ai import AIToolID
+from wade.models.config import ComplexityModelMapping
+from wade.services.init_service import (
     GITIGNORE_ENTRIES,
     GITIGNORE_MARKER_END,
     GITIGNORE_MARKER_START,
@@ -28,8 +28,8 @@ from ghaiw.services.init_service import (
     init,
     update,
 )
-from ghaiw.skills.installer import get_templates_dir
-from ghaiw.skills.pointer import (
+from wade.skills.installer import get_templates_dir
+from wade.skills.pointer import (
     MARKER_END,
     MARKER_START,
     ensure_pointer,
@@ -140,7 +140,7 @@ class TestSkillInstaller:
         assert tdir.is_dir()
 
     def test_install_copies_files(self, tmp_git_repo: Path) -> None:
-        from ghaiw.skills.installer import install_skills
+        from wade.skills.installer import install_skills
 
         installed = install_skills(tmp_git_repo)
         assert len(installed) > 0
@@ -151,7 +151,7 @@ class TestSkillInstaller:
         assert (tmp_git_repo / ".gemini" / "skills").exists()
 
     def test_remove_skills(self, tmp_git_repo: Path) -> None:
-        from ghaiw.skills.installer import install_skills, remove_skills
+        from wade.skills.installer import install_skills, remove_skills
 
         install_skills(tmp_git_repo)
         removed = remove_skills(tmp_git_repo)
@@ -214,7 +214,7 @@ class TestGitignoreBlock:
         """Old-style entries (no markers) are cleaned up and replaced with block."""
         gitignore = tmp_path / ".gitignore"
         gitignore.write_text(
-            "__pycache__/\n# ghaiw managed files\n.ghaiw-managed\n.issue-context.md\nPLAN.md\n"
+            "__pycache__/\n# wade managed files\n.wade-managed\n.issue-context.md\nPLAN.md\n"
         )
         _ensure_gitignore(tmp_path)
         content = gitignore.read_text()
@@ -223,7 +223,7 @@ class TestGitignoreBlock:
         # Old comment removed; entries now inside the block
         assert content.count("PLAN.md") == 1
         assert ".issue-context.md" not in content
-        assert "# ghaiw managed files" not in content
+        assert "# wade managed files" not in content
 
     # --- _clean_gitignore ---
 
@@ -249,15 +249,15 @@ class TestGitignoreBlock:
         """Deinit on a project inited before markers were introduced."""
         gitignore = tmp_path / ".gitignore"
         gitignore.write_text(
-            "__pycache__/\n# ghaiw managed files\n.ghaiw-managed\n.issue-context.md\nPLAN.md\n"
+            "__pycache__/\n# wade managed files\n.wade-managed\n.issue-context.md\nPLAN.md\n"
         )
         _clean_gitignore(tmp_path)
         content = (tmp_path / ".gitignore").read_text()
         assert "__pycache__/" in content
-        assert ".ghaiw-managed" not in content
+        assert ".wade-managed" not in content
         assert ".issue-context.md" not in content
         assert "PLAN.md" not in content
-        assert "# ghaiw managed files" not in content
+        assert "# wade managed files" not in content
 
     def test_clean_no_op_when_no_file(self, tmp_path: Path) -> None:
         _clean_gitignore(tmp_path)  # must not raise
@@ -273,7 +273,7 @@ class TestInit:
         success = init(project_root=tmp_git_repo, non_interactive=True)
         assert success
 
-        config_path = tmp_git_repo / ".ghaiw.yml"
+        config_path = tmp_git_repo / ".wade.yml"
         assert config_path.is_file()
 
         config = yaml.safe_load(config_path.read_text())
@@ -286,7 +286,7 @@ class TestInit:
         manifest = tmp_git_repo / MANIFEST_FILENAME
         assert manifest.is_file()
         content = manifest.read_text()
-        assert ".ghaiw.yml" in content
+        assert ".wade.yml" in content
 
     def test_init_creates_gitignore_block(self, tmp_git_repo: Path) -> None:
         init(project_root=tmp_git_repo, non_interactive=True)
@@ -306,11 +306,11 @@ class TestInit:
 
     def test_init_with_ai_tool(self, tmp_git_repo: Path) -> None:
         init(project_root=tmp_git_repo, ai_tool="claude", non_interactive=True)
-        config = yaml.safe_load((tmp_git_repo / ".ghaiw.yml").read_text())
+        config = yaml.safe_load((tmp_git_repo / ".wade.yml").read_text())
         assert config["ai"]["default_tool"] == "claude"
 
     def test_init_patches_existing_config(self, tmp_git_repo: Path) -> None:
-        config_path = tmp_git_repo / ".ghaiw.yml"
+        config_path = tmp_git_repo / ".wade.yml"
         config_path.write_text("version: 2\nproject:\n  issue_label: custom-label\n")
 
         init(project_root=tmp_git_repo, ai_tool="claude", non_interactive=True)
@@ -330,7 +330,7 @@ class TestInit:
         success = init(project_root=tmp_git_repo, non_interactive=True)
         assert success
 
-        config = yaml.safe_load((tmp_git_repo / ".ghaiw.yml").read_text())
+        config = yaml.safe_load((tmp_git_repo / ".wade.yml").read_text())
         assert config["project"]["main_branch"] == "main"
 
 
@@ -348,26 +348,26 @@ class TestSelectAITool:
         with pytest.raises(ValueError, match="Unknown AI tool"):
             _select_ai_tool("unknown-tool", non_interactive=False)
 
-    @patch("ghaiw.services.init_service.AbstractAITool.detect_installed")
+    @patch("wade.services.init_service.AbstractAITool.detect_installed")
     def test_no_tools_returns_none(self, mock_detect: MagicMock) -> None:
         mock_detect.return_value = []
         result = _select_ai_tool(None, non_interactive=False)
         assert result is None
 
-    @patch("ghaiw.services.init_service.AbstractAITool.detect_installed")
+    @patch("wade.services.init_service.AbstractAITool.detect_installed")
     def test_single_tool_auto_selects(self, mock_detect: MagicMock) -> None:
         mock_detect.return_value = [AIToolID.CLAUDE]
         result = _select_ai_tool(None, non_interactive=False)
         assert result == "claude"
 
-    @patch("ghaiw.services.init_service.AbstractAITool.detect_installed")
+    @patch("wade.services.init_service.AbstractAITool.detect_installed")
     def test_multiple_tools_non_interactive_selects_first(self, mock_detect: MagicMock) -> None:
         mock_detect.return_value = [AIToolID.CLAUDE, AIToolID.COPILOT]
         result = _select_ai_tool(None, non_interactive=True)
         assert result == "claude"
 
-    @patch("ghaiw.ui.prompts.select")
-    @patch("ghaiw.services.init_service.AbstractAITool.detect_installed")
+    @patch("wade.ui.prompts.select")
+    @patch("wade.services.init_service.AbstractAITool.detect_installed")
     def test_multiple_tools_interactive_selects_chosen(
         self, mock_detect: MagicMock, mock_select: MagicMock
     ) -> None:
@@ -376,8 +376,8 @@ class TestSelectAITool:
         result = _select_ai_tool(None, non_interactive=False)
         assert result == "copilot"
 
-    @patch("ghaiw.ui.prompts.select")
-    @patch("ghaiw.services.init_service.AbstractAITool.detect_installed")
+    @patch("wade.ui.prompts.select")
+    @patch("wade.services.init_service.AbstractAITool.detect_installed")
     def test_multiple_tools_skip_returns_none(
         self, mock_detect: MagicMock, mock_select: MagicMock
     ) -> None:
@@ -417,8 +417,8 @@ class TestPromptProjectSettings:
         assert result["issue_label"] == "feature-plan"
         assert result["worktrees_dir"] == "../.worktrees"
 
-    @patch("ghaiw.ui.prompts.select")
-    @patch("ghaiw.ui.prompts.input_prompt")
+    @patch("wade.ui.prompts.select")
+    @patch("wade.ui.prompts.input_prompt")
     def test_interactive_uses_prompts(
         self, mock_input: MagicMock, mock_select: MagicMock, tmp_git_repo: Path
     ) -> None:
@@ -457,7 +457,7 @@ class TestPromptModelMapping:
         result = _prompt_model_mapping("claude", mapping, non_interactive=True)
         assert result == mapping
 
-    @patch("ghaiw.ui.prompts.select")
+    @patch("wade.ui.prompts.select")
     def test_interactive_allows_edits(self, mock_select: MagicMock) -> None:
         mapping = ComplexityModelMapping(
             easy="haiku", medium="haiku", complex="sonnet", very_complex="opus"
@@ -468,8 +468,8 @@ class TestPromptModelMapping:
         assert result.easy == "haiku"
         assert result.complex == "sonnet"
 
-    @patch("ghaiw.ui.prompts.input_prompt")
-    @patch("ghaiw.ui.prompts.select")
+    @patch("wade.ui.prompts.input_prompt")
+    @patch("wade.ui.prompts.select")
     def test_interactive_overrides_values(
         self, mock_select: MagicMock, mock_input: MagicMock
     ) -> None:
@@ -496,7 +496,7 @@ class TestPromptCommandOverrides:
         result = _prompt_command_overrides(["claude"], non_interactive=True)
         assert result == {"plan": {}, "deps": {}}
 
-    @patch("ghaiw.ui.prompts.select")
+    @patch("wade.ui.prompts.select")
     def test_interactive_no_overrides(self, mock_select: MagicMock) -> None:
         # Select "Skip (use default)" for plan and deps only
         # With installed_tools=["claude"], options are: ["claude", "Skip (use default)"]
@@ -506,8 +506,8 @@ class TestPromptCommandOverrides:
         assert result["deps"] == {}
         assert "work" not in result
 
-    @patch("ghaiw.services.init_service._suggest_model_for_tool")
-    @patch("ghaiw.ui.prompts.select")
+    @patch("wade.services.init_service._suggest_model_for_tool")
+    @patch("wade.ui.prompts.select")
     def test_interactive_with_tool_override(
         self, mock_select: MagicMock, mock_suggest: MagicMock
     ) -> None:
@@ -530,7 +530,7 @@ class TestPromptCommandOverrides:
 
 class TestWriteConfig:
     def test_default_config(self, tmp_path: Path) -> None:
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         _write_config(config_path, "claude", ComplexityModelMapping())
         config = yaml.safe_load(config_path.read_text())
         assert config["version"] == 2
@@ -538,7 +538,7 @@ class TestWriteConfig:
         assert config["ai"]["default_tool"] == "claude"
 
     def test_with_project_settings(self, tmp_path: Path) -> None:
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         settings = {
             "main_branch": "master",
             "merge_strategy": "direct",
@@ -555,7 +555,7 @@ class TestWriteConfig:
         assert config["project"]["worktrees_dir"] == "../trees"
 
     def test_with_command_overrides(self, tmp_path: Path) -> None:
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         overrides = {
             "plan": {"tool": "gemini", "model": "gemini-2.5-pro"},
             "deps": {},
@@ -575,7 +575,7 @@ class TestWriteConfig:
         assert "model" not in config["ai"]["work"]
 
     def test_with_model_mapping(self, tmp_path: Path) -> None:
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         mapping = ComplexityModelMapping(
             easy="haiku", medium="haiku", complex="sonnet", very_complex="opus"
         )
@@ -586,14 +586,14 @@ class TestWriteConfig:
         assert config["models"]["claude"]["very_complex"] == "opus"
 
     def test_no_tool_omits_ai_and_models(self, tmp_path: Path) -> None:
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         _write_config(config_path, None, ComplexityModelMapping())
         config = yaml.safe_load(config_path.read_text())
         assert "default_tool" not in config.get("ai", {})
         assert "models" not in config
 
     def test_with_default_model_and_work_tool(self, tmp_path: Path) -> None:
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         mapping = ComplexityModelMapping(easy="haiku", complex="sonnet")
         _write_config(
             config_path,
@@ -612,7 +612,7 @@ class TestWriteConfig:
         assert "claude" not in config.get("models", {})
 
     def test_work_tool_same_as_ai_tool_omits_work_section(self, tmp_path: Path) -> None:
-        config_path = tmp_path / ".ghaiw.yml"
+        config_path = tmp_path / ".wade.yml"
         _write_config(config_path, "claude", ComplexityModelMapping(), work_tool="claude")
         config = yaml.safe_load(config_path.read_text())
         # work section omitted when tool matches default
@@ -646,12 +646,12 @@ class TestUpdate:
 class TestDeinitConfirmation:
     """Tests for the confirmation gate in deinit() (force=False path)."""
 
-    @patch("ghaiw.ui.prompts.confirm", return_value=False)
+    @patch("wade.ui.prompts.confirm", return_value=False)
     def test_deinit_aborts_when_user_declines(
         self, mock_confirm: MagicMock, tmp_git_repo: Path
     ) -> None:
         """When the user declines, deinit() returns False without removing config."""
-        config_path = tmp_git_repo / ".ghaiw.yml"
+        config_path = tmp_git_repo / ".wade.yml"
         config_path.write_text("version: 2\n")
 
         result = deinit(project_root=tmp_git_repo, force=False)
@@ -660,13 +660,13 @@ class TestDeinitConfirmation:
         assert config_path.is_file()  # Config was NOT removed
         mock_confirm.assert_called_once()
 
-    @patch("ghaiw.ui.prompts.confirm", return_value=True)
+    @patch("wade.ui.prompts.confirm", return_value=True)
     def test_deinit_proceeds_when_user_confirms(
         self, mock_confirm: MagicMock, tmp_git_repo: Path
     ) -> None:
         """When the user confirms, deinit() proceeds and removes config."""
         init(project_root=tmp_git_repo, non_interactive=True)
-        config_path = tmp_git_repo / ".ghaiw.yml"
+        config_path = tmp_git_repo / ".wade.yml"
         assert config_path.is_file()
 
         result = deinit(project_root=tmp_git_repo, force=False)
@@ -679,10 +679,10 @@ class TestDeinitConfirmation:
 class TestDeinit:
     def test_deinit_removes_config(self, tmp_git_repo: Path) -> None:
         init(project_root=tmp_git_repo, non_interactive=True)
-        assert (tmp_git_repo / ".ghaiw.yml").is_file()
+        assert (tmp_git_repo / ".wade.yml").is_file()
 
         deinit(project_root=tmp_git_repo, force=True)
-        assert not (tmp_git_repo / ".ghaiw.yml").is_file()
+        assert not (tmp_git_repo / ".wade.yml").is_file()
 
     def test_deinit_removes_manifest(self, tmp_git_repo: Path) -> None:
         init(project_root=tmp_git_repo, non_interactive=True)
@@ -722,21 +722,21 @@ class TestDeinit:
             for entry in GITIGNORE_ENTRIES:
                 assert entry not in content
 
-    def test_deinit_removes_ghaiw_dir(self, tmp_git_repo: Path) -> None:
+    def test_deinit_removes_wade_dir(self, tmp_git_repo: Path) -> None:
         init(project_root=tmp_git_repo, non_interactive=True)
-        # Simulate ghaiw creating its database directory
-        ghaiw_dir = tmp_git_repo / ".ghaiw"
-        ghaiw_dir.mkdir(exist_ok=True)
-        (ghaiw_dir / "ghaiw.db").write_text("fake db")
+        # Simulate wade creating its database directory
+        wade_dir = tmp_git_repo / ".wade"
+        wade_dir.mkdir(exist_ok=True)
+        (wade_dir / "wade.db").write_text("fake db")
 
         deinit(project_root=tmp_git_repo, force=True)
-        assert not ghaiw_dir.exists()
+        assert not wade_dir.exists()
 
     def test_full_lifecycle(self, tmp_git_repo: Path) -> None:
         """Test init → update → deinit full lifecycle."""
         # Init
         assert init(project_root=tmp_git_repo, ai_tool="claude", non_interactive=True)
-        assert (tmp_git_repo / ".ghaiw.yml").is_file()
+        assert (tmp_git_repo / ".wade.yml").is_file()
         assert (tmp_git_repo / MANIFEST_FILENAME).is_file()
         assert (tmp_git_repo / "AGENTS.md").is_file()
 
@@ -745,7 +745,7 @@ class TestDeinit:
 
         # Deinit
         assert deinit(project_root=tmp_git_repo, force=True)
-        assert not (tmp_git_repo / ".ghaiw.yml").is_file()
+        assert not (tmp_git_repo / ".wade.yml").is_file()
         assert not (tmp_git_repo / MANIFEST_FILENAME).is_file()
 
 
@@ -755,14 +755,14 @@ class TestDeinit:
 
 
 class TestReadManifestVersion:
-    def test_parses_ghaiw_version(self, tmp_path: Path) -> None:
+    def test_parses_wade_version(self, tmp_path: Path) -> None:
         manifest = tmp_path / MANIFEST_FILENAME
-        manifest.write_text("# Managed by ghaiw 0.1.0\n.ghaiw.yml\n")
+        manifest.write_text("# Managed by wade 0.1.0\n.wade.yml\n")
         assert _read_manifest_version(tmp_path) == "0.1.0"
 
-    def test_parses_ghaiw_version_other_value(self, tmp_path: Path) -> None:
+    def test_parses_wade_version_other_value(self, tmp_path: Path) -> None:
         manifest = tmp_path / MANIFEST_FILENAME
-        manifest.write_text("# Managed by ghaiw 3.14.0\n.ghaiw.yml\n")
+        manifest.write_text("# Managed by wade 3.14.0\n.wade.yml\n")
         assert _read_manifest_version(tmp_path) == "3.14.0"
 
     def test_returns_none_when_no_manifest(self, tmp_path: Path) -> None:
@@ -770,7 +770,7 @@ class TestReadManifestVersion:
 
     def test_returns_none_when_no_version_line(self, tmp_path: Path) -> None:
         manifest = tmp_path / MANIFEST_FILENAME
-        manifest.write_text(".ghaiw.yml\n.claude/skills/workflow/SKILL.md\n")
+        manifest.write_text(".wade.yml\n.claude/skills/workflow/SKILL.md\n")
         assert _read_manifest_version(tmp_path) is None
 
 
@@ -784,7 +784,7 @@ class TestUpdateExtended:
         """update() should call run_all_migrations on the config path."""
         init(project_root=tmp_git_repo, non_interactive=True)
 
-        with patch("ghaiw.config.migrations.run_all_migrations") as mock_mig:
+        with patch("wade.config.migrations.run_all_migrations") as mock_mig:
             mock_mig.return_value = False
             update(project_root=tmp_git_repo, skip_self_upgrade=True)
             mock_mig.assert_called_once()
@@ -793,7 +793,7 @@ class TestUpdateExtended:
         """update() should call configure_allowlist."""
         init(project_root=tmp_git_repo, non_interactive=True)
 
-        with patch("ghaiw.config.claude_allowlist.configure_allowlist") as mock_allow:
+        with patch("wade.config.claude_allowlist.configure_allowlist") as mock_allow:
             update(project_root=tmp_git_repo, skip_self_upgrade=True)
             mock_allow.assert_called_once()
 
@@ -801,7 +801,7 @@ class TestUpdateExtended:
         """skip_self_upgrade=True should not call _maybe_self_upgrade."""
         init(project_root=tmp_git_repo, non_interactive=True)
 
-        with patch("ghaiw.services.init_service._maybe_self_upgrade") as mock_upgrade:
+        with patch("wade.services.init_service._maybe_self_upgrade") as mock_upgrade:
             update(project_root=tmp_git_repo, skip_self_upgrade=True)
             mock_upgrade.assert_not_called()
 
@@ -811,7 +811,7 @@ class TestUpdateExtended:
 
         # Write a manifest with an old version number
         manifest = tmp_git_repo / MANIFEST_FILENAME
-        manifest.write_text("# Managed by ghaiw 0.0.1\n.ghaiw.yml\n")
+        manifest.write_text("# Managed by wade 0.0.1\n.wade.yml\n")
 
         success = update(project_root=tmp_git_repo, skip_self_upgrade=True)
         assert success  # update should succeed and detect version difference

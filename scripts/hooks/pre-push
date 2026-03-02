@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ghaiw pre-push hook — auto-bumps semver on conventional commits pushed to main.
+# wade pre-push hook — auto-bumps semver on conventional commits pushed to main.
 #
 # Install: scripts/install-hooks.sh
 # Manual:  cp scripts/hooks/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
@@ -42,7 +42,7 @@ _find_python() {
     return
   fi
   # Try uv-managed venv
-  local uv_venv="$HOME/.local/share/ghaiw/venv/bin/python"
+  local uv_venv="$HOME/.local/share/wade/venv/bin/python"
   if [[ -x "$uv_venv" ]]; then
     echo "$uv_venv"
     return
@@ -73,7 +73,7 @@ while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
   # Skip if the tip commit is already a version bump (no double-bump).
   tip_msg=$(git log -1 --pretty=%s "$local_sha" 2>/dev/null || true)
   if echo "$tip_msg" | grep -q '^chore: bump version'; then
-    echo "[ghaiw] Version bump already present at tip — skipping auto-bump."
+    echo "[wade] Version bump already present at tip — skipping auto-bump."
     continue
   fi
 
@@ -89,14 +89,14 @@ while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
 
   if [[ -n "$bump_type" ]]; then
     PYTHON="$(_find_python)"
-    echo "[ghaiw] Detected conventional commits requiring a ${bump_type} bump."
-    echo "[ghaiw] Running auto_version.py ${bump_type} ..."
+    echo "[wade] Detected conventional commits requiring a ${bump_type} bump."
+    echo "[wade] Running auto_version.py ${bump_type} ..."
     cd "$REPO_ROOT"
     "$PYTHON" "$BUMP_SCRIPT" "$bump_type"
     # Push only the tag — git's original push will carry the version bump commit.
     new_tag=$(git describe --tags --abbrev=0 2>/dev/null || true)
     [[ -n "$new_tag" ]] && git push "$REMOTE" "$new_tag" --no-verify
-    echo "[ghaiw] Auto-version bump complete. Tag ${new_tag} pushed."
+    echo "[wade] Auto-version bump complete. Tag ${new_tag} pushed."
   fi
 done
 
