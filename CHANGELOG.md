@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.0.10] — 2026-03-02
+
+### Bug Fixes
+
+- harden PR workflow and config/deps validation (5963dc4)
+
 ## [v1.0.9] — 2026-03-01
 
 ### Bug Fixes
