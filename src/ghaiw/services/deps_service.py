@@ -216,13 +216,19 @@ def apply_deps_to_issues(
 
     for issue_id in issue_numbers:
         deps_section = build_deps_section(issue_id, edges)
-        if not deps_section:
-            continue
 
         try:
             task = provider.read_task(issue_id)
             cleaned_body = strip_deps_section(task.body)
-            new_body = cleaned_body.rstrip("\n") + "\n\n" + deps_section
+
+            if deps_section:
+                new_body = cleaned_body.rstrip("\n") + "\n\n" + deps_section
+            elif "## Dependencies" in task.body:
+                # No edges remain but a stale ## Dependencies block was stripped
+                new_body = cleaned_body
+            else:
+                continue
+
             provider.update_task(issue_id, body=new_body)
             console.detail(f"Updated #{issue_id} with dependency refs")
             updated += 1
@@ -364,37 +370,37 @@ def _run_interactive_analysis(
 
     console.empty()
 
-    # Launch AI interactively
     try:
-        adapter = AbstractAITool.get(AIToolID(ai_tool))
-        adapter.launch(
-            worktree_path=Path.cwd(),
-            model=model,
-            prompt=interactive_prompt,
-            trusted_dirs=[str(Path.cwd()), output_dir, tempfile.gettempdir()],
-        )
-    except (ValueError, KeyError):
-        console.warn(f"Unknown AI tool: {ai_tool}")
-        return None
-    except Exception as e:
-        console.warn(f"AI tool launch failed: {e}")
-        return None
+        # Launch AI interactively
+        try:
+            adapter = AbstractAITool.get(AIToolID(ai_tool))
+            adapter.launch(
+                worktree_path=Path.cwd(),
+                model=model,
+                prompt=interactive_prompt,
+                trusted_dirs=[str(Path.cwd()), output_dir, tempfile.gettempdir()],
+            )
+        except (ValueError, KeyError):
+            console.warn(f"Unknown AI tool: {ai_tool}")
+            return None
+        except Exception as e:
+            console.warn(f"AI tool launch failed: {e}")
+            return None
 
-    # Read output file after AI exits
-    try:
+        # Read output file after AI exits
         if output_file.is_file():
             text = output_file.read_text(encoding="utf-8").strip()
             if text:
                 return text
+
+        console.warn("No dependency output file found after interactive session.")
+        return None
     finally:
         # Clean up temp dir if we created it
         if created_tmp:
             import shutil
 
             shutil.rmtree(output_dir, ignore_errors=True)
-
-    console.warn("No dependency output file found after interactive session.")
-    return None
 
 
 # ---------------------------------------------------------------------------

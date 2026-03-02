@@ -98,6 +98,7 @@ class AbstractTaskProvider(ABC):
         body: str,
         base_branch: str,
         draft: bool = False,
+        head_branch: str | None = None,
     ) -> str:
         """Create a pull request. Returns the PR URL."""
         raise NotImplementedError(f"{type(self).__name__} does not support pull requests")

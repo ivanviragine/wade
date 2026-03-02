@@ -364,9 +364,9 @@ class TestSnapshotTaskNumbers:
 
 
 class TestCreatePR:
-    @patch("ghaiw.providers.github.run")
-    def test_create_pr(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
-        mock_run.return_value = _make_completed("https://github.com/owner/repo/pull/5\n")
+    @patch("ghaiw.git.pr.create_pr")
+    def test_create_pr(self, mock_create: MagicMock, provider: GitHubProvider) -> None:
+        mock_create.return_value = {"url": "https://github.com/owner/repo/pull/5"}
 
         url = provider.create_pr(
             title="Add feature",
@@ -375,38 +375,65 @@ class TestCreatePR:
         )
         assert url == "https://github.com/owner/repo/pull/5"
 
-        cmd = mock_run.call_args[0][0]
-        assert "pr" in cmd
-        assert "create" in cmd
-        assert "--base" in cmd
-        assert "main" in cmd
+        mock_create.assert_called_once()
+        call_kwargs = mock_create.call_args[1]
+        assert call_kwargs["title"] == "Add feature"
+        assert call_kwargs["base"] == "main"
+        assert call_kwargs["head"] is None
 
-    @patch("ghaiw.providers.github.run")
-    def test_create_draft_pr(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
-        mock_run.return_value = _make_completed("https://github.com/owner/repo/pull/6\n")
+    @patch("ghaiw.git.pr.create_pr")
+    def test_create_draft_pr(self, mock_create: MagicMock, provider: GitHubProvider) -> None:
+        mock_create.return_value = {"url": "https://github.com/owner/repo/pull/6"}
 
         provider.create_pr("Draft", "body", "main", draft=True)
-        cmd = mock_run.call_args[0][0]
-        assert "--draft" in cmd
+
+        mock_create.assert_called_once()
+        call_kwargs = mock_create.call_args[1]
+        assert call_kwargs["draft"] is True
+
+    @patch("ghaiw.git.pr.create_pr")
+    def test_create_pr_with_head_branch(
+        self, mock_create: MagicMock, provider: GitHubProvider
+    ) -> None:
+        mock_create.return_value = {"url": "https://github.com/owner/repo/pull/7"}
+
+        url = provider.create_pr("Feature", "body", "main", head_branch="feat/42-test")
+        assert url == "https://github.com/owner/repo/pull/7"
+
+        call_kwargs = mock_create.call_args[1]
+        assert call_kwargs["head"] == "feat/42-test"
 
 
 class TestMergePR:
-    @patch("ghaiw.providers.github.run")
-    def test_merge_squash(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
-        mock_run.return_value = _make_completed("")
+    @patch("ghaiw.git.pr.merge_pr")
+    def test_merge_squash(self, mock_merge: MagicMock, provider: GitHubProvider) -> None:
         provider.merge_pr("5", strategy="squash")
 
-        cmd = mock_run.call_args[0][0]
-        assert "--squash" in cmd
-        assert "--delete-branch" in cmd
+        mock_merge.assert_called_once()
+        call_kwargs = mock_merge.call_args[1]
+        assert call_kwargs["pr_number"] == 5
+        assert call_kwargs["strategy"] == "squash"
+        assert call_kwargs["delete_branch"] is True
 
-    @patch("ghaiw.providers.github.run")
-    def test_merge_no_delete(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
-        mock_run.return_value = _make_completed("")
-        provider.merge_pr("5", delete_branch=False)
+    @patch("ghaiw.git.pr.merge_pr")
+    def test_merge_delegates_to_git_pr(
+        self, mock_merge: MagicMock, provider: GitHubProvider
+    ) -> None:
+        provider.merge_pr("10", strategy="rebase")
 
-        cmd = mock_run.call_args[0][0]
-        assert "--delete-branch" not in cmd
+        mock_merge.assert_called_once()
+        call_kwargs = mock_merge.call_args[1]
+        assert call_kwargs["pr_number"] == 10
+        assert call_kwargs["strategy"] == "rebase"
+
+    @patch("ghaiw.git.pr.merge_pr")
+    def test_merge_no_delete_branch(self, mock_merge: MagicMock, provider: GitHubProvider) -> None:
+        provider.merge_pr("7", strategy="squash", delete_branch=False)
+
+        mock_merge.assert_called_once()
+        call_kwargs = mock_merge.call_args[1]
+        assert call_kwargs["pr_number"] == 7
+        assert call_kwargs["delete_branch"] is False
 
 
 # ---------------------------------------------------------------------------

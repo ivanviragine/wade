@@ -59,7 +59,7 @@ def create_pr(
     title: str,
     body: str,
     base: str,
-    head: str,
+    head: str | None = None,
     draft: bool = False,
 ) -> dict[str, str | int]:
     """Create a pull request via ``gh pr create``.
@@ -69,7 +69,7 @@ def create_pr(
         title: PR title.
         body: PR body (Markdown).
         base: Base branch to merge into (e.g., "main").
-        head: Head branch with changes.
+        head: Head branch with changes. If None, gh infers the current branch.
         draft: If True, create as a draft PR.
 
     Returns:
@@ -87,9 +87,9 @@ def create_pr(
         body,
         "--base",
         base,
-        "--head",
-        head,
     ]
+    if head is not None:
+        cmd_args.extend(["--head", head])
     if draft:
         cmd_args.append("--draft")
 
@@ -134,6 +134,7 @@ def merge_pr(
     repo_root: Path,
     pr_number: int,
     strategy: str = "squash",
+    delete_branch: bool = True,
 ) -> None:
     """Merge a pull request via ``gh pr merge``.
 
@@ -141,6 +142,7 @@ def merge_pr(
         repo_root: Repository root directory.
         pr_number: PR number to merge.
         strategy: Merge strategy — "squash", "merge", or "rebase".
+        delete_branch: If True, delete the branch after merging.
 
     Raises:
         GhCliError: If the merge fails.
@@ -151,15 +153,16 @@ def merge_pr(
         raise ValueError(f"strategy must be one of {allowed}, got {strategy!r}")
 
     flag = f"--{strategy}"
-    log.info("pr.merge", pr_number=pr_number, strategy=strategy)
-    _run_gh(
+    log.info("pr.merge", pr_number=pr_number, strategy=strategy, delete_branch=delete_branch)
+    cmd_args = [
         "pr",
         "merge",
         str(pr_number),
         flag,
-        "--delete-branch",
-        cwd=repo_root,
-    )
+    ]
+    if delete_branch:
+        cmd_args.append("--delete-branch")
+    _run_gh(*cmd_args, cwd=repo_root)
 
 
 def update_pr_body(repo_root: Path, pr_number: int, body: str) -> bool:

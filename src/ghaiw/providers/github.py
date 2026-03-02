@@ -280,7 +280,7 @@ class GitHubProvider(AbstractTaskProvider):
         tasks = self.list_tasks(label=label, state=state)
         return {t.id for t in tasks}
 
-    # --- PR operations ---
+    # --- PR operations (delegate to git/pr.py) ---
 
     def create_pr(
         self,
@@ -288,33 +288,20 @@ class GitHubProvider(AbstractTaskProvider):
         body: str,
         base_branch: str,
         draft: bool = False,
+        head_branch: str | None = None,
     ) -> str:
         """Create a pull request via gh pr create. Returns the PR URL."""
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
-            f.write(body)
-            body_file = f.name
+        from ghaiw.git import pr as git_pr
 
-        try:
-            cmd = [
-                "gh",
-                "pr",
-                "create",
-                "--title",
-                title,
-                "--body-file",
-                body_file,
-                "--base",
-                base_branch,
-            ]
-            if draft:
-                cmd.append("--draft")
-
-            result = run(cmd, check=True)
-            url = result.stdout.strip()
-            logger.info("github.pr_created", url=url)
-            return url
-        finally:
-            Path(body_file).unlink(missing_ok=True)
+        info = git_pr.create_pr(
+            repo_root=Path.cwd(),
+            title=title,
+            body=body,
+            base=base_branch,
+            head=head_branch,
+            draft=draft,
+        )
+        return str(info.get("url", ""))
 
     def merge_pr(
         self,
@@ -323,45 +310,27 @@ class GitHubProvider(AbstractTaskProvider):
         delete_branch: bool = True,
     ) -> None:
         """Merge a PR via gh pr merge."""
-        cmd = ["gh", "pr", "merge", pr_number, f"--{strategy}"]
-        if delete_branch:
-            cmd.append("--delete-branch")
-        run(cmd, check=True)
-        logger.info("github.pr_merged", number=pr_number, strategy=strategy)
+        from ghaiw.git import pr as git_pr
+
+        git_pr.merge_pr(
+            repo_root=Path.cwd(),
+            pr_number=int(pr_number),
+            strategy=strategy,
+            delete_branch=delete_branch,
+        )
 
     def get_pr_for_branch(self, branch: str) -> dict[str, Any] | None:
         """Get PR info for a branch. Returns dict with number/body or None."""
-        try:
-            result = run(
-                ["gh", "pr", "view", branch, "--json", "number,body"],
-                check=True,
-            )
-            data: dict[str, Any] = json.loads(result.stdout)
-            return data
-        except CommandError as e:
-            logger.warning("get_pr_for_branch failed", branch=branch, error=str(e))
-            return None
-        except json.JSONDecodeError as e:
-            logger.warning(
-                "get_pr_for_branch: invalid JSON response",
-                branch=branch,
-                error=str(e),
-            )
-            return None
+        from ghaiw.git import pr as git_pr
+
+        return git_pr.get_pr_for_branch(Path.cwd(), branch)
 
     def update_pr_body(self, pr_number: str, body: str) -> None:
         """Update a PR's body text."""
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
-            f.write(body)
-            body_file = f.name
+        from ghaiw.git import pr as git_pr
 
-        try:
-            run(
-                ["gh", "pr", "edit", pr_number, "--body-file", body_file],
-                check=True,
-            )
-        finally:
-            Path(body_file).unlink(missing_ok=True)
+        if not git_pr.update_pr_body(Path.cwd(), int(pr_number), body):
+            logger.warning("github.update_pr_body_failed", pr_number=pr_number)
 
     # --- Repository info ---
 

@@ -44,10 +44,23 @@ class WorkSession(BaseModel):
     pr_url: str | None = None
 
 
+class SyncEventType(StrEnum):
+    """Event types emitted during sync operations."""
+
+    ERROR = "error"
+    PREFLIGHT_OK = "preflight_ok"
+    UP_TO_DATE = "up_to_date"
+    DONE = "done"
+    DRY_RUN = "dry_run"
+    MERGED = "merged"
+    CONFLICT = "conflict"
+    CONFLICT_DIFF = "conflict_diff"
+
+
 class SyncEvent(BaseModel):
     """A structured event emitted during a sync operation."""
 
-    event: str
+    event: SyncEventType
     data: dict[str, Any] = {}
     timestamp: datetime = Field(default_factory=datetime.now)
 

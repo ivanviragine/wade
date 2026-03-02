@@ -30,7 +30,13 @@ from ghaiw.models.ai import AIToolID, TokenUsage
 from ghaiw.models.config import ProjectConfig
 from ghaiw.models.deps import DependencyGraph
 from ghaiw.models.task import Task
-from ghaiw.models.work import MergeStrategy, SyncEvent, SyncResult, WorktreeState
+from ghaiw.models.work import (
+    MergeStrategy,
+    SyncEvent,
+    SyncEventType,
+    SyncResult,
+    WorktreeState,
+)
 from ghaiw.providers.base import AbstractTaskProvider
 from ghaiw.providers.registry import get_provider
 from ghaiw.services.ai_resolution import resolve_ai_tool, resolve_model
@@ -416,13 +422,7 @@ def _post_work_lifecycle_pr(
     worktree_path: Path | None,
     provider: AbstractTaskProvider,
 ) -> None:
-    provider_get_pr = getattr(provider, "get_pr_for_branch", None)
-    pr_info_raw = (
-        provider_get_pr(branch)
-        if callable(provider_get_pr)
-        else git_pr.get_pr_for_branch(repo_root, branch)
-    )
-    pr_info = pr_info_raw if isinstance(pr_info_raw, dict) else None
+    pr_info = git_pr.get_pr_for_branch(repo_root, branch)
     if not pr_info:
         console.warn(f"No open PR found for branch '{branch}'. Skipping lifecycle.")
         return
@@ -435,9 +435,40 @@ def _post_work_lifecycle_pr(
     if not prompts.confirm(f"Do you want to merge PR #{pr_number}?", default=True):
         return
 
-    # Remove the worktree before merging. git refuses to delete a branch that
-    # is checked out in a linked worktree, so `gh pr merge --delete-branch`
-    # would fail without this step.
+    # Warn if the worktree has uncommitted changes before proceeding.
+    if worktree_path and worktree_path.is_dir() and not git_repo.is_clean(worktree_path):
+        console.warn("Worktree has uncommitted changes.")
+        if not prompts.confirm("Proceed anyway? Uncommitted work will be lost.", default=False):
+            return
+
+    # Detach HEAD in the worktree so git no longer considers the branch
+    # "checked out", which unblocks `gh pr merge --delete-branch`.
+    if worktree_path and worktree_path.is_dir():
+        with contextlib.suppress(Exception):
+            subprocess.run(
+                ["git", "checkout", "--detach"],
+                cwd=worktree_path,
+                check=True,
+                capture_output=True,
+            )
+
+    try:
+        git_pr.merge_pr(repo_root=repo_root, pr_number=int(pr_number), strategy="squash")
+    except Exception as e:
+        if worktree_path and worktree_path.is_dir():
+            with contextlib.suppress(Exception):
+                subprocess.run(
+                    ["git", "checkout", branch],
+                    cwd=worktree_path,
+                    check=True,
+                    capture_output=True,
+                )
+        logger.error("pr_merge.failed", pr_number=pr_number, error=str(e))
+        console.error(f"PR merge failed: {e}")
+        console.hint(f"Branch '{branch}' preserved — retry or clean up manually.")
+        return
+
+    # Remove the worktree only after a successful merge.
     if worktree_path:
         console.step(f"Removing worktree: {worktree_path.name}")
         with contextlib.suppress(Exception):
@@ -445,14 +476,6 @@ def _post_work_lifecycle_pr(
         with contextlib.suppress(Exception):
             git_worktree.prune_worktrees(repo_root)
         console.success(f"Removed {worktree_path.name}")
-
-    try:
-        git_pr.merge_pr(repo_root=repo_root, pr_number=int(pr_number), strategy="squash")
-    except Exception as e:
-        logger.error("pr_merge.failed", pr_number=pr_number, error=str(e))
-        console.error(f"PR merge failed: {e}")
-        console.hint(f"Branch '{branch}' preserved — retry or clean up manually.")
-        return
 
     with contextlib.suppress(Exception):
         subprocess.run(["git", "pull", "--quiet"], cwd=repo_root)
@@ -777,6 +800,7 @@ def start(
         console.step(f"Launching {resolved_tool}...")
 
         adapter: AbstractAITool | None = None
+        launch_completed = False
         try:
             adapter = AbstractAITool.get(AIToolID(resolved_tool))
 
@@ -798,6 +822,7 @@ def start(
                 transcript_path=transcript_path,
                 trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
             )
+            launch_completed = True
             logger.info("work.ai_exited", exit_code=exit_code, tool=resolved_tool)
         except (ValueError, KeyError):
             console.warn(f"Unknown AI tool: {resolved_tool}")
@@ -806,7 +831,7 @@ def start(
         finally:
             stop_title_keeper()
 
-            if adapter is not None:
+            if launch_completed:
                 try:
                     _post_work_lifecycle(
                         repo_root=repo_root,
@@ -1241,6 +1266,40 @@ def _strip_summary_section(body: str) -> str:
     return result if result else ""
 
 
+def _apply_pr_refs(
+    body: str,
+    issue_number: str,
+    close_issue: bool,
+    parent_issue: str | None,
+) -> str:
+    """Add or update Closes/Part-of references in a PR body.
+
+    Idempotent: repeated calls do not duplicate references.
+    """
+    updated = body
+
+    # Add "Closes #N" if requested and not already present
+    if close_issue:
+        close_pattern = rf"^Closes\s+#{re.escape(issue_number)}\b"
+        if not re.search(close_pattern, updated, flags=re.MULTILINE):
+            # Strip existing "Implements #N" line when upgrading to "Closes #N"
+            updated = re.sub(
+                rf"^Implements\s+#{re.escape(issue_number)}\s*\n?",
+                "",
+                updated,
+                flags=re.MULTILINE,
+            )
+            updated = f"Closes #{issue_number}\n\n" + updated.lstrip("\n")
+
+    # Add "Part of #parent" if detected and not already present
+    if parent_issue:
+        parent_pattern = rf"^Part of\s+#{re.escape(parent_issue)}\b"
+        if not re.search(parent_pattern, updated, flags=re.MULTILINE):
+            updated = f"Part of #{parent_issue}\n" + updated
+
+    return updated
+
+
 # ---------------------------------------------------------------------------
 # PR body composition
 # ---------------------------------------------------------------------------
@@ -1255,18 +1314,18 @@ def _build_pr_body(
     """Compose the PR body.
 
     Order:
-    1. Closes #N
-    2. Part of #parent (if detected)
+    1. Part of #parent (if detected)
+    2. Closes #N
     3. ## Summary (from PR-SUMMARY file)
 
     Plan summary stays on the issue only — not copied into the PR body.
     """
     lines: list[str] = []
 
-    if close_issue:
-        lines.append(f"Closes #{task.id}")
     if parent_issue:
         lines.append(f"Part of #{parent_issue}")
+    if close_issue:
+        lines.append(f"Closes #{task.id}")
 
     if lines:
         lines.append("")
@@ -1306,7 +1365,7 @@ def sync(
     cwd = project_root or Path.cwd()
     events: list[SyncEvent] = []
 
-    def emit(event: str, **data: str | int) -> None:
+    def emit(event: SyncEventType, **data: str | int) -> None:
         ev = SyncEvent(event=event, data=data)
         events.append(ev)
         if json_output:
@@ -1316,7 +1375,7 @@ def sync(
     try:
         repo_root = git_repo.get_repo_root(cwd)
     except GitError:
-        emit("error", reason="not_git_repo")
+        emit(SyncEventType.ERROR, reason="not_git_repo")
         return SyncResult(
             success=False,
             current_branch="",
@@ -1327,7 +1386,7 @@ def sync(
     try:
         current = git_repo.get_current_branch(cwd)
     except GitError:
-        emit("error", reason="detached_head")
+        emit(SyncEventType.ERROR, reason="detached_head")
         return SyncResult(
             success=False,
             current_branch="",
@@ -1340,7 +1399,7 @@ def sync(
         try:
             resolved_main = git_repo.detect_main_branch(repo_root)
         except GitError:
-            emit("error", reason="no_main_branch")
+            emit(SyncEventType.ERROR, reason="no_main_branch")
             return SyncResult(
                 success=False,
                 current_branch=current,
@@ -1349,7 +1408,7 @@ def sync(
             )
 
     if current == resolved_main:
-        emit("error", reason="on_main_branch")
+        emit(SyncEventType.ERROR, reason="on_main_branch")
         return SyncResult(
             success=False,
             current_branch=current,
@@ -1360,7 +1419,7 @@ def sync(
     # Check clean — with detailed diagnostics
     if not git_repo.is_clean(cwd):
         detail_str = _format_dirty_details(cwd)
-        emit("error", reason="dirty_worktree", details=detail_str)
+        emit(SyncEventType.ERROR, reason="dirty_worktree", details=detail_str)
         if not json_output:
             console.error_with_fix(
                 f"Working tree is dirty ({detail_str})",
@@ -1374,7 +1433,7 @@ def sync(
             events=events,
         )
 
-    emit("preflight_ok", current_branch=current, main_branch=resolved_main)
+    emit(SyncEventType.PREFLIGHT_OK, current_branch=current, main_branch=resolved_main)
     if not json_output:
         console.step(f"Syncing {current} with {resolved_main}")
 
@@ -1403,10 +1462,10 @@ def sync(
         behind = 0
 
     if behind == 0:
-        emit("up_to_date", branch=current, main=resolved_main)
+        emit(SyncEventType.UP_TO_DATE, branch=current, main=resolved_main)
         if not json_output:
             console.success("Already up to date.")
-        emit("done", branch=current, main=resolved_main)
+        emit(SyncEventType.DONE, branch=current, main=resolved_main)
         return SyncResult(
             success=True,
             current_branch=current,
@@ -1415,10 +1474,10 @@ def sync(
         )
 
     if dry_run:
-        emit("dry_run", action="merge_main_into_feature", behind=behind)
+        emit(SyncEventType.DRY_RUN, action="merge_main_into_feature", behind=behind)
         if not json_output:
             console.info(f"Dry run: {behind} commit(s) would be merged.")
-        emit("done", branch=current, main=resolved_main)
+        emit(SyncEventType.DONE, branch=current, main=resolved_main)
         return SyncResult(
             success=True,
             current_branch=current,
@@ -1433,10 +1492,10 @@ def sync(
     merge_result = git_sync.merge_branch(repo_root, merge_ref)
 
     if merge_result.success:
-        emit("merged", commits_merged=behind)
+        emit(SyncEventType.MERGED, commits_merged=behind)
         if not json_output:
             console.success(f"Merged {behind} commit(s).")
-        emit("done", branch=current, main=resolved_main)
+        emit(SyncEventType.DONE, branch=current, main=resolved_main)
         return SyncResult(
             success=True,
             current_branch=current,
@@ -1447,7 +1506,7 @@ def sync(
 
     # Conflicts
     conflicts = merge_result.conflicts
-    emit("conflict", source=resolved_main, target=current, files="\n".join(conflicts))
+    emit(SyncEventType.CONFLICT, source=resolved_main, target=current, files="\n".join(conflicts))
     if not json_output:
         console.error(f"Merge conflict in {len(conflicts)} file(s):")
         for f in conflicts:
@@ -1460,7 +1519,7 @@ def sync(
     try:
         diff_result = git_repo._run_git("diff", cwd=repo_root, check=False)
         if diff_result.stdout.strip():
-            emit("conflict_diff", diff=diff_result.stdout)
+            emit(SyncEventType.CONFLICT_DIFF, diff=diff_result.stdout)
     except GitError:
         logger.debug("sync.conflict_diff_read_failed", exc_info=True)
 
@@ -1702,21 +1761,8 @@ def _done_via_pr(
         except Exception:
             logger.debug("work.parent_issue_detection_failed", exc_info=True)
 
-        # Build updated body: keep existing content, add close reference + summary
-        close_ref = f"Closes #{issue_number}" if close_issue else ""
-        parent_ref = f"\nPart of #{parent_issue}" if parent_issue else ""
-        refs = close_ref + parent_ref
-
-        # Strip existing "Implements #N" line if we're adding "Closes #N"
-        updated_body = current_body
-        if close_ref:
-            updated_body = re.sub(
-                rf"^Implements\s+#{re.escape(issue_number)}\s*\n?",
-                "",
-                updated_body,
-                flags=re.MULTILINE,
-            )
-            updated_body = refs + "\n\n" + updated_body.lstrip("\n")
+        # Build updated body: keep existing content, add close/parent references + summary
+        updated_body = _apply_pr_refs(current_body, issue_number, close_issue, parent_issue)
         # Strip any existing ## Summary section to avoid duplication on retry.
         # Use the impl-usage HTML marker as a hard boundary so that freeform
         # summary content (which may contain ## subheadings) is fully removed.

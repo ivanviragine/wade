@@ -9,7 +9,12 @@ from typing import Any
 import structlog
 import yaml
 
-from ghaiw.config.loader import find_config_file, parse_config_file
+from ghaiw.config.loader import (
+    ConfigError,
+    ensure_yaml_mapping,
+    find_config_file,
+    parse_config_file,
+)
 from ghaiw.git import repo
 from ghaiw.git.repo import GitError
 from ghaiw.models.ai import AIToolID
@@ -225,12 +230,16 @@ def _validate_config_file(config_path: Path) -> list[str]:
     except yaml.YAMLError as e:
         return [f"YAML parse error: {e}"]
 
-    if raw is None:
+    try:
+        validated = ensure_yaml_mapping(raw)
+    except ConfigError:
+        return ["config must be a YAML mapping (key: value pairs)"]
+
+    if validated is None:
         # Empty file — treated as defaults, valid
         return []
 
-    if not isinstance(raw, dict):
-        return ["config must be a YAML mapping (key: value pairs)"]
+    raw = validated
 
     # Validate version
     version = raw.get("version")

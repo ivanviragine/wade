@@ -15,7 +15,7 @@ import yaml
 
 from ghaiw.ai_tools.base import AbstractAITool
 from ghaiw.config.defaults import get_defaults
-from ghaiw.config.loader import find_config_file, load_config
+from ghaiw.config.loader import ConfigError, ensure_yaml_mapping, find_config_file, load_config
 from ghaiw.git import repo
 from ghaiw.git.repo import GitError
 from ghaiw.models.ai import AIToolID
@@ -1045,8 +1045,11 @@ def _patch_config(
     except (yaml.YAMLError, OSError):
         return
 
-    if not isinstance(raw, dict):
-        raw = {}
+    try:
+        validated = ensure_yaml_mapping(raw)
+        raw = validated if validated is not None else {}
+    except ConfigError:
+        return
 
     changed = False
 

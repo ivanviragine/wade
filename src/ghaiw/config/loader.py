@@ -24,6 +24,22 @@ class ConfigError(Exception):
     """Raised when .ghaiw.yml cannot be parsed or has invalid structure."""
 
 
+def ensure_yaml_mapping(raw: Any) -> dict[str, Any] | None:
+    """Validate that parsed YAML is a dict (mapping).
+
+    Returns:
+        The dict if raw is a dict, None if raw is None (empty file).
+
+    Raises:
+        ConfigError: If raw is a non-dict, non-None value (list, scalar).
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        return raw
+    raise ConfigError("Config must be a YAML mapping (key: value pairs)")
+
+
 def find_config_file(start: Path | None = None) -> Path | None:
     """Walk up from start (or CWD) looking for .ghaiw.yml.
 
@@ -62,14 +78,16 @@ def parse_config_file(config_path: Path) -> ProjectConfig:
     except yaml.YAMLError as e:
         raise ConfigError(f"Invalid YAML in {config_path}: {e}") from e
 
-    if not isinstance(raw, dict):
+    validated = ensure_yaml_mapping(raw)
+    if validated is None:
+        # Empty file — treated as defaults
         return ProjectConfig(
             config_path=str(config_path),
             project_root=str(config_path.parent),
         )
 
     try:
-        return _build_config(raw, config_path)
+        return _build_config(validated, config_path)
     except (KeyError, TypeError, ValueError) as e:
         raise ConfigError(f"Invalid config structure in {config_path}: {e}") from e
 

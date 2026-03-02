@@ -122,7 +122,11 @@ def run_ai_planning_session(
         adapter = AbstractAITool.get(AIToolID(ai_tool))
     except (ValueError, KeyError):
         console.warn(f"Unknown AI tool: {ai_tool} — launching directly")
-        result = subprocess.run([ai_tool], cwd=None)
+        try:
+            result = subprocess.run([ai_tool], cwd=None)
+        except FileNotFoundError:
+            console.error(f"AI tool binary not found: {ai_tool}")
+            return 1
         return result.returncode
 
     # Check model compatibility — drop model if it's not valid for this tool

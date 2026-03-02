@@ -225,7 +225,7 @@ class TestWorkLifecycle:
             assert sessions[0]["issue"] == "43"
 
     def test_pr_body_composition(self, tmp_path: Path) -> None:
-        """PR body includes Closes, Part of, and Summary — but NOT plan summary."""
+        """PR body includes Part of, Closes, and Summary — but NOT plan summary."""
         from ghaiw.services.task_service import (
             PLAN_SUMMARY_MARKER_END,
             PLAN_SUMMARY_MARKER_START,
@@ -255,13 +255,13 @@ class TestWorkLifecycle:
             parent_issue="10",
         )
 
-        # Verify order: Closes, Part of, ## Summary
+        # Verify order: Part of, Closes, ## Summary
         closes_pos = body.find("Closes #42")
         part_of_pos = body.find("Part of #10")
         summary_pos = body.find("## Summary")
 
-        assert closes_pos < part_of_pos
-        assert part_of_pos < summary_pos
+        assert part_of_pos < closes_pos
+        assert closes_pos < summary_pos
         assert "OAuth login" in body
         # Plan summary must NOT appear in PR body
         assert "## Plan Summary" not in body

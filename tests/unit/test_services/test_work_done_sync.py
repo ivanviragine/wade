@@ -13,6 +13,7 @@ from ghaiw.models.work import WorktreeState
 from ghaiw.services.work_service import (
     IMPL_USAGE_MARKER_END,
     IMPL_USAGE_MARKER_START,
+    _apply_pr_refs,
     _build_pr_body,
     _strip_impl_usage_block,
     _strip_summary_section,
@@ -255,6 +256,7 @@ class TestBuildPrBody:
         body = _build_pr_body(task, parent_issue="10")
         assert "Closes #42" in body
         assert "Part of #10" in body
+        assert body.find("Part of #10") < body.find("Closes #42")
 
     def test_no_close(self) -> None:
         task = Task(id="42", title="Add auth")
@@ -289,6 +291,41 @@ class TestBuildPrBody:
         assert "## Plan Summary" not in body
         assert "Tokens" not in body
         assert "Closes #42" in body
+
+
+# ---------------------------------------------------------------------------
+# Existing-PR body update idempotency
+# ---------------------------------------------------------------------------
+
+
+class TestExistingPrBodyUpdate:
+    """Regression tests for _apply_pr_refs — exercises real production code."""
+
+    def test_closes_ref_not_duplicated_on_retry(self) -> None:
+        """Calling _apply_pr_refs twice must not duplicate 'Closes #42'."""
+        body = "Closes #42\n\n## Tasks\n- Login\n"
+        result = _apply_pr_refs(body, "42", close_issue=True, parent_issue=None)
+        assert result.count("Closes #42") == 1
+
+    def test_parent_ref_added_with_no_close(self) -> None:
+        """--no-close should still insert 'Part of #parent'."""
+        body = "Implements #42\n\n## Tasks\n- Login\n"
+        result = _apply_pr_refs(body, "42", close_issue=False, parent_issue="10")
+        assert "Part of #10" in result
+        assert "Implements #42" in result  # Should not be stripped with --no-close
+
+    def test_parent_ref_not_duplicated_on_retry(self) -> None:
+        """Repeated updates must not duplicate 'Part of #10'."""
+        body = "Part of #10\nCloses #42\n\n## Tasks\n- Login\n"
+        result = _apply_pr_refs(body, "42", close_issue=True, parent_issue="10")
+        assert result.count("Part of #10") == 1
+
+    def test_implements_upgraded_to_closes(self) -> None:
+        """'Implements #42' should be replaced with 'Closes #42'."""
+        body = "Implements #42\n\n## Tasks\n- Login\n"
+        result = _apply_pr_refs(body, "42", close_issue=True, parent_issue=None)
+        assert "Closes #42" in result
+        assert "Implements #42" not in result
 
 
 # ---------------------------------------------------------------------------

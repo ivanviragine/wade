@@ -21,9 +21,16 @@ def _config(strategy: MergeStrategy) -> ProjectConfig:
 @patch("ghaiw.services.work_service.git_worktree.prune_worktrees")
 @patch("ghaiw.services.work_service.git_worktree.remove_worktree")
 @patch("ghaiw.services.work_service.git_pr.merge_pr")
+@patch("ghaiw.services.work_service.git_repo.is_clean", return_value=True)
 @patch("ghaiw.services.work_service.prompts.confirm", return_value=True)
+@patch(
+    "ghaiw.services.work_service.git_pr.get_pr_for_branch",
+    return_value={"number": 99, "url": "https://example/pr/99"},
+)
 def test_pr_strategy_prompts_merge_on_existing_pr(
+    _mock_get_pr: MagicMock,
     mock_confirm: MagicMock,
+    _mock_is_clean: MagicMock,
     mock_merge_pr: MagicMock,
     mock_remove_worktree: MagicMock,
     _mock_prune: MagicMock,
@@ -31,9 +38,9 @@ def test_pr_strategy_prompts_merge_on_existing_pr(
     tmp_path: Path,
 ) -> None:
     provider = MagicMock()
-    provider.get_pr_for_branch.return_value = {"number": 99, "url": "https://example/pr/99"}
     repo_root = tmp_path / "repo"
     wt_path = tmp_path / "wt"
+    wt_path.mkdir()  # Needs to exist for is_dir() check
     _post_work_lifecycle(
         repo_root, "feat/42-test", 42, wt_path, _config(MergeStrategy.PR), provider
     )
@@ -42,21 +49,22 @@ def test_pr_strategy_prompts_merge_on_existing_pr(
     confirm_msg = mock_confirm.call_args[0][0]
     assert "merge" in confirm_msg.lower()
     assert "99" in confirm_msg
-    # Worktree is removed BEFORE merge so --delete-branch can succeed
-    mock_remove_worktree.assert_called_once_with(repo_root, wt_path)
+    # Worktree is removed AFTER successful merge
     mock_merge_pr.assert_called_once_with(repo_root=repo_root, pr_number=99, strategy="squash")
+    mock_remove_worktree.assert_called_once_with(repo_root, wt_path)
     mock_run.assert_any_call(["git", "pull", "--quiet"], cwd=repo_root)
 
 
 @patch("ghaiw.services.work_service.git_pr.merge_pr")
 @patch("ghaiw.services.work_service.prompts.confirm")
+@patch("ghaiw.services.work_service.git_pr.get_pr_for_branch", return_value=None)
 def test_pr_strategy_no_pr_warns_and_returns(
+    _mock_get_pr: MagicMock,
     mock_confirm: MagicMock,
     mock_merge_pr: MagicMock,
     tmp_path: Path,
 ) -> None:
     provider = MagicMock()
-    provider.get_pr_for_branch.return_value = None
     _post_work_lifecycle(
         tmp_path / "repo",
         "feat/42-test",
@@ -72,13 +80,17 @@ def test_pr_strategy_no_pr_warns_and_returns(
 
 @patch("ghaiw.services.work_service.git_pr.merge_pr")
 @patch("ghaiw.services.work_service.prompts.confirm", return_value=False)
+@patch(
+    "ghaiw.services.work_service.git_pr.get_pr_for_branch",
+    return_value={"number": 99, "url": "https://example/pr/99"},
+)
 def test_pr_strategy_user_declines_merge(
+    _mock_get_pr: MagicMock,
     mock_confirm: MagicMock,
     mock_merge_pr: MagicMock,
     tmp_path: Path,
 ) -> None:
     provider = MagicMock()
-    provider.get_pr_for_branch.return_value = {"number": 99, "url": "https://example/pr/99"}
     _post_work_lifecycle(
         tmp_path / "repo",
         "feat/42-test",
@@ -95,14 +107,18 @@ def test_pr_strategy_user_declines_merge(
 @patch("ghaiw.services.work_service.subprocess.run")
 @patch("ghaiw.services.work_service.git_pr.merge_pr")
 @patch("ghaiw.services.work_service.prompts.confirm", return_value=True)
+@patch(
+    "ghaiw.services.work_service.git_pr.get_pr_for_branch",
+    return_value={"number": 99, "url": "https://example/pr/99"},
+)
 def test_pr_strategy_merge_failure_preserves_branch(
+    _mock_get_pr: MagicMock,
     _mock_confirm: MagicMock,
     mock_merge_pr: MagicMock,
     mock_run: MagicMock,
     tmp_path: Path,
 ) -> None:
     provider = MagicMock()
-    provider.get_pr_for_branch.return_value = {"number": 99, "url": "https://example/pr/99"}
     mock_merge_pr.side_effect = subprocess.CalledProcessError(1, ["gh", "pr", "merge"])
 
     _post_work_lifecycle(
@@ -123,12 +139,59 @@ def test_pr_strategy_merge_failure_preserves_branch(
 
 
 @patch("ghaiw.services.work_service.subprocess.run")
+@patch("ghaiw.services.work_service.git_pr.merge_pr")
+@patch("ghaiw.services.work_service.git_repo.is_clean", return_value=True)
+@patch("ghaiw.services.work_service.prompts.confirm", return_value=True)
+@patch(
+    "ghaiw.services.work_service.git_pr.get_pr_for_branch",
+    return_value={"number": 99, "url": "https://example/pr/99"},
+)
+def test_pr_strategy_merge_failure_restores_branch(
+    _mock_get_pr: MagicMock,
+    _mock_confirm: MagicMock,
+    _mock_is_clean: MagicMock,
+    mock_merge_pr: MagicMock,
+    mock_run: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """On merge failure, HEAD should be restored from detached state to the branch."""
+    provider = MagicMock()
+    wt_path = tmp_path / "wt"
+    wt_path.mkdir()
+    mock_merge_pr.side_effect = subprocess.CalledProcessError(1, ["gh", "pr", "merge"])
+
+    _post_work_lifecycle(
+        tmp_path / "repo",
+        "feat/42-test",
+        42,
+        wt_path,
+        _config(MergeStrategy.PR),
+        provider,
+    )
+
+    # Should have called git checkout feat/42-test to restore branch
+    checkout_calls = [
+        c for c in mock_run.call_args_list if c[0][0] == ["git", "checkout", "feat/42-test"]
+    ]
+    assert len(checkout_calls) == 1, (
+        f"Expected branch restore checkout, got calls: {mock_run.call_args_list}"
+    )
+
+
+@patch("ghaiw.services.work_service.subprocess.run")
 @patch("ghaiw.services.work_service.git_worktree.prune_worktrees")
 @patch("ghaiw.services.work_service.git_worktree.remove_worktree")
 @patch("ghaiw.services.work_service.git_pr.merge_pr")
+@patch("ghaiw.services.work_service.git_repo.is_clean", return_value=True)
 @patch("ghaiw.services.work_service.prompts.confirm", return_value=True)
+@patch(
+    "ghaiw.services.work_service.git_pr.get_pr_for_branch",
+    return_value={"number": 99, "url": "https://example/pr/99"},
+)
 def test_pr_strategy_cleanup_and_pull_after_merge(
+    _mock_get_pr: MagicMock,
     _mock_confirm: MagicMock,
+    _mock_is_clean: MagicMock,
     _mock_merge_pr: MagicMock,
     mock_remove_worktree: MagicMock,
     _mock_prune: MagicMock,
@@ -136,15 +199,15 @@ def test_pr_strategy_cleanup_and_pull_after_merge(
     tmp_path: Path,
 ) -> None:
     provider = MagicMock()
-    provider.get_pr_for_branch.return_value = {"number": 99, "url": "https://example/pr/99"}
     repo_root = tmp_path / "repo"
     wt_path = tmp_path / "wt"
+    wt_path.mkdir()  # Needs to exist for is_dir() check
 
     _post_work_lifecycle(
         repo_root, "feat/42-test", 42, wt_path, _config(MergeStrategy.PR), provider
     )
 
-    # Worktree is removed before merge; no separate cleanup call needed after
+    # Worktree is removed AFTER successful merge
     mock_remove_worktree.assert_called_once_with(repo_root, wt_path)
     mock_run.assert_any_call(["git", "pull", "--quiet"], cwd=repo_root)
 
@@ -301,7 +364,7 @@ def test_lifecycle_skipped_in_detach_mode(
     return_value={"number": 1, "url": "http://test"},
 )
 @patch("ghaiw.services.work_service.prompts")
-def test_lifecycle_runs_after_ai_crash(
+def test_lifecycle_skipped_after_ai_crash(
     mock_prompts: MagicMock,
     _mock_bootstrap_pr: MagicMock,
     _mock_get_pr: MagicMock,
@@ -337,4 +400,4 @@ def test_lifecycle_runs_after_ai_crash(
     result = start("42", ai_tool="claude", project_root=tmp_path, detach=False)
 
     assert result is True
-    mock_lifecycle.assert_called_once()
+    mock_lifecycle.assert_not_called()

@@ -12,6 +12,8 @@ from typing import Any
 import structlog
 import yaml
 
+from ghaiw.config.loader import ConfigError, ensure_yaml_mapping
+
 logger = structlog.get_logger()
 
 
@@ -37,8 +39,12 @@ def run_all_migrations(config_path: Path) -> bool:
         logger.warning("migrations.load_failed", path=str(config_path), error=str(e))
         return False
 
-    if not isinstance(raw, dict):
-        raw = {}
+    try:
+        validated = ensure_yaml_mapping(raw)
+        raw = validated if validated is not None else {}
+    except ConfigError:
+        logger.warning("migrations.invalid_shape", path=str(config_path))
+        return False
 
     try:
         changed = ensure_version(raw)

@@ -82,13 +82,13 @@ class TestRunAllMigrations:
         migrated = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         assert migrated["version"] == 2
 
-    def test_non_dict_yaml_treated_as_empty(self, tmp_path: Path) -> None:
+    def test_non_dict_yaml_rejected(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".ghaiw.yml"
         config_path.write_text("just a string\n")
         result = run_all_migrations(config_path)
-        assert result is True
-        migrated = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        assert migrated["version"] == 2
+        assert result is False
+        # File should not be modified
+        assert config_path.read_text(encoding="utf-8") == "just a string\n"
 
     def test_file_not_modified_when_no_changes(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".ghaiw.yml"
