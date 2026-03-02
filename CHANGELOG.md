@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.0.11] — 2026-03-02
+
+### Chores
+
+- rename project from ghaiw to WADE (Workflow for AI-Driven Engineering) (c156666)
+
 ## [v1.0.10] — 2026-03-02
 
 ### Bug Fixes
@@ -26,7 +32,7 @@ The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
 ### Bug Fixes
 
-- remove WADE_WORK_MODEL env var and fix summary ordering in PR body (a84957d)
+- remove GHAIW_WORK_MODEL env var and fix summary ordering in PR body (a84957d)
 
 ## [v1.0.6] — 2026-02-28
 
