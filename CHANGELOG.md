@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.0.13] — 2026-03-02
+
+### Bug Fixes
+
+- add --sandbox workspace-write to Codex trusted_dirs_args (683a067)
+
 ## [v1.0.12] — 2026-03-02
 
 ### Documentation
