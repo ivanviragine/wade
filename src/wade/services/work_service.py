@@ -285,6 +285,14 @@ def bootstrap_draft_pr(
         git_branch.create_branch(repo_root, branch_name, main_branch)
         logger.info("bootstrap_draft_pr.branch_created", branch=branch_name)
 
+    # Scaffold commit so GitHub accepts the draft PR (needs ≥1 commit ahead of base)
+    if git_branch.commits_ahead(repo_root, branch_name, main_branch) == 0:
+        git_branch.create_scaffold_commit(
+            repo_root,
+            branch_name,
+            f"chore: scaffold branch for #{issue_number}",
+        )
+
     # Push branch to origin
     try:
         git_repo._run_git("push", "-u", "origin", branch_name, cwd=repo_root)
@@ -1730,19 +1738,15 @@ def _done_via_pr(
     # Check for existing PR (expected from plan-task or implement-task bootstrap)
     existing_pr = git_pr.get_pr_for_branch(repo_root, branch)
 
-    # Resolve PR-SUMMARY.md path: check worktree first, then fall back to temp dir
+    # Resolve PR-SUMMARY.md from worktree root
     pr_summary_path: Path | None = None
     if worktree_path and (worktree_path / "PR-SUMMARY.md").exists():
         pr_summary_path = worktree_path / "PR-SUMMARY.md"
-    else:
-        tmp_path = Path(tempfile.gettempdir()) / f"PR-SUMMARY-{issue_number}.md"
-        if tmp_path.exists():
-            pr_summary_path = tmp_path
 
     if pr_summary_path is None:
-        console.warn("No PR-SUMMARY file found — PR description will have no summary.")
-        expected = Path(tempfile.gettempdir()) / f"PR-SUMMARY-{issue_number}.md"
-        console.detail(f"Expected: {expected}")
+        console.warn("No PR-SUMMARY.md found — PR description will have no summary.")
+        if worktree_path:
+            console.detail(f"Expected: {worktree_path / 'PR-SUMMARY.md'}")
 
     if existing_pr:
         # Update existing PR: append summary

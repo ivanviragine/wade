@@ -94,9 +94,10 @@ File naming convention:
 - Single issue: `PLAN.md`
 - Multi-issue: `PLAN-1-<slug>.md`, `PLAN-2-<slug>.md`, etc.
 
-Write plan files to `/tmp/` (or the temp dir shown in your prompt if inside
-a `wade plan-task` session). **Never write plan files into the repo working
-directory** — they are session artifacts, not committed code.
+Write plan files to the **session directory**: the temp dir from your prompt
+if inside a `wade plan-task` session, or the worktree root if inside a work
+session. **Never write plan files into the repo's main checkout** — they are
+session artifacts, not committed code.
 
 ## Step 5: Create issues
 
@@ -178,7 +179,7 @@ Example PR body generated:
 Closes #42
 Part of #10
 
-<content of /tmp/PR-SUMMARY-42.md>
+<content of PR-SUMMARY.md>
 ```
 
 ### After your PR merges

@@ -49,20 +49,11 @@ multi-line messages.
 
 ## PR summary
 
-**Write this file immediately — before you write any code.**
-
-```bash
-cat > /tmp/PR-SUMMARY-{issue-number}.md << 'EOF'
-# PR Summary
-(in progress)
-EOF
-```
-
-`wade work done` reads **`/tmp/PR-SUMMARY-{issue-number}.md`** to populate
+Before closing the session, write **`PR-SUMMARY.md`** in the worktree root
+(your current working directory). `wade work done` reads this file to populate
 the PR body. If the file is missing, the PR will have no description.
-Creating it early as a placeholder guarantees it exists; update it as you work.
 
-> **Never commit this file** — it is a session artifact.
+> **Never commit this file** — it is a session artifact (already in `.gitignore`).
 
 ### What to include
 
@@ -70,13 +61,10 @@ Creating it early as a placeholder guarantees it exists; update it as you work.
 2. **Why these changes** — context from the issue/plan
 3. **Key technical decisions** — important implementation choices
 4. **What was tested** — how you verified the changes work
-5. **Screenshots** — visual evidence for UI/UX changes (if applicable)
 
-### Final form
+### Format
 
 ```markdown
-# PR Summary
-
 ## What was done
 [High-level summary in 2-3 sentences]
 
@@ -138,14 +126,10 @@ directly.
 
 To finalize your work, follow these steps in order:
 
-**Step 1 — Verify PR summary exists and is complete:**
+**Step 1 — Write PR summary:**
 
-```bash
-cat /tmp/PR-SUMMARY-{issue-number}.md
-```
-
-The file must exist and contain a real description (not just the placeholder).
-If it is missing or still says "(in progress)", write it now before continuing.
+Write `PR-SUMMARY.md` in the worktree root with a real description of your
+changes (see the format above). If the file already exists, update it.
 
 **Step 2 — Sync with main:**
 
@@ -183,7 +167,7 @@ If your issue appears in a parent "Tracking:" issue checklist:
 If you finalize a plan or feature spec during a work session, you **must**
 create a GitHub Issue from it:
 
-1. Write the plan file (to `/tmp/`, never into the repo)
+1. Write the plan file to the worktree root (never into the repo's main checkout)
 2. Create the issue via `wade new-task` (interactive)
 3. List the created issues and show `wade implement-task <number>` as a hint.
    Do **not** run the command yourself — the human starts work sessions.

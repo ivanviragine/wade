@@ -40,7 +40,6 @@ GITIGNORE_ENTRIES: Final = [
     ".wade-managed",
     "PLAN.md",
     "PR-SUMMARY.md",
-    "PR-SUMMARY-*.md",
 ]
 
 # Entries added by older versions without markers — used for backward-compat cleanup

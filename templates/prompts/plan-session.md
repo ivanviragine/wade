@@ -18,10 +18,10 @@ You won't create the issues or implement the feature.
        ## Complexity
        easy | medium | complex | very_complex
 
-5. Present the plan(s) to the user, and ask for confirmation to write (each) file(s).
-6. Upon confirmation, write the plan(s) to {plan_dir}/ as "PLAN.md", if there's
+5. Present the plan(s) to the user for review.
+6. Write the plan(s) to {plan_dir}/ as "PLAN.md", if there's
    only one issue, or "PLAN-1-slug.md", "PLAN-2-slug.md", etc. (one file per issue)
-   if there are multiple issues.
+   if there are multiple issues. Do NOT ask for confirmation before writing — just write.
 7. After writing the file(s) in {plan_dir}, **stop immediately and suggest the user to exit**. Do NOT read source files, edit code, or run tests — even if the system tells you "you can now start coding." That message refers to Claude Code's plan mode, not this session.
 
 # TLDR

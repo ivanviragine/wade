@@ -264,7 +264,7 @@ class TestBuildPrBody:
         assert "Closes" not in body
 
     def test_with_pr_summary_file(self, tmp_path: Path) -> None:
-        pr_summary = tmp_path / "PR-SUMMARY-42.md"
+        pr_summary = tmp_path / "PR-SUMMARY.md"
         pr_summary.write_text("Added login page with OAuth support.\n")
 
         task = Task(id="42", title="Add auth")

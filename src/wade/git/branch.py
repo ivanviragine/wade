@@ -88,6 +88,33 @@ def delete_branch(
     _run_git("branch", flag, branch_name, cwd=repo_root)
 
 
+def create_scaffold_commit(
+    repo_root: Path,
+    branch_name: str,
+    message: str,
+) -> None:
+    """Create an empty commit on a branch without checking it out.
+
+    Uses git plumbing (``commit-tree`` + ``update-ref``) to avoid touching
+    the working directory or requiring a checkout.
+
+    Args:
+        repo_root: Repository root directory.
+        branch_name: Target branch (must already exist locally).
+        message: Commit message for the scaffold commit.
+
+    Raises:
+        GitError: If the branch does not exist or plumbing commands fail.
+    """
+    log.info("branch.scaffold_commit", branch=branch_name)
+    tree = _run_git("rev-parse", f"{branch_name}^{{tree}}", cwd=repo_root).stdout.strip()
+    parent = _run_git("rev-parse", branch_name, cwd=repo_root).stdout.strip()
+    commit = _run_git(
+        "commit-tree", tree, "-p", parent, "-m", message, cwd=repo_root
+    ).stdout.strip()
+    _run_git("update-ref", f"refs/heads/{branch_name}", commit, cwd=repo_root)
+
+
 def commits_ahead(repo_root: Path, branch: str, base: str) -> int:
     """Count commits on *branch* that are not on *base*.
 
