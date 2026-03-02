@@ -189,13 +189,17 @@ Skills work with Claude Code natively. Symlinks are created for Copilot, Gemini,
 
 ## Shell Integration
 
-Add to your shell profile to enable `wade work cd`:
+By default, `wade work cd <N>` just prints the worktree directory path. To actually `cd` into it, add this to your shell profile (`.bashrc`, `.zshrc`, or equivalent):
 
 ```bash
 eval "$(wade shell-init)"
 ```
 
-This lets `wade work cd <N>` change your shell's directory into the worktree. Without it, the command just prints the path.
+**Why is this needed?** When a program runs in a subprocess, it can't change your shell's working directory — only the shell itself can do that with the `cd` builtin. This command installs a shell function that intercepts `wade work cd` calls and performs the actual `cd` in your shell, so you end up in the worktree instead of staying put.
+
+**Without shell integration:** `wade work cd 5` prints `/path/to/worktree`, but you stay in your current directory.
+
+**With shell integration:** `wade work cd 5` changes your directory to the worktree (just like running `cd` manually).
 
 Tab completion:
 

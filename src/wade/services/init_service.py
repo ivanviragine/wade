@@ -6,6 +6,7 @@ AGENTS.md pointer, .gitignore entries, and .wade-managed manifest.
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 from typing import Any, Final
@@ -113,6 +114,7 @@ def init(
     _prompt_claude_code_settings(root, non_interactive)
     if "gemini" in installed_tools:
         _maybe_configure_gemini_experimental(non_interactive)
+    _maybe_configure_shell_integration(non_interactive)
 
     # Write phase
     if not non_interactive:
@@ -545,6 +547,97 @@ def _maybe_configure_statusline(non_interactive: bool) -> None:
     ):
         _configure_statusline()
         console.success("Installed ~/.claude/statusline-command.sh")
+
+
+def _get_shell_profile(shell_env: str) -> Path | None:
+    """Detect shell profile path from SHELL env var.
+
+    Returns:
+        Path to the shell profile file, or None if shell is unknown.
+    """
+    import sys
+
+    # Extract shell name from full path (e.g., /bin/zsh -> zsh)
+    shell_name = Path(shell_env).name.lower()
+
+    if "zsh" in shell_name:
+        return Path.home() / ".zshrc"
+    elif "fish" in shell_name:
+        return Path.home() / ".config" / "fish" / "config.fish"
+    elif "bash" in shell_name:
+        # bash uses different profile on macOS vs Linux
+        if sys.platform == "darwin":
+            return Path.home() / ".bash_profile"
+        else:
+            return Path.home() / ".bashrc"
+    else:
+        return None
+
+
+def _is_shell_integration_configured(profile: Path) -> bool:
+    """Check if shell integration is already in the profile file."""
+    if not profile.is_file():
+        return False
+    try:
+        content = profile.read_text(encoding="utf-8")
+        return "wade shell-init" in content
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def _configure_shell_integration(profile: Path, is_fish: bool) -> None:
+    """Append shell integration to the profile file.
+
+    Creates the profile if it doesn't exist.
+    """
+    line = "wade shell-init | source" if is_fish else 'eval "$(wade shell-init)"'
+    block = f"\n# wade shell integration\n{line}\n"
+
+    profile.parent.mkdir(parents=True, exist_ok=True)
+
+    if profile.is_file():
+        existing = profile.read_text(encoding="utf-8")
+        profile.write_text(existing.rstrip("\n") + block, encoding="utf-8")
+    else:
+        profile.write_text(block.lstrip("\n"), encoding="utf-8")
+
+    logger.info("shell.integration_configured", path=str(profile))
+
+
+def _maybe_configure_shell_integration(non_interactive: bool) -> None:
+    """Prompt user to add shell integration, skipping if already configured."""
+    from wade.ui import prompts
+
+    shell_env = os.environ.get("SHELL", "/bin/bash")
+    profile = _get_shell_profile(shell_env)
+
+    # If we can't detect the shell, show manual instructions
+    if profile is None:
+        shell_name = Path(shell_env).name
+        console.hint(
+            f"Shell '{shell_name}' not auto-detected. "
+            f"To enable 'wade work cd', add to your shell profile:\n"
+            f'  eval "$(wade shell-init)"'
+        )
+        return
+
+    # If already configured, skip silently
+    if _is_shell_integration_configured(profile):
+        console.detail("Shell integration already configured")
+        return
+
+    # If non-interactive, skip silently
+    if non_interactive:
+        return
+
+    # Prompt the user
+    is_fish = "fish" in shell_env.lower()
+    if prompts.confirm(
+        "Add shell integration for 'wade work cd' (changes to shell profile)?",
+        default=True,
+    ):
+        _configure_shell_integration(profile, is_fish=is_fish)
+        console.success(f"Added shell integration to {profile}")
 
 
 def _prompt_claude_code_settings(root: Path, non_interactive: bool) -> None:

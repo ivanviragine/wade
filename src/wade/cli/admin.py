@@ -95,8 +95,17 @@ def shell_init(
 
     Usage: eval "$(wade shell-init)"
 
-    Installs a shell function that intercepts `wade work cd <n>`
-    to perform a real `cd` in the caller's shell.
+    The Problem: When you run 'wade work cd <n>', the command runs in a
+    subprocess and prints a directory path. But a subprocess cannot change
+    your shell's working directory — only the shell itself can do that
+    with the 'cd' builtin.
+
+    The Solution: This outputs a shell function that intercepts
+    'wade work cd' calls and performs the actual 'cd' in your shell,
+    so you end up in the worktree directory instead of staying put.
+
+    Without this, 'wade work cd 5' just prints a path. With it, you'll
+    actually change into the worktree.
     """
     # Detect shell from --shell flag or SHELL env var
     shell_env: str = os.environ.get("SHELL", "/bin/bash")
