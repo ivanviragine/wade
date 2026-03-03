@@ -31,15 +31,13 @@ def cli_main() -> None:
 
 
 def _smart_route_issue(issue_number: str) -> bool:
-    """Fetch issue N, detect plan state, dispatch to plan-task or implement-task.
+    """Fetch issue N and dispatch to work_service.start().
 
-    Routing signals (in order):
-      1. ``planned_by:*`` label on the issue → implement
-      2. Existing draft PR on the issue's branch → implement
-      3. Neither → plan
+    Checks for a ``planned_by:*`` label (the one signal work_service doesn't
+    have) and prints a helpful message if found. Draft PR detection, the
+    no-plan prompt, and plan-vs-implement routing are all handled by
+    work_service.start() to avoid duplication.
     """
-    from pathlib import Path
-
     from wade.config.loader import ConfigError as _ConfigError
     from wade.config.loader import load_config
     from wade.providers.registry import get_provider
@@ -59,45 +57,17 @@ def _smart_route_issue(issue_number: str) -> bool:
         console.error(f"Could not fetch issue #{issue_number}: {exc}")
         return False
 
-    # Signal 1: planned_by label
-    is_planned = any(label.name.startswith("planned_by:") for label in task.labels)
-
-    # Signal 2: draft PR on the issue branch
-    if not is_planned:
-        try:
-            from wade.git import branch as git_branch
-            from wade.git import pr as git_pr
-            from wade.git import repo as git_repo
-
-            repo_root = git_repo.get_repo_root(Path.cwd())
-            branch_name = git_branch.make_branch_name(
-                config.project.branch_prefix, int(task.id), task.title
-            )
-            if git_pr.get_pr_for_branch(repo_root, branch_name):
-                is_planned = True
-        except Exception:
-            pass  # Not in a git repo or PR lookup failed — treat as unplanned
-
-    if is_planned:
+    # work_service.start() already handles draft PR detection, the no-plan
+    # prompt ("Plan first / Proceed without plan"), and routing to plan_service.
+    # The only unique signal here is the planned_by label — if set, we know
+    # it's planned even if the draft PR is missing, so we skip that warning.
+    has_planned_label = any(label.name.startswith("planned_by:") for label in task.labels)
+    if has_planned_label:
         console.info(f"Issue #{task.id} has a plan — starting implementation session...")
-        from wade.services.work_service import start as do_start
 
-        return do_start(target=issue_number)
-    else:
-        from wade.ui import prompts
+    from wade.services.work_service import start as do_start
 
-        console.warn(f"Issue #{task.id} has no plan attached.")
-        if prompts.is_tty():
-            choices = ["Plan first (recommended)", "Proceed straight to implementation"]
-            idx = prompts.select("How would you like to proceed?", choices)
-            if idx == 0:
-                from wade.services.plan_service import plan as do_plan
-
-                return do_plan(issue_id=issue_number)
-
-        from wade.services.work_service import start as do_start
-
-        return do_start(target=issue_number)
+    return do_start(target=issue_number)
 
 
 def version_callback(value: bool) -> None:
