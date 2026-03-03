@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.5.0] — 2026-03-03
+
+### Features
+
+- add smart `wade <N>` shorthand that routes to plan or implement (ef21393)
+
+### Other Changes
+
+- Revise README for clarity and installation steps (683b2c2)
+- Fix formatting in README.md for clarity (22f12d7)
+
 ## [v1.4.6] — 2026-03-03
 
 ### Documentation
