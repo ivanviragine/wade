@@ -1,8 +1,10 @@
 # WADE — Workflow for AI-Driven Engineering
 
+<img src="assets/wade.png" alt="WADE" width="600" />
+
 Turn GitHub Issues into isolated, AI-powered development sessions — with one command.
 
-WADE works with all major AI coding tools — Claude Code, Copilot, Gemini, Codex, and more — and automatically dispatches the right tool and model for each job. Set it up once per project with `wade init`, then just point it at an issue number.
+WADE works with all major AI coding tools — Claude Code, Copilot, Gemini, Codex, and more — and automatically dispatches the right tool and model for each job. Run `wade init` once per project and it wires up everything: Skill files, `AGENTS.md` workflow pointer, and tool-specific configs for whichever AI tools you use. Then just point it at an issue number.
 
 ## Why WADE
 
@@ -13,6 +15,7 @@ WADE works with all major AI coding tools — Claude Code, Copilot, Gemini, Code
 | One task at a time (or messy stash juggling) | Parallel tasks in isolated git worktrees |
 | Manually write PR, link issue, clean up branch | Skills guide the AI to do it automatically |
 | Re-explain project conventions to AI every time | Skills teach the AI how your project works |
+| Configure skills and AGENTS.md per tool manually | `wade init` wires up all AI tools automatically |
 | Pick tool and model manually every time | WADE selects both based on task type and complexity |
 
 ## Installation
@@ -195,7 +198,7 @@ models:
 
 ## Agent Skills
 
-`wade init` installs Skill files into `.claude/skills/` that teach your AI agent the workflow:
+`wade init` installs Skill files that teach your AI agent the workflow:
 
 | Skill | Purpose |
 |-------|---------|
@@ -204,7 +207,7 @@ models:
 | `work-session` | Implementation session rules and workflow |
 | `deps` | Dependency analysis between issues |
 
-Skills work with Claude Code natively. Symlinks are created for Copilot, Gemini, and Codex.
+Skills, `AGENTS.md` workflow pointer, and any tool-specific configuration are set up automatically for all supported AI tools — you don't configure anything per tool manually.
 
 ## Shell Integration
 
