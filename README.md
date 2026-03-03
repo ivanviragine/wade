@@ -4,21 +4,46 @@
   <img src="assets/wade.png" alt="WADE" width="250" />
 </p>
 
-Turn GitHub Issues into isolated, AI-powered development sessions — with one command.
+**AI tools write the code. WADE handles everything else.**
 
-WADE works with all major AI coding tools — Claude Code, Copilot, Gemini, Codex, and more — and automatically dispatches the right tool and model for each job. Run `wade init` once per project and it wires up everything: Skill files, `AGENTS.md` workflow pointer, and tool-specific configs for whichever AI tools you use. Then just point it at an issue number.
+Branches, context loading, model selection, PR creation — all the workflow friction that surrounds AI coding sessions. WADE eliminates it. Works with Claude Code, Copilot, Gemini, Codex, and more. Run `wade init` once per project, then just point it at an issue number.
+
+## See It in Action
+
+Starting work on Issue #42 — without WADE:
+
+```bash
+git fetch origin && git checkout main && git pull
+git checkout -b feat/issue-42-user-auth
+# paste issue title + description into AI chat
+# explain your branching rules, test locations, linters to run...
+```
+
+With WADE:
+
+```bash
+wade implement-task 42
+```
+
+WADE creates an isolated git worktree, launches your AI tool with the full issue loaded — title, description, labels, and all your project conventions — and Skills guide the AI from first commit to open PR without you touching git again.
+
+Working on multiple issues at once:
+
+```bash
+wade work batch 42 43 44   # three worktrees, three AI sessions, zero stashing
+```
 
 ## Why WADE
 
-| Without WADE | With WADE |
+| The old way | With WADE |
 |---|---|
-| Copy-paste issue details into AI chat | AI reads the issue automatically |
-| Create branch, remember naming convention | `wade implement-task 42` handles it |
-| One task at a time (or messy stash juggling) | Parallel tasks in isolated git worktrees |
-| Manually write PR, link issue, clean up branch | Skills guide the AI to do it automatically |
-| Re-explain project conventions to AI every time | Skills teach the AI how your project works |
-| Configure skills and AGENTS.md per tool manually | `wade init` wires up all AI tools automatically |
-| Pick tool and model manually every time | WADE selects both based on task type and complexity |
+| Paste issue context into every AI session | Full issue + project conventions loaded automatically |
+| Five git commands before you even start | `wade implement-task 42` |
+| One task at a time — or stash juggling | Parallel issues in isolated worktrees, zero conflicts |
+| Write PR, link issue, clean up branch — manually | The AI ships the PR. You just review. |
+| Re-explain project conventions every session | Skills teach the AI once. It knows forever. |
+| Manually pick model — overpay or underpower | Haiku for fixes, Sonnet for features, Opus for architecture |
+| Configure skills and tools per AI tool manually | Every tool wired up automatically by `wade init` |
 
 ## Installation
 
@@ -26,12 +51,10 @@ WADE works with all major AI coding tools — Claude Code, Copilot, Gemini, Code
 curl -LsSf https://raw.githubusercontent.com/ivanviragine/wade/main/install.sh | sh
 ```
 
-Requires [gh CLI](https://cli.github.com/) (authenticated) and at least one AI coding tool. Everything else — including Python — is managed automatically by `uv`.
+Requires [gh CLI](https://cli.github.com/) (authenticated) and at least one supported AI coding tool. Python and all dependencies are managed automatically by `uv`.
 
 ```bash
-# Verify gh is authenticated
-gh auth login     # follow the prompts
-gh auth status    # confirm it worked
+gh auth login    # if not already authenticated
 ```
 
 Or install manually:
@@ -41,62 +64,16 @@ uv tool install wade
 pipx install wade
 ```
 
-## How It Works
-
-**Before WADE** — starting work on GitHub Issue #42:
-
-```bash
-git fetch origin && git checkout main && git pull
-git checkout -b feat/issue-42-user-auth
-# copy issue title + description into AI chat
-# explain branching conventions, test locations, linters to run...
-```
-
-**With WADE** — same thing:
-
-```bash
-wade implement-task 42
-```
-
-That one command creates an isolated git worktree, opens your AI tool with the issue title, description, labels, and all project context pre-loaded. The AI already knows your project conventions — `wade init` installs Skill files that teach it.
-
-From there the AI session is self-contained: the installed Skills guide the AI to sync with main when needed, commit, push the branch, and open a linked PR — all without leaving the session.
-
-### Right tool and model for each job
-
-WADE dispatches based on command type and issue complexity — no manual selection needed:
-
-| Situation | What WADE launches |
-|---|---|
-| Planning a new feature | Claude Opus — best reasoning for architecture decisions |
-| Implementing a complex task | Claude Sonnet — solid execution at reasonable cost |
-| Fixing a simple bug or config tweak | Claude Haiku — fast and cheap |
-| Analyzing issue dependencies | Codex — dedicated code and graph analysis |
-
-Tool and model are fully configurable per phase and complexity level in `.wade.yml`.
-
-### One-time project setup
-
-`wade init` runs **once per project**. It creates `.wade.yml`, installs Skill files into `.claude/skills/`, and wires up the git workflow. After that, the only commands you type day-to-day are `wade plan-task` and `wade implement-task`.
-
-### Parallel work sessions
-
-```bash
-wade work batch 42 43 44   # three worktrees, three AI sessions, zero stashing
-```
-
 ## Quick Start
 
 ```bash
-# ── One-time project setup ──────────────────────────────────────────────────
+# Once per project
 wade init
 
-# ── Daily workflow ───────────────────────────────────────────────────────────
-
-# Plan a feature with AI — creates GitHub issues + draft PRs
+# Plan a feature — AI creates GitHub issues and draft PRs
 wade plan-task
 
-# Start working on an issue — WADE picks the right tool and model automatically
+# Start working — WADE picks the right tool and model automatically
 wade implement-task 42
 ```
 
@@ -143,7 +120,7 @@ wade implement-task 42
 
 ### AI-Invoked Commands
 
-These are called by the AI skill during an implementation session — not by the user directly.
+Called by the AI skill during a session — not by the user directly.
 
 | Command | Description |
 |---------|-------------|
@@ -166,11 +143,10 @@ project:
   merge_strategy: PR       # PR or direct
 
 ai:
-  default_tool: claude
   plan:
-    tool: claude            # tool used for wade plan-task
+    tool: claude            # tool for wade plan-task
   work:
-    tool: claude            # tool used for wade implement-task
+    tool: claude            # tool for wade implement-task
 
 models:
   claude:
@@ -180,11 +156,7 @@ models:
     very_complex: claude-opus-4-6
 ```
 
-**Merge strategies:** `PR` pushes the branch and opens a Pull Request; `direct` merges into main locally.
-
-**Complexity-based model dispatch:** Issues carry a `complexity` label (`easy`, `medium`, `complex`, `very_complex`). `wade implement-task` reads it and launches the matching model automatically — no flags needed.
-
-**Per-phase tool selection:** Planning sessions and implementation sessions can use different AI tools. Set `ai.plan.tool` and `ai.work.tool` independently.
+`wade implement-task` reads the issue's `complexity` label and launches the matching model automatically. Planning and implementation sessions can use different tools. Merge strategy `PR` opens a pull request; `direct` merges locally.
 
 ## Supported AI Tools
 
@@ -200,7 +172,7 @@ models:
 
 ## Agent Skills
 
-`wade init` installs Skill files that teach your AI agent the workflow:
+`wade init` installs Skills that teach your AI agent the workflow — issue format, planning rules, implementation session rules, and dependency analysis. Skills, the `AGENTS.md` workflow pointer, and any tool-specific configuration are set up automatically for every supported tool. Nothing to configure manually.
 
 | Skill | Purpose |
 |-------|---------|
@@ -209,21 +181,13 @@ models:
 | `work-session` | Implementation session rules and workflow |
 | `deps` | Dependency analysis between issues |
 
-Skills, `AGENTS.md` workflow pointer, and any tool-specific configuration are set up automatically for all supported AI tools — you don't configure anything per tool manually.
-
 ## Shell Integration
 
-By default, `wade work cd <N>` just prints the worktree directory path. To actually `cd` into it, add this to your shell profile (`.bashrc`, `.zshrc`, or equivalent):
+To make `wade work cd <N>` actually change your directory (instead of just printing the path), add this to your shell profile:
 
 ```bash
 eval "$(wade shell-init)"
 ```
-
-**Why is this needed?** When a program runs in a subprocess, it can't change your shell's working directory — only the shell itself can do that with the `cd` builtin. This command installs a shell function that intercepts `wade work cd` calls and performs the actual `cd` in your shell, so you end up in the worktree instead of staying put.
-
-**Without shell integration:** `wade work cd 5` prints `/path/to/worktree`, but you stay in your current directory.
-
-**With shell integration:** `wade work cd 5` changes your directory to the worktree (just like running `cd` manually).
 
 Tab completion:
 
