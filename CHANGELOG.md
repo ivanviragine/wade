@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.3.2] — 2026-03-03
+
+### Documentation
+
+- clarify that work done/sync are AI-invoked, not user commands (7c31d45)
+
 ## [v1.3.1] — 2026-03-03
 
 ### Refactoring
