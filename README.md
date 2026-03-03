@@ -6,6 +6,8 @@
 
 **AI tools write the code. WADE handles everything else.**
 
+*Every Wade does the dirty work so the heroes don't have to.*
+
 Branches, worktrees, context loading, model selection, PR creation — all the workflow friction that surrounds AI coding sessions. WADE eliminates it. Works with `Claude Code`, `Copilot`, `Gemini`, `Codex`, and more. Run `wade init` once per project, then just point it at a GitHub *(more to come!)* issue number.
 
 ## See It in Action
@@ -45,6 +47,7 @@ wade work batch 42 43 44   # three worktrees, three AI sessions, zero stashing
 | Re-explain your branching rules, test commands, linters every session | Skills teach the AI your conventions once |
 | Write the PR description, link the issue, clean up the branch — manually | The AI ships the PR. You just review |
 | Manually pick the right model for each task | Automatic model routing based on issue complexity |
+| Which terminal tab has which issue? No idea | Terminal title shows `wade work #42 — Feature Name` |
 
 ## Installation
 
