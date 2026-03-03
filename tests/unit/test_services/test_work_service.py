@@ -22,6 +22,8 @@ from wade.models.task import Task
 from wade.services.work_service import (
     _build_graph_from_issues,
     _complexity_to_model,
+    _parse_overwrite_paths,
+    _pull_main_after_merge,
     _resolve_target,
     _resolve_worktrees_dir,
     batch,
@@ -640,3 +642,72 @@ class TestWorkBatch:
             result = batch(["1", "2"], project_root=tmp_path)
 
         assert result is False
+
+
+# ---------------------------------------------------------------------------
+# _parse_overwrite_paths / _pull_main_after_merge
+# ---------------------------------------------------------------------------
+
+UNTRACKED_STDERR = (
+    "error: The following untracked working tree files would be overwritten by merge:\n"
+    "\t.claude/settings.json\n"
+    "\t.wade-managed\n"
+    "Please move or remove them before you merge.\n"
+)
+
+LOCAL_CHANGES_STDERR = (
+    "error: Your local changes to the following files would be overwritten by merge:\n"
+    "\tsrc/main.py\n"
+    "Please commit your changes or stash them before you merge.\n"
+)
+
+
+class TestParseOverwritePaths:
+    def test_extracts_paths_from_untracked_stderr(self) -> None:
+        paths = _parse_overwrite_paths(UNTRACKED_STDERR)
+        assert paths == [".claude/settings.json", ".wade-managed"]
+
+    def test_returns_empty_for_unrelated_stderr(self) -> None:
+        paths = _parse_overwrite_paths("fatal: some other error\n")
+        assert paths == []
+
+
+class TestPullMainAfterMerge:
+    def test_untracked_triggers_cleanup_and_retry(self, tmp_path: Path) -> None:
+        """Untracked-files error triggers file deletion and pull retry."""
+        # Create the files that would be "untracked"
+        settings = tmp_path / ".claude" / "settings.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text("{}")
+        managed = tmp_path / ".wade-managed"
+        managed.write_text("# managed")
+
+        fail_result = MagicMock(returncode=1, stderr=UNTRACKED_STDERR)
+        ok_result = MagicMock(returncode=0, stderr="")
+
+        with patch(
+            "wade.services.work_service.subprocess.run", side_effect=[fail_result, ok_result]
+        ):
+            _pull_main_after_merge(tmp_path)
+
+        assert not settings.exists()
+        assert not managed.exists()
+
+    def test_local_changes_falls_through_to_warning(self, tmp_path: Path) -> None:
+        """Tracked-files error does NOT trigger deletion — just warns."""
+        target_file = tmp_path / "src" / "main.py"
+        target_file.parent.mkdir(parents=True)
+        target_file.write_text("print('hello')")
+
+        fail_result = MagicMock(returncode=1, stderr=LOCAL_CHANGES_STDERR)
+
+        with (
+            patch("wade.services.work_service.subprocess.run", return_value=fail_result),
+            patch("wade.services.work_service.console") as mock_console,
+        ):
+            _pull_main_after_merge(tmp_path)
+
+        # File must NOT be deleted
+        assert target_file.exists()
+        mock_console.warn.assert_called_once()
+        mock_console.hint.assert_called_once()

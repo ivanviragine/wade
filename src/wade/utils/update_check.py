@@ -47,7 +47,13 @@ def _load_cache() -> dict[str, object] | None:
     try:
         if CACHE_FILE.is_file():
             data = json.loads(CACHE_FILE.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and "timestamp" in data and "latest_version" in data:
+            if (
+                isinstance(data, dict)
+                and "timestamp" in data
+                and "latest_version" in data
+                and isinstance(data["timestamp"], (int, float))
+                and isinstance(data["latest_version"], str)
+            ):
                 return data
     except (OSError, json.JSONDecodeError, ValueError):
         pass

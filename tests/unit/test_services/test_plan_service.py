@@ -11,6 +11,7 @@ from wade.models.config import AIConfig, ProjectConfig
 from wade.models.task import PlanFile
 from wade.services.ai_resolution import resolve_ai_tool, resolve_model
 from wade.services.plan_service import (
+    _finalize_issues,
     discover_plan_files,
     get_plan_prompt_template,
     render_plan_prompt,
@@ -366,3 +367,36 @@ class TestModelCompatibility:
             )
 
             adapter.is_model_compatible.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _finalize_issues — label failure resilience
+# ---------------------------------------------------------------------------
+
+
+class TestFinalizeIssues:
+    def test_label_failure_does_not_abort(self) -> None:
+        """A failing add_planned_by_labels must not prevent finalization."""
+        provider = MagicMock()
+        config = ProjectConfig()
+
+        with (
+            patch(
+                "wade.services.plan_service.add_planned_by_labels",
+                side_effect=RuntimeError("API error"),
+            ),
+            patch("wade.services.plan_service.apply_plan_token_usage"),
+            patch("wade.services.plan_service.console") as mock_console,
+        ):
+            # Must not raise
+            _finalize_issues(
+                provider=provider,
+                config=config,
+                issue_numbers=["1", "2"],
+                ai_tool="claude",
+                model="opus",
+                usage=None,
+            )
+
+        # Warnings emitted for both issues
+        assert mock_console.warn.call_count == 2

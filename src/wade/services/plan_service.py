@@ -542,7 +542,11 @@ def _finalize_issues(
 
     # Add planned-by labels
     for issue_id in issue_numbers:
-        add_planned_by_labels(provider, issue_id, ai_tool, model)
+        try:
+            add_planned_by_labels(provider, issue_id, ai_tool, model)
+        except Exception as e:
+            console.warn(f"Could not apply planned-by labels to #{issue_id}: {e}")
+            logger.warning("plan.planned_by_labels_failed", task_id=issue_id, error=str(e))
 
     # Auto-dependency analysis for 2+ issues
     if len(issue_numbers) >= 2:

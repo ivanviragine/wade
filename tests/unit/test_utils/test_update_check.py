@@ -80,6 +80,30 @@ class TestCacheRoundtrip:
 
         assert result is None
 
+    def test_load_returns_none_when_timestamp_not_numeric(self, tmp_path: Path) -> None:
+        """Returns None when timestamp is a non-numeric string."""
+        cache_file = tmp_path / "update-check.json"
+        cache_file.write_text(
+            json.dumps({"timestamp": "not-a-number", "latest_version": "1.0.0"}),
+            encoding="utf-8",
+        )
+        with patch("wade.utils.update_check.CACHE_FILE", cache_file):
+            result = _load_cache()
+
+        assert result is None
+
+    def test_load_returns_none_when_version_not_string(self, tmp_path: Path) -> None:
+        """Returns None when latest_version is not a string."""
+        cache_file = tmp_path / "update-check.json"
+        cache_file.write_text(
+            json.dumps({"timestamp": 123.0, "latest_version": 42}),
+            encoding="utf-8",
+        )
+        with patch("wade.utils.update_check.CACHE_FILE", cache_file):
+            result = _load_cache()
+
+        assert result is None
+
     def test_save_creates_parent_dirs(self, tmp_path: Path) -> None:
         """_save_cache creates parent directories if needed."""
         cache_file = tmp_path / "deeply" / "nested" / "update-check.json"

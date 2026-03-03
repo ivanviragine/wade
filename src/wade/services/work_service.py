@@ -457,7 +457,7 @@ def _pull_main_after_merge(repo_root: Path) -> None:
     )
     if result.returncode == 0:
         return
-    if "would be overwritten by merge" in result.stderr:
+    if "untracked working tree files would be overwritten by merge" in result.stderr:
         for rel_path in _parse_overwrite_paths(result.stderr):
             target = repo_root / rel_path
             target.unlink(missing_ok=True)

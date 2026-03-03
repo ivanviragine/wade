@@ -105,8 +105,7 @@ src/wade/
 │   └── claude_allowlist.py  # .claude/settings.json allowlist management
 ├── ui/                  # Terminal UI (Rich)
 │   ├── console.py       # Console class
-│   ├── prompts.py       # confirm, input, select, menu
-│   └── formatters.py    # OutputFormatter (human + JSON)
+│   └── prompts.py       # confirm, input, select, menu
 ├── data/                # Bundled data files
 │   └── models.json      # AI model registry (probed from CLIs)
 ├── logging/             # Structured logging
