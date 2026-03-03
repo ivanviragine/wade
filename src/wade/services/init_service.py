@@ -458,13 +458,12 @@ def _prompt_configure_gemini_experimental(non_interactive: bool) -> None:
             if isinstance(raw, dict):
                 existing = raw
 
-    if not non_interactive:
-        console.rule("Gemini")
-
     experimental = existing.get("experimental", {})
     if isinstance(experimental, dict) and experimental.get("plan") is True:
-        console.detail("Gemini experimental.plan already enabled")
-        return  # Already configured
+        return  # Already configured — skip section entirely
+
+    if not non_interactive:
+        console.rule("Gemini")
 
     if non_interactive:
         return
@@ -483,7 +482,6 @@ def _prompt_configure_allowlist(root: Path, non_interactive: bool) -> None:
     from wade.ui import prompts
 
     if is_allowlist_configured(root):
-        console.detail("Claude Code allowlist already configured")
         return
 
     if non_interactive:
@@ -550,7 +548,6 @@ def _prompt_configure_statusline(non_interactive: bool) -> None:
                 existing = raw
 
     if "statusLine" in existing:
-        console.detail("Claude Code statusline already configured")
         return  # Already configured — skip silently (idempotent)
 
     if non_interactive:
@@ -636,14 +633,15 @@ def _prompt_configure_shell_integration(non_interactive: bool) -> None:
         )
         return
 
-    # If already configured, skip silently
+    # If already configured, skip section entirely
     if _is_shell_integration_configured(profile):
-        console.detail("Shell integration already configured")
         return
 
     # If non-interactive, skip silently
     if non_interactive:
         return
+
+    console.rule("Shell")
 
     # Prompt the user
     is_fish = "fish" in shell_env.lower()
@@ -657,6 +655,23 @@ def _prompt_configure_shell_integration(non_interactive: bool) -> None:
 
 def _prompt_claude_code_settings(root: Path, non_interactive: bool) -> None:
     """Prompt for Claude Code-specific settings: allowlist and statusline."""
+    import contextlib
+    import json
+
+    from wade.config.claude_allowlist import is_allowlist_configured
+
+    # Pre-check: skip entire section if everything is already configured
+    allowlist_done = is_allowlist_configured(root)
+    statusline_done = False
+    settings_path = Path.home() / ".claude" / "settings.json"
+    if settings_path.is_file():
+        with contextlib.suppress(json.JSONDecodeError, OSError):
+            raw = json.loads(settings_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict) and "statusLine" in raw:
+                statusline_done = True
+    if allowlist_done and statusline_done:
+        return
+
     if not non_interactive:
         console.rule("Claude Code")
     _prompt_configure_allowlist(root, non_interactive)
