@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "wade"
-version = "1.1.8"
+version = "1.2.0"
 description = "WADE — Workflow for AI-Driven Engineering"
 readme = "README.md"
 license = "MIT"

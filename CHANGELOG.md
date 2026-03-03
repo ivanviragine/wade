@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.2.0] — 2026-03-03
+
+### Features
+
+- highlight wade in accent color in allowlist prompt and success message (e44b98a)
+
 ## [v1.1.8] — 2026-03-03
 
 ### Bug Fixes
