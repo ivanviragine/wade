@@ -1,6 +1,8 @@
 # WADE — Workflow for AI-Driven Engineering
 
-<img src="assets/wade.png" alt="WADE" width="300" />
+<p align="center">
+  <img src="assets/wade.png" alt="WADE" width="300" />
+</p>
 
 Turn GitHub Issues into isolated, AI-powered development sessions — with one command.
 
