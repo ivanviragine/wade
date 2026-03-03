@@ -20,54 +20,16 @@ app = typer.Typer(
 
 def cli_main() -> None:
     """Console entrypoint — wraps ``app()`` to catch ConfigError gracefully."""
-    if len(sys.argv) > 1 and sys.argv[1].isdigit():
-        success = _smart_route_issue(sys.argv[1])
-        raise SystemExit(0 if success else 1)
     try:
+        if len(sys.argv) > 1 and sys.argv[1].isdigit():
+            from wade.services.work_service import start as do_start
+
+            success = do_start(target=sys.argv[1])
+            raise SystemExit(0 if success else 1)
         app()
     except ConfigError as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
         raise SystemExit(1) from None
-
-
-def _smart_route_issue(issue_number: str) -> bool:
-    """Fetch issue N and dispatch to work_service.start().
-
-    Checks for a ``planned_by:*`` label (the one signal work_service doesn't
-    have) and prints a helpful message if found. Draft PR detection, the
-    no-plan prompt, and plan-vs-implement routing are all handled by
-    work_service.start() to avoid duplication.
-    """
-    from wade.config.loader import ConfigError as _ConfigError
-    from wade.config.loader import load_config
-    from wade.providers.registry import get_provider
-    from wade.ui.console import console
-
-    try:
-        config = load_config()
-    except _ConfigError as exc:
-        print(f"Configuration error: {exc}", file=sys.stderr)
-        return False
-
-    provider = get_provider(config)
-
-    try:
-        task = provider.read_task(issue_number)
-    except Exception as exc:
-        console.error(f"Could not fetch issue #{issue_number}: {exc}")
-        return False
-
-    # work_service.start() already handles draft PR detection, the no-plan
-    # prompt ("Plan first / Proceed without plan"), and routing to plan_service.
-    # The only unique signal here is the planned_by label — if set, we know
-    # it's planned even if the draft PR is missing, so we skip that warning.
-    has_planned_label = any(label.name.startswith("planned_by:") for label in task.labels)
-    if has_planned_label:
-        console.info(f"Issue #{task.id} has a plan — starting implementation session...")
-
-    from wade.services.work_service import start as do_start
-
-    return do_start(target=issue_number)
 
 
 def version_callback(value: bool) -> None:
