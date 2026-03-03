@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.3.0] — 2026-03-03
+
+### Features
+
+- support planning existing issues via `wade plan-task --issue <id>` (06ca562)
+
 ## [v1.2.0] — 2026-03-03
 
 ### Features
