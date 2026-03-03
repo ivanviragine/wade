@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.5.6] — 2026-03-03
+
+### Documentation
+
+- add tagline to README and update GitHub description (bf88957)
+
 ## [v1.5.5] — 2026-03-03
 
 ### Bug Fixes
