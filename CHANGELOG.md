@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.1.8] — 2026-03-03
+
+### Bug Fixes
+
+- capture token usage before PR merge, handle local changes in pull sync (f031bba)
+
 ## [v1.1.7] — 2026-03-03
 
 ### Bug Fixes
