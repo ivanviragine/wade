@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.5.3] — 2026-03-03
+
+### Bug Fixes
+
+- remove _smart_route_issue, inline into cli_main to eliminate bugs (e52a4b2)
+
 ## [v1.5.2] — 2026-03-03
 
 ### Refactoring
