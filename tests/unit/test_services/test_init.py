@@ -790,8 +790,12 @@ class TestUpdateExtended:
             mock_mig.assert_called_once()
 
     def test_update_configures_allowlist(self, tmp_git_repo: Path) -> None:
-        """update() should call configure_allowlist."""
-        init(project_root=tmp_git_repo, non_interactive=True)
+        """update() should call configure_allowlist when Claude is the configured tool."""
+        with patch(
+            "wade.services.init_service.AbstractAITool.detect_installed",
+            return_value=[AIToolID.CLAUDE],
+        ):
+            init(project_root=tmp_git_repo, non_interactive=True)
 
         with patch("wade.config.claude_allowlist.configure_allowlist") as mock_allow:
             update(project_root=tmp_git_repo, skip_self_upgrade=True)

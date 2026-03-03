@@ -110,8 +110,19 @@ def init(
     command_overrides = _prompt_command_overrides(
         installed_tools, non_interactive, default_model=default_model
     )
-    _prompt_claude_code_settings(root, non_interactive)
-    if "gemini" in installed_tools:
+    # Compute which tools are actually in use (selected + per-command overrides)
+    tools_in_use: set[str] = set()
+    if selected_tool:
+        tools_in_use.add(selected_tool)
+    if work_setup.get("tool"):
+        tools_in_use.add(work_setup["tool"])
+    for cmd_cfg in command_overrides.values():
+        if cmd_cfg.get("tool"):
+            tools_in_use.add(cmd_cfg["tool"])
+
+    if "claude" in tools_in_use:
+        _prompt_claude_code_settings(root, non_interactive)
+    if "gemini" in tools_in_use:
         _maybe_configure_gemini_experimental(non_interactive)
     _maybe_configure_shell_integration(non_interactive)
 
@@ -252,13 +263,18 @@ def update(
     installed = installer.install_skills(root, is_self_init=is_self, force=True)
     console.info(f"Updated {len(installed)} skill entries")
 
-    # Step 8: Configure Claude Code allowlist
-    configure_allowlist(root)
+    # Compute which tools are actually configured for this project
+    tools_in_use: set[str] = set()
+    for cmd in [None, "plan", "deps", "work"]:
+        t = config.get_ai_tool(cmd)
+        if t:
+            tools_in_use.add(t)
 
-    # Step 9: Configure Gemini experimental (if applicable)
-    installed_tools = [str(t) for t in AbstractAITool.detect_installed()]
-    if "gemini" in installed_tools:
-        _maybe_configure_gemini_experimental(False)
+    # Step 8-9: Silently configure tool-specific settings (idempotent)
+    if "claude" in tools_in_use:
+        configure_allowlist(root)
+    if "gemini" in tools_in_use:
+        _configure_gemini_experimental()
 
     # Step 10: Refresh .gitignore + AGENTS.md pointer
     _ensure_gitignore(root)
