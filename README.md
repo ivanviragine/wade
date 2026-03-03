@@ -11,7 +11,7 @@ Working with AI coding tools is powerful, but the workflow around them is still 
 | Copy-paste issue details into AI chat | AI reads the issue automatically |
 | Create branch, remember naming convention | `wade implement-task 42` handles it |
 | One task at a time (or messy stash juggling) | Parallel tasks in isolated git worktrees |
-| Manually write PR, link issue, clean up branch | `wade work done` — one command |
+| Manually write PR, link issue, clean up branch | Skills guide the AI to do it automatically |
 | Re-explain project conventions to AI every time | Skills teach your AI how your project works |
 
 ## Installation
@@ -54,16 +54,12 @@ wade implement-task 42
 
 That one command creates an isolated git worktree, opens your AI tool with the issue title, description, labels, and all project context pre-loaded. The AI already knows your project conventions — `wade init` installs Skill files that teach it.
 
+From there the AI session is self-contained: the installed Skills guide the AI to sync with main when needed, commit, push the branch, and open a linked PR — all without leaving the session.
+
 Working on multiple issues simultaneously:
 
 ```bash
 wade work batch 42 43 44   # three worktrees, three AI sessions, zero stashing
-```
-
-Done with an issue:
-
-```bash
-wade work done   # pushes branch, opens PR linked to the issue, cleans up worktree
 ```
 
 ## Quick Start
@@ -75,14 +71,8 @@ wade init
 # Plan features with AI — creates issues + draft PRs
 wade plan-task
 
-# Start working on an issue
+# Start working on an issue — the AI session handles everything from here
 wade implement-task 42
-
-# Sync with main mid-work
-wade work sync
-
-# Ship — push branch and open PR
-wade work done
 ```
 
 ## Commands
@@ -117,17 +107,24 @@ wade work done
 | `wade implement-task <N> --cd` | Create worktree, print path (no AI launch) |
 | `wade work batch <N> <M> ...` | Start parallel sessions for multiple issues |
 
-### Work Sessions
+### Worktree Management
+
+| Command | Description |
+|---------|-------------|
+| `wade work list` | List active worktrees |
+| `wade work remove <N>` | Remove a worktree |
+| `wade work remove --stale` | Remove all stale worktrees |
+| `wade work cd <N>` | `cd` into a worktree (requires shell integration) |
+
+### AI-Invoked Commands
+
+These are called by the AI skill during an implementation session — not by the user directly.
 
 | Command | Description |
 |---------|-------------|
 | `wade work sync` | Sync feature branch with main |
 | `wade work done` | Push branch and create PR |
 | `wade work done --no-cleanup` | Keep the worktree after direct merge |
-| `wade work list` | List active worktrees |
-| `wade work remove <N>` | Remove a worktree |
-| `wade work remove --stale` | Remove all stale worktrees |
-| `wade work cd <N>` | `cd` into a worktree (requires shell integration) |
 
 ## Configuration
 
