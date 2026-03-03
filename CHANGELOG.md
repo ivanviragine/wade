@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.3.1] — 2026-03-03
+
+### Refactoring
+
+- standardize token usage section headings and inline model breakdown (58fdbb5)
+
 ## [v1.3.0] — 2026-03-03
 
 ### Features
