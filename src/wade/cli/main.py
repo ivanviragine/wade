@@ -20,11 +20,74 @@ app = typer.Typer(
 
 def cli_main() -> None:
     """Console entrypoint — wraps ``app()`` to catch ConfigError gracefully."""
+    if len(sys.argv) > 1 and sys.argv[1].isdigit():
+        success = _smart_route_issue(sys.argv[1])
+        raise SystemExit(0 if success else 1)
     try:
         app()
     except ConfigError as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
         raise SystemExit(1) from None
+
+
+def _smart_route_issue(issue_number: str) -> bool:
+    """Fetch issue N, detect plan state, dispatch to plan-task or implement-task.
+
+    Routing signals (in order):
+      1. ``planned_by:*`` label on the issue → implement
+      2. Existing draft PR on the issue's branch → implement
+      3. Neither → plan
+    """
+    from pathlib import Path
+
+    from wade.config.loader import ConfigError as _ConfigError
+    from wade.config.loader import load_config
+    from wade.providers.registry import get_provider
+    from wade.ui.console import console
+
+    try:
+        config = load_config()
+    except _ConfigError as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        return False
+
+    provider = get_provider(config)
+
+    try:
+        task = provider.read_task(issue_number)
+    except Exception as exc:
+        console.error(f"Could not fetch issue #{issue_number}: {exc}")
+        return False
+
+    # Signal 1: planned_by label
+    is_planned = any(label.name.startswith("planned_by:") for label in task.labels)
+
+    # Signal 2: draft PR on the issue branch
+    if not is_planned:
+        try:
+            from wade.git import branch as git_branch
+            from wade.git import pr as git_pr
+            from wade.git import repo as git_repo
+
+            repo_root = git_repo.get_repo_root(Path.cwd())
+            branch_name = git_branch.make_branch_name(
+                config.project.branch_prefix, int(task.id), task.title
+            )
+            if git_pr.get_pr_for_branch(repo_root, branch_name):
+                is_planned = True
+        except Exception:
+            pass  # Not in a git repo or PR lookup failed — treat as unplanned
+
+    if is_planned:
+        console.info(f"Issue #{task.id} has a plan — starting implementation session...")
+        from wade.services.work_service import start as do_start
+
+        return do_start(target=issue_number)
+    else:
+        console.info(f"Issue #{task.id} has no plan yet — starting planning session...")
+        from wade.services.plan_service import plan as do_plan
+
+        return do_plan(issue_id=issue_number)
 
 
 def version_callback(value: bool) -> None:

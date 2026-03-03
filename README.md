@@ -24,10 +24,10 @@ git checkout -b feat/issue-42-user-auth
 *With* WADE:
 
 ```bash
-wade implement-task 42
+wade 42
 ```
 
-WADE creates an isolated git worktree, launches your AI tool with the full issue loaded — title, description, labels, and all your project conventions — and Skills guide the AI from first commit to open PR without you touching git again.
+WADE fetches the issue, detects whether it's been planned, and starts the right session automatically — planning if no plan exists yet, implementation if it does. Creates an isolated git worktree, launches your AI tool with the full issue loaded — title, description, labels, and all your project conventions — and Skills guide the AI from first commit to open PR without you touching git again.
 
 Working on multiple issues at once:
 
@@ -74,8 +74,8 @@ wade init
 # Plan a feature — AI creates GitHub issues and draft PRs
 wade plan-task
 
-# Start working — WADE picks the right tool and model automatically
-wade implement-task 42
+# Start working — WADE detects plan state and picks the right session automatically
+wade 42
 ```
 
 ## Commands
@@ -105,6 +105,7 @@ wade implement-task 42
 
 | Command | Description |
 |---------|-------------|
+| `wade <N>` | Smart shorthand — detects plan state and routes to plan or implement automatically |
 | `wade implement-task <N>` | Create worktree and start AI session for issue N |
 | `wade implement-task <N> --detach` | Launch AI in a new terminal tab |
 | `wade implement-task <N> --cd` | Create worktree, print path (no AI launch) |
