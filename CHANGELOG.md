@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.4.3] — 2026-03-03
+
+### Documentation
+
+- halve banner width to 300px (a2143c7)
+
 ## [v1.4.2] — 2026-03-03
 
 ### Documentation
