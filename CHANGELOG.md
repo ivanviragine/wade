@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.1.5] — 2026-03-03
+
+### Bug Fixes
+
+- only show tool-specific config for tools actually in use (0ec030d)
+
+### Chores
+
+- remove .sisyphus planning artifacts (1747b14)
+
 ## [v1.1.4] — 2026-03-03
 
 ### Bug Fixes
