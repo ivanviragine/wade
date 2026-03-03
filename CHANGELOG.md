@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.4.4] — 2026-03-03
+
+### Documentation
+
+- center banner image (89b7e4f)
+
 ## [v1.4.3] — 2026-03-03
 
 ### Documentation
