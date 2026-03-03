@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.1.6] — 2026-03-03
+
+### Refactoring
+
+- deduplicate adapters, clean git layer, remove dead code, improve naming (f247a88)
+
 ## [v1.1.5] — 2026-03-03
 
 ### Bug Fixes
