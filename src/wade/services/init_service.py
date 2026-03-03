@@ -1162,7 +1162,10 @@ def _patch_config(
 
     # Patch models if missing
     tool_key = str(ai_tool) if ai_tool else None
-    if tool_key and model_mapping.easy:
+    has_any_model = any(
+        getattr(model_mapping, k, None) for k in ("easy", "medium", "complex", "very_complex")
+    )
+    if tool_key and has_any_model:
         models = raw.get("models", {}) or {}
         tool_models = models.get(tool_key, {}) or {}
 

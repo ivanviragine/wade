@@ -37,6 +37,7 @@ def test_pr_strategy_prompts_merge_on_existing_pr(
     mock_run: MagicMock,
     tmp_path: Path,
 ) -> None:
+    mock_run.return_value = MagicMock(returncode=0)
     provider = MagicMock()
     repo_root = tmp_path / "repo"
     wt_path = tmp_path / "wt"
@@ -52,7 +53,12 @@ def test_pr_strategy_prompts_merge_on_existing_pr(
     # Worktree is removed AFTER successful merge
     mock_merge_pr.assert_called_once_with(repo_root=repo_root, pr_number=99, strategy="squash")
     mock_remove_worktree.assert_called_once_with(repo_root, wt_path)
-    mock_run.assert_any_call(["git", "pull", "--quiet"], cwd=repo_root)
+    mock_run.assert_any_call(
+        ["git", "pull", "--ff-only", "--quiet"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
 
 
 @patch("wade.services.work_service.git_pr.merge_pr")
@@ -198,6 +204,7 @@ def test_pr_strategy_cleanup_and_pull_after_merge(
     mock_run: MagicMock,
     tmp_path: Path,
 ) -> None:
+    mock_run.return_value = MagicMock(returncode=0)
     provider = MagicMock()
     repo_root = tmp_path / "repo"
     wt_path = tmp_path / "wt"
@@ -209,7 +216,12 @@ def test_pr_strategy_cleanup_and_pull_after_merge(
 
     # Worktree is removed AFTER successful merge
     mock_remove_worktree.assert_called_once_with(repo_root, wt_path)
-    mock_run.assert_any_call(["git", "pull", "--quiet"], cwd=repo_root)
+    mock_run.assert_any_call(
+        ["git", "pull", "--ff-only", "--quiet"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
 
 
 @patch("wade.services.work_service.prompts.confirm", return_value=False)

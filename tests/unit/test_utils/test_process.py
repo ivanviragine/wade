@@ -81,11 +81,12 @@ class TestRunWithTranscript:
         actual_cmd = mock_run.call_args[0][0]
         assert actual_cmd[0] == "script"
         assert actual_cmd[1] == "-q"
-        assert actual_cmd[2] == "-c"
+        assert actual_cmd[2] == "-e"
+        assert actual_cmd[3] == "-c"
         # The quoted command string should contain all parts
-        assert "claude" in actual_cmd[3]
-        assert "--permission-mode" in actual_cmd[3]
-        assert actual_cmd[4] == str(transcript)
+        assert "claude" in actual_cmd[4]
+        assert "--permission-mode" in actual_cmd[4]
+        assert actual_cmd[5] == str(transcript)
 
     def test_bsd_script_macos_syntax(self, tmp_path: Path) -> None:
         """When script --version fails (BSD), use: script -q transcript cmd..."""

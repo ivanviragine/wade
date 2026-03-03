@@ -101,7 +101,7 @@ def run_with_transcript(
     if version_check.returncode == 0:
         # GNU script (Linux): script -q -c "cmd" transcript_file
         cmd_str = " ".join(shlex.quote(c) for c in cmd)
-        full_cmd = ["script", "-q", "-c", cmd_str, str(transcript_path)]
+        full_cmd = ["script", "-q", "-e", "-c", cmd_str, str(transcript_path)]
     else:
         # BSD script (macOS): script -q transcript_file cmd...
         full_cmd = ["script", "-q", str(transcript_path), *cmd]

@@ -423,6 +423,60 @@ def _post_work_lifecycle(
         )
 
 
+def _parse_overwrite_paths(stderr: str) -> list[str]:
+    """Extract conflicting file paths from a git 'would be overwritten' error."""
+    paths: list[str] = []
+    in_block = False
+    for line in stderr.splitlines():
+        if "would be overwritten by merge" in line:
+            in_block = True
+            continue
+        if in_block:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("Please"):
+                break
+            paths.append(stripped)
+    return paths
+
+
+def _pull_main_after_merge(repo_root: Path) -> None:
+    """Pull the latest main branch after a successful PR merge.
+
+    Handles the common case where wade-managed files (skills, settings) were
+    installed by ``wade init`` as untracked files in the repo root. When the PR
+    being merged introduced those same files as tracked, a plain ``git pull``
+    aborts with "untracked files would be overwritten". This helper detects that
+    condition, removes the conflicting untracked files (they will be replaced by
+    the tracked versions from the merge), and retries the pull.
+    """
+    result = subprocess.run(
+        ["git", "pull", "--ff-only", "--quiet"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        return
+    if "would be overwritten by merge" in result.stderr:
+        for rel_path in _parse_overwrite_paths(result.stderr):
+            target = repo_root / rel_path
+            target.unlink(missing_ok=True)
+            with contextlib.suppress(Exception):
+                target.parent.rmdir()
+        retry = subprocess.run(
+            ["git", "pull", "--ff-only", "--quiet"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+        )
+        if retry.returncode != 0:
+            console.warn("Could not sync local main branch after merge.")
+            console.hint("Run 'git pull' manually to update your local branch.")
+    else:
+        console.warn("Could not sync local main branch after merge.")
+        console.hint("Run 'git pull' manually to update your local branch.")
+
+
 def _post_work_lifecycle_pr(
     repo_root: Path,
     branch: str,
@@ -485,8 +539,7 @@ def _post_work_lifecycle_pr(
             git_worktree.prune_worktrees(repo_root)
         console.success(f"Removed {worktree_path.name}")
 
-    with contextlib.suppress(Exception):
-        subprocess.run(["git", "pull", "--quiet"], cwd=repo_root)
+    _pull_main_after_merge(repo_root)
 
     if issue_number:
         with contextlib.suppress(Exception):
@@ -807,6 +860,7 @@ def start(
             console.step(f"Launching {resolved_tool} in new terminal...")
             if launch_in_new_terminal(cmd, cwd=str(worktree_path), title=work_title):
                 console.success(f"Detached AI session for #{task.id}")
+                stop_title_keeper()
                 return True
             console.warn("Could not launch in new terminal — falling back to inline")
             # Fall through to inline launch below
@@ -884,6 +938,7 @@ def start(
         elif not resolved_tool:
             console.info("No AI tool configured. Worktree ready for manual work.")
             console.detail(f"cd {worktree_path}")
+            stop_title_keeper()
 
         lines = []
         lines.append(f"  Worktree   {console.git_ref(branch_name)}")
@@ -1882,10 +1937,11 @@ def _done_via_direct(
         console.error(f"Merge failed: {e}")
         return False
 
-    # Switch to main and merge feature branch
+    # Switch to main, fast-forward to origin, and merge feature branch
     console.step(f"Merging {branch} into {main_branch}...")
     try:
         git_repo._run_git("checkout", main_branch, cwd=repo_root)
+        git_repo._run_git("merge", "--ff-only", f"origin/{main_branch}", cwd=repo_root)
         git_repo._run_git("merge", "--no-edit", branch, cwd=repo_root)
         git_repo._run_git("push", "origin", main_branch, cwd=repo_root)
         console.success("Merged and pushed.")

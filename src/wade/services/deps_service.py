@@ -479,13 +479,13 @@ def analyze_deps(
 
     if output and output_is_parseable(output):
         console.success("Headless analysis complete.")
-    elif output:
-        console.warn("Headless output not parseable.")
-        output = None
     else:
-        console.info(
-            f"Headless mode not available for {resolved_tool}. Falling back to interactive..."
-        )
+        if output:
+            console.warn("Headless output not parseable — falling back to interactive...")
+        else:
+            console.info(
+                f"Headless mode not available for {resolved_tool}. Falling back to interactive..."
+            )
         output = _run_interactive_analysis(
             resolved_tool,
             prompt,
