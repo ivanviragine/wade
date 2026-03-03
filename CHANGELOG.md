@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.3.3] — 2026-03-03
+
+### Documentation
+
+- highlight one-time init, multi-tool support, and smart dispatch (6f05539)
+
 ## [v1.3.2] — 2026-03-03
 
 ### Documentation
