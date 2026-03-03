@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.1.7] — 2026-03-03
+
+### Bug Fixes
+
+- skip tool-specific init sections when already configured (0711e62)
+
 ## [v1.1.6] — 2026-03-03
 
 ### Refactoring
