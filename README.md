@@ -6,7 +6,7 @@
 
 **AI tools write the code. WADE handles everything else.**
 
-Branches, context loading, model selection, PR creation — all the workflow friction that surrounds AI coding sessions. WADE eliminates it. Works with Claude Code, Copilot, Gemini, Codex, and more. Run `wade init` once per project, then just point it at an issue number.
+Branches, worktrees, context loading, model selection, PR creation — all the workflow friction that surrounds AI coding sessions. WADE eliminates it. Works with Claude Code, Copilot, Gemini, Codex, and more. Run `wade init` once per project, then just point it at an issue number.
 
 ## See It in Action
 
