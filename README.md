@@ -6,7 +6,7 @@
 
 **AI tools write the code. WADE handles everything else.**
 
-Branches, worktrees, context loading, model selection, PR creation — all the workflow friction that surrounds AI coding sessions. WADE eliminates it. Works with Claude Code, Copilot, Gemini, Codex, and more. Run `wade init` once per project, then just point it at an GitHub *(more to come!)* issue number.
+Branches, worktrees, context loading, model selection, PR creation — all the workflow friction that surrounds AI coding sessions. WADE eliminates it. Works with `Claude Code`, `Copilot`, `Gemini`, `Codex`, and more. Run `wade init` once per project, then just point it at a GitHub *(more to come!)* issue number.
 
 ## See It in Action
 
@@ -37,29 +37,31 @@ wade work batch 42 43 44   # three worktrees, three AI sessions, zero stashing
 
 ## Why WADE
 
-| The old way | With WADE |
+| Without WADE | With WADE |
 |---|---|
-| Paste issue context into every AI session | Full issue + project conventions loaded automatically |
-| Five git commands before you even start | `wade implement-task 42` |
-| One task at a time — or stash juggling | Parallel issues in isolated worktrees, zero conflicts |
-| Write PR, link issue, clean up branch/worktree — manually | The AI ships the PR. You just review |
-| Re-explain project conventions every session | Skills teach the AI once. It knows forever. |
-| Manually pick model — overpay or underpower | Haiku for simple fixes, Sonnet for features, Opus for architecture - you configure it once |
-| Configure skills and tools per AI tool manually | Every tool wired up automatically by `wade init` |
+| `git fetch && checkout && pull && checkout -b ...` before every task | `wade 42` — one command, done |
+| Copy-paste issue title + description into AI chat every time | Full issue context + project conventions loaded automatically |
+| One task at a time, or stash-juggle between branches | Parallel issues in isolated worktrees, zero conflicts |
+| Re-explain your branching rules, test commands, linters every session | Skills teach the AI your conventions once |
+| Write the PR description, link the issue, clean up the branch — manually | The AI ships the PR. You just review |
+| Manually pick the right model for each task | Automatic model routing based on issue complexity |
 
 ## Installation
+
+One-line install script (installs [`uv`](https://docs.astral.sh/uv/) automatically if missing):
 
 ```bash
 curl -LsSf https://raw.githubusercontent.com/ivanviragine/wade/main/install.sh | sh
 ```
-Or install manually:
+
+Or, if you already have `uv` or `pipx`:
 
 ```bash
-uv tool install wade
+uv tool install wade    # recommended
 pipx install wade
 ```
 
-Requires [gh CLI](https://cli.github.com/) (authenticated) and at least one supported AI coding tool. Python and all dependencies are managed automatically by `uv`.
+Requires [gh CLI](https://cli.github.com/) (authenticated) and at least one supported AI coding tool.
 
 ```bash
 gh auth login    # if not already authenticated
@@ -67,10 +69,15 @@ gh auth login    # if not already authenticated
 
 ## Quick Start
 
-```bash
-# Once per project
-wade init
+Initialize WADE in your project (once):
 
+```bash
+wade init
+```
+
+Then start working:
+
+```bash
 # Plan a feature — AI creates GitHub issues and draft PRs
 wade plan-task
 
@@ -80,85 +87,21 @@ wade 42
 
 ## Commands
 
-### Setup
-
 | Command | Description |
 |---------|-------------|
-| `wade init` | Initialize WADE in the current project (once per project) |
-| `wade update` | Upgrade WADE and refresh managed project files |
-| `wade deinit` | Remove WADE from the project |
-| `wade check` | Check worktree status |
-| `wade check-config` | Validate `.wade.yml` |
-
-### Planning & Issues
-
-| Command | Description |
-|---------|-------------|
+| `wade <N>` | Smart shorthand — routes to plan or implement automatically |
+| `wade work batch <N> <M> ...` | Start parallel sessions for multiple issues *(beta)* |
 | `wade plan-task` | AI planning session — creates issues + draft PRs |
+| `wade implement-task <N>` | Create worktree and start AI session for an issue |
 | `wade new-task` | Create a GitHub issue interactively |
 | `wade task list` | List open issues |
 | `wade task read <N>` | Show issue details |
-| `wade task close <N>` | Close an issue |
-| `wade task deps <N> <M> ...` | Analyze dependencies between issues |
-
-### Implementation
-
-| Command | Description |
-|---------|-------------|
-| `wade <N>` | Smart shorthand — detects plan state and routes to plan or implement automatically |
-| `wade implement-task <N>` | Create worktree and start AI session for issue N |
-| `wade implement-task <N> --detach` | Launch AI in a new terminal tab |
-| `wade implement-task <N> --cd` | Create worktree, print path (no AI launch) |
-| `wade work batch <N> <M> ...` | Start parallel sessions for multiple issues |
-
-### Worktree Management
-
-| Command | Description |
-|---------|-------------|
 | `wade work list` | List active worktrees |
 | `wade work remove <N>` | Remove a worktree |
-| `wade work remove --stale` | Remove all stale worktrees |
-| `wade work cd <N>` | `cd` into a worktree (requires shell integration) |
+| `wade init` | Initialize WADE in the current project |
+| `wade update` | Upgrade WADE and refresh project files |
 
-### AI-Invoked Commands
-
-Called by the AI skill during a session — not by the user directly.
-
-| Command | Description |
-|---------|-------------|
-| `wade work sync` | Sync feature branch with main |
-| `wade work done` | Push branch and create PR |
-| `wade work done --no-cleanup` | Keep the worktree after direct merge |
-
-## Configuration
-
-`wade init` creates a `.wade.yml` in your project root:
-
-```yaml
-version: 2
-
-project:
-  main_branch: main
-  issue_label: feature-plan
-  worktrees_dir: ../.worktrees
-  branch_prefix: feat
-  merge_strategy: PR       # PR or direct
-
-ai:
-  plan:
-    tool: claude            # tool for wade plan-task
-  work:
-    tool: claude            # tool for wade implement-task
-
-models:
-  claude:
-    easy: claude-haiku-4-5-20251001
-    medium: claude-sonnet-4-6
-    complex: claude-sonnet-4-6
-    very_complex: claude-opus-4-6
-```
-
-`wade implement-task` reads the issue's `complexity` label and launches the matching model automatically. Planning and implementation sessions can use different tools. Merge strategy `PR` opens a pull request; `direct` merges locally.
+`plan-task` and `implement-task` accept `--ai <tool>` and `--model <model>` to override the configured defaults. `implement-task` also supports `--detach` (new terminal tab) and `--cd` (print worktree path only).
 
 ## Supported AI Tools
 
