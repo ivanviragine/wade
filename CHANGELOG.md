@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.1.3] — 2026-03-03
+
+### Bug Fixes
+
+- address 7 bugs found in code review (531e7a6)
+
 ## [v1.1.2] — 2026-03-02
 
 ### Bug Fixes
