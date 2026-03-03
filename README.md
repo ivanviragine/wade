@@ -6,11 +6,13 @@
 
 **AI tools write the code. WADE handles everything else.**
 
-Branches, worktrees, context loading, model selection, PR creation — all the workflow friction that surrounds AI coding sessions. WADE eliminates it. Works with Claude Code, Copilot, Gemini, Codex, and more. Run `wade init` once per project, then just point it at an issue number.
+Branches, worktrees, context loading, model selection, PR creation — all the workflow friction that surrounds AI coding sessions. WADE eliminates it. Works with Claude Code, Copilot, Gemini, Codex, and more. Run `wade init` once per project, then just point it at an GitHub *(more to come!)* issue number.
 
 ## See It in Action
 
-Starting work on Issue #42 — without WADE:
+Starting work on Issue #42:
+
+*Without* WADE:
 
 ```bash
 git fetch origin && git checkout main && git pull
@@ -19,7 +21,7 @@ git checkout -b feat/issue-42-user-auth
 # explain your branching rules, test locations, linters to run...
 ```
 
-With WADE:
+*With* WADE:
 
 ```bash
 wade implement-task 42
@@ -40,9 +42,9 @@ wade work batch 42 43 44   # three worktrees, three AI sessions, zero stashing
 | Paste issue context into every AI session | Full issue + project conventions loaded automatically |
 | Five git commands before you even start | `wade implement-task 42` |
 | One task at a time — or stash juggling | Parallel issues in isolated worktrees, zero conflicts |
-| Write PR, link issue, clean up branch — manually | The AI ships the PR. You just review. |
+| Write PR, link issue, clean up branch/worktree — manually | The AI ships the PR. You just review |
 | Re-explain project conventions every session | Skills teach the AI once. It knows forever. |
-| Manually pick model — overpay or underpower | Haiku for fixes, Sonnet for features, Opus for architecture |
+| Manually pick model — overpay or underpower | Haiku for simple fixes, Sonnet for features, Opus for architecture - you configure it once |
 | Configure skills and tools per AI tool manually | Every tool wired up automatically by `wade init` |
 
 ## Installation
@@ -50,18 +52,17 @@ wade work batch 42 43 44   # three worktrees, three AI sessions, zero stashing
 ```bash
 curl -LsSf https://raw.githubusercontent.com/ivanviragine/wade/main/install.sh | sh
 ```
-
-Requires [gh CLI](https://cli.github.com/) (authenticated) and at least one supported AI coding tool. Python and all dependencies are managed automatically by `uv`.
-
-```bash
-gh auth login    # if not already authenticated
-```
-
 Or install manually:
 
 ```bash
 uv tool install wade
 pipx install wade
+```
+
+Requires [gh CLI](https://cli.github.com/) (authenticated) and at least one supported AI coding tool. Python and all dependencies are managed automatically by `uv`.
+
+```bash
+gh auth login    # if not already authenticated
 ```
 
 ## Quick Start
