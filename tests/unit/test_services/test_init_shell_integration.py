@@ -7,7 +7,7 @@ from wade.services.init_service import (
     _configure_shell_integration,
     _get_shell_profile,
     _is_shell_integration_configured,
-    _maybe_configure_shell_integration,
+    _prompt_configure_shell_integration,
 )
 
 
@@ -153,7 +153,7 @@ class TestConfigureShellIntegration:
 
 
 class TestMaybeConfigureShellIntegration:
-    """Tests for _maybe_configure_shell_integration conditional logic."""
+    """Tests for _prompt_configure_shell_integration conditional logic."""
 
     def test_non_interactive_skips_configuration(self, tmp_path):
         """non_interactive=True should skip without prompting."""
@@ -161,7 +161,7 @@ class TestMaybeConfigureShellIntegration:
             patch.dict("os.environ", {"SHELL": "/bin/zsh"}),
             patch("wade.services.init_service._configure_shell_integration") as mock_config,
         ):
-            _maybe_configure_shell_integration(non_interactive=True)
+            _prompt_configure_shell_integration(non_interactive=True)
             mock_config.assert_not_called()
 
     def test_already_configured_skips(self, tmp_path):
@@ -174,7 +174,7 @@ class TestMaybeConfigureShellIntegration:
             patch("wade.services.init_service._get_shell_profile", return_value=profile),
             patch("wade.services.init_service._configure_shell_integration") as mock_config,
         ):
-            _maybe_configure_shell_integration(non_interactive=False)
+            _prompt_configure_shell_integration(non_interactive=False)
             mock_config.assert_not_called()
 
     def test_unknown_shell_shows_hint(self):
@@ -184,7 +184,7 @@ class TestMaybeConfigureShellIntegration:
             patch("wade.services.init_service.console") as mock_console,
             patch("wade.services.init_service._configure_shell_integration") as mock_config,
         ):
-            _maybe_configure_shell_integration(non_interactive=False)
+            _prompt_configure_shell_integration(non_interactive=False)
             # Should show hint
             mock_console.hint.assert_called_once()
             # Should not configure
@@ -204,7 +204,7 @@ class TestMaybeConfigureShellIntegration:
             patch("wade.ui.prompts.confirm", return_value=True),
             patch("wade.services.init_service._configure_shell_integration") as mock_config,
         ):
-            _maybe_configure_shell_integration(non_interactive=False)
+            _prompt_configure_shell_integration(non_interactive=False)
             mock_config.assert_called_once()
 
     def test_does_not_configure_on_decline(self, tmp_path):
@@ -221,7 +221,7 @@ class TestMaybeConfigureShellIntegration:
             patch("wade.ui.prompts.confirm", return_value=False),
             patch("wade.services.init_service._configure_shell_integration") as mock_config,
         ):
-            _maybe_configure_shell_integration(non_interactive=False)
+            _prompt_configure_shell_integration(non_interactive=False)
             mock_config.assert_not_called()
 
     def test_fish_shell_detected(self):
@@ -237,7 +237,7 @@ class TestMaybeConfigureShellIntegration:
             patch("wade.ui.prompts.confirm", return_value=True),
             patch("wade.services.init_service._configure_shell_integration") as mock_config,
         ):
-            _maybe_configure_shell_integration(non_interactive=False)
+            _prompt_configure_shell_integration(non_interactive=False)
             # Should pass is_fish=True
             mock_config.assert_called_once()
             _, kwargs = mock_config.call_args

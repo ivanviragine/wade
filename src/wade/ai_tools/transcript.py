@@ -595,8 +595,11 @@ def extract_premium_requests_from_text(text: str) -> int | None:
 # ---------------------------------------------------------------------------
 
 
-def parse_claude_transcript(transcript_path: Path) -> TokenUsage:
-    """Parse Claude CLI transcript for token usage."""
+def parse_transcript_common(transcript_path: Path) -> TokenUsage:
+    """Parse a CLI transcript for token usage (tool-agnostic).
+
+    This is the default implementation used by most adapters.
+    """
     text = read_transcript_excerpt(transcript_path)
     if not text:
         return TokenUsage(raw_transcript_path=transcript_path)
@@ -606,7 +609,10 @@ def parse_claude_transcript(transcript_path: Path) -> TokenUsage:
 
 
 def parse_copilot_transcript(transcript_path: Path) -> TokenUsage:
-    """Parse Copilot CLI transcript for token usage."""
+    """Parse Copilot CLI transcript for token usage.
+
+    Extends the common parser with premium-request extraction.
+    """
     text = read_transcript_excerpt(transcript_path)
     if not text:
         return TokenUsage(raw_transcript_path=transcript_path)
@@ -614,26 +620,6 @@ def parse_copilot_transcript(transcript_path: Path) -> TokenUsage:
     # Also try to get premium requests if not already found
     if usage.premium_requests is None:
         usage.premium_requests = extract_premium_requests_from_text(text)
-    usage.raw_transcript_path = transcript_path
-    return usage
-
-
-def parse_gemini_transcript(transcript_path: Path) -> TokenUsage:
-    """Parse Gemini CLI transcript for token usage."""
-    text = read_transcript_excerpt(transcript_path)
-    if not text:
-        return TokenUsage(raw_transcript_path=transcript_path)
-    usage = extract_token_usage_from_text(text)
-    usage.raw_transcript_path = transcript_path
-    return usage
-
-
-def parse_codex_transcript(transcript_path: Path) -> TokenUsage:
-    """Parse Codex CLI transcript for token usage."""
-    text = read_transcript_excerpt(transcript_path)
-    if not text:
-        return TokenUsage(raw_transcript_path=transcript_path)
-    usage = extract_token_usage_from_text(text)
     usage.raw_transcript_path = transcript_path
     return usage
 

@@ -7,9 +7,6 @@ import pytest
 from wade.ai_tools import AbstractAITool
 from wade.ai_tools.base import pick_best_model
 from wade.ai_tools.model_utils import (
-    classify_tier_claude,
-    classify_tier_codex,
-    classify_tier_gemini,
     classify_tier_universal,
     has_date_suffix,
 )
@@ -149,23 +146,6 @@ class TestBuildLaunchCommand:
             "run",
             "Fix the bug",
         ]
-
-
-class TestTierClassification:
-    def test_claude_tiers(self) -> None:
-        assert classify_tier_claude("claude-haiku-4-5") == ModelTier.FAST
-        assert classify_tier_claude("claude-sonnet-4-6") == ModelTier.BALANCED
-        assert classify_tier_claude("claude-opus-4-6") == ModelTier.POWERFUL
-        assert classify_tier_claude("unknown-model") is None
-
-    def test_gemini_tiers(self) -> None:
-        assert classify_tier_gemini("gemini-2.0-flash") == ModelTier.FAST
-        assert classify_tier_gemini("gemini-2.5-pro") == ModelTier.BALANCED
-        assert classify_tier_gemini("gemini-ultra") == ModelTier.POWERFUL
-
-    def test_codex_tiers(self) -> None:
-        assert classify_tier_codex("codex-mini-latest") == ModelTier.FAST
-        assert classify_tier_codex("gpt-4o") == ModelTier.POWERFUL
 
 
 class TestDateSuffix:

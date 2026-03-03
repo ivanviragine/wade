@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import heapq
 from collections import defaultdict, deque
 
 from pydantic import BaseModel
@@ -48,18 +49,18 @@ class DependencyGraph(BaseModel):
             if node not in in_degree:
                 in_degree[node] = 0
 
-        # Kahn's algorithm
-        queue = sorted(n for n in all_nodes if in_degree[n] == 0)
+        # Kahn's algorithm with min-heap for deterministic ordering
+        heap = sorted(n for n in all_nodes if in_degree[n] == 0)
+        heapq.heapify(heap)
         result: list[str] = []
 
-        while queue:
-            node = queue.pop(0)
+        while heap:
+            node = heapq.heappop(heap)
             result.append(node)
-            for neighbor in sorted(adj.get(node, [])):
+            for neighbor in adj.get(node, []):
                 in_degree[neighbor] -= 1
                 if in_degree[neighbor] == 0:
-                    queue.append(neighbor)
-            queue.sort()  # Deterministic ordering
+                    heapq.heappush(heap, neighbor)
 
         if len(result) != len(all_nodes):
             raise ValueError("Dependency graph contains a cycle")

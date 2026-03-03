@@ -58,7 +58,7 @@ def _label_for_type(
     )
 
 
-def ensure_issue_label(provider: AbstractTaskProvider, label_name: str) -> None:
+def ensure_task_label(provider: AbstractTaskProvider, label_name: str) -> None:
     """Ensure the main task label exists. Create if missing."""
     label = _label_for_type(
         LabelType.ISSUE_LABEL,
@@ -370,7 +370,7 @@ def create_interactive(
         body = "\n".join(body_lines)
 
     # Ensure task label exists
-    ensure_issue_label(provider, config.project.issue_label)
+    ensure_task_label(provider, config.project.issue_label)
 
     console.step(f"Creating issue: {title}")
 
@@ -406,7 +406,7 @@ def create_from_plan_file(
         return None
 
     # Ensure task label exists
-    ensure_issue_label(provider, config.project.issue_label)
+    ensure_task_label(provider, config.project.issue_label)
 
     # Create the issue
     console.step(f"Creating issue: {plan.title}")

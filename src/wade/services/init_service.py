@@ -123,8 +123,8 @@ def init(
     if "claude" in tools_in_use:
         _prompt_claude_code_settings(root, non_interactive)
     if "gemini" in tools_in_use:
-        _maybe_configure_gemini_experimental(non_interactive)
-    _maybe_configure_shell_integration(non_interactive)
+        _prompt_configure_gemini_experimental(non_interactive)
+    _prompt_configure_shell_integration(non_interactive)
 
     # Write phase
     if not non_interactive:
@@ -442,7 +442,7 @@ def _configure_gemini_experimental() -> None:
     logger.info("gemini.experimental_configured", path=str(settings_path))
 
 
-def _maybe_configure_gemini_experimental(non_interactive: bool) -> None:
+def _prompt_configure_gemini_experimental(non_interactive: bool) -> None:
     """Prompt user to enable Gemini experimental plan mode, skipping if already configured."""
     import contextlib
     import json
@@ -477,7 +477,7 @@ def _maybe_configure_gemini_experimental(non_interactive: bool) -> None:
         console.success("Enabled experimental.plan in ~/.gemini/settings.json")
 
 
-def _maybe_configure_allowlist(root: Path, non_interactive: bool) -> None:
+def _prompt_configure_allowlist(root: Path, non_interactive: bool) -> None:
     """Prompt user to configure the Claude Code allowlist, skipping if already set."""
     from wade.config.claude_allowlist import configure_allowlist, is_allowlist_configured
     from wade.ui import prompts
@@ -534,7 +534,7 @@ def _configure_statusline() -> None:
     logger.info("claude.statusline_configured", path=str(dest))
 
 
-def _maybe_configure_statusline(non_interactive: bool) -> None:
+def _prompt_configure_statusline(non_interactive: bool) -> None:
     """Prompt user to install Claude Code statusline, skipping if already configured."""
     import contextlib
     import json
@@ -619,7 +619,7 @@ def _configure_shell_integration(profile: Path, is_fish: bool) -> None:
     logger.info("shell.integration_configured", path=str(profile))
 
 
-def _maybe_configure_shell_integration(non_interactive: bool) -> None:
+def _prompt_configure_shell_integration(non_interactive: bool) -> None:
     """Prompt user to add shell integration, skipping if already configured."""
     from wade.ui import prompts
 
@@ -659,8 +659,8 @@ def _prompt_claude_code_settings(root: Path, non_interactive: bool) -> None:
     """Prompt for Claude Code-specific settings: allowlist and statusline."""
     if not non_interactive:
         console.rule("Claude Code")
-    _maybe_configure_allowlist(root, non_interactive)
-    _maybe_configure_statusline(non_interactive)
+    _prompt_configure_allowlist(root, non_interactive)
+    _prompt_configure_statusline(non_interactive)
 
 
 def _select_ai_tool(

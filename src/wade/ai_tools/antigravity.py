@@ -9,7 +9,6 @@ import structlog
 
 from wade.ai_tools.base import AbstractAITool
 from wade.models.ai import (
-    AIModel,
     AIToolCapabilities,
     AIToolID,
     AIToolType,
@@ -35,9 +34,6 @@ class AntigravityAdapter(AbstractAITool):
             headless_flag=None,
             supports_headless=False,
         )
-
-    def get_models(self) -> list[AIModel]:
-        return []
 
     def launch(
         self,

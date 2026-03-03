@@ -32,7 +32,7 @@ from wade.services.task_service import (
     add_complexity_label,
     add_planned_by_labels,
     apply_plan_token_usage,
-    ensure_issue_label,
+    ensure_task_label,
 )
 from wade.services.work_service import bootstrap_draft_pr
 from wade.ui.console import console
@@ -248,7 +248,7 @@ def plan(
         repo_root = None
 
     # Ensure task label exists
-    ensure_issue_label(provider, config.project.issue_label)
+    ensure_task_label(provider, config.project.issue_label)
 
     # Create temp directory for plan files
     plan_dir = tempfile.mkdtemp(prefix="wade-plan-")

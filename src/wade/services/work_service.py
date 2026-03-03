@@ -75,7 +75,7 @@ def _resolve_worktrees_dir(config: ProjectConfig, repo_root: Path) -> Path:
     return (repo_root / wt_dir).resolve()
 
 
-def _format_dirty_details(cwd: Path) -> str:
+def _format_uncommitted_summary(cwd: Path) -> str:
     """Build a human-readable summary of dirty working tree status."""
     dirty = git_repo.get_dirty_status(cwd)
     parts: list[str] = []
@@ -158,8 +158,6 @@ def bootstrap_worktree(
 
     # Run post-create hook
     if config.hooks.post_worktree_create:
-        import subprocess
-
         hook_path = repo_root / config.hooks.post_worktree_create
         if hook_path.is_file():
             try:
@@ -295,7 +293,7 @@ def bootstrap_draft_pr(
 
     # Push branch to origin
     try:
-        git_repo._run_git("push", "-u", "origin", branch_name, cwd=repo_root)
+        git_repo.push_branch(repo_root, branch_name, set_upstream=True)
     except GitError as e:
         console.error(f"Failed to push branch: {e}")
         return None
@@ -324,7 +322,7 @@ def bootstrap_draft_pr(
         return None
 
 
-def _post_exit_capture(
+def _capture_post_session_usage(
     transcript_path: Path | None,
     adapter: AbstractAITool,
     repo_root: Path,
@@ -449,12 +447,7 @@ def _pull_main_after_merge(repo_root: Path) -> None:
     condition, removes the conflicting untracked files (they will be replaced by
     the tracked versions from the merge), and retries the pull.
     """
-    result = subprocess.run(
-        ["git", "pull", "--ff-only", "--quiet"],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-    )
+    result = git_repo.pull_ff_only(repo_root)
     if result.returncode == 0:
         return
     if "untracked working tree files would be overwritten by merge" in result.stderr:
@@ -463,12 +456,7 @@ def _pull_main_after_merge(repo_root: Path) -> None:
             target.unlink(missing_ok=True)
             with contextlib.suppress(Exception):
                 target.parent.rmdir()
-        retry = subprocess.run(
-            ["git", "pull", "--ff-only", "--quiet"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-        )
+        retry = git_repo.pull_ff_only(repo_root)
         if retry.returncode != 0:
             console.warn("Could not sync local main branch after merge.")
             console.hint("Run 'git pull' manually to update your local branch.")
@@ -507,24 +495,14 @@ def _post_work_lifecycle_pr(
     # "checked out", which unblocks `gh pr merge --delete-branch`.
     if worktree_path and worktree_path.is_dir():
         with contextlib.suppress(Exception):
-            subprocess.run(
-                ["git", "checkout", "--detach"],
-                cwd=worktree_path,
-                check=True,
-                capture_output=True,
-            )
+            git_repo.checkout_detach(worktree_path)
 
     try:
         git_pr.merge_pr(repo_root=repo_root, pr_number=int(pr_number), strategy="squash")
     except Exception as e:
         if worktree_path and worktree_path.is_dir():
             with contextlib.suppress(Exception):
-                subprocess.run(
-                    ["git", "checkout", branch],
-                    cwd=worktree_path,
-                    check=True,
-                    capture_output=True,
-                )
+                git_repo.checkout(worktree_path, branch)
         logger.error("pr_merge.failed", pr_number=pr_number, error=str(e))
         console.error(f"PR merge failed: {e}")
         console.hint(f"Branch '{branch}' preserved — retry or clean up manually.")
@@ -575,25 +553,10 @@ def _post_work_lifecycle_direct(
         return
 
     try:
-        subprocess.run(
-            ["git", "merge", "--squash", branch],
-            check=True,
-            capture_output=True,
-            cwd=repo_root,
-        )
-        subprocess.run(
-            ["git", "commit", "--no-edit"],
-            check=True,
-            capture_output=True,
-            cwd=repo_root,
-        )
-        subprocess.run(
-            ["git", "push"],
-            check=True,
-            capture_output=True,
-            cwd=repo_root,
-        )
-    except Exception as e:
+        git_repo.merge_squash(repo_root, branch)
+        git_repo.commit_no_edit(repo_root)
+        git_repo.push(repo_root)
+    except (GitError, Exception) as e:
         logger.error("direct_merge.failed", branch=branch, error=str(e))
         return
 
@@ -658,7 +621,7 @@ def start(
         console.out = console.err
     try:
         # Read the issue
-        task = _resolve_target(target, provider, config)
+        task = _resolve_task_target(target, provider, config)
         if not task:
             return False
 
@@ -756,9 +719,7 @@ def start(
             try:
                 # Ensure local branch tracks remote
                 if not git_branch.branch_exists(repo_root, branch_name):
-                    git_repo._run_git(
-                        "fetch", "origin", f"{branch_name}:{branch_name}", cwd=repo_root
-                    )
+                    git_repo.fetch_ref(repo_root, "origin", f"{branch_name}:{branch_name}")
                 with console.status("Creating worktree..."):
                     git_worktree.checkout_existing_branch_worktree(
                         repo_root=repo_root,
@@ -917,7 +878,7 @@ def start(
             # Post-exit: parse transcript, update PR body and issue with token usage.
             detected_model: str | None = None
             if adapter is not None:
-                detected_model = _post_exit_capture(
+                detected_model = _capture_post_session_usage(
                     transcript_path=transcript_path,
                     adapter=adapter,
                     repo_root=repo_root,
@@ -950,7 +911,7 @@ def start(
         console.out = _original_out
 
 
-def _resolve_target(
+def _resolve_task_target(
     target: str,
     provider: AbstractTaskProvider,
     config: ProjectConfig,
@@ -1210,23 +1171,17 @@ def classify_staleness(
 
     # 3. Check if merged (merge-base equals branch tip)
     try:
-        merge_base = git_repo._run_git("merge-base", branch, main_branch, cwd=repo_root)
-        branch_tip = git_repo._run_git("rev-parse", branch, cwd=repo_root)
-        if merge_base.stdout.strip() == branch_tip.stdout.strip():
+        mb = git_repo.merge_base(repo_root, branch, main_branch)
+        tip = git_repo.rev_parse(repo_root, branch)
+        if mb == tip:
             return WorktreeState.STALE_MERGED
     except GitError:
         logger.debug("staleness.merge_base_check_failed", exc_info=True)
 
     # 4. Check if remote tracking branch gone
     try:
-        result = git_repo._run_git(
-            "for-each-ref",
-            "--format=%(upstream:trackshort)",
-            f"refs/heads/{branch}",
-            cwd=repo_root,
-            check=False,
-        )
-        if result.stdout.strip() == "gone":
+        tracking = git_repo.upstream_tracking_status(repo_root, branch)
+        if tracking == "gone":
             return WorktreeState.STALE_REMOTE_GONE
     except GitError:
         logger.debug("staleness.remote_tracking_check_failed", exc_info=True)
@@ -1491,7 +1446,7 @@ def sync(
 
     # Check clean — with detailed diagnostics
     if not git_repo.is_clean(cwd):
-        detail_str = _format_dirty_details(cwd)
+        detail_str = _format_uncommitted_summary(cwd)
         emit(SyncEventType.ERROR, reason="dirty_worktree", details=detail_str)
         if not json_output:
             console.error_with_fix(
@@ -1513,8 +1468,7 @@ def sync(
     # Fetch
     merge_ref = resolved_main
     try:
-        remote_result = git_repo._run_git("remote", cwd=repo_root, check=False)
-        has_remote = bool(remote_result.stdout.strip())
+        has_remote = git_repo.has_remote(repo_root)
     except GitError:
         has_remote = False
 
@@ -1590,9 +1544,9 @@ def sync(
 
     # Get conflict diff
     try:
-        diff_result = git_repo._run_git("diff", cwd=repo_root, check=False)
-        if diff_result.stdout.strip():
-            emit(SyncEventType.CONFLICT_DIFF, diff=diff_result.stdout)
+        diff_output = git_repo.diff_stat(repo_root)
+        if diff_output.strip():
+            emit(SyncEventType.CONFLICT_DIFF, diff=diff_output)
     except GitError:
         logger.debug("sync.conflict_diff_read_failed", exc_info=True)
 
@@ -1709,7 +1663,7 @@ def done(
 
     # Check clean
     if not git_repo.is_clean(cwd):
-        detail_str = _format_dirty_details(cwd)
+        detail_str = _format_uncommitted_summary(cwd)
         console.error_with_fix(
             f"Working tree is dirty ({detail_str})",
             "Commit or stash your changes first",
@@ -1784,7 +1738,7 @@ def _done_via_pr(
     # Push branch
     console.step("Pushing branch...")
     try:
-        git_repo._run_git("push", "-u", "origin", branch, cwd=repo_root)
+        git_repo.push_branch(repo_root, branch, set_upstream=True)
         console.success("Branch pushed.")
     except GitError as e:
         console.error(f"Push failed: {e}")
@@ -1940,10 +1894,10 @@ def _done_via_direct(
     # Switch to main, fast-forward to origin, and merge feature branch
     console.step(f"Merging {branch} into {main_branch}...")
     try:
-        git_repo._run_git("checkout", main_branch, cwd=repo_root)
-        git_repo._run_git("merge", "--ff-only", f"origin/{main_branch}", cwd=repo_root)
-        git_repo._run_git("merge", "--no-edit", branch, cwd=repo_root)
-        git_repo._run_git("push", "origin", main_branch, cwd=repo_root)
+        git_repo.checkout(repo_root, main_branch)
+        git_repo.merge_ff_only(repo_root, f"origin/{main_branch}")
+        git_repo.merge_no_edit(repo_root, branch)
+        git_repo.push_branch(repo_root, main_branch)
         console.success("Merged and pushed.")
     except GitError as e:
         console.error(f"Direct merge failed: {e}")

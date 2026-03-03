@@ -10,11 +10,9 @@ from wade.ai_tools.transcript import (
     extract_premium_requests_from_text,
     extract_token_usage_from_text,
     format_count,
-    parse_claude_transcript,
-    parse_codex_transcript,
     parse_copilot_transcript,
-    parse_gemini_transcript,
     parse_token_count,
+    parse_transcript_common,
     read_transcript_excerpt,
 )
 
@@ -182,7 +180,7 @@ class TestClaudeExtraction:
 
     def test_fixture_file(self) -> None:
         """Real Claude Code transcript with ANSI escape codes."""
-        usage = parse_claude_transcript(FIXTURES / "claude_session.txt")
+        usage = parse_transcript_common(FIXTURES / "claude_session.txt")
         assert usage.input_tokens == 304
         assert usage.output_tokens == 72
         assert usage.total_tokens == 376
@@ -277,7 +275,7 @@ class TestGeminiExtraction:
 
     def test_fixture_file(self) -> None:
         """Real Gemini CLI transcript with ANSI escape codes and leading whitespace."""
-        usage = parse_gemini_transcript(FIXTURES / "gemini_session.txt")
+        usage = parse_transcript_common(FIXTURES / "gemini_session.txt")
         assert usage.input_tokens == 14_928
         assert usage.output_tokens == 141
         assert usage.cached_tokens == 5_848
@@ -311,7 +309,7 @@ class TestCodexExtraction:
 
     def test_fixture_file(self) -> None:
         """Real Codex CLI transcript with ANSI escape codes."""
-        usage = parse_codex_transcript(FIXTURES / "codex_session.txt")
+        usage = parse_transcript_common(FIXTURES / "codex_session.txt")
         assert usage.total_tokens == 5_325
         assert usage.input_tokens == 5_213
         assert usage.output_tokens == 112

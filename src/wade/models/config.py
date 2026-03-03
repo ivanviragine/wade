@@ -38,11 +38,6 @@ class ProviderID(StrEnum):
     """Canonical identifiers for task providers."""
 
     GITHUB = "github"
-    LINEAR = "linear"
-    ASANA = "asana"
-    TRELLO = "trello"
-    CLICKUP = "clickup"
-    JIRA = "jira"
 
 
 class ComplexityModelMapping(BaseModel):

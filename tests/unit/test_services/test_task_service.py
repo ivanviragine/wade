@@ -25,7 +25,7 @@ from wade.services.task_service import (
     close_task,
     create_from_plan_file,
     ensure_in_progress_label,
-    ensure_issue_label,
+    ensure_task_label,
     list_tasks,
     read_task,
     remove_in_progress_label,
@@ -71,8 +71,8 @@ def config():
 
 
 class TestLabels:
-    def test_ensure_issue_label(self, mock_provider: MagicMock) -> None:
-        ensure_issue_label(mock_provider, "feature-plan")
+    def test_ensure_task_label(self, mock_provider: MagicMock) -> None:
+        ensure_task_label(mock_provider, "feature-plan")
         mock_provider.ensure_label.assert_called_once()
         label = mock_provider.ensure_label.call_args[0][0]
         assert label.name == "feature-plan"

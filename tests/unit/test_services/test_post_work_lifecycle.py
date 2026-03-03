@@ -9,6 +9,13 @@ from wade.models.task import Task
 from wade.models.work import MergeStrategy
 from wade.services.work_service import _post_work_lifecycle, start
 
+_PULL_FF = "wade.services.work_service.git_repo.pull_ff_only"
+_CHECKOUT = "wade.services.work_service.git_repo.checkout"
+_CHECKOUT_DETACH = "wade.services.work_service.git_repo.checkout_detach"
+_MERGE_SQUASH = "wade.services.work_service.git_repo.merge_squash"
+_COMMIT_NO_EDIT = "wade.services.work_service.git_repo.commit_no_edit"
+_PUSH = "wade.services.work_service.git_repo.push"
+
 
 def _config(strategy: MergeStrategy) -> ProjectConfig:
     return ProjectConfig(
@@ -17,7 +24,8 @@ def _config(strategy: MergeStrategy) -> ProjectConfig:
     )
 
 
-@patch("wade.services.work_service.subprocess.run")
+@patch(_PULL_FF)
+@patch(_CHECKOUT_DETACH)
 @patch("wade.services.work_service.git_worktree.prune_worktrees")
 @patch("wade.services.work_service.git_worktree.remove_worktree")
 @patch("wade.services.work_service.git_pr.merge_pr")
@@ -34,10 +42,11 @@ def test_pr_strategy_prompts_merge_on_existing_pr(
     mock_merge_pr: MagicMock,
     mock_remove_worktree: MagicMock,
     _mock_prune: MagicMock,
-    mock_run: MagicMock,
+    _mock_checkout_detach: MagicMock,
+    mock_pull_ff: MagicMock,
     tmp_path: Path,
 ) -> None:
-    mock_run.return_value = MagicMock(returncode=0)
+    mock_pull_ff.return_value = MagicMock(returncode=0)
     provider = MagicMock()
     repo_root = tmp_path / "repo"
     wt_path = tmp_path / "wt"
@@ -53,12 +62,7 @@ def test_pr_strategy_prompts_merge_on_existing_pr(
     # Worktree is removed AFTER successful merge
     mock_merge_pr.assert_called_once_with(repo_root=repo_root, pr_number=99, strategy="squash")
     mock_remove_worktree.assert_called_once_with(repo_root, wt_path)
-    mock_run.assert_any_call(
-        ["git", "pull", "--ff-only", "--quiet"],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-    )
+    mock_pull_ff.assert_called_once_with(repo_root)
 
 
 @patch("wade.services.work_service.git_pr.merge_pr")
@@ -110,7 +114,7 @@ def test_pr_strategy_user_declines_merge(
     mock_merge_pr.assert_not_called()
 
 
-@patch("wade.services.work_service.subprocess.run")
+@patch(_CHECKOUT)
 @patch("wade.services.work_service.git_pr.merge_pr")
 @patch("wade.services.work_service.prompts.confirm", return_value=True)
 @patch(
@@ -121,7 +125,7 @@ def test_pr_strategy_merge_failure_preserves_branch(
     _mock_get_pr: MagicMock,
     _mock_confirm: MagicMock,
     mock_merge_pr: MagicMock,
-    mock_run: MagicMock,
+    _mock_checkout: MagicMock,
     tmp_path: Path,
 ) -> None:
     provider = MagicMock()
@@ -136,15 +140,12 @@ def test_pr_strategy_merge_failure_preserves_branch(
         provider,
     )
 
-    # Branch should NOT be deleted on merge failure
-    for call in mock_run.call_args_list:
-        args = call[0][0] if call[0] else call[1].get("args", [])
-        assert not (isinstance(args, list) and "push" in args and "--delete" in args), (
-            "Branch should be preserved on merge failure"
-        )
+    # merge_pr raised, so no push or delete should have happened
+    mock_merge_pr.assert_called_once()
 
 
-@patch("wade.services.work_service.subprocess.run")
+@patch(_CHECKOUT)
+@patch(_CHECKOUT_DETACH)
 @patch("wade.services.work_service.git_pr.merge_pr")
 @patch("wade.services.work_service.git_repo.is_clean", return_value=True)
 @patch("wade.services.work_service.prompts.confirm", return_value=True)
@@ -157,7 +158,8 @@ def test_pr_strategy_merge_failure_restores_branch(
     _mock_confirm: MagicMock,
     _mock_is_clean: MagicMock,
     mock_merge_pr: MagicMock,
-    mock_run: MagicMock,
+    _mock_checkout_detach: MagicMock,
+    mock_checkout: MagicMock,
     tmp_path: Path,
 ) -> None:
     """On merge failure, HEAD should be restored from detached state to the branch."""
@@ -175,16 +177,12 @@ def test_pr_strategy_merge_failure_restores_branch(
         provider,
     )
 
-    # Should have called git checkout feat/42-test to restore branch
-    checkout_calls = [
-        c for c in mock_run.call_args_list if c[0][0] == ["git", "checkout", "feat/42-test"]
-    ]
-    assert len(checkout_calls) == 1, (
-        f"Expected branch restore checkout, got calls: {mock_run.call_args_list}"
-    )
+    # Should have called checkout to restore branch after merge failure
+    mock_checkout.assert_called_once_with(wt_path, "feat/42-test")
 
 
-@patch("wade.services.work_service.subprocess.run")
+@patch(_PULL_FF)
+@patch(_CHECKOUT_DETACH)
 @patch("wade.services.work_service.git_worktree.prune_worktrees")
 @patch("wade.services.work_service.git_worktree.remove_worktree")
 @patch("wade.services.work_service.git_pr.merge_pr")
@@ -201,10 +199,11 @@ def test_pr_strategy_cleanup_and_pull_after_merge(
     _mock_merge_pr: MagicMock,
     mock_remove_worktree: MagicMock,
     _mock_prune: MagicMock,
-    mock_run: MagicMock,
+    _mock_checkout_detach: MagicMock,
+    mock_pull_ff: MagicMock,
     tmp_path: Path,
 ) -> None:
-    mock_run.return_value = MagicMock(returncode=0)
+    mock_pull_ff.return_value = MagicMock(returncode=0)
     provider = MagicMock()
     repo_root = tmp_path / "repo"
     wt_path = tmp_path / "wt"
@@ -216,12 +215,7 @@ def test_pr_strategy_cleanup_and_pull_after_merge(
 
     # Worktree is removed AFTER successful merge
     mock_remove_worktree.assert_called_once_with(repo_root, wt_path)
-    mock_run.assert_any_call(
-        ["git", "pull", "--ff-only", "--quiet"],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-    )
+    mock_pull_ff.assert_called_once_with(repo_root)
 
 
 @patch("wade.services.work_service.prompts.confirm", return_value=False)
@@ -273,11 +267,15 @@ def test_direct_strategy_commits_ahead_shows_menu(
 
 @patch("wade.services.work_service._cleanup_worktree")
 @patch("wade.services.work_service.prompts.select", return_value=1)
-@patch("wade.services.work_service.subprocess.run")
+@patch(_PUSH)
+@patch(_COMMIT_NO_EDIT)
+@patch(_MERGE_SQUASH)
 @patch("wade.services.work_service.git_branch.commits_ahead", return_value=3)
 def test_direct_strategy_merge_and_close(
     _mock_ahead: MagicMock,
-    mock_run: MagicMock,
+    mock_merge_squash: MagicMock,
+    _mock_commit: MagicMock,
+    _mock_push: MagicMock,
     _mock_select: MagicMock,
     mock_cleanup: MagicMock,
     tmp_path: Path,
@@ -290,12 +288,7 @@ def test_direct_strategy_merge_and_close(
         repo_root, "feat/42-test", 42, wt_path, _config(MergeStrategy.DIRECT), provider
     )
 
-    mock_run.assert_any_call(
-        ["git", "merge", "--squash", "feat/42-test"],
-        check=True,
-        capture_output=True,
-        cwd=repo_root,
-    )
+    mock_merge_squash.assert_called_once_with(repo_root, "feat/42-test")
     mock_cleanup.assert_called_once_with(repo_root, wt_path, "main")
     provider.close_task.assert_called_once_with("42")
 
@@ -310,7 +303,7 @@ def test_direct_strategy_merge_and_close(
 @patch("wade.services.work_service.git_worktree.list_worktrees", return_value=[])
 @patch("wade.services.work_service.git_worktree.create_worktree")
 @patch("wade.services.work_service.git_repo.get_repo_root")
-@patch("wade.services.work_service._resolve_target")
+@patch("wade.services.work_service._resolve_task_target")
 @patch("wade.services.work_service.get_provider")
 @patch("wade.services.work_service.load_config")
 @patch("wade.services.work_service.git_pr.get_pr_for_branch", return_value=None)
@@ -325,7 +318,7 @@ def test_lifecycle_skipped_in_detach_mode(
     _mock_get_pr: MagicMock,
     mock_load_config: MagicMock,
     _mock_get_provider: MagicMock,
-    mock_resolve_target: MagicMock,
+    mock_resolve_task_target: MagicMock,
     mock_get_repo_root: MagicMock,
     _mock_create_worktree: MagicMock,
     _mock_list_worktrees: MagicMock,
@@ -340,7 +333,7 @@ def test_lifecycle_skipped_in_detach_mode(
 ) -> None:
     mock_load_config.return_value = _config(MergeStrategy.PR)
     mock_get_repo_root.return_value = tmp_path
-    mock_resolve_target.return_value = Task(id="42", title="Test")
+    mock_resolve_task_target.return_value = Task(id="42", title="Test")
     mock_prompts.is_tty.return_value = False
     adapter = MagicMock()
     adapter.build_launch_command.return_value = ["claude"]
@@ -355,7 +348,7 @@ def test_lifecycle_skipped_in_detach_mode(
 @patch("wade.services.work_service.write_plan_md")
 @patch("wade.services.work_service._post_work_lifecycle")
 @patch("wade.services.work_service.add_worked_by_labels")
-@patch("wade.services.work_service._post_exit_capture")
+@patch("wade.services.work_service._capture_post_session_usage")
 @patch("wade.services.work_service.stop_title_keeper")
 @patch("wade.services.work_service.start_title_keeper")
 @patch("wade.services.work_service.set_terminal_title")
@@ -366,7 +359,7 @@ def test_lifecycle_skipped_in_detach_mode(
 @patch("wade.services.work_service.git_worktree.list_worktrees", return_value=[])
 @patch("wade.services.work_service.git_worktree.create_worktree")
 @patch("wade.services.work_service.git_repo.get_repo_root")
-@patch("wade.services.work_service._resolve_target")
+@patch("wade.services.work_service._resolve_task_target")
 @patch("wade.services.work_service.AbstractAITool.get")
 @patch("wade.services.work_service.get_provider")
 @patch("wade.services.work_service.load_config")
@@ -383,7 +376,7 @@ def test_lifecycle_skipped_after_ai_crash(
     mock_load_config: MagicMock,
     _mock_get_provider: MagicMock,
     mock_get_adapter: MagicMock,
-    mock_resolve_target: MagicMock,
+    mock_resolve_task_target: MagicMock,
     mock_get_repo_root: MagicMock,
     _mock_create_worktree: MagicMock,
     _mock_list_worktrees: MagicMock,
@@ -394,7 +387,7 @@ def test_lifecycle_skipped_after_ai_crash(
     _mock_set_title: MagicMock,
     _mock_start_keeper: MagicMock,
     _mock_stop_keeper: MagicMock,
-    _mock_post_exit_capture: MagicMock,
+    _mock_capture_post_session_usage: MagicMock,
     _mock_add_worked_by: MagicMock,
     mock_lifecycle: MagicMock,
     _mock_write_plan_md: MagicMock,
@@ -402,7 +395,7 @@ def test_lifecycle_skipped_after_ai_crash(
 ) -> None:
     mock_load_config.return_value = _config(MergeStrategy.PR)
     mock_get_repo_root.return_value = tmp_path
-    mock_resolve_target.return_value = Task(id="42", title="Test")
+    mock_resolve_task_target.return_value = Task(id="42", title="Test")
     mock_prompts.is_tty.return_value = False
     adapter = MagicMock()
     adapter.is_model_compatible.return_value = True

@@ -24,7 +24,7 @@ from wade.services.work_service import (
     _complexity_to_model,
     _parse_overwrite_paths,
     _pull_main_after_merge,
-    _resolve_target,
+    _resolve_task_target,
     _resolve_worktrees_dir,
     batch,
     bootstrap_worktree,
@@ -170,7 +170,7 @@ class TestResolveTarget:
         provider.read_task.return_value = Task(id="42", title="Test")
         config = ProjectConfig()
 
-        task = _resolve_target("42", provider, config)
+        task = _resolve_task_target("42", provider, config)
         assert task is not None
         assert task.id == "42"
         provider.read_task.assert_called_once_with("42")
@@ -185,7 +185,7 @@ class TestResolveTarget:
             project=ProjectSettings(issue_label="feature-plan"),
         )
 
-        task = _resolve_target(str(plan), provider, config)
+        task = _resolve_task_target(str(plan), provider, config)
         assert task is not None
         assert task.id == "99"
 
@@ -194,7 +194,7 @@ class TestResolveTarget:
         provider.read_task.side_effect = Exception("Not found")
         config = ProjectConfig()
 
-        task = _resolve_target("999", provider, config)
+        task = _resolve_task_target("999", provider, config)
         assert task is None
 
 

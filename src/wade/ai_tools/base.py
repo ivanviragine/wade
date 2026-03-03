@@ -13,6 +13,8 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, ClassVar
 
+import structlog
+
 from wade.models.ai import (
     AIModel,
     AIToolCapabilities,
@@ -21,6 +23,8 @@ from wade.models.ai import (
     TokenUsage,
 )
 from wade.models.config import ComplexityModelMapping
+
+logger = structlog.get_logger()
 
 
 class AbstractAITool(ABC):
@@ -74,13 +78,24 @@ class AbstractAITool(ABC):
         """Declare what this tool can do."""
         raise NotImplementedError
 
-    @abstractmethod
     def get_models(self) -> list[AIModel]:
-        """Query the tool for its available models.
+        """Return known models from the static registry.
 
-        Returns an empty list if probing fails.
+        Uses universal tier classification. Override for tools with
+        special model ID formats (e.g. OpenCode's provider/model).
+        Returns an empty list if no models are registered for this tool.
         """
-        raise NotImplementedError
+        from wade.ai_tools.model_utils import classify_tier_universal, has_date_suffix
+        from wade.data import get_models_for_tool
+
+        return [
+            AIModel(
+                id=mid,
+                tier=classify_tier_universal(mid),
+                is_alias=not has_date_suffix(mid),
+            )
+            for mid in get_models_for_tool(str(self.TOOL_ID))
+        ]
 
     def get_default_model(self, tier: ModelTier) -> AIModel | None:
         """Get the best model for a given tier.
@@ -106,7 +121,6 @@ class AbstractAITool(ABC):
             very_complex=powerful.id if powerful else None,
         )
 
-    @abstractmethod
     def launch(
         self,
         worktree_path: Path,
@@ -117,6 +131,10 @@ class AbstractAITool(ABC):
         trusted_dirs: list[str] | None = None,
     ) -> int:
         """Launch the AI tool in the given worktree.
+
+        Default implementation builds a command via build_launch_command()
+        and runs it with transcript capture. Override for tools with
+        non-standard launch behavior (e.g. GUI tools).
 
         Args:
             worktree_path: Directory to run in.
@@ -132,15 +150,24 @@ class AbstractAITool(ABC):
         Returns:
             Exit code from the tool process (0 for detached).
         """
-        raise NotImplementedError
+        from wade.utils.process import run_with_transcript
 
-    @abstractmethod
+        cmd = self.build_launch_command(
+            model=model, initial_message=prompt, trusted_dirs=trusted_dirs
+        )
+        logger.info("ai_tool.launch", tool=str(self.TOOL_ID), model=model, cwd=str(worktree_path))
+        return run_with_transcript(cmd, transcript_path, cwd=worktree_path)
+
     def parse_transcript(self, transcript_path: Path) -> TokenUsage:
         """Parse a transcript file for token usage.
 
+        Default implementation extracts token usage from transcript text.
+        Override for tools with special parsing needs (e.g. premium requests).
         Returns TokenUsage with whatever fields could be parsed.
         """
-        raise NotImplementedError
+        from wade.ai_tools.transcript import parse_transcript_common
+
+        return parse_transcript_common(transcript_path)
 
     def is_model_compatible(self, model: str) -> bool:
         """Check if a model ID is valid for this tool."""
