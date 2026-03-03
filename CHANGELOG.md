@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.5.2] — 2026-03-03
+
+### Refactoring
+
+- remove duplicate draft PR check and no-plan prompt from _smart_route_issue (917ac75)
+
 ## [v1.5.1] — 2026-03-03
 
 ### Bug Fixes
