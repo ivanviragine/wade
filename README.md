@@ -2,9 +2,9 @@
 
 Turn GitHub Issues into isolated, AI-powered development sessions — with one command.
 
-## The Problem
+WADE works with all major AI coding tools — Claude Code, Copilot, Gemini, Codex, and more — and automatically dispatches the right tool and model for each job. Set it up once per project with `wade init`, then just point it at an issue number.
 
-Working with AI coding tools is powerful, but the workflow around them is still manual:
+## Why WADE
 
 | Without WADE | With WADE |
 |---|---|
@@ -12,7 +12,8 @@ Working with AI coding tools is powerful, but the workflow around them is still 
 | Create branch, remember naming convention | `wade implement-task 42` handles it |
 | One task at a time (or messy stash juggling) | Parallel tasks in isolated git worktrees |
 | Manually write PR, link issue, clean up branch | Skills guide the AI to do it automatically |
-| Re-explain project conventions to AI every time | Skills teach your AI how your project works |
+| Re-explain project conventions to AI every time | Skills teach the AI how your project works |
+| Pick tool and model manually every time | WADE selects both based on task type and complexity |
 
 ## Installation
 
@@ -56,7 +57,24 @@ That one command creates an isolated git worktree, opens your AI tool with the i
 
 From there the AI session is self-contained: the installed Skills guide the AI to sync with main when needed, commit, push the branch, and open a linked PR — all without leaving the session.
 
-Working on multiple issues simultaneously:
+### Right tool and model for each job
+
+WADE dispatches based on command type and issue complexity — no manual selection needed:
+
+| Situation | What WADE launches |
+|---|---|
+| Planning a new feature | Claude Opus — best reasoning for architecture decisions |
+| Implementing a complex task | Claude Sonnet — solid execution at reasonable cost |
+| Fixing a simple bug or config tweak | Claude Haiku — fast and cheap |
+| Analyzing issue dependencies | Codex — dedicated code and graph analysis |
+
+Tool and model are fully configurable per phase and complexity level in `.wade.yml`.
+
+### One-time project setup
+
+`wade init` runs **once per project**. It creates `.wade.yml`, installs Skill files into `.claude/skills/`, and wires up the git workflow. After that, the only commands you type day-to-day are `wade plan-task` and `wade implement-task`.
+
+### Parallel work sessions
 
 ```bash
 wade work batch 42 43 44   # three worktrees, three AI sessions, zero stashing
@@ -65,13 +83,15 @@ wade work batch 42 43 44   # three worktrees, three AI sessions, zero stashing
 ## Quick Start
 
 ```bash
-# Wire up your project once
+# ── One-time project setup ──────────────────────────────────────────────────
 wade init
 
-# Plan features with AI — creates issues + draft PRs
+# ── Daily workflow ───────────────────────────────────────────────────────────
+
+# Plan a feature with AI — creates GitHub issues + draft PRs
 wade plan-task
 
-# Start working on an issue — the AI session handles everything from here
+# Start working on an issue — WADE picks the right tool and model automatically
 wade implement-task 42
 ```
 
@@ -81,7 +101,7 @@ wade implement-task 42
 
 | Command | Description |
 |---------|-------------|
-| `wade init` | Initialize WADE in the current project |
+| `wade init` | Initialize WADE in the current project (once per project) |
 | `wade update` | Upgrade WADE and refresh managed project files |
 | `wade deinit` | Remove WADE from the project |
 | `wade check` | Check worktree status |
@@ -143,9 +163,9 @@ project:
 ai:
   default_tool: claude
   plan:
-    tool: claude
+    tool: claude            # tool used for wade plan-task
   work:
-    tool: claude
+    tool: claude            # tool used for wade implement-task
 
 models:
   claude:
@@ -157,7 +177,9 @@ models:
 
 **Merge strategies:** `PR` pushes the branch and opens a Pull Request; `direct` merges into main locally.
 
-**Complexity-based models:** Issues carry a `complexity` label (`easy`, `medium`, `complex`, `very_complex`). `wade implement-task` picks the right model automatically.
+**Complexity-based model dispatch:** Issues carry a `complexity` label (`easy`, `medium`, `complex`, `very_complex`). `wade implement-task` reads it and launches the matching model automatically — no flags needed.
+
+**Per-phase tool selection:** Planning sessions and implementation sessions can use different AI tools. Set `ai.plan.tool` and `ai.work.tool` independently.
 
 ## Supported AI Tools
 
