@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.1.4] — 2026-03-03
+
+### Bug Fixes
+
+- address 4 code review findings (safety, resilience, hardening, dead code) (555faf4)
+
 ## [v1.1.3] — 2026-03-03
 
 ### Bug Fixes
