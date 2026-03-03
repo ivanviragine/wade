@@ -348,7 +348,8 @@ def _capture_post_session_usage(
         return None
 
     if not usage or (not usage.total_tokens and not usage.input_tokens):
-        logger.debug("work.no_token_usage")
+        logger.warning("work.no_token_usage", transcript=str(transcript_path))
+        console.warn(f"No token usage found in transcript: {transcript_path}")
         return None
 
     # Use transcript model_breakdown as source of truth when model wasn't set explicitly
@@ -437,6 +438,11 @@ def _parse_overwrite_paths(stderr: str) -> list[str]:
     return paths
 
 
+def _warn_pull_sync_failed() -> None:
+    console.warn("Could not sync local main branch after merge.")
+    console.hint("Run 'git pull' manually to update your local branch.")
+
+
 def _pull_main_after_merge(repo_root: Path) -> None:
     """Pull the latest main branch after a successful PR merge.
 
@@ -446,6 +452,9 @@ def _pull_main_after_merge(repo_root: Path) -> None:
     aborts with "untracked files would be overwritten". This helper detects that
     condition, removes the conflicting untracked files (they will be replaced by
     the tracked versions from the merge), and retries the pull.
+
+    Also handles local modifications to tracked files (e.g. ``wade init``
+    modifying ``.gitignore``) by stashing, pulling, and popping the stash.
     """
     result = git_repo.pull_ff_only(repo_root)
     if result.returncode == 0:
@@ -458,11 +467,19 @@ def _pull_main_after_merge(repo_root: Path) -> None:
                 target.parent.rmdir()
         retry = git_repo.pull_ff_only(repo_root)
         if retry.returncode != 0:
-            console.warn("Could not sync local main branch after merge.")
-            console.hint("Run 'git pull' manually to update your local branch.")
+            _warn_pull_sync_failed()
+    elif "Your local changes to the following files would be overwritten" in result.stderr:
+        # Stash local changes, pull, then restore
+        stash_result = git_repo.stash(repo_root)
+        if stash_result.returncode != 0:
+            _warn_pull_sync_failed()
+            return
+        retry = git_repo.pull_ff_only(repo_root)
+        git_repo.stash_pop(repo_root)  # best-effort restore; failure leaves stash intact
+        if retry.returncode != 0:
+            _warn_pull_sync_failed()
     else:
-        console.warn("Could not sync local main branch after merge.")
-        console.hint("Run 'git pull' manually to update your local branch.")
+        _warn_pull_sync_failed()
 
 
 def _post_work_lifecycle_pr(
@@ -832,6 +849,7 @@ def start(
 
             adapter: AbstractAITool | None = None
             launch_completed = False
+            detected_model: str | None = None
             try:
                 adapter = AbstractAITool.get(AIToolID(resolved_tool))
 
@@ -862,6 +880,20 @@ def start(
             finally:
                 stop_title_keeper()
 
+                # Capture token usage BEFORE lifecycle (merge/cleanup) to ensure
+                # the PR is still open and the branch still exists.
+                if adapter is not None and launch_completed:
+                    detected_model = _capture_post_session_usage(
+                        transcript_path=transcript_path,
+                        adapter=adapter,
+                        repo_root=repo_root,
+                        branch=branch_name,
+                        ai_tool=resolved_tool,
+                        model=resolved_model,
+                        issue_number=task.id,
+                        provider=provider,
+                    )
+
                 if launch_completed:
                     try:
                         _post_work_lifecycle(
@@ -874,20 +906,6 @@ def start(
                         )
                     except Exception:
                         logger.exception("post_work_lifecycle.failed")
-
-            # Post-exit: parse transcript, update PR body and issue with token usage.
-            detected_model: str | None = None
-            if adapter is not None:
-                detected_model = _capture_post_session_usage(
-                    transcript_path=transcript_path,
-                    adapter=adapter,
-                    repo_root=repo_root,
-                    branch=branch_name,
-                    ai_tool=resolved_tool,
-                    model=resolved_model,
-                    issue_number=task.id,
-                    provider=provider,
-                )
 
             # Use CLI-resolved model, falling back to transcript-detected model.
             effective_model = resolved_model or detected_model

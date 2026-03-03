@@ -693,21 +693,67 @@ class TestPullMainAfterMerge:
         assert not settings.exists()
         assert not managed.exists()
 
-    def test_local_changes_falls_through_to_warning(self, tmp_path: Path) -> None:
-        """Tracked-files error does NOT trigger deletion — just warns."""
+    def test_local_changes_triggers_stash_and_retry(self, tmp_path: Path) -> None:
+        """Tracked-files error triggers stash, pull retry, then stash pop."""
         target_file = tmp_path / "src" / "main.py"
         target_file.parent.mkdir(parents=True)
         target_file.write_text("print('hello')")
 
         fail_result = MagicMock(returncode=1, stderr=LOCAL_CHANGES_STDERR)
+        stash_ok = MagicMock(returncode=0)
+        pull_ok = MagicMock(returncode=0, stderr="")
+        pop_ok = MagicMock(returncode=0)
 
         with (
-            patch("wade.services.work_service.subprocess.run", return_value=fail_result),
-            patch("wade.services.work_service.console") as mock_console,
+            patch(
+                "wade.services.work_service.git_repo.pull_ff_only",
+                side_effect=[fail_result, pull_ok],
+            ),
+            patch("wade.services.work_service.git_repo.stash", return_value=stash_ok) as mock_stash,
+            patch("wade.services.work_service.git_repo.stash_pop", return_value=pop_ok) as mock_pop,
         ):
             _pull_main_after_merge(tmp_path)
 
         # File must NOT be deleted
         assert target_file.exists()
+        mock_stash.assert_called_once_with(tmp_path)
+        mock_pop.assert_called_once_with(tmp_path)
+
+    def test_local_changes_stash_failure_warns(self, tmp_path: Path) -> None:
+        """When stash fails, falls through to warning without retry."""
+        fail_result = MagicMock(returncode=1, stderr=LOCAL_CHANGES_STDERR)
+        stash_fail = MagicMock(returncode=1)
+
+        with (
+            patch("wade.services.work_service.git_repo.pull_ff_only", return_value=fail_result),
+            patch("wade.services.work_service.git_repo.stash", return_value=stash_fail),
+            patch("wade.services.work_service.git_repo.stash_pop") as mock_pop,
+            patch("wade.services.work_service.console") as mock_console,
+        ):
+            _pull_main_after_merge(tmp_path)
+
+        mock_pop.assert_not_called()
+        mock_console.warn.assert_called_once()
+        mock_console.hint.assert_called_once()
+
+    def test_local_changes_pull_retry_failure_warns(self, tmp_path: Path) -> None:
+        """When stash succeeds but pull retry fails, warns and still pops stash."""
+        fail_result = MagicMock(returncode=1, stderr=LOCAL_CHANGES_STDERR)
+        stash_ok = MagicMock(returncode=0)
+        pull_fail = MagicMock(returncode=1, stderr="some error")
+        pop_ok = MagicMock(returncode=0)
+
+        with (
+            patch(
+                "wade.services.work_service.git_repo.pull_ff_only",
+                side_effect=[fail_result, pull_fail],
+            ),
+            patch("wade.services.work_service.git_repo.stash", return_value=stash_ok),
+            patch("wade.services.work_service.git_repo.stash_pop", return_value=pop_ok) as mock_pop,
+            patch("wade.services.work_service.console") as mock_console,
+        ):
+            _pull_main_after_merge(tmp_path)
+
+        mock_pop.assert_called_once_with(tmp_path)
         mock_console.warn.assert_called_once()
         mock_console.hint.assert_called_once()

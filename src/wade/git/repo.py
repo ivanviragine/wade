@@ -364,6 +364,16 @@ def merge_no_edit(repo_root: Path, branch: str) -> None:
     _run_git("merge", "--no-edit", branch, cwd=repo_root)
 
 
+def stash(repo_root: Path) -> subprocess.CompletedProcess[str]:
+    """Stash local changes. Returns CompletedProcess (no raise on failure)."""
+    return _run_git("stash", "--quiet", cwd=repo_root, check=False)
+
+
+def stash_pop(repo_root: Path) -> subprocess.CompletedProcess[str]:
+    """Pop the top stash entry. Returns CompletedProcess (no raise on failure)."""
+    return _run_git("stash", "pop", "--quiet", cwd=repo_root, check=False)
+
+
 def upstream_tracking_status(repo_root: Path, branch: str) -> str | None:
     """Return the upstream tracking status for a branch.
 
