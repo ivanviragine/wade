@@ -702,8 +702,9 @@ def start(
                 choices = ["Plan first (recommended)", "Proceed without plan"]
                 idx = prompts.select("How would you like to proceed?", choices)
                 if idx == 0:
-                    console.info("Run `wade plan-task` to create a plan first.")
-                    return True  # Early exit — user chose to plan
+                    from wade.services.plan_service import plan as do_plan
+
+                    return do_plan(issue_id=task.id, project_root=project_root)
             # Proceed: bootstrap a draft PR with the issue body
             console.step("Bootstrapping draft PR...")
             pr_info = bootstrap_draft_pr(

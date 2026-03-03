@@ -24,7 +24,7 @@ from wade.ai_tools.transcript import (
 from wade.config.loader import load_config
 from wade.models.ai import AIToolID, TokenUsage
 from wade.models.config import ProjectConfig
-from wade.models.task import PlanFile
+from wade.models.task import PlanFile, Task
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.ai_resolution import resolve_ai_tool, resolve_model
@@ -51,10 +51,32 @@ def get_plan_prompt_template() -> str:
     return template.read_text(encoding="utf-8")
 
 
-def render_plan_prompt(plan_dir: str) -> str:
+def render_plan_prompt(plan_dir: str, issue_context: str | None = None) -> str:
     """Render the plan prompt template with the plan directory."""
     template = get_plan_prompt_template()
-    return template.replace("{plan_dir}", plan_dir)
+    prompt = template.replace("{plan_dir}", plan_dir)
+    if issue_context:
+        prompt = issue_context + "\n\n" + prompt
+    return prompt
+
+
+def _build_issue_context_header(issue: Task) -> str:
+    """Build a Markdown header injected into the planning prompt for an existing issue."""
+    body = (issue.body or "_No description provided._").strip()
+    lines = [
+        f"# Existing Issue #{issue.id}: {issue.title}",
+        "",
+        "You are planning the following existing GitHub issue.",
+        "**Do NOT ask the user what to plan** — skip step 1 and go straight to analysis.",
+        "Write the plan for this specific issue and save it to the plan directory.",
+        "",
+        "## Issue Details",
+        "",
+        body,
+        "",
+        "---",
+    ]
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +119,7 @@ def run_ai_planning_session(
     plan_dir: str,
     model: str | None = None,
     transcript_path: Path | None = None,
+    issue_context: str | None = None,
 ) -> int:
     """Launch the AI CLI for a planning session.
 
@@ -105,7 +128,7 @@ def run_ai_planning_session(
 
     """
     # Build prompt
-    prompt = render_plan_prompt(plan_dir)
+    prompt = render_plan_prompt(plan_dir, issue_context=issue_context)
 
     # For Copilot/Codex, prefix with /plan
     tool_lower = ai_tool.lower()
@@ -201,12 +224,16 @@ def plan(
     ai_tool: str | None = None,
     model: str | None = None,
     project_root: Path | None = None,
+    issue_id: str | None = None,
 ) -> bool:
     """Run an AI-assisted planning session.
 
     Two-path design:
       Path A: Issues created during AI session (detected via snapshot/diff)
       Path B: Plan files written to temp dir → issues created from files
+
+    When ``issue_id`` is provided the session is pre-loaded with that issue's
+    context and the resulting plan is attached to it via draft PR (no new issue).
     """
     config = load_config(project_root)
     provider = get_provider(config)
@@ -237,6 +264,16 @@ def plan(
     if resolved_model:
         console.kv("Model", resolved_model)
 
+    # Pre-load existing issue context when issue_id is supplied
+    existing_issue: Task | None = None
+    if issue_id:
+        try:
+            existing_issue = provider.read_task(issue_id)
+            console.kv("Issue", f"#{existing_issue.id}: {existing_issue.title}")
+        except Exception as e:
+            console.error(f"Could not fetch issue #{issue_id}: {e}")
+            return False
+
     # Resolve repo root for draft PR creation
     from wade.git import repo as git_repo
 
@@ -253,15 +290,18 @@ def plan(
     # Create temp directory for plan files
     plan_dir = tempfile.mkdtemp(prefix="wade-plan-")
 
-    # Snapshot current issue numbers (for Path A detection)
-    before_snapshot = provider.snapshot_task_numbers(
-        label=config.project.issue_label,
-    )
-    logger.info(
-        "plan.snapshot",
-        count=len(before_snapshot),
-        numbers=sorted(before_snapshot),
-    )
+    # Snapshot current issue numbers (for Path A detection) — skip when
+    # planning an existing issue since we won't be diffing snapshots.
+    before_snapshot: set[str] = set()
+    if existing_issue is None:
+        before_snapshot = provider.snapshot_task_numbers(
+            label=config.project.issue_label,
+        )
+        logger.info(
+            "plan.snapshot",
+            count=len(before_snapshot),
+            numbers=sorted(before_snapshot),
+        )
 
     # Set up transcript capture
     transcript_path = Path(plan_dir) / ".transcript"
@@ -269,11 +309,13 @@ def plan(
 
     # Launch AI session
     console.empty()
+    issue_context = _build_issue_context_header(existing_issue) if existing_issue else None
     exit_code = run_ai_planning_session(
         ai_tool=resolved_tool,
         plan_dir=plan_dir,
         model=resolved_model,
         transcript_path=transcript_path,
+        issue_context=issue_context,
     )
     logger.info("plan.ai_exited", exit_code=exit_code)
 
@@ -281,6 +323,32 @@ def plan(
     usage = _extract_token_usage(transcript_path)
     if not usage.total_tokens:
         _warn_token_extraction(transcript_path)
+
+    # Path C: Existing issue — attach plan files to it (no new issue created)
+    if existing_issue is not None:
+        plan_files = validate_plan_files(Path(plan_dir))
+        if plan_files:
+            console.info(f"Found {len(plan_files)} plan file(s)")
+            _attach_plan_to_existing_issue(
+                provider=provider,
+                config=config,
+                issue=existing_issue,
+                plan_files=plan_files,
+                repo_root=repo_root,
+            )
+            _finalize_issues(
+                provider=provider,
+                config=config,
+                issue_numbers=[existing_issue.id],
+                ai_tool=resolved_tool,
+                model=resolved_model,
+                usage=usage,
+            )
+            _cleanup_plan_dir(plan_dir)
+            return True
+        console.warn("No plan files found — the AI session may not have produced output.")
+        _cleanup_plan_dir(plan_dir)
+        return False
 
     # Path A: Check for issues created during AI session
     after_snapshot = provider.snapshot_task_numbers(
@@ -448,6 +516,60 @@ def _create_issues_from_plans(
         created.append(task.id)
 
     return created
+
+
+def _attach_plan_to_existing_issue(
+    provider: AbstractTaskProvider,
+    config: ProjectConfig,
+    issue: Task,
+    plan_files: list[PlanFile],
+    repo_root: Path | None,
+) -> None:
+    """Attach the first plan file to an existing issue via a draft PR.
+
+    Reuses the same label / PR / body-update logic as _create_issues_from_plans
+    but skips issue creation since the issue already exists.  The original issue
+    body is preserved — the PR link is appended rather than replacing it.
+    """
+    if len(plan_files) > 1:
+        console.warn(
+            f"Multiple plan files found — using '{plan_files[0].path.name}', "
+            f"ignoring {len(plan_files) - 1} other(s)."
+        )
+    plan = plan_files[0]
+
+    # Add complexity label
+    if plan.complexity:
+        try:
+            add_complexity_label(provider, issue.id, plan.complexity)
+        except Exception as e:
+            logger.warning("plan.complexity_label_failed", error=str(e))
+
+    # Bootstrap draft PR with full plan content
+    if repo_root is not None:
+        pr_info = bootstrap_draft_pr(
+            issue_number=issue.id,
+            issue_title=issue.title,
+            plan_body=plan.body,
+            config=config,
+            repo_root=repo_root,
+        )
+        if pr_info:
+            pr_number = pr_info.get("number", "?")
+            pr_url = pr_info.get("url", "")
+            console.success(f"Draft PR #{pr_number}: {pr_url}")
+
+            # Preserve the original issue body and append the PR link
+            original_body = (issue.body or "").rstrip("\n")
+            updated_body = original_body + f"\n\n**Full plan**: PR #{pr_number}"
+            try:
+                provider.update_task(issue.id, body=updated_body)
+            except Exception as e:
+                logger.warning("plan.pr_link_update_failed", error=str(e))
+        else:
+            console.warn(f"Could not create draft PR for #{issue.id}")
+    else:
+        console.warn("Not in a git repo — skipping draft PR creation.")
 
 
 def _bootstrap_draft_prs_for_issues(

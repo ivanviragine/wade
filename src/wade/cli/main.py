@@ -140,6 +140,7 @@ from wade.cli.autocomplete import complete_ai_tools, complete_models  # noqa: E4
 
 @app.command("plan-task")
 def plan_task_cmd(
+    issue: str | None = typer.Option(None, "--issue", "-i", help="Plan an existing issue by ID."),
     ai: str | None = typer.Option(
         None, "--ai", help="AI tool to use for planning.", autocompletion=complete_ai_tools
     ),
@@ -150,7 +151,7 @@ def plan_task_cmd(
     """Plan tasks with AI — creates lightweight issues + draft PRs."""
     from wade.services.plan_service import plan as do_plan
 
-    success = do_plan(ai_tool=ai, model=model)
+    success = do_plan(ai_tool=ai, model=model, issue_id=issue)
     raise typer.Exit(0 if success else 1)
 
 
