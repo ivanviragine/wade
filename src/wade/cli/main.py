@@ -20,12 +20,12 @@ app = typer.Typer(
 
 def cli_main() -> None:
     """Console entrypoint — wraps ``app()`` to catch ConfigError gracefully."""
+    if len(sys.argv) > 1 and sys.argv[1].isdigit():
+        # Rewrite "wade 42 [flags]" → "wade implement-task 42 [flags]" so Typer
+        # dispatches normally: the main callback runs (logging, update nag,
+        # version banner) and any extra flags (--detach, --ai, etc.) are parsed.
+        sys.argv = [sys.argv[0], "implement-task", *sys.argv[1:]]
     try:
-        if len(sys.argv) > 1 and sys.argv[1].isdigit():
-            from wade.services.work_service import start as do_start
-
-            success = do_start(target=sys.argv[1])
-            raise SystemExit(0 if success else 1)
         app()
     except ConfigError as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
