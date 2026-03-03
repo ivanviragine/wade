@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -962,6 +963,10 @@ def _resolve_task_target(
 # ---------------------------------------------------------------------------
 
 
+_BATCH_STAGGER_SECS = 1.0
+"""Delay between terminal spawns to avoid git index.lock contention."""
+
+
 def batch(
     issue_numbers: list[str],
     ai_tool: str | None = None,
@@ -975,6 +980,9 @@ def batch(
     remaining chain members are printed in order for manual sequential
     execution (one cannot work on a dependent issue before its blocker is done).
     """
+    # Deduplicate while preserving order
+    issue_numbers = list(dict.fromkeys(issue_numbers))
+
     config = load_config(project_root)
     cwd = project_root or Path.cwd()
 
@@ -1002,39 +1010,38 @@ def batch(
 
     launched = 0
 
-    # Launch independent issues in parallel terminals
-    for issue_id in independent:
+    def _launch(issue_id: str, label: str) -> bool:
+        """Build command and launch a single issue in a new terminal."""
+        nonlocal launched
         cmd = ["wade", "implement-task", issue_id]
         if resolved_tool:
             cmd.extend(["--ai", resolved_tool])
         if model:
             cmd.extend(["--model", model])
 
-        console.step(f"Launching #{issue_id} in new terminal")
+        console.step(f"Launching #{issue_id} ({label}) in new terminal")
         if launch_in_new_terminal(cmd, cwd=str(repo_root), title=f"wade #{issue_id}"):
             launched += 1
-        else:
-            console.warn(f"Could not launch terminal for #{issue_id}")
+            return True
+        console.warn(f"Could not launch terminal for #{issue_id}")
+        return False
+
+    # Launch independent issues in staggered terminals
+    for i, issue_id in enumerate(independent):
+        if i > 0:
+            time.sleep(_BATCH_STAGGER_SECS)
+        _launch(issue_id, "independent")
 
     # Launch chains: start only the first item, list the rest in order
     for chain in chains:
         console.info(f"Dependency chain: {' → '.join(f'#{n}' for n in chain)}")
-        first_id = chain[0]
-        cmd = ["wade", "implement-task", first_id]
-        if resolved_tool:
-            cmd.extend(["--ai", resolved_tool])
-        if model:
-            cmd.extend(["--model", model])
-
-        console.step(f"Launching #{first_id} (first in chain) in new terminal")
-        if launch_in_new_terminal(cmd, cwd=str(repo_root), title=f"wade #{first_id}"):
-            launched += 1
-        else:
-            console.warn(f"Could not launch terminal for #{first_id}")
+        if launched > 0:
+            time.sleep(_BATCH_STAGGER_SECS)
+        _launch(chain[0], "first in chain")
 
         if len(chain) > 1:
             remaining = ", ".join(f"#{n}" for n in chain[1:])
-            console.info(f"After completing #{first_id}, work on these in order: {remaining}")
+            console.info(f"After completing #{chain[0]}, work on these in order: {remaining}")
 
     console.panel(f"  Launched {launched} work session(s)", title="Batch started")
     return launched > 0

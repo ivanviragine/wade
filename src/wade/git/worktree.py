@@ -6,7 +6,7 @@ from pathlib import Path
 
 import structlog
 
-from wade.git.repo import _run_git
+from wade.git.repo import _run_git, _run_git_with_retry
 
 log = structlog.get_logger(__name__)
 
@@ -38,7 +38,7 @@ def create_worktree(
         worktree=str(worktree_path),
         base=base_branch,
     )
-    _run_git(
+    _run_git_with_retry(
         "worktree",
         "add",
         "-b",
@@ -77,7 +77,7 @@ def checkout_existing_branch_worktree(
         branch=branch_name,
         worktree=str(worktree_path),
     )
-    _run_git(
+    _run_git_with_retry(
         "worktree",
         "add",
         str(worktree_path),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import time
 from pathlib import Path
 
 import structlog
@@ -47,6 +48,44 @@ def _run_git(
             f"git {' '.join(args)} failed (exit {exc.returncode}): {exc.stderr.strip()}"
         ) from exc
     return result
+
+
+_LOCK_PATTERNS = ("index.lock", "Unable to create", "lock on reference")
+"""Stderr substrings that indicate a transient git lock contention."""
+
+
+def _run_git_with_retry(
+    *args: str,
+    cwd: Path,
+    check: bool = True,
+    retries: int = 3,
+    base_delay: float = 0.3,
+) -> subprocess.CompletedProcess[str]:
+    """Run a git command with retries on transient lock errors.
+
+    Uses exponential backoff: *base_delay*, *base_delay * 2*, *base_delay * 4*, etc.
+    Only retries when stderr matches known lock-contention patterns; all other
+    errors are raised immediately.
+    """
+    last_exc: GitError | None = None
+    for attempt in range(retries):
+        try:
+            return _run_git(*args, cwd=cwd, check=check)
+        except GitError as exc:
+            msg = str(exc)
+            if any(p in msg for p in _LOCK_PATTERNS):
+                last_exc = exc
+                delay = base_delay * (2**attempt)
+                log.debug(
+                    "git.retry",
+                    attempt=attempt + 1,
+                    delay=delay,
+                    cmd=["git", *args],
+                )
+                time.sleep(delay)
+                continue
+            raise
+    raise last_exc  # type: ignore[misc]
 
 
 def is_git_repo(path: Path) -> bool:

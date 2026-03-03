@@ -221,6 +221,18 @@ key code 36"""
         except subprocess.CalledProcessError:
             pass
 
+    if terminal == "wezterm" and shutil.which("wezterm"):
+        cmd_str = " ".join(shlex.quote(str(c)) for c in command)
+        wez_cmd = ["wezterm", "cli", "spawn", "--"]
+        if cwd:
+            wez_cmd = ["wezterm", "cli", "spawn", "--cwd", cwd, "--"]
+        wez_cmd.extend(["bash", "-c", cmd_str])
+        try:
+            subprocess.run(wez_cmd, check=True, capture_output=True)
+            return True
+        except subprocess.CalledProcessError:
+            pass
+
     if sys.platform == "darwin":
         # Use a temp script to avoid AppleScript string quoting issues
         # (shlex.quote can produce '"'"' which breaks do script "..." parsing)

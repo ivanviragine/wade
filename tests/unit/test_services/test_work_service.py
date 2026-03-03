@@ -643,6 +643,35 @@ class TestWorkBatch:
 
         assert result is False
 
+    def test_deduplicates_issue_numbers(self, tmp_path: Path) -> None:
+        """Duplicate issue numbers are removed, launching each only once."""
+        with (
+            patch("wade.services.work_service.load_config", return_value=ProjectConfig()),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch("wade.services.work_service._build_graph_from_issues", return_value=None),
+            patch(
+                "wade.services.work_service.launch_in_new_terminal", return_value=True
+            ) as mock_launch,
+        ):
+            result = batch(["1", "2", "1", "3", "2"], project_root=tmp_path)
+
+        assert result is True
+        assert mock_launch.call_count == 3  # 1, 2, 3 — not 5
+
+    def test_staggers_launches(self, tmp_path: Path) -> None:
+        """Launches are staggered with a delay between each terminal spawn."""
+        with (
+            patch("wade.services.work_service.load_config", return_value=ProjectConfig()),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch("wade.services.work_service._build_graph_from_issues", return_value=None),
+            patch("wade.services.work_service.launch_in_new_terminal", return_value=True),
+            patch("wade.services.work_service.time.sleep") as mock_sleep,
+        ):
+            batch(["1", "2", "3"], project_root=tmp_path)
+
+        # First launch has no delay; 2nd and 3rd each get a stagger delay
+        assert mock_sleep.call_count == 2
+
 
 # ---------------------------------------------------------------------------
 # _parse_overwrite_paths / _pull_main_after_merge

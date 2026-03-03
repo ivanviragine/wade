@@ -6,7 +6,7 @@ from pathlib import Path
 
 import structlog
 
-from wade.git.repo import _run_git
+from wade.git.repo import _run_git, _run_git_with_retry
 from wade.utils.slug import slugify
 
 log = structlog.get_logger(__name__)
@@ -65,7 +65,7 @@ def create_branch(
         GitError: If the branch already exists or the start_point is invalid.
     """
     log.info("branch.create", branch=branch_name, start_point=start_point)
-    _run_git("branch", branch_name, start_point, cwd=repo_root)
+    _run_git_with_retry("branch", branch_name, start_point, cwd=repo_root)
 
 
 def delete_branch(

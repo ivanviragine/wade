@@ -159,10 +159,13 @@ def batch(
         None, "--model", help="AI model to use.", autocompletion=complete_models
     ),
 ) -> None:
-    """Start parallel work sessions for multiple issues."""
+    """Start parallel work sessions for multiple issues. [beta]"""
     from wade.services.work_service import batch as do_batch
     from wade.ui import prompts
     from wade.ui.console import console
+
+    console.warn("Batch mode is in beta — please report issues.")
+    console.empty()
 
     # Interactive picker if no numbers provided
     if not numbers and prompts.is_tty():
