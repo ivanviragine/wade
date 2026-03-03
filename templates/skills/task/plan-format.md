@@ -34,7 +34,7 @@ What to build / change.
 | **Body** | Everything after the title heading becomes the draft PR plan content. The issue gets a lightweight summary. |
 | **Label** | Applied automatically from `.wade.yml` config (`issue_label`). |
 | **Complexity** | Optional `## Complexity` section with one value: `easy`, `medium`, `complex`, or `very_complex`. Applied as a `complexity:X` label on the issue. Used by `wade implement-task` to auto-select the AI model. |
-| **Plan Summary** | When issues are created through `wade plan-task`, wade appends a managed `## Plan Summary` section to the GitHub issue body after creation. If available from the AI CLI output, the summary includes a `### Model Breakdown` table for per-model token usage. |
+| **Token Usage (Planning)** | When issues are created through `wade plan-task`, wade appends a managed `## Token Usage (Planning)` section to the GitHub issue body. It includes tool, model, token counts, and per-model breakdown rows (when available) — all in a single table. |
 | **Sections** | Context, Proposed Solution, Tasks, and Acceptance Criteria are recommended but not enforced. |
 
 ## Complexity values

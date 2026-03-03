@@ -219,7 +219,7 @@ def build_plan_summary_block(
     lines = [
         PLAN_SUMMARY_MARKER_START,
         "",
-        "## Plan Summary",
+        "## Token Usage (Planning)",
         "",
         "| Metric | Value |",
         "| --- | --- |",
@@ -227,7 +227,7 @@ def build_plan_summary_block(
 
     # Tool and model
     if ai_tool:
-        lines.append(f"| Planning tool | `{ai_tool}` |")
+        lines.append(f"| Tool | `{ai_tool}` |")
     if model:
         lines.append(f"| Model | `{model}` |")
 
@@ -248,19 +248,17 @@ def build_plan_summary_block(
     if premium_requests is not None and premium_requests > 0:
         lines.append(f"| Premium requests (est.) | **{premium_requests}** |")
 
-    # Model breakdown table
+    # Model breakdown as inline rows in the main table
     if model_breakdown:
-        lines.append("")
-        lines.append("### Model Breakdown")
-        lines.append("")
-        lines.append("| Model | Input | Output | Cached |")
-        lines.append("|-------|-------|--------|--------|")
         for row in model_breakdown:
             m = row.get("model", "unknown")
             inp = format_count(row.get("input", 0))
             out = format_count(row.get("output", 0))
-            cache = format_count(row.get("cached", 0))
-            lines.append(f"| {m} | {inp} | {out} | {cache} |")
+            cache = row.get("cached", 0)
+            parts = [f"**{inp}** in", f"**{out}** out"]
+            if cache:
+                parts.append(f"**{format_count(cache)}** cached")
+            lines.append(f"| `{m}` | {' · '.join(parts)} |")
 
     lines.append("")
     lines.append(PLAN_SUMMARY_MARKER_END)

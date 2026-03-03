@@ -1224,14 +1224,14 @@ def build_impl_usage_block(
     lines = [
         IMPL_USAGE_MARKER_START,
         "",
-        "## Implementation Usage",
+        "## Token Usage (Implementation)",
         "",
         "| Metric | Value |",
         "| --- | --- |",
     ]
 
     if ai_tool:
-        lines.append(f"| Implementation tool | `{ai_tool}` |")
+        lines.append(f"| Tool | `{ai_tool}` |")
     if model:
         lines.append(f"| Model | `{model}` |")
 
@@ -1251,18 +1251,15 @@ def build_impl_usage_block(
     if token_usage and token_usage.premium_requests and token_usage.premium_requests > 0:
         lines.append(f"| Premium requests (est.) | **{token_usage.premium_requests}** |")
 
-    # Model breakdown table
+    # Model breakdown as inline rows in the main table
     if token_usage and token_usage.model_breakdown:
-        lines.append("")
-        lines.append("### Model Breakdown")
-        lines.append("")
-        lines.append("| Model | Input | Output | Cached |")
-        lines.append("|-------|-------|--------|--------|")
         for row in token_usage.model_breakdown:
             inp = format_count(row.input_tokens)
             out = format_count(row.output_tokens)
-            cache = format_count(row.cached_tokens)
-            lines.append(f"| {row.model} | {inp} | {out} | {cache} |")
+            parts = [f"**{inp}** in", f"**{out}** out"]
+            if row.cached_tokens:
+                parts.append(f"**{format_count(row.cached_tokens)}** cached")
+            lines.append(f"| `{row.model}` | {' · '.join(parts)} |")
 
     lines.append("")
     lines.append(IMPL_USAGE_MARKER_END)

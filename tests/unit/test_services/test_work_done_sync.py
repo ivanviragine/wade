@@ -146,7 +146,7 @@ class TestBuildImplUsageBlock:
         block = build_impl_usage_block(ai_tool="claude", model="claude-sonnet-4-6")
         assert IMPL_USAGE_MARKER_START in block
         assert IMPL_USAGE_MARKER_END in block
-        assert "| Implementation tool | `claude` |" in block
+        assert "| Tool | `claude` |" in block
         assert "| Model | `claude-sonnet-4-6` |" in block
         assert "### Usage" not in block
 
@@ -181,9 +181,11 @@ class TestBuildImplUsageBlock:
             ],
         )
         block = build_impl_usage_block(ai_tool="claude", token_usage=usage)
-        assert "### Model Breakdown" in block
-        assert "claude-opus-4-6" in block
-        assert "claude-haiku-4-5" in block
+        assert "### Model Breakdown" not in block
+        assert "| `claude-opus-4-6`" in block
+        assert "| `claude-haiku-4-5`" in block
+        assert "**3,000** in · **1,000** out · **500** cached" in block
+        assert "**400** in · **100** out" in block
 
     def test_with_premium_requests(self) -> None:
         usage = TokenUsage(
@@ -210,7 +212,7 @@ class TestBuildImplUsageBlock:
         block = build_impl_usage_block()
         assert IMPL_USAGE_MARKER_START in block
         assert IMPL_USAGE_MARKER_END in block
-        assert "## Implementation Usage" in block
+        assert "## Token Usage (Implementation)" in block
         assert "| Metric | Value |" in block
 
 
@@ -219,7 +221,7 @@ class TestStripImplUsageBlock:
         body = (
             "Some content\n\n"
             f"{IMPL_USAGE_MARKER_START}\n"
-            "## Implementation Usage\n"
+            "## Token Usage (Implementation)\n"
             f"{IMPL_USAGE_MARKER_END}\n\n"
             "More content\n"
         )

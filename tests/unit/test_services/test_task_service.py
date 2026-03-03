@@ -145,7 +145,7 @@ class TestPlanSummary:
         assert PLAN_SUMMARY_MARKER_START in block
         assert PLAN_SUMMARY_MARKER_END in block
         assert "| Metric | Value |" in block
-        assert "| Planning tool | `claude` |" in block
+        assert "| Tool | `claude` |" in block
         assert "| Model | `claude-opus-4-6` |" in block
         assert "| Total tokens | **12,345** |" in block
         assert "| Input tokens | **10,000** |" in block
@@ -167,9 +167,11 @@ class TestPlanSummary:
                 {"model": "claude-haiku-4-5", "input": 400, "output": 100, "cached": 0},
             ],
         )
-        assert "### Model Breakdown" in block
-        assert "claude-opus-4-6" in block
-        assert "claude-haiku-4-5" in block
+        assert "### Model Breakdown" not in block
+        assert "| `claude-opus-4-6`" in block
+        assert "| `claude-haiku-4-5`" in block
+        assert "**3,000** in · **1,000** out · **500** cached" in block
+        assert "**400** in · **100** out" in block
 
     def test_build_block_with_premium(self) -> None:
         block = build_plan_summary_block(
@@ -189,7 +191,7 @@ class TestPlanSummary:
         body = (
             "# Title\n\nSome content.\n\n"
             f"{PLAN_SUMMARY_MARKER_START}\n"
-            "## Plan Summary\n\nUsage info\n"
+            "## Token Usage (Planning)\n\nUsage info\n"
             f"{PLAN_SUMMARY_MARKER_END}\n"
         )
         stripped = _strip_plan_summary(body)
