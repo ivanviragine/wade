@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.5.1] — 2026-03-03
+
+### Bug Fixes
+
+- prompt user when no plan found on `wade <N>`, matching implement-task behavior (b8258f4)
+
 ## [v1.5.0] — 2026-03-03
 
 ### Features
