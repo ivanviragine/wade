@@ -84,10 +84,20 @@ def _smart_route_issue(issue_number: str) -> bool:
 
         return do_start(target=issue_number)
     else:
-        console.info(f"Issue #{task.id} has no plan yet — starting planning session...")
-        from wade.services.plan_service import plan as do_plan
+        from wade.ui import prompts
 
-        return do_plan(issue_id=issue_number)
+        console.warn(f"Issue #{task.id} has no plan attached.")
+        if prompts.is_tty():
+            choices = ["Plan first (recommended)", "Proceed straight to implementation"]
+            idx = prompts.select("How would you like to proceed?", choices)
+            if idx == 0:
+                from wade.services.plan_service import plan as do_plan
+
+                return do_plan(issue_id=issue_number)
+
+        from wade.services.work_service import start as do_start
+
+        return do_start(target=issue_number)
 
 
 def version_callback(value: bool) -> None:
