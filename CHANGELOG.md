@@ -1,9 +1,16 @@
 # Changelog
 
-## v0.0.2 (2026-03-04)
+All notable changes to this project will be documented in this file.
 
-Initial public release of WADE — Workflow for AI-Driven Engineering.
+The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
-## v0.0.1 (2026-03-04)
+## [v0.0.3] — 2026-03-04
 
-PyPI name reservation.
+### Bug Fixes
+
+- update install.sh to use wade-cli package name (bb65a72)
+
+### Chores
+
+- add manual release script (40c4270)
+- remove release and publish workflows (cd9b42d)
