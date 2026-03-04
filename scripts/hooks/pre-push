@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# wade pre-push hook — auto-bumps semver on conventional commits pushed to main.
+#
+# Install: scripts/install-hooks.sh
+# Manual:  cp scripts/hooks/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+#
+# The hook reads the standard git pre-push protocol from stdin:
+#   <local_ref> <local_sha> <remote_ref> <remote_sha>
+# It only acts when pushing to main/master, and only when scripts/auto_version.py exists.
+
+set -euo pipefail
+
+HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Resolve repo root: hooks live in .git/hooks/, so go up two levels.
+REPO_ROOT="$(cd "${HOOK_DIR}/../.." && pwd)"
+BUMP_SCRIPT="${REPO_ROOT}/scripts/auto_version.py"
+
+# Feature detection: only run if auto_version.py exists.
+if [[ ! -f "$BUMP_SCRIPT" ]]; then
+  exit 0
+fi
+
+# Detect bump type from conventional commit messages.
+_detect_bump_type() {
+  local range="$1"
+  [[ -z "$range" ]] && return 0
+  local log_msgs
+  log_msgs=$(git log "$range" --pretty=%B 2>/dev/null || true)
+  [[ -z "$log_msgs" ]] && return 0
+  if echo "$log_msgs" | grep -q 'BREAKING CHANGE'; then echo "major"; return 0; fi
+  local re_major='^[a-z]+(\(.+\))?!:'
+  if echo "$log_msgs" | grep -qE "${re_major}"; then echo "major"; return 0; fi
+  if echo "$log_msgs" | grep -qE '^feat(\(.+\))?:|^update(\(.+\))?:'; then echo "minor"; return 0; fi
+  if echo "$log_msgs" | grep -qE '^(fix|docs|refactor|chore|style|perf|test|ci|build|revert)(\(.+\))?:'; then echo "patch"; return 0; fi
+}
+
+# Find Python — prefer the venv python, fall back to system.
+_find_python() {
+  local venv_python="${REPO_ROOT}/.venv/bin/python"
+  if [[ -x "$venv_python" ]]; then
+    echo "$venv_python"
+    return
+  fi
+  # Try uv-managed venv
+  local uv_venv="$HOME/.local/share/wade/venv/bin/python"
+  if [[ -x "$uv_venv" ]]; then
+    echo "$uv_venv"
+    return
+  fi
+  # System fallback
+  if command -v python3 &>/dev/null; then
+    echo "python3"
+    return
+  fi
+  echo "python"
+}
+
+REMOTE="$1"
+
+# Read pushed refs from stdin (git pre-push protocol).
+zero_sha="0000000000000000000000000000000000000000"
+while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
+  # Only act on pushes targeting main or master.
+  if [[ "$remote_ref" != "refs/heads/main" && "$remote_ref" != "refs/heads/master" ]]; then
+    continue
+  fi
+
+  # Skip if the push is a deletion (local_sha is all zeros).
+  if [[ "$local_sha" == "$zero_sha" ]]; then
+    continue
+  fi
+
+  # Skip if the tip commit is already a version bump (no double-bump).
+  tip_msg=$(git log -1 --pretty=%s "$local_sha" 2>/dev/null || true)
+  if echo "$tip_msg" | grep -q '^chore: bump version'; then
+    echo "[wade] Version bump already present at tip — skipping auto-bump."
+    continue
+  fi
+
+  # Determine commit range: remote_sha..local_sha, or all commits if new branch.
+  if [[ "$remote_sha" == "$zero_sha" ]] || ! git rev-parse --verify "$remote_sha" >/dev/null 2>&1; then
+    # New branch or remote SHA unknown — look back one commit.
+    range="HEAD~1..HEAD"
+  else
+    range="${remote_sha}..${local_sha}"
+  fi
+
+  bump_type="$(_detect_bump_type "$range")"
+
+  if [[ -n "$bump_type" ]]; then
+    PYTHON="$(_find_python)"
+    echo "[wade] Detected conventional commits requiring a ${bump_type} bump."
+    echo "[wade] Running auto_version.py ${bump_type} ..."
+    cd "$REPO_ROOT"
+    "$PYTHON" "$BUMP_SCRIPT" "$bump_type"
+    # Push only the tag — git's original push will carry the version bump commit.
+    new_tag=$(git describe --tags --abbrev=0 2>/dev/null || true)
+    [[ -n "$new_tag" ]] && git push "$REMOTE" "$new_tag" --no-verify
+    echo "[wade] Auto-version bump complete. Tag ${new_tag} pushed."
+  fi
+done
+
+exit 0
