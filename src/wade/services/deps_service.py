@@ -23,6 +23,7 @@ from wade.providers.registry import get_provider
 from wade.services.ai_resolution import resolve_ai_tool, resolve_model
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import ensure_task_label
+from wade.ui import prompts
 from wade.ui.console import console
 from wade.utils.process import CommandError, run
 
@@ -382,6 +383,12 @@ def _run_interactive_analysis(
                 prompt=interactive_prompt,
                 trusted_dirs=[str(Path.cwd()), output_dir, tempfile.gettempdir()],
             )
+
+            # Non-blocking tools return immediately — wait for user.
+            if not adapter.capabilities().blocks_until_exit:
+                console.empty()
+                if not prompts.confirm("Have you finished the session?", default=True):
+                    return None
         except (ValueError, KeyError):
             console.warn(f"Unknown AI tool: {ai_tool}")
             return None

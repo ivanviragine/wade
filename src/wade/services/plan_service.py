@@ -36,6 +36,7 @@ from wade.services.task_service import (
     ensure_task_label,
 )
 from wade.services.work_service import bootstrap_draft_pr
+from wade.ui import prompts
 from wade.ui.console import console
 from wade.utils.process import run_with_transcript
 
@@ -322,10 +323,27 @@ def plan(
     )
     logger.info("plan.ai_exited", exit_code=exit_code)
 
-    # Post-session: extract token usage
-    usage = _extract_token_usage(transcript_path)
-    if not usage.total_tokens:
-        _warn_token_extraction(transcript_path)
+    # Non-blocking tools (VS Code, Antigravity) return immediately.
+    # Wait for user confirmation before post-session processing.
+    try:
+        tool_adapter = AbstractAITool.get(AIToolID(resolved_tool))
+        tool_caps = tool_adapter.capabilities()
+    except (ValueError, KeyError):
+        tool_caps = None
+
+    if tool_caps and not tool_caps.blocks_until_exit:
+        console.empty()
+        if not prompts.confirm("Have you finished the session?", default=True):
+            console.info("Plan directory preserved — review output manually.")
+            console.hint(f"Plan dir: {plan_dir}")
+            return False
+
+    # Post-session: extract token usage (skip for non-blocking tools)
+    usage = TokenUsage()
+    if not tool_caps or tool_caps.blocks_until_exit:
+        usage = _extract_token_usage(transcript_path)
+        if not usage.total_tokens:
+            _warn_token_extraction(transcript_path)
 
     # Path C: Existing issue — attach plan files to it (no new issue created)
     if existing_issue is not None:
