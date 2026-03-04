@@ -77,7 +77,7 @@ class TestResolveModel:
         result = resolve_model("claude-opus-4-6", config)
         assert result == "claude-opus-4-6"
 
-    def test_config_fallback(self) -> None:
+    def test_command_specific_fallback(self) -> None:
         from wade.models.config import AICommandConfig
 
         config = ProjectConfig(ai=AIConfig(plan=AICommandConfig(model="claude-sonnet-4-6")))
@@ -87,6 +87,76 @@ class TestResolveModel:
     def test_no_model(self) -> None:
         config = ProjectConfig()
         result = resolve_model(None, config)
+        assert result is None
+
+    def test_complexity_maps_easy(self) -> None:
+        from wade.models.config import ComplexityModelMapping
+
+        config = ProjectConfig(models={"claude": ComplexityModelMapping(easy="claude-haiku-4-5")})
+        result = resolve_model(None, config, "work", tool="claude", complexity="easy")
+        assert result == "claude-haiku-4-5"
+
+    def test_complexity_maps_complex(self) -> None:
+        from wade.models.config import ComplexityModelMapping
+
+        config = ProjectConfig(
+            models={"claude": ComplexityModelMapping(complex="claude-sonnet-4-6")}
+        )
+        result = resolve_model(None, config, "work", tool="claude", complexity="complex")
+        assert result == "claude-sonnet-4-6"
+
+    def test_complexity_no_mapping_falls_to_default(self) -> None:
+        config = ProjectConfig(ai=AIConfig(default_model="claude-sonnet-4-6"))
+        result = resolve_model(None, config, "work", tool="claude", complexity="easy")
+        assert result == "claude-sonnet-4-6"
+
+    def test_complexity_none_falls_to_default(self) -> None:
+        config = ProjectConfig(ai=AIConfig(default_model="claude-sonnet-4-6"))
+        result = resolve_model(None, config, "work", tool="claude", complexity=None)
+        assert result == "claude-sonnet-4-6"
+
+    def test_complexity_beats_default_model(self) -> None:
+        """Complexity mapping must take priority over ai.default_model."""
+        from wade.models.config import ComplexityModelMapping
+
+        config = ProjectConfig(
+            ai=AIConfig(default_model="claude-sonnet-4-6"),
+            models={"claude": ComplexityModelMapping(easy="claude-haiku-4-5")},
+        )
+        result = resolve_model(None, config, "work", tool="claude", complexity="easy")
+        assert result == "claude-haiku-4-5"
+
+    def test_command_specific_beats_complexity(self) -> None:
+        """Command-specific model must take priority over complexity mapping."""
+        from wade.models.config import AICommandConfig, ComplexityModelMapping
+
+        config = ProjectConfig(
+            ai=AIConfig(work=AICommandConfig(model="claude-opus-4-6")),
+            models={"claude": ComplexityModelMapping(easy="claude-haiku-4-5")},
+        )
+        result = resolve_model(None, config, "work", tool="claude", complexity="easy")
+        assert result == "claude-opus-4-6"
+
+    def test_explicit_beats_everything(self) -> None:
+        from wade.models.config import AICommandConfig, ComplexityModelMapping
+
+        config = ProjectConfig(
+            ai=AIConfig(
+                default_model="default-model",
+                work=AICommandConfig(model="cmd-model"),
+            ),
+            models={"claude": ComplexityModelMapping(easy="complexity-model")},
+        )
+        # Omit tool= so the compatibility gate doesn't interfere;
+        # this test validates fallback *priority*, not compatibility.
+        result = resolve_model("explicit-model", config, "work", complexity="easy")
+        assert result == "explicit-model"
+
+    def test_incompatible_model_returns_none(self) -> None:
+        """When the resolved model is incompatible with the tool, return None."""
+        config = ProjectConfig(ai=AIConfig(default_model="claude-sonnet-4-6"))
+        # gemini tool won't accept a claude model
+        result = resolve_model(None, config, "work", tool="gemini")
         assert result is None
 
 

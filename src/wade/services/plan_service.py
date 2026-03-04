@@ -248,20 +248,7 @@ def plan(
         console.error("No AI tool specified and none detected. Use --ai <tool>.")
         return False
 
-    resolved_model = resolve_model(model, config, "plan")
-
-    # Check model compatibility early so the display reflects what will actually be used
-    if resolved_model:
-        try:
-            adapter = AbstractAITool.get(AIToolID(resolved_tool))
-            if not adapter.is_model_compatible(resolved_model):
-                console.warn(
-                    f"Model '{resolved_model}' is not compatible with "
-                    f"{resolved_tool}; using tool default"
-                )
-                resolved_model = None
-        except (ValueError, KeyError):
-            pass
+    resolved_model = resolve_model(model, config, "plan", tool=resolved_tool)
 
     console.rule("wade plan-task")
     console.kv("AI tool", resolved_tool)

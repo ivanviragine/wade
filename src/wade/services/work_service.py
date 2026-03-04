@@ -90,17 +90,6 @@ def _format_uncommitted_summary(cwd: Path) -> str:
     return ", ".join(parts) if parts else "dirty"
 
 
-def _complexity_to_model(
-    config: ProjectConfig,
-    ai_tool: str,
-    complexity: str | None,
-) -> str | None:
-    """Map task complexity to model ID from config."""
-    if not complexity:
-        return None
-    return config.get_complexity_model(ai_tool, complexity)
-
-
 def write_plan_md(
     worktree_path: Path,
     task: Task,
@@ -659,10 +648,14 @@ def start(
             elif installed:
                 resolved_tool = installed[0].value
 
-        # Resolve model: shared resolution + complexity mapping
-        resolved_model = resolve_model(model, config, "work")
-        if not resolved_model and resolved_tool and task.complexity:
-            resolved_model = _complexity_to_model(config, resolved_tool, task.complexity.value)
+        # Resolve model: explicit arg → command-specific → complexity → global default
+        resolved_model = resolve_model(
+            model,
+            config,
+            "work",
+            tool=resolved_tool,
+            complexity=task.complexity.value if task.complexity else None,
+        )
 
         if resolved_tool:
             console.kv("AI tool", resolved_tool)
@@ -856,17 +849,6 @@ def start(
             detected_model: str | None = None
             try:
                 adapter = AbstractAITool.get(AIToolID(resolved_tool))
-
-                # Check model compatibility
-                if resolved_model and not adapter.is_model_compatible(resolved_model):
-                    console.warn(
-                        f"Model '{resolved_model}' is not compatible with {resolved_tool}; "
-                        "using tool default"
-                    )
-                    resolved_model = None
-
-                if resolved_model:
-                    console.detail(f"Model: {resolved_model}")
 
                 deliver_prompt_if_needed(adapter, prompt)
                 exit_code = adapter.launch(

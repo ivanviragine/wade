@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import structlog
+
 from wade.ai_tools.base import AbstractAITool
-from wade.models.config import ProjectConfig
+from wade.models.ai import AIToolID
+from wade.models.config import AICommandConfig, ProjectConfig
+
+logger = structlog.get_logger()
 
 
 def resolve_ai_tool(
@@ -40,11 +45,49 @@ def resolve_model(
     model: str | None,
     config: ProjectConfig,
     command: str = "plan",
+    *,
+    tool: str | None = None,
+    complexity: str | None = None,
 ) -> str | None:
-    """Resolve model from args -> config.
+    """Resolve model from args -> config -> complexity -> default.
 
-    Fallback chain: explicit arg -> command-specific config -> global default.
+    Fallback chain:
+      1. Explicit *model* arg (e.g. ``--model`` CLI flag)
+      2. Command-specific config (``ai.<command>.model``)
+      3. Complexity-based mapping (``models.<tool>.<complexity>``)
+      4. Global default (``ai.default_model``)
+
+    When *tool* is provided, the resolved model is checked for compatibility
+    with that tool.  Incompatible models are dropped (returns ``None``).
     """
-    if model:
-        return model
-    return config.get_model(command)
+    resolved: str | None = model
+
+    # 2. Command-specific config
+    if not resolved:
+        cmd_config = getattr(config.ai, command, None)
+        if isinstance(cmd_config, AICommandConfig) and cmd_config.model:
+            resolved = cmd_config.model
+
+    # 3. Complexity-based mapping
+    if not resolved and tool and complexity:
+        resolved = config.get_complexity_model(tool, complexity)
+
+    # 4. Global default
+    if not resolved:
+        resolved = config.ai.default_model
+
+    # Compatibility gate
+    if resolved and tool:
+        try:
+            adapter = AbstractAITool.get(AIToolID(tool))
+            if not adapter.is_model_compatible(resolved):
+                logger.info(
+                    "model.incompatible",
+                    model=resolved,
+                    tool=tool,
+                )
+                return None
+        except (ValueError, KeyError):
+            pass
+
+    return resolved

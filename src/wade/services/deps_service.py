@@ -447,20 +447,7 @@ def analyze_deps(
         console.error("No AI tool available for dependency analysis.")
         return None
 
-    resolved_model = resolve_model(model, config, "deps")
-
-    # Check model compatibility — drop model if it's not valid for this tool
-    if resolved_model:
-        try:
-            adapter = AbstractAITool.get(AIToolID(resolved_tool))
-            if not adapter.is_model_compatible(resolved_model):
-                console.warn(
-                    f"Model '{resolved_model}' is not compatible with "
-                    f"{resolved_tool}; using tool default"
-                )
-                resolved_model = None
-        except (ValueError, KeyError):
-            pass
+    resolved_model = resolve_model(model, config, "deps", tool=resolved_tool)
 
     console.rule("wade task deps")
     console.kv("Issues", str(len(issue_numbers)))

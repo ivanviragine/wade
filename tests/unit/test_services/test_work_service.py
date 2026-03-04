@@ -21,7 +21,6 @@ from wade.models.config import (
 from wade.models.task import Task
 from wade.services.work_service import (
     _build_graph_from_issues,
-    _complexity_to_model,
     _parse_overwrite_paths,
     _pull_main_after_merge,
     _resolve_task_target,
@@ -52,34 +51,6 @@ class TestResolveWorktreesDir:
         )
         result = _resolve_worktrees_dir(config, Path("/some/repo"))
         assert result == Path("/tmp/wt")
-
-
-class TestComplexityToModel:
-    def test_maps_easy(self) -> None:
-        from wade.models.config import ComplexityModelMapping
-
-        config = ProjectConfig(models={"claude": ComplexityModelMapping(easy="claude-haiku-4-5")})
-        result = _complexity_to_model(config, "claude", "easy")
-        assert result == "claude-haiku-4-5"
-
-    def test_maps_complex(self) -> None:
-        from wade.models.config import ComplexityModelMapping
-
-        config = ProjectConfig(
-            models={"claude": ComplexityModelMapping(complex="claude-sonnet-4-6")}
-        )
-        result = _complexity_to_model(config, "claude", "complex")
-        assert result == "claude-sonnet-4-6"
-
-    def test_no_mapping(self) -> None:
-        config = ProjectConfig()
-        result = _complexity_to_model(config, "claude", "easy")
-        assert result is None
-
-    def test_none_complexity(self) -> None:
-        config = ProjectConfig()
-        result = _complexity_to_model(config, "claude", None)
-        assert result is None
 
 
 class TestBootstrapWorktree:
