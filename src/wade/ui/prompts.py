@@ -9,11 +9,9 @@ Uses questionary for arrow-key navigation menus.
 from __future__ import annotations
 
 import sys
-from typing import cast
 
 import questionary
 import typer
-from prompt_toolkit.formatted_text import AnyFormattedText
 from prompt_toolkit.styles import Style
 from rich.console import Console
 
@@ -44,7 +42,7 @@ def _handle_none(result: object) -> None:
         raise typer.Exit(1)
 
 
-def confirm(message: AnyFormattedText, default: bool = False) -> bool:
+def confirm(message: str, default: bool = False) -> bool:
     """Ask a yes/no confirmation question.
 
     Returns default when stdin is not a TTY.
@@ -55,7 +53,7 @@ def confirm(message: AnyFormattedText, default: bool = False) -> bool:
     default_choice = "Yes" if default else "No"
 
     result: str | None = questionary.select(
-        cast(str, message),
+        message,
         choices=choices,
         default=default_choice,
         pointer="\u203a",

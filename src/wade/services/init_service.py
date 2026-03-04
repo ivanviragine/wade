@@ -487,13 +487,10 @@ def _prompt_configure_allowlist(root: Path, non_interactive: bool) -> None:
     if non_interactive:
         return
 
-    from prompt_toolkit.formatted_text import HTML
-
-    _msg = HTML(
-        'Auto-approve <style fg="#7c8aff">wade</style> commands in Claude Code?'
-        " (skips Bash approval in work sessions)"
-    )
-    if prompts.confirm(_msg, default=True):
+    if prompts.confirm(
+        "Auto-approve wade commands in Claude Code? (skips Bash approval in work sessions)",
+        default=True,
+    ):
         configure_allowlist(root)
         console.success("Added Bash([step]wade[/] *) to .claude/settings.json allowlist")
 
