@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.6.1] — 2026-03-03
+
+### Bug Fixes
+
+- add post-session wait for non-blocking tools in plan and deps services (683d76a)
+
 ## [v1.6.0] — 2026-03-03
 
 ### Features
