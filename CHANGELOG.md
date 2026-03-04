@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.6.0] — 2026-03-03
+
+### Features
+
+- clipboard prompt delivery and post-session UX for non-CLI AI tools (bcbb58d)
+
 ## [v1.5.6] — 2026-03-03
 
 ### Documentation
