@@ -384,7 +384,7 @@ def create_interactive(
         console.error("Title is required")
         return None
 
-    console.hint("Enter task body (press Ctrl+D when done, or leave empty):")
+    console.hint("Enter task body (press Enter then Ctrl+D when done, or leave empty):")
     body_lines: list[str] = []
     if not sys.stdin.isatty():
         body = ""
