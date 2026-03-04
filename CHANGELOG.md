@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.6.2] — 2026-03-03
+
+### Bug Fixes
+
+- render allowlist prompt as plain text in wade init (03d6d0a)
+
 ## [v1.6.1] — 2026-03-03
 
 ### Bug Fixes
