@@ -45,6 +45,7 @@ wade work batch 42 43 44   # three worktrees, three AI sessions, zero stashing
 | Copy-paste issue title + description into AI chat every time | Full issue context + project conventions loaded automatically |
 | One task at a time, or stash-juggle between branches | Parallel issues in isolated worktrees, zero conflicts |
 | Re-explain your branching rules, test commands, linters every session | Skills teach the AI your conventions once |
+| Forget to sync with main before opening a PR — merge conflicts for the reviewer | Branch synced with main automatically before every PR |
 | Write the PR description, link the issue, clean up the branch — manually | The AI ships the PR. You just review |
 | Manually pick the right model for each task | Automatic model routing based on issue complexity |
 | Which terminal tab has which issue? No idea | Terminal title shows `wade work #42 — Feature Name` |
