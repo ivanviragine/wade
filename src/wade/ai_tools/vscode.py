@@ -32,6 +32,8 @@ class VSCodeAdapter(AbstractAITool):
             tool_type=AIToolType.GUI,
             supports_model_flag=False,
             supports_headless=False,
+            supports_initial_message=False,
+            blocks_until_exit=False,
         )
 
     def launch(

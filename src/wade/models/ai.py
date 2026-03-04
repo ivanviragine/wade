@@ -62,6 +62,8 @@ class AIToolCapabilities(BaseModel, frozen=True):
     model_flag: str = "--model"
     headless_flag: str | None = None
     supports_headless: bool = False
+    supports_initial_message: bool = True
+    blocks_until_exit: bool = True
 
 
 class TokenUsage(BaseModel):

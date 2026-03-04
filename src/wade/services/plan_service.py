@@ -28,6 +28,7 @@ from wade.models.task import PlanFile, Task
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.ai_resolution import resolve_ai_tool, resolve_model
+from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import (
     add_complexity_label,
     add_planned_by_labels,
@@ -156,6 +157,8 @@ def run_ai_planning_session(
     if model and not adapter.is_model_compatible(model):
         console.warn(f"Model '{model}' is not compatible with {ai_tool}; using tool default")
         model = None
+
+    deliver_prompt_if_needed(adapter, prompt)
 
     # Build command — plan_dir included in trusted_dirs so all flags precede the
     # initial_message positional arg (many CLIs stop flag-parsing after a positional).

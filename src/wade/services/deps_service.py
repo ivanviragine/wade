@@ -21,6 +21,7 @@ from wade.models.deps import DependencyEdge, DependencyGraph
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.ai_resolution import resolve_ai_tool, resolve_model
+from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import ensure_task_label
 from wade.ui.console import console
 from wade.utils.process import CommandError, run
@@ -374,6 +375,7 @@ def _run_interactive_analysis(
         # Launch AI interactively
         try:
             adapter = AbstractAITool.get(AIToolID(ai_tool))
+            deliver_prompt_if_needed(adapter, interactive_prompt)
             adapter.launch(
                 worktree_path=Path.cwd(),
                 model=model,

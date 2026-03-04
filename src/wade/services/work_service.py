@@ -41,6 +41,7 @@ from wade.models.work import (
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.ai_resolution import resolve_ai_tool, resolve_model
+from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import (
     add_in_progress_label,
     add_worked_by_labels,
@@ -829,6 +830,7 @@ def start(
         if detach and resolved_tool:
             try:
                 detach_adapter = AbstractAITool.get(AIToolID(resolved_tool))
+                deliver_prompt_if_needed(detach_adapter, prompt)
                 cmd = detach_adapter.build_launch_command(
                     model=resolved_model,
                     trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
@@ -866,6 +868,7 @@ def start(
                 if resolved_model:
                     console.detail(f"Model: {resolved_model}")
 
+                deliver_prompt_if_needed(adapter, prompt)
                 exit_code = adapter.launch(
                     worktree_path=worktree_path,
                     model=resolved_model,
@@ -875,6 +878,14 @@ def start(
                 )
                 launch_completed = True
                 logger.info("work.ai_exited", exit_code=exit_code, tool=resolved_tool)
+
+                # Non-blocking tools (VS Code, Antigravity) return immediately.
+                # Wait for the user to confirm they're done before post-session steps.
+                if not adapter.capabilities().blocks_until_exit:
+                    console.empty()
+                    if not prompts.confirm("Have you finished the session?", default=True):
+                        console.info("Worktree preserved — run 'wade work done' when ready.")
+                        launch_completed = False
             except (ValueError, KeyError):
                 console.warn(f"Unknown AI tool: {resolved_tool}")
             except Exception as e:
@@ -884,7 +895,12 @@ def start(
 
                 # Capture token usage BEFORE lifecycle (merge/cleanup) to ensure
                 # the PR is still open and the branch still exists.
-                if adapter is not None and launch_completed:
+                # Skip for non-blocking tools — they don't produce transcripts.
+                if (
+                    adapter is not None
+                    and launch_completed
+                    and adapter.capabilities().blocks_until_exit
+                ):
                     detected_model = _capture_post_session_usage(
                         transcript_path=transcript_path,
                         adapter=adapter,

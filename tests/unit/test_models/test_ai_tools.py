@@ -41,6 +41,8 @@ class TestCapabilities:
         assert caps.model_flag == "--model"
         assert caps.headless_flag == "--print"
         assert caps.supports_headless is True
+        assert caps.supports_initial_message is True
+        assert caps.blocks_until_exit is True
 
     def test_copilot_capabilities(self) -> None:
         caps = AbstractAITool.get("copilot").capabilities()
@@ -54,6 +56,14 @@ class TestCapabilities:
     def test_antigravity_capabilities(self) -> None:
         caps = AbstractAITool.get("antigravity").capabilities()
         assert caps.supports_model_flag is False
+        assert caps.supports_initial_message is False
+        assert caps.blocks_until_exit is False
+
+    def test_vscode_capabilities(self) -> None:
+        caps = AbstractAITool.get("vscode").capabilities()
+        assert caps.tool_type == AIToolType.GUI
+        assert caps.supports_initial_message is False
+        assert caps.blocks_until_exit is False
 
     def test_opencode_capabilities(self) -> None:
         caps = AbstractAITool.get("opencode").capabilities()

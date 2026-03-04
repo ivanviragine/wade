@@ -33,6 +33,8 @@ class AntigravityAdapter(AbstractAITool):
             supports_model_flag=False,
             headless_flag=None,
             supports_headless=False,
+            supports_initial_message=False,
+            blocks_until_exit=False,
         )
 
     def launch(
