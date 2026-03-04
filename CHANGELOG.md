@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v1.6.4] — 2026-03-03
+
+### Bug Fixes
+
+- centralize model resolution with correct fallback hierarchy (d9bb6c3)
+
 ## [v1.6.3] — 2026-03-03
 
 ### Documentation
