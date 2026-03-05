@@ -5,6 +5,7 @@ from __future__ import annotations
 from wade.ai_tools.claude import ClaudeAdapter
 from wade.ai_tools.codex import CodexAdapter
 from wade.ai_tools.copilot import CopilotAdapter
+from wade.ai_tools.cursor import CursorAdapter
 from wade.ai_tools.gemini import GeminiAdapter
 from wade.ai_tools.opencode import OpenCodeAdapter
 
@@ -78,6 +79,20 @@ class TestGeminiAllowedCommands:
             "--allowedTools",
             "shell(./scripts/check.sh:*)",
         ]
+
+
+class TestCursorAllowedCommands:
+    """Tests for CursorAdapter — returns empty (config-file permissions)."""
+
+    def test_returns_empty(self) -> None:
+        adapter = CursorAdapter()
+        result = adapter.allowed_commands_args(["wade *"])
+        assert result == []
+
+    def test_returns_empty_with_multiple_patterns(self) -> None:
+        adapter = CursorAdapter()
+        result = adapter.allowed_commands_args(["wade *", "./scripts/check.sh *"])
+        assert result == []
 
 
 class TestCodexAllowedCommands:
