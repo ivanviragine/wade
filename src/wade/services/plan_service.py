@@ -27,7 +27,7 @@ from wade.models.config import ProjectConfig
 from wade.models.task import PlanFile, Task
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
-from wade.services.ai_resolution import resolve_ai_tool, resolve_model
+from wade.services.ai_resolution import confirm_ai_selection, resolve_ai_tool, resolve_model
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import (
     add_complexity_label,
@@ -230,6 +230,9 @@ def plan(
     model: str | None = None,
     project_root: Path | None = None,
     issue_id: str | None = None,
+    *,
+    ai_explicit: bool = False,
+    model_explicit: bool = False,
 ) -> bool:
     """Run an AI-assisted planning session.
 
@@ -252,9 +255,17 @@ def plan(
     resolved_model = resolve_model(model, config, "plan", tool=resolved_tool)
 
     console.rule("wade plan-task")
-    console.kv("AI tool", resolved_tool)
-    if resolved_model:
-        console.kv("Model", resolved_model)
+
+    # Offer interactive confirmation unless both flags were explicitly provided.
+    resolved_tool, resolved_model = confirm_ai_selection(
+        resolved_tool,
+        resolved_model,
+        tool_explicit=ai_explicit,
+        model_explicit=model_explicit,
+    )
+    if not resolved_tool:
+        console.error("No AI tool selected.")
+        return False
 
     # Pre-load existing issue context when issue_id is supplied
     existing_issue: Task | None = None
@@ -709,6 +720,8 @@ def _finalize_issues(
                 issue_numbers=issue_numbers,
                 ai_tool=ai_tool,
                 model=model,
+                ai_explicit=True,
+                model_explicit=True,
             )
             if graph and graph.edges:
                 console.success(f"Applied {len(graph.edges)} dependency edge(s)")
