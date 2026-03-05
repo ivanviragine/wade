@@ -44,6 +44,7 @@ GITIGNORE_ENTRIES: Final = [
     ".github/skills",
     ".agents/",
     ".gemini/",
+    ".cursor/",
     "PLAN.md",
     "PR-SUMMARY.md",
 ]

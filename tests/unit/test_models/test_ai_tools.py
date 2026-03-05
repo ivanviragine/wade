@@ -22,6 +22,7 @@ class TestSelfRegistration:
         assert AIToolID.CODEX in registered
         assert AIToolID.ANTIGRAVITY in registered
         assert AIToolID.OPENCODE in registered
+        assert AIToolID.CURSOR in registered
 
     def test_get_adapter(self) -> None:
         adapter = AbstractAITool.get("claude")
@@ -74,6 +75,17 @@ class TestCapabilities:
         assert caps.headless_flag == "run"
         assert caps.supports_headless is True
 
+    def test_cursor_capabilities(self) -> None:
+        caps = AbstractAITool.get("cursor").capabilities()
+        assert caps.binary == "cursor"
+        assert caps.tool_type == AIToolType.TERMINAL
+        assert caps.supports_model_flag is True
+        assert caps.model_flag == "--model"
+        assert caps.headless_flag == "--print"
+        assert caps.supports_headless is True
+        assert caps.supports_initial_message is True
+        assert caps.blocks_until_exit is True
+
 
 class TestModelCompatibility:
     def test_claude_accepts_claude_models(self) -> None:
@@ -108,6 +120,12 @@ class TestModelCompatibility:
         assert adapter.is_model_compatible("anthropic/claude-sonnet-4") is True
         assert adapter.is_model_compatible("openai/gpt-4o") is True
         assert adapter.is_model_compatible("google/gemini-2.0-flash") is True
+
+    def test_cursor_accepts_all(self) -> None:
+        adapter = AbstractAITool.get("cursor")
+        assert adapter.is_model_compatible("claude-opus-4.6") is True
+        assert adapter.is_model_compatible("gpt-5.1") is True
+        assert adapter.is_model_compatible("anything") is True
 
 
 class TestBuildLaunchCommand:
@@ -156,6 +174,37 @@ class TestBuildLaunchCommand:
             "run",
             "Fix the bug",
         ]
+
+    def test_cursor_basic_launch(self) -> None:
+        adapter = AbstractAITool.get("cursor")
+        cmd = adapter.build_launch_command(model="claude-opus-4.6")
+        assert cmd == ["cursor", "--model", "claude-opus-4.6"]
+
+    def test_cursor_with_initial_message(self) -> None:
+        adapter = AbstractAITool.get("cursor")
+        cmd = adapter.build_launch_command(initial_message="Implement feature X")
+        assert cmd == ["cursor", "Implement feature X"]
+
+    def test_cursor_plan_mode_launch(self) -> None:
+        """Cursor plan mode uses --mode plan."""
+        adapter = AbstractAITool.get("cursor")
+        cmd = adapter.build_launch_command(
+            model="claude-sonnet-4.6", initial_message="Do stuff", plan_mode=True
+        )
+        assert cmd == [
+            "cursor",
+            "Do stuff",
+            "--model",
+            "claude-sonnet-4.6",
+            "--mode",
+            "plan",
+        ]
+
+    def test_cursor_normalizes_model_in_launch(self) -> None:
+        """Cursor must receive dotted model format."""
+        adapter = AbstractAITool.get("cursor")
+        cmd = adapter.build_launch_command(model="claude-sonnet-4-6")
+        assert cmd == ["cursor", "--model", "claude-sonnet-4.6"]
 
 
 class TestDateSuffix:
@@ -234,6 +283,10 @@ class TestPlanModeArgs:
         adapter = AbstractAITool.get("opencode")
         assert adapter.plan_mode_args() == []
 
+    def test_cursor_plan_mode(self) -> None:
+        adapter = AbstractAITool.get("cursor")
+        assert adapter.plan_mode_args() == ["--mode", "plan"]
+
     def test_plan_mode_in_launch_command(self) -> None:
         adapter = AbstractAITool.get("claude")
         cmd = adapter.build_launch_command(plan_mode=True)
@@ -287,3 +340,16 @@ class TestNormalizeModelFormat:
             == "anthropic/claude-sonnet-4"
         )
         assert adapter.normalize_model_format("openai/gpt-4o") == "openai/gpt-4o"
+
+    def test_cursor_dashed_to_dotted(self) -> None:
+        adapter = AbstractAITool.get("cursor")
+        assert adapter.normalize_model_format("claude-haiku-4-5") == "claude-haiku-4.5"
+        assert adapter.normalize_model_format("claude-sonnet-4-6") == "claude-sonnet-4.6"
+
+    def test_cursor_already_dotted(self) -> None:
+        adapter = AbstractAITool.get("cursor")
+        assert adapter.normalize_model_format("claude-haiku-4.5") == "claude-haiku-4.5"
+
+    def test_cursor_non_claude_passthrough(self) -> None:
+        adapter = AbstractAITool.get("cursor")
+        assert adapter.normalize_model_format("gpt-5.1") == "gpt-5.1"
