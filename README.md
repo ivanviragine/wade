@@ -164,26 +164,11 @@ hooks:
     - .env.example
 ```
 
-**`post_worktree_create`** — Path to a script that runs after each worktree is created. Runs from the worktree root with a 60-second timeout. Useful for installing dependencies, configuring environment, or syncing additional files. If the script fails or times out, a warning is logged but the AI session continues.
+**`post_worktree_create`** — A setup script to run after each worktree is created. Use it to install dependencies, run builds, or prepare the environment so worktrees are ready to use immediately.
 
-**`copy_to_worktree`** — List of files to copy from the project root into the worktree before running the hook. Handy for `.env` files, configuration, or other project setup.
+**`copy_to_worktree`** — Files to copy from the project root into the worktree before running the hook. Useful for secrets and config files (e.g., `.env`) that are gitignored and wouldn't otherwise be present in a new worktree.
 
-Example setup script (save as `scripts/setup-worktree.sh`):
-
-```bash
-#!/bin/bash
-set -euo pipefail
-
-# Install dependencies
-npm ci
-# or for Python:
-# pip install -r requirements.txt
-
-# Other setup (e.g., build, initialize DB)
-# ...
-```
-
-Make the script executable: `chmod +x scripts/setup-worktree.sh`
+See [`templates/setup-worktree.sh.example`](templates/setup-worktree.sh.example) for a starter script.
 
 ## Shell Integration
 

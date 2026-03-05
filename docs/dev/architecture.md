@@ -169,12 +169,7 @@ hooks:
 
 **Per-command AI tool and model overrides**: The `ai` section supports `plan`, `deps`, and `work` sub-sections, each with optional `tool` and `model` keys. The fallback chain is: CLI `--ai`/`--model` flag -> command-specific config -> global `default_tool`. This is implemented in `ProjectConfig.get_ai_tool(command)` and `ProjectConfig.get_model(command)`.
 
-**Worktree hooks**: The `hooks` section controls what happens when a worktree is created (`wade implement-task` or `wade work batch`):
-
-- **`post_worktree_create`** (optional) — Path to a script (relative to the project root) that `work_service._bootstrap_worktree()` will execute after the worktree is created. The script runs with **working directory = worktree root**, a **60-second timeout**, and **non-blocking failure** (warnings are logged, but the session continues). Useful for installing dependencies, configuring environment, or syncing additional files into the worktree.
-- **`copy_to_worktree`** (optional) — List of paths (relative to the project root) to copy into the worktree before running the hook. Common use case: `.env` files or other project configuration. If a source file does not exist, the copy is silently skipped.
-
-If the hook script fails or times out, the error is logged as a warning (not fatal) so the AI session can still proceed. Logs appear in the console during worktree creation and can be reviewed later.
+**Worktree hooks**: The `hooks` section lets projects run setup automatically when a worktree is created. `post_worktree_create` points to a script that runs in the new worktree (e.g., installing dependencies). `copy_to_worktree` lists files to copy from the project root into the worktree before the hook runs (e.g., `.env`). Hook failures are non-fatal — a warning is logged and the session continues.
 
 ## Config Migration Pipeline
 
