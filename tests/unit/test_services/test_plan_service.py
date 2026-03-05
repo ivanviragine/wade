@@ -14,8 +14,10 @@ from wade.services.plan_service import (
     _finalize_issues,
     discover_plan_files,
     get_plan_prompt_template,
+    plan_done,
     render_plan_prompt,
     run_ai_planning_session,
+    validate_plan_dir,
     validate_plan_files,
 )
 
@@ -470,3 +472,117 @@ class TestFinalizeIssues:
 
         # Warnings emitted for both issues
         assert mock_console.warn.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# validate_plan_dir tests
+# ---------------------------------------------------------------------------
+
+
+class TestValidatePlanDir:
+    def test_empty_dir_returns_error(self, tmp_path: Path) -> None:
+        result = validate_plan_dir(tmp_path)
+        assert result.has_errors
+        assert any("No plan files" in d.message for d in result.errors)
+
+    def test_nonexistent_dir_returns_error(self) -> None:
+        result = validate_plan_dir(Path("/nonexistent/path"))
+        assert result.has_errors
+
+    def test_valid_plan_passes(self, tmp_path: Path) -> None:
+        content = (
+            "# My Feature\n\n## Complexity\nmedium\n\n"
+            "## Tasks\n- [ ] Do it\n\n## Acceptance Criteria\n- [ ] It works\n"
+        )
+        (tmp_path / "PLAN.md").write_text(content)
+        result = validate_plan_dir(tmp_path)
+        assert not result.has_errors
+        assert not result.warnings
+
+    def test_missing_title_produces_error(self, tmp_path: Path) -> None:
+        (tmp_path / "PLAN.md").write_text("No heading here\n\nJust text.\n")
+        result = validate_plan_dir(tmp_path)
+        assert result.has_errors
+        assert any("# Title" in d.message for d in result.errors)
+
+    def test_missing_complexity_produces_error(self, tmp_path: Path) -> None:
+        (tmp_path / "PLAN.md").write_text("# My Feature\n\n## Tasks\n- [ ] Do it\n")
+        result = validate_plan_dir(tmp_path)
+        assert result.has_errors
+        assert any("Complexity" in d.message for d in result.errors)
+
+    def test_invalid_complexity_produces_error(self, tmp_path: Path) -> None:
+        (tmp_path / "PLAN.md").write_text(
+            "# My Feature\n\n## Complexity\nbogus_value\n\n## Tasks\n- [ ] Do it\n"
+        )
+        result = validate_plan_dir(tmp_path)
+        assert result.has_errors
+        assert any("Complexity" in d.message for d in result.errors)
+
+    def test_missing_tasks_section_produces_warning(self, tmp_path: Path) -> None:
+        (tmp_path / "PLAN.md").write_text(
+            "# My Feature\n\n## Complexity\nmedium\n\n## Acceptance Criteria\n- [ ] It works\n"
+        )
+        result = validate_plan_dir(tmp_path)
+        assert not result.has_errors
+        assert any("Tasks" in d.message for d in result.warnings)
+
+    def test_missing_acceptance_criteria_produces_warning(self, tmp_path: Path) -> None:
+        (tmp_path / "PLAN.md").write_text(
+            "# My Feature\n\n## Complexity\nmedium\n\n## Tasks\n- [ ] Do it\n"
+        )
+        result = validate_plan_dir(tmp_path)
+        assert not result.has_errors
+        assert any("Acceptance Criteria" in d.message for d in result.warnings)
+
+    def test_multiple_files_all_validated(self, tmp_path: Path) -> None:
+        content_a = (
+            "# Feature A\n\n## Complexity\nmedium\n\n"
+            "## Tasks\n- [ ] A\n\n## Acceptance Criteria\n- [ ] AC\n"
+        )
+        (tmp_path / "PLAN-1-a.md").write_text(content_a)
+        (tmp_path / "PLAN-2-b.md").write_text("No title here\n")
+        result = validate_plan_dir(tmp_path)
+        assert result.has_errors
+        assert any(d.file == "PLAN-2-b.md" for d in result.errors)
+
+    def test_errors_collected_across_files(self, tmp_path: Path) -> None:
+        """All files are validated — errors are not fail-fast."""
+        (tmp_path / "PLAN-1-a.md").write_text("No title\n")
+        (tmp_path / "PLAN-2-b.md").write_text("Also no title\n")
+        result = validate_plan_dir(tmp_path)
+        assert len(result.errors) == 2
+
+    def test_diagnostic_includes_filename(self, tmp_path: Path) -> None:
+        (tmp_path / "my-plan.md").write_text("No title\n")
+        result = validate_plan_dir(tmp_path)
+        assert result.errors[0].file == "my-plan.md"
+
+
+# ---------------------------------------------------------------------------
+# plan_done tests
+# ---------------------------------------------------------------------------
+
+
+class TestPlanDone:
+    def test_returns_true_for_valid_plans(self, tmp_path: Path) -> None:
+        content = (
+            "# Feature\n\n## Complexity\nmedium\n\n"
+            "## Tasks\n- [ ] Do it\n\n## Acceptance Criteria\n- [ ] Works\n"
+        )
+        (tmp_path / "PLAN.md").write_text(content)
+        with patch("wade.services.plan_service.console"):
+            assert plan_done(tmp_path) is True
+
+    def test_returns_false_for_invalid_plans(self, tmp_path: Path) -> None:
+        (tmp_path / "PLAN.md").write_text("No title heading\n")
+        with patch("wade.services.plan_service.console"):
+            assert plan_done(tmp_path) is False
+
+    def test_returns_true_with_warnings_only(self, tmp_path: Path) -> None:
+        """Warnings (missing recommended sections) must not make plan_done return False."""
+        (tmp_path / "PLAN.md").write_text(
+            "# Feature\n\n## Complexity\nmedium\n\nNo tasks or criteria sections.\n"
+        )
+        with patch("wade.services.plan_service.console"):
+            assert plan_done(tmp_path) is True

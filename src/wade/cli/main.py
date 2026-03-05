@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 import typer
 
@@ -163,6 +164,17 @@ def plan_task_cmd(
         ai_explicit=ai is not None,
         model_explicit=model is not None,
     )
+    raise typer.Exit(0 if success else 1)
+
+
+@app.command("plan-done")
+def plan_done_cmd(
+    plan_dir: Path = typer.Argument(..., help="Path to the plan directory containing .md files."),  # noqa: B008
+) -> None:
+    """Validate plan files — run this before exiting a planning session."""
+    from wade.services.plan_service import plan_done as do_plan_done
+
+    success = do_plan_done(plan_dir)
     raise typer.Exit(0 if success else 1)
 
 
