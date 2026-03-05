@@ -42,6 +42,19 @@ def compose_work_title(issue_id: str, issue_title: str) -> str:
     return f"wade work #{issue_id} — {title}"
 
 
+def compose_plan_title(issue_id: str | None, issue_title: str | None) -> str:
+    """Compose a terminal title for a plan session.
+
+    Format: "wade plan #42 — Feature Name" with issue, "wade plan" without.
+    """
+    if not issue_id:
+        return "wade plan"
+    max_title = 50
+    title = issue_title or ""
+    title = title[:max_title] + "..." if len(title) > max_title else title
+    return f"wade plan #{issue_id} — {title}" if title else f"wade plan #{issue_id}"
+
+
 def start_title_keeper(title: str, interval: float = 2.0) -> None:
     """Start a background thread that re-asserts the terminal title periodically.
 
