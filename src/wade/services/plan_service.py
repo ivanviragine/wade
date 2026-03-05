@@ -234,6 +234,11 @@ def plan_done(plan_dir: Path) -> bool:
         return False
 
     console.success(f"Plan validation passed ({len(result.warnings)} warning(s)).")
+    console.info(
+        "SESSION COMPLETE — do not implement anything. "
+        "Suggest the user to exit the session now. "
+        "wade will read the plan files and create GitHub issues automatically."
+    )
     return True
 
 
