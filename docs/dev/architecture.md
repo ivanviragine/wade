@@ -169,6 +169,8 @@ hooks:
 
 **Per-command AI tool and model overrides**: The `ai` section supports `plan`, `deps`, and `work` sub-sections, each with optional `tool` and `model` keys. The fallback chain is: CLI `--ai`/`--model` flag -> command-specific config -> global `default_tool`. This is implemented in `ProjectConfig.get_ai_tool(command)` and `ProjectConfig.get_model(command)`.
 
+**Worktree hooks**: The `hooks` section lets projects run setup automatically when a worktree is created. `post_worktree_create` points to a script that runs in the new worktree (e.g., installing dependencies). `copy_to_worktree` lists files to copy from the project root into the worktree before the hook runs (e.g., `.env`). Hook failures are non-fatal — a warning is logged and the session continues.
+
 ## Config Migration Pipeline
 
 `config/migrations.py` provides a single migration run during `wade update`:
