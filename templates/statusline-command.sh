@@ -3,10 +3,11 @@
 # Mirrors the zsh PROMPT: cyan path + yellow git branch
 # Also shows session identity, model name, context usage, and token counts
 #
+# Branch is suppressed when the cwd is a git worktree (non-primary checkout),
+# because the worktree name already implies the branch context.
+#
 # Each Claude Code instance passes its own JSON to stdin, so all fields
 # (model, context, session_id) are scoped to the specific instance.
-# session_name or a short session_id prefix is shown to distinguish
-# parallel instances at a glance.
 
 input=$(cat)
 cwd=$(echo "$input" | jq -r '.cwd')
@@ -15,18 +16,24 @@ cwd=$(echo "$input" | jq -r '.cwd')
 home="$HOME"
 short_path="${cwd/#$home/~}"
 
-# Get git branch (skip optional locks)
-branch=$(git -C "$cwd" --no-optional-locks branch --show-current 2>/dev/null || true)
+# Detect whether cwd is a git worktree (non-primary checkout).
+# `git worktree list` always lists the main worktree first; if our cwd
+# appears in any subsequent line it is a linked worktree.
+is_worktree=false
+worktree_list=$(git -C "$cwd" --no-optional-locks worktree list --porcelain 2>/dev/null || true)
+if [ -n "$worktree_list" ]; then
+  # Count how many worktree blocks have a worktree path matching cwd
+  # The first block is the main worktree; extras are linked worktrees.
+  main_wt=$(echo "$worktree_list" | awk '/^worktree /{print $2; exit}')
+  if [ "$cwd" != "$main_wt" ]; then
+    is_worktree=true
+  fi
+fi
 
-# Session identity: prefer human-readable name, fall back to first 8 chars of session_id
-session_name=$(echo "$input" | jq -r '.session_name // empty')
-session_id=$(echo "$input" | jq -r '.session_id // empty')
-if [ -n "$session_name" ]; then
-  session_label="$session_name"
-elif [ -n "$session_id" ]; then
-  session_label="${session_id:0:8}"
-else
-  session_label=""
+# Get git branch (only needed when not in a worktree)
+branch=""
+if [ "$is_worktree" = false ]; then
+  branch=$(git -C "$cwd" --no-optional-locks branch --show-current 2>/dev/null || true)
 fi
 
 # Model display name — read from the per-instance JSON (never shared between instances)
@@ -45,69 +52,10 @@ YELLOW='\033[33m'
 GREEN='\033[32m'
 MAGENTA='\033[35m'
 RED='\033[31m'
-BLUE='\033[34m'
 DIM='\033[2m'
 RESET='\033[0m'
 
-# Build progress bar (10 chars wide)
-build_bar() {
-  local pct="$1"
-  local width=10
-  local filled=$(( pct * width / 100 ))
-  local empty=$(( width - filled ))
-  local bar=""
-  local i=0
-  while [ $i -lt $filled ]; do
-    bar="${bar}█"
-    i=$(( i + 1 ))
-  done
-  i=0
-  while [ $i -lt $empty ]; do
-    bar="${bar}░"
-    i=$(( i + 1 ))
-  done
-  echo "$bar"
-}
-
-# --- Left side: path + branch ---
-if [ -n "$branch" ]; then
-  printf "${CYAN}%s${RESET} ${YELLOW}(%s)${RESET}" "$short_path" "$branch"
-else
-  printf "${CYAN}%s${RESET}" "$short_path"
-fi
-
-# --- Session label (distinguishes parallel instances) ---
-if [ -n "$session_label" ]; then
-  printf " ${DIM}[${RESET}${BLUE}%s${RESET}${DIM}]${RESET}" "$session_label"
-fi
-
-# --- Model (scoped to this instance's stdin JSON) ---
-if [ -n "$model" ]; then
-  printf " ${DIM}|${RESET} ${MAGENTA}%s${RESET}" "$model"
-fi
-
-if [ -n "$used_pct" ]; then
-  # Round to integer
-  pct=$(printf "%.0f" "$used_pct")
-  bar=$(build_bar "$pct")
-
-  # Color the bar based on usage level
-  if [ "$pct" -ge 80 ]; then
-    bar_color="$RED"
-  elif [ "$pct" -ge 50 ]; then
-    bar_color="$YELLOW"
-  else
-    bar_color="$GREEN"
-  fi
-
-  printf " ${DIM}[${RESET}${bar_color}%s${RESET}${DIM}]${RESET} ${DIM}%s%%%${RESET}" "$bar" "$pct"
-fi
-
-# --- Token counts ---
-total_in=$(echo "$input" | jq -r '.context_window.total_input_tokens // empty')
-total_out=$(echo "$input" | jq -r '.context_window.total_output_tokens // empty')
-
-# Format numbers with k/M suffix for readability
+# Format token count with k/M suffix
 format_tokens() {
   local n="$1"
   if [ "$n" -ge 1000000 ]; then
@@ -118,6 +66,38 @@ format_tokens() {
     printf "%d" "$n"
   fi
 }
+
+# --- Path (always shown) ---
+printf "${CYAN}%s${RESET}" "$short_path"
+
+# --- Branch: only when NOT in a worktree ---
+if [ -n "$branch" ]; then
+  printf " ${YELLOW}(%s)${RESET}" "$branch"
+fi
+
+# --- Model (scoped to this instance's stdin JSON) ---
+if [ -n "$model" ]; then
+  printf " ${DIM}|${RESET} ${MAGENTA}%s${RESET}" "$model"
+fi
+
+# --- Context percentage ---
+if [ -n "$used_pct" ]; then
+  pct=$(printf "%.0f" "$used_pct")
+
+  if [ "$pct" -ge 80 ]; then
+    pct_color="$RED"
+  elif [ "$pct" -ge 50 ]; then
+    pct_color="$YELLOW"
+  else
+    pct_color="$GREEN"
+  fi
+
+  printf " ${DIM}[${RESET}${pct_color}%s%%${RESET}${DIM}]${RESET}" "$pct"
+fi
+
+# --- Token counts ---
+total_in=$(echo "$input" | jq -r '.context_window.total_input_tokens // empty')
+total_out=$(echo "$input" | jq -r '.context_window.total_output_tokens // empty')
 
 if [ -n "$total_in" ] && [ -n "$total_out" ]; then
   in_fmt=$(format_tokens "$total_in")
