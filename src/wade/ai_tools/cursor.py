@@ -17,6 +17,9 @@ class CursorAdapter(AbstractAITool):
 
     Cursor is an AI-powered IDE with a terminal CLI that supports plan mode,
     model selection, headless execution, and skill discovery.
+
+    Cursor uses its own model ID namespace — e.g. ``sonnet-4.6``, ``opus-4.6``,
+    ``gpt-5.3-codex`` — so no format normalization is needed.
     """
 
     TOOL_ID: ClassVar[AIToolID] = AIToolID.CURSOR
@@ -25,7 +28,7 @@ class CursorAdapter(AbstractAITool):
         return AIToolCapabilities(
             tool_id=AIToolID.CURSOR,
             display_name="Cursor",
-            binary="cursor",
+            binary="agent",
             tool_type=AIToolType.TERMINAL,
             supports_model_flag=True,
             headless_flag="--print",
@@ -43,12 +46,3 @@ class CursorAdapter(AbstractAITool):
     def plan_mode_args(self) -> list[str]:
         """Cursor supports ``--mode plan``."""
         return ["--mode", "plan"]
-
-    def normalize_model_format(self, model_id: str) -> str:
-        """Cursor uses dotted format for Claude models."""
-        if model_id.startswith("claude-"):
-            import re
-
-            # Convert claude-haiku-4-5 -> claude-haiku-4.5
-            return re.sub(r"(\d)-(\d)", r"\1.\2", model_id)
-        return model_id

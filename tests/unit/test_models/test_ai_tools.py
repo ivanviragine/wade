@@ -77,7 +77,7 @@ class TestCapabilities:
 
     def test_cursor_capabilities(self) -> None:
         caps = AbstractAITool.get("cursor").capabilities()
-        assert caps.binary == "cursor"
+        assert caps.binary == "agent"
         assert caps.tool_type == AIToolType.TERMINAL
         assert caps.supports_model_flag is True
         assert caps.model_flag == "--model"
@@ -123,8 +123,9 @@ class TestModelCompatibility:
 
     def test_cursor_accepts_all(self) -> None:
         adapter = AbstractAITool.get("cursor")
-        assert adapter.is_model_compatible("claude-opus-4.6") is True
-        assert adapter.is_model_compatible("gpt-5.1") is True
+        assert adapter.is_model_compatible("opus-4.6") is True
+        assert adapter.is_model_compatible("sonnet-4.6") is True
+        assert adapter.is_model_compatible("gpt-5.3-codex") is True
         assert adapter.is_model_compatible("anything") is True
 
 
@@ -177,34 +178,34 @@ class TestBuildLaunchCommand:
 
     def test_cursor_basic_launch(self) -> None:
         adapter = AbstractAITool.get("cursor")
-        cmd = adapter.build_launch_command(model="claude-opus-4.6")
-        assert cmd == ["cursor", "--model", "claude-opus-4.6"]
+        cmd = adapter.build_launch_command(model="opus-4.6")
+        assert cmd == ["agent", "--model", "opus-4.6"]
 
     def test_cursor_with_initial_message(self) -> None:
         adapter = AbstractAITool.get("cursor")
         cmd = adapter.build_launch_command(initial_message="Implement feature X")
-        assert cmd == ["cursor", "Implement feature X"]
+        assert cmd == ["agent", "Implement feature X"]
 
     def test_cursor_plan_mode_launch(self) -> None:
         """Cursor plan mode uses --mode plan."""
         adapter = AbstractAITool.get("cursor")
         cmd = adapter.build_launch_command(
-            model="claude-sonnet-4.6", initial_message="Do stuff", plan_mode=True
+            model="sonnet-4.6", initial_message="Do stuff", plan_mode=True
         )
         assert cmd == [
-            "cursor",
+            "agent",
             "Do stuff",
             "--model",
-            "claude-sonnet-4.6",
+            "sonnet-4.6",
             "--mode",
             "plan",
         ]
 
-    def test_cursor_normalizes_model_in_launch(self) -> None:
-        """Cursor must receive dotted model format."""
+    def test_cursor_model_passthrough(self) -> None:
+        """Cursor uses its own model namespace — IDs pass through unchanged."""
         adapter = AbstractAITool.get("cursor")
-        cmd = adapter.build_launch_command(model="claude-sonnet-4-6")
-        assert cmd == ["cursor", "--model", "claude-sonnet-4.6"]
+        cmd = adapter.build_launch_command(model="gpt-5.3-codex")
+        assert cmd == ["agent", "--model", "gpt-5.3-codex"]
 
 
 class TestDateSuffix:
@@ -341,15 +342,9 @@ class TestNormalizeModelFormat:
         )
         assert adapter.normalize_model_format("openai/gpt-4o") == "openai/gpt-4o"
 
-    def test_cursor_dashed_to_dotted(self) -> None:
+    def test_cursor_passthrough(self) -> None:
+        """Cursor uses its own model namespace — no normalization needed."""
         adapter = AbstractAITool.get("cursor")
-        assert adapter.normalize_model_format("claude-haiku-4-5") == "claude-haiku-4.5"
-        assert adapter.normalize_model_format("claude-sonnet-4-6") == "claude-sonnet-4.6"
-
-    def test_cursor_already_dotted(self) -> None:
-        adapter = AbstractAITool.get("cursor")
-        assert adapter.normalize_model_format("claude-haiku-4.5") == "claude-haiku-4.5"
-
-    def test_cursor_non_claude_passthrough(self) -> None:
-        adapter = AbstractAITool.get("cursor")
-        assert adapter.normalize_model_format("gpt-5.1") == "gpt-5.1"
+        assert adapter.normalize_model_format("sonnet-4.6") == "sonnet-4.6"
+        assert adapter.normalize_model_format("opus-4.6") == "opus-4.6"
+        assert adapter.normalize_model_format("gpt-5.3-codex") == "gpt-5.3-codex"
