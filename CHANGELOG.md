@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.0.5] — 2026-03-05
+
+### Chores
+
+- update statusline template — suppress branch in worktrees, replace bar with percentage (576faf1)
+
+### Other Changes
+
+- Make bootstrap_worktree self-init aware for wade development (#57) (3bbea63)
+- Fix worktree dirty state caused by untracked wade init files (#47) (06c267a)
+- Build setup-worktree.sh script (#53) (bfb11a9)
+- Document and wire `setup-worktree` hook (#52) (aac3057)
+- Audit and update all documentation for current command names and workflow (#44) (2907d57)
+- Improve multiline input UX: fix Ctrl+D hint and tip shown to user (#43) (8b9272a)
+
 ## [v0.0.4] — 2026-03-04
 
 ### Chores
