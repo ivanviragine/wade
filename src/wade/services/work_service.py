@@ -152,7 +152,7 @@ def bootstrap_worktree(
     from wade.config.claude_allowlist import configure_allowlist, is_allowlist_configured
 
     if is_allowlist_configured(repo_root):
-        configure_allowlist(worktree_path)
+        configure_allowlist(worktree_path, extra_patterns=config.permissions.allowed_commands)
 
     # Run post-create hook
     if config.hooks.post_worktree_create:
@@ -885,6 +885,7 @@ def start(
                     model=resolved_model,
                     trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
                     initial_message=prompt,
+                    allowed_commands=config.permissions.allowed_commands,
                 )
             except (ValueError, KeyError):
                 cmd = [resolved_tool]
@@ -914,6 +915,7 @@ def start(
                     prompt=prompt,
                     transcript_path=transcript_path,
                     trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
+                    allowed_commands=config.permissions.allowed_commands,
                 )
                 launch_completed = True
                 logger.info("work.ai_exited", exit_code=exit_code, tool=resolved_tool)

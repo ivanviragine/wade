@@ -295,7 +295,8 @@ def update(
 
     # Step 8-9: Silently configure tool-specific settings (idempotent)
     if "claude" in tools_in_use:
-        configure_allowlist(root)
+        extra = config.permissions.allowed_commands
+        configure_allowlist(root, extra_patterns=extra)
     if "gemini" in tools_in_use:
         _configure_gemini_experimental()
 
@@ -514,7 +515,8 @@ def _prompt_configure_allowlist(root: Path, non_interactive: bool) -> None:
         "Auto-approve wade commands in Claude Code? (skips Bash approval in work sessions)",
         default=True,
     ):
-        configure_allowlist(root)
+        extra = _build_permissions_commands(root)
+        configure_allowlist(root, extra_patterns=extra)
         console.success("Added Bash([step]wade[/] *) to .claude/settings.json allowlist")
 
 
@@ -1138,6 +1140,27 @@ def _prompt_command_overrides(
     return result
 
 
+def _detect_scripts(project_root: Path) -> list[str]:
+    """Auto-detect executable scripts in the project's scripts/ directory.
+
+    Returns canonical command patterns (e.g. ``"./scripts/check.sh *"``).
+    """
+    scripts_dir = project_root / "scripts"
+    if not scripts_dir.is_dir():
+        return []
+    patterns: list[str] = []
+    for sh_file in sorted(scripts_dir.glob("*.sh")):
+        patterns.append(f"./{sh_file.relative_to(project_root)} *")
+    return patterns
+
+
+def _build_permissions_commands(project_root: Path) -> list[str]:
+    """Build the full allowed_commands list: default + detected scripts."""
+    commands = ["wade *"]
+    commands.extend(_detect_scripts(project_root))
+    return commands
+
+
 def _write_config(
     config_path: Path,
     ai_tool: str | None,
@@ -1210,6 +1233,12 @@ def _write_config(
         }
 
     config_dict["provider"] = {"name": "github"}
+
+    # Build permissions section with auto-detected scripts
+    allowed_commands = _build_permissions_commands(config_path.parent)
+    if len(allowed_commands) > 1:
+        # Only write section when there are extra patterns beyond default
+        config_dict["permissions"] = {"allowed_commands": allowed_commands}
 
     # Build hooks section — always include .wade.yml in copy_to_worktree
     hooks_dict: dict[str, Any] = {}
