@@ -31,12 +31,14 @@ def _config(strategy: MergeStrategy) -> ProjectConfig:
 @patch("wade.services.work_service.git_pr.merge_pr")
 @patch("wade.services.work_service.git_repo.is_clean", return_value=True)
 @patch("wade.services.work_service.prompts.confirm", return_value=True)
+@patch("wade.services.work_service.webbrowser.open")
 @patch(
     "wade.services.work_service.git_pr.get_pr_for_branch",
     return_value={"number": 99, "url": "https://example/pr/99"},
 )
 def test_pr_strategy_prompts_merge_on_existing_pr(
     _mock_get_pr: MagicMock,
+    _mock_webbrowser_open: MagicMock,
     mock_confirm: MagicMock,
     _mock_is_clean: MagicMock,
     mock_merge_pr: MagicMock,
@@ -110,19 +112,22 @@ def test_pr_strategy_user_declines_merge(
         provider,
     )
 
-    mock_confirm.assert_called_once()
+    # confirm is called twice: once for "Open PR in browser?" and once for merge
+    assert mock_confirm.call_count == 2
     mock_merge_pr.assert_not_called()
 
 
 @patch(_CHECKOUT)
 @patch("wade.services.work_service.git_pr.merge_pr")
 @patch("wade.services.work_service.prompts.confirm", return_value=True)
+@patch("wade.services.work_service.webbrowser.open")
 @patch(
     "wade.services.work_service.git_pr.get_pr_for_branch",
     return_value={"number": 99, "url": "https://example/pr/99"},
 )
 def test_pr_strategy_merge_failure_preserves_branch(
     _mock_get_pr: MagicMock,
+    _mock_webbrowser_open: MagicMock,
     _mock_confirm: MagicMock,
     mock_merge_pr: MagicMock,
     _mock_checkout: MagicMock,
@@ -149,12 +154,14 @@ def test_pr_strategy_merge_failure_preserves_branch(
 @patch("wade.services.work_service.git_pr.merge_pr")
 @patch("wade.services.work_service.git_repo.is_clean", return_value=True)
 @patch("wade.services.work_service.prompts.confirm", return_value=True)
+@patch("wade.services.work_service.webbrowser.open")
 @patch(
     "wade.services.work_service.git_pr.get_pr_for_branch",
     return_value={"number": 99, "url": "https://example/pr/99"},
 )
 def test_pr_strategy_merge_failure_restores_branch(
     _mock_get_pr: MagicMock,
+    _mock_webbrowser_open: MagicMock,
     _mock_confirm: MagicMock,
     _mock_is_clean: MagicMock,
     mock_merge_pr: MagicMock,
@@ -188,12 +195,14 @@ def test_pr_strategy_merge_failure_restores_branch(
 @patch("wade.services.work_service.git_pr.merge_pr")
 @patch("wade.services.work_service.git_repo.is_clean", return_value=True)
 @patch("wade.services.work_service.prompts.confirm", return_value=True)
+@patch("wade.services.work_service.webbrowser.open")
 @patch(
     "wade.services.work_service.git_pr.get_pr_for_branch",
     return_value={"number": 99, "url": "https://example/pr/99"},
 )
 def test_pr_strategy_cleanup_and_pull_after_merge(
     _mock_get_pr: MagicMock,
+    _mock_webbrowser_open: MagicMock,
     _mock_confirm: MagicMock,
     _mock_is_clean: MagicMock,
     _mock_merge_pr: MagicMock,

@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import webbrowser
 from pathlib import Path
 from typing import Any
 
@@ -522,6 +523,10 @@ def _post_work_lifecycle_pr(
     if not pr_number:
         console.warn(f"Could not determine PR number for branch '{branch}'.")
         return
+
+    pr_url = str(pr_info.get("url", ""))
+    if pr_url and prompts.confirm("Open PR in browser?", default=True):
+        webbrowser.open(pr_url)
 
     if not prompts.confirm(f"Do you want to merge PR #{pr_number}?", default=True):
         return
@@ -1967,6 +1972,9 @@ def _done_via_pr(
     lines.append(f"  PR      [url]{pr_url}[/]")
     lines.append(f"  Issue   {console.issue_ref(issue_number, task.title)}")
     console.panel("\n".join(lines), title="Work done")
+
+    if pr_url and prompts.confirm("Open PR in browser?", default=True):
+        webbrowser.open(pr_url)
 
     return True
 
