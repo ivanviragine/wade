@@ -24,6 +24,7 @@ from wade.models.config import (
     ComplexityModelMapping,
 )
 from wade.skills import installer, pointer
+from wade.skills.installer import get_wade_repo_root
 from wade.ui.console import console
 
 logger = structlog.get_logger()
@@ -57,8 +58,12 @@ MANIFEST_FILENAME = ".wade-managed"
 
 
 def get_wade_root() -> Path:
-    """Get the wade package root (for self-init detection)."""
-    return Path(__file__).parent.parent.parent.parent
+    """Get the wade package root (for self-init detection).
+
+    Delegates to installer.get_wade_repo_root() — kept as a local alias
+    for backward compatibility.
+    """
+    return get_wade_repo_root()
 
 
 # ---------------------------------------------------------------------------

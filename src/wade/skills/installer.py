@@ -11,6 +11,14 @@ import structlog
 logger = structlog.get_logger()
 
 
+def get_wade_repo_root() -> Path:
+    """Get the wade package repository root (for self-init detection).
+
+    Works in both editable installs (dev) and regular installs.
+    """
+    return Path(__file__).parent.parent.parent.parent
+
+
 def get_templates_dir() -> Path:
     """Get the path to the templates directory.
 
@@ -64,6 +72,7 @@ def install_skills(
     project_root: Path,
     is_self_init: bool = False,
     force: bool = False,
+    templates_dir: Path | None = None,
 ) -> list[str]:
     """Install all skill files to a project.
 
@@ -71,12 +80,15 @@ def install_skills(
         project_root: Root of the target project.
         is_self_init: If True, create symlinks instead of copies.
         force: If True, overwrite existing files.
+        templates_dir: Override the skills templates directory.
+            Useful for worktrees where templates live in the worktree itself.
 
     Returns:
         List of installed file paths (relative to project root).
     """
     installed: list[str] = []
-    templates_dir = get_skills_templates_dir()
+    if templates_dir is None:
+        templates_dir = get_skills_templates_dir()
 
     if not templates_dir.is_dir():
         logger.warning("skills.templates_not_found", path=str(templates_dir))
