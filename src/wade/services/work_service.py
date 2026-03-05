@@ -175,10 +175,13 @@ def bootstrap_worktree(
             except subprocess.TimeoutExpired as e:
                 raise RuntimeError(f"Bootstrap hook timed out after 60 seconds: {hook_path}") from e
             except subprocess.CalledProcessError as e:
+                hook_path_str = str(hook_path)
                 logger.warning(
                     "work.hook_failed",
                     hook=config.hooks.post_worktree_create,
-                    error=e.stderr,
+                    hook_path=hook_path_str,
+                    error=e.stderr.decode("utf-8", errors="replace") if e.stderr else "",
+                    msg=f"Hook script failed: {hook_path_str}. Check logs for details.",
                 )
 
 

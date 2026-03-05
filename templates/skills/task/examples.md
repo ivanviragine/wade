@@ -98,7 +98,7 @@ Created 3 issues:
   #52 — Epic: User preferences feature (links #50, #51)
 ```
 
-### 3. Auto-dependency analysis (multi-issue plans)
+### Auto-dependency analysis (multi-issue plans)
 
 When `wade plan-task` creates 2+ issues, it automatically runs `wade task deps`
 to analyze dependencies. It updates each issue and creates a tracking issue:

@@ -37,7 +37,9 @@ uv pip install -e ".[dev]"
 CLI Layer      →  services, models, config, logging, ui
 Service Layer  →  providers, ai_tools, git, db, models, config, logging
 Provider Layer →  models, config, logging  (no service imports)
+AI Tool Layer  →  models, config, logging  (no service imports)
 Git Layer      →  models, config, logging  (no service imports)
+DB Layer       →  models, logging          (no config imports)
 Models Layer   →  nothing (leaf)
 ```
 

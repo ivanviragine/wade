@@ -1149,10 +1149,15 @@ def _write_config(
 
     config_dict["provider"] = {"name": "github"}
 
-    config_path.write_text(
-        yaml.dump(config_dict, default_flow_style=False, sort_keys=False),
-        encoding="utf-8",
-    )
+    # Generate YAML and append commented-out hooks block
+    yaml_content = yaml.dump(config_dict, default_flow_style=False, sort_keys=False)
+    hooks_block = """
+# hooks:
+#   post_worktree_create: scripts/setup-worktree.sh
+#   copy_to_worktree:
+#     - .env
+"""
+    config_path.write_text(yaml_content + hooks_block, encoding="utf-8")
 
 
 def _patch_config(
