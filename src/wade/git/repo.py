@@ -428,3 +428,65 @@ def upstream_tracking_status(repo_root: Path, branch: str) -> str | None:
     )
     status = result.stdout.strip()
     return status if status else None
+
+
+def list_untracked_from(repo_root: Path, candidates: list[str]) -> list[str]:
+    """Return which candidate paths are not tracked in the git index.
+
+    Args:
+        repo_root: Repository root directory (used as cwd for git commands).
+        candidates: Relative paths to check against the git index.
+
+    Returns:
+        Subset of *candidates* that are not committed/staged in the index.
+        Returns an empty list when *candidates* is empty.
+    """
+    if not candidates:
+        return []
+    untracked = []
+    for path in candidates:
+        result = _run_git("ls-files", "--error-unmatch", path, cwd=repo_root, check=False)
+        if result.returncode != 0:
+            untracked.append(path)
+    return untracked
+
+
+def write_worktree_exclude(worktree_path: Path, patterns: list[str]) -> bool:
+    """Append *patterns* to the per-worktree git exclude file (deduplicating).
+
+    The per-worktree exclude file lives at ``$GIT_DIR/info/exclude`` inside
+    the linked worktree's private git directory.  Patterns written there are
+    respected by ``git status`` only in that worktree — no effect on the main
+    checkout or other worktrees.
+
+    Args:
+        worktree_path: Root directory of the linked worktree.
+        patterns: Relative path patterns to exclude (e.g. ``[".wade.yml"]``).
+
+    Returns:
+        True if patterns were written (or were already present), False if
+        *worktree_path* is not inside a git repository or has no git dir.
+    """
+    if not patterns:
+        return True
+    git_dir_str = get_git_dir(worktree_path)
+    if git_dir_str is None:
+        return False
+    git_dir = Path(git_dir_str)
+    if not git_dir.is_absolute():
+        git_dir = (worktree_path / git_dir).resolve()
+    info_dir = git_dir / "info"
+    info_dir.mkdir(parents=True, exist_ok=True)
+    exclude_file = info_dir / "exclude"
+    existing: set[str] = set()
+    if exclude_file.exists():
+        existing = {
+            line.rstrip("\n") for line in exclude_file.read_text(encoding="utf-8").splitlines()
+        }
+    new_patterns = [p for p in patterns if p not in existing]
+    if not new_patterns:
+        return True
+    with exclude_file.open("a", encoding="utf-8") as fh:
+        for pattern in new_patterns:
+            fh.write(pattern + "\n")
+    return True

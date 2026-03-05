@@ -141,6 +141,18 @@ def bootstrap_worktree(
     install_skills(worktree_path, is_self_init=False, force=True)
     logger.debug("work.bootstrap_skills", path=str(worktree_path))
 
+    # Exclude untracked wade-managed files from git status in this worktree.
+    # Files installed by `wade init` (but never committed) would otherwise
+    # appear as untracked, blocking `work done` / `work sync` clean checks.
+    from wade.services.init_service import read_manifest_paths
+
+    manifest_paths = read_manifest_paths(repo_root)
+    if manifest_paths:
+        untracked = git_repo.list_untracked_from(repo_root, manifest_paths)
+        if untracked:
+            git_repo.write_worktree_exclude(worktree_path, untracked)
+            logger.debug("work.bootstrap_excluded", count=len(untracked))
+
     # Propagate allowlist from project root to worktree if already configured
     from wade.config.claude_allowlist import configure_allowlist, is_allowlist_configured
 

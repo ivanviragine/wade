@@ -1315,3 +1315,27 @@ def _write_manifest(project_root: Path, installed_files: list[str]) -> None:
     lines = [".wade.yml", *installed_files]
     lines.append(f"# Managed by wade {__version__}")
     manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def read_manifest_paths(project_root: Path) -> list[str]:
+    """Return the list of wade-managed file paths from the manifest.
+
+    Reads ``MANIFEST_FILENAME`` (`.wade-managed`) and returns every
+    non-comment, non-empty line.  Lines starting with ``#`` are skipped.
+
+    Args:
+        project_root: Repository root containing the manifest file.
+
+    Returns:
+        List of relative path strings.  Returns ``[]`` if the manifest
+        does not exist.
+    """
+    manifest = project_root / MANIFEST_FILENAME
+    if not manifest.exists():
+        return []
+    paths = []
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            paths.append(stripped)
+    return paths
