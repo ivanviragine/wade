@@ -41,6 +41,12 @@ from wade.ui import prompts
 from wade.ui.console import console
 from wade.utils.markdown import append_session_to_body
 from wade.utils.process import run_with_transcript
+from wade.utils.terminal import (
+    compose_plan_title,
+    set_terminal_title,
+    start_title_keeper,
+    stop_title_keeper,
+)
 
 logger = structlog.get_logger()
 
@@ -395,6 +401,14 @@ def plan(
             console.error(f"Could not fetch issue #{issue_id}: {e}")
             return False
 
+    # Set terminal title for the plan session
+    plan_title = compose_plan_title(
+        existing_issue.id if existing_issue else None,
+        existing_issue.title if existing_issue else None,
+    )
+    set_terminal_title(plan_title)
+    start_title_keeper(plan_title)
+
     # Resolve repo root for draft PR creation
     from wade.git import repo as git_repo
 
@@ -440,6 +454,7 @@ def plan(
         if not prompts.confirm("Have you finished the session?", default=True):
             console.info("Plan directory preserved — review output manually.")
             console.hint(f"Plan dir: {plan_dir}")
+            stop_title_keeper()
             return False
 
     # Post-session: extract token usage (skip for non-blocking tools)
@@ -471,9 +486,11 @@ def plan(
                 repo_root=repo_root,
             )
             _cleanup_plan_dir(plan_dir)
+            stop_title_keeper()
             return True
         console.warn("No plan files found — the AI session may not have produced output.")
         _cleanup_plan_dir(plan_dir)
+        stop_title_keeper()
         return False
 
     # Read plan files from temp dir and create issues
@@ -498,6 +515,7 @@ def plan(
                 repo_root=repo_root,
             )
             _cleanup_plan_dir(plan_dir)
+            stop_title_keeper()
             return True
         console.warn("No issues were created from plan files.")
     else:
@@ -505,6 +523,7 @@ def plan(
         console.hint("The AI session may not have produced any output.")
 
     _cleanup_plan_dir(plan_dir)
+    stop_title_keeper()
     return False
 
 

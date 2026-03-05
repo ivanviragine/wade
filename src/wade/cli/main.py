@@ -179,12 +179,41 @@ def plan_done_cmd(
 
 
 @app.command("new-task")
-def new_task_cmd() -> None:
-    """Create a new GitHub Issue interactively."""
-    from wade.services.task_service import create_interactive
+def new_task_cmd(
+    title: str | None = typer.Option(None, "--title", "-t", help="Issue title (non-interactive)."),
+    body: str | None = typer.Option(None, "--body", "-b", help="Issue body text."),
+    body_file: str | None = typer.Option(
+        None, "--body-file", help="Path to a file whose contents become the issue body."
+    ),
+    label: list[str] | None = typer.Option(  # noqa: B008
+        None, "--label", "-l", help="Extra label(s) to apply (can repeat)."
+    ),
+) -> None:
+    """Create a new GitHub Issue (interactive by default, non-interactive with --title)."""
     from wade.ui.console import console
 
-    task = create_interactive()
+    if title is not None:
+        from pathlib import Path
+
+        from wade.services.task_service import create_task
+
+        # Resolve body: --body-file takes precedence over --body
+        resolved_body = ""
+        if body_file:
+            bp = Path(body_file).expanduser()
+            if not bp.is_file():
+                console.error(f"File not found: {body_file}")
+                raise typer.Exit(1)
+            resolved_body = bp.read_text()
+        elif body:
+            resolved_body = body
+
+        task = create_task(title=title, body=resolved_body, extra_labels=list(label or []))
+    else:
+        from wade.services.task_service import create_interactive
+
+        task = create_interactive()
+
     if task:
         console.empty()
         console.info("When you're ready to implement, run:")

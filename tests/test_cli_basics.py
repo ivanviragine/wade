@@ -80,6 +80,62 @@ class TestCommandBehaviorWithoutContext:
         assert result.exit_code == 1
         assert "Title is required" in result.output
 
+    @patch("wade.services.task_service.create_task")
+    def test_new_task_non_interactive_title(self, mock_create: patch) -> None:
+        from wade.models.task import Task
+
+        mock_create.return_value = Task(id="1", title="My Bug")
+        result = runner.invoke(app, ["new-task", "--title", "My Bug"])
+        assert result.exit_code == 0
+        mock_create.assert_called_once()
+        call_kwargs = mock_create.call_args[1]
+        assert call_kwargs["title"] == "My Bug"
+        assert call_kwargs["body"] == ""
+
+    @patch("wade.services.task_service.create_task")
+    def test_new_task_non_interactive_with_body(self, mock_create: patch) -> None:
+        from wade.models.task import Task
+
+        mock_create.return_value = Task(id="2", title="Fix")
+        result = runner.invoke(app, ["new-task", "--title", "Fix", "--body", "Details here"])
+        assert result.exit_code == 0
+        call_kwargs = mock_create.call_args[1]
+        assert call_kwargs["body"] == "Details here"
+
+    @patch("wade.services.task_service.create_task")
+    def test_new_task_non_interactive_body_file(self, mock_create: patch) -> None:
+        import tempfile
+
+        from wade.models.task import Task
+
+        mock_create.return_value = Task(id="3", title="Fix")
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
+            f.write("Body from file")
+            f.flush()
+            result = runner.invoke(app, ["new-task", "--title", "Fix", "--body-file", f.name])
+        assert result.exit_code == 0
+        call_kwargs = mock_create.call_args[1]
+        assert call_kwargs["body"] == "Body from file"
+
+    @patch("wade.services.task_service.create_task")
+    def test_new_task_non_interactive_labels(self, mock_create: patch) -> None:
+        from wade.models.task import Task
+
+        mock_create.return_value = Task(id="4", title="Fix")
+        result = runner.invoke(
+            app, ["new-task", "--title", "Fix", "--label", "bug", "--label", "urgent"]
+        )
+        assert result.exit_code == 0
+        call_kwargs = mock_create.call_args[1]
+        assert "bug" in call_kwargs["extra_labels"]
+        assert "urgent" in call_kwargs["extra_labels"]
+
+    def test_new_task_body_file_not_found(self) -> None:
+        result = runner.invoke(
+            app, ["new-task", "--title", "Fix", "--body-file", "/nonexistent/file.md"]
+        )
+        assert result.exit_code == 1
+
     @patch("wade.services.task_service.list_tasks", return_value=[])
     def test_task_list_exits(self, mock_list: patch) -> None:
         # task list exits 0 when no tasks are found
