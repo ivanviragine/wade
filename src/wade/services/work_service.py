@@ -136,9 +136,15 @@ def bootstrap_worktree(
             logger.debug("work.bootstrap_copy", file=filename)
 
     # Install skill files — not tracked by git so worktrees don't inherit them
-    from wade.skills.installer import install_skills
+    from wade.skills.installer import get_wade_repo_root, install_skills
 
-    install_skills(worktree_path, is_self_init=False, force=True)
+    is_self = repo_root.resolve() == get_wade_repo_root().resolve()
+    if is_self:
+        # Worktree has its own templates/ checkout — symlink to those
+        wt_templates = worktree_path / "templates" / "skills"
+        install_skills(worktree_path, is_self_init=True, force=True, templates_dir=wt_templates)
+    else:
+        install_skills(worktree_path, is_self_init=False, force=True)
     logger.debug("work.bootstrap_skills", path=str(worktree_path))
 
     # Propagate allowlist from project root to worktree if already configured

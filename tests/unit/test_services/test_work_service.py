@@ -120,6 +120,49 @@ class TestBootstrapWorktree:
 
         assert not (worktree / ".claude" / "settings.json").is_file()
 
+    def test_self_init_creates_symlinks(self, tmp_path: Path) -> None:
+        """When repo_root is the wade package root, skills are symlinked from worktree templates."""
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+
+        # Create templates in the worktree (mimics a wade repo worktree checkout)
+        skills_tpl = worktree / "templates" / "skills"
+        for skill_name in ("task", "plan-session", "work-session", "deps"):
+            (skills_tpl / skill_name).mkdir(parents=True, exist_ok=True)
+            (skills_tpl / skill_name / "SKILL.md").write_text(f"# {skill_name}\n")
+
+        config = ProjectConfig()
+        with patch("wade.skills.installer.get_wade_repo_root", return_value=repo_root):
+            bootstrap_worktree(worktree, config, repo_root)
+
+        # Skills should be symlinks, not copies
+        task_skill = worktree / ".claude" / "skills" / "task"
+        assert task_skill.is_symlink()
+        assert (task_skill / "SKILL.md").read_text() == "# task\n"
+
+    def test_non_self_init_creates_copies(self, tmp_path: Path) -> None:
+        """When repo_root is NOT the wade package root, skills are copied (not symlinked)."""
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+
+        config = ProjectConfig()
+        # get_wade_repo_root returns a different path — not self-init
+        with patch(
+            "wade.skills.installer.get_wade_repo_root",
+            return_value=tmp_path / "some-other-path",
+        ):
+            bootstrap_worktree(worktree, config, repo_root)
+
+        # Skills should be regular files, not symlinks
+        task_skill = worktree / ".claude" / "skills" / "task"
+        assert not task_skill.is_symlink()
+
 
 class TestBuildWorkPrompt:
     def test_includes_issue_info(self) -> None:
