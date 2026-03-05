@@ -16,8 +16,11 @@ from wade.services.init_service import (
     GITIGNORE_MARKER_START,
     MANIFEST_FILENAME,
     _clean_gitignore,
+    _commit_wade_files,
+    _configure_local_worktree,
     _ensure_gitignore,
     _prompt_command_overrides,
+    _prompt_commit_or_local,
     _prompt_model_mapping,
     _prompt_project_settings,
     _read_manifest_version,
@@ -819,3 +822,194 @@ class TestUpdateExtended:
 
         success = update(project_root=tmp_git_repo, skip_self_upgrade=True)
         assert success  # update should succeed and detect version difference
+
+
+# ---------------------------------------------------------------------------
+# Gitignore entries coverage
+# ---------------------------------------------------------------------------
+
+
+class TestGitignoreEntries:
+    """Verify GITIGNORE_ENTRIES includes all wade-managed paths."""
+
+    def test_contains_wade_config(self) -> None:
+        assert ".wade.yml" in GITIGNORE_ENTRIES
+
+    def test_contains_skill_dirs(self) -> None:
+        assert ".claude/skills/" in GITIGNORE_ENTRIES
+        assert ".github/skills" in GITIGNORE_ENTRIES
+        assert ".agents/" in GITIGNORE_ENTRIES
+        assert ".gemini/" in GITIGNORE_ENTRIES
+
+    def test_contains_internal_files(self) -> None:
+        assert ".wade/" in GITIGNORE_ENTRIES
+        assert ".wade-managed" in GITIGNORE_ENTRIES
+        assert "PLAN.md" in GITIGNORE_ENTRIES
+        assert "PR-SUMMARY.md" in GITIGNORE_ENTRIES
+
+
+# ---------------------------------------------------------------------------
+# _configure_local_worktree tests
+# ---------------------------------------------------------------------------
+
+
+class TestConfigureLocalWorktree:
+    def test_adds_wade_yml_to_copy_to_worktree(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            yaml.dump({"version": 2, "project": {"main_branch": "main"}}),
+            encoding="utf-8",
+        )
+        _configure_local_worktree(config_path)
+        config = yaml.safe_load(config_path.read_text())
+        assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
+
+    def test_idempotent(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            yaml.dump(
+                {
+                    "version": 2,
+                    "hooks": {"copy_to_worktree": [".wade.yml"]},
+                }
+            ),
+            encoding="utf-8",
+        )
+        _configure_local_worktree(config_path)
+        config = yaml.safe_load(config_path.read_text())
+        assert config["hooks"]["copy_to_worktree"].count(".wade.yml") == 1
+
+    def test_preserves_existing_entries(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            yaml.dump(
+                {
+                    "version": 2,
+                    "hooks": {"copy_to_worktree": [".env"]},
+                }
+            ),
+            encoding="utf-8",
+        )
+        _configure_local_worktree(config_path)
+        config = yaml.safe_load(config_path.read_text())
+        assert ".env" in config["hooks"]["copy_to_worktree"]
+        assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
+
+    def test_handles_missing_hooks_section(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(yaml.dump({"version": 2}), encoding="utf-8")
+        _configure_local_worktree(config_path)
+        config = yaml.safe_load(config_path.read_text())
+        assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
+
+    def test_handles_unreadable_file(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        # File doesn't exist — should not raise
+        _configure_local_worktree(config_path)
+
+
+# ---------------------------------------------------------------------------
+# _commit_wade_files tests
+# ---------------------------------------------------------------------------
+
+
+class TestCommitWadeFiles:
+    def test_commits_files(self, tmp_git_repo: Path) -> None:
+        """git add --force + git commit should succeed on a real repo."""
+        config_path = tmp_git_repo / ".wade.yml"
+        config_path.write_text("version: 2\n")
+        gitignore = tmp_git_repo / ".gitignore"
+        gitignore.write_text(".wade/\n")
+        manifest = tmp_git_repo / MANIFEST_FILENAME
+        manifest.write_text(".wade.yml\n")
+        agents = tmp_git_repo / "AGENTS.md"
+        agents.write_text("# Agents\n")
+
+        _commit_wade_files(tmp_git_repo, [])
+
+        # Verify commit was created
+        import subprocess
+
+        result = subprocess.run(
+            ["git", "log", "--oneline", "-1"],
+            cwd=tmp_git_repo,
+            capture_output=True,
+            text=True,
+        )
+        assert "chore: initialize wade" in result.stdout
+
+    def test_handles_commit_failure(self, tmp_path: Path) -> None:
+        """When not in a git repo, should warn instead of crashing."""
+        # tmp_path is not a git repo — git add will fail
+        _commit_wade_files(tmp_path, [])
+        # Should not raise — just logs a warning
+
+
+# ---------------------------------------------------------------------------
+# _prompt_commit_or_local tests
+# ---------------------------------------------------------------------------
+
+
+class TestPromptCommitOrLocal:
+    def test_non_interactive_configures_local(self, tmp_path: Path) -> None:
+        """Non-interactive mode should configure copy_to_worktree, not commit."""
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(yaml.dump({"version": 2}), encoding="utf-8")
+
+        _prompt_commit_or_local(tmp_path, config_path, [], non_interactive=True)
+
+        config = yaml.safe_load(config_path.read_text())
+        assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
+
+    @patch("wade.ui.prompts.is_tty", return_value=False)
+    def test_no_tty_configures_local(self, _mock_tty: MagicMock, tmp_path: Path) -> None:
+        """When not a TTY, should configure copy_to_worktree."""
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(yaml.dump({"version": 2}), encoding="utf-8")
+
+        _prompt_commit_or_local(tmp_path, config_path, [], non_interactive=False)
+
+        config = yaml.safe_load(config_path.read_text())
+        assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
+
+    @patch("wade.ui.prompts.is_tty", return_value=True)
+    @patch("wade.ui.prompts.confirm", return_value=True)
+    @patch("wade.services.init_service._commit_wade_files")
+    def test_interactive_commit_yes(
+        self,
+        mock_commit: MagicMock,
+        _mock_confirm: MagicMock,
+        _mock_tty: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """When user says yes, should call _commit_wade_files."""
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(yaml.dump({"version": 2}), encoding="utf-8")
+
+        _prompt_commit_or_local(tmp_path, config_path, ["a.md"], non_interactive=False)
+
+        mock_commit.assert_called_once_with(tmp_path, ["a.md"])
+
+    @patch("wade.ui.prompts.is_tty", return_value=True)
+    @patch("wade.ui.prompts.confirm", return_value=False)
+    def test_interactive_commit_no(
+        self,
+        _mock_confirm: MagicMock,
+        _mock_tty: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """When user says no, should configure copy_to_worktree."""
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(yaml.dump({"version": 2}), encoding="utf-8")
+
+        _prompt_commit_or_local(tmp_path, config_path, [], non_interactive=False)
+
+        config = yaml.safe_load(config_path.read_text())
+        assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
+
+    def test_init_non_interactive_adds_copy_to_worktree(self, tmp_git_repo: Path) -> None:
+        """Full init in non-interactive mode should set copy_to_worktree."""
+        init(project_root=tmp_git_repo, non_interactive=True)
+
+        config = yaml.safe_load((tmp_git_repo / ".wade.yml").read_text())
+        assert ".wade.yml" in config["hooks"]["copy_to_worktree"]

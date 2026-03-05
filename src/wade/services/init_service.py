@@ -38,6 +38,11 @@ GITIGNORE_MARKER_END: Final = "# wade:end"
 GITIGNORE_ENTRIES: Final = [
     ".wade/",
     ".wade-managed",
+    ".wade.yml",
+    ".claude/skills/",
+    ".github/skills",
+    ".agents/",
+    ".gemini/",
     "PLAN.md",
     "PR-SUMMARY.md",
 ]
@@ -176,6 +181,9 @@ def init(
         console.warn("Config validation issues:")
         for err in check_result.errors:
             console.detail(err)
+
+    # 9. Commit or configure for local-only use
+    _prompt_commit_or_local(root, config_path, installed, non_interactive)
 
     console.panel(
         "  Project initialized. Run [bold]wade plan-task[/] to get started.",
@@ -1320,3 +1328,81 @@ def _write_manifest(project_root: Path, installed_files: list[str]) -> None:
     lines = [".wade.yml", *installed_files]
     lines.append(f"# Managed by wade {__version__}")
     manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _prompt_commit_or_local(
+    root: Path,
+    config_path: Path,
+    installed: list[str],
+    non_interactive: bool,
+) -> None:
+    """Ask whether to commit wade files or keep them local.
+
+    If the user commits, all wade files are added and committed.
+    If not, ``.wade.yml`` is added to ``copy_to_worktree`` so worktrees
+    get a working config, and the user is reminded to commit ``.gitignore``.
+    """
+    from wade.ui import prompts
+
+    if non_interactive or not prompts.is_tty():
+        _configure_local_worktree(config_path)
+        console.hint("Commit at least .gitignore so worktrees stay clean:")
+        console.detail('git add .gitignore && git commit -m "chore: add wade gitignore entries"')
+        return
+
+    commit = prompts.confirm("Commit wade files now?", default=True)
+
+    if commit:
+        _commit_wade_files(root, installed)
+    else:
+        _configure_local_worktree(config_path)
+        console.hint("Commit at least .gitignore so worktrees stay clean:")
+        console.detail('git add .gitignore && git commit -m "chore: add wade gitignore entries"')
+
+
+def _commit_wade_files(root: Path, installed: list[str]) -> None:
+    """Stage and commit all wade-managed files."""
+    import subprocess
+
+    files_to_add = [".wade.yml", ".gitignore", MANIFEST_FILENAME]
+    files_to_add.extend(installed)
+    if (root / "AGENTS.md").exists():
+        files_to_add.append("AGENTS.md")
+
+    try:
+        subprocess.run(
+            ["git", "add", "--force", "--", *files_to_add],
+            cwd=root,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "chore: initialize wade"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+        )
+        console.success("Committed wade files")
+    except subprocess.CalledProcessError as exc:
+        logger.warning("init.commit_failed", error=exc.stderr)
+        console.warn("Could not commit wade files — commit them manually")
+
+
+def _configure_local_worktree(config_path: Path) -> None:
+    """Add ``.wade.yml`` to ``copy_to_worktree`` so worktrees get the config."""
+    try:
+        raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except (yaml.YAMLError, OSError):
+        return
+
+    hooks = raw.get("hooks") or {}
+    existing: list[str] = hooks.get("copy_to_worktree") or []
+    if ".wade.yml" not in existing:
+        existing.append(".wade.yml")
+    hooks["copy_to_worktree"] = existing
+    raw["hooks"] = hooks
+
+    config_path.write_text(
+        yaml.dump(raw, default_flow_style=False, sort_keys=False),
+        encoding="utf-8",
+    )
