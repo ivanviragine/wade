@@ -40,7 +40,7 @@ from wade.models.work import (
 )
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
-from wade.services.ai_resolution import resolve_ai_tool, resolve_model
+from wade.services.ai_resolution import confirm_ai_selection, resolve_ai_tool, resolve_model
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import (
     add_in_progress_label,
@@ -621,6 +621,9 @@ def start(
     project_root: Path | None = None,
     detach: bool = False,
     cd_only: bool = False,
+    *,
+    ai_explicit: bool = False,
+    model_explicit: bool = False,
 ) -> bool:
     """Start a work session on an issue.
 
@@ -669,19 +672,8 @@ def start(
         console.rule(f"implement-task #{task.id}")
         console.kv("Issue", console.issue_ref(task.id, task.title))
 
-        # Resolve AI tool (shared resolution + work-specific TTY prompt)
-        # auto_detect=False so multi-tool TTY selection still fires below
-        resolved_tool = resolve_ai_tool(ai_tool, config, "work", auto_detect=False)
-        if not resolved_tool:
-            installed = AbstractAITool.detect_installed()
-            if installed and len(installed) > 1 and prompts.is_tty():
-                tool_names = [str(t) for t in installed]
-                idx = prompts.select("Select AI tool", tool_names)
-                resolved_tool = tool_names[idx]
-            elif installed:
-                resolved_tool = installed[0].value
-
-        # Resolve model: explicit arg → command-specific → complexity → global default
+        # Resolve AI tool and model
+        resolved_tool = resolve_ai_tool(ai_tool, config, "work")
         resolved_model = resolve_model(
             model,
             config,
@@ -690,12 +682,17 @@ def start(
             complexity=task.complexity.value if task.complexity else None,
         )
 
-        if resolved_tool:
-            console.kv("AI tool", resolved_tool)
         if task.complexity:
             console.kv("Complexity", task.complexity.value)
-        if resolved_model:
-            console.kv("Model", resolved_model)
+
+        # Offer interactive confirmation (skipped when cd_only or both flags explicit).
+        if not cd_only:
+            resolved_tool, resolved_model = confirm_ai_selection(
+                resolved_tool,
+                resolved_model,
+                tool_explicit=ai_explicit,
+                model_explicit=model_explicit,
+            )
 
         # Resolve main branch
         main_branch = config.project.main_branch or git_repo.detect_main_branch(repo_root)
@@ -1003,6 +1000,9 @@ def batch(
     ai_tool: str | None = None,
     model: str | None = None,
     project_root: Path | None = None,
+    *,
+    ai_explicit: bool = False,
+    model_explicit: bool = False,
 ) -> bool:
     """Start parallel work sessions for multiple issues.
 
@@ -1025,8 +1025,15 @@ def batch(
 
     console.rule(f"work batch ({len(issue_numbers)} issues)")
 
-    # Resolve AI tool
-    resolved_tool = ai_tool or config.get_ai_tool("work")
+    # Resolve AI tool and model, then offer interactive confirmation.
+    resolved_tool = resolve_ai_tool(ai_tool, config, "work")
+    resolved_model = resolve_model(model, config, "work", tool=resolved_tool)
+    resolved_tool, resolved_model = confirm_ai_selection(
+        resolved_tool,
+        resolved_model,
+        tool_explicit=ai_explicit,
+        model_explicit=model_explicit,
+    )
 
     # Check for dependency ordering
     # Try to load deps from issue bodies (look for "Depends on" references)
@@ -1047,8 +1054,8 @@ def batch(
         cmd = ["wade", "implement-task", issue_id]
         if resolved_tool:
             cmd.extend(["--ai", resolved_tool])
-        if model:
-            cmd.extend(["--model", model])
+        if resolved_model:
+            cmd.extend(["--model", resolved_model])
 
         console.step(f"Launching #{issue_id} ({label}) in new terminal")
         if launch_in_new_terminal(cmd, cwd=str(repo_root), title=f"wade #{issue_id}"):

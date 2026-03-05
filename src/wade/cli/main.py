@@ -156,7 +156,13 @@ def plan_task_cmd(
     """Plan tasks with AI — creates lightweight issues + draft PRs."""
     from wade.services.plan_service import plan as do_plan
 
-    success = do_plan(ai_tool=ai, model=model, issue_id=issue)
+    success = do_plan(
+        ai_tool=ai,
+        model=model,
+        issue_id=issue,
+        ai_explicit=ai is not None,
+        model_explicit=model is not None,
+    )
     raise typer.Exit(0 if success else 1)
 
 
@@ -206,6 +212,8 @@ def implement_task_cmd(
         model=model,
         detach=detach,
         cd_only=cd_only,
+        ai_explicit=selected_ai is not None,
+        model_explicit=model is not None,
     )
     raise typer.Exit(0 if success else 1)
 
