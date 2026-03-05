@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.0.6] — 2026-03-05
+
+### Bug Fixes
+
+- remove snapshot-based issue detection from plan-task (bdce128)
+
+### Other Changes
+
+- Fix: include issue description in work-session initial prompt (#67) (da94b0a)
+- Fix `wade init` not updating config values on re-init (#65) (e01ed4e)
+- Add option to open PR and/or issue (#63) (1dbbc1d)
+- Add interactive AI tool/model confirmation before launching AI sessions (#61) (f3979e6)
+
 ## [v0.0.5] — 2026-03-05
 
 ### Chores
