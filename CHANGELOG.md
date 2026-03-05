@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.1.0] — 2026-03-05
+
+### Features
+
+- prompt for setup-worktree script during `wade init` (3742141)
+
 ## [v0.0.6] — 2026-03-05
 
 ### Bug Fixes
