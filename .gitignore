@@ -26,7 +26,6 @@ htmlcov/
 .mypy_cache/
 
 # wade runtime (per-project, gitignored)
-.wade/
 
 # OS
 .DS_Store
@@ -40,3 +39,15 @@ uv.lock
 
 # Local archive (pre-reset export)
 archive/
+
+# wade:start — managed by wade (do not edit — run `wade update` to refresh)
+.wade/
+.wade-managed
+.wade.yml
+.claude/skills/
+.github/skills
+.agents/
+.gemini/
+PLAN.md
+PR-SUMMARY.md
+# wade:end
