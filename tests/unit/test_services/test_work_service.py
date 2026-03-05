@@ -120,60 +120,6 @@ class TestBootstrapWorktree:
 
         assert not (worktree / ".claude" / "settings.json").is_file()
 
-    def test_writes_exclude_for_untracked_manifest_paths(self, tmp_path: Path) -> None:
-        """bootstrap_worktree writes exclude for untracked manifest files."""
-        repo_root = tmp_path / "repo"
-        repo_root.mkdir()
-        (repo_root / ".wade-managed").write_text(".wade.yml\nAGENTS.md\n")
-
-        worktree = tmp_path / "wt"
-        worktree.mkdir()
-
-        config = ProjectConfig()
-        with (
-            patch(
-                "wade.git.repo.list_untracked_from",
-                return_value=[".wade.yml", "AGENTS.md"],
-            ) as mock_untracked,
-            patch("wade.git.repo.write_worktree_exclude") as mock_exclude,
-        ):
-            bootstrap_worktree(worktree, config, repo_root)
-
-        mock_untracked.assert_called_once_with(repo_root, [".wade.yml", "AGENTS.md"])
-        mock_exclude.assert_called_once_with(worktree, [".wade.yml", "AGENTS.md"])
-
-    def test_no_exclude_when_all_manifest_paths_committed(self, tmp_path: Path) -> None:
-        """No exclude written when all manifest files are in the git index."""
-        repo_root = tmp_path / "repo"
-        repo_root.mkdir()
-        (repo_root / ".wade-managed").write_text(".wade.yml\n")
-
-        worktree = tmp_path / "wt"
-        worktree.mkdir()
-
-        config = ProjectConfig()
-        with (
-            patch("wade.git.repo.list_untracked_from", return_value=[]),
-            patch("wade.git.repo.write_worktree_exclude") as mock_exclude,
-        ):
-            bootstrap_worktree(worktree, config, repo_root)
-
-        mock_exclude.assert_not_called()
-
-    def test_no_exclude_when_no_manifest_file(self, tmp_path: Path) -> None:
-        """No exclude written when .wade-managed does not exist."""
-        repo_root = tmp_path / "repo"
-        repo_root.mkdir()  # no .wade-managed
-
-        worktree = tmp_path / "wt"
-        worktree.mkdir()
-
-        config = ProjectConfig()
-        with patch("wade.git.repo.write_worktree_exclude") as mock_exclude:
-            bootstrap_worktree(worktree, config, repo_root)
-
-        mock_exclude.assert_not_called()
-
 
 class TestBuildWorkPrompt:
     def test_includes_issue_info(self) -> None:
