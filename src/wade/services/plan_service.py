@@ -1,8 +1,8 @@
 """Plan service — AI-assisted planning session orchestration.
 
-Implements the two-phase planning design:
+Implements a two-phase planning design:
   Phase 1: Launch AI with initial prompt, let it write plan files to temp dir
-  Phase 2: After AI exits, detect new issues (Path A) or read plan files (Path B)
+  Phase 2: After AI exits, read plan files from temp dir and create issues
 """
 
 from __future__ import annotations
@@ -236,9 +236,8 @@ def plan(
 ) -> bool:
     """Run an AI-assisted planning session.
 
-    Two-path design:
-      Path A: Issues created during AI session (detected via snapshot/diff)
-      Path B: Plan files written to temp dir → issues created from files
+    The AI writes plan files to a temp dir. After the session ends, wade reads
+    them back and creates issues + draft PRs.
 
     When ``issue_id`` is provided the session is pre-loaded with that issue's
     context and the resulting plan is attached to it via draft PR (no new issue).
@@ -293,19 +292,6 @@ def plan(
     # Create temp directory for plan files
     plan_dir = tempfile.mkdtemp(prefix="wade-plan-")
 
-    # Snapshot current issue numbers (for Path A detection) — skip when
-    # planning an existing issue since we won't be diffing snapshots.
-    before_snapshot: set[str] = set()
-    if existing_issue is None:
-        before_snapshot = provider.snapshot_task_numbers(
-            label=config.project.issue_label,
-        )
-        logger.info(
-            "plan.snapshot",
-            count=len(before_snapshot),
-            numbers=sorted(before_snapshot),
-        )
-
     # Set up transcript capture
     transcript_path = Path(plan_dir) / ".transcript"
     console.hint(f"Transcript: {transcript_path}")
@@ -344,7 +330,7 @@ def plan(
         if not usage.total_tokens:
             _warn_token_extraction(transcript_path)
 
-    # Path C: Existing issue — attach plan files to it (no new issue created)
+    # Existing issue — attach plan files to it (no new issue created)
     if existing_issue is not None:
         plan_files = validate_plan_files(Path(plan_dir))
         if plan_files:
@@ -371,35 +357,7 @@ def plan(
         _cleanup_plan_dir(plan_dir)
         return False
 
-    # Path A: Check for issues created during AI session
-    after_snapshot = provider.snapshot_task_numbers(
-        label=config.project.issue_label,
-    )
-    new_issue_numbers = sorted(after_snapshot - before_snapshot)
-
-    if new_issue_numbers:
-        console.success(f"Detected {len(new_issue_numbers)} new issue(s)")
-        # Bootstrap draft PRs for issues created during AI session
-        if repo_root is not None:
-            _bootstrap_draft_prs_for_issues(
-                provider=provider,
-                config=config,
-                issue_numbers=new_issue_numbers,
-                repo_root=repo_root,
-            )
-        _finalize_issues(
-            provider=provider,
-            config=config,
-            issue_numbers=new_issue_numbers,
-            ai_tool=resolved_tool,
-            model=resolved_model,
-            usage=usage,
-            repo_root=repo_root,
-        )
-        _cleanup_plan_dir(plan_dir)
-        return True
-
-    # Path B: Check for plan files in temp dir
+    # Read plan files from temp dir and create issues
     plan_files = validate_plan_files(Path(plan_dir))
 
     if plan_files:
@@ -424,7 +382,7 @@ def plan(
             return True
         console.warn("No issues were created from plan files.")
     else:
-        console.warn("No issues detected and no plan files found.")
+        console.warn("No plan files found.")
         console.hint("The AI session may not have produced any output.")
 
     _cleanup_plan_dir(plan_dir)
@@ -593,60 +551,6 @@ def _attach_plan_to_existing_issue(
             console.warn(f"Could not create draft PR for #{issue.id}")
     else:
         console.warn("Not in a git repo — skipping draft PR creation.")
-
-
-def _bootstrap_draft_prs_for_issues(
-    provider: AbstractTaskProvider,
-    config: ProjectConfig,
-    issue_numbers: list[str],
-    repo_root: Path,
-) -> None:
-    """Bootstrap draft PRs for issues that were created during AI session (Path A).
-
-    For each issue, reads its current body and uses it as the plan content
-    for the draft PR. Also adds complexity labels from the issue body.
-    """
-    from wade.models.task import parse_complexity_from_body
-
-    for issue_id in issue_numbers:
-        try:
-            task = provider.read_task(issue_id)
-        except Exception:
-            logger.warning("plan.issue_read_failed_for_pr", issue_id=issue_id)
-            continue
-
-        # Add complexity label if complexity is detectable
-        complexity = parse_complexity_from_body(task.body) if task.body else None
-        if complexity:
-            try:
-                add_complexity_label(provider, issue_id, complexity)
-            except Exception as e:
-                logger.warning("plan.complexity_label_failed", error=str(e))
-
-        # Bootstrap draft PR with the issue body as plan content
-        plan_body = task.body or f"Implements #{issue_id}: {task.title}"
-        pr_info = bootstrap_draft_pr(
-            issue_number=issue_id,
-            issue_title=task.title,
-            plan_body=plan_body,
-            config=config,
-            repo_root=repo_root,
-        )
-        if pr_info:
-            pr_number = pr_info.get("number", "?")
-            pr_url = pr_info.get("url", "")
-            console.success(f"Draft PR #{pr_number} for #{issue_id}: {pr_url}")
-
-            # Update issue body: make it lightweight (remove full plan, add PR link)
-            brief_body = task.body[:500] if task.body else ""
-            if len(task.body or "") > 500:
-                cut = brief_body.rfind(". ")
-                brief_body = brief_body[: cut + 1] if cut > 250 else brief_body + "…"
-            updated_body = brief_body.rstrip("\n") + f"\n\n**Full plan**: PR #{pr_number}"
-            try:
-                provider.update_task(issue_id, body=updated_body)
-            except Exception as e:
-                logger.warning("plan.pr_link_update_failed", error=str(e))
 
 
 def _finalize_issues(

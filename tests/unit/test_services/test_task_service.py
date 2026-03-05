@@ -53,7 +53,6 @@ def mock_provider():
         Task(id="1", title="First Issue", state=TaskState.OPEN),
         Task(id="2", title="Second Issue", state=TaskState.OPEN),
     ]
-    provider.snapshot_task_numbers.return_value = {"1", "2"}
     return provider
 
 

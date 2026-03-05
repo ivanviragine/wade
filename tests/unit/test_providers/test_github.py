@@ -338,27 +338,6 @@ class TestRemoveLabel:
 
 
 # ---------------------------------------------------------------------------
-# Snapshot/diff tests
-# ---------------------------------------------------------------------------
-
-
-class TestSnapshotTaskNumbers:
-    @patch("wade.providers.github.run")
-    def test_snapshot(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
-        issues_json = json.dumps(
-            [
-                {"number": 10, "title": "A", "state": "OPEN", "labels": [], "body": ""},
-                {"number": 20, "title": "B", "state": "OPEN", "labels": [], "body": ""},
-                {"number": 30, "title": "C", "state": "OPEN", "labels": [], "body": ""},
-            ]
-        )
-        mock_run.return_value = _make_completed(issues_json)
-
-        numbers = provider.snapshot_task_numbers(label="feature-plan")
-        assert numbers == {"10", "20", "30"}
-
-
-# ---------------------------------------------------------------------------
 # PR operation tests
 # ---------------------------------------------------------------------------
 

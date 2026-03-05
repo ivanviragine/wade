@@ -75,16 +75,6 @@ class AbstractTaskProvider(ABC):
     def remove_label(self, task_id: str, label_name: str) -> None:
         """Remove a label from a task (non-fatal on failure)."""
 
-    # --- Snapshot/diff for AI session detection ---
-
-    @abstractmethod
-    def snapshot_task_numbers(
-        self,
-        label: str | None = None,
-        state: TaskState = TaskState.OPEN,
-    ) -> set[str]:
-        """Get current task IDs (for pre/post AI session diff)."""
-
     # --- PR operations (optional — not all providers have PRs) ---
     # NOTE: These exist on the provider interface for future provider
     # implementations.  The main work-service flow uses ``git.pr`` directly

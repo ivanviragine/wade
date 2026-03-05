@@ -269,17 +269,6 @@ class GitHubProvider(AbstractTaskProvider):
                 label=label_name,
             )
 
-    # --- Snapshot/diff ---
-
-    def snapshot_task_numbers(
-        self,
-        label: str | None = None,
-        state: TaskState = TaskState.OPEN,
-    ) -> set[str]:
-        """Get current issue numbers for pre/post session diffing."""
-        tasks = self.list_tasks(label=label, state=state)
-        return {t.id for t in tasks}
-
     # --- PR operations (delegate to git/pr.py) ---
 
     def create_pr(
