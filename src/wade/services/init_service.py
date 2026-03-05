@@ -143,9 +143,16 @@ def init(
     # Generate config
     config_path = root / ".wade.yml"
     if config_path.exists():
-        console.info("Config .wade.yml already exists — patching missing values")
+        console.info("Config .wade.yml already exists — updating with selected values")
         _patch_config(
-            config_path, selected_tool, work_setup["model_mapping"], default_model=default_model
+            config_path,
+            selected_tool,
+            work_setup["model_mapping"],
+            default_model=default_model,
+            project_settings=project_settings,
+            work_tool=work_setup["tool"],
+            command_overrides=command_overrides,
+            force=not non_interactive,
         )
     else:
         _write_config(
@@ -1178,8 +1185,16 @@ def _patch_config(
     ai_tool: str | None,
     model_mapping: ComplexityModelMapping,
     default_model: str | None = None,
+    project_settings: dict[str, str] | None = None,
+    work_tool: str | None = None,
+    command_overrides: dict[str, dict[str, str]] | None = None,
+    force: bool = False,
 ) -> None:
-    """Patch missing values into an existing config without overwriting."""
+    """Patch values into an existing config.
+
+    When force=True, user-selected values overwrite existing entries.
+    When force=False (default), only missing keys are filled in.
+    """
     try:
         raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     except (yaml.YAMLError, OSError):
@@ -1198,19 +1213,80 @@ def _patch_config(
         raw["version"] = 2
         changed = True
 
-    # Patch AI tool and default model if missing
+    # Patch project settings
+    if project_settings:
+        project = raw.get("project", {}) or {}
+        for key in (
+            "main_branch",
+            "issue_label",
+            "worktrees_dir",
+            "branch_prefix",
+            "merge_strategy",
+        ):
+            value = project_settings.get(key)
+            if value and (force or not project.get(key)):
+                project[key] = value
+                changed = True
+        raw["project"] = project
+
+    # Patch AI tool and default model
     ai = raw.get("ai", {}) or {}
-    if ai_tool and not ai.get("default_tool"):
+    if ai_tool and (force or not ai.get("default_tool")):
         ai["default_tool"] = str(ai_tool)
         raw["ai"] = ai
         changed = True
-    if default_model and not ai.get("default_model"):
+    if default_model and (force or not ai.get("default_model")):
         ai["default_model"] = default_model
         raw["ai"] = ai
         changed = True
 
-    # Patch models if missing
-    tool_key = str(ai_tool) if ai_tool else None
+    # Patch work tool override
+    if work_tool:
+        if force:
+            if work_tool != ai_tool:
+                ai["work"] = {"tool": work_tool}
+                changed = True
+            elif "work" in ai:
+                del ai["work"]
+                changed = True
+            raw["ai"] = ai
+        elif work_tool != ai_tool and not ai.get("work"):
+            ai["work"] = {"tool": work_tool}
+            raw["ai"] = ai
+            changed = True
+
+    # Patch command overrides (plan, deps)
+    if command_overrides is not None:
+        for cmd_name in ("plan", "deps"):
+            overrides = command_overrides.get(cmd_name, {})
+            if force:
+                if overrides:
+                    cmd_section: dict[str, str] = {}
+                    if overrides.get("tool"):
+                        cmd_section["tool"] = overrides["tool"]
+                    if overrides.get("model"):
+                        cmd_section["model"] = overrides["model"]
+                    if cmd_section:
+                        ai[cmd_name] = cmd_section
+                        raw["ai"] = ai
+                        changed = True
+                elif cmd_name in ai:
+                    del ai[cmd_name]
+                    raw["ai"] = ai
+                    changed = True
+            elif overrides and not ai.get(cmd_name):
+                cmd_section = {}
+                if overrides.get("tool"):
+                    cmd_section["tool"] = overrides["tool"]
+                if overrides.get("model"):
+                    cmd_section["model"] = overrides["model"]
+                if cmd_section:
+                    ai[cmd_name] = cmd_section
+                    raw["ai"] = ai
+                    changed = True
+
+    # Patch models — keyed by work_tool when provided (matching _write_config)
+    tool_key = str(work_tool or ai_tool) if (work_tool or ai_tool) else None
     has_any_model = any(
         getattr(model_mapping, k, None) for k in ("easy", "medium", "complex", "very_complex")
     )
@@ -1220,7 +1296,7 @@ def _patch_config(
 
         for key in ("easy", "medium", "complex", "very_complex"):
             value = getattr(model_mapping, key, None)
-            if value and not tool_models.get(key):
+            if value and (force or not tool_models.get(key)):
                 tool_models[key] = value
                 changed = True
 

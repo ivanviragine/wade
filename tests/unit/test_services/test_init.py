@@ -19,6 +19,7 @@ from wade.services.init_service import (
     _commit_wade_files,
     _configure_local_worktree,
     _ensure_gitignore,
+    _patch_config,
     _prompt_command_overrides,
     _prompt_commit_or_local,
     _prompt_model_mapping,
@@ -620,6 +621,186 @@ class TestWriteConfig:
         config = yaml.safe_load(config_path.read_text())
         # work section omitted when tool matches default
         assert "work" not in config.get("ai", {})
+
+
+# ---------------------------------------------------------------------------
+# _patch_config tests
+# ---------------------------------------------------------------------------
+
+
+class TestPatchConfig:
+    def test_force_overwrites_ai_tool(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  default_tool: gemini\n")
+        _patch_config(config_path, "claude", ComplexityModelMapping(), force=True)
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["default_tool"] == "claude"
+
+    def test_no_force_preserves_ai_tool(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  default_tool: gemini\n")
+        _patch_config(config_path, "claude", ComplexityModelMapping(), force=False)
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["default_tool"] == "gemini"
+
+    def test_force_overwrites_default_model(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  default_model: old-model\n")
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), default_model="new-model", force=True
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["default_model"] == "new-model"
+
+    def test_no_force_preserves_default_model(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  default_model: old-model\n")
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), default_model="new-model", force=False
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["default_model"] == "old-model"
+
+    def test_force_sets_work_tool_override(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), work_tool="gemini", force=True
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["work"]["tool"] == "gemini"
+
+    def test_force_removes_work_section_when_same_as_default(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nai:\n  default_tool: claude\n  work:\n    tool: gemini\n"
+        )
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), work_tool="claude", force=True
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert "work" not in config["ai"]
+
+    def test_force_sets_command_overrides(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
+        overrides = {"plan": {"tool": "gemini", "model": "gemini-2.5-pro"}, "deps": {}}
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), command_overrides=overrides, force=True
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["plan"]["tool"] == "gemini"
+        assert config["ai"]["plan"]["model"] == "gemini-2.5-pro"
+        assert "deps" not in config["ai"]
+
+    def test_force_clears_command_overrides_when_empty(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nai:\n  default_tool: claude\n  plan:\n    tool: gemini\n"
+        )
+        overrides = {"plan": {}, "deps": {}}
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), command_overrides=overrides, force=True
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert "plan" not in config["ai"]
+
+    def test_no_force_does_not_overwrite_command_overrides(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nai:\n  default_tool: claude\n  plan:\n    tool: existing-tool\n"
+        )
+        overrides = {"plan": {"tool": "new-tool"}, "deps": {}}
+        _patch_config(
+            config_path,
+            "claude",
+            ComplexityModelMapping(),
+            command_overrides=overrides,
+            force=False,
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["plan"]["tool"] == "existing-tool"
+
+    def test_force_overwrites_models(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nai:\n  default_tool: claude\nmodels:\n  claude:\n    easy: old-haiku\n"
+        )
+        mapping = ComplexityModelMapping(easy="new-haiku", complex="sonnet")
+        _patch_config(config_path, "claude", mapping, force=True)
+        config = yaml.safe_load(config_path.read_text())
+        assert config["models"]["claude"]["easy"] == "new-haiku"
+        assert config["models"]["claude"]["complex"] == "sonnet"
+
+    def test_no_force_preserves_existing_models(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nai:\n  default_tool: claude\n"
+            "models:\n  claude:\n    easy: existing-haiku\n"
+        )
+        mapping = ComplexityModelMapping(easy="new-haiku", complex="sonnet")
+        _patch_config(config_path, "claude", mapping, force=False)
+        config = yaml.safe_load(config_path.read_text())
+        assert config["models"]["claude"]["easy"] == "existing-haiku"
+        assert config["models"]["claude"]["complex"] == "sonnet"
+
+    def test_models_keyed_by_work_tool_when_provided(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
+        mapping = ComplexityModelMapping(easy="haiku", complex="sonnet")
+        _patch_config(config_path, "claude", mapping, work_tool="gemini", force=True)
+        config = yaml.safe_load(config_path.read_text())
+        assert "gemini" in config["models"]
+        assert "claude" not in config.get("models", {})
+
+    def test_force_overwrites_project_settings(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nproject:\n  main_branch: master\n  issue_label: old-label\n"
+        )
+        settings = {
+            "main_branch": "main",
+            "issue_label": "new-label",
+            "branch_prefix": "feat",
+            "worktrees_dir": "../.worktrees",
+            "merge_strategy": "PR",
+        }
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), project_settings=settings, force=True
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["project"]["main_branch"] == "main"
+        assert config["project"]["issue_label"] == "new-label"
+
+    def test_no_force_preserves_project_settings(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nproject:\n  main_branch: master\n  issue_label: custom-label\n"
+        )
+        settings = {
+            "main_branch": "main",
+            "issue_label": "new-label",
+        }
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), project_settings=settings, force=False
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["project"]["main_branch"] == "master"
+        assert config["project"]["issue_label"] == "custom-label"
+
+    def test_hooks_preserved_through_patch(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nhooks:\n  post_worktree_create: scripts/setup.sh\n")
+        _patch_config(config_path, "claude", ComplexityModelMapping(), force=True)
+        config = yaml.safe_load(config_path.read_text())
+        assert config["hooks"]["post_worktree_create"] == "scripts/setup.sh"
+
+    def test_provider_preserved_through_patch(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nprovider:\n  name: github\n")
+        _patch_config(config_path, "claude", ComplexityModelMapping(), force=True)
+        config = yaml.safe_load(config_path.read_text())
+        assert config["provider"]["name"] == "github"
 
 
 # ---------------------------------------------------------------------------
