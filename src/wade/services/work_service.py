@@ -201,6 +201,9 @@ def _detect_ai_cli_env() -> str | None:
     # Codex CLI
     if os.environ.get("CODEX_CLI"):
         return "CODEX_CLI"
+    # Cursor CLI
+    if os.environ.get("CURSOR_CLI"):
+        return "CURSOR_CLI"
     return None
 
 
