@@ -65,7 +65,7 @@ ALWAYS_OVERWRITE = {"plan-session", "work-session"}
 _LEGACY_SKILLS = {"workflow", "sync", "pr-summary"}
 
 # Cross-tool directories that get symlinked to .claude/skills
-CROSS_TOOL_DIRS = [".github/skills", ".agents/skills", ".gemini/skills"]
+CROSS_TOOL_DIRS = [".github/skills", ".agents/skills", ".gemini/skills", ".cursor/skills"]
 
 
 def install_skills(
@@ -168,6 +168,7 @@ def remove_skills(project_root: Path) -> list[str]:
         project_root / ".github",
         project_root / ".agents",
         project_root / ".gemini",
+        project_root / ".cursor",
     ]:
         if parent.is_dir() and not any(parent.iterdir()):
             parent.rmdir()
