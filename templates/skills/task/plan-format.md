@@ -33,7 +33,7 @@ What to build / change.
 | **Title** | First `# Heading` line becomes the GitHub issue title. Required. Max 256 chars (truncated with a warning if exceeded). |
 | **Body** | Everything after the title heading becomes the draft PR plan content. The issue gets a lightweight summary. |
 | **Label** | Applied automatically from `.wade.yml` config (`issue_label`). |
-| **Complexity** | Optional `## Complexity` section with one value: `easy`, `medium`, `complex`, or `very_complex`. Applied as a `complexity:X` label on the issue. Used by `wade implement-task` to auto-select the AI model. |
+| **Complexity** | `## Complexity` section with one value: `easy`, `medium`, `complex`, or `very_complex`. Required. Applied as a `complexity:X` label on the issue. Used by `wade implement-task` to auto-select the AI model. |
 | **Token Usage (Planning)** | When issues are created through `wade plan-task`, wade appends a managed `## Token Usage (Planning)` section to the GitHub issue body. It includes tool, model, token counts, and per-model breakdown rows (when available) — all in a single table. |
 | **Sections** | Context, Proposed Solution, Tasks, and Acceptance Criteria are recommended but not enforced. |
 
@@ -72,9 +72,9 @@ When creating multiple issues from one plan, each issue gets its own `.md`
 file. Use the naming convention:
 
 ```
-plan-1-schema-changes.md
-plan-2-api-endpoint.md
-plan-3-ui-panel.md
+PLAN-1-schema-changes.md
+PLAN-2-api-endpoint.md
+PLAN-3-ui-panel.md
 ```
 
 Each file follows the same format above — fully self-contained with its own
