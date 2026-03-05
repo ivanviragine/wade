@@ -1995,9 +1995,6 @@ def _done_via_pr(
     lines.append(f"  Issue   {console.issue_ref(issue_number, task.title)}")
     console.panel("\n".join(lines), title="Work done")
 
-    if pr_url and prompts.confirm("Open PR in browser?", default=True):
-        webbrowser.open(pr_url)
-
     return True
 
 
