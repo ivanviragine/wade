@@ -39,7 +39,7 @@ GITIGNORE_ENTRIES: Final = [
     ".wade/",
     ".wade-managed",
     ".wade.yml",
-    ".claude/skills/",
+    ".claude/",
     ".github/skills",
     ".agents/",
     ".gemini/",

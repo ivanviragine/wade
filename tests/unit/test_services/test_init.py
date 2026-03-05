@@ -836,7 +836,7 @@ class TestGitignoreEntries:
         assert ".wade.yml" in GITIGNORE_ENTRIES
 
     def test_contains_skill_dirs(self) -> None:
-        assert ".claude/skills/" in GITIGNORE_ENTRIES
+        assert ".claude/" in GITIGNORE_ENTRIES
         assert ".github/skills" in GITIGNORE_ENTRIES
         assert ".agents/" in GITIGNORE_ENTRIES
         assert ".gemini/" in GITIGNORE_ENTRIES
