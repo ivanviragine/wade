@@ -435,8 +435,14 @@ def _build_work_issue_context_header(task: Task) -> str:
     return "\n".join(lines)
 
 
-def build_work_prompt(task: Task, ai_tool: str | None = None) -> str:
-    """Build the initial prompt for a work session."""
+def build_work_prompt(task: Task, ai_tool: str | None = None, has_plan: bool = False) -> str:
+    """Build the initial prompt for a work session.
+
+    When *has_plan* is False (no plan content in the draft PR), the issue
+    description is prepended inline so the AI has it without relying on
+    @PLAN.md.  When a plan already exists, PLAN.md carries the full context
+    and the inline header is skipped to avoid duplication.
+    """
     from wade.skills.installer import get_templates_dir
 
     template_path = get_templates_dir() / "prompts" / "work-context.md"
@@ -444,7 +450,7 @@ def build_work_prompt(task: Task, ai_tool: str | None = None) -> str:
         raise FileNotFoundError(f"Prompt template not found: {template_path}")
     template = template_path.read_text(encoding="utf-8")
     prompt = template.format(issue_number=task.id, issue_title=task.title)
-    if task.body:
+    if task.body and not has_plan:
         prompt = _build_work_issue_context_header(task) + prompt
     return prompt
 
@@ -833,7 +839,7 @@ def start(
             provider.move_to_in_progress(task.id)
 
         # Build work prompt
-        prompt = build_work_prompt(task, resolved_tool)
+        prompt = build_work_prompt(task, resolved_tool, has_plan=bool(plan_content))
         snippet = "\n".join(prompt.splitlines()[:5]) + "\n…"
         console.panel(snippet, title="Work Prompt (preview)")
 

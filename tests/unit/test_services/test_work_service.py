@@ -173,15 +173,21 @@ class TestBuildWorkPrompt:
         assert "Add auth" in prompt
         assert "PLAN.md" in prompt
 
-    def test_includes_body_when_present(self) -> None:
+    def test_includes_body_when_no_plan(self) -> None:
         task = Task(id="42", title="Add auth", body="Implement OAuth2 login flow.")
-        prompt = build_work_prompt(task)
+        prompt = build_work_prompt(task, has_plan=False)
         assert "Implement OAuth2 login flow." in prompt
         assert "## Description" in prompt
 
+    def test_omits_body_when_plan_exists(self) -> None:
+        task = Task(id="42", title="Add auth", body="Implement OAuth2 login flow.")
+        prompt = build_work_prompt(task, has_plan=True)
+        assert "## Description" not in prompt
+        assert "Implement OAuth2 login flow." not in prompt
+
     def test_no_body_section_when_body_empty(self) -> None:
         task = Task(id="42", title="Add auth", body="")
-        prompt = build_work_prompt(task)
+        prompt = build_work_prompt(task, has_plan=False)
         assert "## Description" not in prompt
         # Template content still present
         assert "#42" in prompt
