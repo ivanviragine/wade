@@ -22,6 +22,7 @@ class TestSelfRegistration:
         assert AIToolID.CODEX in registered
         assert AIToolID.ANTIGRAVITY in registered
         assert AIToolID.OPENCODE in registered
+        assert AIToolID.CURSOR in registered
 
     def test_get_adapter(self) -> None:
         adapter = AbstractAITool.get("claude")
@@ -74,6 +75,17 @@ class TestCapabilities:
         assert caps.headless_flag == "run"
         assert caps.supports_headless is True
 
+    def test_cursor_capabilities(self) -> None:
+        caps = AbstractAITool.get("cursor").capabilities()
+        assert caps.binary == "agent"
+        assert caps.tool_type == AIToolType.TERMINAL
+        assert caps.supports_model_flag is True
+        assert caps.model_flag == "--model"
+        assert caps.headless_flag == "--print"
+        assert caps.supports_headless is True
+        assert caps.supports_initial_message is True
+        assert caps.blocks_until_exit is True
+
 
 class TestModelCompatibility:
     def test_claude_accepts_claude_models(self) -> None:
@@ -108,6 +120,13 @@ class TestModelCompatibility:
         assert adapter.is_model_compatible("anthropic/claude-sonnet-4") is True
         assert adapter.is_model_compatible("openai/gpt-4o") is True
         assert adapter.is_model_compatible("google/gemini-2.0-flash") is True
+
+    def test_cursor_accepts_all(self) -> None:
+        adapter = AbstractAITool.get("cursor")
+        assert adapter.is_model_compatible("opus-4.6") is True
+        assert adapter.is_model_compatible("sonnet-4.6") is True
+        assert adapter.is_model_compatible("gpt-5.3-codex") is True
+        assert adapter.is_model_compatible("anything") is True
 
 
 class TestBuildLaunchCommand:
@@ -156,6 +175,37 @@ class TestBuildLaunchCommand:
             "run",
             "Fix the bug",
         ]
+
+    def test_cursor_basic_launch(self) -> None:
+        adapter = AbstractAITool.get("cursor")
+        cmd = adapter.build_launch_command(model="opus-4.6")
+        assert cmd == ["agent", "--model", "opus-4.6"]
+
+    def test_cursor_with_initial_message(self) -> None:
+        adapter = AbstractAITool.get("cursor")
+        cmd = adapter.build_launch_command(initial_message="Implement feature X")
+        assert cmd == ["agent", "Implement feature X"]
+
+    def test_cursor_plan_mode_launch(self) -> None:
+        """Cursor plan mode uses --mode plan."""
+        adapter = AbstractAITool.get("cursor")
+        cmd = adapter.build_launch_command(
+            model="sonnet-4.6", initial_message="Do stuff", plan_mode=True
+        )
+        assert cmd == [
+            "agent",
+            "Do stuff",
+            "--model",
+            "sonnet-4.6",
+            "--mode",
+            "plan",
+        ]
+
+    def test_cursor_model_passthrough(self) -> None:
+        """Cursor uses its own model namespace — IDs pass through unchanged."""
+        adapter = AbstractAITool.get("cursor")
+        cmd = adapter.build_launch_command(model="gpt-5.3-codex")
+        assert cmd == ["agent", "--model", "gpt-5.3-codex"]
 
 
 class TestDateSuffix:
@@ -211,6 +261,19 @@ class TestClassifyTierUniversal:
         assert classify_tier_universal("some-unknown-model") == ModelTier.BALANCED
 
 
+class TestTrustedDirsArgs:
+    """Test trusted directory CLI arguments per tool."""
+
+    def test_claude_add_dir(self) -> None:
+        adapter = AbstractAITool.get("claude")
+        assert adapter.trusted_dirs_args(["/tmp"]) == ["--add-dir", "/tmp"]
+
+    def test_cursor_no_per_dir_trust(self) -> None:
+        """Cursor has no per-directory trust flag — returns empty."""
+        adapter = AbstractAITool.get("cursor")
+        assert adapter.trusted_dirs_args(["/tmp", "/work"]) == []
+
+
 class TestPlanModeArgs:
     """Test native plan mode CLI arguments per tool."""
 
@@ -233,6 +296,10 @@ class TestPlanModeArgs:
     def test_opencode_no_plan_mode(self) -> None:
         adapter = AbstractAITool.get("opencode")
         assert adapter.plan_mode_args() == []
+
+    def test_cursor_plan_mode(self) -> None:
+        adapter = AbstractAITool.get("cursor")
+        assert adapter.plan_mode_args() == ["--mode", "plan"]
 
     def test_plan_mode_in_launch_command(self) -> None:
         adapter = AbstractAITool.get("claude")
@@ -287,3 +354,10 @@ class TestNormalizeModelFormat:
             == "anthropic/claude-sonnet-4"
         )
         assert adapter.normalize_model_format("openai/gpt-4o") == "openai/gpt-4o"
+
+    def test_cursor_passthrough(self) -> None:
+        """Cursor uses its own model namespace — no normalization needed."""
+        adapter = AbstractAITool.get("cursor")
+        assert adapter.normalize_model_format("sonnet-4.6") == "sonnet-4.6"
+        assert adapter.normalize_model_format("opus-4.6") == "opus-4.6"
+        assert adapter.normalize_model_format("gpt-5.3-codex") == "gpt-5.3-codex"

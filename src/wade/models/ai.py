@@ -18,6 +18,7 @@ class AIToolID(StrEnum):
     ANTIGRAVITY = "antigravity"
     VSCODE = "vscode"
     OPENCODE = "opencode"
+    CURSOR = "cursor"
 
 
 class AIToolType(StrEnum):
