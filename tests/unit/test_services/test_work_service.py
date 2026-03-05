@@ -21,6 +21,7 @@ from wade.models.config import (
 from wade.models.task import Task
 from wade.services.work_service import (
     _build_graph_from_issues,
+    _build_work_issue_context_header,
     _parse_overwrite_paths,
     _pull_main_after_merge,
     _resolve_task_target,
@@ -171,6 +172,34 @@ class TestBuildWorkPrompt:
         assert "#42" in prompt
         assert "Add auth" in prompt
         assert "PLAN.md" in prompt
+
+    def test_includes_body_when_present(self) -> None:
+        task = Task(id="42", title="Add auth", body="Implement OAuth2 login flow.")
+        prompt = build_work_prompt(task)
+        assert "Implement OAuth2 login flow." in prompt
+        assert "## Description" in prompt
+
+    def test_no_body_section_when_body_empty(self) -> None:
+        task = Task(id="42", title="Add auth", body="")
+        prompt = build_work_prompt(task)
+        assert "## Description" not in prompt
+        # Template content still present
+        assert "#42" in prompt
+        assert "Add auth" in prompt
+
+
+class TestBuildWorkIssueContextHeader:
+    def test_contains_issue_id_and_title(self) -> None:
+        task = Task(id="7", title="Fix bug", body="Something is broken.")
+        header = _build_work_issue_context_header(task)
+        assert "# Issue #7: Fix bug" in header
+        assert "Something is broken." in header
+        assert "## Description" in header
+
+    def test_ends_with_separator(self) -> None:
+        task = Task(id="1", title="T", body="Body text.")
+        header = _build_work_issue_context_header(task)
+        assert "---" in header
 
 
 # ---------------------------------------------------------------------------

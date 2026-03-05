@@ -62,8 +62,17 @@ class TestCommandBehaviorWithoutContext:
     """Verify subcommand exit codes and output when run without git/gh context."""
 
     def test_plan_task_exits_without_ai(self) -> None:
-        # plan-task exits 1 when no AI tool / gh available
-        result = runner.invoke(app, ["plan-task"])
+        # plan-task exits 1 when no AI tool is available.
+        # Patch both config loading and auto-detection so the test is not
+        # environment-dependent: a real .wade.yml or installed AI CLI would
+        # resolve a tool and confirm_ai_selection would block on TTY input.
+        from wade.models.config import ProjectConfig
+
+        with (
+            patch("wade.services.plan_service.load_config", return_value=ProjectConfig()),
+            patch("wade.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
+        ):
+            result = runner.invoke(app, ["plan-task"])
         assert result.exit_code == 1
 
     def test_new_task_requires_title(self) -> None:
@@ -78,8 +87,12 @@ class TestCommandBehaviorWithoutContext:
         assert result.exit_code == 0
 
     def test_work_done_exits_with_error(self) -> None:
-        # work done requires git context; exits 1 without it
-        result = runner.invoke(app, ["work", "done"])
+        # work done exits 1 when the branch has no issue number.
+        # Mock the branch name so the test is not environment-dependent
+        # (on a feature worktree the branch has an issue number and the
+        # error path is different).
+        with patch("wade.git.repo.get_current_branch", return_value="main"):
+            result = runner.invoke(app, ["work", "done"])
         assert result.exit_code == 1
         assert "Cannot extract issue number" in result.output
 

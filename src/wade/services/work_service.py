@@ -420,6 +420,21 @@ def _capture_post_session_usage(
     return effective_model
 
 
+def _build_work_issue_context_header(task: Task) -> str:
+    """Build a Markdown header with issue description for the work prompt."""
+    lines = [
+        f"# Issue #{task.id}: {task.title}",
+        "",
+        "## Description",
+        "",
+        (task.body or "").strip(),
+        "",
+        "---",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def build_work_prompt(task: Task, ai_tool: str | None = None) -> str:
     """Build the initial prompt for a work session."""
     from wade.skills.installer import get_templates_dir
@@ -428,7 +443,10 @@ def build_work_prompt(task: Task, ai_tool: str | None = None) -> str:
     if not template_path.is_file():
         raise FileNotFoundError(f"Prompt template not found: {template_path}")
     template = template_path.read_text(encoding="utf-8")
-    return template.format(issue_number=task.id, issue_title=task.title)
+    prompt = template.format(issue_number=task.id, issue_title=task.title)
+    if task.body:
+        prompt = _build_work_issue_context_header(task) + prompt
+    return prompt
 
 
 def _post_work_lifecycle(
