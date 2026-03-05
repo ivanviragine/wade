@@ -111,6 +111,7 @@ def init(
 
     # Interactive wizard — all prompts before any writes
     project_settings = _prompt_project_settings(root, non_interactive)
+    hooks_setup = _prompt_hooks_setup(non_interactive)
     try:
         selected_tool, default_model = _prompt_ai_section(ai_tool, non_interactive)
     except ValueError as exc:
@@ -152,6 +153,7 @@ def init(
             project_settings=project_settings,
             work_tool=work_setup["tool"],
             command_overrides=command_overrides,
+            hooks_setup=hooks_setup,
             force=not non_interactive,
         )
     else:
@@ -163,6 +165,7 @@ def init(
             work_tool=work_setup["tool"],
             default_model=default_model,
             command_overrides=command_overrides,
+            hooks_setup=hooks_setup,
         )
         console.success(f"Created {config_path.name}")
 
@@ -854,6 +857,44 @@ def _prompt_project_settings(
     return defaults
 
 
+def _prompt_hooks_setup(
+    non_interactive: bool,
+) -> dict[str, Any]:
+    """Collect worktree hooks settings — setup script and files to copy.
+
+    Returns a dict with keys: post_worktree_create (str | None), copy_to_worktree (list[str]).
+    """
+    from wade.ui import prompts
+
+    defaults: dict[str, Any] = {
+        "post_worktree_create": None,
+        "copy_to_worktree": [],
+    }
+
+    if non_interactive:
+        return defaults
+
+    console.rule("Worktree hooks")
+
+    script_path = prompts.input_prompt(
+        "Setup script for new worktrees (e.g. scripts/setup-worktree.sh)",
+        default="",
+        allow_empty=True,
+    )
+    if script_path.strip():
+        defaults["post_worktree_create"] = script_path.strip()
+
+    copy_files = prompts.input_prompt(
+        "Files to copy into worktrees (comma-separated, e.g. .env)",
+        default="",
+        allow_empty=True,
+    )
+    if copy_files.strip():
+        defaults["copy_to_worktree"] = [f.strip() for f in copy_files.split(",") if f.strip()]
+
+    return defaults
+
+
 def _prompt_model_mapping(
     tool: str | None,
     mapping: ComplexityModelMapping,
@@ -1105,6 +1146,7 @@ def _write_config(
     work_tool: str | None = None,
     default_model: str | None = None,
     command_overrides: dict[str, dict[str, str]] | None = None,
+    hooks_setup: dict[str, Any] | None = None,
 ) -> None:
     """Write a fresh .wade.yml config file."""
     config_dict: dict[str, Any] = {"version": 2}
@@ -1169,15 +1211,20 @@ def _write_config(
 
     config_dict["provider"] = {"name": "github"}
 
-    # Generate YAML and append commented-out hooks block
-    yaml_content = yaml.dump(config_dict, default_flow_style=False, sort_keys=False)
-    hooks_block = """
-# hooks:
-#   post_worktree_create: scripts/setup-worktree.sh
-#   copy_to_worktree:
-#     - .env
-"""
-    config_path.write_text(yaml_content + hooks_block, encoding="utf-8")
+    # Build hooks section — always include .wade.yml in copy_to_worktree
+    hooks_dict: dict[str, Any] = {}
+    if hooks_setup and hooks_setup.get("post_worktree_create"):
+        hooks_dict["post_worktree_create"] = hooks_setup["post_worktree_create"]
+    copy_files: list[str] = list(hooks_setup.get("copy_to_worktree", [])) if hooks_setup else []
+    if ".wade.yml" not in copy_files:
+        copy_files.append(".wade.yml")
+    hooks_dict["copy_to_worktree"] = copy_files
+    config_dict["hooks"] = hooks_dict
+
+    config_path.write_text(
+        yaml.dump(config_dict, default_flow_style=False, sort_keys=False),
+        encoding="utf-8",
+    )
 
 
 def _patch_config(
@@ -1188,6 +1235,7 @@ def _patch_config(
     project_settings: dict[str, str] | None = None,
     work_tool: str | None = None,
     command_overrides: dict[str, dict[str, str]] | None = None,
+    hooks_setup: dict[str, Any] | None = None,
     force: bool = False,
 ) -> None:
     """Patch values into an existing config.
@@ -1303,6 +1351,32 @@ def _patch_config(
         if tool_models:
             models[tool_key] = tool_models
             raw["models"] = models
+
+    # Patch hooks — setup script and copy_to_worktree
+    hooks = raw.get("hooks") or {}
+    if hooks_setup:
+        script = hooks_setup.get("post_worktree_create")
+        if script and (force or not hooks.get("post_worktree_create")):
+            hooks["post_worktree_create"] = script
+            changed = True
+        elif not script and force and "post_worktree_create" in hooks:
+            del hooks["post_worktree_create"]
+            changed = True
+        user_files: list[str] = hooks_setup.get("copy_to_worktree", [])
+        if user_files and (force or not hooks.get("copy_to_worktree")):
+            existing_copy: list[str] = hooks.get("copy_to_worktree") or []
+            for f in user_files:
+                if f not in existing_copy:
+                    existing_copy.append(f)
+                    changed = True
+            hooks["copy_to_worktree"] = existing_copy
+    # Always ensure .wade.yml is in copy_to_worktree
+    copy_list: list[str] = hooks.get("copy_to_worktree") or []
+    if ".wade.yml" not in copy_list:
+        copy_list.append(".wade.yml")
+        changed = True
+    hooks["copy_to_worktree"] = copy_list
+    raw["hooks"] = hooks
 
     if changed:
         config_path.write_text(
@@ -1420,13 +1494,12 @@ def _prompt_commit_or_local(
     """Ask whether to commit wade files or keep them local.
 
     If the user commits, all wade files are added and committed.
-    If not, ``.wade.yml`` is added to ``copy_to_worktree`` so worktrees
-    get a working config, and the user is reminded to commit ``.gitignore``.
+    Otherwise the user is reminded to commit ``.gitignore``.
+    ``.wade.yml`` is always in ``copy_to_worktree`` (handled during config write).
     """
     from wade.ui import prompts
 
     if non_interactive or not prompts.is_tty():
-        _configure_local_worktree(config_path)
         console.hint("Commit at least .gitignore so worktrees stay clean:")
         console.detail('git add .gitignore && git commit -m "chore: add wade gitignore entries"')
         return
@@ -1436,7 +1509,6 @@ def _prompt_commit_or_local(
     if commit:
         _commit_wade_files(root, installed)
     else:
-        _configure_local_worktree(config_path)
         console.hint("Commit at least .gitignore so worktrees stay clean:")
         console.detail('git add .gitignore && git commit -m "chore: add wade gitignore entries"')
 
@@ -1467,23 +1539,3 @@ def _commit_wade_files(root: Path, installed: list[str]) -> None:
     except subprocess.CalledProcessError as exc:
         logger.warning("init.commit_failed", error=exc.stderr)
         console.warn("Could not commit wade files — commit them manually")
-
-
-def _configure_local_worktree(config_path: Path) -> None:
-    """Add ``.wade.yml`` to ``copy_to_worktree`` so worktrees get the config."""
-    try:
-        raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-    except (yaml.YAMLError, OSError):
-        return
-
-    hooks = raw.get("hooks") or {}
-    existing: list[str] = hooks.get("copy_to_worktree") or []
-    if ".wade.yml" not in existing:
-        existing.append(".wade.yml")
-    hooks["copy_to_worktree"] = existing
-    raw["hooks"] = hooks
-
-    config_path.write_text(
-        yaml.dump(raw, default_flow_style=False, sort_keys=False),
-        encoding="utf-8",
-    )

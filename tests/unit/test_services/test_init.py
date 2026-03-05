@@ -17,11 +17,11 @@ from wade.services.init_service import (
     MANIFEST_FILENAME,
     _clean_gitignore,
     _commit_wade_files,
-    _configure_local_worktree,
     _ensure_gitignore,
     _patch_config,
     _prompt_command_overrides,
     _prompt_commit_or_local,
+    _prompt_hooks_setup,
     _prompt_model_mapping,
     _prompt_project_settings,
     _read_manifest_version,
@@ -1030,37 +1030,75 @@ class TestGitignoreEntries:
 
 
 # ---------------------------------------------------------------------------
-# _configure_local_worktree tests
+# _prompt_hooks_setup tests
 # ---------------------------------------------------------------------------
 
 
-class TestConfigureLocalWorktree:
-    def test_adds_wade_yml_to_copy_to_worktree(self, tmp_path: Path) -> None:
+class TestPromptHooksSetup:
+    def test_non_interactive_returns_defaults(self) -> None:
+        result = _prompt_hooks_setup(non_interactive=True)
+        assert result["post_worktree_create"] is None
+        assert result["copy_to_worktree"] == []
+
+    @patch("wade.ui.prompts.input_prompt")
+    def test_interactive_with_values(self, mock_input: MagicMock) -> None:
+        mock_input.side_effect = ["scripts/setup-worktree.sh", ".env, .secrets"]
+        result = _prompt_hooks_setup(non_interactive=False)
+        assert result["post_worktree_create"] == "scripts/setup-worktree.sh"
+        assert result["copy_to_worktree"] == [".env", ".secrets"]
+
+    @patch("wade.ui.prompts.input_prompt")
+    def test_interactive_empty_skips(self, mock_input: MagicMock) -> None:
+        mock_input.side_effect = ["", ""]
+        result = _prompt_hooks_setup(non_interactive=False)
+        assert result["post_worktree_create"] is None
+        assert result["copy_to_worktree"] == []
+
+
+# ---------------------------------------------------------------------------
+# _write_config hooks tests
+# ---------------------------------------------------------------------------
+
+
+class TestWriteConfigHooks:
+    def test_write_config_includes_hooks_section(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
-        config_path.write_text(
-            yaml.dump({"version": 2, "project": {"main_branch": "main"}}),
-            encoding="utf-8",
-        )
-        _configure_local_worktree(config_path)
+        _write_config(config_path, "claude", ComplexityModelMapping())
+        config = yaml.safe_load(config_path.read_text())
+        assert "hooks" in config
+        assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
+
+    def test_write_config_with_setup_script(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        hooks = {"post_worktree_create": "scripts/setup.sh", "copy_to_worktree": [".env"]}
+        _write_config(config_path, "claude", ComplexityModelMapping(), hooks_setup=hooks)
+        config = yaml.safe_load(config_path.read_text())
+        assert config["hooks"]["post_worktree_create"] == "scripts/setup.sh"
+        assert ".env" in config["hooks"]["copy_to_worktree"]
+        assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
+
+    def test_write_config_no_commented_hooks(self, tmp_path: Path) -> None:
+        """Config should not contain commented-out hooks block."""
+        config_path = tmp_path / ".wade.yml"
+        _write_config(config_path, "claude", ComplexityModelMapping())
+        content = config_path.read_text()
+        assert "# hooks:" not in content
+
+
+# ---------------------------------------------------------------------------
+# _patch_config hooks tests
+# ---------------------------------------------------------------------------
+
+
+class TestPatchConfigHooks:
+    def test_patch_always_adds_wade_yml(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(yaml.dump({"version": 2}), encoding="utf-8")
+        _patch_config(config_path, "claude", ComplexityModelMapping(), force=True)
         config = yaml.safe_load(config_path.read_text())
         assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
 
-    def test_idempotent(self, tmp_path: Path) -> None:
-        config_path = tmp_path / ".wade.yml"
-        config_path.write_text(
-            yaml.dump(
-                {
-                    "version": 2,
-                    "hooks": {"copy_to_worktree": [".wade.yml"]},
-                }
-            ),
-            encoding="utf-8",
-        )
-        _configure_local_worktree(config_path)
-        config = yaml.safe_load(config_path.read_text())
-        assert config["hooks"]["copy_to_worktree"].count(".wade.yml") == 1
-
-    def test_preserves_existing_entries(self, tmp_path: Path) -> None:
+    def test_patch_preserves_existing_hooks(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text(
             yaml.dump(
@@ -1071,22 +1109,37 @@ class TestConfigureLocalWorktree:
             ),
             encoding="utf-8",
         )
-        _configure_local_worktree(config_path)
+        _patch_config(config_path, "claude", ComplexityModelMapping(), force=True)
         config = yaml.safe_load(config_path.read_text())
         assert ".env" in config["hooks"]["copy_to_worktree"]
         assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
 
-    def test_handles_missing_hooks_section(self, tmp_path: Path) -> None:
+    def test_patch_force_sets_hooks_setup(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text(yaml.dump({"version": 2}), encoding="utf-8")
-        _configure_local_worktree(config_path)
+        hooks = {"post_worktree_create": "scripts/setup.sh", "copy_to_worktree": [".env"]}
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), hooks_setup=hooks, force=True
+        )
         config = yaml.safe_load(config_path.read_text())
+        assert config["hooks"]["post_worktree_create"] == "scripts/setup.sh"
+        assert ".env" in config["hooks"]["copy_to_worktree"]
         assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
 
-    def test_handles_unreadable_file(self, tmp_path: Path) -> None:
+    def test_patch_idempotent_wade_yml(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
-        # File doesn't exist — should not raise
-        _configure_local_worktree(config_path)
+        config_path.write_text(
+            yaml.dump(
+                {
+                    "version": 2,
+                    "hooks": {"copy_to_worktree": [".wade.yml"]},
+                }
+            ),
+            encoding="utf-8",
+        )
+        _patch_config(config_path, "claude", ComplexityModelMapping(), force=True)
+        config = yaml.safe_load(config_path.read_text())
+        assert config["hooks"]["copy_to_worktree"].count(".wade.yml") == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1132,26 +1185,26 @@ class TestCommitWadeFiles:
 
 
 class TestPromptCommitOrLocal:
-    def test_non_interactive_configures_local(self, tmp_path: Path) -> None:
-        """Non-interactive mode should configure copy_to_worktree, not commit."""
+    def test_non_interactive_does_not_modify_config(self, tmp_path: Path) -> None:
+        """Non-interactive mode should not modify config (hooks handled by _write_config)."""
         config_path = tmp_path / ".wade.yml"
         config_path.write_text(yaml.dump({"version": 2}), encoding="utf-8")
+        original = config_path.read_text()
 
         _prompt_commit_or_local(tmp_path, config_path, [], non_interactive=True)
 
-        config = yaml.safe_load(config_path.read_text())
-        assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
+        assert config_path.read_text() == original
 
     @patch("wade.ui.prompts.is_tty", return_value=False)
-    def test_no_tty_configures_local(self, _mock_tty: MagicMock, tmp_path: Path) -> None:
-        """When not a TTY, should configure copy_to_worktree."""
+    def test_no_tty_does_not_modify_config(self, _mock_tty: MagicMock, tmp_path: Path) -> None:
+        """When not a TTY, should not modify config."""
         config_path = tmp_path / ".wade.yml"
         config_path.write_text(yaml.dump({"version": 2}), encoding="utf-8")
+        original = config_path.read_text()
 
         _prompt_commit_or_local(tmp_path, config_path, [], non_interactive=False)
 
-        config = yaml.safe_load(config_path.read_text())
-        assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
+        assert config_path.read_text() == original
 
     @patch("wade.ui.prompts.is_tty", return_value=True)
     @patch("wade.ui.prompts.confirm", return_value=True)
@@ -1173,20 +1226,20 @@ class TestPromptCommitOrLocal:
 
     @patch("wade.ui.prompts.is_tty", return_value=True)
     @patch("wade.ui.prompts.confirm", return_value=False)
-    def test_interactive_commit_no(
+    def test_interactive_commit_no_does_not_modify_config(
         self,
         _mock_confirm: MagicMock,
         _mock_tty: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """When user says no, should configure copy_to_worktree."""
+        """When user says no, should not modify config."""
         config_path = tmp_path / ".wade.yml"
         config_path.write_text(yaml.dump({"version": 2}), encoding="utf-8")
+        original = config_path.read_text()
 
         _prompt_commit_or_local(tmp_path, config_path, [], non_interactive=False)
 
-        config = yaml.safe_load(config_path.read_text())
-        assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
+        assert config_path.read_text() == original
 
     def test_init_non_interactive_adds_copy_to_worktree(self, tmp_git_repo: Path) -> None:
         """Full init in non-interactive mode should set copy_to_worktree."""
