@@ -99,19 +99,25 @@ def probe_copilot() -> set[str]:
 
 
 def probe_cursor() -> set[str]:
-    """Probe Cursor CLI (agent) by passing an invalid model to extract available models."""
+    """Probe Cursor CLI (agent) via ``agent --list-models``."""
     if not shutil.which("agent"):
         return set()
     try:
-        res = subprocess.run(["agent", "--model", "x"], capture_output=True, text=True, timeout=15)
-        out = res.stdout + res.stderr
-        # Output: "Cannot use this model: x. Available models: model1, model2, ..."
-        m = re.search(r"Available models:\s*(.+)", out)
-        if m:
-            return {name.strip() for name in m.group(1).split(",") if name.strip()}
-        return set()
+        res = subprocess.run(["agent", "--list-models"], capture_output=True, text=True, timeout=15)
+        if res.returncode == 0:
+            models = set()
+            for line in res.stdout.splitlines():
+                # Lines like: "sonnet-4.6 - Claude 4.6 Sonnet"
+                stripped = line.strip()
+                if stripped and " - " in stripped:
+                    model_id = stripped.split(" - ")[0].strip()
+                    if model_id and not model_id.startswith(("Available", "Tip:")):
+                        models.add(model_id)
+            if models:
+                return models
     except Exception:
-        return set()
+        pass
+    return set()
 
 
 def probe_gemini() -> set[str]:

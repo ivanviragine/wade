@@ -261,6 +261,19 @@ class TestClassifyTierUniversal:
         assert classify_tier_universal("some-unknown-model") == ModelTier.BALANCED
 
 
+class TestTrustedDirsArgs:
+    """Test trusted directory CLI arguments per tool."""
+
+    def test_claude_add_dir(self) -> None:
+        adapter = AbstractAITool.get("claude")
+        assert adapter.trusted_dirs_args(["/tmp"]) == ["--add-dir", "/tmp"]
+
+    def test_cursor_no_per_dir_trust(self) -> None:
+        """Cursor has no per-directory trust flag — returns empty."""
+        adapter = AbstractAITool.get("cursor")
+        assert adapter.trusted_dirs_args(["/tmp", "/work"]) == []
+
+
 class TestPlanModeArgs:
     """Test native plan mode CLI arguments per tool."""
 

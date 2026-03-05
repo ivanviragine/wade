@@ -134,6 +134,8 @@ def init(
 
     if "claude" in tools_in_use:
         _prompt_claude_code_settings(root, non_interactive)
+    if "cursor" in tools_in_use:
+        _prompt_cursor_settings(non_interactive)
     if "gemini" in tools_in_use:
         _prompt_configure_gemini_experimental(non_interactive)
     _prompt_configure_shell_integration(non_interactive)
@@ -517,6 +519,26 @@ def _prompt_configure_allowlist(root: Path, non_interactive: bool) -> None:
     ):
         configure_allowlist(root)
         console.success("Added Bash([step]wade[/] *) to .claude/settings.json allowlist")
+
+
+def _prompt_cursor_settings(non_interactive: bool) -> None:
+    """Prompt for Cursor CLI-specific settings: command allowlist."""
+    from wade.config.cursor_allowlist import configure_allowlist, is_allowlist_configured
+    from wade.ui import prompts
+
+    if is_allowlist_configured():
+        return
+
+    if non_interactive:
+        return
+
+    console.rule("Cursor CLI")
+    if prompts.confirm(
+        "Auto-approve wade commands in Cursor CLI? (skips Shell approval in work sessions)",
+        default=True,
+    ):
+        configure_allowlist()
+        console.success("Added Shell([step]wade[/] *) to ~/.cursor/cli-config.json allowlist")
 
 
 def _configure_statusline() -> None:
