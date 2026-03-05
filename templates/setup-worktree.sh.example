@@ -1,0 +1,41 @@
+#!/bin/bash
+# Worktree setup script — runs automatically when a new worktree is created.
+# Customize this script for your project's needs.
+#
+# Execution environment:
+#   - Working directory: worktree root
+#   - Timeout: 60 seconds (non-blocking on failure)
+#   - Copy files first: use .copy_to_worktree config to copy .env, etc.
+#
+# Usage:
+#   Save this file to: scripts/setup-worktree.sh
+#   Make it executable: chmod +x scripts/setup-worktree.sh
+#   Configure in .wade.yml:
+#       hooks:
+#         post_worktree_create: scripts/setup-worktree.sh
+
+set -euo pipefail
+
+# Install Node.js dependencies (if using npm)
+if [ -f package.json ]; then
+    npm ci
+fi
+
+# Install Python dependencies (if using pip)
+if [ -f requirements.txt ]; then
+    pip install -r requirements.txt
+fi
+
+# Install Python dependencies with poetry (if using poetry)
+if [ -f poetry.lock ]; then
+    poetry install
+fi
+
+# Build or compile artifacts (if needed)
+# make build
+
+# Initialize database or run migrations (if needed)
+# npm run migrate
+# python manage.py migrate
+
+echo "✓ Worktree setup complete"
