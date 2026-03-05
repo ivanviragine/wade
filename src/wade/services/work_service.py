@@ -421,11 +421,9 @@ def _capture_post_session_usage(
 
 
 def _build_work_issue_context_header(task: Task) -> str:
-    """Build a Markdown header with issue description for the work prompt."""
+    """Build an issue description block to prepend to the work prompt."""
     lines = [
-        f"# Issue #{task.id}: {task.title}",
-        "",
-        "## Description",
+        "## Issue Description",
         "",
         (task.body or "").strip(),
         "",

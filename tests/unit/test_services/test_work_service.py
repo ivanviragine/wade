@@ -177,30 +177,31 @@ class TestBuildWorkPrompt:
         task = Task(id="42", title="Add auth", body="Implement OAuth2 login flow.")
         prompt = build_work_prompt(task, has_plan=False)
         assert "Implement OAuth2 login flow." in prompt
-        assert "## Description" in prompt
+        assert "## Issue Description" in prompt
 
     def test_omits_body_when_plan_exists(self) -> None:
         task = Task(id="42", title="Add auth", body="Implement OAuth2 login flow.")
         prompt = build_work_prompt(task, has_plan=True)
-        assert "## Description" not in prompt
+        assert "## Issue Description" not in prompt
         assert "Implement OAuth2 login flow." not in prompt
 
     def test_no_body_section_when_body_empty(self) -> None:
         task = Task(id="42", title="Add auth", body="")
         prompt = build_work_prompt(task, has_plan=False)
-        assert "## Description" not in prompt
+        assert "## Issue Description" not in prompt
         # Template content still present
         assert "#42" in prompt
         assert "Add auth" in prompt
 
 
 class TestBuildWorkIssueContextHeader:
-    def test_contains_issue_id_and_title(self) -> None:
+    def test_contains_body_not_title(self) -> None:
         task = Task(id="7", title="Fix bug", body="Something is broken.")
         header = _build_work_issue_context_header(task)
-        assert "# Issue #7: Fix bug" in header
+        # Title is already in the template — header only adds the description
+        assert "# Issue #7" not in header
         assert "Something is broken." in header
-        assert "## Description" in header
+        assert "## Issue Description" in header
 
     def test_ends_with_separator(self) -> None:
         task = Task(id="1", title="T", body="Body text.")
