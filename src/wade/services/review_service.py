@@ -289,7 +289,7 @@ def start(
     )
 
     if not detach:
-        resolved_tool, resolved_model = confirm_ai_selection(
+        resolved_tool, resolved_model, _effort = confirm_ai_selection(
             resolved_tool,
             resolved_model,
             tool_explicit=ai_explicit,

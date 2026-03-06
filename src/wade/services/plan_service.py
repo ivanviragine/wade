@@ -24,12 +24,17 @@ from wade.ai_tools.transcript import (
     read_transcript_excerpt,
 )
 from wade.config.loader import load_config
-from wade.models.ai import AIToolID, TokenUsage
+from wade.models.ai import AIToolID, EffortLevel, TokenUsage
 from wade.models.config import ProjectConfig
 from wade.models.task import PlanFile, Task
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
-from wade.services.ai_resolution import confirm_ai_selection, resolve_ai_tool, resolve_model
+from wade.services.ai_resolution import (
+    confirm_ai_selection,
+    resolve_ai_tool,
+    resolve_effort,
+    resolve_model,
+)
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import (
     add_complexity_label,
@@ -239,6 +244,7 @@ def run_ai_planning_session(
     model: str | None = None,
     transcript_path: Path | None = None,
     issue_context: str | None = None,
+    effort: EffortLevel | None = None,
     allowed_commands: list[str] | None = None,
 ) -> int:
     """Launch the AI CLI for a planning session.
@@ -286,6 +292,7 @@ def run_ai_planning_session(
         plan_mode=True,
         trusted_dirs=[str(Path.cwd()), tempfile.gettempdir(), plan_dir],
         initial_message=prompt,
+        effort=effort,
         allowed_commands=allowed_commands,
     )
     console.info(f"Plan directory: {plan_dir}")
@@ -351,6 +358,8 @@ def plan(
     *,
     ai_explicit: bool = False,
     model_explicit: bool = False,
+    effort: str | None = None,
+    effort_explicit: bool = False,
 ) -> bool:
     """Run an AI-assisted planning session.
 
@@ -371,14 +380,19 @@ def plan(
 
     resolved_model = resolve_model(model, config, "plan", tool=resolved_tool)
 
+    # Resolve effort level
+    resolved_effort = resolve_effort(effort, config, "plan", tool=resolved_tool)
+
     console.rule("wade plan-task")
 
     # Offer interactive confirmation unless both flags were explicitly provided.
-    resolved_tool, resolved_model = confirm_ai_selection(
+    resolved_tool, resolved_model, resolved_effort = confirm_ai_selection(
         resolved_tool,
         resolved_model,
         tool_explicit=ai_explicit,
         model_explicit=model_explicit,
+        resolved_effort=resolved_effort,
+        effort_explicit=effort_explicit,
     )
     if not resolved_tool:
         console.error("No AI tool selected.")
@@ -431,6 +445,7 @@ def plan(
         model=resolved_model,
         transcript_path=transcript_path,
         issue_context=issue_context,
+        effort=resolved_effort,
         allowed_commands=config.permissions.allowed_commands,
     )
     logger.info("plan.ai_exited", exit_code=exit_code)

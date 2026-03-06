@@ -8,6 +8,15 @@ from pathlib import Path
 from pydantic import BaseModel
 
 
+class EffortLevel(StrEnum):
+    """Reasoning effort / thinking depth level for AI tools."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    MAX = "max"
+
+
 class AIToolID(StrEnum):
     """Canonical identifiers for all supported AI tools."""
 
@@ -65,6 +74,7 @@ class AIToolCapabilities(BaseModel, frozen=True):
     supports_headless: bool = False
     supports_initial_message: bool = True
     blocks_until_exit: bool = True
+    supports_effort: bool = False
 
 
 class TokenUsage(BaseModel):

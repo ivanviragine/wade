@@ -6,7 +6,7 @@ from pathlib import Path
 
 import typer
 
-from wade.cli.autocomplete import complete_ai_tools, complete_models
+from wade.cli.autocomplete import complete_ai_tools, complete_effort_levels, complete_models
 
 work_app = typer.Typer(
     help="Work session lifecycle.",
@@ -158,6 +158,12 @@ def batch(
     model: str | None = typer.Option(
         None, "--model", help="AI model to use.", autocompletion=complete_models
     ),
+    effort: str | None = typer.Option(
+        None,
+        "--effort",
+        help="Reasoning effort level: low, medium, high, max.",
+        autocompletion=complete_effort_levels,
+    ),
 ) -> None:
     """Start parallel work sessions for multiple issues. [beta]"""
     from wade.services.work_service import batch as do_batch
@@ -189,6 +195,8 @@ def batch(
         model=model,
         ai_explicit=ai is not None,
         model_explicit=model is not None,
+        effort=effort,
+        effort_explicit=effort is not None,
     )
     raise typer.Exit(0 if success else 1)
 

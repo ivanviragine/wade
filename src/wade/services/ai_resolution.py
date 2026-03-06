@@ -5,7 +5,7 @@ from __future__ import annotations
 import structlog
 
 from wade.ai_tools.base import AbstractAITool
-from wade.models.ai import AIToolID
+from wade.models.ai import AIToolID, EffortLevel
 from wade.models.config import AICommandConfig, ProjectConfig
 
 logger = structlog.get_logger()
@@ -95,41 +95,90 @@ def resolve_model(
     return resolved
 
 
+def resolve_effort(
+    effort: str | None,
+    config: ProjectConfig,
+    command: str = "plan",
+    *,
+    tool: str | None = None,
+) -> EffortLevel | None:
+    """Resolve effort level from args -> config -> None.
+
+    Fallback chain:
+      1. Explicit *effort* arg (e.g. ``--effort`` CLI flag)
+      2. Command-specific config (``ai.<command>.effort``)
+      3. Global config (``ai.effort``)
+
+    When *tool* is provided and the tool does not support effort, a warning
+    is logged and ``None`` is returned.
+    """
+    resolved: str | None = effort
+
+    if not resolved:
+        resolved = config.get_effort(command)
+
+    if not resolved:
+        return None
+
+    # Validate
+    try:
+        level = EffortLevel(resolved)
+    except ValueError:
+        logger.warning("effort.invalid_level", effort=resolved)
+        return None
+
+    # Check tool support
+    if tool:
+        try:
+            adapter = AbstractAITool.get(AIToolID(tool))
+            if not adapter.capabilities().supports_effort:
+                logger.info("effort.unsupported_tool", tool=tool, effort=resolved)
+                return None
+        except (ValueError, KeyError):
+            pass
+
+    return level
+
+
 def confirm_ai_selection(
     resolved_tool: str | None,
     resolved_model: str | None,
     *,
     tool_explicit: bool,
     model_explicit: bool,
-) -> tuple[str | None, str | None]:
-    """Interactively confirm (and optionally change) the resolved AI tool/model.
+    resolved_effort: EffortLevel | None = None,
+    effort_explicit: bool = False,
+) -> tuple[str | None, str | None, EffortLevel | None]:
+    """Interactively confirm (and optionally change) the resolved AI tool/model/effort.
 
     Fires only when stdin is a TTY and at least one of the flags was not
-    explicitly provided by the caller.  When both flags are explicit (e.g.
-    because ``wade work batch`` passes ``--ai``/``--model`` to child calls),
-    this is a no-op.
+    explicitly provided by the caller.  When all flags are explicit (e.g.
+    because ``wade work batch`` passes ``--ai``/``--model``/``--effort`` to
+    child calls), this is a no-op.
 
-    Returns the (tool, model) pair after any user-driven changes.
+    Returns the (tool, model, effort) triple after any user-driven changes.
     """
     from wade.ui import prompts
     from wade.ui.console import console
 
-    # Skip when non-TTY, no tool resolved, or both flags were explicit.
-    if not prompts.is_tty() or resolved_tool is None or (tool_explicit and model_explicit):
-        return resolved_tool, resolved_model
+    # Skip when non-TTY, no tool resolved, or all flags were explicit.
+    all_explicit = tool_explicit and model_explicit and effort_explicit
+    if not prompts.is_tty() or resolved_tool is None or all_explicit:
+        return resolved_tool, resolved_model, resolved_effort
 
     tool = resolved_tool
     model = resolved_model
+    effort = resolved_effort
 
     while True:
         # Display current selection
         console.kv("AI tool", tool)
         if model:
             console.kv("Model", model)
+        if effort:
+            console.kv("Effort", effort.value)
 
         # Build menu dynamically based on which flags were NOT explicit.
-        # Once the user changes a value at the prompt it becomes "confirmed",
-        # but we keep the menu until they explicitly choose Proceed.
         menu_items: list[str] = ["Proceed"]
         installed = AbstractAITool.detect_installed()
         can_change_tool = not tool_explicit and len(installed) > 1
@@ -138,8 +187,17 @@ def confirm_ai_selection(
         if not model_explicit:
             menu_items.append("Change model")
 
+        # Show "Change effort" only when the tool supports it
+        tool_supports_effort = False
+        try:
+            adapter = AbstractAITool.get(AIToolID(tool))
+            tool_supports_effort = adapter.capabilities().supports_effort
+        except (ValueError, KeyError):
+            pass
+        if not effort_explicit and tool_supports_effort:
+            menu_items.append("Change effort")
+
         if len(menu_items) == 1:
-            # Nothing to change — nothing to confirm either, exit immediately.
             break
 
         idx = prompts.select("Confirm AI selection", menu_items)
@@ -155,13 +213,23 @@ def confirm_ai_selection(
             new_tool = tool_names[new_idx]
             if new_tool != tool:
                 tool = new_tool
-                # Tool changed — force model re-selection regardless of model_explicit.
                 model = _prompt_model_selection(tool)
+                # Clear stale effort when the new tool doesn't support it.
+                if effort is not None:
+                    try:
+                        new_adapter = AbstractAITool.get(AIToolID(tool))
+                        if not new_adapter.capabilities().supports_effort:
+                            effort = None
+                    except (ValueError, KeyError):
+                        effort = None
 
         elif choice == "Change model":
             model = _prompt_model_selection(tool)
 
-    return tool, model
+        elif choice == "Change effort":
+            effort = _prompt_effort_selection(effort)
+
+    return tool, model, effort
 
 
 def _prompt_model_selection(tool: str) -> str | None:
@@ -177,3 +245,17 @@ def _prompt_model_selection(tool: str) -> str | None:
         custom = prompts.input_prompt("Enter model name", allow_empty=True)
         return custom or None
     return chosen or None
+
+
+def _prompt_effort_selection(current: EffortLevel | None) -> EffortLevel | None:
+    """Show an effort level picker and return the chosen level (or None)."""
+    from wade.ui import prompts
+
+    choices = ["(none — use tool default)", *[e.value for e in EffortLevel]]
+    default_idx = 0
+    if current:
+        default_idx = [e.value for e in EffortLevel].index(current.value) + 1
+    idx = prompts.select("Select effort level", choices, default=default_idx)
+    if idx == 0:
+        return None
+    return EffortLevel(choices[idx])
