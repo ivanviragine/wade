@@ -214,6 +214,14 @@ def confirm_ai_selection(
             if new_tool != tool:
                 tool = new_tool
                 model = _prompt_model_selection(tool)
+                # Clear stale effort when the new tool doesn't support it.
+                if effort is not None:
+                    try:
+                        new_adapter = AbstractAITool.get(AIToolID(tool))
+                        if not new_adapter.capabilities().supports_effort:
+                            effort = None
+                    except (ValueError, KeyError):
+                        effort = None
 
         elif choice == "Change model":
             model = _prompt_model_selection(tool)

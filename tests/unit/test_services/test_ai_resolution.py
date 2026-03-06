@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import wade.ai_tools  # noqa: F401 — registers all adapters via __init_subclass__
+from wade.models.ai import EffortLevel
 from wade.services.ai_resolution import confirm_ai_selection
 
 # ---------------------------------------------------------------------------
@@ -339,3 +341,75 @@ class TestChangeModel:
 
         assert model == custom_model
         mock_input.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Change effort
+# ---------------------------------------------------------------------------
+
+
+class TestChangeEffort:
+    def test_change_effort_selects_level(self) -> None:
+        """User picks Change effort → selects 'max' → effort is EffortLevel.MAX."""
+        call_count = 0
+
+        def fake_select(title: str, items: list[str], **kwargs: object) -> int:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return items.index("Change effort")
+            if call_count == 2:
+                # Effort picker: ["(none — use tool default)", "low", "medium", "high", "max"]
+                return items.index("max")
+            return 0  # Proceed
+
+        with (
+            patch(_IS_TTY, return_value=True),
+            patch(_SELECT, side_effect=fake_select),
+            patch(_DETECT, return_value=_make_installed(_CLAUDE)),
+            patch(_CONSOLE_KV),
+        ):
+            _, _, effort = confirm_ai_selection(
+                _CLAUDE,
+                _MODEL_A,
+                tool_explicit=False,
+                model_explicit=True,
+                effort_explicit=False,
+            )
+
+        assert effort == EffortLevel.MAX
+
+    def test_tool_switch_clears_effort_for_unsupported_tool(self) -> None:
+        """Switching to a tool that doesn't support effort clears stale effort."""
+        call_count = 0
+
+        def fake_select(title: str, items: list[str], **kwargs: object) -> int:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return items.index("Change AI tool")
+            if call_count == 2:
+                return items.index(_COPILOT)
+            if call_count == 3:
+                return 0  # first model
+            return 0  # Proceed
+
+        with (
+            patch(_IS_TTY, return_value=True),
+            patch(_SELECT, side_effect=fake_select),
+            patch(_DETECT, return_value=_make_installed(_CLAUDE, _COPILOT)),
+            patch(_MODELS_FOR_TOOL, return_value=[_MODEL_B]),
+            patch(_CONSOLE_KV),
+        ):
+            tool, model, effort = confirm_ai_selection(
+                _CLAUDE,
+                _MODEL_A,
+                tool_explicit=False,
+                model_explicit=False,
+                resolved_effort=EffortLevel.HIGH,
+                effort_explicit=False,
+            )
+
+        assert tool == _COPILOT
+        assert model == _MODEL_B
+        assert effort is None  # stale effort cleared when copilot doesn't support it

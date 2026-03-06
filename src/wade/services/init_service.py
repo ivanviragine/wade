@@ -809,8 +809,8 @@ def _prompt_ai_section(
 
             effort_choices = ["(none — use tool default)", *[e.value for e in EffortLevel]]
             idx = ui_prompts.select("Default reasoning effort level", effort_choices)
-            if idx > 0:
-                default_effort = effort_choices[idx]
+            # "" sentinel signals explicit "none" so _patch_config can clear on force
+            default_effort = effort_choices[idx] if idx > 0 else ""
     except (ValueError, KeyError):
         pass
 
@@ -1368,10 +1368,16 @@ def _patch_config(
         ai["default_model"] = default_model
         raw["ai"] = ai
         changed = True
-    if default_effort and (force or not ai.get("effort")):
-        ai["effort"] = default_effort
-        raw["ai"] = ai
-        changed = True
+    if default_effort is not None:
+        if default_effort == "":  # Sentinel: user explicitly cleared effort
+            if force and "effort" in ai:
+                del ai["effort"]
+                raw["ai"] = ai
+                changed = True
+        elif force or not ai.get("effort"):
+            ai["effort"] = default_effort
+            raw["ai"] = ai
+            changed = True
 
     # Patch work tool override
     if work_tool:
