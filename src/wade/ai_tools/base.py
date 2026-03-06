@@ -247,6 +247,35 @@ class AbstractAITool(ABC):
         """
         return []
 
+    def preserve_session_data(self, worktree_path: Path, main_checkout_path: Path) -> bool:
+        """Preserve AI tool session data from a worktree before it is deleted.
+
+        Called before removing a worktree so that sessions started in the worktree
+        can be resumed from the main checkout after the worktree is gone.
+
+        Default: no-op (return True). Override in tools that store path-bound
+        session data.
+
+        Args:
+            worktree_path: The worktree directory being deleted.
+            main_checkout_path: The main checkout to migrate session data into.
+
+        Returns:
+            True if preservation succeeded (or is not needed), False on failure.
+        """
+        return True
+
+    def session_data_dirs(self) -> list[str]:
+        """Return directory names that indicate this tool may have session data.
+
+        Used as a fallback when the DB has no record of the tool used in a
+        worktree. If any of these directories exist under a worktree, this
+        adapter is selected for preservation.
+
+        Default: empty list (no detection). Override per tool.
+        """
+        return []
+
     def build_launch_command(
         self,
         model: str | None = None,

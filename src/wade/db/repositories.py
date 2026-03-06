@@ -100,6 +100,11 @@ class SessionRepository:
             statement = select(SessionRecord).where(SessionRecord.ended_at.is_(None))  # type: ignore[union-attr]
             return list(session.exec(statement).all())
 
+    def get_by_worktree_path(self, worktree_path: str) -> list[SessionRecord]:
+        with Session(self.engine) as session:
+            statement = select(SessionRecord).where(SessionRecord.worktree_path == worktree_path)
+            return list(session.exec(statement).all())
+
     def update(self, session_id: str, **kwargs: Any) -> SessionRecord | None:
         with Session(self.engine) as session:
             record = session.get(SessionRecord, session_id)

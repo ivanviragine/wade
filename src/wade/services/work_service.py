@@ -2472,6 +2472,52 @@ def _remove_stale(repo_root: Path, main_branch: str, force: bool) -> bool:
     return removed > 0
 
 
+def _preserve_session_data(repo_root: Path, wt_path: Path) -> None:
+    """Preserve AI tool session data before worktree removal.
+
+    Queries the DB for the AI tool used in this worktree; falls back to
+    directory-presence detection via ``session_data_dirs()``.  Calls the
+    adapter's ``preserve_session_data()``.  Any failure is logged but never
+    propagates — preservation must never block worktree deletion.
+    """
+    try:
+        from wade.db.engine import get_or_create_engine
+        from wade.db.repositories import SessionRepository
+
+        engine = get_or_create_engine(repo_root)
+        session_repo = SessionRepository(engine)
+
+        sessions = session_repo.get_by_worktree_path(str(wt_path))
+
+        adapter: AbstractAITool | None = None
+        if sessions:
+            latest = max(sessions, key=lambda s: s.started_at)
+            with contextlib.suppress(ValueError):
+                adapter = AbstractAITool.get(latest.ai_tool)
+
+        # Fallback: detect via session_data_dirs
+        if adapter is None:
+            for tool_id in AbstractAITool.available_tools():
+                candidate = AbstractAITool.get(tool_id)
+                for dir_name in candidate.session_data_dirs():
+                    if (wt_path / dir_name).exists():
+                        adapter = candidate
+                        break
+                if adapter is not None:
+                    break
+
+        if adapter is None:
+            return
+
+        adapter.preserve_session_data(wt_path, repo_root)
+    except Exception:
+        logger.warning(
+            "worktree.preserve_session_data_failed",
+            worktree=str(wt_path),
+            exc_info=True,
+        )
+
+
 def _cleanup_worktree(repo_root: Path, wt_path: Path, main_branch: str) -> bool:
     """Remove a single worktree and its branch."""
     console.step(f"Removing worktree: {wt_path}")
@@ -2483,6 +2529,8 @@ def _cleanup_worktree(repo_root: Path, wt_path: Path, main_branch: str) -> bool:
         if wt.get("path") == str(wt_path):
             branch_name = wt.get("branch")
             break
+
+    _preserve_session_data(repo_root, wt_path)
 
     try:
         git_worktree.remove_worktree(repo_root, wt_path)
