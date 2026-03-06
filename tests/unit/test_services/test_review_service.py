@@ -7,12 +7,17 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from wade.git.repo import GitError
 from wade.models.ai import ModelBreakdown, TokenUsage
 from wade.models.review import ReviewComment, ReviewThread
 from wade.models.task import Task, TaskState
 from wade.services.review_service import (
     _capture_review_session_usage,
+    _post_review_lifecycle,
+    _recover_worktree,
     build_review_prompt,
+    fetch_reviews,
+    resolve_thread,
     start,
 )
 from wade.services.work_service import (
@@ -243,6 +248,9 @@ class TestReviewServiceStart:
                 "wade.services.review_service._detect_ai_cli_env",
                 return_value=None,
             ),
+            "_post_review_lifecycle": patch(
+                "wade.services.review_service._post_review_lifecycle",
+            ),
         }
 
         started = {k: p.start() for k, p in patches.items()}
@@ -253,7 +261,7 @@ class TestReviewServiceStart:
             p.stop()
 
     def test_no_worktree_returns_false(self, tmp_path: Path, mock_provider: MagicMock) -> None:
-        """start() should fail if no worktree exists for the issue."""
+        """start() should fail if no worktree and no remote branch for recovery."""
         with (
             patch("wade.services.review_service.load_config"),
             patch("wade.services.review_service.get_provider", return_value=mock_provider),
@@ -268,6 +276,10 @@ class TestReviewServiceStart:
             patch(
                 "wade.services.review_service.git_worktree.list_worktrees",
                 return_value=[],
+            ),
+            patch(
+                "wade.services.review_service._recover_worktree",
+                return_value=None,
             ),
         ):
             result = start(target="42")
@@ -300,10 +312,10 @@ class TestReviewServiceStart:
         result = start(target="42")
         assert result is True
 
-    def test_writes_review_comments_file(
+    def test_launches_ai_with_actionable_comments(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock], mock_provider: MagicMock
     ) -> None:
-        """start() should write REVIEW-COMMENTS.md to the worktree."""
+        """start() should proceed to AI launch when actionable comments exist."""
         mock_provider.get_pr_review_threads.return_value = [
             ReviewThread(
                 comments=[
@@ -320,14 +332,11 @@ class TestReviewServiceStart:
         result = start(target="42")
         assert result is True
 
-        # Find the worktree path used
+        # Verify that no REVIEW-COMMENTS.md was written (AI uses wade fetch-reviews)
         wt_paths = list(tmp_path.glob("wt"))
         assert len(wt_paths) == 1
         review_file = wt_paths[0] / "REVIEW-COMMENTS.md"
-        assert review_file.is_file()
-        content = review_file.read_text()
-        assert "Fix this" in content
-        assert "main.py" in content
+        assert not review_file.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -415,3 +424,268 @@ class TestCaptureReviewSessionUsage:
             )
 
         assert result == "claude-opus-4-6"
+
+
+# ---------------------------------------------------------------------------
+# fetch_reviews()
+# ---------------------------------------------------------------------------
+
+
+class TestFetchReviews:
+    """Tests for the fetch_reviews() subcommand function."""
+
+    def _make_task(self) -> Task:
+        return Task(id="42", title="Fix the widget", state=TaskState.OPEN, body="")
+
+    @patch("wade.services.review_service.filter_actionable_threads")
+    @patch("wade.services.review_service.git_pr.get_pr_for_branch")
+    @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.review_service.git_repo.get_repo_root")
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_outputs_formatted_markdown(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_branch: MagicMock,
+        mock_pr: MagicMock,
+        mock_filter: MagicMock,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        mock_repo_root.return_value = tmp_path
+        provider = mock_get_provider.return_value
+        provider.read_task.return_value = self._make_task()
+        mock_pr.return_value = {"number": 99, "state": "OPEN"}
+        threads = [
+            ReviewThread(
+                id="PRRT_123",
+                comments=[ReviewComment(author="alice", body="Fix this", path="a.py", line=1)],
+            )
+        ]
+        mock_filter.return_value = threads
+        provider.get_pr_review_threads.return_value = threads
+
+        result = fetch_reviews("42", project_root=tmp_path)
+
+        assert result is True
+        captured = capsys.readouterr()
+        assert "Fix this" in captured.out
+        assert "@alice" in captured.out
+
+    @patch("wade.services.review_service.filter_actionable_threads")
+    @patch("wade.services.review_service.git_pr.get_pr_for_branch")
+    @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.review_service.git_repo.get_repo_root")
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_no_comments_prints_message(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_branch: MagicMock,
+        mock_pr: MagicMock,
+        mock_filter: MagicMock,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        mock_repo_root.return_value = tmp_path
+        provider = mock_get_provider.return_value
+        provider.read_task.return_value = self._make_task()
+        mock_pr.return_value = {"number": 99, "state": "OPEN"}
+        provider.get_pr_review_threads.return_value = []
+        mock_filter.return_value = []
+
+        result = fetch_reviews("42", project_root=tmp_path)
+
+        assert result is True
+        captured = capsys.readouterr()
+        assert "No unresolved" in captured.out
+
+    @patch("wade.services.review_service.git_pr.get_pr_for_branch", return_value=None)
+    @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.review_service.git_repo.get_repo_root")
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_no_pr_returns_false(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_branch: MagicMock,
+        mock_pr: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_repo_root.return_value = tmp_path
+        provider = mock_get_provider.return_value
+        provider.read_task.return_value = self._make_task()
+
+        result = fetch_reviews("42", project_root=tmp_path)
+
+        assert result is False
+
+    @patch("wade.services.review_service.git_repo.get_repo_root", side_effect=GitError("nope"))
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_not_in_repo_returns_false(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        result = fetch_reviews("42", project_root=tmp_path)
+        assert result is False
+
+
+# ---------------------------------------------------------------------------
+# resolve_thread()
+# ---------------------------------------------------------------------------
+
+
+class TestResolveThread:
+    """Tests for the resolve_thread() subcommand function."""
+
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_success_returns_true(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+    ) -> None:
+        provider = mock_get_provider.return_value
+        provider.resolve_review_thread.return_value = True
+
+        result = resolve_thread("PRRT_abc123")
+
+        assert result is True
+        provider.resolve_review_thread.assert_called_once_with("PRRT_abc123")
+
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_failure_returns_false(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+    ) -> None:
+        provider = mock_get_provider.return_value
+        provider.resolve_review_thread.return_value = False
+
+        result = resolve_thread("PRRT_abc123")
+
+        assert result is False
+
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_not_implemented_returns_false(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+    ) -> None:
+        provider = mock_get_provider.return_value
+        provider.resolve_review_thread.side_effect = NotImplementedError
+
+        result = resolve_thread("PRRT_abc123")
+
+        assert result is False
+
+
+# ---------------------------------------------------------------------------
+# _recover_worktree()
+# ---------------------------------------------------------------------------
+
+
+class TestRecoverWorktree:
+    """Tests for the _recover_worktree() helper."""
+
+    def _make_config(self) -> MagicMock:
+        from wade.models.config import ProjectConfig
+
+        config = MagicMock(spec=ProjectConfig)
+        config.project = MagicMock()
+        config.project.worktrees_dir = ""
+        config.project.branch_prefix = "feat"
+        config.project.main_branch = "main"
+        return config
+
+    @patch("wade.services.review_service.git_worktree.checkout_existing_branch_worktree")
+    @patch("wade.services.review_service._resolve_worktrees_dir")
+    @patch("wade.services.review_service.git_repo.rev_parse")
+    @patch("wade.services.review_service.git_repo.fetch_ref")
+    def test_success_returns_worktree_path(
+        self,
+        mock_fetch: MagicMock,
+        mock_rev_parse: MagicMock,
+        mock_resolve_wt: MagicMock,
+        mock_checkout: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        worktrees_dir = tmp_path / "worktrees"
+        worktrees_dir.mkdir()
+        mock_resolve_wt.return_value = worktrees_dir
+        expected_path = worktrees_dir / "repo" / "feat-42-fix"
+        mock_checkout.return_value = expected_path
+
+        result = _recover_worktree(repo_root, "feat/42-fix", self._make_config())
+
+        assert result == expected_path
+        mock_fetch.assert_called_once()
+        mock_rev_parse.assert_called_once()
+        mock_checkout.assert_called_once()
+
+    @patch("wade.services.review_service.git_repo.fetch_ref", side_effect=GitError("no remote"))
+    def test_no_remote_branch_returns_none(
+        self,
+        mock_fetch: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        result = _recover_worktree(tmp_path, "feat/42-fix", self._make_config())
+        assert result is None
+
+    @patch("wade.services.review_service.git_repo.rev_parse", side_effect=GitError("not found"))
+    @patch("wade.services.review_service.git_repo.fetch_ref")
+    def test_branch_not_local_returns_none(
+        self,
+        mock_fetch: MagicMock,
+        mock_rev_parse: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        result = _recover_worktree(tmp_path, "feat/42-fix", self._make_config())
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _post_review_lifecycle()
+# ---------------------------------------------------------------------------
+
+
+class TestPostReviewLifecycle:
+    """Tests for the _post_review_lifecycle() helper."""
+
+    @patch("wade.services.review_service._merge_pr")
+    @patch("wade.ui.prompts.select", return_value=0)
+    def test_merge_choice_calls_merge_pr(
+        self,
+        mock_select: MagicMock,
+        mock_merge: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        provider = MagicMock()
+        _post_review_lifecycle(tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider)
+        mock_merge.assert_called_once_with(tmp_path, "feat/42", 99, "42", tmp_path / "wt", provider)
+
+    @patch("wade.services.review_service._merge_pr")
+    @patch("wade.ui.prompts.select", return_value=1)
+    def test_wait_choice_shows_hint(
+        self,
+        mock_select: MagicMock,
+        mock_merge: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        provider = MagicMock()
+        _post_review_lifecycle(tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider)
+        mock_merge.assert_not_called()

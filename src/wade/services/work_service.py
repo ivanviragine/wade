@@ -557,9 +557,29 @@ def _post_work_lifecycle_pr(
     if pr_url and prompts.confirm("Open PR in browser?", default=True):
         webbrowser.open(pr_url)
 
-    if not prompts.confirm(f"Do you want to merge PR #{pr_number}?", default=True):
+    choice = prompts.select(
+        f"PR #{pr_number} — what next?",
+        ["Merge PR", "Wait for reviews"],
+    )
+
+    if choice == 1:  # Wait for reviews
+        issue_hint = f" {issue_number}" if issue_number else ""
+        console.hint(f"Run `wade address-reviews{issue_hint}` when reviews come in.")
         return
 
+    # Merge flow
+    _merge_pr(repo_root, branch, int(pr_number), issue_number, worktree_path, provider)
+
+
+def _merge_pr(
+    repo_root: Path,
+    branch: str,
+    pr_number: int,
+    issue_number: str | int | None,
+    worktree_path: Path | None,
+    provider: AbstractTaskProvider,
+) -> None:
+    """Merge a PR via squash, clean up worktree, pull main, close issue."""
     # Warn if the worktree has uncommitted changes before proceeding.
     if worktree_path and worktree_path.is_dir() and not git_repo.is_clean(worktree_path):
         console.warn("Worktree has uncommitted changes.")
@@ -573,7 +593,7 @@ def _post_work_lifecycle_pr(
             git_repo.checkout_detach(worktree_path)
 
     try:
-        git_pr.merge_pr(repo_root=repo_root, pr_number=int(pr_number), strategy="squash")
+        git_pr.merge_pr(repo_root=repo_root, pr_number=pr_number, strategy="squash")
     except Exception as e:
         if worktree_path and worktree_path.is_dir():
             with contextlib.suppress(Exception):

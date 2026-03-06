@@ -369,6 +369,7 @@ query($owner: String!, $repo: String!, $pr: Int!) {{
           endCursor
         }}
         nodes {{
+          id
           isResolved
           isOutdated
           comments(first: 50) {{
@@ -432,6 +433,7 @@ query($owner: String!, $repo: String!, $pr: Int!) {{
                 )
             threads.append(
                 ReviewThread(
+                    id=node.get("id", ""),
                     is_resolved=node.get("isResolved", False),
                     is_outdated=node.get("isOutdated", False),
                     comments=comments,
@@ -443,6 +445,40 @@ query($owner: String!, $repo: String!, $pr: Int!) {{
             page_info.get("hasNextPage", False),
             page_info.get("endCursor"),
         )
+
+    def resolve_review_thread(self, thread_id: str) -> bool:
+        """Mark a PR review thread as resolved via GitHub GraphQL mutation."""
+        query = """
+mutation($threadId: ID!) {
+  resolveReviewThread(input: {threadId: $threadId}) {
+    thread {
+      isResolved
+    }
+  }
+}"""
+        try:
+            result = run(
+                [
+                    "gh",
+                    "api",
+                    "graphql",
+                    "-f",
+                    f"threadId={thread_id}",
+                    "-f",
+                    f"query={query}",
+                ],
+                check=True,
+            )
+            data = json.loads(result.stdout)
+            thread_data = data.get("data", {}).get("resolveReviewThread", {}).get("thread", {})
+            return bool(thread_data.get("isResolved", False))
+        except (CommandError, json.JSONDecodeError) as e:
+            logger.warning(
+                "github.resolve_review_thread_failed",
+                thread_id=thread_id,
+                error=str(e),
+            )
+            return False
 
     # --- Repository info ---
 

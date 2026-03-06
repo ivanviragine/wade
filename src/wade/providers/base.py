@@ -121,6 +121,10 @@ class AbstractTaskProvider(ABC):
         """Fetch PR review threads. Returns empty list by default."""
         raise NotImplementedError(f"{type(self).__name__} does not support review threads")
 
+    def resolve_review_thread(self, thread_id: str) -> bool:
+        """Mark a PR review thread as resolved. Returns True on success."""
+        raise NotImplementedError(f"{type(self).__name__} does not support resolving threads")
+
     # --- Repository info ---
 
     def get_repo_nwo(self) -> str:

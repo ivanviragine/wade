@@ -43,6 +43,7 @@ class TestReviewThread:
         assert thread.is_outdated is False
         assert thread.comments == []
         assert thread.first_comment is None
+        assert thread.id == ""
 
     def test_first_comment(self) -> None:
         c1 = ReviewComment(author="alice", body="First")
@@ -56,6 +57,13 @@ class TestReviewThread:
             comments=[ReviewComment(body="resolved")],
         )
         assert thread.is_resolved is True
+
+    def test_thread_with_id(self) -> None:
+        thread = ReviewThread(
+            id="PRRT_kwDONS4bTM6VIKWd",
+            comments=[ReviewComment(body="Fix this")],
+        )
+        assert thread.id == "PRRT_kwDONS4bTM6VIKWd"
 
 
 # ---------------------------------------------------------------------------
@@ -282,3 +290,30 @@ Fix the null check in main.py.
         result = format_review_threads_markdown([])
         assert "# Review Comments to Address" in result
         assert "**0** unresolved comment(s)" in result
+
+    def test_thread_id_in_output(self) -> None:
+        threads = [
+            ReviewThread(
+                id="PRRT_kwDONS4bTM6VIKWd",
+                comments=[
+                    ReviewComment(
+                        author="alice",
+                        body="Fix this",
+                        path="main.py",
+                        line=10,
+                    )
+                ],
+            )
+        ]
+        result = format_review_threads_markdown(threads)
+        assert "PRRT_kwDONS4bTM6VIKWd" in result
+        assert "**Thread ID:**" in result
+
+    def test_thread_id_missing_no_extra_line(self) -> None:
+        threads = [
+            ReviewThread(
+                comments=[ReviewComment(author="alice", body="Fix this", path="main.py", line=10)],
+            )
+        ]
+        result = format_review_threads_markdown(threads)
+        assert "**Thread ID:**" not in result

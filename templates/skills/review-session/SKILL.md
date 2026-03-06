@@ -1,7 +1,7 @@
 ---
 name: review-session
 description: >
-  Rules for AI sessions that address PR review comments. Covers reading
+  Rules for AI sessions that address PR review comments. Covers fetching
   review comments, verifying findings, making fixes, and pushing changes.
   Read this at the start of every review-addressing session.
 ---
@@ -31,12 +31,15 @@ Run `wade check` as your **first action**:
   human to run `wade address-reviews <issue>` from the main checkout.
 - `NOT_IN_GIT_REPO` — you are not inside a git repository.
 
-## Read the review comments
+## Fetching review comments
 
-Your primary input is **`REVIEW-COMMENTS.md`** in the worktree root. This
-file contains all unresolved PR review comments, grouped by file.
+Use `wade fetch-reviews <issue-number>` to fetch all unresolved PR review
+comments. This outputs formatted markdown with:
+- Comments grouped by file
+- CodeRabbit AI-agent prompts extracted and highlighted
+- Thread IDs for resolution
 
-Read it carefully before making any changes.
+**Run this command first** to understand what needs to be addressed.
 
 ## Addressing comments
 
@@ -73,6 +76,16 @@ if the request is ambiguous.
 Address comments file-by-file or in logical groups. Each commit should be
 cohesive — don't mix unrelated fixes.
 
+## Resolving threads
+
+After addressing a review comment, resolve the corresponding thread on GitHub:
+
+```bash
+wade resolve-thread <thread-node-id>
+```
+
+The thread ID is included in the output of `wade fetch-reviews`.
+
 ## Commit conventions
 
 Use [Conventional Commits](https://www.conventionalcommits.org/) format:
@@ -90,7 +103,6 @@ Add tests if a review comment identified a missing test case.
 
 - **Do NOT implement new features** — only address review comments
 - **Do NOT make unrelated changes** — stay focused on the review feedback
-- **Do NOT resolve review threads on GitHub** — the reviewer will do that
 - **Do NOT create new PRs** — push to the existing branch
 
 ## Syncing with main

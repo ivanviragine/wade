@@ -33,8 +33,10 @@ from wade.services.ai_resolution import (
     resolve_model,
 )
 from wade.services.prompt_delivery import deliver_prompt_if_needed
-from wade.services.task_service import add_reviewed_by_labels
+from wade.services.task_service import add_review_addressed_by_labels
 from wade.services.work_service import (
+    _merge_pr,
+    _resolve_worktrees_dir,
     _strip_review_usage_block,
     bootstrap_worktree,
     build_review_usage_block,
@@ -52,6 +54,110 @@ from wade.utils.terminal import (
 logger = structlog.get_logger()
 
 
+# ---------------------------------------------------------------------------
+# Simple subcommands — used by AI agents during review sessions
+# ---------------------------------------------------------------------------
+
+
+def fetch_reviews(
+    target: str,
+    project_root: Path | None = None,
+) -> bool:
+    """Fetch unresolved PR review comments and print formatted markdown to stdout.
+
+    This is a tool for AI agents — it outputs structured markdown that the agent
+    can read and act on.
+
+    Returns:
+        True on success, False on failure.
+    """
+    config = load_config(project_root)
+    provider = get_provider(config)
+
+    cwd = project_root or Path.cwd()
+    try:
+        repo_root = git_repo.get_repo_root(cwd)
+    except GitError:
+        console.error_with_fix("Not inside a git repository", "Navigate to your project directory")
+        return False
+
+    # Read the issue
+    issue_number = target.lstrip("#")
+    try:
+        task = provider.read_task(issue_number)
+    except Exception as e:
+        console.error(f"Could not read issue #{issue_number}: {e}")
+        return False
+
+    # Find branch and PR
+    branch_name = git_branch.make_branch_name(
+        config.project.branch_prefix,
+        int(task.id),
+        task.title,
+    )
+
+    pr_info = git_pr.get_pr_for_branch(repo_root, branch_name)
+    if not pr_info:
+        console.error(f"No open PR found for branch {branch_name}")
+        return False
+
+    pr_number = int(pr_info["number"])
+
+    # Fetch review threads
+    try:
+        all_threads = provider.get_pr_review_threads(repo_root, pr_number)
+    except NotImplementedError:
+        console.error("Review thread fetching is not supported by this provider.")
+        return False
+    except Exception as e:
+        console.error(f"Failed to fetch review threads: {e}")
+        return False
+
+    # Filter to actionable threads
+    actionable = filter_actionable_threads(all_threads)
+
+    if not actionable:
+        print("No unresolved review comments found.")
+        return True
+
+    # Output formatted markdown to stdout (for AI consumption)
+    print(format_review_threads_markdown(actionable))
+    return True
+
+
+def resolve_thread(
+    thread_id: str,
+    project_root: Path | None = None,
+) -> bool:
+    """Mark a PR review thread as resolved on GitHub.
+
+    Returns:
+        True on success, False on failure.
+    """
+    config = load_config(project_root)
+    provider = get_provider(config)
+
+    try:
+        success = provider.resolve_review_thread(thread_id)
+    except NotImplementedError:
+        console.error("Resolving review threads is not supported by this provider.")
+        return False
+    except Exception as e:
+        console.error(f"Failed to resolve thread: {e}")
+        return False
+
+    if success:
+        console.success(f"Thread {thread_id} resolved.")
+    else:
+        console.error(f"Failed to resolve thread {thread_id}.")
+    return success
+
+
+# ---------------------------------------------------------------------------
+# Main orchestration
+# ---------------------------------------------------------------------------
+
+
 def start(
     target: str,
     ai_tool: str | None = None,
@@ -66,13 +172,12 @@ def start(
 
     Steps:
     1. Read the issue from the provider
-    2. Find existing worktree (error if missing)
+    2. Find existing worktree (or recover from remote branch)
     3. Find PR for the branch (error if missing or merged)
-    4. Fetch and filter review threads
-    5. If no actionable threads: display success, return
-    6. Write REVIEW-COMMENTS.md to worktree
-    7. Install review-session skill, build prompt, launch AI
-    8. Post-session: capture token usage, update PR, add labels
+    4. Quick-check for unresolved review threads
+    5. Install review-session skill, build prompt, launch AI
+    6. Post-session: capture token usage, update PR, add labels
+    7. Post-review lifecycle: "Merge PR" / "Wait for new reviews"
 
     Returns:
         True on success, False on failure.
@@ -98,7 +203,7 @@ def start(
     console.rule(f"address-reviews #{task.id}")
     console.kv("Issue", console.issue_ref(task.id, task.title))
 
-    # 2. Find existing worktree for the issue
+    # 2. Find existing worktree for the issue (or recover from remote branch)
     branch_name = git_branch.make_branch_name(
         config.project.branch_prefix,
         int(task.id),
@@ -114,14 +219,19 @@ def start(
         None,
     )
 
-    if not existing_wt:
-        console.error_with_fix(
-            f"No worktree found for issue #{task.id}",
-            f"Run `wade implement-task {task.id}` first to create a worktree",
-        )
-        return False
+    if existing_wt:
+        worktree_path = existing_wt
+    else:
+        # Try to recover: create worktree from the remote branch
+        recovered = _recover_worktree(repo_root, branch_name, config)
+        if not recovered:
+            console.error_with_fix(
+                f"No worktree or remote branch found for issue #{task.id}",
+                f"Run `wade implement-task {task.id}` first to create a worktree",
+            )
+            return False
+        worktree_path = recovered
 
-    worktree_path = existing_wt
     console.kv("Worktree", str(worktree_path))
 
     # 3. Find PR for the branch
@@ -142,45 +252,33 @@ def start(
 
     console.kv("PR", f"#{pr_number}")
 
-    # 4. Fetch review threads
-    console.step("Fetching review comments...")
+    # 4. Quick-check for unresolved review threads
+    console.step("Checking for review comments...")
+    comment_count = 0
+    file_count = 0
     try:
         all_threads = provider.get_pr_review_threads(repo_root, pr_number)
-    except NotImplementedError:
-        console.error("Review thread fetching is not supported by this provider.")
-        return False
-    except Exception as e:
-        console.error(f"Failed to fetch review threads: {e}")
-        return False
+        actionable = filter_actionable_threads(all_threads)
+        comment_count = len(actionable)
+        file_paths = {
+            t.first_comment.path for t in actionable if t.first_comment and t.first_comment.path
+        }
+        file_count = len(file_paths) + (
+            1 if any(t.first_comment and not t.first_comment.path for t in actionable) else 0
+        )
+    except Exception:
+        logger.debug("review.quick_check_failed", exc_info=True)
 
-    # 5. Filter to actionable threads
-    actionable = filter_actionable_threads(all_threads)
-
-    if not actionable:
+    if comment_count == 0:
         console.success("All review comments resolved — nothing to address! 🎉")
         return True
 
-    # Count files
-    file_paths = {
-        t.first_comment.path for t in actionable if t.first_comment and t.first_comment.path
-    }
-    comment_count = len(actionable)
-    file_count = len(file_paths) + (
-        1 if any(t.first_comment and not t.first_comment.path for t in actionable) else 0
-    )
-
     console.info(f"Found {comment_count} unresolved comment(s) across {file_count} file(s)")
 
-    # 6. Format and write REVIEW-COMMENTS.md
-    review_md = format_review_threads_markdown(actionable)
-    review_file = worktree_path / "REVIEW-COMMENTS.md"
-    review_file.write_text(review_md, encoding="utf-8")
-    console.detail(f"Wrote {review_file}")
-
-    # 7. Re-bootstrap skills (ensures review-session skill is installed)
+    # 5. Re-bootstrap skills (ensures review-session skill is installed)
     bootstrap_worktree(worktree_path, config, repo_root)
 
-    # 8. Resolve AI tool and model
+    # 6. Resolve AI tool and model
     resolved_tool = resolve_ai_tool(ai_tool, config, "work")
     resolved_model = resolve_model(
         model,
@@ -198,7 +296,7 @@ def start(
             model_explicit=model_explicit,
         )
 
-    # 9. Build review prompt
+    # 7. Build review prompt
     prompt = build_review_prompt(
         task=task,
         pr_number=pr_number,
@@ -238,7 +336,7 @@ def start(
     except OSError:
         logger.warning("review.transcript_dir_failed")
 
-    # 10. Detach mode
+    # 8. Detach mode
     if detach and resolved_tool:
         try:
             detach_adapter = AbstractAITool.get(AIToolID(resolved_tool))
@@ -258,7 +356,7 @@ def start(
             return True
         console.warn("Could not launch in new terminal — falling back to inline")
 
-    # 11. Launch AI tool inline
+    # 9. Launch AI tool inline
     if resolved_tool:
         console.step(f"Launching {resolved_tool}...")
 
@@ -280,10 +378,10 @@ def start(
             logger.info("review.ai_exited", exit_code=exit_code, tool=resolved_tool)
 
             if not adapter.capabilities().blocks_until_exit:
-                from wade.ui import prompts
+                from wade.ui import prompts as ui_prompts
 
                 console.empty()
-                if not prompts.confirm("Have you finished the review session?", default=True):
+                if not ui_prompts.confirm("Have you finished the review session?", default=True):
                     console.info("Worktree preserved — run 'wade work done' when ready.")
                     launch_completed = False
         except (ValueError, KeyError):
@@ -311,21 +409,17 @@ def start(
 
         effective_model = resolved_model or detected_model
         try:
-            add_reviewed_by_labels(provider, task.id, resolved_tool, effective_model)
+            add_review_addressed_by_labels(provider, task.id, resolved_tool, effective_model)
         except Exception as e:
-            console.warn(f"Could not apply reviewed-by labels: {e}")
-            logger.warning("review.reviewed_by_labels_failed", error=str(e))
+            console.warn(f"Could not apply review-addressed-by labels: {e}")
+            logger.warning("review.review_addressed_by_labels_failed", error=str(e))
     else:
-        console.info("No AI tool configured. Review comments in REVIEW-COMMENTS.md.")
+        console.info("No AI tool configured — use `wade fetch-reviews` to view comments.")
         console.detail(f"cd {worktree_path}")
         stop_title_keeper()
 
-    # Summary panel (no merge prompt — review cycle is iterative)
-    lines = []
-    lines.append(f"  Worktree   {console.git_ref(branch_name)}")
-    lines.append(f"  Issue      {console.issue_ref(task.id, task.title)}")
-    lines.append(f"  PR         #{pr_number}")
-    console.panel("\n".join(lines), title="Review session complete")
+    # 10. Post-review lifecycle: "Merge PR" / "Wait for new reviews"
+    _post_review_lifecycle(repo_root, branch_name, task.id, worktree_path, pr_number, provider)
 
     return True
 
@@ -333,6 +427,82 @@ def start(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _recover_worktree(
+    repo_root: Path,
+    branch_name: str,
+    config: object,
+) -> Path | None:
+    """Try to recover a worktree from an existing remote branch.
+
+    If the branch exists on the remote (e.g. from a PR), fetch it and
+    create a new worktree pointing at it.
+
+    Returns the worktree path on success, or None if the branch doesn't exist.
+    """
+    from wade.models.config import ProjectConfig
+
+    assert isinstance(config, ProjectConfig)
+
+    # Fetch the branch from remote
+    try:
+        git_repo.fetch_ref(repo_root, "origin", f"{branch_name}:{branch_name}")
+    except GitError:
+        logger.debug("review.fetch_branch_failed", branch=branch_name)
+        return None
+
+    # Verify the branch exists locally after fetch
+    try:
+        git_repo.rev_parse(repo_root, branch_name)
+    except GitError:
+        return None
+
+    # Build worktree path
+    worktrees_dir = _resolve_worktrees_dir(config, repo_root)
+    repo_name = repo_root.name
+    worktree_path = worktrees_dir / repo_name / branch_name.replace("/", "-")
+
+    if worktree_path.exists():
+        logger.debug("review.worktree_dir_exists", path=str(worktree_path))
+        return None
+
+    console.step(f"Recovering worktree from remote branch {branch_name}...")
+    try:
+        result = git_worktree.checkout_existing_branch_worktree(
+            repo_root, branch_name, worktree_path
+        )
+        console.success(f"Recovered worktree at {result}")
+        return result
+    except Exception as e:
+        logger.warning("review.worktree_recovery_failed", error=str(e))
+        return None
+
+
+def _post_review_lifecycle(
+    repo_root: Path,
+    branch: str,
+    issue_number: str | int | None,
+    worktree_path: Path | None,
+    pr_number: int,
+    provider: AbstractTaskProvider,
+) -> None:
+    """Post-review lifecycle menu: Merge PR or wait for new reviews."""
+    from wade.ui import prompts
+
+    console.empty()
+    choice = prompts.select(
+        f"PR #{pr_number} — what next?",
+        ["Merge PR", "Wait for new reviews"],
+    )
+
+    if choice == 1:  # Wait for new reviews
+        issue_hint = f" {issue_number}" if issue_number else ""
+        console.hint(f"Run `wade address-reviews{issue_hint}` when new reviews come in.")
+        return
+
+    # Merge flow — reuse the same merge logic as post-work lifecycle
+    _merge_pr(repo_root, branch, pr_number, issue_number, worktree_path, provider)
 
 
 def build_review_prompt(

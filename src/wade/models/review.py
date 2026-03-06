@@ -26,6 +26,7 @@ class ReviewComment(BaseModel):
 class ReviewThread(BaseModel):
     """A PR review thread — a group of comments on the same code location."""
 
+    id: str = ""
     is_resolved: bool = False
     is_outdated: bool = False
     comments: list[ReviewComment] = []
@@ -160,6 +161,11 @@ def _format_thread(thread: ReviewThread) -> list[str]:
 
     lines.append(f"### {' '.join(loc_parts)}" if loc_parts else "### Comment")
     lines.append("")
+
+    # Thread ID for resolution
+    if thread.id:
+        lines.append(f"**Thread ID:** `{thread.id}`")
+        lines.append("")
 
     # CodeRabbit: extract AI-agent prompt as primary instruction
     ai_prompt = extract_coderabbit_ai_prompt(first.body)
