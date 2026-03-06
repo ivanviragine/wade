@@ -30,6 +30,7 @@ def _config(strategy: MergeStrategy) -> ProjectConfig:
 @patch("wade.services.work_service.git_worktree.remove_worktree")
 @patch("wade.services.work_service.git_pr.merge_pr")
 @patch("wade.services.work_service.git_repo.is_clean", return_value=True)
+@patch("wade.services.work_service.prompts.select", return_value=0)
 @patch("wade.services.work_service.prompts.confirm", return_value=True)
 @patch("wade.services.work_service.webbrowser.open")
 @patch(
@@ -40,6 +41,7 @@ def test_pr_strategy_prompts_merge_on_existing_pr(
     _mock_get_pr: MagicMock,
     _mock_webbrowser_open: MagicMock,
     mock_confirm: MagicMock,
+    mock_select: MagicMock,
     _mock_is_clean: MagicMock,
     mock_merge_pr: MagicMock,
     mock_remove_worktree: MagicMock,
@@ -57,10 +59,11 @@ def test_pr_strategy_prompts_merge_on_existing_pr(
         repo_root, "feat/42-test", 42, wt_path, _config(MergeStrategy.PR), provider
     )
 
-    assert mock_confirm.called
-    confirm_msg = mock_confirm.call_args[0][0]
-    assert "merge" in confirm_msg.lower()
-    assert "99" in confirm_msg
+    # select is called with "Merge PR" / "Wait for reviews" — user picks 0 (Merge PR)
+    mock_select.assert_called_once()
+    select_items = mock_select.call_args[0][1]
+    assert "Merge PR" in select_items
+    assert "Wait for reviews" in select_items
     # Worktree is removed AFTER successful merge
     mock_merge_pr.assert_called_once_with(repo_root=repo_root, pr_number=99, strategy="squash")
     mock_remove_worktree.assert_called_once_with(repo_root, wt_path)
@@ -91,6 +94,7 @@ def test_pr_strategy_no_pr_warns_and_returns(
 
 
 @patch("wade.services.work_service.git_pr.merge_pr")
+@patch("wade.services.work_service.prompts.select", return_value=1)
 @patch("wade.services.work_service.prompts.confirm", return_value=False)
 @patch(
     "wade.services.work_service.git_pr.get_pr_for_branch",
@@ -99,6 +103,7 @@ def test_pr_strategy_no_pr_warns_and_returns(
 def test_pr_strategy_user_declines_merge(
     _mock_get_pr: MagicMock,
     mock_confirm: MagicMock,
+    mock_select: MagicMock,
     mock_merge_pr: MagicMock,
     tmp_path: Path,
 ) -> None:
@@ -112,13 +117,14 @@ def test_pr_strategy_user_declines_merge(
         provider,
     )
 
-    # confirm is called twice: once for "Open PR in browser?" and once for merge
-    assert mock_confirm.call_count == 2
+    # select returns 1 (Wait for reviews) — merge should NOT be called
+    mock_select.assert_called_once()
     mock_merge_pr.assert_not_called()
 
 
 @patch(_CHECKOUT)
 @patch("wade.services.work_service.git_pr.merge_pr")
+@patch("wade.services.work_service.prompts.select", return_value=0)
 @patch("wade.services.work_service.prompts.confirm", return_value=True)
 @patch("wade.services.work_service.webbrowser.open")
 @patch(
@@ -129,6 +135,7 @@ def test_pr_strategy_merge_failure_preserves_branch(
     _mock_get_pr: MagicMock,
     _mock_webbrowser_open: MagicMock,
     _mock_confirm: MagicMock,
+    _mock_select: MagicMock,
     mock_merge_pr: MagicMock,
     _mock_checkout: MagicMock,
     tmp_path: Path,
@@ -153,6 +160,7 @@ def test_pr_strategy_merge_failure_preserves_branch(
 @patch(_CHECKOUT_DETACH)
 @patch("wade.services.work_service.git_pr.merge_pr")
 @patch("wade.services.work_service.git_repo.is_clean", return_value=True)
+@patch("wade.services.work_service.prompts.select", return_value=0)
 @patch("wade.services.work_service.prompts.confirm", return_value=True)
 @patch("wade.services.work_service.webbrowser.open")
 @patch(
@@ -163,6 +171,7 @@ def test_pr_strategy_merge_failure_restores_branch(
     _mock_get_pr: MagicMock,
     _mock_webbrowser_open: MagicMock,
     _mock_confirm: MagicMock,
+    _mock_select: MagicMock,
     _mock_is_clean: MagicMock,
     mock_merge_pr: MagicMock,
     _mock_checkout_detach: MagicMock,
