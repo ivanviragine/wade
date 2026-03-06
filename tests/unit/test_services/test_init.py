@@ -16,8 +16,12 @@ from wade.services.init_service import (
     GITIGNORE_MARKER_START,
     MANIFEST_FILENAME,
     _clean_gitignore,
+    _commit_wade_files,
     _ensure_gitignore,
+    _patch_config,
     _prompt_command_overrides,
+    _prompt_commit_or_local,
+    _prompt_hooks_setup,
     _prompt_model_mapping,
     _prompt_project_settings,
     _read_manifest_version,
@@ -620,6 +624,186 @@ class TestWriteConfig:
 
 
 # ---------------------------------------------------------------------------
+# _patch_config tests
+# ---------------------------------------------------------------------------
+
+
+class TestPatchConfig:
+    def test_force_overwrites_ai_tool(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  default_tool: gemini\n")
+        _patch_config(config_path, "claude", ComplexityModelMapping(), force=True)
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["default_tool"] == "claude"
+
+    def test_no_force_preserves_ai_tool(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  default_tool: gemini\n")
+        _patch_config(config_path, "claude", ComplexityModelMapping(), force=False)
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["default_tool"] == "gemini"
+
+    def test_force_overwrites_default_model(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  default_model: old-model\n")
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), default_model="new-model", force=True
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["default_model"] == "new-model"
+
+    def test_no_force_preserves_default_model(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  default_model: old-model\n")
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), default_model="new-model", force=False
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["default_model"] == "old-model"
+
+    def test_force_sets_work_tool_override(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), work_tool="gemini", force=True
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["work"]["tool"] == "gemini"
+
+    def test_force_removes_work_section_when_same_as_default(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nai:\n  default_tool: claude\n  work:\n    tool: gemini\n"
+        )
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), work_tool="claude", force=True
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert "work" not in config["ai"]
+
+    def test_force_sets_command_overrides(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
+        overrides = {"plan": {"tool": "gemini", "model": "gemini-2.5-pro"}, "deps": {}}
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), command_overrides=overrides, force=True
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["plan"]["tool"] == "gemini"
+        assert config["ai"]["plan"]["model"] == "gemini-2.5-pro"
+        assert "deps" not in config["ai"]
+
+    def test_force_clears_command_overrides_when_empty(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nai:\n  default_tool: claude\n  plan:\n    tool: gemini\n"
+        )
+        overrides = {"plan": {}, "deps": {}}
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), command_overrides=overrides, force=True
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert "plan" not in config["ai"]
+
+    def test_no_force_does_not_overwrite_command_overrides(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nai:\n  default_tool: claude\n  plan:\n    tool: existing-tool\n"
+        )
+        overrides = {"plan": {"tool": "new-tool"}, "deps": {}}
+        _patch_config(
+            config_path,
+            "claude",
+            ComplexityModelMapping(),
+            command_overrides=overrides,
+            force=False,
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["plan"]["tool"] == "existing-tool"
+
+    def test_force_overwrites_models(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nai:\n  default_tool: claude\nmodels:\n  claude:\n    easy: old-haiku\n"
+        )
+        mapping = ComplexityModelMapping(easy="new-haiku", complex="sonnet")
+        _patch_config(config_path, "claude", mapping, force=True)
+        config = yaml.safe_load(config_path.read_text())
+        assert config["models"]["claude"]["easy"] == "new-haiku"
+        assert config["models"]["claude"]["complex"] == "sonnet"
+
+    def test_no_force_preserves_existing_models(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nai:\n  default_tool: claude\n"
+            "models:\n  claude:\n    easy: existing-haiku\n"
+        )
+        mapping = ComplexityModelMapping(easy="new-haiku", complex="sonnet")
+        _patch_config(config_path, "claude", mapping, force=False)
+        config = yaml.safe_load(config_path.read_text())
+        assert config["models"]["claude"]["easy"] == "existing-haiku"
+        assert config["models"]["claude"]["complex"] == "sonnet"
+
+    def test_models_keyed_by_work_tool_when_provided(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
+        mapping = ComplexityModelMapping(easy="haiku", complex="sonnet")
+        _patch_config(config_path, "claude", mapping, work_tool="gemini", force=True)
+        config = yaml.safe_load(config_path.read_text())
+        assert "gemini" in config["models"]
+        assert "claude" not in config.get("models", {})
+
+    def test_force_overwrites_project_settings(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nproject:\n  main_branch: master\n  issue_label: old-label\n"
+        )
+        settings = {
+            "main_branch": "main",
+            "issue_label": "new-label",
+            "branch_prefix": "feat",
+            "worktrees_dir": "../.worktrees",
+            "merge_strategy": "PR",
+        }
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), project_settings=settings, force=True
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["project"]["main_branch"] == "main"
+        assert config["project"]["issue_label"] == "new-label"
+
+    def test_no_force_preserves_project_settings(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nproject:\n  main_branch: master\n  issue_label: custom-label\n"
+        )
+        settings = {
+            "main_branch": "main",
+            "issue_label": "new-label",
+        }
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), project_settings=settings, force=False
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["project"]["main_branch"] == "master"
+        assert config["project"]["issue_label"] == "custom-label"
+
+    def test_hooks_preserved_through_patch(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nhooks:\n  post_worktree_create: scripts/setup.sh\n")
+        _patch_config(config_path, "claude", ComplexityModelMapping(), force=True)
+        config = yaml.safe_load(config_path.read_text())
+        assert config["hooks"]["post_worktree_create"] == "scripts/setup.sh"
+
+    def test_provider_preserved_through_patch(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nprovider:\n  name: github\n")
+        _patch_config(config_path, "claude", ComplexityModelMapping(), force=True)
+        config = yaml.safe_load(config_path.read_text())
+        assert config["provider"]["name"] == "github"
+
+
+# ---------------------------------------------------------------------------
 # Update service tests
 # ---------------------------------------------------------------------------
 
@@ -819,3 +1003,247 @@ class TestUpdateExtended:
 
         success = update(project_root=tmp_git_repo, skip_self_upgrade=True)
         assert success  # update should succeed and detect version difference
+
+
+# ---------------------------------------------------------------------------
+# Gitignore entries coverage
+# ---------------------------------------------------------------------------
+
+
+class TestGitignoreEntries:
+    """Verify GITIGNORE_ENTRIES includes all wade-managed paths."""
+
+    def test_contains_wade_config(self) -> None:
+        assert ".wade.yml" in GITIGNORE_ENTRIES
+
+    def test_contains_skill_dirs(self) -> None:
+        assert ".claude/" in GITIGNORE_ENTRIES
+        assert ".github/skills" in GITIGNORE_ENTRIES
+        assert ".agents/" in GITIGNORE_ENTRIES
+        assert ".gemini/" in GITIGNORE_ENTRIES
+
+    def test_contains_internal_files(self) -> None:
+        assert ".wade/" in GITIGNORE_ENTRIES
+        assert ".wade-managed" in GITIGNORE_ENTRIES
+        assert "PLAN.md" in GITIGNORE_ENTRIES
+        assert "PR-SUMMARY.md" in GITIGNORE_ENTRIES
+
+
+# ---------------------------------------------------------------------------
+# _prompt_hooks_setup tests
+# ---------------------------------------------------------------------------
+
+
+class TestPromptHooksSetup:
+    def test_non_interactive_returns_defaults(self) -> None:
+        result = _prompt_hooks_setup(non_interactive=True)
+        assert result["post_worktree_create"] is None
+        assert result["copy_to_worktree"] == []
+
+    @patch("wade.ui.prompts.input_prompt")
+    def test_interactive_with_values(self, mock_input: MagicMock) -> None:
+        mock_input.side_effect = ["scripts/setup-worktree.sh", ".env, .secrets"]
+        result = _prompt_hooks_setup(non_interactive=False)
+        assert result["post_worktree_create"] == "scripts/setup-worktree.sh"
+        assert result["copy_to_worktree"] == [".env", ".secrets"]
+
+    @patch("wade.ui.prompts.input_prompt")
+    def test_interactive_empty_skips(self, mock_input: MagicMock) -> None:
+        mock_input.side_effect = ["", ""]
+        result = _prompt_hooks_setup(non_interactive=False)
+        assert result["post_worktree_create"] is None
+        assert result["copy_to_worktree"] == []
+
+
+# ---------------------------------------------------------------------------
+# _write_config hooks tests
+# ---------------------------------------------------------------------------
+
+
+class TestWriteConfigHooks:
+    def test_write_config_includes_hooks_section(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        _write_config(config_path, "claude", ComplexityModelMapping())
+        config = yaml.safe_load(config_path.read_text())
+        assert "hooks" in config
+        assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
+
+    def test_write_config_with_setup_script(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        hooks = {"post_worktree_create": "scripts/setup.sh", "copy_to_worktree": [".env"]}
+        _write_config(config_path, "claude", ComplexityModelMapping(), hooks_setup=hooks)
+        config = yaml.safe_load(config_path.read_text())
+        assert config["hooks"]["post_worktree_create"] == "scripts/setup.sh"
+        assert ".env" in config["hooks"]["copy_to_worktree"]
+        assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
+
+    def test_write_config_no_commented_hooks(self, tmp_path: Path) -> None:
+        """Config should not contain commented-out hooks block."""
+        config_path = tmp_path / ".wade.yml"
+        _write_config(config_path, "claude", ComplexityModelMapping())
+        content = config_path.read_text()
+        assert "# hooks:" not in content
+
+
+# ---------------------------------------------------------------------------
+# _patch_config hooks tests
+# ---------------------------------------------------------------------------
+
+
+class TestPatchConfigHooks:
+    def test_patch_always_adds_wade_yml(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(yaml.dump({"version": 2}), encoding="utf-8")
+        _patch_config(config_path, "claude", ComplexityModelMapping(), force=True)
+        config = yaml.safe_load(config_path.read_text())
+        assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
+
+    def test_patch_preserves_existing_hooks(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            yaml.dump(
+                {
+                    "version": 2,
+                    "hooks": {"copy_to_worktree": [".env"]},
+                }
+            ),
+            encoding="utf-8",
+        )
+        _patch_config(config_path, "claude", ComplexityModelMapping(), force=True)
+        config = yaml.safe_load(config_path.read_text())
+        assert ".env" in config["hooks"]["copy_to_worktree"]
+        assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
+
+    def test_patch_force_sets_hooks_setup(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(yaml.dump({"version": 2}), encoding="utf-8")
+        hooks = {"post_worktree_create": "scripts/setup.sh", "copy_to_worktree": [".env"]}
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), hooks_setup=hooks, force=True
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["hooks"]["post_worktree_create"] == "scripts/setup.sh"
+        assert ".env" in config["hooks"]["copy_to_worktree"]
+        assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
+
+    def test_patch_idempotent_wade_yml(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            yaml.dump(
+                {
+                    "version": 2,
+                    "hooks": {"copy_to_worktree": [".wade.yml"]},
+                }
+            ),
+            encoding="utf-8",
+        )
+        _patch_config(config_path, "claude", ComplexityModelMapping(), force=True)
+        config = yaml.safe_load(config_path.read_text())
+        assert config["hooks"]["copy_to_worktree"].count(".wade.yml") == 1
+
+
+# ---------------------------------------------------------------------------
+# _commit_wade_files tests
+# ---------------------------------------------------------------------------
+
+
+class TestCommitWadeFiles:
+    def test_commits_files(self, tmp_git_repo: Path) -> None:
+        """git add --force + git commit should succeed on a real repo."""
+        config_path = tmp_git_repo / ".wade.yml"
+        config_path.write_text("version: 2\n")
+        gitignore = tmp_git_repo / ".gitignore"
+        gitignore.write_text(".wade/\n")
+        manifest = tmp_git_repo / MANIFEST_FILENAME
+        manifest.write_text(".wade.yml\n")
+        agents = tmp_git_repo / "AGENTS.md"
+        agents.write_text("# Agents\n")
+
+        _commit_wade_files(tmp_git_repo, [])
+
+        # Verify commit was created
+        import subprocess
+
+        result = subprocess.run(
+            ["git", "log", "--oneline", "-1"],
+            cwd=tmp_git_repo,
+            capture_output=True,
+            text=True,
+        )
+        assert "chore: initialize wade" in result.stdout
+
+    def test_handles_commit_failure(self, tmp_path: Path) -> None:
+        """When not in a git repo, should warn instead of crashing."""
+        # tmp_path is not a git repo — git add will fail
+        _commit_wade_files(tmp_path, [])
+        # Should not raise — just logs a warning
+
+
+# ---------------------------------------------------------------------------
+# _prompt_commit_or_local tests
+# ---------------------------------------------------------------------------
+
+
+class TestPromptCommitOrLocal:
+    def test_non_interactive_does_not_modify_config(self, tmp_path: Path) -> None:
+        """Non-interactive mode should not modify config (hooks handled by _write_config)."""
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(yaml.dump({"version": 2}), encoding="utf-8")
+        original = config_path.read_text()
+
+        _prompt_commit_or_local(tmp_path, config_path, [], non_interactive=True)
+
+        assert config_path.read_text() == original
+
+    @patch("wade.ui.prompts.is_tty", return_value=False)
+    def test_no_tty_does_not_modify_config(self, _mock_tty: MagicMock, tmp_path: Path) -> None:
+        """When not a TTY, should not modify config."""
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(yaml.dump({"version": 2}), encoding="utf-8")
+        original = config_path.read_text()
+
+        _prompt_commit_or_local(tmp_path, config_path, [], non_interactive=False)
+
+        assert config_path.read_text() == original
+
+    @patch("wade.ui.prompts.is_tty", return_value=True)
+    @patch("wade.ui.prompts.confirm", return_value=True)
+    @patch("wade.services.init_service._commit_wade_files")
+    def test_interactive_commit_yes(
+        self,
+        mock_commit: MagicMock,
+        _mock_confirm: MagicMock,
+        _mock_tty: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """When user says yes, should call _commit_wade_files."""
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(yaml.dump({"version": 2}), encoding="utf-8")
+
+        _prompt_commit_or_local(tmp_path, config_path, ["a.md"], non_interactive=False)
+
+        mock_commit.assert_called_once_with(tmp_path, ["a.md"])
+
+    @patch("wade.ui.prompts.is_tty", return_value=True)
+    @patch("wade.ui.prompts.confirm", return_value=False)
+    def test_interactive_commit_no_does_not_modify_config(
+        self,
+        _mock_confirm: MagicMock,
+        _mock_tty: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """When user says no, should not modify config."""
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(yaml.dump({"version": 2}), encoding="utf-8")
+        original = config_path.read_text()
+
+        _prompt_commit_or_local(tmp_path, config_path, [], non_interactive=False)
+
+        assert config_path.read_text() == original
+
+    def test_init_non_interactive_adds_copy_to_worktree(self, tmp_git_repo: Path) -> None:
+        """Full init in non-interactive mode should set copy_to_worktree."""
+        init(project_root=tmp_git_repo, non_interactive=True)
+
+        config = yaml.safe_load((tmp_git_repo / ".wade.yml").read_text())
+        assert ".wade.yml" in config["hooks"]["copy_to_worktree"]

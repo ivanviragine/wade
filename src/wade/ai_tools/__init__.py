@@ -8,6 +8,7 @@ import wade.ai_tools.antigravity
 import wade.ai_tools.claude
 import wade.ai_tools.codex
 import wade.ai_tools.copilot
+import wade.ai_tools.cursor
 import wade.ai_tools.gemini
 import wade.ai_tools.opencode
 import wade.ai_tools.vscode  # noqa: F401

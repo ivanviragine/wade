@@ -337,6 +337,38 @@ def apply_plan_token_usage(
 # ---------------------------------------------------------------------------
 
 
+def create_task(
+    title: str,
+    body: str = "",
+    extra_labels: list[str] | None = None,
+    config: ProjectConfig | None = None,
+    provider: AbstractTaskProvider | None = None,
+) -> Task | None:
+    """Create a GitHub Issue with the given title, body, and optional extra labels.
+
+    The project issue label is always applied.  ``extra_labels`` are applied
+    in addition to it.
+    """
+    config = config or load_config()
+    provider = provider or get_provider(config)
+
+    ensure_task_label(provider, config.project.issue_label)
+
+    labels = [config.project.issue_label] + (extra_labels or [])
+
+    console.step(f"Creating issue: {title}")
+
+    try:
+        task = provider.create_task(title=title, body=body, labels=labels)
+        console.success(f"Created {console.issue_ref(task.id, task.title)}")
+        if task.url:
+            console.detail(task.url)
+        return task
+    except Exception as e:
+        console.error(f"Failed to create issue: {e}")
+        return None
+
+
 def create_interactive(
     config: ProjectConfig | None = None,
     provider: AbstractTaskProvider | None = None,
@@ -354,7 +386,7 @@ def create_interactive(
         console.error("Title is required")
         return None
 
-    console.hint("Enter task body (press Ctrl+D when done, or leave empty):")
+    console.hint("Enter task body (press Enter then Ctrl+D when done, or leave empty):")
     body_lines: list[str] = []
     if not sys.stdin.isatty():
         body = ""
@@ -367,24 +399,7 @@ def create_interactive(
             pass  # Expected: signals end of stdin input
         body = "\n".join(body_lines)
 
-    # Ensure task label exists
-    ensure_task_label(provider, config.project.issue_label)
-
-    console.step(f"Creating issue: {title}")
-
-    try:
-        task = provider.create_task(
-            title=title,
-            body=body,
-            labels=[config.project.issue_label],
-        )
-        console.success(f"Created {console.issue_ref(task.id, task.title)}")
-        if task.url:
-            console.detail(task.url)
-        return task
-    except Exception as e:
-        console.error(f"Failed to create issue: {e}")
-        return None
+    return create_task(title=title, body=body, config=config, provider=provider)
 
 
 def create_from_plan_file(
@@ -396,32 +411,13 @@ def create_from_plan_file(
     config = config or load_config()
     provider = provider or get_provider(config)
 
-    # Parse the plan file
     try:
         plan = PlanFile.from_markdown(plan_file)
     except (ValueError, OSError) as e:
         console.error(f"Failed to parse plan file: {e}")
         return None
 
-    # Ensure task label exists
-    ensure_task_label(provider, config.project.issue_label)
-
-    # Create the issue
-    console.step(f"Creating issue: {plan.title}")
-
-    try:
-        task = provider.create_task(
-            title=plan.title,
-            body=plan.body,
-            labels=[config.project.issue_label],
-        )
-        console.success(f"Created {console.issue_ref(task.id, task.title)}")
-        if task.url:
-            console.detail(task.url)
-        return task
-    except Exception as e:
-        console.error(f"Failed to create issue: {e}")
-        return None
+    return create_task(title=plan.title, body=plan.body, config=config, provider=provider)
 
 
 def list_tasks(

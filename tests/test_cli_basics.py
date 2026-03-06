@@ -62,14 +62,79 @@ class TestCommandBehaviorWithoutContext:
     """Verify subcommand exit codes and output when run without git/gh context."""
 
     def test_plan_task_exits_without_ai(self) -> None:
-        # plan-task exits 1 when no AI tool / gh available
-        result = runner.invoke(app, ["plan-task"])
+        # plan-task exits 1 when no AI tool is available.
+        # Patch both config loading and auto-detection so the test is not
+        # environment-dependent: a real .wade.yml or installed AI CLI would
+        # resolve a tool and confirm_ai_selection would block on TTY input.
+        from wade.models.config import ProjectConfig
+
+        with (
+            patch("wade.services.plan_service.load_config", return_value=ProjectConfig()),
+            patch("wade.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
+        ):
+            result = runner.invoke(app, ["plan-task"])
         assert result.exit_code == 1
 
     def test_new_task_requires_title(self) -> None:
         result = runner.invoke(app, ["new-task"])
         assert result.exit_code == 1
         assert "Title is required" in result.output
+
+    @patch("wade.services.task_service.create_task")
+    def test_new_task_non_interactive_title(self, mock_create: patch) -> None:
+        from wade.models.task import Task
+
+        mock_create.return_value = Task(id="1", title="My Bug")
+        result = runner.invoke(app, ["new-task", "--title", "My Bug"])
+        assert result.exit_code == 0
+        mock_create.assert_called_once()
+        call_kwargs = mock_create.call_args[1]
+        assert call_kwargs["title"] == "My Bug"
+        assert call_kwargs["body"] == ""
+
+    @patch("wade.services.task_service.create_task")
+    def test_new_task_non_interactive_with_body(self, mock_create: patch) -> None:
+        from wade.models.task import Task
+
+        mock_create.return_value = Task(id="2", title="Fix")
+        result = runner.invoke(app, ["new-task", "--title", "Fix", "--body", "Details here"])
+        assert result.exit_code == 0
+        call_kwargs = mock_create.call_args[1]
+        assert call_kwargs["body"] == "Details here"
+
+    @patch("wade.services.task_service.create_task")
+    def test_new_task_non_interactive_body_file(self, mock_create: patch) -> None:
+        import tempfile
+
+        from wade.models.task import Task
+
+        mock_create.return_value = Task(id="3", title="Fix")
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
+            f.write("Body from file")
+            f.flush()
+            result = runner.invoke(app, ["new-task", "--title", "Fix", "--body-file", f.name])
+        assert result.exit_code == 0
+        call_kwargs = mock_create.call_args[1]
+        assert call_kwargs["body"] == "Body from file"
+
+    @patch("wade.services.task_service.create_task")
+    def test_new_task_non_interactive_labels(self, mock_create: patch) -> None:
+        from wade.models.task import Task
+
+        mock_create.return_value = Task(id="4", title="Fix")
+        result = runner.invoke(
+            app, ["new-task", "--title", "Fix", "--label", "bug", "--label", "urgent"]
+        )
+        assert result.exit_code == 0
+        call_kwargs = mock_create.call_args[1]
+        assert "bug" in call_kwargs["extra_labels"]
+        assert "urgent" in call_kwargs["extra_labels"]
+
+    def test_new_task_body_file_not_found(self) -> None:
+        result = runner.invoke(
+            app, ["new-task", "--title", "Fix", "--body-file", "/nonexistent/file.md"]
+        )
+        assert result.exit_code == 1
 
     @patch("wade.services.task_service.list_tasks", return_value=[])
     def test_task_list_exits(self, mock_list: patch) -> None:
@@ -78,8 +143,12 @@ class TestCommandBehaviorWithoutContext:
         assert result.exit_code == 0
 
     def test_work_done_exits_with_error(self) -> None:
-        # work done requires git context; exits 1 without it
-        result = runner.invoke(app, ["work", "done"])
+        # work done exits 1 when the branch has no issue number.
+        # Mock the branch name so the test is not environment-dependent
+        # (on a feature worktree the branch has an issue number and the
+        # error path is different).
+        with patch("wade.git.repo.get_current_branch", return_value="main"):
+            result = runner.invoke(app, ["work", "done"])
         assert result.exit_code == 1
         assert "Cannot extract issue number" in result.output
 

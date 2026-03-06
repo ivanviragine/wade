@@ -18,6 +18,7 @@ class AIToolID(StrEnum):
     ANTIGRAVITY = "antigravity"
     VSCODE = "vscode"
     OPENCODE = "opencode"
+    CURSOR = "cursor"
 
 
 class AIToolType(StrEnum):
@@ -76,6 +77,7 @@ class TokenUsage(BaseModel):
     premium_requests: int | None = None
     model_breakdown: list[ModelBreakdown] = []
     raw_transcript_path: Path | None = None
+    session_id: str | None = None  # full resume command or session ID as printed by the tool
 
 
 class ModelBreakdown(BaseModel):

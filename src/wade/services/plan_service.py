@@ -1,8 +1,8 @@
 """Plan service — AI-assisted planning session orchestration.
 
-Implements the two-phase planning design:
+Implements a two-phase planning design:
   Phase 1: Launch AI with initial prompt, let it write plan files to temp dir
-  Phase 2: After AI exits, detect new issues (Path A) or read plan files (Path B)
+  Phase 2: After AI exits, read plan files from temp dir and create issues
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from wade.models.config import ProjectConfig
 from wade.models.task import PlanFile, Task
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
-from wade.services.ai_resolution import resolve_ai_tool, resolve_model
+from wade.services.ai_resolution import confirm_ai_selection, resolve_ai_tool, resolve_model
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import (
     add_complexity_label,
@@ -38,7 +38,14 @@ from wade.services.task_service import (
 from wade.services.work_service import bootstrap_draft_pr
 from wade.ui import prompts
 from wade.ui.console import console
+from wade.utils.markdown import append_session_to_body
 from wade.utils.process import run_with_transcript
+from wade.utils.terminal import (
+    compose_plan_title,
+    set_terminal_title,
+    start_title_keeper,
+    stop_title_keeper,
+)
 
 logger = structlog.get_logger()
 
@@ -229,12 +236,14 @@ def plan(
     model: str | None = None,
     project_root: Path | None = None,
     issue_id: str | None = None,
+    *,
+    ai_explicit: bool = False,
+    model_explicit: bool = False,
 ) -> bool:
     """Run an AI-assisted planning session.
 
-    Two-path design:
-      Path A: Issues created during AI session (detected via snapshot/diff)
-      Path B: Plan files written to temp dir → issues created from files
+    The AI writes plan files to a temp dir. After the session ends, wade reads
+    them back and creates issues + draft PRs.
 
     When ``issue_id`` is provided the session is pre-loaded with that issue's
     context and the resulting plan is attached to it via draft PR (no new issue).
@@ -251,9 +260,17 @@ def plan(
     resolved_model = resolve_model(model, config, "plan", tool=resolved_tool)
 
     console.rule("wade plan-task")
-    console.kv("AI tool", resolved_tool)
-    if resolved_model:
-        console.kv("Model", resolved_model)
+
+    # Offer interactive confirmation unless both flags were explicitly provided.
+    resolved_tool, resolved_model = confirm_ai_selection(
+        resolved_tool,
+        resolved_model,
+        tool_explicit=ai_explicit,
+        model_explicit=model_explicit,
+    )
+    if not resolved_tool:
+        console.error("No AI tool selected.")
+        return False
 
     # Pre-load existing issue context when issue_id is supplied
     existing_issue: Task | None = None
@@ -264,6 +281,14 @@ def plan(
         except Exception as e:
             console.error(f"Could not fetch issue #{issue_id}: {e}")
             return False
+
+    # Set terminal title for the plan session
+    plan_title = compose_plan_title(
+        existing_issue.id if existing_issue else None,
+        existing_issue.title if existing_issue else None,
+    )
+    set_terminal_title(plan_title)
+    start_title_keeper(plan_title)
 
     # Resolve repo root for draft PR creation
     from wade.git import repo as git_repo
@@ -280,19 +305,6 @@ def plan(
 
     # Create temp directory for plan files
     plan_dir = tempfile.mkdtemp(prefix="wade-plan-")
-
-    # Snapshot current issue numbers (for Path A detection) — skip when
-    # planning an existing issue since we won't be diffing snapshots.
-    before_snapshot: set[str] = set()
-    if existing_issue is None:
-        before_snapshot = provider.snapshot_task_numbers(
-            label=config.project.issue_label,
-        )
-        logger.info(
-            "plan.snapshot",
-            count=len(before_snapshot),
-            numbers=sorted(before_snapshot),
-        )
 
     # Set up transcript capture
     transcript_path = Path(plan_dir) / ".transcript"
@@ -323,6 +335,7 @@ def plan(
         if not prompts.confirm("Have you finished the session?", default=True):
             console.info("Plan directory preserved — review output manually.")
             console.hint(f"Plan dir: {plan_dir}")
+            stop_title_keeper()
             return False
 
     # Post-session: extract token usage (skip for non-blocking tools)
@@ -332,7 +345,7 @@ def plan(
         if not usage.total_tokens:
             _warn_token_extraction(transcript_path)
 
-    # Path C: Existing issue — attach plan files to it (no new issue created)
+    # Existing issue — attach plan files to it (no new issue created)
     if existing_issue is not None:
         plan_files = validate_plan_files(Path(plan_dir))
         if plan_files:
@@ -351,41 +364,17 @@ def plan(
                 ai_tool=resolved_tool,
                 model=resolved_model,
                 usage=usage,
+                repo_root=repo_root,
             )
             _cleanup_plan_dir(plan_dir)
+            stop_title_keeper()
             return True
         console.warn("No plan files found — the AI session may not have produced output.")
         _cleanup_plan_dir(plan_dir)
+        stop_title_keeper()
         return False
 
-    # Path A: Check for issues created during AI session
-    after_snapshot = provider.snapshot_task_numbers(
-        label=config.project.issue_label,
-    )
-    new_issue_numbers = sorted(after_snapshot - before_snapshot)
-
-    if new_issue_numbers:
-        console.success(f"Detected {len(new_issue_numbers)} new issue(s)")
-        # Bootstrap draft PRs for issues created during AI session
-        if repo_root is not None:
-            _bootstrap_draft_prs_for_issues(
-                provider=provider,
-                config=config,
-                issue_numbers=new_issue_numbers,
-                repo_root=repo_root,
-            )
-        _finalize_issues(
-            provider=provider,
-            config=config,
-            issue_numbers=new_issue_numbers,
-            ai_tool=resolved_tool,
-            model=resolved_model,
-            usage=usage,
-        )
-        _cleanup_plan_dir(plan_dir)
-        return True
-
-    # Path B: Check for plan files in temp dir
+    # Read plan files from temp dir and create issues
     plan_files = validate_plan_files(Path(plan_dir))
 
     if plan_files:
@@ -404,15 +393,18 @@ def plan(
                 ai_tool=resolved_tool,
                 model=resolved_model,
                 usage=usage,
+                repo_root=repo_root,
             )
             _cleanup_plan_dir(plan_dir)
+            stop_title_keeper()
             return True
         console.warn("No issues were created from plan files.")
     else:
-        console.warn("No issues detected and no plan files found.")
+        console.warn("No plan files found.")
         console.hint("The AI session may not have produced any output.")
 
     _cleanup_plan_dir(plan_dir)
+    stop_title_keeper()
     return False
 
 
@@ -580,60 +572,6 @@ def _attach_plan_to_existing_issue(
         console.warn("Not in a git repo — skipping draft PR creation.")
 
 
-def _bootstrap_draft_prs_for_issues(
-    provider: AbstractTaskProvider,
-    config: ProjectConfig,
-    issue_numbers: list[str],
-    repo_root: Path,
-) -> None:
-    """Bootstrap draft PRs for issues that were created during AI session (Path A).
-
-    For each issue, reads its current body and uses it as the plan content
-    for the draft PR. Also adds complexity labels from the issue body.
-    """
-    from wade.models.task import parse_complexity_from_body
-
-    for issue_id in issue_numbers:
-        try:
-            task = provider.read_task(issue_id)
-        except Exception:
-            logger.warning("plan.issue_read_failed_for_pr", issue_id=issue_id)
-            continue
-
-        # Add complexity label if complexity is detectable
-        complexity = parse_complexity_from_body(task.body) if task.body else None
-        if complexity:
-            try:
-                add_complexity_label(provider, issue_id, complexity)
-            except Exception as e:
-                logger.warning("plan.complexity_label_failed", error=str(e))
-
-        # Bootstrap draft PR with the issue body as plan content
-        plan_body = task.body or f"Implements #{issue_id}: {task.title}"
-        pr_info = bootstrap_draft_pr(
-            issue_number=issue_id,
-            issue_title=task.title,
-            plan_body=plan_body,
-            config=config,
-            repo_root=repo_root,
-        )
-        if pr_info:
-            pr_number = pr_info.get("number", "?")
-            pr_url = pr_info.get("url", "")
-            console.success(f"Draft PR #{pr_number} for #{issue_id}: {pr_url}")
-
-            # Update issue body: make it lightweight (remove full plan, add PR link)
-            brief_body = task.body[:500] if task.body else ""
-            if len(task.body or "") > 500:
-                cut = brief_body.rfind(". ")
-                brief_body = brief_body[: cut + 1] if cut > 250 else brief_body + "…"
-            updated_body = brief_body.rstrip("\n") + f"\n\n**Full plan**: PR #{pr_number}"
-            try:
-                provider.update_task(issue_id, body=updated_body)
-            except Exception as e:
-                logger.warning("plan.pr_link_update_failed", error=str(e))
-
-
 def _finalize_issues(
     provider: AbstractTaskProvider,
     config: ProjectConfig,
@@ -641,6 +579,7 @@ def _finalize_issues(
     ai_tool: str | None = None,
     model: str | None = None,
     usage: TokenUsage | None = None,
+    repo_root: Path | None = None,
 ) -> None:
     """Finalize newly created issues: token summaries, labels, hints."""
     # Apply token usage to issue bodies
@@ -670,6 +609,21 @@ def _finalize_issues(
             ),
         )
 
+    # Record plan session ID in issue bodies and draft PR bodies
+    if usage and usage.session_id:
+        for issue_id in issue_numbers:
+            # Update issue body
+            with contextlib.suppress(Exception):
+                task = provider.read_task(issue_id)
+                new_body = append_session_to_body(
+                    task.body,
+                    phase="Plan",
+                    ai_tool=ai_tool or "",
+                    session_id=usage.session_id,
+                )
+                provider.update_task(issue_id, body=new_body)
+                logger.info("plan.session_id_recorded", issue=issue_id)
+
     # Add planned-by labels
     for issue_id in issue_numbers:
         try:
@@ -689,6 +643,8 @@ def _finalize_issues(
                 issue_numbers=issue_numbers,
                 ai_tool=ai_tool,
                 model=model,
+                ai_explicit=True,
+                model_explicit=True,
             )
             if graph and graph.edges:
                 console.success(f"Applied {len(graph.edges)} dependency edge(s)")

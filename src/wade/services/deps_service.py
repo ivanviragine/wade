@@ -20,7 +20,7 @@ from wade.models.config import ProjectConfig
 from wade.models.deps import DependencyEdge, DependencyGraph
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
-from wade.services.ai_resolution import resolve_ai_tool, resolve_model
+from wade.services.ai_resolution import confirm_ai_selection, resolve_ai_tool, resolve_model
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import ensure_task_label
 from wade.ui import prompts
@@ -422,6 +422,9 @@ def analyze_deps(
     ai_tool: str | None = None,
     model: str | None = None,
     project_root: Path | None = None,
+    *,
+    ai_explicit: bool = False,
+    model_explicit: bool = False,
 ) -> DependencyGraph | None:
     """Analyze dependencies between issues.
 
@@ -451,7 +454,17 @@ def analyze_deps(
 
     console.rule("wade task deps")
     console.kv("Issues", str(len(issue_numbers)))
-    console.kv("AI tool", resolved_tool)
+
+    # Offer interactive confirmation unless both flags were explicitly provided.
+    resolved_tool, resolved_model = confirm_ai_selection(
+        resolved_tool,
+        resolved_model,
+        tool_explicit=ai_explicit,
+        model_explicit=model_explicit,
+    )
+    if not resolved_tool:
+        console.error("No AI tool selected.")
+        return None
 
     # Build context
     context = build_context(provider, issue_numbers)

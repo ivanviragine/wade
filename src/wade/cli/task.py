@@ -232,5 +232,11 @@ def deps(
             console.success("All dependencies are valid.")
         raise typer.Exit(0 if all_valid else 1)
 
-    graph = analyze_deps(issue_numbers=issue_ids, ai_tool=ai, model=model)
+    graph = analyze_deps(
+        issue_numbers=issue_ids,
+        ai_tool=ai,
+        model=model,
+        ai_explicit=ai is not None,
+        model_explicit=model is not None,
+    )
     raise typer.Exit(0 if graph is not None else 1)

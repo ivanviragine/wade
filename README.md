@@ -130,6 +130,24 @@ wade 42
 | `work-session` | Implementation session rules and workflow |
 | `deps` | Dependency analysis between issues |
 
+## Worktree Hooks
+
+Configure automated setup when worktrees are created via `wade implement-task` or `wade work batch`. Add a `hooks` section to `.wade.yml`:
+
+```yaml
+hooks:
+  post_worktree_create: scripts/setup-worktree.sh
+  copy_to_worktree:
+    - .env
+    - .env.example
+```
+
+**`post_worktree_create`** — A setup script to run after each worktree is created. Use it to install dependencies, run builds, or prepare the environment so worktrees are ready to use immediately.
+
+**`copy_to_worktree`** — Files to copy from the project root into the worktree before running the hook. Useful for secrets and config files (e.g., `.env`) that are gitignored and wouldn't otherwise be present in a new worktree.
+
+See [`templates/setup-worktree.sh.example`](templates/setup-worktree.sh.example) for a starter script.
+
 ## Shell Integration
 
 To make `wade work cd <N>` actually change your directory (instead of just printing the path), add this to your shell profile:

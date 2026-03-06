@@ -24,6 +24,7 @@ from wade.services.task_service import (
     build_plan_summary_block,
     close_task,
     create_from_plan_file,
+    create_task,
     ensure_in_progress_label,
     ensure_task_label,
     list_tasks,
@@ -53,7 +54,6 @@ def mock_provider():
         Task(id="1", title="First Issue", state=TaskState.OPEN),
         Task(id="2", title="Second Issue", state=TaskState.OPEN),
     ]
-    provider.snapshot_task_numbers.return_value = {"1", "2"}
     return provider
 
 
@@ -224,6 +224,52 @@ class TestPlanSummary:
 # ---------------------------------------------------------------------------
 # CRUD tests
 # ---------------------------------------------------------------------------
+
+
+class TestCreateTask:
+    def test_create_success(self, mock_provider: MagicMock, config: ProjectConfig) -> None:
+        task = create_task("My Bug", body="Details", config=config, provider=mock_provider)
+        assert task is not None
+        assert task.id == "42"
+        mock_provider.create_task.assert_called_once()
+        call_kwargs = mock_provider.create_task.call_args[1]
+        assert call_kwargs["title"] == "My Bug"
+        assert call_kwargs["body"] == "Details"
+        assert "test-label" in call_kwargs["labels"]
+
+    def test_create_applies_project_label(
+        self, mock_provider: MagicMock, config: ProjectConfig
+    ) -> None:
+        create_task("Fix", config=config, provider=mock_provider)
+        call_kwargs = mock_provider.create_task.call_args[1]
+        assert "test-label" in call_kwargs["labels"]
+
+    def test_create_applies_extra_labels(
+        self, mock_provider: MagicMock, config: ProjectConfig
+    ) -> None:
+        create_task("Fix", extra_labels=["bug", "urgent"], config=config, provider=mock_provider)
+        call_kwargs = mock_provider.create_task.call_args[1]
+        assert "test-label" in call_kwargs["labels"]
+        assert "bug" in call_kwargs["labels"]
+        assert "urgent" in call_kwargs["labels"]
+
+    def test_create_empty_body_by_default(
+        self, mock_provider: MagicMock, config: ProjectConfig
+    ) -> None:
+        create_task("Fix", config=config, provider=mock_provider)
+        call_kwargs = mock_provider.create_task.call_args[1]
+        assert call_kwargs["body"] == ""
+
+    def test_create_ensures_label(self, mock_provider: MagicMock, config: ProjectConfig) -> None:
+        create_task("Fix", config=config, provider=mock_provider)
+        mock_provider.ensure_label.assert_called_once()
+
+    def test_create_failure_returns_none(
+        self, mock_provider: MagicMock, config: ProjectConfig
+    ) -> None:
+        mock_provider.create_task.side_effect = Exception("API error")
+        task = create_task("Fix", config=config, provider=mock_provider)
+        assert task is None
 
 
 class TestCreateFromPlanFile:

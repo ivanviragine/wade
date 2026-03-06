@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import webbrowser
 from pathlib import Path
 from typing import Any
 
@@ -40,7 +41,7 @@ from wade.models.work import (
 )
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
-from wade.services.ai_resolution import resolve_ai_tool, resolve_model
+from wade.services.ai_resolution import confirm_ai_selection, resolve_ai_tool, resolve_model
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import (
     add_in_progress_label,
@@ -136,9 +137,15 @@ def bootstrap_worktree(
             logger.debug("work.bootstrap_copy", file=filename)
 
     # Install skill files — not tracked by git so worktrees don't inherit them
-    from wade.skills.installer import install_skills
+    from wade.skills.installer import get_wade_repo_root, install_skills
 
-    install_skills(worktree_path, is_self_init=False, force=True)
+    is_self = repo_root.resolve() == get_wade_repo_root().resolve()
+    if is_self:
+        # Worktree has its own templates/ checkout — symlink to those
+        wt_templates = worktree_path / "templates" / "skills"
+        install_skills(worktree_path, is_self_init=True, force=True, templates_dir=wt_templates)
+    else:
+        install_skills(worktree_path, is_self_init=False, force=True)
     logger.debug("work.bootstrap_skills", path=str(worktree_path))
 
     # Propagate allowlist from project root to worktree if already configured
@@ -163,10 +170,13 @@ def bootstrap_worktree(
             except subprocess.TimeoutExpired as e:
                 raise RuntimeError(f"Bootstrap hook timed out after 60 seconds: {hook_path}") from e
             except subprocess.CalledProcessError as e:
+                hook_path_str = str(hook_path)
                 logger.warning(
                     "work.hook_failed",
                     hook=config.hooks.post_worktree_create,
-                    error=e.stderr,
+                    hook_path=hook_path_str,
+                    error=e.stderr.decode("utf-8", errors="replace") if e.stderr else "",
+                    msg=f"Hook script failed: {hook_path_str}. Check logs for details.",
                 )
 
 
@@ -191,6 +201,9 @@ def _detect_ai_cli_env() -> str | None:
     # Codex CLI
     if os.environ.get("CODEX_CLI"):
         return "CODEX_CLI"
+    # Cursor CLI
+    if os.environ.get("CURSOR_CLI"):
+        return "CURSOR_CLI"
     return None
 
 
@@ -386,15 +399,37 @@ def _capture_post_session_usage(
     return effective_model
 
 
-def build_work_prompt(task: Task, ai_tool: str | None = None) -> str:
-    """Build the initial prompt for a work session."""
+def _build_work_issue_context_header(task: Task) -> str:
+    """Build an issue description block to prepend to the work prompt."""
+    lines = [
+        "## Issue Description",
+        "",
+        (task.body or "").strip(),
+        "",
+        "---",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def build_work_prompt(task: Task, ai_tool: str | None = None, has_plan: bool = False) -> str:
+    """Build the initial prompt for a work session.
+
+    When *has_plan* is False (no plan content in the draft PR), the issue
+    description is prepended inline so the AI has it without relying on
+    @PLAN.md.  When a plan already exists, PLAN.md carries the full context
+    and the inline header is skipped to avoid duplication.
+    """
     from wade.skills.installer import get_templates_dir
 
     template_path = get_templates_dir() / "prompts" / "work-context.md"
     if not template_path.is_file():
         raise FileNotFoundError(f"Prompt template not found: {template_path}")
     template = template_path.read_text(encoding="utf-8")
-    return template.format(issue_number=task.id, issue_title=task.title)
+    prompt = template.format(issue_number=task.id, issue_title=task.title)
+    if task.body and not has_plan:
+        prompt = _build_work_issue_context_header(task) + prompt
+    return prompt
 
 
 def _post_work_lifecycle(
@@ -489,6 +524,10 @@ def _post_work_lifecycle_pr(
     if not pr_number:
         console.warn(f"Could not determine PR number for branch '{branch}'.")
         return
+
+    pr_url = str(pr_info.get("url", ""))
+    if pr_url and prompts.confirm("Open PR in browser?", default=True):
+        webbrowser.open(pr_url)
 
     if not prompts.confirm(f"Do you want to merge PR #{pr_number}?", default=True):
         return
@@ -588,6 +627,9 @@ def start(
     project_root: Path | None = None,
     detach: bool = False,
     cd_only: bool = False,
+    *,
+    ai_explicit: bool = False,
+    model_explicit: bool = False,
 ) -> bool:
     """Start a work session on an issue.
 
@@ -636,19 +678,8 @@ def start(
         console.rule(f"implement-task #{task.id}")
         console.kv("Issue", console.issue_ref(task.id, task.title))
 
-        # Resolve AI tool (shared resolution + work-specific TTY prompt)
-        # auto_detect=False so multi-tool TTY selection still fires below
-        resolved_tool = resolve_ai_tool(ai_tool, config, "work", auto_detect=False)
-        if not resolved_tool:
-            installed = AbstractAITool.detect_installed()
-            if installed and len(installed) > 1 and prompts.is_tty():
-                tool_names = [str(t) for t in installed]
-                idx = prompts.select("Select AI tool", tool_names)
-                resolved_tool = tool_names[idx]
-            elif installed:
-                resolved_tool = installed[0].value
-
-        # Resolve model: explicit arg → command-specific → complexity → global default
+        # Resolve AI tool and model
+        resolved_tool = resolve_ai_tool(ai_tool, config, "work")
         resolved_model = resolve_model(
             model,
             config,
@@ -657,12 +688,17 @@ def start(
             complexity=task.complexity.value if task.complexity else None,
         )
 
-        if resolved_tool:
-            console.kv("AI tool", resolved_tool)
         if task.complexity:
             console.kv("Complexity", task.complexity.value)
-        if resolved_model:
-            console.kv("Model", resolved_model)
+
+        # Offer interactive confirmation (skipped when cd_only or both flags explicit).
+        if not cd_only:
+            resolved_tool, resolved_model = confirm_ai_selection(
+                resolved_tool,
+                resolved_model,
+                tool_explicit=ai_explicit,
+                model_explicit=model_explicit,
+            )
 
         # Resolve main branch
         main_branch = config.project.main_branch or git_repo.detect_main_branch(repo_root)
@@ -780,7 +816,7 @@ def start(
             provider.move_to_in_progress(task.id)
 
         # Build work prompt
-        prompt = build_work_prompt(task, resolved_tool)
+        prompt = build_work_prompt(task, resolved_tool, has_plan=bool(plan_content))
         snippet = "\n".join(prompt.splitlines()[:5]) + "\n…"
         console.panel(snippet, title="Work Prompt (preview)")
 
@@ -970,6 +1006,9 @@ def batch(
     ai_tool: str | None = None,
     model: str | None = None,
     project_root: Path | None = None,
+    *,
+    ai_explicit: bool = False,
+    model_explicit: bool = False,
 ) -> bool:
     """Start parallel work sessions for multiple issues.
 
@@ -992,8 +1031,15 @@ def batch(
 
     console.rule(f"work batch ({len(issue_numbers)} issues)")
 
-    # Resolve AI tool
-    resolved_tool = ai_tool or config.get_ai_tool("work")
+    # Resolve AI tool and model, then offer interactive confirmation.
+    resolved_tool = resolve_ai_tool(ai_tool, config, "work")
+    resolved_model = resolve_model(model, config, "work", tool=resolved_tool)
+    resolved_tool, resolved_model = confirm_ai_selection(
+        resolved_tool,
+        resolved_model,
+        tool_explicit=ai_explicit,
+        model_explicit=model_explicit,
+    )
 
     # Check for dependency ordering
     # Try to load deps from issue bodies (look for "Depends on" references)
@@ -1014,8 +1060,8 @@ def batch(
         cmd = ["wade", "implement-task", issue_id]
         if resolved_tool:
             cmd.extend(["--ai", resolved_tool])
-        if model:
-            cmd.extend(["--model", model])
+        if resolved_model:
+            cmd.extend(["--model", resolved_model])
 
         console.step(f"Launching #{issue_id} ({label}) in new terminal")
         if launch_in_new_terminal(cmd, cwd=str(repo_root), title=f"wade #{issue_id}"):

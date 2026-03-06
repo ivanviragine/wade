@@ -97,3 +97,70 @@ def remove_marker_block(content: str, start_marker: str, end_marker: str) -> str
     if not after.strip():
         return before + "\n" if before.strip() else ""
     return before + "\n\n" + after
+
+
+# ---------------------------------------------------------------------------
+# AI sessions block helpers
+# ---------------------------------------------------------------------------
+
+SESSIONS_MARKER_START = "<!-- wade:sessions:start -->"
+SESSIONS_MARKER_END = "<!-- wade:sessions:end -->"
+
+
+def parse_sessions_from_body(body: str) -> list[dict[str, str]]:
+    """Extract existing session rows from the sessions block in a body string.
+
+    Returns a list of dicts with keys: ``phase``, ``ai_tool``, ``session_id``.
+    """
+    start_idx = body.find(SESSIONS_MARKER_START)
+    end_idx = body.find(SESSIONS_MARKER_END)
+    if start_idx == -1 or end_idx == -1 or end_idx <= start_idx:
+        return []
+    block_content = body[start_idx + len(SESSIONS_MARKER_START) : end_idx]
+    rows: list[dict[str, str]] = []
+    for line in block_content.splitlines():
+        line = line.strip()
+        if not line.startswith("|") or not line.endswith("|"):
+            continue
+        cells = [c.strip().strip("`") for c in line.split("|")[1:-1]]
+        if len(cells) != 3:
+            continue
+        phase, ai_tool, session_id = cells
+        if "---" in phase or phase.lower() == "phase":
+            continue
+        if phase and ai_tool and session_id:
+            rows.append({"phase": phase, "ai_tool": ai_tool, "session_id": session_id})
+    return rows
+
+
+def build_sessions_block(rows: list[dict[str, str]]) -> str:
+    """Render the sessions block markdown from a list of session row dicts."""
+    lines = [
+        SESSIONS_MARKER_START,
+        "",
+        "## AI Sessions",
+        "",
+        "| Phase | Tool | Session |",
+        "| --- | --- | --- |",
+    ]
+    for row in rows:
+        lines.append(f"| {row['phase']} | `{row['ai_tool']}` | `{row['session_id']}` |")
+    lines.append("")
+    lines.append(SESSIONS_MARKER_END)
+    return "\n".join(lines)
+
+
+def append_session_to_body(body: str, phase: str, ai_tool: str, session_id: str) -> str:
+    """Add a new session row to the sessions block in a body string.
+
+    Accumulates across calls — never replaces the full block. Idempotent:
+    if a row with the same ``session_id`` already exists, the body is
+    returned unchanged.
+    """
+    existing_rows = parse_sessions_from_body(body)
+    if any(row["session_id"] == session_id for row in existing_rows):
+        return body
+    new_rows = [*existing_rows, {"phase": phase, "ai_tool": ai_tool, "session_id": session_id}]
+    new_block = build_sessions_block(new_rows)
+    cleaned = remove_marker_block(body, SESSIONS_MARKER_START, SESSIONS_MARKER_END)
+    return cleaned.rstrip("\n") + "\n\n" + new_block + "\n"

@@ -183,7 +183,13 @@ def batch(
         raise typer.Exit(1)
 
     issue_ids = [str(n) for n in numbers]
-    success = do_batch(issue_numbers=issue_ids, ai_tool=ai, model=model)
+    success = do_batch(
+        issue_numbers=issue_ids,
+        ai_tool=ai,
+        model=model,
+        ai_explicit=ai is not None,
+        model_explicit=model is not None,
+    )
     raise typer.Exit(0 if success else 1)
 
 

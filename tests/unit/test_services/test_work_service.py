@@ -21,6 +21,7 @@ from wade.models.config import (
 from wade.models.task import Task
 from wade.services.work_service import (
     _build_graph_from_issues,
+    _build_work_issue_context_header,
     _parse_overwrite_paths,
     _pull_main_after_merge,
     _resolve_task_target,
@@ -120,6 +121,49 @@ class TestBootstrapWorktree:
 
         assert not (worktree / ".claude" / "settings.json").is_file()
 
+    def test_self_init_creates_symlinks(self, tmp_path: Path) -> None:
+        """When repo_root is the wade package root, skills are symlinked from worktree templates."""
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+
+        # Create templates in the worktree (mimics a wade repo worktree checkout)
+        skills_tpl = worktree / "templates" / "skills"
+        for skill_name in ("task", "plan-session", "work-session", "deps"):
+            (skills_tpl / skill_name).mkdir(parents=True, exist_ok=True)
+            (skills_tpl / skill_name / "SKILL.md").write_text(f"# {skill_name}\n")
+
+        config = ProjectConfig()
+        with patch("wade.skills.installer.get_wade_repo_root", return_value=repo_root):
+            bootstrap_worktree(worktree, config, repo_root)
+
+        # Skills should be symlinks, not copies
+        task_skill = worktree / ".claude" / "skills" / "task"
+        assert task_skill.is_symlink()
+        assert (task_skill / "SKILL.md").read_text() == "# task\n"
+
+    def test_non_self_init_creates_copies(self, tmp_path: Path) -> None:
+        """When repo_root is NOT the wade package root, skills are copied (not symlinked)."""
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+
+        config = ProjectConfig()
+        # get_wade_repo_root returns a different path — not self-init
+        with patch(
+            "wade.skills.installer.get_wade_repo_root",
+            return_value=tmp_path / "some-other-path",
+        ):
+            bootstrap_worktree(worktree, config, repo_root)
+
+        # Skills should be regular files, not symlinks
+        task_skill = worktree / ".claude" / "skills" / "task"
+        assert not task_skill.is_symlink()
+
 
 class TestBuildWorkPrompt:
     def test_includes_issue_info(self) -> None:
@@ -128,6 +172,41 @@ class TestBuildWorkPrompt:
         assert "#42" in prompt
         assert "Add auth" in prompt
         assert "PLAN.md" in prompt
+
+    def test_includes_body_when_no_plan(self) -> None:
+        task = Task(id="42", title="Add auth", body="Implement OAuth2 login flow.")
+        prompt = build_work_prompt(task, has_plan=False)
+        assert "Implement OAuth2 login flow." in prompt
+        assert "## Issue Description" in prompt
+
+    def test_omits_body_when_plan_exists(self) -> None:
+        task = Task(id="42", title="Add auth", body="Implement OAuth2 login flow.")
+        prompt = build_work_prompt(task, has_plan=True)
+        assert "## Issue Description" not in prompt
+        assert "Implement OAuth2 login flow." not in prompt
+
+    def test_no_body_section_when_body_empty(self) -> None:
+        task = Task(id="42", title="Add auth", body="")
+        prompt = build_work_prompt(task, has_plan=False)
+        assert "## Issue Description" not in prompt
+        # Template content still present
+        assert "#42" in prompt
+        assert "Add auth" in prompt
+
+
+class TestBuildWorkIssueContextHeader:
+    def test_contains_body_not_title(self) -> None:
+        task = Task(id="7", title="Fix bug", body="Something is broken.")
+        header = _build_work_issue_context_header(task)
+        # Title is already in the template — header only adds the description
+        assert "# Issue #7" not in header
+        assert "Something is broken." in header
+        assert "## Issue Description" in header
+
+    def test_ends_with_separator(self) -> None:
+        task = Task(id="1", title="T", body="Body text.")
+        header = _build_work_issue_context_header(task)
+        assert "---" in header
 
 
 # ---------------------------------------------------------------------------

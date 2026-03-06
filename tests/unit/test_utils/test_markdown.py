@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from wade.utils.markdown import (
+    append_session_to_body,
+    build_sessions_block,
     extract_all_sections,
     extract_marker_block,
     extract_section,
     extract_title,
     has_marker_block,
+    parse_sessions_from_body,
     remove_marker_block,
 )
 
@@ -105,3 +110,97 @@ class TestMarkerBlock:
         once = remove_marker_block(content, self.START, self.END)
         twice = remove_marker_block(once, self.START, self.END)
         assert once == twice
+
+
+# ---------------------------------------------------------------------------
+# Sessions block helpers
+# ---------------------------------------------------------------------------
+
+
+class TestSessionsBlock:
+    SESSION: ClassVar[dict[str, str]] = {
+        "phase": "Plan",
+        "ai_tool": "claude",
+        "session_id": "claude --resume abc-123",
+    }
+    SESSION2: ClassVar[dict[str, str]] = {
+        "phase": "Implement",
+        "ai_tool": "claude",
+        "session_id": "claude --resume def-456",
+    }
+
+    def test_build_sessions_block_renders_table(self) -> None:
+        block = build_sessions_block([self.SESSION])
+        assert "## AI Sessions" in block
+        assert "| Phase | Tool | Session |" in block
+        assert "| Plan |" in block
+        assert "`claude`" in block
+        assert "`claude --resume abc-123`" in block
+
+    def test_build_sessions_block_multiple_rows(self) -> None:
+        block = build_sessions_block([self.SESSION, self.SESSION2])
+        assert "| Plan |" in block
+        assert "| Implement |" in block
+
+    def test_build_sessions_block_empty(self) -> None:
+        block = build_sessions_block([])
+        assert "## AI Sessions" in block
+        assert "| --- | --- | --- |" in block
+        # No data rows
+        lines = [
+            ln
+            for ln in block.splitlines()
+            if ln.startswith("| ") and "---" not in ln and "Phase" not in ln
+        ]
+        assert lines == []
+
+    def test_parse_sessions_from_body_empty_body(self) -> None:
+        assert parse_sessions_from_body("no block here") == []
+
+    def test_parse_sessions_from_body_parses_rows(self) -> None:
+        block = build_sessions_block([self.SESSION, self.SESSION2])
+        body = f"Some content\n\n{block}\n"
+        rows = parse_sessions_from_body(body)
+        assert len(rows) == 2
+        assert rows[0]["phase"] == "Plan"
+        assert rows[0]["ai_tool"] == "claude"
+        assert rows[0]["session_id"] == "claude --resume abc-123"
+        assert rows[1]["phase"] == "Implement"
+
+    def test_parse_sessions_skips_header(self) -> None:
+        block = build_sessions_block([self.SESSION])
+        rows = parse_sessions_from_body(block)
+        # Only data rows, no header
+        assert all(row["phase"] not in {"Phase", "---"} for row in rows)
+        assert len(rows) == 1
+
+    def test_append_session_to_empty_body(self) -> None:
+        body = "Some issue description.\n"
+        result = append_session_to_body(body, "Plan", "claude", "claude --resume abc-123")
+        assert "## AI Sessions" in result
+        assert "claude --resume abc-123" in result
+        assert "Some issue description." in result
+
+    def test_append_session_accumulates(self) -> None:
+        body = "Description\n"
+        body = append_session_to_body(body, "Plan", "claude", "claude --resume abc-123")
+        body = append_session_to_body(body, "Implement", "claude", "claude --resume def-456")
+        rows = parse_sessions_from_body(body)
+        assert len(rows) == 2
+        assert rows[0]["phase"] == "Plan"
+        assert rows[1]["phase"] == "Implement"
+
+    def test_append_session_idempotent(self) -> None:
+        body = "Description\n"
+        body = append_session_to_body(body, "Plan", "claude", "claude --resume abc-123")
+        body_again = append_session_to_body(body, "Plan", "claude", "claude --resume abc-123")
+        assert body == body_again
+        rows = parse_sessions_from_body(body)
+        assert len(rows) == 1
+
+    def test_append_session_preserves_existing_content(self) -> None:
+        body = "Original description.\n\nMore text.\n"
+        result = append_session_to_body(body, "Plan", "gemini", "Session ID: 123")
+        assert "Original description." in result
+        assert "More text." in result
+        assert "Session ID: 123" in result

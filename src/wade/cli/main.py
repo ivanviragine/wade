@@ -156,17 +156,52 @@ def plan_task_cmd(
     """Plan tasks with AI — creates lightweight issues + draft PRs."""
     from wade.services.plan_service import plan as do_plan
 
-    success = do_plan(ai_tool=ai, model=model, issue_id=issue)
+    success = do_plan(
+        ai_tool=ai,
+        model=model,
+        issue_id=issue,
+        ai_explicit=ai is not None,
+        model_explicit=model is not None,
+    )
     raise typer.Exit(0 if success else 1)
 
 
 @app.command("new-task")
-def new_task_cmd() -> None:
-    """Create a new GitHub Issue interactively."""
-    from wade.services.task_service import create_interactive
+def new_task_cmd(
+    title: str | None = typer.Option(None, "--title", "-t", help="Issue title (non-interactive)."),
+    body: str | None = typer.Option(None, "--body", "-b", help="Issue body text."),
+    body_file: str | None = typer.Option(
+        None, "--body-file", help="Path to a file whose contents become the issue body."
+    ),
+    label: list[str] | None = typer.Option(  # noqa: B008
+        None, "--label", "-l", help="Extra label(s) to apply (can repeat)."
+    ),
+) -> None:
+    """Create a new GitHub Issue (interactive by default, non-interactive with --title)."""
     from wade.ui.console import console
 
-    task = create_interactive()
+    if title is not None:
+        from pathlib import Path
+
+        from wade.services.task_service import create_task
+
+        # Resolve body: --body-file takes precedence over --body
+        resolved_body = ""
+        if body_file:
+            bp = Path(body_file).expanduser()
+            if not bp.is_file():
+                console.error(f"File not found: {body_file}")
+                raise typer.Exit(1)
+            resolved_body = bp.read_text()
+        elif body:
+            resolved_body = body
+
+        task = create_task(title=title, body=resolved_body, extra_labels=list(label or []))
+    else:
+        from wade.services.task_service import create_interactive
+
+        task = create_interactive()
+
     if task:
         console.empty()
         console.info("When you're ready to implement, run:")
@@ -206,6 +241,8 @@ def implement_task_cmd(
         model=model,
         detach=detach,
         cd_only=cd_only,
+        ai_explicit=selected_ai is not None,
+        model_explicit=model is not None,
     )
     raise typer.Exit(0 if success else 1)
 

@@ -24,6 +24,7 @@ from wade.models.config import (
     ComplexityModelMapping,
 )
 from wade.skills import installer, pointer
+from wade.skills.installer import get_wade_repo_root
 from wade.ui.console import console
 
 logger = structlog.get_logger()
@@ -38,6 +39,12 @@ GITIGNORE_MARKER_END: Final = "# wade:end"
 GITIGNORE_ENTRIES: Final = [
     ".wade/",
     ".wade-managed",
+    ".wade.yml",
+    ".claude/",
+    ".github/skills",
+    ".agents/",
+    ".gemini/",
+    ".cursor/",
     "PLAN.md",
     "PR-SUMMARY.md",
 ]
@@ -52,8 +59,12 @@ MANIFEST_FILENAME = ".wade-managed"
 
 
 def get_wade_root() -> Path:
-    """Get the wade package root (for self-init detection)."""
-    return Path(__file__).parent.parent.parent.parent
+    """Get the wade package root (for self-init detection).
+
+    Delegates to installer.get_wade_repo_root() — kept as a local alias
+    for backward compatibility.
+    """
+    return get_wade_repo_root()
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +112,7 @@ def init(
 
     # Interactive wizard — all prompts before any writes
     project_settings = _prompt_project_settings(root, non_interactive)
+    hooks_setup = _prompt_hooks_setup(non_interactive)
     try:
         selected_tool, default_model = _prompt_ai_section(ai_tool, non_interactive)
     except ValueError as exc:
@@ -122,6 +134,8 @@ def init(
 
     if "claude" in tools_in_use:
         _prompt_claude_code_settings(root, non_interactive)
+    if "cursor" in tools_in_use:
+        _prompt_cursor_settings(non_interactive)
     if "gemini" in tools_in_use:
         _prompt_configure_gemini_experimental(non_interactive)
     _prompt_configure_shell_integration(non_interactive)
@@ -133,9 +147,17 @@ def init(
     # Generate config
     config_path = root / ".wade.yml"
     if config_path.exists():
-        console.info("Config .wade.yml already exists — patching missing values")
+        console.info("Config .wade.yml already exists — updating with selected values")
         _patch_config(
-            config_path, selected_tool, work_setup["model_mapping"], default_model=default_model
+            config_path,
+            selected_tool,
+            work_setup["model_mapping"],
+            default_model=default_model,
+            project_settings=project_settings,
+            work_tool=work_setup["tool"],
+            command_overrides=command_overrides,
+            hooks_setup=hooks_setup,
+            force=not non_interactive,
         )
     else:
         _write_config(
@@ -146,6 +168,7 @@ def init(
             work_tool=work_setup["tool"],
             default_model=default_model,
             command_overrides=command_overrides,
+            hooks_setup=hooks_setup,
         )
         console.success(f"Created {config_path.name}")
 
@@ -176,6 +199,9 @@ def init(
         console.warn("Config validation issues:")
         for err in check_result.errors:
             console.detail(err)
+
+    # 9. Commit or configure for local-only use
+    _prompt_commit_or_local(root, config_path, installed, non_interactive)
 
     console.panel(
         "  Project initialized. Run [bold]wade plan-task[/] to get started.",
@@ -493,6 +519,26 @@ def _prompt_configure_allowlist(root: Path, non_interactive: bool) -> None:
     ):
         configure_allowlist(root)
         console.success("Added Bash([step]wade[/] *) to .claude/settings.json allowlist")
+
+
+def _prompt_cursor_settings(non_interactive: bool) -> None:
+    """Prompt for Cursor CLI-specific settings: command allowlist."""
+    from wade.config.cursor_allowlist import configure_allowlist, is_allowlist_configured
+    from wade.ui import prompts
+
+    if is_allowlist_configured():
+        return
+
+    if non_interactive:
+        return
+
+    console.rule("Cursor CLI")
+    if prompts.confirm(
+        "Auto-approve wade commands in Cursor CLI? (skips Shell approval in work sessions)",
+        default=True,
+    ):
+        configure_allowlist()
+        console.success("Added Shell([step]wade[/] *) to ~/.cursor/cli-config.json allowlist")
 
 
 def _configure_statusline() -> None:
@@ -834,6 +880,44 @@ def _prompt_project_settings(
     return defaults
 
 
+def _prompt_hooks_setup(
+    non_interactive: bool,
+) -> dict[str, Any]:
+    """Collect worktree hooks settings — setup script and files to copy.
+
+    Returns a dict with keys: post_worktree_create (str | None), copy_to_worktree (list[str]).
+    """
+    from wade.ui import prompts
+
+    defaults: dict[str, Any] = {
+        "post_worktree_create": None,
+        "copy_to_worktree": [],
+    }
+
+    if non_interactive:
+        return defaults
+
+    console.rule("Worktree hooks")
+
+    script_path = prompts.input_prompt(
+        "Setup script for new worktrees (e.g. scripts/setup-worktree.sh)",
+        default="",
+        allow_empty=True,
+    )
+    if script_path.strip():
+        defaults["post_worktree_create"] = script_path.strip()
+
+    copy_files = prompts.input_prompt(
+        "Files to copy into worktrees (comma-separated, e.g. .env)",
+        default="",
+        allow_empty=True,
+    )
+    if copy_files.strip():
+        defaults["copy_to_worktree"] = [f.strip() for f in copy_files.split(",") if f.strip()]
+
+    return defaults
+
+
 def _prompt_model_mapping(
     tool: str | None,
     mapping: ComplexityModelMapping,
@@ -1085,6 +1169,7 @@ def _write_config(
     work_tool: str | None = None,
     default_model: str | None = None,
     command_overrides: dict[str, dict[str, str]] | None = None,
+    hooks_setup: dict[str, Any] | None = None,
 ) -> None:
     """Write a fresh .wade.yml config file."""
     config_dict: dict[str, Any] = {"version": 2}
@@ -1149,6 +1234,16 @@ def _write_config(
 
     config_dict["provider"] = {"name": "github"}
 
+    # Build hooks section — always include .wade.yml in copy_to_worktree
+    hooks_dict: dict[str, Any] = {}
+    if hooks_setup and hooks_setup.get("post_worktree_create"):
+        hooks_dict["post_worktree_create"] = hooks_setup["post_worktree_create"]
+    copy_files: list[str] = list(hooks_setup.get("copy_to_worktree", [])) if hooks_setup else []
+    if ".wade.yml" not in copy_files:
+        copy_files.append(".wade.yml")
+    hooks_dict["copy_to_worktree"] = copy_files
+    config_dict["hooks"] = hooks_dict
+
     config_path.write_text(
         yaml.dump(config_dict, default_flow_style=False, sort_keys=False),
         encoding="utf-8",
@@ -1160,8 +1255,17 @@ def _patch_config(
     ai_tool: str | None,
     model_mapping: ComplexityModelMapping,
     default_model: str | None = None,
+    project_settings: dict[str, str] | None = None,
+    work_tool: str | None = None,
+    command_overrides: dict[str, dict[str, str]] | None = None,
+    hooks_setup: dict[str, Any] | None = None,
+    force: bool = False,
 ) -> None:
-    """Patch missing values into an existing config without overwriting."""
+    """Patch values into an existing config.
+
+    When force=True, user-selected values overwrite existing entries.
+    When force=False (default), only missing keys are filled in.
+    """
     try:
         raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     except (yaml.YAMLError, OSError):
@@ -1180,19 +1284,80 @@ def _patch_config(
         raw["version"] = 2
         changed = True
 
-    # Patch AI tool and default model if missing
+    # Patch project settings
+    if project_settings:
+        project = raw.get("project", {}) or {}
+        for key in (
+            "main_branch",
+            "issue_label",
+            "worktrees_dir",
+            "branch_prefix",
+            "merge_strategy",
+        ):
+            value = project_settings.get(key)
+            if value and (force or not project.get(key)):
+                project[key] = value
+                changed = True
+        raw["project"] = project
+
+    # Patch AI tool and default model
     ai = raw.get("ai", {}) or {}
-    if ai_tool and not ai.get("default_tool"):
+    if ai_tool and (force or not ai.get("default_tool")):
         ai["default_tool"] = str(ai_tool)
         raw["ai"] = ai
         changed = True
-    if default_model and not ai.get("default_model"):
+    if default_model and (force or not ai.get("default_model")):
         ai["default_model"] = default_model
         raw["ai"] = ai
         changed = True
 
-    # Patch models if missing
-    tool_key = str(ai_tool) if ai_tool else None
+    # Patch work tool override
+    if work_tool:
+        if force:
+            if work_tool != ai_tool:
+                ai["work"] = {"tool": work_tool}
+                changed = True
+            elif "work" in ai:
+                del ai["work"]
+                changed = True
+            raw["ai"] = ai
+        elif work_tool != ai_tool and not ai.get("work"):
+            ai["work"] = {"tool": work_tool}
+            raw["ai"] = ai
+            changed = True
+
+    # Patch command overrides (plan, deps)
+    if command_overrides is not None:
+        for cmd_name in ("plan", "deps"):
+            overrides = command_overrides.get(cmd_name, {})
+            if force:
+                if overrides:
+                    cmd_section: dict[str, str] = {}
+                    if overrides.get("tool"):
+                        cmd_section["tool"] = overrides["tool"]
+                    if overrides.get("model"):
+                        cmd_section["model"] = overrides["model"]
+                    if cmd_section:
+                        ai[cmd_name] = cmd_section
+                        raw["ai"] = ai
+                        changed = True
+                elif cmd_name in ai:
+                    del ai[cmd_name]
+                    raw["ai"] = ai
+                    changed = True
+            elif overrides and not ai.get(cmd_name):
+                cmd_section = {}
+                if overrides.get("tool"):
+                    cmd_section["tool"] = overrides["tool"]
+                if overrides.get("model"):
+                    cmd_section["model"] = overrides["model"]
+                if cmd_section:
+                    ai[cmd_name] = cmd_section
+                    raw["ai"] = ai
+                    changed = True
+
+    # Patch models — keyed by work_tool when provided (matching _write_config)
+    tool_key = str(work_tool or ai_tool) if (work_tool or ai_tool) else None
     has_any_model = any(
         getattr(model_mapping, k, None) for k in ("easy", "medium", "complex", "very_complex")
     )
@@ -1202,13 +1367,39 @@ def _patch_config(
 
         for key in ("easy", "medium", "complex", "very_complex"):
             value = getattr(model_mapping, key, None)
-            if value and not tool_models.get(key):
+            if value and (force or not tool_models.get(key)):
                 tool_models[key] = value
                 changed = True
 
         if tool_models:
             models[tool_key] = tool_models
             raw["models"] = models
+
+    # Patch hooks — setup script and copy_to_worktree
+    hooks = raw.get("hooks") or {}
+    if hooks_setup:
+        script = hooks_setup.get("post_worktree_create")
+        if script and (force or not hooks.get("post_worktree_create")):
+            hooks["post_worktree_create"] = script
+            changed = True
+        elif not script and force and "post_worktree_create" in hooks:
+            del hooks["post_worktree_create"]
+            changed = True
+        user_files: list[str] = hooks_setup.get("copy_to_worktree", [])
+        if user_files and (force or not hooks.get("copy_to_worktree")):
+            existing_copy: list[str] = hooks.get("copy_to_worktree") or []
+            for f in user_files:
+                if f not in existing_copy:
+                    existing_copy.append(f)
+                    changed = True
+            hooks["copy_to_worktree"] = existing_copy
+    # Always ensure .wade.yml is in copy_to_worktree
+    copy_list: list[str] = hooks.get("copy_to_worktree") or []
+    if ".wade.yml" not in copy_list:
+        copy_list.append(".wade.yml")
+        changed = True
+    hooks["copy_to_worktree"] = copy_list
+    raw["hooks"] = hooks
 
     if changed:
         config_path.write_text(
@@ -1315,3 +1506,59 @@ def _write_manifest(project_root: Path, installed_files: list[str]) -> None:
     lines = [".wade.yml", *installed_files]
     lines.append(f"# Managed by wade {__version__}")
     manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _prompt_commit_or_local(
+    root: Path,
+    config_path: Path,
+    installed: list[str],
+    non_interactive: bool,
+) -> None:
+    """Ask whether to commit wade files or keep them local.
+
+    If the user commits, all wade files are added and committed.
+    Otherwise the user is reminded to commit ``.gitignore``.
+    ``.wade.yml`` is always in ``copy_to_worktree`` (handled during config write).
+    """
+    from wade.ui import prompts
+
+    if non_interactive or not prompts.is_tty():
+        console.hint("Commit at least .gitignore so worktrees stay clean:")
+        console.detail('git add .gitignore && git commit -m "chore: add wade gitignore entries"')
+        return
+
+    commit = prompts.confirm("Commit wade files now?", default=True)
+
+    if commit:
+        _commit_wade_files(root, installed)
+    else:
+        console.hint("Commit at least .gitignore so worktrees stay clean:")
+        console.detail('git add .gitignore && git commit -m "chore: add wade gitignore entries"')
+
+
+def _commit_wade_files(root: Path, installed: list[str]) -> None:
+    """Stage and commit all wade-managed files."""
+    import subprocess
+
+    files_to_add = [".wade.yml", ".gitignore", MANIFEST_FILENAME]
+    files_to_add.extend(installed)
+    if (root / "AGENTS.md").exists():
+        files_to_add.append("AGENTS.md")
+
+    try:
+        subprocess.run(
+            ["git", "add", "--force", "--", *files_to_add],
+            cwd=root,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "chore: initialize wade"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+        )
+        console.success("Committed wade files")
+    except subprocess.CalledProcessError as exc:
+        logger.warning("init.commit_failed", error=exc.stderr)
+        console.warn("Could not commit wade files — commit them manually")
