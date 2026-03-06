@@ -70,6 +70,10 @@ logger = structlog.get_logger()
 IMPL_USAGE_MARKER_START = "<!-- wade:impl-usage:start -->"
 IMPL_USAGE_MARKER_END = "<!-- wade:impl-usage:end -->"
 
+# --- Review usage block markers ---
+REVIEW_USAGE_MARKER_START = "<!-- wade:review-usage:start -->"
+REVIEW_USAGE_MARKER_END = "<!-- wade:review-usage:end -->"
+
 # ---------------------------------------------------------------------------
 # Bootstrap helpers
 # ---------------------------------------------------------------------------
@@ -157,7 +161,16 @@ def bootstrap_worktree(
     from wade.config.claude_allowlist import configure_allowlist, is_allowlist_configured
 
     if is_allowlist_configured(repo_root):
-        configure_allowlist(worktree_path)
+        configure_allowlist(worktree_path, extra_patterns=config.permissions.allowed_commands)
+
+    # Propagate Cursor allowlist to worktree's per-project .cursor/cli.json
+    from wade.config.cursor_allowlist import configure_allowlist as configure_cursor_allowlist
+    from wade.config.cursor_allowlist import is_allowlist_configured as is_cursor_configured
+
+    if is_cursor_configured() or is_cursor_configured(repo_root):
+        configure_cursor_allowlist(
+            worktree_path, extra_patterns=config.permissions.allowed_commands
+        )
 
     # Run post-create hook
     if config.hooks.post_worktree_create:
@@ -378,13 +391,12 @@ def _capture_post_session_usage(
                 new_body = current_body
                 if has_tokens:
                     assert usage is not None
-                    usage_block = build_impl_usage_block(
+                    new_body = append_impl_usage_entry(
+                        new_body,
                         ai_tool=ai_tool,
                         model=effective_model,
                         token_usage=usage,
                     )
-                    stripped = _strip_impl_usage_block(new_body).rstrip("\n")
-                    new_body = stripped + "\n\n" + usage_block + "\n"
                 if has_session:
                     assert usage is not None and usage.session_id is not None
                     new_body = append_session_to_body(
@@ -409,13 +421,12 @@ def _capture_post_session_usage(
             new_body = task.body
             if has_tokens:
                 assert usage is not None
-                usage_block = build_impl_usage_block(
+                new_body = append_impl_usage_entry(
+                    new_body,
                     ai_tool=ai_tool,
                     model=effective_model,
                     token_usage=usage,
                 )
-                stripped = _strip_impl_usage_block(new_body).rstrip("\n")
-                new_body = stripped + "\n\n" + usage_block + "\n"
             if has_session:
                 assert usage is not None and usage.session_id is not None
                 new_body = append_session_to_body(
@@ -558,9 +569,29 @@ def _post_work_lifecycle_pr(
     if pr_url and prompts.confirm("Open PR in browser?", default=True):
         webbrowser.open(pr_url)
 
-    if not prompts.confirm(f"Do you want to merge PR #{pr_number}?", default=True):
+    choice = prompts.select(
+        f"PR #{pr_number} — what next?",
+        ["Merge PR", "Wait for reviews"],
+    )
+
+    if choice == 1:  # Wait for reviews
+        issue_hint = f" {issue_number}" if issue_number else ""
+        console.hint(f"Run `wade address-reviews{issue_hint}` when reviews come in.")
         return
 
+    # Merge flow
+    _merge_pr(repo_root, branch, int(pr_number), issue_number, worktree_path, provider)
+
+
+def _merge_pr(
+    repo_root: Path,
+    branch: str,
+    pr_number: int,
+    issue_number: str | int | None,
+    worktree_path: Path | None,
+    provider: AbstractTaskProvider,
+) -> None:
+    """Merge a PR via squash, clean up worktree, pull main, close issue."""
     # Warn if the worktree has uncommitted changes before proceeding.
     if worktree_path and worktree_path.is_dir() and not git_repo.is_clean(worktree_path):
         console.warn("Worktree has uncommitted changes.")
@@ -574,7 +605,7 @@ def _post_work_lifecycle_pr(
             git_repo.checkout_detach(worktree_path)
 
     try:
-        git_pr.merge_pr(repo_root=repo_root, pr_number=int(pr_number), strategy="squash")
+        git_pr.merge_pr(repo_root=repo_root, pr_number=pr_number, strategy="squash")
     except Exception as e:
         if worktree_path and worktree_path.is_dir():
             with contextlib.suppress(Exception):
@@ -901,6 +932,7 @@ def start(
                     trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
                     initial_message=prompt,
                     effort=resolved_effort,
+                    allowed_commands=config.permissions.allowed_commands,
                 )
             except (ValueError, KeyError):
                 cmd = [resolved_tool]
@@ -931,6 +963,7 @@ def start(
                     transcript_path=transcript_path,
                     trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
                     effort=resolved_effort,
+                    allowed_commands=config.permissions.allowed_commands,
                 )
                 launch_completed = True
                 logger.info("work.ai_exited", exit_code=exit_code, tool=resolved_tool)
@@ -1309,16 +1342,22 @@ def classify_staleness(
 # ---------------------------------------------------------------------------
 
 
-def build_impl_usage_block(
+def _build_session_usage_table(
     ai_tool: str | None = None,
     model: str | None = None,
     token_usage: TokenUsage | None = None,
 ) -> str:
-    """Build the ## Implementation Usage section for PR body."""
+    """Build a single-session markdown usage table (no markers or headings).
+
+    Generates the table rows for one session, used by both impl and review
+    usage block builders.
+    """
     from wade.ai_tools.transcript import format_count
 
     breakdown = token_usage.model_breakdown if token_usage else []
     multi = len(breakdown) > 1
+
+    lines: list[str] = []
 
     if multi:
         names = [row.model for row in breakdown]
@@ -1327,14 +1366,7 @@ def build_impl_usage_block(
         sep = "| " + " | ".join(["---"] * (2 + n)) + " |"
         empty = " |" * n
 
-        lines = [
-            IMPL_USAGE_MARKER_START,
-            "",
-            "## Token Usage (Implementation)",
-            "",
-            header,
-            sep,
-        ]
+        lines.extend([header, sep])
 
         if ai_tool:
             lines.append(f"| Tool | `{ai_tool}` |{empty}")
@@ -1374,14 +1406,7 @@ def build_impl_usage_block(
             )
 
     else:
-        lines = [
-            IMPL_USAGE_MARKER_START,
-            "",
-            "## Token Usage (Implementation)",
-            "",
-            "| Metric | Value |",
-            "| --- | --- |",
-        ]
+        lines.extend(["| Metric | Value |", "| --- | --- |"])
 
         if ai_tool:
             lines.append(f"| Tool | `{ai_tool}` |")
@@ -1404,15 +1429,161 @@ def build_impl_usage_block(
         if token_usage and token_usage.premium_requests and token_usage.premium_requests > 0:
             lines.append(f"| Premium requests (est.) | **{token_usage.premium_requests}** |")
 
-    lines.append("")
-    lines.append(IMPL_USAGE_MARKER_END)
+    return "\n".join(lines)
 
+
+def _count_sessions(block_content: str) -> int:
+    """Count ``### Session N`` occurrences in a marker block's inner content."""
+    return len(re.findall(r"^### Session \d+", block_content, re.MULTILINE))
+
+
+def _append_usage_entry(
+    body: str,
+    ai_tool: str | None,
+    model: str | None,
+    token_usage: TokenUsage | None,
+    start_marker: str,
+    end_marker: str,
+    heading: str,
+) -> str:
+    """Append a new session entry to a usage marker block.
+
+    If the block doesn't exist, creates a fresh block with ``### Session 1``.
+    If the block exists with N sessions, appends ``### Session N+1``.
+    """
+    from wade.utils.markdown import extract_marker_block
+
+    existing = extract_marker_block(body, start_marker, end_marker)
+    table = _build_session_usage_table(ai_tool=ai_tool, model=model, token_usage=token_usage)
+
+    if existing is None:
+        # Fresh block
+        lines = [
+            start_marker,
+            "",
+            f"## {heading}",
+            "",
+            "### Session 1",
+            "",
+            table,
+            "",
+            end_marker,
+        ]
+        block = "\n".join(lines)
+        stripped = body.rstrip("\n")
+        return stripped + "\n\n" + block + "\n" if stripped else block + "\n"
+
+    # Existing block — count sessions and append
+    n = _count_sessions(existing)
+
+    if n == 0 and existing.strip():
+        # Old format (no ### Session headings) — wrap old content as Session 1
+        new_inner = f"### Session 1\n\n{existing.strip()}\n\n### Session 2\n\n{table}"
+    else:
+        new_session = f"### Session {n + 1}\n\n{table}"
+        new_inner = existing.rstrip("\n") + "\n\n" + new_session
+
+    # Rebuild: remove old block, construct new one with appended session
+    cleaned = remove_marker_block(body, start_marker, end_marker)
+    new_block = f"{start_marker}\n\n{new_inner}\n\n{end_marker}"
+    stripped = cleaned.rstrip("\n")
+    return stripped + "\n\n" + new_block + "\n" if stripped else new_block + "\n"
+
+
+def append_impl_usage_entry(
+    body: str,
+    ai_tool: str | None = None,
+    model: str | None = None,
+    token_usage: TokenUsage | None = None,
+) -> str:
+    """Append an implementation usage session entry to the body."""
+    return _append_usage_entry(
+        body,
+        ai_tool=ai_tool,
+        model=model,
+        token_usage=token_usage,
+        start_marker=IMPL_USAGE_MARKER_START,
+        end_marker=IMPL_USAGE_MARKER_END,
+        heading="Token Usage (Implementation)",
+    )
+
+
+def append_review_usage_entry(
+    body: str,
+    ai_tool: str | None = None,
+    model: str | None = None,
+    token_usage: TokenUsage | None = None,
+) -> str:
+    """Append a review usage session entry to the body."""
+    return _append_usage_entry(
+        body,
+        ai_tool=ai_tool,
+        model=model,
+        token_usage=token_usage,
+        start_marker=REVIEW_USAGE_MARKER_START,
+        end_marker=REVIEW_USAGE_MARKER_END,
+        heading="Token Usage (Review)",
+    )
+
+
+def build_impl_usage_block(
+    ai_tool: str | None = None,
+    model: str | None = None,
+    token_usage: TokenUsage | None = None,
+) -> str:
+    """Build the ## Token Usage (Implementation) section for PR body.
+
+    Wraps ``_build_session_usage_table`` with markers and a ``### Session 1``
+    header.
+    """
+    table = _build_session_usage_table(ai_tool=ai_tool, model=model, token_usage=token_usage)
+    lines = [
+        IMPL_USAGE_MARKER_START,
+        "",
+        "## Token Usage (Implementation)",
+        "",
+        "### Session 1",
+        "",
+        table,
+        "",
+        IMPL_USAGE_MARKER_END,
+    ]
     return "\n".join(lines)
 
 
 def _strip_impl_usage_block(body: str) -> str:
     """Remove existing implementation usage block from body (idempotent)."""
     return remove_marker_block(body, IMPL_USAGE_MARKER_START, IMPL_USAGE_MARKER_END)
+
+
+def build_review_usage_block(
+    ai_tool: str | None = None,
+    model: str | None = None,
+    token_usage: TokenUsage | None = None,
+) -> str:
+    """Build the ## Token Usage (Review) section for PR/issue body.
+
+    Wraps ``_build_session_usage_table`` with review markers and a
+    ``### Session 1`` header.
+    """
+    table = _build_session_usage_table(ai_tool=ai_tool, model=model, token_usage=token_usage)
+    lines = [
+        REVIEW_USAGE_MARKER_START,
+        "",
+        "## Token Usage (Review)",
+        "",
+        "### Session 1",
+        "",
+        table,
+        "",
+        REVIEW_USAGE_MARKER_END,
+    ]
+    return "\n".join(lines)
+
+
+def _strip_review_usage_block(body: str) -> str:
+    """Remove existing review usage block from body (idempotent)."""
+    return remove_marker_block(body, REVIEW_USAGE_MARKER_START, REVIEW_USAGE_MARKER_END)
 
 
 def _strip_summary_section(body: str) -> str:
@@ -2322,6 +2493,52 @@ def _remove_stale(repo_root: Path, main_branch: str, force: bool) -> bool:
     return removed > 0
 
 
+def _preserve_session_data(repo_root: Path, wt_path: Path) -> None:
+    """Preserve AI tool session data before worktree removal.
+
+    Queries the DB for the AI tool used in this worktree; falls back to
+    directory-presence detection via ``session_data_dirs()``.  Calls the
+    adapter's ``preserve_session_data()``.  Any failure is logged but never
+    propagates — preservation must never block worktree deletion.
+    """
+    try:
+        from wade.db.engine import get_or_create_engine
+        from wade.db.repositories import SessionRepository
+
+        engine = get_or_create_engine(repo_root)
+        session_repo = SessionRepository(engine)
+
+        sessions = session_repo.get_by_worktree_path(str(wt_path))
+
+        adapter: AbstractAITool | None = None
+        if sessions:
+            latest = max(sessions, key=lambda s: s.started_at)
+            with contextlib.suppress(ValueError):
+                adapter = AbstractAITool.get(latest.ai_tool)
+
+        # Fallback: detect via session_data_dirs
+        if adapter is None:
+            for tool_id in AbstractAITool.available_tools():
+                candidate = AbstractAITool.get(tool_id)
+                for dir_name in candidate.session_data_dirs():
+                    if (wt_path / dir_name).exists():
+                        adapter = candidate
+                        break
+                if adapter is not None:
+                    break
+
+        if adapter is None:
+            return
+
+        adapter.preserve_session_data(wt_path, repo_root)
+    except Exception:
+        logger.warning(
+            "worktree.preserve_session_data_failed",
+            worktree=str(wt_path),
+            exc_info=True,
+        )
+
+
 def _cleanup_worktree(repo_root: Path, wt_path: Path, main_branch: str) -> bool:
     """Remove a single worktree and its branch."""
     console.step(f"Removing worktree: {wt_path}")
@@ -2333,6 +2550,8 @@ def _cleanup_worktree(repo_root: Path, wt_path: Path, main_branch: str) -> bool:
         if wt.get("path") == str(wt_path):
             branch_name = wt.get("branch")
             break
+
+    _preserve_session_data(repo_root, wt_path)
 
     try:
         git_worktree.remove_worktree(repo_root, wt_path)

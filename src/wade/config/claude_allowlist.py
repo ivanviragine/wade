@@ -1,8 +1,7 @@
 """Claude Code .claude/settings.json allowlist management.
 
-Configures the Claude Code permission allowlist to include `wade` commands,
-so agents can run `wade work done`, `wade new-task`, etc. without
-manual approval.
+Configures the Claude Code permission allowlist to include `wade` commands
+and project scripts, so agents can run them without manual approval.
 """
 
 from __future__ import annotations
@@ -19,6 +18,21 @@ logger = structlog.get_logger()
 WADE_ALLOW_PATTERN = "Bash(wade *)"
 
 
+def canonical_to_claude(pattern: str) -> str:
+    """Convert a canonical command pattern to Claude Code allowlist syntax.
+
+    Canonical patterns use shell-style ``"cmd args"`` notation.
+    Claude expects ``"Bash(cmd args)"`` — the command string wrapped in ``Bash(…)``.
+
+    Examples::
+
+        "wade *"                → "Bash(wade *)"
+        "./scripts/check.sh *"  → "Bash(./scripts/check.sh *)"
+        "./scripts/check.sh"    → "Bash(./scripts/check.sh)"
+    """
+    return f"Bash({pattern})"
+
+
 def is_allowlist_configured(project_root: Path) -> bool:
     """Return True if Bash(wade *) is present in the allowlist at project_root."""
     settings_path = project_root / ".claude" / "settings.json"
@@ -32,11 +46,20 @@ def is_allowlist_configured(project_root: Path) -> bool:
     return False
 
 
-def configure_allowlist(project_root: Path) -> None:
+def configure_allowlist(
+    project_root: Path,
+    extra_patterns: list[str] | None = None,
+) -> None:
     """Add wade commands to .claude/settings.json permissions allowlist.
 
-    Idempotent — skips if already present. Non-destructive merge with
-    existing settings.
+    Args:
+        project_root: Project directory containing ``.claude/``.
+        extra_patterns: Additional canonical command patterns (e.g.
+            ``["./scripts/check.sh *"]``).  Translated to Claude syntax
+            and merged into the allowlist.
+
+    Idempotent — each pattern is added at most once.  Non-destructive
+    merge with existing settings.
     """
     settings_path = project_root / ".claude" / "settings.json"
 
@@ -57,10 +80,21 @@ def configure_allowlist(project_root: Path) -> None:
         allow_list = []
         permissions["allow"] = allow_list
 
-    if WADE_ALLOW_PATTERN in allow_list:
-        return  # Already present
+    # Build the full set of patterns to ensure
+    all_patterns = [WADE_ALLOW_PATTERN]
+    for pat in extra_patterns or []:
+        claude_pat = canonical_to_claude(pat)
+        if claude_pat not in all_patterns:
+            all_patterns.append(claude_pat)
 
-    allow_list.append(WADE_ALLOW_PATTERN)
+    changed = False
+    for pat in all_patterns:
+        if pat not in allow_list:
+            allow_list.append(pat)
+            changed = True
+
+    if not changed:
+        return  # All patterns already present
 
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     settings_path.write_text(

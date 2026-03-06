@@ -135,6 +135,7 @@ def run_ai_planning_session(
     transcript_path: Path | None = None,
     issue_context: str | None = None,
     effort: EffortLevel | None = None,
+    allowed_commands: list[str] | None = None,
 ) -> int:
     """Launch the AI CLI for a planning session.
 
@@ -182,6 +183,7 @@ def run_ai_planning_session(
         trusted_dirs=[str(Path.cwd()), tempfile.gettempdir(), plan_dir],
         initial_message=prompt,
         effort=effort,
+        allowed_commands=allowed_commands,
     )
     console.info(f"Plan directory: {plan_dir}")
 
@@ -334,6 +336,7 @@ def plan(
         transcript_path=transcript_path,
         issue_context=issue_context,
         effort=resolved_effort,
+        allowed_commands=config.permissions.allowed_commands,
     )
     logger.info("plan.ai_exited", exit_code=exit_code)
 

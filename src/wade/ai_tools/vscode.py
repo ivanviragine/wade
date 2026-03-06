@@ -46,6 +46,7 @@ class VSCodeAdapter(AbstractAITool):
         transcript_path: Path | None = None,
         trusted_dirs: list[str] | None = None,
         effort: EffortLevel | None = None,
+        allowed_commands: list[str] | None = None,
     ) -> int:
         cmd = ["code", str(worktree_path)]
         logger.info("ai_tool.launch", tool="vscode", cwd=str(worktree_path))

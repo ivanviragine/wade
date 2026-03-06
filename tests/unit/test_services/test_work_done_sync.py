@@ -148,7 +148,7 @@ class TestBuildImplUsageBlock:
         assert IMPL_USAGE_MARKER_END in block
         assert "| Tool | `claude` |" in block
         assert "| Model | `claude-sonnet-4-6` |" in block
-        assert "### Usage" not in block
+        assert "### Session 1" in block
 
     def test_with_token_usage(self) -> None:
         usage = TokenUsage(
