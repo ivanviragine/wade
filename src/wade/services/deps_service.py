@@ -311,6 +311,7 @@ def run_headless_analysis(
     ai_tool: str,
     prompt: str,
     model: str | None = None,
+    allowed_commands: list[str] | None = None,
 ) -> str | None:
     """Run dependency analysis in headless mode.
 
@@ -330,6 +331,7 @@ def run_headless_analysis(
         model=model,
         prompt=prompt,
         trusted_dirs=[str(Path.cwd()), tempfile.gettempdir()],
+        allowed_commands=allowed_commands,
     )
 
     try:
@@ -352,6 +354,7 @@ def _run_interactive_analysis(
     prompt: str,
     model: str | None = None,
     plan_dir: str | None = None,
+    allowed_commands: list[str] | None = None,
 ) -> str | None:
     """Run dependency analysis interactively when headless fails.
 
@@ -382,6 +385,7 @@ def _run_interactive_analysis(
                 model=model,
                 prompt=interactive_prompt,
                 trusted_dirs=[str(Path.cwd()), output_dir, tempfile.gettempdir()],
+                allowed_commands=allowed_commands,
             )
 
             # Non-blocking tools return immediately — wait for user.
@@ -484,7 +488,8 @@ def analyze_deps(
 
     # Run headless AI analysis
     console.step(f"Running {resolved_tool} for dependency analysis...")
-    output = run_headless_analysis(resolved_tool, prompt, resolved_model)
+    allowed_cmds = config.permissions.allowed_commands
+    output = run_headless_analysis(resolved_tool, prompt, resolved_model, allowed_cmds)
 
     if output and output_is_parseable(output):
         console.success("Headless analysis complete.")
@@ -500,6 +505,7 @@ def analyze_deps(
             prompt,
             resolved_model,
             plan_dir=None,
+            allowed_commands=allowed_cmds,
         )
 
     # Parse edges

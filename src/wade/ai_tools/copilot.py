@@ -47,6 +47,20 @@ class CopilotAdapter(AbstractAITool):
         """Copilot uses --add-dir for plan directory access."""
         return ["--add-dir", plan_dir]
 
+    def allowed_commands_args(self, commands: list[str]) -> list[str]:
+        """Translate canonical patterns to Copilot --allow-tool flags.
+
+        Canonical ``"cmd args"`` becomes ``--allow-tool "shell(cmd:args)"``.
+        """
+        result: list[str] = []
+        for cmd in commands:
+            parts = cmd.split(None, 1)
+            binary = parts[0]
+            args = parts[1] if len(parts) > 1 else ""
+            pattern = f"shell({binary}:{args})" if args else f"shell({binary})"
+            result.extend(["--allow-tool", pattern])
+        return result
+
     def normalize_model_format(self, model_id: str) -> str:
         """Copilot uses dotted format for Claude models."""
         if model_id.startswith("claude-"):
