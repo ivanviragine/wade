@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+from enum import StrEnum
 from pathlib import Path
 
 import structlog
@@ -126,11 +127,16 @@ def validate_plan_files(plan_dir: Path) -> list[PlanFile]:
 _RECOMMENDED_SECTIONS = ("tasks", "acceptance criteria")
 
 
+class PlanDiagnosticLevel(StrEnum):
+    ERROR = "error"
+    WARNING = "warning"
+
+
 class PlanDiagnostic(BaseModel):
     """A single diagnostic message for a plan file."""
 
     file: str
-    level: str  # "error" or "warning"
+    level: PlanDiagnosticLevel
     message: str
 
 
@@ -141,11 +147,11 @@ class PlanValidationResult(BaseModel):
 
     @property
     def errors(self) -> list[PlanDiagnostic]:
-        return [d for d in self.diagnostics if d.level == "error"]
+        return [d for d in self.diagnostics if d.level == PlanDiagnosticLevel.ERROR]
 
     @property
     def warnings(self) -> list[PlanDiagnostic]:
-        return [d for d in self.diagnostics if d.level == "warning"]
+        return [d for d in self.diagnostics if d.level == PlanDiagnosticLevel.WARNING]
 
     @property
     def has_errors(self) -> bool:
@@ -172,7 +178,7 @@ def validate_plan_dir(plan_dir: Path) -> PlanValidationResult:
         result.diagnostics.append(
             PlanDiagnostic(
                 file="(none)",
-                level="error",
+                level=PlanDiagnosticLevel.ERROR,
                 message="No plan files (.md) found in the plan directory.",
             )
         )
@@ -183,7 +189,7 @@ def validate_plan_dir(plan_dir: Path) -> PlanValidationResult:
             plan = PlanFile.from_markdown(md_file)
         except (ValueError, OSError) as e:
             result.diagnostics.append(
-                PlanDiagnostic(file=md_file.name, level="error", message=str(e))
+                PlanDiagnostic(file=md_file.name, level=PlanDiagnosticLevel.ERROR, message=str(e))
             )
             continue
 
@@ -191,7 +197,7 @@ def validate_plan_dir(plan_dir: Path) -> PlanValidationResult:
             result.diagnostics.append(
                 PlanDiagnostic(
                     file=md_file.name,
-                    level="error",
+                    level=PlanDiagnosticLevel.ERROR,
                     message=(
                         "Missing or invalid '## Complexity' section. "
                         "Must be one of: easy, medium, complex, very_complex."
@@ -205,7 +211,7 @@ def validate_plan_dir(plan_dir: Path) -> PlanValidationResult:
                 result.diagnostics.append(
                     PlanDiagnostic(
                         file=md_file.name,
-                        level="warning",
+                        level=PlanDiagnosticLevel.WARNING,
                         message=f"Missing recommended section: '## {heading}'.",
                     )
                 )
@@ -213,33 +219,13 @@ def validate_plan_dir(plan_dir: Path) -> PlanValidationResult:
     return result
 
 
-def plan_done(plan_dir: Path) -> bool:
-    """Validate plan files and print per-file diagnostics.
+def plan_done(plan_dir: Path) -> PlanValidationResult:
+    """Validate plan files and return aggregated diagnostics.
 
-    Returns ``True`` (exit 0) when no errors are found.
-    Returns ``False`` (exit 1) when one or more errors exist.
-    Warnings are printed but do not affect the exit code.
+    The caller is responsible for rendering results and determining the exit code.
+    Use ``result.has_errors`` to check whether validation passed.
     """
-    result = validate_plan_dir(plan_dir)
-
-    for diag in result.warnings:
-        console.warn(f"{diag.file}: {diag.message}")
-
-    for diag in result.errors:
-        console.error(f"{diag.file}: {diag.message}")
-
-    if result.has_errors:
-        n = len(result.errors)
-        console.error(f"Plan validation failed — {n} error(s) must be fixed before exiting.")
-        return False
-
-    console.success(f"Plan validation passed ({len(result.warnings)} warning(s)).")
-    console.info(
-        "SESSION COMPLETE — do not implement anything. "
-        "Suggest the user to exit the session now. "
-        "wade will read the plan files and create GitHub issues automatically."
-    )
-    return True
+    return validate_plan_dir(plan_dir)
 
 
 # ---------------------------------------------------------------------------

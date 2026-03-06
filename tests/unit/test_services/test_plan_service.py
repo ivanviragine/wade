@@ -485,8 +485,8 @@ class TestValidatePlanDir:
         assert result.has_errors
         assert any("No plan files" in d.message for d in result.errors)
 
-    def test_nonexistent_dir_returns_error(self) -> None:
-        result = validate_plan_dir(Path("/nonexistent/path"))
+    def test_nonexistent_dir_returns_error(self, tmp_path: Path) -> None:
+        result = validate_plan_dir(tmp_path / "does-not-exist")
         assert result.has_errors
 
     def test_valid_plan_passes(self, tmp_path: Path) -> None:
@@ -565,24 +565,23 @@ class TestValidatePlanDir:
 
 
 class TestPlanDone:
-    def test_returns_true_for_valid_plans(self, tmp_path: Path) -> None:
+    def test_returns_no_errors_for_valid_plans(self, tmp_path: Path) -> None:
         content = (
             "# Feature\n\n## Complexity\nmedium\n\n"
             "## Tasks\n- [ ] Do it\n\n## Acceptance Criteria\n- [ ] Works\n"
         )
         (tmp_path / "PLAN.md").write_text(content)
-        with patch("wade.services.plan_service.console"):
-            assert plan_done(tmp_path) is True
+        assert not plan_done(tmp_path).has_errors
 
-    def test_returns_false_for_invalid_plans(self, tmp_path: Path) -> None:
+    def test_returns_errors_for_invalid_plans(self, tmp_path: Path) -> None:
         (tmp_path / "PLAN.md").write_text("No title heading\n")
-        with patch("wade.services.plan_service.console"):
-            assert plan_done(tmp_path) is False
+        assert plan_done(tmp_path).has_errors
 
-    def test_returns_true_with_warnings_only(self, tmp_path: Path) -> None:
-        """Warnings (missing recommended sections) must not make plan_done return False."""
+    def test_no_errors_with_warnings_only(self, tmp_path: Path) -> None:
+        """Warnings (missing recommended sections) must not produce errors."""
         (tmp_path / "PLAN.md").write_text(
             "# Feature\n\n## Complexity\nmedium\n\nNo tasks or criteria sections.\n"
         )
-        with patch("wade.services.plan_service.console"):
-            assert plan_done(tmp_path) is True
+        result = plan_done(tmp_path)
+        assert not result.has_errors
+        assert result.warnings

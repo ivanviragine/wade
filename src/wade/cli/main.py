@@ -173,9 +173,28 @@ def plan_done_cmd(
 ) -> None:
     """Validate plan files — run this before exiting a planning session."""
     from wade.services.plan_service import plan_done as do_plan_done
+    from wade.ui.console import console
 
-    success = do_plan_done(plan_dir)
-    raise typer.Exit(0 if success else 1)
+    result = do_plan_done(plan_dir)
+
+    for diag in result.warnings:
+        console.warn(f"{diag.file}: {diag.message}")
+
+    for diag in result.errors:
+        console.error(f"{diag.file}: {diag.message}")
+
+    if result.has_errors:
+        n = len(result.errors)
+        console.error(f"Plan validation failed — {n} error(s) must be fixed before exiting.")
+        raise typer.Exit(1)
+
+    console.success(f"Plan validation passed ({len(result.warnings)} warning(s)).")
+    console.info(
+        "SESSION COMPLETE — do not implement anything. "
+        "Suggest the user to exit the session now. "
+        "wade will read the plan files and create GitHub issues automatically."
+    )
+    raise typer.Exit(0)
 
 
 @app.command("new-task")
