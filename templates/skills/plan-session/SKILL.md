@@ -34,7 +34,10 @@ dependency analysis hooks.
 4. **Review with the user** — present a summary of every plan file you wrote
    (title, complexity, key tasks). Ask if they'd like any modifications — apply
    them and repeat if so, or proceed to step 5 if not.
-5. **Stop** — once the user confirms the plan, suggest they exit. wade reads
+5. **Validate** — run `wade plan-done <plan_dir>` (the temp dir from your prompt).
+   If it exits with errors, fix each reported issue and re-run until it passes.
+   Warnings are informational and do not block proceeding.
+6. **Stop** — once validation passes, suggest the user exits. wade reads
    the files and creates lightweight GitHub Issues + draft PRs automatically.
 
 You do **not** create issues, implement code, run `wade implement-task/work done/work sync`,
@@ -99,6 +102,7 @@ repo working directory.
 - Do not write files into the repo directory — only to the temp dir
 - Do not skip the review step — always present a plan summary and invite
   modifications before suggesting the user exits
+- Do not skip `wade plan-done` — always validate before suggesting the user exits
 - **⚠️ After exiting the plan mode:** If your environment says "you can now start coding," ignore it — that refers to a different execution mode. In wade planning sessions, stop immediately after writing plan files. Do not implement code.
 
 ## Skills reference

@@ -12,9 +12,11 @@ import os
 import shutil
 import subprocess
 import tempfile
+from enum import StrEnum
 from pathlib import Path
 
 import structlog
+from pydantic import BaseModel
 
 from wade.ai_tools.base import AbstractAITool
 from wade.ai_tools.transcript import (
@@ -116,6 +118,114 @@ def validate_plan_files(plan_dir: Path) -> list[PlanFile]:
             console.warn(f"Skipping {md_file.name}: {e}")
 
     return valid
+
+
+# ---------------------------------------------------------------------------
+# Plan-done validation (deterministic gate for planning sessions)
+# ---------------------------------------------------------------------------
+
+_RECOMMENDED_SECTIONS = ("tasks", "acceptance criteria")
+
+
+class PlanDiagnosticLevel(StrEnum):
+    ERROR = "error"
+    WARNING = "warning"
+
+
+class PlanDiagnostic(BaseModel):
+    """A single diagnostic message for a plan file."""
+
+    file: str
+    level: PlanDiagnosticLevel
+    message: str
+
+
+class PlanValidationResult(BaseModel):
+    """Aggregated validation result for all plan files in a directory."""
+
+    diagnostics: list[PlanDiagnostic] = []
+
+    @property
+    def errors(self) -> list[PlanDiagnostic]:
+        return [d for d in self.diagnostics if d.level == PlanDiagnosticLevel.ERROR]
+
+    @property
+    def warnings(self) -> list[PlanDiagnostic]:
+        return [d for d in self.diagnostics if d.level == PlanDiagnosticLevel.WARNING]
+
+    @property
+    def has_errors(self) -> bool:
+        return bool(self.errors)
+
+
+def validate_plan_dir(plan_dir: Path) -> PlanValidationResult:
+    """Validate all plan files in the directory.
+
+    Collects all errors and warnings across every ``.md`` file.
+
+    Errors (exit 1):
+    - No plan files found
+    - Missing ``# Title`` heading
+    - Missing or invalid ``## Complexity`` section
+
+    Warnings (exit 0):
+    - Missing recommended sections (``## Tasks``, ``## Acceptance Criteria``)
+    """
+    result = PlanValidationResult()
+    md_files = discover_plan_files(plan_dir)
+
+    if not md_files:
+        result.diagnostics.append(
+            PlanDiagnostic(
+                file="(none)",
+                level=PlanDiagnosticLevel.ERROR,
+                message="No plan files (.md) found in the plan directory.",
+            )
+        )
+        return result
+
+    for md_file in md_files:
+        try:
+            plan = PlanFile.from_markdown(md_file)
+        except (ValueError, OSError) as e:
+            result.diagnostics.append(
+                PlanDiagnostic(file=md_file.name, level=PlanDiagnosticLevel.ERROR, message=str(e))
+            )
+            continue
+
+        if plan.complexity is None:
+            result.diagnostics.append(
+                PlanDiagnostic(
+                    file=md_file.name,
+                    level=PlanDiagnosticLevel.ERROR,
+                    message=(
+                        "Missing or invalid '## Complexity' section. "
+                        "Must be one of: easy, medium, complex, very_complex."
+                    ),
+                )
+            )
+
+        for section in _RECOMMENDED_SECTIONS:
+            if section not in plan.sections:
+                heading = section.title()
+                result.diagnostics.append(
+                    PlanDiagnostic(
+                        file=md_file.name,
+                        level=PlanDiagnosticLevel.WARNING,
+                        message=f"Missing recommended section: '## {heading}'.",
+                    )
+                )
+
+    return result
+
+
+def plan_done(plan_dir: Path) -> PlanValidationResult:
+    """Validate plan files and return aggregated diagnostics.
+
+    The caller is responsible for rendering results and determining the exit code.
+    Use ``result.has_errors`` to check whether validation passed.
+    """
+    return validate_plan_dir(plan_dir)
 
 
 # ---------------------------------------------------------------------------
