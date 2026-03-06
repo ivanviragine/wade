@@ -37,6 +37,8 @@ class LabelType(StrEnum):
     PLANNED_MODEL = "planned_model"
     WORKED_BY = "worked_by"
     WORKED_MODEL = "worked_model"
+    REVIEWED_BY = "reviewed_by"
+    REVIEWED_MODEL = "reviewed_model"
     AI_LABEL = "ai_label"
 
 

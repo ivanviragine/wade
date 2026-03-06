@@ -247,6 +247,39 @@ def implement_task_cmd(
     raise typer.Exit(0 if success else 1)
 
 
+@app.command("address-reviews")
+def address_reviews_cmd(
+    target: str = typer.Argument(..., help="Issue number."),
+    ai: list[str] | None = typer.Option(  # noqa: B008
+        None, "--ai", help="AI tool to use.", autocompletion=complete_ai_tools
+    ),
+    model: str | None = typer.Option(
+        None, "--model", help="AI model to use.", autocompletion=complete_models
+    ),
+    detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
+) -> None:
+    """Address PR review comments — fetches unresolved threads and launches AI."""
+    from wade.services.review_service import start as do_start
+    from wade.ui import prompts
+
+    selected_ai: str | None = None
+    if ai and len(ai) > 1:
+        idx = prompts.select("Select AI tool", ai)
+        selected_ai = ai[idx]
+    elif ai and len(ai) == 1:
+        selected_ai = ai[0]
+
+    success = do_start(
+        target=target,
+        ai_tool=selected_ai,
+        model=model,
+        detach=detach,
+        ai_explicit=selected_ai is not None,
+        model_explicit=model is not None,
+    )
+    raise typer.Exit(0 if success else 1)
+
+
 # Register subcommand groups
 from wade.cli.admin import admin_app  # noqa: E402
 from wade.cli.task import task_app  # noqa: E402

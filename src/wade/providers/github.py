@@ -14,6 +14,7 @@ from typing import Any
 
 import structlog
 
+from wade.models.review import ReviewComment, ReviewThread
 from wade.models.task import (
     Label,
     Task,
@@ -320,6 +321,128 @@ class GitHubProvider(AbstractTaskProvider):
 
         if not git_pr.update_pr_body(Path.cwd(), int(pr_number), body):
             logger.warning("github.update_pr_body_failed", pr_number=pr_number)
+
+    # --- PR review operations ---
+
+    def get_pr_review_threads(
+        self,
+        repo_root: Any,
+        pr_number: int,
+    ) -> list[ReviewThread]:
+        """Fetch PR review threads via GitHub GraphQL API with pagination."""
+        try:
+            nwo = self.get_repo_nwo()
+        except CommandError:
+            logger.warning("github.get_review_threads_nwo_failed")
+            return []
+
+        owner, repo = nwo.split("/", 1)
+        threads: list[ReviewThread] = []
+        cursor: str | None = None
+
+        while True:
+            page_threads, has_next, cursor = self._fetch_review_threads_page(
+                owner, repo, pr_number, cursor
+            )
+            threads.extend(page_threads)
+            if not has_next or not cursor:
+                break
+
+        return threads
+
+    def _fetch_review_threads_page(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        cursor: str | None = None,
+    ) -> tuple[list[ReviewThread], bool, str | None]:
+        """Fetch one page of review threads. Returns (threads, has_next, end_cursor)."""
+        after_clause = f', after: "{cursor}"' if cursor else ""
+        query = f"""
+query($owner: String!, $repo: String!, $pr: Int!) {{
+  repository(owner: $owner, name: $repo) {{
+    pullRequest(number: $pr) {{
+      reviewThreads(first: 100{after_clause}) {{
+        pageInfo {{
+          hasNextPage
+          endCursor
+        }}
+        nodes {{
+          isResolved
+          isOutdated
+          comments(first: 50) {{
+            nodes {{
+              body
+              path
+              line
+              author {{ login }}
+              createdAt
+              url
+            }}
+          }}
+        }}
+      }}
+    }}
+  }}
+}}"""
+
+        try:
+            result = run(
+                [
+                    "gh",
+                    "api",
+                    "graphql",
+                    "-f",
+                    f"owner={owner}",
+                    "-f",
+                    f"repo={repo}",
+                    "-F",
+                    f"pr={pr_number}",
+                    "-f",
+                    f"query={query}",
+                ],
+                check=True,
+            )
+            data = json.loads(result.stdout)
+        except (CommandError, json.JSONDecodeError) as e:
+            logger.warning("github.review_threads_fetch_failed", error=str(e))
+            return [], False, None
+
+        pr_data = data.get("data", {}).get("repository", {}).get("pullRequest") or {}
+        threads_data = pr_data.get("reviewThreads", {})
+        page_info = threads_data.get("pageInfo", {})
+        nodes = threads_data.get("nodes", [])
+
+        threads: list[ReviewThread] = []
+        for node in nodes:
+            comments: list[ReviewComment] = []
+            for cnode in node.get("comments", {}).get("nodes", []):
+                comments.append(
+                    ReviewComment(
+                        author=cnode.get("author", {}).get("login", "")
+                        if cnode.get("author")
+                        else "",
+                        body=cnode.get("body", ""),
+                        path=cnode.get("path"),
+                        line=cnode.get("line"),
+                        created_at=cnode.get("createdAt"),
+                        url=cnode.get("url"),
+                    )
+                )
+            threads.append(
+                ReviewThread(
+                    is_resolved=node.get("isResolved", False),
+                    is_outdated=node.get("isOutdated", False),
+                    comments=comments,
+                )
+            )
+
+        return (
+            threads,
+            page_info.get("hasNextPage", False),
+            page_info.get("endCursor"),
+        )
 
     # --- Repository info ---
 

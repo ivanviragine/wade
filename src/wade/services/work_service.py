@@ -65,6 +65,10 @@ logger = structlog.get_logger()
 IMPL_USAGE_MARKER_START = "<!-- wade:impl-usage:start -->"
 IMPL_USAGE_MARKER_END = "<!-- wade:impl-usage:end -->"
 
+# --- Review usage block markers ---
+REVIEW_USAGE_MARKER_START = "<!-- wade:review-usage:start -->"
+REVIEW_USAGE_MARKER_END = "<!-- wade:review-usage:end -->"
+
 # ---------------------------------------------------------------------------
 # Bootstrap helpers
 # ---------------------------------------------------------------------------
@@ -1392,6 +1396,115 @@ def build_impl_usage_block(
 def _strip_impl_usage_block(body: str) -> str:
     """Remove existing implementation usage block from body (idempotent)."""
     return remove_marker_block(body, IMPL_USAGE_MARKER_START, IMPL_USAGE_MARKER_END)
+
+
+def build_review_usage_block(
+    ai_tool: str | None = None,
+    model: str | None = None,
+    token_usage: TokenUsage | None = None,
+) -> str:
+    """Build the ## Token Usage (Review) section for PR/issue body.
+
+    Same structure as :func:`build_impl_usage_block` but with review markers.
+    """
+    from wade.ai_tools.transcript import format_count
+
+    breakdown = token_usage.model_breakdown if token_usage else []
+    multi = len(breakdown) > 1
+
+    if multi:
+        names = [row.model for row in breakdown]
+        n = len(names)
+        header = "| Metric | Total | " + " | ".join(f"`{m}`" for m in names) + " |"
+        sep = "| " + " | ".join(["---"] * (2 + n)) + " |"
+        empty = " |" * n
+
+        lines = [
+            REVIEW_USAGE_MARKER_START,
+            "",
+            "## Token Usage (Review)",
+            "",
+            header,
+            sep,
+        ]
+
+        if ai_tool:
+            lines.append(f"| Tool | `{ai_tool}` |{empty}")
+
+        has_tokens = token_usage and token_usage.total_tokens and token_usage.total_tokens > 0
+        if has_tokens:
+            assert token_usage is not None
+
+            def per(attr: str) -> str:
+                return " | ".join(f"**{format_count(getattr(r, attr))}**" for r in breakdown)
+
+            per_total = " | ".join(
+                f"**{format_count((r.input_tokens or 0) + (r.output_tokens or 0) + (r.cached_tokens or 0))}**"  # noqa: E501
+                for r in breakdown
+            )
+            lines.append(
+                f"| Total tokens | **{format_count(token_usage.total_tokens)}** | {per_total} |"
+            )
+            if token_usage.input_tokens:
+                inp_total = format_count(token_usage.input_tokens)
+                lines.append(f"| Input tokens | **{inp_total}** | {per('input_tokens')} |")
+            if token_usage.output_tokens:
+                out_total = format_count(token_usage.output_tokens)
+                lines.append(f"| Output tokens | **{out_total}** | {per('output_tokens')} |")
+            if token_usage.cached_tokens:
+                cac_total = format_count(token_usage.cached_tokens)
+                lines.append(f"| Cached tokens | **{cac_total}** | {per('cached_tokens')} |")
+        else:
+            lines.append(f"| Total tokens | *unavailable* |{empty}")
+
+        if token_usage and token_usage.premium_requests and token_usage.premium_requests > 0:
+            per_prem = " | ".join(
+                f"**{r.premium_requests}**" if r.premium_requests else "" for r in breakdown
+            )
+            lines.append(
+                f"| Premium requests (est.) | **{token_usage.premium_requests}** | {per_prem} |"
+            )
+
+    else:
+        lines = [
+            REVIEW_USAGE_MARKER_START,
+            "",
+            "## Token Usage (Review)",
+            "",
+            "| Metric | Value |",
+            "| --- | --- |",
+        ]
+
+        if ai_tool:
+            lines.append(f"| Tool | `{ai_tool}` |")
+        if model:
+            lines.append(f"| Model | `{model}` |")
+
+        has_tokens = token_usage and token_usage.total_tokens and token_usage.total_tokens > 0
+        if has_tokens:
+            assert token_usage is not None
+            lines.append(f"| Total tokens | **{format_count(token_usage.total_tokens)}** |")
+            if token_usage.input_tokens:
+                lines.append(f"| Input tokens | **{format_count(token_usage.input_tokens)}** |")
+            if token_usage.output_tokens:
+                lines.append(f"| Output tokens | **{format_count(token_usage.output_tokens)}** |")
+            if token_usage.cached_tokens:
+                lines.append(f"| Cached tokens | **{format_count(token_usage.cached_tokens)}** |")
+        else:
+            lines.append("| Total tokens | *unavailable* |")
+
+        if token_usage and token_usage.premium_requests and token_usage.premium_requests > 0:
+            lines.append(f"| Premium requests (est.) | **{token_usage.premium_requests}** |")
+
+    lines.append("")
+    lines.append(REVIEW_USAGE_MARKER_END)
+
+    return "\n".join(lines)
+
+
+def _strip_review_usage_block(body: str) -> str:
+    """Remove existing review usage block from body (idempotent)."""
+    return remove_marker_block(body, REVIEW_USAGE_MARKER_START, REVIEW_USAGE_MARKER_END)
 
 
 def _strip_summary_section(body: str) -> str:
