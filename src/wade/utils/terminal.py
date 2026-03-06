@@ -42,6 +42,16 @@ def compose_work_title(issue_id: str, issue_title: str) -> str:
     return f"wade work #{issue_id} — {title}"
 
 
+def compose_review_title(issue_id: str, issue_title: str) -> str:
+    """Compose a terminal title for an address-reviews session.
+
+    Format: "wade address-reviews #42 — Feature Name"
+    """
+    max_title = 50
+    title = issue_title[:max_title] + "..." if len(issue_title) > max_title else issue_title
+    return f"wade address-reviews #{issue_id} — {title}"
+
+
 def compose_plan_title(issue_id: str | None, issue_title: str | None) -> str:
     """Compose a terminal title for a plan session.
 
