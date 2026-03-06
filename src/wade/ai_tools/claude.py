@@ -127,6 +127,18 @@ class ClaudeAdapter(AbstractAITool):
     def session_data_dirs(self) -> list[str]:
         return [".claude"]
 
+    def allowed_commands_args(self, commands: list[str]) -> list[str]:
+        """Translate canonical patterns to Claude --allowedTools flags.
+
+        Canonical ``"cmd args"`` becomes ``"Bash(cmd:args)"``.
+        """
+        from wade.config.claude_allowlist import canonical_to_claude
+
+        patterns = [canonical_to_claude(cmd) for cmd in commands]
+        if not patterns:
+            return []
+        return ["--allowedTools", *patterns]
+
     def structured_output_args(self, json_schema: dict[str, Any]) -> list[str]:
         import json
 

@@ -6,9 +6,27 @@ from wade.models.config import (
     AICommandConfig,
     AIConfig,
     ComplexityModelMapping,
+    PermissionsConfig,
     ProjectConfig,
 )
 from wade.models.work import MergeStrategy
+
+
+class TestPermissionsConfig:
+    def test_defaults(self) -> None:
+        perms = PermissionsConfig()
+        assert perms.allowed_commands == ["wade *"]
+
+    def test_custom_commands(self) -> None:
+        perms = PermissionsConfig(
+            allowed_commands=["wade *", "./scripts/check.sh *", "./scripts/fmt.sh *"]
+        )
+        assert len(perms.allowed_commands) == 3
+        assert "./scripts/check.sh *" in perms.allowed_commands
+
+    def test_empty_commands(self) -> None:
+        perms = PermissionsConfig(allowed_commands=[])
+        assert perms.allowed_commands == []
 
 
 class TestProjectConfig:
@@ -20,6 +38,7 @@ class TestProjectConfig:
         assert config.project.branch_prefix == "feat"
         assert config.ai.default_tool is None
         assert config.models == {}
+        assert config.permissions.allowed_commands == ["wade *"]
 
     def test_get_ai_tool_global(self) -> None:
         config = ProjectConfig(ai=AIConfig(default_tool="claude"))
