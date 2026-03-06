@@ -1,10 +1,15 @@
-"""Cursor CLI ~/.cursor/cli-config.json allowlist management.
+"""Cursor CLI permission allowlist management.
 
 Configures the Cursor CLI permission allowlist to include ``wade`` commands
 and project scripts, so agents can run them without manual approval.
 
-Unlike Claude Code (per-project .claude/settings.json), Cursor stores its
-CLI config globally at ``~/.cursor/cli-config.json``.
+Cursor supports two config locations:
+
+- **Per-project**: ``<project>/.cursor/cli.json`` (preferred for worktrees)
+- **Global**: ``~/.cursor/cli-config.json`` (fallback / ``wade init``)
+
+When a ``project_root`` is provided, the per-project config is used.
+When ``project_root`` is ``None``, the global config is used.
 """
 
 from __future__ import annotations
@@ -20,7 +25,18 @@ logger = structlog.get_logger()
 # Allowlist entry pattern for wade commands
 WADE_ALLOW_PATTERN = "Shell(wade *)"
 
-_CLI_CONFIG_PATH = Path.home() / ".cursor" / "cli-config.json"
+_GLOBAL_CONFIG_PATH = Path.home() / ".cursor" / "cli-config.json"
+
+
+def _config_path(project_root: Path | None) -> Path:
+    """Return the Cursor CLI config path for the given scope.
+
+    Per-project: ``<project_root>/.cursor/cli.json``
+    Global:      ``~/.cursor/cli-config.json``
+    """
+    if project_root is not None:
+        return project_root / ".cursor" / "cli.json"
+    return _GLOBAL_CONFIG_PATH
 
 
 def canonical_to_cursor(pattern: str) -> str:
@@ -39,15 +55,16 @@ def canonical_to_cursor(pattern: str) -> str:
 
 
 def is_allowlist_configured(project_root: Path | None = None) -> bool:
-    """Return True if Shell(wade *) is present in the global Cursor allowlist.
+    """Return True if Shell(wade *) is present in the Cursor allowlist.
 
-    ``project_root`` is accepted for interface compatibility but unused —
-    Cursor stores its CLI config globally.
+    When ``project_root`` is given, checks the per-project config.
+    Otherwise checks the global config.
     """
-    if not _CLI_CONFIG_PATH.is_file():
+    config_file = _config_path(project_root)
+    if not config_file.is_file():
         return False
     with contextlib.suppress(json.JSONDecodeError, OSError):
-        raw = json.loads(_CLI_CONFIG_PATH.read_text(encoding="utf-8"))
+        raw = json.loads(config_file.read_text(encoding="utf-8"))
         if isinstance(raw, dict):
             allow = raw.get("permissions", {}).get("allow", [])
             return isinstance(allow, list) and WADE_ALLOW_PATTERN in allow
@@ -58,11 +75,12 @@ def configure_allowlist(
     project_root: Path | None = None,
     extra_patterns: list[str] | None = None,
 ) -> None:
-    """Add wade commands to ~/.cursor/cli-config.json permissions allowlist.
+    """Add wade commands to the Cursor CLI permissions allowlist.
 
     Args:
-        project_root: Accepted for interface compatibility but unused —
-            Cursor stores its CLI config globally.
+        project_root: When provided, writes to the per-project config
+            ``<project_root>/.cursor/cli.json``.  When ``None``, writes
+            to the global ``~/.cursor/cli-config.json``.
         extra_patterns: Additional canonical command patterns (e.g.
             ``["./scripts/check.sh *"]``).  Translated to Cursor syntax
             and merged into the allowlist.
@@ -70,10 +88,12 @@ def configure_allowlist(
     Idempotent — each pattern is added at most once.  Non-destructive
     merge with existing config.
     """
+    config_file = _config_path(project_root)
+
     existing: dict[str, object] = {}
-    if _CLI_CONFIG_PATH.is_file():
+    if config_file.is_file():
         with contextlib.suppress(json.JSONDecodeError, OSError):
-            raw = json.loads(_CLI_CONFIG_PATH.read_text(encoding="utf-8"))
+            raw = json.loads(config_file.read_text(encoding="utf-8"))
             if isinstance(raw, dict):
                 existing = raw
 
@@ -103,9 +123,9 @@ def configure_allowlist(
     if not changed:
         return  # All patterns already present
 
-    _CLI_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _CLI_CONFIG_PATH.write_text(
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(
         json.dumps(existing, indent=2) + "\n",
         encoding="utf-8",
     )
-    logger.info("cursor_allowlist.configured", path=str(_CLI_CONFIG_PATH))
+    logger.info("cursor_allowlist.configured", path=str(config_file))

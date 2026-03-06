@@ -154,6 +154,15 @@ def bootstrap_worktree(
     if is_allowlist_configured(repo_root):
         configure_allowlist(worktree_path, extra_patterns=config.permissions.allowed_commands)
 
+    # Propagate Cursor allowlist to worktree's per-project .cursor/cli.json
+    from wade.config.cursor_allowlist import configure_allowlist as configure_cursor_allowlist
+    from wade.config.cursor_allowlist import is_allowlist_configured as is_cursor_configured
+
+    if is_cursor_configured() or is_cursor_configured(repo_root):
+        configure_cursor_allowlist(
+            worktree_path, extra_patterns=config.permissions.allowed_commands
+        )
+
     # Run post-create hook
     if config.hooks.post_worktree_create:
         hook_path = repo_root / config.hooks.post_worktree_create

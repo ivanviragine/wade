@@ -305,7 +305,7 @@ def update(
             configure_allowlist as configure_cursor_allowlist,
         )
 
-        configure_cursor_allowlist(extra_patterns=config.permissions.allowed_commands)
+        configure_cursor_allowlist(root, extra_patterns=config.permissions.allowed_commands)
     if "gemini" in tools_in_use:
         _configure_gemini_experimental()
 
@@ -534,7 +534,7 @@ def _prompt_cursor_settings(root: Path, non_interactive: bool) -> None:
     from wade.config.cursor_allowlist import configure_allowlist, is_allowlist_configured
     from wade.ui import prompts
 
-    if is_allowlist_configured():
+    if is_allowlist_configured(root):
         return
 
     if non_interactive:
@@ -546,8 +546,8 @@ def _prompt_cursor_settings(root: Path, non_interactive: bool) -> None:
         default=True,
     ):
         extra = _build_permissions_commands(root)
-        configure_allowlist(extra_patterns=extra)
-        console.success("Added Shell([step]wade[/] *) to ~/.cursor/cli-config.json allowlist")
+        configure_allowlist(root, extra_patterns=extra)
+        console.success("Added Shell([step]wade[/] *) to .cursor/cli.json allowlist")
 
 
 def _configure_statusline() -> None:

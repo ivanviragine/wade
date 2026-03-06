@@ -1,4 +1,4 @@
-"""Tests for Cursor CLI ~/.cursor/cli-config.json allowlist management."""
+"""Tests for Cursor CLI allowlist management (global + per-project)."""
 
 from __future__ import annotations
 
@@ -15,25 +15,27 @@ from wade.config.cursor_allowlist import (
 
 
 @pytest.fixture(autouse=True)
-def _patch_config_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _patch_global_config_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Redirect the global config path to a temp directory."""
     fake_config = tmp_path / ".cursor" / "cli-config.json"
-    monkeypatch.setattr("wade.config.cursor_allowlist._CLI_CONFIG_PATH", fake_config)
+    monkeypatch.setattr("wade.config.cursor_allowlist._GLOBAL_CONFIG_PATH", fake_config)
 
 
-def _config_path(tmp_path: Path) -> Path:
+def _global_config_path(tmp_path: Path) -> Path:
     return tmp_path / ".cursor" / "cli-config.json"
 
 
-class TestConfigureAllowlist:
+class TestConfigureAllowlistGlobal:
+    """Tests for configure_allowlist() targeting the global config."""
+
     def test_creates_config_from_scratch(self, tmp_path: Path) -> None:
         configure_allowlist()
 
-        data = json.loads(_config_path(tmp_path).read_text(encoding="utf-8"))
+        data = json.loads(_global_config_path(tmp_path).read_text(encoding="utf-8"))
         assert data == {"permissions": {"allow": [WADE_ALLOW_PATTERN]}}
 
     def test_adds_to_existing_config(self, tmp_path: Path) -> None:
-        config_path = _config_path(tmp_path)
+        config_path = _global_config_path(tmp_path)
         config_path.parent.mkdir(parents=True)
         existing = {
             "permissions": {"allow": ["Shell(ls)"], "deny": []},
@@ -52,11 +54,11 @@ class TestConfigureAllowlist:
         configure_allowlist()
         configure_allowlist()
 
-        data = json.loads(_config_path(tmp_path).read_text(encoding="utf-8"))
+        data = json.loads(_global_config_path(tmp_path).read_text(encoding="utf-8"))
         assert data["permissions"]["allow"].count(WADE_ALLOW_PATTERN) == 1
 
     def test_handles_corrupted_json(self, tmp_path: Path) -> None:
-        config_path = _config_path(tmp_path)
+        config_path = _global_config_path(tmp_path)
         config_path.parent.mkdir(parents=True)
         config_path.write_text("{broken!!", encoding="utf-8")
 
@@ -69,9 +71,46 @@ class TestConfigureAllowlist:
         assert WADE_ALLOW_PATTERN == "Shell(wade *)"
 
 
+class TestConfigureAllowlistPerProject:
+    """Tests for configure_allowlist() targeting per-project .cursor/cli.json."""
+
+    def test_creates_per_project_config(self, tmp_path: Path) -> None:
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        configure_allowlist(project_root)
+
+        config_path = project_root / ".cursor" / "cli.json"
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+        assert data == {"permissions": {"allow": [WADE_ALLOW_PATTERN]}}
+
+    def test_per_project_does_not_touch_global(self, tmp_path: Path) -> None:
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        configure_allowlist(project_root)
+
+        assert not _global_config_path(tmp_path).exists()
+
+    def test_per_project_adds_to_existing(self, tmp_path: Path) -> None:
+        project_root = tmp_path / "project"
+        config_path = project_root / ".cursor" / "cli.json"
+        config_path.parent.mkdir(parents=True)
+        config_path.write_text(
+            json.dumps({"permissions": {"allow": ["Shell(ls)"]}}),
+            encoding="utf-8",
+        )
+
+        configure_allowlist(project_root)
+
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+        assert WADE_ALLOW_PATTERN in data["permissions"]["allow"]
+        assert "Shell(ls)" in data["permissions"]["allow"]
+
+
 class TestIsAllowlistConfigured:
-    def test_returns_true_when_present(self, tmp_path: Path) -> None:
-        config_path = _config_path(tmp_path)
+    def test_returns_true_when_present_globally(self, tmp_path: Path) -> None:
+        config_path = _global_config_path(tmp_path)
         config_path.parent.mkdir(parents=True)
         config_path.write_text(
             json.dumps({"permissions": {"allow": [WADE_ALLOW_PATTERN]}}),
@@ -84,7 +123,7 @@ class TestIsAllowlistConfigured:
         assert is_allowlist_configured() is False
 
     def test_returns_false_when_pattern_absent(self, tmp_path: Path) -> None:
-        config_path = _config_path(tmp_path)
+        config_path = _global_config_path(tmp_path)
         config_path.parent.mkdir(parents=True)
         config_path.write_text(
             json.dumps({"permissions": {"allow": ["Shell(ls)"]}}),
@@ -92,3 +131,20 @@ class TestIsAllowlistConfigured:
         )
 
         assert is_allowlist_configured() is False
+
+    def test_per_project_returns_true(self, tmp_path: Path) -> None:
+        project_root = tmp_path / "project"
+        config_path = project_root / ".cursor" / "cli.json"
+        config_path.parent.mkdir(parents=True)
+        config_path.write_text(
+            json.dumps({"permissions": {"allow": [WADE_ALLOW_PATTERN]}}),
+            encoding="utf-8",
+        )
+
+        assert is_allowlist_configured(project_root) is True
+
+    def test_per_project_returns_false_when_missing(self, tmp_path: Path) -> None:
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        assert is_allowlist_configured(project_root) is False
