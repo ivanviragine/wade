@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 from typing import Any, ClassVar
@@ -13,6 +14,7 @@ from wade.models.ai import (
     AIToolCapabilities,
     AIToolID,
     AIToolType,
+    EffortLevel,
     TokenUsage,
 )
 
@@ -33,6 +35,7 @@ class ClaudeAdapter(AbstractAITool):
             supports_model_flag=True,
             headless_flag="--print",
             supports_headless=True,
+            supports_effort=True,
         )
 
     def initial_message_args(self, prompt: str) -> list[str]:
@@ -140,6 +143,8 @@ class ClaudeAdapter(AbstractAITool):
         return ["--allowedTools", *patterns]
 
     def structured_output_args(self, json_schema: dict[str, Any]) -> list[str]:
-        import json
-
         return ["--output-format", "json", "--json-schema", json.dumps(json_schema)]
+
+    def effort_args(self, effort: EffortLevel) -> list[str]:
+        """Claude uses ``--settings '{"effortLevel": "<level>"}'``."""
+        return ["--settings", json.dumps({"effortLevel": effort.value})]

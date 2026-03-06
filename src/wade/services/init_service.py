@@ -114,7 +114,7 @@ def init(
     project_settings = _prompt_project_settings(root, non_interactive)
     hooks_setup = _prompt_hooks_setup(non_interactive)
     try:
-        selected_tool, default_model = _prompt_ai_section(ai_tool, non_interactive)
+        selected_tool, default_model, default_effort = _prompt_ai_section(ai_tool, non_interactive)
     except ValueError as exc:
         console.error(str(exc))
         return False
@@ -153,6 +153,7 @@ def init(
             selected_tool,
             work_setup["model_mapping"],
             default_model=default_model,
+            default_effort=default_effort,
             project_settings=project_settings,
             work_tool=work_setup["tool"],
             command_overrides=command_overrides,
@@ -167,6 +168,7 @@ def init(
             project_settings=project_settings,
             work_tool=work_setup["tool"],
             default_model=default_model,
+            default_effort=default_effort,
             command_overrides=command_overrides,
             hooks_setup=hooks_setup,
         )
@@ -781,22 +783,38 @@ def _select_ai_tool(
 def _prompt_ai_section(
     ai_tool: str | None,
     non_interactive: bool,
-) -> tuple[str | None, str | None]:
-    """Run the AI wizard section: select default tool then default model.
+) -> tuple[str | None, str | None, str | None]:
+    """Run the AI wizard section: select default tool, model, and effort.
 
     The rule is shown here (before any detection messages) so both the
     single-tool and multi-tool cases are grouped under the same header.
 
-    Returns ``(selected_tool, default_model)``.
+    Returns ``(selected_tool, default_model, default_effort)``.
     """
     if not non_interactive:
         console.rule("AI")
     selected_tool = _select_ai_tool(ai_tool, non_interactive)
     if non_interactive or not selected_tool:
-        return selected_tool, None
+        return selected_tool, None, None
     mapping = _resolve_models(selected_tool)
     default_model = _prompt_default_model(selected_tool, mapping, non_interactive=False)
-    return selected_tool, default_model
+
+    # Prompt for default effort level (only when tool supports it)
+    default_effort: str | None = None
+    try:
+        adapter = AbstractAITool.get(selected_tool)
+        if adapter.capabilities().supports_effort:
+            from wade.models.ai import EffortLevel
+            from wade.ui import prompts as ui_prompts
+
+            effort_choices = ["(none — use tool default)", *[e.value for e in EffortLevel]]
+            idx = ui_prompts.select("Default reasoning effort level", effort_choices)
+            # "" sentinel signals explicit "none" so _patch_config can clear on force
+            default_effort = effort_choices[idx] if idx > 0 else ""
+    except (ValueError, KeyError):
+        pass
+
+    return selected_tool, default_model, default_effort
 
 
 def _resolve_models(tool: str | None) -> ComplexityModelMapping:
@@ -1198,6 +1216,7 @@ def _write_config(
     project_settings: dict[str, str] | None = None,
     work_tool: str | None = None,
     default_model: str | None = None,
+    default_effort: str | None = None,
     command_overrides: dict[str, dict[str, str]] | None = None,
     hooks_setup: dict[str, Any] | None = None,
 ) -> None:
@@ -1226,6 +1245,8 @@ def _write_config(
         ai_section["default_tool"] = str(ai_tool)
     if default_model:
         ai_section["default_model"] = default_model
+    if default_effort:
+        ai_section["effort"] = default_effort
 
     # Write work tool override (only when different from default_tool)
     if work_tool and work_tool != ai_tool:
@@ -1291,6 +1312,7 @@ def _patch_config(
     ai_tool: str | None,
     model_mapping: ComplexityModelMapping,
     default_model: str | None = None,
+    default_effort: str | None = None,
     project_settings: dict[str, str] | None = None,
     work_tool: str | None = None,
     command_overrides: dict[str, dict[str, str]] | None = None,
@@ -1346,6 +1368,16 @@ def _patch_config(
         ai["default_model"] = default_model
         raw["ai"] = ai
         changed = True
+    if default_effort is not None:
+        if default_effort == "":  # Sentinel: user explicitly cleared effort
+            if force and "effort" in ai:
+                del ai["effort"]
+                raw["ai"] = ai
+                changed = True
+        elif force or not ai.get("effort"):
+            ai["effort"] = default_effort
+            raw["ai"] = ai
+            changed = True
 
     # Patch work tool override
     if work_tool:

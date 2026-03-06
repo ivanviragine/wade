@@ -12,6 +12,7 @@ from wade.models.ai import (
     AIToolCapabilities,
     AIToolID,
     AIToolType,
+    EffortLevel,
     TokenUsage,
 )
 from wade.utils.process import run_with_transcript
@@ -44,6 +45,7 @@ class VSCodeAdapter(AbstractAITool):
         detach: bool = False,
         transcript_path: Path | None = None,
         trusted_dirs: list[str] | None = None,
+        effort: EffortLevel | None = None,
         allowed_commands: list[str] | None = None,
     ) -> int:
         cmd = ["code", str(worktree_path)]
