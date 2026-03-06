@@ -12,6 +12,7 @@ from wade.models.ai import (
     AIToolCapabilities,
     AIToolID,
     AIToolType,
+    EffortLevel,
     TokenUsage,
 )
 from wade.utils.process import run_with_transcript
@@ -45,6 +46,7 @@ class AntigravityAdapter(AbstractAITool):
         detach: bool = False,
         transcript_path: Path | None = None,
         trusted_dirs: list[str] | None = None,
+        effort: EffortLevel | None = None,
     ) -> int:
         cmd = [self.capabilities().binary, "."]
         logger.info("ai_tool.launch", tool="antigravity", cwd=str(worktree_path))

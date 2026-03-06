@@ -49,21 +49,25 @@ class TestConfirmAiSelectionEarlyExit:
             result = confirm_ai_selection(
                 _CLAUDE, _MODEL_A, tool_explicit=False, model_explicit=False
             )
-        assert result == (_CLAUDE, _MODEL_A)
+        assert result == (_CLAUDE, _MODEL_A, None)
         mock_select.assert_not_called()
 
     def test_both_explicit_skips_prompts(self) -> None:
         with patch(_IS_TTY, return_value=True), patch(_SELECT) as mock_select:
             result = confirm_ai_selection(
-                _CLAUDE, _MODEL_A, tool_explicit=True, model_explicit=True
+                _CLAUDE,
+                _MODEL_A,
+                tool_explicit=True,
+                model_explicit=True,
+                effort_explicit=True,
             )
-        assert result == (_CLAUDE, _MODEL_A)
+        assert result == (_CLAUDE, _MODEL_A, None)
         mock_select.assert_not_called()
 
     def test_none_tool_returns_none(self) -> None:
         with patch(_IS_TTY, return_value=True), patch(_SELECT) as mock_select:
             result = confirm_ai_selection(None, None, tool_explicit=False, model_explicit=False)
-        assert result == (None, None)
+        assert result == (None, None, None)
         mock_select.assert_not_called()
 
 
@@ -119,14 +123,20 @@ class TestConfirmAiSelectionMenuItems:
         assert "Change model" in items
 
     def test_model_explicit_single_tool__exits_immediately(self) -> None:
-        """model_explicit + single installed tool → nothing to change → no prompt."""
+        """model+effort explicit + single tool → nothing to change → no prompt."""
         with (
             patch(_IS_TTY, return_value=True),
             patch(_SELECT) as mock_select,
             patch(_DETECT, return_value=_make_installed(_CLAUDE)),
             patch(_CONSOLE_KV),
         ):
-            confirm_ai_selection(_CLAUDE, _MODEL_A, tool_explicit=False, model_explicit=True)
+            confirm_ai_selection(
+                _CLAUDE,
+                _MODEL_A,
+                tool_explicit=False,
+                model_explicit=True,
+                effort_explicit=True,
+            )
 
         # Only ["Proceed"] in menu → exits silently without prompting.
         mock_select.assert_not_called()
@@ -192,7 +202,7 @@ class TestProceedImmediately:
                 _CLAUDE, _MODEL_A, tool_explicit=False, model_explicit=False
             )
 
-        assert result == (_CLAUDE, _MODEL_A)
+        assert result == (_CLAUDE, _MODEL_A, None)
 
 
 # ---------------------------------------------------------------------------
@@ -227,12 +237,13 @@ class TestChangeAiTool:
             patch(_MODELS_FOR_TOOL, return_value=[_MODEL_B]),
             patch(_CONSOLE_KV),
         ):
-            tool, model = confirm_ai_selection(
+            tool, model, effort = confirm_ai_selection(
                 _CLAUDE, _MODEL_A, tool_explicit=False, model_explicit=False
             )
 
         assert tool == _COPILOT
         assert model == _MODEL_B
+        assert effort is None
 
     def test_tool_change_forces_model_reselect_when_model_explicit(self) -> None:
         """Tool change forces model re-prompt even when model_explicit=True."""
@@ -256,7 +267,7 @@ class TestChangeAiTool:
             patch(_MODELS_FOR_TOOL, return_value=[_MODEL_B]),
             patch(_CONSOLE_KV),
         ):
-            tool, model = confirm_ai_selection(
+            tool, model, effort = confirm_ai_selection(
                 _CLAUDE,
                 _MODEL_A,
                 tool_explicit=False,
@@ -265,6 +276,7 @@ class TestChangeAiTool:
 
         assert tool == _COPILOT
         assert model == _MODEL_B
+        assert effort is None
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +305,7 @@ class TestChangeModel:
             patch(_MODELS_FOR_TOOL, return_value=[_MODEL_A, _MODEL_B]),
             patch(_CONSOLE_KV),
         ):
-            _, model = confirm_ai_selection(
+            _, model, _ = confirm_ai_selection(
                 _CLAUDE, _MODEL_A, tool_explicit=False, model_explicit=False
             )
 
@@ -321,7 +333,7 @@ class TestChangeModel:
             patch(_MODELS_FOR_TOOL, return_value=[_MODEL_A]),
             patch(_CONSOLE_KV),
         ):
-            _, model = confirm_ai_selection(
+            _, model, _ = confirm_ai_selection(
                 _CLAUDE, _MODEL_A, tool_explicit=False, model_explicit=False
             )
 

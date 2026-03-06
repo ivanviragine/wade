@@ -19,6 +19,7 @@ from wade.models.ai import (
     AIModel,
     AIToolCapabilities,
     AIToolID,
+    EffortLevel,
     ModelTier,
     TokenUsage,
 )
@@ -129,6 +130,7 @@ class AbstractAITool(ABC):
         detach: bool = False,
         transcript_path: Path | None = None,
         trusted_dirs: list[str] | None = None,
+        effort: EffortLevel | None = None,
     ) -> int:
         """Launch the AI tool in the given worktree.
 
@@ -146,6 +148,7 @@ class AbstractAITool(ABC):
             trusted_dirs: Optional list of directory paths to pre-authorize.
                 Tools that support directory-trust flags (e.g. --add-dir) will
                 pass these so the user is not prompted for confirmation.
+            effort: Optional reasoning effort level for the AI tool.
 
         Returns:
             Exit code from the tool process (0 for detached).
@@ -153,7 +156,7 @@ class AbstractAITool(ABC):
         from wade.utils.process import run_with_transcript
 
         cmd = self.build_launch_command(
-            model=model, initial_message=prompt, trusted_dirs=trusted_dirs
+            model=model, initial_message=prompt, trusted_dirs=trusted_dirs, effort=effort
         )
         logger.info("ai_tool.launch", tool=str(self.TOOL_ID), model=model, cwd=str(worktree_path))
         return run_with_transcript(cmd, transcript_path, cwd=worktree_path)
@@ -230,6 +233,21 @@ class AbstractAITool(ABC):
         """
         return []
 
+    def effort_args(self, effort: EffortLevel) -> list[str]:
+        """Get extra CLI args to set reasoning effort level.
+
+        Default: return empty list. Override per tool.
+        """
+        return []
+
+    def resolve_effort_model(self, model: str | None, effort: EffortLevel) -> str | None:
+        """Resolve model variant based on effort level.
+
+        Some tools use different model IDs for higher effort (e.g., thinking
+        model variants). Default: return model unchanged. Override per tool.
+        """
+        return model
+
     def build_launch_command(
         self,
         model: str | None = None,
@@ -238,6 +256,7 @@ class AbstractAITool(ABC):
         json_schema: dict[str, Any] | None = None,
         trusted_dirs: list[str] | None = None,
         initial_message: str | None = None,
+        effort: EffortLevel | None = None,
     ) -> list[str]:
         """Build the command line for launching this tool."""
         caps = self.capabilities()
@@ -248,8 +267,15 @@ class AbstractAITool(ABC):
         if initial_message:
             cmd.extend(self.initial_message_args(initial_message))
 
-        if model and caps.supports_model_flag:
-            cmd.extend([caps.model_flag, self.normalize_model_format(model)])
+        # Resolve effort-based model variant before applying model flag
+        effective_model = model
+        if effort and effective_model:
+            effective_model = self.resolve_effort_model(effective_model, effort)
+        elif effort and not effective_model:
+            effective_model = self.resolve_effort_model(None, effort)
+
+        if effective_model and caps.supports_model_flag:
+            cmd.extend([caps.model_flag, self.normalize_model_format(effective_model)])
 
         if prompt and caps.supports_headless and caps.headless_flag:
             cmd.extend([caps.headless_flag, prompt])
@@ -262,6 +288,10 @@ class AbstractAITool(ABC):
 
         if trusted_dirs:
             cmd.extend(self.trusted_dirs_args(trusted_dirs))
+
+        # Effort args (tool-specific flags like --settings, --variant, etc.)
+        if effort and caps.supports_effort:
+            cmd.extend(self.effort_args(effort))
 
         return cmd
 

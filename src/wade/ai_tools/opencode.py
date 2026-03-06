@@ -12,6 +12,7 @@ from wade.models.ai import (
     AIToolCapabilities,
     AIToolID,
     AIToolType,
+    EffortLevel,
     TokenUsage,
 )
 
@@ -38,6 +39,7 @@ class OpenCodeAdapter(AbstractAITool):
             supports_model_flag=True,
             headless_flag="run",
             supports_headless=True,
+            supports_effort=True,
         )
 
     def get_models(self) -> list[AIModel]:
@@ -68,3 +70,8 @@ class OpenCodeAdapter(AbstractAITool):
             # Convert anthropic/claude-haiku-4-5 -> anthropic/claude-haiku-4.5
             return re.sub(r"(\d)-(\d)", r"\1.\2", raw_model_id)
         return raw_model_id
+
+    def effort_args(self, effort: EffortLevel) -> list[str]:
+        """OpenCode uses ``--variant <level>`` (max maps to high)."""
+        mapped = "high" if effort == EffortLevel.MAX else effort.value
+        return ["--variant", mapped]

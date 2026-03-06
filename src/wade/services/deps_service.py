@@ -20,7 +20,12 @@ from wade.models.config import ProjectConfig
 from wade.models.deps import DependencyEdge, DependencyGraph
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
-from wade.services.ai_resolution import confirm_ai_selection, resolve_ai_tool, resolve_model
+from wade.services.ai_resolution import (
+    confirm_ai_selection,
+    resolve_ai_tool,
+    resolve_effort,
+    resolve_model,
+)
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import ensure_task_label
 from wade.ui import prompts
@@ -425,6 +430,8 @@ def analyze_deps(
     *,
     ai_explicit: bool = False,
     model_explicit: bool = False,
+    effort: str | None = None,
+    effort_explicit: bool = False,
 ) -> DependencyGraph | None:
     """Analyze dependencies between issues.
 
@@ -451,16 +458,19 @@ def analyze_deps(
         return None
 
     resolved_model = resolve_model(model, config, "deps", tool=resolved_tool)
+    resolved_effort = resolve_effort(effort, config, "deps", tool=resolved_tool)
 
     console.rule("wade task deps")
     console.kv("Issues", str(len(issue_numbers)))
 
     # Offer interactive confirmation unless both flags were explicitly provided.
-    resolved_tool, resolved_model = confirm_ai_selection(
+    resolved_tool, resolved_model, resolved_effort = confirm_ai_selection(
         resolved_tool,
         resolved_model,
         tool_explicit=ai_explicit,
         model_explicit=model_explicit,
+        resolved_effort=resolved_effort,
+        effort_explicit=effort_explicit,
     )
     if not resolved_tool:
         console.error("No AI tool selected.")

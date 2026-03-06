@@ -66,6 +66,7 @@ class AICommandConfig(BaseModel):
 
     tool: str | None = None
     model: str | None = None
+    effort: str | None = None
 
 
 class AIConfig(BaseModel):
@@ -73,6 +74,7 @@ class AIConfig(BaseModel):
 
     default_tool: str | None = None
     default_model: str | None = None
+    effort: str | None = None
     plan: AICommandConfig = AICommandConfig()
     deps: AICommandConfig = AICommandConfig()
     work: AICommandConfig = AICommandConfig()
@@ -142,3 +144,14 @@ class ProjectConfig(BaseModel):
         if mapping:
             return getattr(mapping, complexity, None)
         return None
+
+    def get_effort(self, command: str | None = None) -> str | None:
+        """Get the effort level for a command, with fallback chain.
+
+        Fallback: command-specific effort → global ai.effort → None.
+        """
+        if command:
+            cmd_config = getattr(self.ai, command, None)
+            if isinstance(cmd_config, AICommandConfig) and cmd_config.effort:
+                return cmd_config.effort
+        return self.ai.effort

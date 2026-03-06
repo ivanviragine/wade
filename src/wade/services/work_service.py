@@ -41,7 +41,12 @@ from wade.models.work import (
 )
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
-from wade.services.ai_resolution import confirm_ai_selection, resolve_ai_tool, resolve_model
+from wade.services.ai_resolution import (
+    confirm_ai_selection,
+    resolve_ai_tool,
+    resolve_effort,
+    resolve_model,
+)
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import (
     add_in_progress_label,
@@ -654,6 +659,8 @@ def start(
     *,
     ai_explicit: bool = False,
     model_explicit: bool = False,
+    effort: str | None = None,
+    effort_explicit: bool = False,
 ) -> bool:
     """Start a work session on an issue.
 
@@ -712,16 +719,21 @@ def start(
             complexity=task.complexity.value if task.complexity else None,
         )
 
+        # Resolve effort level
+        resolved_effort = resolve_effort(effort, config, "work", tool=resolved_tool)
+
         if task.complexity:
             console.kv("Complexity", task.complexity.value)
 
         # Offer interactive confirmation (skipped when cd_only or both flags explicit).
         if not cd_only:
-            resolved_tool, resolved_model = confirm_ai_selection(
+            resolved_tool, resolved_model, resolved_effort = confirm_ai_selection(
                 resolved_tool,
                 resolved_model,
                 tool_explicit=ai_explicit,
                 model_explicit=model_explicit,
+                resolved_effort=resolved_effort,
+                effort_explicit=effort_explicit,
             )
 
         # Resolve main branch
@@ -888,6 +900,7 @@ def start(
                     model=resolved_model,
                     trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
                     initial_message=prompt,
+                    effort=resolved_effort,
                 )
             except (ValueError, KeyError):
                 cmd = [resolved_tool]
@@ -917,6 +930,7 @@ def start(
                     prompt=prompt,
                     transcript_path=transcript_path,
                     trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
+                    effort=resolved_effort,
                 )
                 launch_completed = True
                 logger.info("work.ai_exited", exit_code=exit_code, tool=resolved_tool)
@@ -1033,6 +1047,8 @@ def batch(
     *,
     ai_explicit: bool = False,
     model_explicit: bool = False,
+    effort: str | None = None,
+    effort_explicit: bool = False,
 ) -> bool:
     """Start parallel work sessions for multiple issues.
 
@@ -1058,11 +1074,14 @@ def batch(
     # Resolve AI tool and model, then offer interactive confirmation.
     resolved_tool = resolve_ai_tool(ai_tool, config, "work")
     resolved_model = resolve_model(model, config, "work", tool=resolved_tool)
-    resolved_tool, resolved_model = confirm_ai_selection(
+    resolved_effort = resolve_effort(effort, config, "work", tool=resolved_tool)
+    resolved_tool, resolved_model, resolved_effort = confirm_ai_selection(
         resolved_tool,
         resolved_model,
         tool_explicit=ai_explicit,
         model_explicit=model_explicit,
+        resolved_effort=resolved_effort,
+        effort_explicit=effort_explicit,
     )
 
     # Check for dependency ordering
@@ -1086,6 +1105,8 @@ def batch(
             cmd.extend(["--ai", resolved_tool])
         if resolved_model:
             cmd.extend(["--model", resolved_model])
+        if resolved_effort:
+            cmd.extend(["--effort", resolved_effort.value])
 
         console.step(f"Launching #{issue_id} ({label}) in new terminal")
         if launch_in_new_terminal(cmd, cwd=str(repo_root), title=f"wade #{issue_id}"):

@@ -140,7 +140,7 @@ def _interactive_main_menu() -> None:
 
 # --- Top-level commands (clean break) ---
 
-from wade.cli.autocomplete import complete_ai_tools, complete_models  # noqa: E402
+from wade.cli.autocomplete import complete_ai_tools, complete_effort_levels, complete_models  # noqa: E402, I001
 
 
 @app.command("plan-task")
@@ -152,6 +152,12 @@ def plan_task_cmd(
     model: str | None = typer.Option(
         None, "--model", help="AI model to use.", autocompletion=complete_models
     ),
+    effort: str | None = typer.Option(
+        None,
+        "--effort",
+        help="Reasoning effort level: low, medium, high, max.",
+        autocompletion=complete_effort_levels,
+    ),
 ) -> None:
     """Plan tasks with AI — creates lightweight issues + draft PRs."""
     from wade.services.plan_service import plan as do_plan
@@ -162,6 +168,8 @@ def plan_task_cmd(
         issue_id=issue,
         ai_explicit=ai is not None,
         model_explicit=model is not None,
+        effort=effort,
+        effort_explicit=effort is not None,
     )
     raise typer.Exit(0 if success else 1)
 
@@ -218,6 +226,12 @@ def implement_task_cmd(
     model: str | None = typer.Option(
         None, "--model", help="AI model to use.", autocompletion=complete_models
     ),
+    effort: str | None = typer.Option(
+        None,
+        "--effort",
+        help="Reasoning effort level: low, medium, high, max.",
+        autocompletion=complete_effort_levels,
+    ),
     detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
     cd_only: bool = typer.Option(
         False, "--cd", help="Create worktree and print path (no AI launch)."
@@ -243,6 +257,8 @@ def implement_task_cmd(
         cd_only=cd_only,
         ai_explicit=selected_ai is not None,
         model_explicit=model is not None,
+        effort=effort,
+        effort_explicit=effort is not None,
     )
     raise typer.Exit(0 if success else 1)
 
