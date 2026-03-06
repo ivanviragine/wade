@@ -358,53 +358,53 @@ class GitHubProvider(AbstractTaskProvider):
         cursor: str | None = None,
     ) -> tuple[list[ReviewThread], bool, str | None]:
         """Fetch one page of review threads. Returns (threads, has_next, end_cursor)."""
-        after_clause = f', after: "{cursor}"' if cursor else ""
-        query = f"""
-query($owner: String!, $repo: String!, $pr: Int!) {{
-  repository(owner: $owner, name: $repo) {{
-    pullRequest(number: $pr) {{
-      reviewThreads(first: 100{after_clause}) {{
-        pageInfo {{
+        query = """
+query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $pr) {
+      reviewThreads(first: 100, after: $after) {
+        pageInfo {
           hasNextPage
           endCursor
-        }}
-        nodes {{
+        }
+        nodes {
           id
           isResolved
           isOutdated
-          comments(first: 50) {{
-            nodes {{
+          comments(first: 50) {
+            nodes {
               body
               path
               line
-              author {{ login }}
+              author { login }
               createdAt
               url
-            }}
-          }}
-        }}
-      }}
-    }}
-  }}
-}}"""
+            }
+          }
+        }
+      }
+    }
+  }
+}"""
+
+        cmd = [
+            "gh",
+            "api",
+            "graphql",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"repo={repo}",
+            "-F",
+            f"pr={pr_number}",
+            "-f",
+            f"query={query}",
+        ]
+        if cursor:
+            cmd.extend(["-f", f"after={cursor}"])
 
         try:
-            result = run(
-                [
-                    "gh",
-                    "api",
-                    "graphql",
-                    "-f",
-                    f"owner={owner}",
-                    "-f",
-                    f"repo={repo}",
-                    "-F",
-                    f"pr={pr_number}",
-                    "-f",
-                    f"query={query}",
-                ],
-                check=True,
-            )
+            result = run(cmd, check=True)
             data = json.loads(result.stdout)
         except (CommandError, json.JSONDecodeError) as e:
             logger.warning("github.review_threads_fetch_failed", error=str(e))

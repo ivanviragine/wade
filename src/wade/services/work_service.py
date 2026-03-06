@@ -377,13 +377,12 @@ def _capture_post_session_usage(
                 new_body = current_body
                 if has_tokens:
                     assert usage is not None
-                    usage_block = build_impl_usage_block(
+                    new_body = append_impl_usage_entry(
+                        new_body,
                         ai_tool=ai_tool,
                         model=effective_model,
                         token_usage=usage,
                     )
-                    stripped = _strip_impl_usage_block(new_body).rstrip("\n")
-                    new_body = stripped + "\n\n" + usage_block + "\n"
                 if has_session:
                     assert usage is not None and usage.session_id is not None
                     new_body = append_session_to_body(
@@ -408,13 +407,12 @@ def _capture_post_session_usage(
             new_body = task.body
             if has_tokens:
                 assert usage is not None
-                usage_block = build_impl_usage_block(
+                new_body = append_impl_usage_entry(
+                    new_body,
                     ai_tool=ai_tool,
                     model=effective_model,
                     token_usage=usage,
                 )
-                stripped = _strip_impl_usage_block(new_body).rstrip("\n")
-                new_body = stripped + "\n\n" + usage_block + "\n"
             if has_session:
                 assert usage is not None and usage.session_id is not None
                 new_body = append_session_to_body(
@@ -1312,16 +1310,22 @@ def classify_staleness(
 # ---------------------------------------------------------------------------
 
 
-def build_impl_usage_block(
+def _build_session_usage_table(
     ai_tool: str | None = None,
     model: str | None = None,
     token_usage: TokenUsage | None = None,
 ) -> str:
-    """Build the ## Implementation Usage section for PR body."""
+    """Build a single-session markdown usage table (no markers or headings).
+
+    Generates the table rows for one session, used by both impl and review
+    usage block builders.
+    """
     from wade.ai_tools.transcript import format_count
 
     breakdown = token_usage.model_breakdown if token_usage else []
     multi = len(breakdown) > 1
+
+    lines: list[str] = []
 
     if multi:
         names = [row.model for row in breakdown]
@@ -1330,14 +1334,7 @@ def build_impl_usage_block(
         sep = "| " + " | ".join(["---"] * (2 + n)) + " |"
         empty = " |" * n
 
-        lines = [
-            IMPL_USAGE_MARKER_START,
-            "",
-            "## Token Usage (Implementation)",
-            "",
-            header,
-            sep,
-        ]
+        lines.extend([header, sep])
 
         if ai_tool:
             lines.append(f"| Tool | `{ai_tool}` |{empty}")
@@ -1377,14 +1374,7 @@ def build_impl_usage_block(
             )
 
     else:
-        lines = [
-            IMPL_USAGE_MARKER_START,
-            "",
-            "## Token Usage (Implementation)",
-            "",
-            "| Metric | Value |",
-            "| --- | --- |",
-        ]
+        lines.extend(["| Metric | Value |", "| --- | --- |"])
 
         if ai_tool:
             lines.append(f"| Tool | `{ai_tool}` |")
@@ -1407,9 +1397,125 @@ def build_impl_usage_block(
         if token_usage and token_usage.premium_requests and token_usage.premium_requests > 0:
             lines.append(f"| Premium requests (est.) | **{token_usage.premium_requests}** |")
 
-    lines.append("")
-    lines.append(IMPL_USAGE_MARKER_END)
+    return "\n".join(lines)
 
+
+def _count_sessions(block_content: str) -> int:
+    """Count ``### Session N`` occurrences in a marker block's inner content."""
+    return len(re.findall(r"^### Session \d+", block_content, re.MULTILINE))
+
+
+def _append_usage_entry(
+    body: str,
+    ai_tool: str | None,
+    model: str | None,
+    token_usage: TokenUsage | None,
+    start_marker: str,
+    end_marker: str,
+    heading: str,
+) -> str:
+    """Append a new session entry to a usage marker block.
+
+    If the block doesn't exist, creates a fresh block with ``### Session 1``.
+    If the block exists with N sessions, appends ``### Session N+1``.
+    """
+    from wade.utils.markdown import extract_marker_block
+
+    existing = extract_marker_block(body, start_marker, end_marker)
+    table = _build_session_usage_table(ai_tool=ai_tool, model=model, token_usage=token_usage)
+
+    if existing is None:
+        # Fresh block
+        lines = [
+            start_marker,
+            "",
+            f"## {heading}",
+            "",
+            "### Session 1",
+            "",
+            table,
+            "",
+            end_marker,
+        ]
+        block = "\n".join(lines)
+        stripped = body.rstrip("\n")
+        return stripped + "\n\n" + block + "\n" if stripped else block + "\n"
+
+    # Existing block — count sessions and append
+    n = _count_sessions(existing)
+
+    if n == 0 and existing.strip():
+        # Old format (no ### Session headings) — wrap old content as Session 1
+        new_inner = f"### Session 1\n\n{existing.strip()}\n\n### Session 2\n\n{table}"
+    else:
+        new_session = f"### Session {n + 1}\n\n{table}"
+        new_inner = existing.rstrip("\n") + "\n\n" + new_session
+
+    # Rebuild: remove old block, construct new one with appended session
+    cleaned = remove_marker_block(body, start_marker, end_marker)
+    new_block = f"{start_marker}\n\n{new_inner}\n\n{end_marker}"
+    stripped = cleaned.rstrip("\n")
+    return stripped + "\n\n" + new_block + "\n" if stripped else new_block + "\n"
+
+
+def append_impl_usage_entry(
+    body: str,
+    ai_tool: str | None = None,
+    model: str | None = None,
+    token_usage: TokenUsage | None = None,
+) -> str:
+    """Append an implementation usage session entry to the body."""
+    return _append_usage_entry(
+        body,
+        ai_tool=ai_tool,
+        model=model,
+        token_usage=token_usage,
+        start_marker=IMPL_USAGE_MARKER_START,
+        end_marker=IMPL_USAGE_MARKER_END,
+        heading="Token Usage (Implementation)",
+    )
+
+
+def append_review_usage_entry(
+    body: str,
+    ai_tool: str | None = None,
+    model: str | None = None,
+    token_usage: TokenUsage | None = None,
+) -> str:
+    """Append a review usage session entry to the body."""
+    return _append_usage_entry(
+        body,
+        ai_tool=ai_tool,
+        model=model,
+        token_usage=token_usage,
+        start_marker=REVIEW_USAGE_MARKER_START,
+        end_marker=REVIEW_USAGE_MARKER_END,
+        heading="Token Usage (Review)",
+    )
+
+
+def build_impl_usage_block(
+    ai_tool: str | None = None,
+    model: str | None = None,
+    token_usage: TokenUsage | None = None,
+) -> str:
+    """Build the ## Token Usage (Implementation) section for PR body.
+
+    Wraps ``_build_session_usage_table`` with markers and a ``### Session 1``
+    header.
+    """
+    table = _build_session_usage_table(ai_tool=ai_tool, model=model, token_usage=token_usage)
+    lines = [
+        IMPL_USAGE_MARKER_START,
+        "",
+        "## Token Usage (Implementation)",
+        "",
+        "### Session 1",
+        "",
+        table,
+        "",
+        IMPL_USAGE_MARKER_END,
+    ]
     return "\n".join(lines)
 
 
@@ -1425,100 +1531,21 @@ def build_review_usage_block(
 ) -> str:
     """Build the ## Token Usage (Review) section for PR/issue body.
 
-    Same structure as :func:`build_impl_usage_block` but with review markers.
+    Wraps ``_build_session_usage_table`` with review markers and a
+    ``### Session 1`` header.
     """
-    from wade.ai_tools.transcript import format_count
-
-    breakdown = token_usage.model_breakdown if token_usage else []
-    multi = len(breakdown) > 1
-
-    if multi:
-        names = [row.model for row in breakdown]
-        n = len(names)
-        header = "| Metric | Total | " + " | ".join(f"`{m}`" for m in names) + " |"
-        sep = "| " + " | ".join(["---"] * (2 + n)) + " |"
-        empty = " |" * n
-
-        lines = [
-            REVIEW_USAGE_MARKER_START,
-            "",
-            "## Token Usage (Review)",
-            "",
-            header,
-            sep,
-        ]
-
-        if ai_tool:
-            lines.append(f"| Tool | `{ai_tool}` |{empty}")
-
-        has_tokens = token_usage and token_usage.total_tokens and token_usage.total_tokens > 0
-        if has_tokens:
-            assert token_usage is not None
-
-            def per(attr: str) -> str:
-                return " | ".join(f"**{format_count(getattr(r, attr))}**" for r in breakdown)
-
-            per_total = " | ".join(
-                f"**{format_count((r.input_tokens or 0) + (r.output_tokens or 0) + (r.cached_tokens or 0))}**"  # noqa: E501
-                for r in breakdown
-            )
-            lines.append(
-                f"| Total tokens | **{format_count(token_usage.total_tokens)}** | {per_total} |"
-            )
-            if token_usage.input_tokens:
-                inp_total = format_count(token_usage.input_tokens)
-                lines.append(f"| Input tokens | **{inp_total}** | {per('input_tokens')} |")
-            if token_usage.output_tokens:
-                out_total = format_count(token_usage.output_tokens)
-                lines.append(f"| Output tokens | **{out_total}** | {per('output_tokens')} |")
-            if token_usage.cached_tokens:
-                cac_total = format_count(token_usage.cached_tokens)
-                lines.append(f"| Cached tokens | **{cac_total}** | {per('cached_tokens')} |")
-        else:
-            lines.append(f"| Total tokens | *unavailable* |{empty}")
-
-        if token_usage and token_usage.premium_requests and token_usage.premium_requests > 0:
-            per_prem = " | ".join(
-                f"**{r.premium_requests}**" if r.premium_requests else "" for r in breakdown
-            )
-            lines.append(
-                f"| Premium requests (est.) | **{token_usage.premium_requests}** | {per_prem} |"
-            )
-
-    else:
-        lines = [
-            REVIEW_USAGE_MARKER_START,
-            "",
-            "## Token Usage (Review)",
-            "",
-            "| Metric | Value |",
-            "| --- | --- |",
-        ]
-
-        if ai_tool:
-            lines.append(f"| Tool | `{ai_tool}` |")
-        if model:
-            lines.append(f"| Model | `{model}` |")
-
-        has_tokens = token_usage and token_usage.total_tokens and token_usage.total_tokens > 0
-        if has_tokens:
-            assert token_usage is not None
-            lines.append(f"| Total tokens | **{format_count(token_usage.total_tokens)}** |")
-            if token_usage.input_tokens:
-                lines.append(f"| Input tokens | **{format_count(token_usage.input_tokens)}** |")
-            if token_usage.output_tokens:
-                lines.append(f"| Output tokens | **{format_count(token_usage.output_tokens)}** |")
-            if token_usage.cached_tokens:
-                lines.append(f"| Cached tokens | **{format_count(token_usage.cached_tokens)}** |")
-        else:
-            lines.append("| Total tokens | *unavailable* |")
-
-        if token_usage and token_usage.premium_requests and token_usage.premium_requests > 0:
-            lines.append(f"| Premium requests (est.) | **{token_usage.premium_requests}** |")
-
-    lines.append("")
-    lines.append(REVIEW_USAGE_MARKER_END)
-
+    table = _build_session_usage_table(ai_tool=ai_tool, model=model, token_usage=token_usage)
+    lines = [
+        REVIEW_USAGE_MARKER_START,
+        "",
+        "## Token Usage (Review)",
+        "",
+        "### Session 1",
+        "",
+        table,
+        "",
+        REVIEW_USAGE_MARKER_END,
+    ]
     return "\n".join(lines)
 
 

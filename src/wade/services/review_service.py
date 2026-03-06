@@ -35,11 +35,11 @@ from wade.services.ai_resolution import (
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import add_review_addressed_by_labels
 from wade.services.work_service import (
+    _detect_ai_cli_env,
     _merge_pr,
     _resolve_worktrees_dir,
-    _strip_review_usage_block,
+    append_review_usage_entry,
     bootstrap_worktree,
-    build_review_usage_block,
 )
 from wade.ui.console import console
 from wade.utils.markdown import append_session_to_body
@@ -273,7 +273,7 @@ def start(
         console.success("All review comments resolved — nothing to address! 🎉")
         return True
 
-    console.info(f"Found {comment_count} unresolved comment(s) across {file_count} file(s)")
+    console.info(f"Found {comment_count} unresolved comment(s) across {file_count} location(s)")
 
     # 5. Re-bootstrap skills (ensures review-session skill is installed)
     bootstrap_worktree(worktree_path, config, repo_root)
@@ -407,19 +407,25 @@ def start(
                     provider=provider,
                 )
 
-        effective_model = resolved_model or detected_model
-        try:
-            add_review_addressed_by_labels(provider, task.id, resolved_tool, effective_model)
-        except Exception as e:
-            console.warn(f"Could not apply review-addressed-by labels: {e}")
-            logger.warning("review.review_addressed_by_labels_failed", error=str(e))
+        if launch_completed:
+            effective_model = resolved_model or detected_model
+            try:
+                add_review_addressed_by_labels(provider, task.id, resolved_tool, effective_model)
+            except Exception as e:
+                console.warn(f"Could not apply review-addressed-by labels: {e}")
+                logger.warning("review.review_addressed_by_labels_failed", error=str(e))
+
+            # 10. Post-review lifecycle: "Merge PR" / "Wait for new reviews"
+            _post_review_lifecycle(
+                repo_root, branch_name, task.id, worktree_path, pr_number, provider
+            )
     else:
         console.info("No AI tool configured — use `wade fetch-reviews` to view comments.")
         console.detail(f"cd {worktree_path}")
         stop_title_keeper()
 
-    # 10. Post-review lifecycle: "Merge PR" / "Wait for new reviews"
-    _post_review_lifecycle(repo_root, branch_name, task.id, worktree_path, pr_number, provider)
+        # 10. Post-review lifecycle (no AI tool — user addressed manually)
+        _post_review_lifecycle(repo_root, branch_name, task.id, worktree_path, pr_number, provider)
 
     return True
 
@@ -527,16 +533,6 @@ def build_review_prompt(
     )
 
 
-def _detect_ai_cli_env() -> str | None:
-    """Detect if running inside an AI CLI tool (to avoid nesting)."""
-    import os
-
-    for var in ("CLAUDE_CODE", "COPILOT_CLI", "CURSOR_SESSION", "AIDER_SESSION"):
-        if os.environ.get(var):
-            return var
-    return None
-
-
 def _capture_review_session_usage(
     transcript_path: Path | None,
     adapter: AbstractAITool,
@@ -581,13 +577,12 @@ def _capture_review_session_usage(
                 new_body = current_body
                 if has_tokens:
                     assert usage is not None
-                    usage_block = build_review_usage_block(
+                    new_body = append_review_usage_entry(
+                        new_body,
                         ai_tool=ai_tool,
                         model=effective_model,
                         token_usage=usage,
                     )
-                    stripped = _strip_review_usage_block(new_body).rstrip("\n")
-                    new_body = stripped + "\n\n" + usage_block + "\n"
                 if has_session:
                     assert usage is not None and usage.session_id is not None
                     new_body = append_session_to_body(
@@ -612,13 +607,12 @@ def _capture_review_session_usage(
             new_body = task.body
             if has_tokens:
                 assert usage is not None
-                usage_block = build_review_usage_block(
+                new_body = append_review_usage_entry(
+                    new_body,
                     ai_tool=ai_tool,
                     model=effective_model,
                     token_usage=usage,
                 )
-                stripped = _strip_review_usage_block(new_body).rstrip("\n")
-                new_body = stripped + "\n\n" + usage_block + "\n"
             if has_session:
                 assert usage is not None and usage.session_id is not None
                 new_body = append_session_to_body(
