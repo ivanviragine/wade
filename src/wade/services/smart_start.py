@@ -122,6 +122,19 @@ def smart_start(
         console.info(f"PR #{pr_number_int} is already merged.")
         return True
 
+    # cd_only: skip menu, just set up worktree and print path
+    if cd_only:
+        return _run_implement_task(
+            target,
+            ai_tool,
+            model,
+            project_root,
+            detach,
+            cd_only,
+            ai_explicit=ai_explicit,
+            model_explicit=model_explicit,
+        )
+
     # Open PR exists — present contextual menu
     from wade.git import worktree as git_worktree
     from wade.ui import prompts
