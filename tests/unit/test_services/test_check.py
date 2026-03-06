@@ -190,6 +190,10 @@ class TestValidateConfig:
             "    very_complex: claude-opus-4.6\n"
             "provider:\n"
             "  name: github\n"
+            "permissions:\n"
+            "  allowed_commands:\n"
+            "    - wade *\n"
+            "    - ./scripts/check.sh *\n"
             "hooks:\n"
             "  post_worktree_create: scripts/setup.sh\n"
             "  copy_to_worktree:\n"
@@ -197,6 +201,29 @@ class TestValidateConfig:
         )
         result = validate_config(tmp_path)
         assert result.is_valid, f"Errors: {result.errors}"
+
+    def test_valid_permissions_section(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text(
+            "version: 2\npermissions:\n  allowed_commands:\n"
+            "    - wade *\n    - ./scripts/check.sh *\n"
+        )
+        result = validate_config(tmp_path)
+        assert result.is_valid, f"Errors: {result.errors}"
+
+    def test_invalid_permissions_not_a_list(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\npermissions:\n  allowed_commands: wade\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("allowed_commands" in e and "list" in e for e in result.errors)
+
+    def test_invalid_permissions_unsupported_key(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\npermissions:\n  forbidden_commands: []\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("permissions.forbidden_commands" in e for e in result.errors)
 
     def test_invalid_yaml(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"

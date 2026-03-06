@@ -31,6 +31,12 @@ TOOL_DEFAULTS: dict[str, ComplexityModelMapping] = {
         complex="gpt-5.3-codex",
         very_complex="gpt-5.3-codex",
     ),
+    AIToolID.CURSOR: ComplexityModelMapping(
+        easy="gemini-3-flash",
+        medium="sonnet-4.6",
+        complex="sonnet-4.6",
+        very_complex="opus-4.6",
+    ),
     AIToolID.OPENCODE: ComplexityModelMapping(
         easy="anthropic/claude-haiku-4.5",
         medium="anthropic/claude-haiku-4.5",

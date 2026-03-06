@@ -22,10 +22,11 @@ app = typer.Typer(
 def cli_main() -> None:
     """Console entrypoint — wraps ``app()`` to catch ConfigError gracefully."""
     if len(sys.argv) > 1 and sys.argv[1].isdigit():
-        # Rewrite "wade 42 [flags]" → "wade implement-task 42 [flags]" so Typer
+        # Rewrite "wade 42 [flags]" → "wade smart-start 42 [flags]" so Typer
         # dispatches normally: the main callback runs (logging, update nag,
         # version banner) and any extra flags (--detach, --ai, etc.) are parsed.
-        sys.argv = [sys.argv[0], "implement-task", *sys.argv[1:]]
+        # smart-start detects PR state and routes to implement-task or address-reviews.
+        sys.argv = [sys.argv[0], "smart-start", *sys.argv[1:]]
     try:
         app()
     except ConfigError as exc:
@@ -267,6 +268,99 @@ def implement_task_cmd(
         selected_ai = ai[0]
 
     success = do_start(
+        target=target,
+        ai_tool=selected_ai,
+        model=model,
+        detach=detach,
+        cd_only=cd_only,
+        ai_explicit=selected_ai is not None,
+        model_explicit=model is not None,
+    )
+    raise typer.Exit(0 if success else 1)
+
+
+@app.command("address-reviews")
+def address_reviews_cmd(
+    target: str = typer.Argument(..., help="Issue number."),
+    ai: list[str] | None = typer.Option(  # noqa: B008
+        None, "--ai", help="AI tool to use.", autocompletion=complete_ai_tools
+    ),
+    model: str | None = typer.Option(
+        None, "--model", help="AI model to use.", autocompletion=complete_models
+    ),
+    detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
+) -> None:
+    """Address PR review comments — fetches unresolved threads and launches AI."""
+    from wade.services.review_service import start as do_start
+    from wade.ui import prompts
+
+    selected_ai: str | None = None
+    if ai and len(ai) > 1:
+        idx = prompts.select("Select AI tool", ai)
+        selected_ai = ai[idx]
+    elif ai and len(ai) == 1:
+        selected_ai = ai[0]
+
+    success = do_start(
+        target=target,
+        ai_tool=selected_ai,
+        model=model,
+        detach=detach,
+        ai_explicit=selected_ai is not None,
+        model_explicit=model is not None,
+    )
+    raise typer.Exit(0 if success else 1)
+
+
+@app.command("fetch-reviews")
+def fetch_reviews_cmd(
+    target: str = typer.Argument(..., help="Issue number."),
+) -> None:
+    """Fetch unresolved PR review comments and print formatted markdown to stdout."""
+    from wade.services.review_service import fetch_reviews
+
+    success = fetch_reviews(target=target)
+    raise typer.Exit(0 if success else 1)
+
+
+@app.command("resolve-thread")
+def resolve_thread_cmd(
+    thread_id: str = typer.Argument(..., help="GitHub review thread node ID."),
+) -> None:
+    """Mark a PR review thread as resolved on GitHub."""
+    from wade.services.review_service import resolve_thread
+
+    success = resolve_thread(thread_id=thread_id)
+    raise typer.Exit(0 if success else 1)
+
+
+@app.command("smart-start", hidden=True)
+def smart_start_cmd(
+    target: str = typer.Argument(..., help="Issue number."),
+    ai: list[str] | None = typer.Option(  # noqa: B008
+        None, "--ai", help="AI tool to use.", autocompletion=complete_ai_tools
+    ),
+    model: str | None = typer.Option(
+        None, "--model", help="AI model to use.", autocompletion=complete_models
+    ),
+    detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
+    cd_only: bool = typer.Option(
+        False, "--cd", help="Create worktree and print path (no AI launch)."
+    ),
+) -> None:
+    """Smart entry point — detects PR state and routes to the right command."""
+    from wade.services.smart_start import smart_start
+
+    selected_ai: str | None = None
+    if ai and len(ai) > 1:
+        from wade.ui import prompts
+
+        idx = prompts.select("Select AI tool", ai)
+        selected_ai = ai[idx]
+    elif ai and len(ai) == 1:
+        selected_ai = ai[0]
+
+    success = smart_start(
         target=target,
         ai_tool=selected_ai,
         model=model,

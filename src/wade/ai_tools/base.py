@@ -129,6 +129,7 @@ class AbstractAITool(ABC):
         detach: bool = False,
         transcript_path: Path | None = None,
         trusted_dirs: list[str] | None = None,
+        allowed_commands: list[str] | None = None,
     ) -> int:
         """Launch the AI tool in the given worktree.
 
@@ -146,6 +147,8 @@ class AbstractAITool(ABC):
             trusted_dirs: Optional list of directory paths to pre-authorize.
                 Tools that support directory-trust flags (e.g. --add-dir) will
                 pass these so the user is not prompted for confirmation.
+            allowed_commands: Optional list of canonical command patterns to
+                pre-authorize (e.g. ``["wade *", "./scripts/check.sh *"]``).
 
         Returns:
             Exit code from the tool process (0 for detached).
@@ -153,7 +156,10 @@ class AbstractAITool(ABC):
         from wade.utils.process import run_with_transcript
 
         cmd = self.build_launch_command(
-            model=model, initial_message=prompt, trusted_dirs=trusted_dirs
+            model=model,
+            initial_message=prompt,
+            trusted_dirs=trusted_dirs,
+            allowed_commands=allowed_commands,
         )
         logger.info("ai_tool.launch", tool=str(self.TOOL_ID), model=model, cwd=str(worktree_path))
         return run_with_transcript(cmd, transcript_path, cwd=worktree_path)
@@ -223,10 +229,50 @@ class AbstractAITool(ABC):
         """
         return raw_model_id
 
+    def allowed_commands_args(self, commands: list[str]) -> list[str]:
+        """Get CLI args to pre-authorize a list of command patterns.
+
+        Canonical patterns use shell-style syntax (e.g. ``"wade *"``,
+        ``"./scripts/check.sh *"``).  Each adapter translates them into
+        tool-specific flags.
+
+        Default: no support (returns empty list). Override per tool.
+        """
+        return []
+
     def structured_output_args(self, json_schema: dict[str, Any]) -> list[str]:
         """Get extra CLI args to enforce structured JSON output according to a schema.
 
         Default: return empty list. Override per tool if they support it.
+        """
+        return []
+
+    def preserve_session_data(self, worktree_path: Path, main_checkout_path: Path) -> bool:
+        """Preserve AI tool session data from a worktree before it is deleted.
+
+        Called before removing a worktree so that sessions started in the worktree
+        can be resumed from the main checkout after the worktree is gone.
+
+        Default: no-op (return True). Override in tools that store path-bound
+        session data.
+
+        Args:
+            worktree_path: The worktree directory being deleted.
+            main_checkout_path: The main checkout to migrate session data into.
+
+        Returns:
+            True if preservation succeeded (or is not needed), False on failure.
+        """
+        return True
+
+    def session_data_dirs(self) -> list[str]:
+        """Return directory names that indicate this tool may have session data.
+
+        Used as a fallback when the DB has no record of the tool used in a
+        worktree. If any of these directories exist under a worktree, this
+        adapter is selected for preservation.
+
+        Default: empty list (no detection). Override per tool.
         """
         return []
 
@@ -238,6 +284,7 @@ class AbstractAITool(ABC):
         json_schema: dict[str, Any] | None = None,
         trusted_dirs: list[str] | None = None,
         initial_message: str | None = None,
+        allowed_commands: list[str] | None = None,
     ) -> list[str]:
         """Build the command line for launching this tool."""
         caps = self.capabilities()
@@ -262,6 +309,9 @@ class AbstractAITool(ABC):
 
         if trusted_dirs:
             cmd.extend(self.trusted_dirs_args(trusted_dirs))
+
+        if allowed_commands:
+            cmd.extend(self.allowed_commands_args(allowed_commands))
 
         return cmd
 

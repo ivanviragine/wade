@@ -98,6 +98,28 @@ def probe_copilot() -> set[str]:
         return set()
 
 
+def probe_cursor() -> set[str]:
+    """Probe Cursor CLI (agent) via ``agent --list-models``."""
+    if not shutil.which("agent"):
+        return set()
+    try:
+        res = subprocess.run(["agent", "--list-models"], capture_output=True, text=True, timeout=15)
+        if res.returncode == 0:
+            models = set()
+            for line in res.stdout.splitlines():
+                # Lines like: "sonnet-4.6 - Claude 4.6 Sonnet"
+                stripped = line.strip()
+                if stripped and " - " in stripped:
+                    model_id = stripped.split(" - ")[0].strip()
+                    if model_id and not model_id.startswith(("Available", "Tip:")):
+                        models.add(model_id)
+            if models:
+                return models
+    except Exception:
+        pass
+    return set()
+
+
 def probe_gemini() -> set[str]:
     try:
         res = subprocess.run(
@@ -161,6 +183,7 @@ def main() -> int:
     with console.status("Probing external AI providers..."):
         found = {
             "claude": probe_claude(),
+            "cursor": probe_cursor(),
             "copilot": probe_copilot(),
             "gemini": probe_gemini(),
             "codex": probe_codex(),
@@ -272,7 +295,7 @@ def main() -> int:
                 return json.dumps(parsed["structured_output"], indent=2)
             # Or it might just be the direct object itself
             is_dict = isinstance(parsed, dict)
-            providers = ["claude", "copilot", "gemini", "codex", "opencode"]
+            providers = ["claude", "cursor", "copilot", "gemini", "codex", "opencode"]
             has_providers = any(k in parsed for k in providers)
             if is_dict and has_providers:
                 return json.dumps(parsed, indent=2)
