@@ -54,6 +54,13 @@ Before closing the session, write **`PR-SUMMARY.md`** in the worktree root
 the PR body. If the file is missing, the PR will have no description.
 
 > **Never commit this file** — it is a session artifact (already in `.gitignore`).
+> If you find it is already tracked by git (e.g. `git status` shows it as modified),
+> untrack it first:
+> ```bash
+> git rm --cached PR-SUMMARY.md
+> git commit -m "chore: untrack PR-SUMMARY.md (already gitignored)"
+> ```
+> Then re-write the file — it will be ignored going forward.
 
 ### What to include
 
