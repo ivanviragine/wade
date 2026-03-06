@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.1.1] — 2026-03-06
+
+### Bug Fixes
+
+- always append usage entry to PR/issue body after session capture (6fc15af)
+
+### Other Changes
+
+- Add `wade plan-done` command for deterministic plan validation (#73) (ab760b1)
+- Preserve AI tool session data on worktree deletion (#75) (e3cc093)
+- Unify and complete AI tool permission pre-authorization (#76) (802e97a)
+- Add `wade address-reviews` command to address PR review comments (#79) (ad00ee2)
+- Support Cursor CLI (#72) (b13d2b5)
+- Set terminal tab title during plan sessions (#70) (3a44666)
+- Make wade new-task work non-interactively (#71) (fed841b)
+
 ## [v0.1.0] — 2026-03-05
 
 ### Features
