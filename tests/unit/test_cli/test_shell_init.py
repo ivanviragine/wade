@@ -10,9 +10,13 @@ runner = CliRunner()
 
 BASH_OUTPUT = """\
 wade() {
-  if [[ "${1:-}" == "work" && "${2:-}" == "cd" ]]; then
+  if [[ "${1:-}" == "cd" ]]; then
     local __p
-    __p=$(command wade "$@") && cd "$__p"
+    __p=$(command wade cd "${@:2}") && cd "$__p"
+    return $?
+  elif [[ "${1:-}" == "worktree" && "${2:-}" == "cd" ]]; then
+    local __p
+    __p=$(command wade worktree cd "${@:3}") && cd "$__p"
     return $?
   fi
   command wade "$@"
@@ -20,8 +24,11 @@ wade() {
 
 FISH_OUTPUT = """\
 function wade
-  if test (count $argv) -ge 2; and test "$argv[1]" = "work"; and test "$argv[2]" = "cd"
-    set -l dir (command wade work cd $argv[3..])
+  if test (count $argv) -ge 1; and test "$argv[1]" = "cd"
+    set -l dir (command wade cd $argv[2..])
+    and builtin cd $dir
+  else if test (count $argv) -ge 2; and test "$argv[1]" = "worktree"; and test "$argv[2]" = "cd"
+    set -l dir (command wade worktree cd $argv[3..])
     and builtin cd $dir
   else
     command wade $argv
@@ -70,3 +77,29 @@ def test_bash_output_unchanged() -> None:
     result = runner.invoke(admin_app, ["shell-init"], env={"SHELL": "/bin/bash"})
     assert result.exit_code == 0
     assert result.output.strip() == BASH_OUTPUT
+
+
+def test_bash_intercepts_wade_cd() -> None:
+    """Bash function intercepts 'wade cd' for directory change."""
+    result = runner.invoke(admin_app, ["shell-init"], env={"SHELL": "/bin/bash"})
+    assert '"cd"' in result.output
+    assert "command wade cd" in result.output
+
+
+def test_bash_intercepts_wade_worktree_cd() -> None:
+    """Bash function intercepts 'wade worktree cd' for directory change."""
+    result = runner.invoke(admin_app, ["shell-init"], env={"SHELL": "/bin/bash"})
+    assert '"worktree"' in result.output
+    assert "command wade worktree cd" in result.output
+
+
+def test_fish_intercepts_wade_cd() -> None:
+    """Fish function intercepts 'wade cd' for directory change."""
+    result = runner.invoke(admin_app, ["shell-init"], env={"SHELL": "/usr/bin/fish"})
+    assert "command wade cd" in result.output
+
+
+def test_fish_intercepts_wade_worktree_cd() -> None:
+    """Fish function intercepts 'wade worktree cd' for directory change."""
+    result = runner.invoke(admin_app, ["shell-init"], env={"SHELL": "/usr/bin/fish"})
+    assert "command wade worktree cd" in result.output

@@ -206,7 +206,7 @@ def init(
     _prompt_commit_or_local(root, config_path, installed, non_interactive)
 
     console.panel(
-        "  Project initialized. Run [bold]wade plan-task[/] to get started.",
+        "  Project initialized. Run [bold]wade plan[/] to get started.",
         title="WADE initialized",
     )
     return True
@@ -685,7 +685,7 @@ def _prompt_configure_shell_integration(non_interactive: bool) -> None:
         shell_name = Path(shell_env).name
         console.hint(
             f"Shell '{shell_name}' not auto-detected. "
-            f"To enable 'wade work cd', add to your shell profile:\n"
+            f"To enable 'wade cd', add to your shell profile:\n"
             f'  eval "$(wade shell-init)"'
         )
         return
@@ -703,7 +703,7 @@ def _prompt_configure_shell_integration(non_interactive: bool) -> None:
     # Prompt the user
     is_fish = "fish" in shell_env.lower()
     if prompts.confirm(
-        "Add shell integration for 'wade work cd' (changes to shell profile)?",
+        "Add shell integration for 'wade cd' (changes to shell profile)?",
         default=True,
     ):
         _configure_shell_integration(profile, is_fish=is_fish)

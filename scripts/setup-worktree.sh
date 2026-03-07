@@ -2,7 +2,7 @@
 # Set up a new worktree with dev dependencies and git hooks.
 #
 # This script is called automatically by the post_worktree_create hook
-# when a new worktree is created via `wade implement-task`.
+# when a new worktree is created via `wade implement`.
 #
 # It installs:
 # - Dev dependencies via `uv pip install -e ".[dev]"`

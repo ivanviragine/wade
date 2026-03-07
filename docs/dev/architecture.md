@@ -52,8 +52,11 @@ src/wade/
 ├── cli/                 # Typer commands (thin dispatch)
 │   ├── main.py          # Root app + interactive menu, subcommand registration
 │   ├── admin.py         # init, update, deinit, check, check-config, shell-init
-│   ├── task.py          # task list/read/update/close/deps
-│   ├── work.py          # work done/sync/list/batch/remove/cd (interactive menu)
+│   ├── task.py          # task create/list/read/update/close/deps
+│   ├── worktree.py      # worktree list/remove/cd (interactive menu)
+│   ├── implementation_session.py  # implementation-session check/sync/done
+│   ├── address_reviews_session.py # address-reviews-session check/sync/done/fetch/resolve
+│   ├── plan_session.py  # plan-session done
 │   └── autocomplete.py  # Shell autocompletion helpers
 ├── models/              # Pydantic domain models (pure data, no I/O)
 │   ├── config.py        # ProjectConfig, ProjectSettings, AIConfig, ComplexityModelMapping
@@ -122,13 +125,13 @@ src/wade/
 
 ## Command Dispatch
 
-`src/wade/cli/main.py` is the root Typer application. It registers subcommand groups (`task`, `work`) and admin commands (`init`, `update`, `deinit`, `check`, `check-config`, `shell-init`). The `tasks` alias is registered as a hidden Typer group pointing to the same `task_app`. The `wade` entry point (defined in `pyproject.toml` as `wade.cli.main:cli_main`) invokes the root app.
+`src/wade/cli/main.py` is the root Typer application. It registers subcommand groups (`task`, `worktree`, `plan-session`, `implementation-session`, `address-reviews-session`) and admin commands (`init`, `update`, `deinit`, `check`, `check-config`, `shell-init`). The `tasks` alias is registered as a hidden Typer group pointing to the same `task_app`. The `wade` entry point (defined in `pyproject.toml` as `wade.cli.main:cli_main`) invokes the root app.
 
 CLI modules are **thin dispatch layers** — they parse flags via Typer, then call service methods. Business logic lives in `services/`, not in `cli/`.
 
-**Interactive menus**: `wade work` with no subcommand shows an interactive menu (done/sync/list/batch/remove). `wade new-task` prompts interactively for title and body. Top-level commands `plan-task`, `new-task`, and `implement-task` are registered directly on the root app.
+**Interactive menus**: `wade task` and `wade worktree` with no subcommand show interactive menus. `wade task create` prompts interactively for title and body. Top-level commands `plan`, `implement`, `implement-batch`, `address-reviews`, `cd`, and `smart-start` are registered directly on the root app. Hidden short aliases `p`, `i`, and `r` map to `plan`, `implement`, and `address-reviews` respectively.
 
-**Shell integration**: `wade shell-init` outputs a shell function wrapper for `eval "$(wade shell-init)"` that intercepts `wade work cd <n>` to perform a real `cd` in the caller's shell.
+**Shell integration**: `wade shell-init` outputs a shell function wrapper for `eval "$(wade shell-init)"` that intercepts `wade cd <n>` and `wade worktree cd <n>` to perform a real `cd` in the caller's shell.
 
 ## Config System
 
@@ -165,7 +168,7 @@ hooks:
     - .env
 ```
 
-**Model complexity mapping**: The `models` section maps AI tool names to complexity-tiered model IDs (`easy`, `medium`, `complex`, `very_complex`). When `implement-task` is invoked, the service reads the `complexity:X` label from the issue (falling back to `## Complexity` in the body), maps it to the appropriate configured model, and passes it as `--model` to the AI tool — unless the user explicitly passed `--model` themselves.
+**Model complexity mapping**: The `models` section maps AI tool names to complexity-tiered model IDs (`easy`, `medium`, `complex`, `very_complex`). When `wade implement` is invoked, the service reads the `complexity:X` label from the issue (falling back to `## Complexity` in the body), maps it to the appropriate configured model, and passes it as `--model` to the AI tool — unless the user explicitly passed `--model` themselves.
 
 **Per-command AI tool and model overrides**: The `ai` section supports `plan`, `deps`, and `work` sub-sections, each with optional `tool` and `model` keys. The fallback chain is: CLI `--ai`/`--model` flag -> command-specific config -> global `default_tool`. This is implemented in `ProjectConfig.get_ai_tool(command)` and `ProjectConfig.get_model(command)`.
 
@@ -214,10 +217,10 @@ Each AI tool adapter implements `capabilities()` (binary name, model flag syntax
 
 ## Issue Detection (Snapshot/Diff Pattern)
 
-`plan-task` uses a snapshot/diff pattern to detect issues created during an AI session (Path A — fallback):
+`wade plan` uses a snapshot/diff pattern to detect issues created during an AI session (Path A — fallback):
 
 1. **Before AI** — Snapshot all open issue numbers with the configured label
-2. **AI runs** — The agent creates issues via `wade new-task` from within the AI CLI
+2. **AI runs** — The agent creates issues via `wade task create` from within the AI CLI
 3. **After AI** — Compare current issue numbers against the pre-snapshot, returning only newly created ones
 
 This avoids requiring the AI to report back which issues it created — the service detects them deterministically. When no issues are detected (Path B), the service reads plan files from the session temp dir and creates lightweight issues + draft PRs.
@@ -225,10 +228,10 @@ This avoids requiring the AI to report back which issues it created — the serv
 ## Merge Strategy
 
 `MergeStrategy` (config key `project.merge_strategy`) controls how feature branches are merged into main:
-- **`PR`** (default) — The agent runs `wade work done` during its session to push the branch and update the existing draft PR (or create one if missing). The worktree is **not** cleaned up by `work done` — it is cleaned up automatically by `implement-task` after the human merges the PR. When the tool exits, `implement-task`'s post-work prompt detects the PR and asks "Do you want to merge this PR?" — if yes, squash-merges via `gh pr merge --squash --delete-branch`.
+- **`PR`** (default) — The agent runs `wade implementation-session done` during its session to push the branch and update the existing draft PR (or create one if missing). The worktree is **not** cleaned up by `done` — it is cleaned up automatically by `implement` after the human merges the PR. When the tool exits, `implement`'s post-work prompt detects the PR and asks "Do you want to merge this PR?" — if yes, squash-merges via `gh pr merge --squash --delete-branch`.
 - **`direct`** — Merge locally into main, push, and clean up the worktree. Useful for solo projects or repos without branch protection.
 
-`wade work done` handles PR creation / direct merge. The post-work lifecycle prompt handles the merge decision (PR strategy) or local merge options (direct strategy).
+`wade implementation-session done` handles PR creation / direct merge. The post-work lifecycle prompt handles the merge decision (PR strategy) or local merge options (direct strategy).
 
 ## Determinism via Services
 
@@ -246,32 +249,32 @@ When adding new functionality, ask: "Can an AI agent get this wrong by reasoning
 | Creating branch with naming convention | Writing commit messages |
 | Emitting structured JSON events | Interpreting event output |
 
-This is why `wade work sync` exists as a CLI command rather than instructions for agents to run raw git commands — the sequence (preflight -> fetch -> merge -> conflict detection -> event emission) is deterministic and must not vary between agent sessions.
+This is why `wade implementation-session sync` exists as a CLI command rather than instructions for agents to run raw git commands — the sequence (preflight -> fetch -> merge -> conflict detection -> event emission) is deterministic and must not vary between agent sessions.
 
 When wade installs skills into a target project (`wade init`), the skills reference `wade <command>` — they do **not** bundle standalone copies of the logic. The wade CLI is the single source of truth for deterministic operations.
 
 ## CLI Flag Reference
 
-**`wade implement-task`:**
+**`wade implement`:**
 - `--detach` — Launch AI in a new terminal tab/window (non-blocking). Uses `build_launch_command()` + `launch_in_new_terminal()`.
-- `--cd` — Create worktree, print its path to stdout, and exit (no AI launch). Used internally by `wade work cd`.
+- `--cd` — Create worktree, print its path to stdout, and exit (no AI launch). Used internally by `wade cd`.
 
-**`wade work done`:**
+**`wade implementation-session done`:**
 - `target` (positional) — Optional issue number, worktree name, or plan file path. If a file path, creates the issue first. If a number/name, finds the worktree. If omitted, detects from current branch.
 - `--no-close` — Don't close the issue on merge.
 - `--draft` — Create PR as draft.
 - `--no-cleanup` — Keep the worktree after direct merge (no effect in PR strategy, which already preserves worktrees).
 
-**`wade work batch`:**
+**`wade implement-batch`:**
 - `--model` — Pass a specific AI model to all parallel sessions.
 
-**`wade work remove`:**
+**`wade worktree remove`:**
 - `--all` — Hidden alias for `--stale` (removes all stale worktrees).
 
 **`wade update`:**
 - `--skip-self-upgrade` — Skip the source-version self-upgrade check.
 
-**`wade new-task`:**
+**`wade task create`:**
 - No flags required — prompts interactively for title and body.
 
 **`wade shell-init`:**

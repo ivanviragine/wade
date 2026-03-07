@@ -4,7 +4,7 @@ description: >
   Create one or more GitHub issues via wade — for a single bug/feature OR a
   full plan/PRD breakdown. Assesses scope, proposes single or multi-issue
   breakdown with reasoning, gets user confirmation, writes plan files, creates
-  issues via wade new-task, and informs the user of next steps. ALL steps
+  issues via wade task create, and informs the user of next steps. ALL steps
   are mandatory — do not stop after planning. Use whenever the user asks to
   create a GitHub issue, regardless of scope.
 ---
@@ -14,7 +14,7 @@ description: >
 Convert a finished plan, PRD, or feature spec into one or more PR-sized GitHub
 issues using the project's `wade` infrastructure.
 
-> **Never use `gh issue create` directly.** Always use `wade new-task`.
+> **Never use `gh issue create` directly.** Always use `wade task create`.
 > Using `gh` directly bypasses label enforcement, snapshot/diff detection,
 > and dependency analysis hooks.
 
@@ -86,7 +86,7 @@ See [plan-format.md](plan-format.md) for the exact format.
 
 **Include a `## Complexity` section** in every plan file with one of:
 `easy`, `medium`, `complex`, or `very_complex` (based on your LOC/scope
-estimate from Step 1). This lets `wade implement-task` automatically select
+estimate from Step 1). This lets `wade implement` automatically select
 the appropriate AI model for the implementation session. The complexity is
 also applied as a `complexity:X` label on the issue.
 
@@ -95,21 +95,21 @@ File naming convention:
 - Multi-issue: `PLAN-1-<slug>.md`, `PLAN-2-<slug>.md`, etc.
 
 Write plan files to the **session directory**: the temp dir from your prompt
-if inside a `wade plan-task` session, or the worktree root if inside a work
+if inside a `wade plan` session, or the worktree root if inside a work
 session. **Never write plan files into the repo's main checkout** — they are
 session artifacts, not committed code.
 
 ## Step 5: Create issues
 
 > **Note:** Issue creation is the *output* of this skill, not code implementation.
-> Do not call `exit_plan_mode` before running `wade new-task` — user
+> Do not call `exit_plan_mode` before running `wade task create` — user
 > confirmation in Step 3 is sufficient, even when running inside `[[PLAN]]` mode.
 
-For each plan, create a lightweight issue via `wade new-task` (interactive)
+For each plan, create a lightweight issue via `wade task create` (interactive)
 with the issue title and a brief description.
 
 The full plan content goes to a draft PR (created automatically by
-`wade plan-task`), not the issue body. Issues are lightweight tickets.
+`wade plan`), not the issue body. Issues are lightweight tickets.
 
 Collect the issue number and URL from each creation.
 
@@ -129,13 +129,13 @@ Write an epic with:
 - Brief summary of the feature
 - Checklist linking each sub-issue: `- [ ] #<number> — <title>`
 
-Create it via `wade new-task`.
+Create it via `wade task create`.
 
 ## Step 7: Inform the user — MANDATORY
 
 **Do not skip this step.** After creating issues you must always inform the user
 of what was created and how to start working. Do NOT offer to run
-`wade implement-task` yourself or present it as a selectable option — the human
+`wade implement` yourself or present it as a selectable option — the human
 starts work sessions when they are ready.
 
 After creating all issues, list them clearly:
@@ -152,9 +152,9 @@ Then show the next-step hint so the user knows how to proceed:
 
 > When you're ready to start, run:
 > ```
-> wade implement-task <number>
+> wade implement <number>
 > ```
-> For example: `wade implement-task 42`
+> For example: `wade implement 42`
 
 **Do NOT run this command yourself.** Do NOT ask the user to pick an issue and
 then run it on their behalf. Simply inform them and end the session.
@@ -170,7 +170,7 @@ appears in a "Tracking:" parent issue checklist), follow these steps:
 
 ### PR association (automatic)
 
-`wade work done` scans open "Tracking:" issues for a checklist entry
+`wade implementation-session done` scans open "Tracking:" issues for a checklist entry
 containing your issue number and automatically adds `Part of #<parent>` to
 the PR body alongside `Closes #<child>`. You do not need to add this manually.
 
@@ -214,7 +214,7 @@ If you are working on the tracking issue itself (not a specific child):
 ## Rules
 
 - **Never create issues without user confirmation** (Step 3 is mandatory).
-- **Always use `wade new-task`** — never construct `gh issue create` commands manually.
+- **Always use `wade task create`** — never construct `gh issue create` commands manually.
 - **Every plan file must have a `# Title`** as the first heading (the script requires it).
 - Keep issue titles concise and actionable (max 256 chars).
 - Each issue should be independently implementable (even if there are dependencies).

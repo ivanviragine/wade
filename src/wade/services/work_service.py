@@ -203,7 +203,7 @@ def _detect_ai_cli_env() -> str | None:
 
     Returns the env-var name that triggered detection, or ``None``.
 
-    When an AI agent calls ``wade implement-task`` from within its own
+    When an AI agent calls ``wade implement`` from within its own
     session, we must not launch another AI instance (infinite nesting).
     Instead, create the worktree and print the path.
     """
@@ -735,7 +735,7 @@ def start(
         if not task:
             return False
 
-        console.rule(f"implement-task #{task.id}")
+        console.rule(f"implement #{task.id}")
         console.kv("Issue", console.issue_ref(task.id, task.title))
 
         # Resolve AI tool and model
@@ -779,7 +779,7 @@ def start(
         repo_name = repo_root.name
         worktree_path = worktrees_dir / repo_name / branch_name.replace("/", "-")
 
-        # Check for existing draft PR (from plan-task flow)
+        # Check for existing draft PR (from plan flow)
         existing_pr = git_pr.get_pr_for_branch(repo_root, branch_name)
         plan_content: str | None = None
 
@@ -971,7 +971,10 @@ def start(
                 if not adapter.capabilities().blocks_until_exit:
                     console.empty()
                     if not prompts.confirm("Have you finished the session?", default=True):
-                        console.info("Worktree preserved — run 'wade work done' when ready.")
+                        console.info(
+                            "Worktree preserved — run"
+                            " 'wade implementation-session done' when ready."
+                        )
                         launch_completed = False
             except (ValueError, KeyError):
                 console.warn(f"Unknown AI tool: {resolved_tool}")
@@ -1100,7 +1103,7 @@ def batch(
         console.error("Not inside a git repository")
         return False
 
-    console.rule(f"work batch ({len(issue_numbers)} issues)")
+    console.rule(f"implement-batch ({len(issue_numbers)} issues)")
 
     # Resolve AI tool and model, then offer interactive confirmation.
     resolved_tool = resolve_ai_tool(ai_tool, config, "work")
@@ -1131,7 +1134,7 @@ def batch(
     def _launch(issue_id: str, label: str) -> bool:
         """Build command and launch a single issue in a new terminal."""
         nonlocal launched
-        cmd = ["wade", "implement-task", issue_id]
+        cmd = ["wade", "implement", issue_id]
         if resolved_tool:
             cmd.extend(["--ai", resolved_tool])
         if resolved_model:
@@ -1253,7 +1256,7 @@ def _resolve_worktree_from_plan(
     if not wt_path:
         raise ValueError(
             f"No worktree found matching plan title '{title}' (slug: '{slug}'). "
-            "Check active worktrees with: wade work list"
+            "Check active worktrees with: wade worktree list"
         )
 
     branch = git_repo.get_current_branch(wt_path)
@@ -1707,6 +1710,7 @@ def sync(
     main_branch: str | None = None,
     json_output: bool = False,
     project_root: Path | None = None,
+    session_type: str = "implementation",
 ) -> SyncResult:
     """Sync current branch with main.
 
@@ -1868,7 +1872,7 @@ def sync(
             console.detail(f)
         console.empty()
         console.hint("Resolve conflicts, then run:")
-        console.out.print("      [prompt.dimmed]$ wade work sync[/]")
+        console.out.print(f"      [prompt.dimmed]$ wade {session_type}-session sync[/]")
 
     # Get conflict diff
     try:
@@ -2007,7 +2011,7 @@ def done(
             console.error("Cannot detect main branch")
             return False
 
-    console.rule(f"work done #{issue_number}")
+    console.rule(f"done #{issue_number}")
 
     strategy = config.project.merge_strategy
 
@@ -2047,8 +2051,8 @@ def _done_via_pr(
 ) -> bool:
     """Finalize work — update existing draft PR or create a new one.
 
-    In the new workflow, a draft PR should already exist (created by plan-task
-    or implement-task). This function:
+    In the new workflow, a draft PR should already exist (created by plan
+    or implement). This function:
     1. Pushes the branch
     2. Appends PR-SUMMARY content to the existing PR body
     3. Marks the draft PR as ready for review
@@ -2072,7 +2076,7 @@ def _done_via_pr(
         console.error(f"Push failed: {e}")
         return False
 
-    # Check for existing PR (expected from plan-task or implement-task bootstrap)
+    # Check for existing PR (expected from plan or implement bootstrap)
     existing_pr = git_pr.get_pr_for_branch(repo_root, branch)
 
     # Resolve PR-SUMMARY.md from worktree root

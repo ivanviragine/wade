@@ -12,7 +12,7 @@ from wade.utils.terminal import (
 class TestComposeWorkTitle:
     def test_basic(self) -> None:
         result = compose_work_title("42", "Add search command")
-        assert "wade work" in result
+        assert "wade implement" in result
         assert "#42" in result
         assert "Add search command" in result
 

@@ -31,38 +31,51 @@ class TestHelp:
         assert result.exit_code == 0
         assert "wade" in result.output
         assert "task" in result.output
-        assert "work" in result.output
+        assert "worktree" in result.output
 
     def test_task_help(self) -> None:
         result = runner.invoke(app, ["task", "--help"])
         assert result.exit_code == 0
         assert "list" in result.output
         assert "read" in result.output
-        # plan and create are now top-level commands, not under task
-        assert "plan" not in result.output
-        assert "create" not in result.output
 
-    def test_work_help(self) -> None:
-        result = runner.invoke(app, ["work", "--help"])
+    def test_task_help_includes_create(self) -> None:
+        result = runner.invoke(app, ["task", "--help"])
+        assert result.exit_code == 0
+        assert "create" in result.output
+
+    def test_worktree_help(self) -> None:
+        result = runner.invoke(app, ["worktree", "--help"])
+        assert result.exit_code == 0
+        assert "list" in result.output
+        assert "remove" in result.output
+
+    def test_implementation_session_help(self) -> None:
+        result = runner.invoke(app, ["implementation-session", "--help"])
         assert result.exit_code == 0
         assert "done" in result.output
         assert "sync" in result.output
-        # start is now top-level implement-task, not under work
-        assert "start" not in result.output
+        assert "check" in result.output
+
+    def test_address_reviews_session_help(self) -> None:
+        result = runner.invoke(app, ["address-reviews-session", "--help"])
+        assert result.exit_code == 0
+        assert "done" in result.output
+        assert "fetch" in result.output
+        assert "resolve" in result.output
 
     def test_top_level_commands_in_help(self) -> None:
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
-        assert "plan-task" in result.output
-        assert "new-task" in result.output
-        assert "implement-task" in result.output
+        assert "plan" in result.output
+        assert "implement" in result.output
 
 
 class TestCommandBehaviorWithoutContext:
     """Verify subcommand exit codes and output when run without git/gh context."""
 
-    def test_plan_task_exits_without_ai(self) -> None:
-        # plan-task exits 1 when no AI tool is available.
+    def test_plan_exits_without_ai(self) -> None:
+        # plan exits 1 when no AI tool is available.
         # Patch both config loading and auto-detection so the test is not
         # environment-dependent: a real .wade.yml or installed AI CLI would
         # resolve a tool and confirm_ai_selection would block on TTY input.
@@ -72,20 +85,20 @@ class TestCommandBehaviorWithoutContext:
             patch("wade.services.plan_service.load_config", return_value=ProjectConfig()),
             patch("wade.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
         ):
-            result = runner.invoke(app, ["plan-task"])
+            result = runner.invoke(app, ["plan"])
         assert result.exit_code == 1
 
-    def test_new_task_requires_title(self) -> None:
-        result = runner.invoke(app, ["new-task"])
+    def test_task_create_requires_title(self) -> None:
+        result = runner.invoke(app, ["task", "create"])
         assert result.exit_code == 1
         assert "Title is required" in result.output
 
     @patch("wade.services.task_service.create_task")
-    def test_new_task_non_interactive_title(self, mock_create: patch) -> None:
+    def test_task_create_non_interactive_title(self, mock_create: patch) -> None:
         from wade.models.task import Task
 
         mock_create.return_value = Task(id="1", title="My Bug")
-        result = runner.invoke(app, ["new-task", "--title", "My Bug"])
+        result = runner.invoke(app, ["task", "create", "--title", "My Bug"])
         assert result.exit_code == 0
         mock_create.assert_called_once()
         call_kwargs = mock_create.call_args[1]
@@ -93,17 +106,17 @@ class TestCommandBehaviorWithoutContext:
         assert call_kwargs["body"] == ""
 
     @patch("wade.services.task_service.create_task")
-    def test_new_task_non_interactive_with_body(self, mock_create: patch) -> None:
+    def test_task_create_non_interactive_with_body(self, mock_create: patch) -> None:
         from wade.models.task import Task
 
         mock_create.return_value = Task(id="2", title="Fix")
-        result = runner.invoke(app, ["new-task", "--title", "Fix", "--body", "Details here"])
+        result = runner.invoke(app, ["task", "create", "--title", "Fix", "--body", "Details here"])
         assert result.exit_code == 0
         call_kwargs = mock_create.call_args[1]
         assert call_kwargs["body"] == "Details here"
 
     @patch("wade.services.task_service.create_task")
-    def test_new_task_non_interactive_body_file(self, mock_create: patch) -> None:
+    def test_task_create_non_interactive_body_file(self, mock_create: patch) -> None:
         import tempfile
 
         from wade.models.task import Task
@@ -112,27 +125,27 @@ class TestCommandBehaviorWithoutContext:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
             f.write("Body from file")
             f.flush()
-            result = runner.invoke(app, ["new-task", "--title", "Fix", "--body-file", f.name])
+            result = runner.invoke(app, ["task", "create", "--title", "Fix", "--body-file", f.name])
         assert result.exit_code == 0
         call_kwargs = mock_create.call_args[1]
         assert call_kwargs["body"] == "Body from file"
 
     @patch("wade.services.task_service.create_task")
-    def test_new_task_non_interactive_labels(self, mock_create: patch) -> None:
+    def test_task_create_non_interactive_labels(self, mock_create: patch) -> None:
         from wade.models.task import Task
 
         mock_create.return_value = Task(id="4", title="Fix")
         result = runner.invoke(
-            app, ["new-task", "--title", "Fix", "--label", "bug", "--label", "urgent"]
+            app, ["task", "create", "--title", "Fix", "--label", "bug", "--label", "urgent"]
         )
         assert result.exit_code == 0
         call_kwargs = mock_create.call_args[1]
         assert "bug" in call_kwargs["extra_labels"]
         assert "urgent" in call_kwargs["extra_labels"]
 
-    def test_new_task_body_file_not_found(self) -> None:
+    def test_task_create_body_file_not_found(self) -> None:
         result = runner.invoke(
-            app, ["new-task", "--title", "Fix", "--body-file", "/nonexistent/file.md"]
+            app, ["task", "create", "--title", "Fix", "--body-file", "/nonexistent/file.md"]
         )
         assert result.exit_code == 1
 
@@ -142,25 +155,25 @@ class TestCommandBehaviorWithoutContext:
         result = runner.invoke(app, ["task", "list"])
         assert result.exit_code == 0
 
-    def test_work_done_exits_with_error(self) -> None:
-        # work done exits 1 when the branch has no issue number.
+    def test_implementation_session_done_exits_with_error(self) -> None:
+        # implementation-session done exits 1 when the branch has no issue number.
         # Mock the branch name so the test is not environment-dependent
         # (on a feature worktree the branch has an issue number and the
         # error path is different).
         with patch("wade.git.repo.get_current_branch", return_value="main"):
-            result = runner.invoke(app, ["work", "done"])
+            result = runner.invoke(app, ["implementation-session", "done"])
         assert result.exit_code == 1
         assert "Cannot extract issue number" in result.output
 
-    def test_work_sync_exits_with_error(self) -> None:
-        # work sync outside a worktree exits 4 (preflight failure)
-        result = runner.invoke(app, ["work", "sync"])
+    def test_implementation_session_sync_exits_with_error(self) -> None:
+        # implementation-session sync outside a worktree exits 4 (preflight failure)
+        result = runner.invoke(app, ["implementation-session", "sync"])
         assert result.exit_code == 4
 
     @patch("wade.git.worktree.list_worktrees", return_value=[])
-    def test_work_list_exits(self, mock_wt: patch) -> None:
-        # work list gracefully handles missing git context — returns empty list
-        result = runner.invoke(app, ["work", "list"])
+    def test_worktree_list_exits(self, mock_wt: patch) -> None:
+        # worktree list gracefully handles missing git context — returns empty list
+        result = runner.invoke(app, ["worktree", "list"])
         assert result.exit_code == 0
         assert "No active wade worktrees" in result.output
 
@@ -175,7 +188,7 @@ class TestInteractiveMenu:
             mock_menu.assert_called_once()
 
     def test_help_selection_exits_cleanly(self) -> None:
-        """Selecting 'Show help' (index 4) from the menu should exit 0."""
-        with patch("wade.ui.prompts.menu", return_value=4):
+        """Selecting 'Show help' (index 5) from the menu should exit 0."""
+        with patch("wade.ui.prompts.menu", return_value=5):
             result = runner.invoke(app, [])
             assert result.exit_code == 0

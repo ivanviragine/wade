@@ -34,7 +34,10 @@ class TestCanonicalToClaude:
         assert canonical_to_claude("./scripts/fmt.sh") == "Bash(./scripts/fmt.sh)"
 
     def test_command_with_multi_word_args(self) -> None:
-        assert canonical_to_claude("wade work done") == "Bash(wade work done)"
+        assert (
+            canonical_to_claude("wade implementation-session done")
+            == "Bash(wade implementation-session done)"
+        )
 
     def test_bare_command(self) -> None:
         assert canonical_to_claude("git") == "Bash(git)"
@@ -130,7 +133,10 @@ class TestCanonicalToCursor:
         assert canonical_to_cursor("./scripts/fmt.sh") == "Shell(./scripts/fmt.sh)"
 
     def test_command_with_multi_word_args(self) -> None:
-        assert canonical_to_cursor("wade work done") == "Shell(wade work done)"
+        assert (
+            canonical_to_cursor("wade implementation-session done")
+            == "Shell(wade implementation-session done)"
+        )
 
     def test_bare_command(self) -> None:
         assert canonical_to_cursor("git") == "Shell(git)"

@@ -175,7 +175,7 @@ def start(
     2. Find existing worktree (or recover from remote branch)
     3. Find PR for the branch (error if missing or merged)
     4. Quick-check for unresolved review threads
-    5. Install review-session skill, build prompt, launch AI
+    5. Install address-reviews-session skill, build prompt, launch AI
     6. Post-session: capture token usage, update PR, add labels
     7. Post-review lifecycle: "Merge PR" / "Wait for new reviews"
 
@@ -227,7 +227,7 @@ def start(
         if not recovered:
             console.error_with_fix(
                 f"No worktree or remote branch found for issue #{task.id}",
-                f"Run `wade implement-task {task.id}` first to create a worktree",
+                f"Run `wade implement {task.id}` first to create a worktree",
             )
             return False
         worktree_path = recovered
@@ -239,7 +239,7 @@ def start(
     if not pr_info:
         console.error_with_fix(
             f"No open PR found for branch {branch_name}",
-            "Run `wade work done` from the worktree to create a PR first",
+            "Run `wade implementation-session done` from the worktree to create a PR first",
         )
         return False
 
@@ -275,7 +275,7 @@ def start(
 
     console.info(f"Found {comment_count} unresolved comment(s) across {file_count} location(s)")
 
-    # 5. Re-bootstrap skills (ensures review-session skill is installed)
+    # 5. Re-bootstrap skills (ensures address-reviews-session skill is installed)
     bootstrap_worktree(worktree_path, config, repo_root)
 
     # 6. Resolve AI tool and model
@@ -382,7 +382,9 @@ def start(
 
                 console.empty()
                 if not ui_prompts.confirm("Have you finished the review session?", default=True):
-                    console.info("Worktree preserved — run 'wade work done' when ready.")
+                    console.info(
+                        "Worktree preserved — run 'wade address-reviews-session done' when ready."
+                    )
                     launch_completed = False
         except (ValueError, KeyError):
             console.warn(f"Unknown AI tool: {resolved_tool}")
@@ -420,7 +422,9 @@ def start(
                 repo_root, branch_name, task.id, worktree_path, pr_number, provider
             )
     else:
-        console.info("No AI tool configured — use `wade fetch-reviews` to view comments.")
+        console.info(
+            "No AI tool configured — use `wade address-reviews-session fetch` to view comments."
+        )
         console.detail(f"cd {worktree_path}")
         stop_title_keeper()
 

@@ -1,4 +1,4 @@
-"""Task subcommands — list, read, update, close, deps."""
+"""Task subcommands — create, list, read, update, close, deps."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ def task_callback(ctx: typer.Context) -> None:
     from wade.ui.console import console
 
     menu_items = [
+        "Create a new GitHub Issue",
         "List GitHub Issues",
         "Read a GitHub Issue",
         "Update a GitHub Issue",
@@ -31,6 +32,7 @@ def task_callback(ctx: typer.Context) -> None:
         "Analyze dependencies",
     ]
     hints = [
+        "task create",
         "task list",
         "task read",
         "task update",
@@ -38,14 +40,19 @@ def task_callback(ctx: typer.Context) -> None:
         "task deps",
     ]
 
-    console.hint("Use `wade plan-task` to plan or `wade new-task` to create issues.")
+    console.hint("Use `wade plan` to plan tasks with AI.")
 
     idx = prompts.menu("wade task", menu_items, hints=hints)
 
-    subcommands = ["list", "read", "update", "close", "deps"]
+    subcommands = ["create", "list", "read", "update", "close", "deps"]
     selected = subcommands[idx]
 
-    if selected == "list":
+    if selected == "create":
+        from wade.services.task_service import create_interactive
+
+        task = create_interactive()
+        raise typer.Exit(0 if task else 1)
+    elif selected == "list":
         from wade.services.task_service import list_tasks as do_list
 
         do_list()
@@ -90,6 +97,49 @@ def task_callback(ctx: typer.Context) -> None:
             raise typer.Exit(0 if graph is not None else 1)
 
     raise typer.Exit(0)
+
+
+@task_app.command()
+def create(
+    title: str | None = typer.Option(None, "--title", "-t", help="Issue title (non-interactive)."),
+    body: str | None = typer.Option(None, "--body", "-b", help="Issue body text."),
+    body_file: str | None = typer.Option(
+        None, "--body-file", help="Path to a file whose contents become the issue body."
+    ),
+    label: list[str] | None = typer.Option(  # noqa: B008
+        None, "--label", "-l", help="Extra label(s) to apply (can repeat)."
+    ),
+) -> None:
+    """Create a new GitHub Issue (interactive by default, non-interactive with --title)."""
+    from wade.ui.console import console
+
+    if title is not None:
+        from pathlib import Path
+
+        from wade.services.task_service import create_task
+
+        # Resolve body: --body-file takes precedence over --body
+        resolved_body = ""
+        if body_file:
+            bp = Path(body_file).expanduser()
+            if not bp.is_file():
+                console.error(f"File not found: {body_file}")
+                raise typer.Exit(1)
+            resolved_body = bp.read_text()
+        elif body:
+            resolved_body = body
+
+        task = create_task(title=title, body=resolved_body, extra_labels=list(label or []))
+    else:
+        from wade.services.task_service import create_interactive
+
+        task = create_interactive()
+
+    if task:
+        console.empty()
+        console.info("When you're ready to implement, run:")
+        console.detail(f"wade implement {task.id}")
+    raise typer.Exit(0 if task else 1)
 
 
 @task_app.command("list")
