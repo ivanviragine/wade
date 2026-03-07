@@ -18,9 +18,15 @@ from wade.config.loader import load_config
 from wade.models.ai import AIToolID
 from wade.models.config import ProjectConfig
 from wade.models.deps import DependencyEdge, DependencyGraph
+from wade.models.task import TaskState
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
-from wade.services.ai_resolution import confirm_ai_selection, resolve_ai_tool, resolve_model
+from wade.services.ai_resolution import (
+    confirm_ai_selection,
+    resolve_ai_tool,
+    resolve_effort,
+    resolve_model,
+)
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import ensure_task_label
 from wade.ui import prompts
@@ -245,6 +251,26 @@ def apply_deps_to_issues(
 # ---------------------------------------------------------------------------
 
 
+def _find_existing_tracking_issue(
+    provider: AbstractTaskProvider,
+    label: str,
+    title: str,
+) -> str | None:
+    """Check for an existing open tracking issue with the same title.
+
+    Returns the issue ID if found, None otherwise.
+    """
+    try:
+        open_issues = provider.list_tasks(label=label, state=TaskState.OPEN)
+        for issue in open_issues:
+            if issue.title == title:
+                return issue.id
+    except Exception:
+        # Non-fatal — fall through to create a new one
+        pass
+    return None
+
+
 def create_tracking_issue(
     provider: AbstractTaskProvider,
     config: ProjectConfig,
@@ -255,7 +281,22 @@ def create_tracking_issue(
     """Create a tracking issue with execution plan and dependency graph.
 
     Returns the tracking issue ID, or None on failure.
+    If a tracking issue with the same title already exists, returns
+    its ID instead of creating a duplicate.
     """
+    # Determine title first so we can check for duplicates
+    if len(issue_numbers) <= 3:
+        issue_refs = ", ".join(f"#{n}" for n in issue_numbers)
+        title = f"Tracking: {issue_refs}"
+    else:
+        title = f"Tracking: {len(issue_numbers)} issues"
+
+    # Check for existing tracking issue with the same title
+    existing_id = _find_existing_tracking_issue(provider, config.project.issue_label, title)
+    if existing_id:
+        console.info(f"Tracking issue #{existing_id} already exists — skipping creation")
+        return existing_id
+
     # Compute execution order
     try:
         ordered = graph.topo_sort(issue_numbers)
@@ -266,8 +307,8 @@ def create_tracking_issue(
     # Build checklist body
     lines = ["## Execution Plan", ""]
     for num in ordered:
-        title = task_titles.get(num, f"Issue #{num}")
-        lines.append(f"- [ ] #{num} — {title}")
+        title_text = task_titles.get(num, f"Issue #{num}")
+        lines.append(f"- [ ] #{num} — {title_text}")
     lines.append("")
 
     # Add Mermaid diagram
@@ -280,13 +321,6 @@ def create_tracking_issue(
     lines.append("")
 
     body = "\n".join(lines)
-
-    # Determine title
-    if len(issue_numbers) <= 3:
-        issue_refs = ", ".join(f"#{n}" for n in issue_numbers)
-        title = f"Tracking: {issue_refs}"
-    else:
-        title = f"Tracking: {len(issue_numbers)} issues"
 
     try:
         ensure_task_label(provider, config.project.issue_label)
@@ -311,6 +345,7 @@ def run_headless_analysis(
     ai_tool: str,
     prompt: str,
     model: str | None = None,
+    allowed_commands: list[str] | None = None,
 ) -> str | None:
     """Run dependency analysis in headless mode.
 
@@ -330,6 +365,7 @@ def run_headless_analysis(
         model=model,
         prompt=prompt,
         trusted_dirs=[str(Path.cwd()), tempfile.gettempdir()],
+        allowed_commands=allowed_commands,
     )
 
     try:
@@ -352,6 +388,7 @@ def _run_interactive_analysis(
     prompt: str,
     model: str | None = None,
     plan_dir: str | None = None,
+    allowed_commands: list[str] | None = None,
 ) -> str | None:
     """Run dependency analysis interactively when headless fails.
 
@@ -382,6 +419,7 @@ def _run_interactive_analysis(
                 model=model,
                 prompt=interactive_prompt,
                 trusted_dirs=[str(Path.cwd()), output_dir, tempfile.gettempdir()],
+                allowed_commands=allowed_commands,
             )
 
             # Non-blocking tools return immediately — wait for user.
@@ -425,6 +463,8 @@ def analyze_deps(
     *,
     ai_explicit: bool = False,
     model_explicit: bool = False,
+    effort: str | None = None,
+    effort_explicit: bool = False,
 ) -> DependencyGraph | None:
     """Analyze dependencies between issues.
 
@@ -451,16 +491,19 @@ def analyze_deps(
         return None
 
     resolved_model = resolve_model(model, config, "deps", tool=resolved_tool)
+    resolved_effort = resolve_effort(effort, config, "deps", tool=resolved_tool)
 
     console.rule("wade task deps")
     console.kv("Issues", str(len(issue_numbers)))
 
     # Offer interactive confirmation unless both flags were explicitly provided.
-    resolved_tool, resolved_model = confirm_ai_selection(
+    resolved_tool, resolved_model, resolved_effort = confirm_ai_selection(
         resolved_tool,
         resolved_model,
         tool_explicit=ai_explicit,
         model_explicit=model_explicit,
+        resolved_effort=resolved_effort,
+        effort_explicit=effort_explicit,
     )
     if not resolved_tool:
         console.error("No AI tool selected.")
@@ -484,7 +527,8 @@ def analyze_deps(
 
     # Run headless AI analysis
     console.step(f"Running {resolved_tool} for dependency analysis...")
-    output = run_headless_analysis(resolved_tool, prompt, resolved_model)
+    allowed_cmds = config.permissions.allowed_commands
+    output = run_headless_analysis(resolved_tool, prompt, resolved_model, allowed_cmds)
 
     if output and output_is_parseable(output):
         console.success("Headless analysis complete.")
@@ -500,6 +544,7 @@ def analyze_deps(
             prompt,
             resolved_model,
             plan_dir=None,
+            allowed_commands=allowed_cmds,
         )
 
     # Parse edges

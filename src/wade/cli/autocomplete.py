@@ -33,3 +33,11 @@ def complete_models(ctx: typer.Context, incomplete: str) -> list[str]:
     # Deduplicate and match prefix
     unique_candidates = sorted(set(candidates))
     return [m for m in unique_candidates if m.startswith(incomplete)]
+
+
+def complete_effort_levels(incomplete: str) -> list[str]:
+    """Autocomplete effort levels."""
+    from wade.models.ai import EffortLevel
+
+    levels = [e.value for e in EffortLevel]
+    return sorted([e for e in levels if e.startswith(incomplete)])

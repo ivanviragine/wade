@@ -9,6 +9,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
+from wade.models.review import ReviewThread
 from wade.models.task import Label, Task, TaskState
 
 
@@ -109,6 +110,20 @@ class AbstractTaskProvider(ABC):
     def update_pr_body(self, pr_number: str, body: str) -> None:
         """Update a PR's body text."""
         raise NotImplementedError(f"{type(self).__name__} does not support pull requests")
+
+    # --- PR review operations (optional) ---
+
+    def get_pr_review_threads(
+        self,
+        repo_root: Any,
+        pr_number: int,
+    ) -> list[ReviewThread]:
+        """Fetch PR review threads. Returns empty list by default."""
+        raise NotImplementedError(f"{type(self).__name__} does not support review threads")
+
+    def resolve_review_thread(self, thread_id: str) -> bool:
+        """Mark a PR review thread as resolved. Returns True on success."""
+        raise NotImplementedError(f"{type(self).__name__} does not support resolving threads")
 
     # --- Repository info ---
 

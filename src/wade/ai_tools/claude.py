@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+import json
+import shutil
 from pathlib import Path
 from typing import Any, ClassVar
+
+import structlog
 
 from wade.ai_tools.base import AbstractAITool
 from wade.models.ai import (
     AIToolCapabilities,
     AIToolID,
     AIToolType,
+    EffortLevel,
     TokenUsage,
 )
+
+logger = structlog.get_logger()
 
 
 class ClaudeAdapter(AbstractAITool):
@@ -28,6 +35,7 @@ class ClaudeAdapter(AbstractAITool):
             supports_model_flag=True,
             headless_flag="--print",
             supports_headless=True,
+            supports_effort=True,
         )
 
     def initial_message_args(self, prompt: str) -> list[str]:
@@ -71,7 +79,72 @@ class ClaudeAdapter(AbstractAITool):
             return re.sub(r"(\d)-(\d)", r"\1.\2", raw_model_id)
         return raw_model_id
 
-    def structured_output_args(self, json_schema: dict[str, Any]) -> list[str]:
-        import json
+    def preserve_session_data(self, worktree_path: Path, main_checkout_path: Path) -> bool:
+        """Copy Claude Code session data from worktree to main checkout's project dir.
 
+        Claude Code stores sessions in ``~/.claude/projects/<encoded-path>/``.
+        The path encoding replaces every ``/`` with ``-``, so
+        ``/Users/foo/bar`` becomes ``-Users-foo-bar``.
+
+        Files are copied without overwriting any that already exist in the
+        main checkout's session directory, so existing memory and settings are
+        preserved.
+        """
+        claude_projects_dir = Path.home() / ".claude" / "projects"
+
+        wt_encoded = str(worktree_path).replace("/", "-")
+        main_encoded = str(main_checkout_path).replace("/", "-")
+
+        wt_session_dir = claude_projects_dir / wt_encoded
+        main_session_dir = claude_projects_dir / main_encoded
+
+        if not wt_session_dir.exists():
+            logger.debug(
+                "claude.preserve_session_data.no_source",
+                worktree=str(worktree_path),
+            )
+            return True
+
+        main_session_dir.mkdir(parents=True, exist_ok=True)
+
+        copied = 0
+        for item in wt_session_dir.iterdir():
+            dest = main_session_dir / item.name
+            if dest.exists():
+                continue
+            if item.is_file():
+                shutil.copy2(item, dest)
+                copied += 1
+            elif item.is_dir():
+                shutil.copytree(item, dest)
+                copied += 1
+
+        logger.info(
+            "claude.preserve_session_data.copied",
+            worktree=str(worktree_path),
+            main=str(main_checkout_path),
+            items=copied,
+        )
+        return True
+
+    def session_data_dirs(self) -> list[str]:
+        return [".claude"]
+
+    def allowed_commands_args(self, commands: list[str]) -> list[str]:
+        """Translate canonical patterns to Claude --allowedTools flags.
+
+        Canonical ``"cmd args"`` becomes ``"Bash(cmd:args)"``.
+        """
+        from wade.config.claude_allowlist import canonical_to_claude
+
+        patterns = [canonical_to_claude(cmd) for cmd in commands]
+        if not patterns:
+            return []
+        return ["--allowedTools", *patterns]
+
+    def structured_output_args(self, json_schema: dict[str, Any]) -> list[str]:
         return ["--output-format", "json", "--json-schema", json.dumps(json_schema)]
+
+    def effort_args(self, effort: EffortLevel) -> list[str]:
+        """Claude uses ``--settings '{"effortLevel": "<level>"}'``."""
+        return ["--settings", json.dumps({"effortLevel": effort.value})]

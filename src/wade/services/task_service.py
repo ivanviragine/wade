@@ -28,6 +28,7 @@ LABEL_COLOR_IN_PROGRESS = "FBCA04"  # Yellow
 LABEL_COLOR_COMPLEXITY = "C5DEF5"  # Pale blue
 LABEL_COLOR_PLANNED = "BFD4F2"  # Light blue
 LABEL_COLOR_WORKED = "D4C5F9"  # Light purple
+LABEL_COLOR_REVIEWED = "E8D5F5"  # Lighter purple
 LABEL_COLOR_DEFAULT = "D3D3D3"  # Gray
 
 # ---------------------------------------------------------------------------
@@ -49,6 +50,8 @@ def _label_for_type(
         LabelType.PLANNED_MODEL: LABEL_COLOR_PLANNED,
         LabelType.WORKED_BY: LABEL_COLOR_WORKED,
         LabelType.WORKED_MODEL: LABEL_COLOR_WORKED,
+        LabelType.REVIEW_ADDRESSED_BY: LABEL_COLOR_REVIEWED,
+        LabelType.REVIEW_ADDRESSED_MODEL: LABEL_COLOR_REVIEWED,
     }
     return Label(
         name=name,
@@ -183,6 +186,41 @@ def add_worked_by_labels(
 
     logger.info(
         "labels.worked_by",
+        task_id=task_id,
+        tool=ai_tool,
+        model=model,
+    )
+
+
+def add_review_addressed_by_labels(
+    provider: AbstractTaskProvider,
+    task_id: str,
+    ai_tool: str | None = None,
+    model: str | None = None,
+) -> None:
+    """Add review-addressed-by labels (tool + optional model) to a task."""
+    if not ai_tool:
+        return
+
+    tool_label = _label_for_type(
+        LabelType.REVIEW_ADDRESSED_BY,
+        f"review-addressed-by:{ai_tool}",
+        f"Review addressed using {ai_tool}",
+    )
+    provider.ensure_label(tool_label)
+    provider.add_label(task_id, tool_label.name)
+
+    if model:
+        model_label = _label_for_type(
+            LabelType.REVIEW_ADDRESSED_MODEL,
+            f"review-addressed-model:{model}",
+            f"Review addressed with model {model}",
+        )
+        provider.ensure_label(model_label)
+        provider.add_label(task_id, model_label.name)
+
+    logger.info(
+        "labels.review_addressed_by",
         task_id=task_id,
         tool=ai_tool,
         model=model,

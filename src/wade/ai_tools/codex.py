@@ -10,7 +10,16 @@ from wade.models.ai import (
     AIToolCapabilities,
     AIToolID,
     AIToolType,
+    EffortLevel,
 )
+
+# Codex uses "xhigh" for our "max" level
+_CODEX_EFFORT_MAP: dict[EffortLevel, str] = {
+    EffortLevel.LOW: "low",
+    EffortLevel.MEDIUM: "medium",
+    EffortLevel.HIGH: "high",
+    EffortLevel.MAX: "xhigh",
+}
 
 
 class CodexAdapter(AbstractAITool):
@@ -27,6 +36,7 @@ class CodexAdapter(AbstractAITool):
             supports_model_flag=True,
             headless_flag=None,
             supports_headless=False,
+            supports_effort=True,
         )
 
     def initial_message_args(self, prompt: str) -> list[str]:
@@ -51,3 +61,8 @@ class CodexAdapter(AbstractAITool):
             return True
         # o1, o3, o4-mini etc.
         return bool(re.match(r"^o\d", lower))
+
+    def effort_args(self, effort: EffortLevel) -> list[str]:
+        """Codex uses ``-c model_reasoning_effort="<mapped>"``."""
+        mapped = _CODEX_EFFORT_MAP.get(effort, effort.value)
+        return ["-c", f'model_reasoning_effort="{mapped}"']

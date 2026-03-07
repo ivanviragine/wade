@@ -12,9 +12,11 @@ import os
 import shutil
 import subprocess
 import tempfile
+from enum import StrEnum
 from pathlib import Path
 
 import structlog
+from pydantic import BaseModel
 
 from wade.ai_tools.base import AbstractAITool
 from wade.ai_tools.transcript import (
@@ -22,12 +24,17 @@ from wade.ai_tools.transcript import (
     read_transcript_excerpt,
 )
 from wade.config.loader import load_config
-from wade.models.ai import AIToolID, TokenUsage
+from wade.models.ai import AIToolID, EffortLevel, TokenUsage
 from wade.models.config import ProjectConfig
 from wade.models.task import PlanFile, Task
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
-from wade.services.ai_resolution import confirm_ai_selection, resolve_ai_tool, resolve_model
+from wade.services.ai_resolution import (
+    confirm_ai_selection,
+    resolve_ai_tool,
+    resolve_effort,
+    resolve_model,
+)
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import (
     add_complexity_label,
@@ -119,6 +126,114 @@ def validate_plan_files(plan_dir: Path) -> list[PlanFile]:
 
 
 # ---------------------------------------------------------------------------
+# Plan-done validation (deterministic gate for planning sessions)
+# ---------------------------------------------------------------------------
+
+_RECOMMENDED_SECTIONS = ("tasks", "acceptance criteria")
+
+
+class PlanDiagnosticLevel(StrEnum):
+    ERROR = "error"
+    WARNING = "warning"
+
+
+class PlanDiagnostic(BaseModel):
+    """A single diagnostic message for a plan file."""
+
+    file: str
+    level: PlanDiagnosticLevel
+    message: str
+
+
+class PlanValidationResult(BaseModel):
+    """Aggregated validation result for all plan files in a directory."""
+
+    diagnostics: list[PlanDiagnostic] = []
+
+    @property
+    def errors(self) -> list[PlanDiagnostic]:
+        return [d for d in self.diagnostics if d.level == PlanDiagnosticLevel.ERROR]
+
+    @property
+    def warnings(self) -> list[PlanDiagnostic]:
+        return [d for d in self.diagnostics if d.level == PlanDiagnosticLevel.WARNING]
+
+    @property
+    def has_errors(self) -> bool:
+        return bool(self.errors)
+
+
+def validate_plan_dir(plan_dir: Path) -> PlanValidationResult:
+    """Validate all plan files in the directory.
+
+    Collects all errors and warnings across every ``.md`` file.
+
+    Errors (exit 1):
+    - No plan files found
+    - Missing ``# Title`` heading
+    - Missing or invalid ``## Complexity`` section
+
+    Warnings (exit 0):
+    - Missing recommended sections (``## Tasks``, ``## Acceptance Criteria``)
+    """
+    result = PlanValidationResult()
+    md_files = discover_plan_files(plan_dir)
+
+    if not md_files:
+        result.diagnostics.append(
+            PlanDiagnostic(
+                file="(none)",
+                level=PlanDiagnosticLevel.ERROR,
+                message="No plan files (.md) found in the plan directory.",
+            )
+        )
+        return result
+
+    for md_file in md_files:
+        try:
+            plan = PlanFile.from_markdown(md_file)
+        except (ValueError, OSError) as e:
+            result.diagnostics.append(
+                PlanDiagnostic(file=md_file.name, level=PlanDiagnosticLevel.ERROR, message=str(e))
+            )
+            continue
+
+        if plan.complexity is None:
+            result.diagnostics.append(
+                PlanDiagnostic(
+                    file=md_file.name,
+                    level=PlanDiagnosticLevel.ERROR,
+                    message=(
+                        "Missing or invalid '## Complexity' section. "
+                        "Must be one of: easy, medium, complex, very_complex."
+                    ),
+                )
+            )
+
+        for section in _RECOMMENDED_SECTIONS:
+            if section not in plan.sections:
+                heading = section.title()
+                result.diagnostics.append(
+                    PlanDiagnostic(
+                        file=md_file.name,
+                        level=PlanDiagnosticLevel.WARNING,
+                        message=f"Missing recommended section: '## {heading}'.",
+                    )
+                )
+
+    return result
+
+
+def plan_done(plan_dir: Path) -> PlanValidationResult:
+    """Validate plan files and return aggregated diagnostics.
+
+    The caller is responsible for rendering results and determining the exit code.
+    Use ``result.has_errors`` to check whether validation passed.
+    """
+    return validate_plan_dir(plan_dir)
+
+
+# ---------------------------------------------------------------------------
 # AI session runner
 # ---------------------------------------------------------------------------
 
@@ -129,6 +244,8 @@ def run_ai_planning_session(
     model: str | None = None,
     transcript_path: Path | None = None,
     issue_context: str | None = None,
+    effort: EffortLevel | None = None,
+    allowed_commands: list[str] | None = None,
 ) -> int:
     """Launch the AI CLI for a planning session.
 
@@ -175,6 +292,8 @@ def run_ai_planning_session(
         plan_mode=True,
         trusted_dirs=[str(Path.cwd()), tempfile.gettempdir(), plan_dir],
         initial_message=prompt,
+        effort=effort,
+        allowed_commands=allowed_commands,
     )
     console.info(f"Plan directory: {plan_dir}")
 
@@ -239,6 +358,8 @@ def plan(
     *,
     ai_explicit: bool = False,
     model_explicit: bool = False,
+    effort: str | None = None,
+    effort_explicit: bool = False,
 ) -> bool:
     """Run an AI-assisted planning session.
 
@@ -259,14 +380,19 @@ def plan(
 
     resolved_model = resolve_model(model, config, "plan", tool=resolved_tool)
 
+    # Resolve effort level
+    resolved_effort = resolve_effort(effort, config, "plan", tool=resolved_tool)
+
     console.rule("wade plan-task")
 
     # Offer interactive confirmation unless both flags were explicitly provided.
-    resolved_tool, resolved_model = confirm_ai_selection(
+    resolved_tool, resolved_model, resolved_effort = confirm_ai_selection(
         resolved_tool,
         resolved_model,
         tool_explicit=ai_explicit,
         model_explicit=model_explicit,
+        resolved_effort=resolved_effort,
+        effort_explicit=effort_explicit,
     )
     if not resolved_tool:
         console.error("No AI tool selected.")
@@ -319,6 +445,8 @@ def plan(
         model=resolved_model,
         transcript_path=transcript_path,
         issue_context=issue_context,
+        effort=resolved_effort,
+        allowed_commands=config.permissions.allowed_commands,
     )
     logger.info("plan.ai_exited", exit_code=exit_code)
 

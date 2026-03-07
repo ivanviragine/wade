@@ -19,6 +19,10 @@ Matches the v2 .wade.yml format:
         ...
     provider:
       name: github
+    permissions:
+      allowed_commands:
+        - "wade *"
+        - "./scripts/check.sh *"
     hooks:
       post_worktree_create: scripts/setup-worktree.sh
       copy_to_worktree:
@@ -66,6 +70,7 @@ class AICommandConfig(BaseModel):
 
     tool: str | None = None
     model: str | None = None
+    effort: str | None = None
 
 
 class AIConfig(BaseModel):
@@ -73,9 +78,20 @@ class AIConfig(BaseModel):
 
     default_tool: str | None = None
     default_model: str | None = None
+    effort: str | None = None
     plan: AICommandConfig = AICommandConfig()
     deps: AICommandConfig = AICommandConfig()
     work: AICommandConfig = AICommandConfig()
+
+
+class PermissionsConfig(BaseModel):
+    """Permission pre-authorization for AI tool sessions.
+
+    Canonical command patterns (e.g. ``"wade *"``, ``"./scripts/check.sh *"``)
+    are translated to tool-specific allowlist flags at launch time.
+    """
+
+    allowed_commands: list[str] = ["wade *"]
 
 
 class HooksConfig(BaseModel):
@@ -108,6 +124,7 @@ class ProjectConfig(BaseModel):
     ai: AIConfig = AIConfig()
     models: dict[str, ComplexityModelMapping] = {}
     provider: ProviderConfig = ProviderConfig()
+    permissions: PermissionsConfig = PermissionsConfig()
     hooks: HooksConfig = HooksConfig()
 
     # Resolved values (set after loading, not in YAML)
@@ -142,3 +159,14 @@ class ProjectConfig(BaseModel):
         if mapping:
             return getattr(mapping, complexity, None)
         return None
+
+    def get_effort(self, command: str | None = None) -> str | None:
+        """Get the effort level for a command, with fallback chain.
+
+        Fallback: command-specific effort → global ai.effort → None.
+        """
+        if command:
+            cmd_config = getattr(self.ai, command, None)
+            if isinstance(cmd_config, AICommandConfig) and cmd_config.effort:
+                return cmd_config.effort
+        return self.ai.effort

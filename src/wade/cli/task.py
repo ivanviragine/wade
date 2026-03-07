@@ -6,7 +6,7 @@ from pathlib import Path
 
 import typer
 
-from wade.cli.autocomplete import complete_ai_tools, complete_models
+from wade.cli.autocomplete import complete_ai_tools, complete_effort_levels, complete_models
 
 task_app = typer.Typer(
     help="GitHub Issue management.",
@@ -172,6 +172,12 @@ def deps(
     model: str | None = typer.Option(
         None, "--model", help="AI model to use.", autocompletion=complete_models
     ),
+    effort: str | None = typer.Option(
+        None,
+        "--effort",
+        help="Reasoning effort level: low, medium, high, max.",
+        autocompletion=complete_effort_levels,
+    ),
     check: bool = typer.Option(False, "--check", help="Validate existing dependencies."),
 ) -> None:
     """Analyze dependencies between issues."""
@@ -238,5 +244,7 @@ def deps(
         model=model,
         ai_explicit=ai is not None,
         model_explicit=model is not None,
+        effort=effort,
+        effort_explicit=effort is not None,
     )
     raise typer.Exit(0 if graph is not None else 1)

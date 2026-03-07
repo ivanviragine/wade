@@ -1,0 +1,70 @@
+name: Auto Version Bump
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  version-bump:
+    # Skip if the commit is already a version bump (from pre-push hook or this workflow)
+    if: "!startsWith(github.event.head_commit.message, 'chore: bump version')"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Detect bump type
+        id: detect
+        run: |
+          MSG="${{ github.event.head_commit.message }}"
+          FIRST_LINE=$(echo "$MSG" | head -n 1)
+
+          if echo "$MSG" | grep -q 'BREAKING CHANGE'; then
+            echo "bump=major" >> "$GITHUB_OUTPUT"
+          elif echo "$FIRST_LINE" | grep -qE '^[a-z]+(\(.+\))?!:'; then
+            echo "bump=major" >> "$GITHUB_OUTPUT"
+          elif echo "$FIRST_LINE" | grep -qE '^(feat|update)(\(.+\))?:'; then
+            echo "bump=minor" >> "$GITHUB_OUTPUT"
+          elif echo "$FIRST_LINE" | grep -qE '^(fix|docs|refactor|chore|style|perf|test|ci|build|revert)(\(.+\))?:'; then
+            echo "bump=patch" >> "$GITHUB_OUTPUT"
+          else
+            echo "bump=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip if no conventional commit
+        if: steps.detect.outputs.bump == ''
+        run: echo "No conventional commit prefix detected — skipping version bump."
+
+      - uses: actions/checkout@v4
+        if: steps.detect.outputs.bump != ''
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v3
+        if: steps.detect.outputs.bump != ''
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        if: steps.detect.outputs.bump != ''
+        run: uv python install 3.13
+
+      - name: Install dependencies
+        if: steps.detect.outputs.bump != ''
+        run: uv sync --all-extras
+
+      - name: Configure git
+        if: steps.detect.outputs.bump != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump version
+        if: steps.detect.outputs.bump != ''
+        run: uv run python scripts/auto_version.py ${{ steps.detect.outputs.bump }}
+
+      - name: Push commit and tag
+        if: steps.detect.outputs.bump != ''
+        run: |
+          git push
+          git push --tags

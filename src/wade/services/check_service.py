@@ -278,6 +278,14 @@ def _validate_config_file(config_path: Path) -> list[str]:
         else:
             _validate_provider_section(provider, errors)
 
+    # Validate permissions section
+    permissions = raw.get("permissions")
+    if permissions is not None:
+        if not isinstance(permissions, dict):
+            errors.append("permissions: must be a mapping")
+        else:
+            _validate_permissions_section(permissions, errors)
+
     # Validate hooks section
     hooks = raw.get("hooks")
     if hooks is not None:
@@ -287,7 +295,7 @@ def _validate_config_file(config_path: Path) -> list[str]:
             _validate_hooks_section(hooks, errors)
 
     # Check for unsupported top-level keys
-    supported_keys = {"version", "project", "ai", "models", "provider", "hooks"}
+    supported_keys = {"version", "project", "ai", "models", "provider", "permissions", "hooks"}
     for key in raw:
         if key not in supported_keys:
             errors.append(
@@ -398,6 +406,29 @@ def _validate_provider_section(provider: dict[str, Any], errors: list[str]) -> N
     for key in provider:
         if key not in valid_keys:
             errors.append(f"provider.{key}: unsupported key")
+
+
+def _validate_permissions_section(permissions: dict[str, Any], errors: list[str]) -> None:
+    """Validate the permissions section."""
+    allowed = permissions.get("allowed_commands")
+    if allowed is not None:
+        if not isinstance(allowed, list):
+            errors.append(
+                "permissions.allowed_commands: must be a list. "
+                "Use: allowed_commands: followed by '- <pattern>' items"
+            )
+        else:
+            for i, item in enumerate(allowed):
+                if not item or not str(item).strip():
+                    errors.append(
+                        f"permissions.allowed_commands[{i}]: item is empty. "
+                        "Use: - <command pattern>"
+                    )
+
+    valid_keys = {"allowed_commands"}
+    for key in permissions:
+        if key not in valid_keys:
+            errors.append(f"permissions.{key}: unsupported key")
 
 
 def _validate_hooks_section(hooks: dict[str, Any], errors: list[str]) -> None:
