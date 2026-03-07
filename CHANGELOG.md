@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.1.3] — 2026-03-06
+
+### Bug Fixes
+
+- prevent duplicate tracking issues in dependency analysis (8b660ae)
+
+### Other Changes
+
+- Make smart-start menu context-aware based on PR draft state and worktree (#102) (b7020cf)
+- Fix terminal tab title for address-reviews sessions (#99) (926dd70)
+
 ## [v0.1.2] — 2026-03-06
 
 ### CI/CD
