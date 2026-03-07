@@ -8,7 +8,9 @@ exists for the issue and presents a contextual menu:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import structlog
 
@@ -142,52 +144,88 @@ def smart_start(
     console.kv("Issue", console.issue_ref(task.id, task.title))
     console.kv("PR", f"#{pr_number_int} ({pr_state.lower()})")
 
+    # Extract draft state and worktree presence
+    is_draft = pr_info.get("isDraft", False)
+    worktrees = git_worktree.list_worktrees(repo_root)
+    has_worktree = any(wt.get("branch") == branch_name for wt in worktrees)
+
+    # Build dynamic menu based on PR state and worktree
+    menu_options: list[tuple[str, Callable[[], bool]]] = []
+
+    if is_draft:
+        # For draft PRs: show either "Start implementation" or "Continue working"
+        if has_worktree:
+            menu_options.append(
+                (
+                    "Continue working",
+                    _run_implement_task_wrapper(
+                        target,
+                        ai_tool,
+                        model,
+                        project_root,
+                        detach,
+                        cd_only,
+                        ai_explicit,
+                        model_explicit,
+                    ),
+                )
+            )
+        else:
+            menu_options.append(
+                (
+                    "Start implementation",
+                    _run_implement_task_wrapper(
+                        target,
+                        ai_tool,
+                        model,
+                        project_root,
+                        detach,
+                        cd_only,
+                        ai_explicit,
+                        model_explicit,
+                    ),
+                )
+            )
+    else:
+        # For ready PRs: show all three options
+        menu_options.append(
+            (
+                "Continue working",
+                _run_implement_task_wrapper(
+                    target,
+                    ai_tool,
+                    model,
+                    project_root,
+                    detach,
+                    cd_only,
+                    ai_explicit,
+                    model_explicit,
+                ),
+            )
+        )
+        menu_options.append(
+            (
+                "Address reviews",
+                _run_address_reviews_wrapper(
+                    target, ai_tool, model, project_root, detach, ai_explicit, model_explicit
+                ),
+            )
+        )
+        menu_options.append(
+            (
+                "Merge PR",
+                _run_merge_pr_wrapper(repo_root, branch_name, pr_number_int, task.id, worktrees),
+            )
+        )
+
+    labels = [label for label, _ in menu_options]
     choice = prompts.select(
         f"PR #{pr_number_int} exists — what do you want to do?",
-        ["Continue working", "Address reviews", "Merge PR"],
+        labels,
     )
 
-    if choice == 0:  # Continue working
-        return _run_implement_task(
-            target,
-            ai_tool,
-            model,
-            project_root,
-            detach,
-            cd_only,
-            ai_explicit=ai_explicit,
-            model_explicit=model_explicit,
-        )
-
-    if choice == 1:  # Address reviews
-        return _run_address_reviews(
-            target,
-            ai_tool,
-            model,
-            project_root,
-            detach,
-            ai_explicit=ai_explicit,
-            model_explicit=model_explicit,
-        )
-
-    # choice == 2: Merge PR
-    worktree_path = next(
-        (
-            Path(wt["path"])
-            for wt in git_worktree.list_worktrees(repo_root)
-            if wt.get("branch") == branch_name
-        ),
-        None,
-    )
-    _merge_pr(
-        repo_root,
-        branch_name,
-        pr_number_int,
-        task.id,
-        worktree_path,
-        provider,
-    )
-    return True
+    # Dispatch the selected action
+    return menu_options[choice][1]()
 
 
 def _run_implement_task(
@@ -238,3 +276,86 @@ def _run_address_reviews(
         ai_explicit=ai_explicit,
         model_explicit=model_explicit,
     )
+
+
+def _run_implement_task_wrapper(
+    target: str,
+    ai_tool: str | None,
+    model: str | None,
+    project_root: Path | None,
+    detach: bool,
+    cd_only: bool,
+    ai_explicit: bool,
+    model_explicit: bool,
+) -> Callable[[], bool]:
+    """Return a callable that runs _run_implement_task with captured arguments."""
+
+    def _impl() -> bool:
+        return _run_implement_task(
+            target=target,
+            ai_tool=ai_tool,
+            model=model,
+            project_root=project_root,
+            detach=detach,
+            cd_only=cd_only,
+            ai_explicit=ai_explicit,
+            model_explicit=model_explicit,
+        )
+
+    return _impl
+
+
+def _run_address_reviews_wrapper(
+    target: str,
+    ai_tool: str | None,
+    model: str | None,
+    project_root: Path | None,
+    detach: bool,
+    ai_explicit: bool,
+    model_explicit: bool,
+) -> Callable[[], bool]:
+    """Return a callable that runs _run_address_reviews with captured arguments."""
+
+    def _impl() -> bool:
+        return _run_address_reviews(
+            target=target,
+            ai_tool=ai_tool,
+            model=model,
+            project_root=project_root,
+            detach=detach,
+            ai_explicit=ai_explicit,
+            model_explicit=model_explicit,
+        )
+
+    return _impl
+
+
+def _run_merge_pr_wrapper(
+    repo_root: Path,
+    branch_name: str,
+    pr_number: int,
+    task_id: str,
+    worktrees: list[Any],
+) -> Callable[[], bool]:
+    """Return a callable that runs the merge PR logic with captured arguments."""
+
+    def _impl() -> bool:
+        from wade.config.loader import load_config
+        from wade.providers.registry import get_provider
+
+        provider = get_provider(load_config())
+        worktree_path = next(
+            (Path(wt["path"]) for wt in worktrees if wt.get("branch") == branch_name),
+            None,
+        )
+        _merge_pr(
+            repo_root,
+            branch_name,
+            pr_number,
+            task_id,
+            worktree_path,
+            provider,
+        )
+        return True
+
+    return _impl
