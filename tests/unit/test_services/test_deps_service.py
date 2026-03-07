@@ -7,8 +7,9 @@ from unittest.mock import MagicMock, patch
 
 from wade.models.config import ProjectConfig, ProjectSettings
 from wade.models.deps import DependencyEdge, DependencyGraph
-from wade.models.task import Task
+from wade.models.task import Task, TaskState
 from wade.services.deps_service import (
+    _find_existing_tracking_issue,
     _run_interactive_analysis,
     apply_deps_to_issues,
     build_context,
@@ -216,6 +217,7 @@ class TestApplyDeps:
 class TestCreateTrackingIssue:
     def test_creates_tracking_issue(self) -> None:
         provider = MagicMock()
+        provider.list_tasks.return_value = []
         provider.create_task.return_value = Task(id="10", title="Tracking: #1, #2, #3")
 
         config = ProjectConfig(project=ProjectSettings(issue_label="feature-plan"))
@@ -239,6 +241,7 @@ class TestCreateTrackingIssue:
 
     def test_title_for_many_issues(self) -> None:
         provider = MagicMock()
+        provider.list_tasks.return_value = []
         provider.create_task.return_value = Task(id="10", title="Tracking")
 
         config = ProjectConfig()
@@ -250,6 +253,7 @@ class TestCreateTrackingIssue:
 
     def test_title_for_few_issues(self) -> None:
         provider = MagicMock()
+        provider.list_tasks.return_value = []
         provider.create_task.return_value = Task(id="10", title="Tracking")
 
         config = ProjectConfig()
@@ -262,12 +266,66 @@ class TestCreateTrackingIssue:
 
     def test_handles_creation_failure(self) -> None:
         provider = MagicMock()
+        provider.list_tasks.return_value = []
         provider.create_task.side_effect = Exception("API error")
 
         config = ProjectConfig()
         graph = DependencyGraph(edges=[])
 
         result = create_tracking_issue(provider, config, ["1", "2", "3"], graph, {})
+        assert result is None
+
+    def test_skips_creation_when_duplicate_exists(self) -> None:
+        """Should return existing tracking issue ID instead of creating a duplicate."""
+        provider = MagicMock()
+        provider.list_tasks.return_value = [
+            Task(id="50", title="Tracking: #1, #2", state=TaskState.OPEN),
+        ]
+
+        config = ProjectConfig(project=ProjectSettings(issue_label="feature-plan"))
+        graph = DependencyGraph(edges=[])
+
+        result = create_tracking_issue(provider, config, ["1", "2"], graph, {})
+        assert result == "50"
+        provider.create_task.assert_not_called()
+
+    def test_creates_when_no_duplicate(self) -> None:
+        """Should create tracking issue when no existing duplicate is found."""
+        provider = MagicMock()
+        provider.list_tasks.return_value = [
+            Task(id="50", title="Tracking: #3, #4", state=TaskState.OPEN),
+        ]
+        provider.create_task.return_value = Task(id="60", title="Tracking: #1, #2")
+
+        config = ProjectConfig(project=ProjectSettings(issue_label="feature-plan"))
+        graph = DependencyGraph(edges=[])
+
+        result = create_tracking_issue(provider, config, ["1", "2"], graph, {})
+        assert result == "60"
+        provider.create_task.assert_called_once()
+
+
+class TestFindExistingTrackingIssue:
+    def test_finds_matching_issue(self) -> None:
+        provider = MagicMock()
+        provider.list_tasks.return_value = [
+            Task(id="10", title="Tracking: #1, #2", state=TaskState.OPEN),
+        ]
+        result = _find_existing_tracking_issue(provider, "feature-plan", "Tracking: #1, #2")
+        assert result == "10"
+
+    def test_returns_none_when_no_match(self) -> None:
+        provider = MagicMock()
+        provider.list_tasks.return_value = [
+            Task(id="10", title="Tracking: #3, #4", state=TaskState.OPEN),
+        ]
+        result = _find_existing_tracking_issue(provider, "feature-plan", "Tracking: #1, #2")
+        assert result is None
+
+    def test_returns_none_on_error(self) -> None:
+        provider = MagicMock()
+        provider.list_tasks.side_effect = Exception("API error")
+        result = _find_existing_tracking_issue(provider, "feature-plan", "Tracking: #1, #2")
         assert result is None
 
 

@@ -18,6 +18,7 @@ from wade.config.loader import load_config
 from wade.models.ai import AIToolID
 from wade.models.config import ProjectConfig
 from wade.models.deps import DependencyEdge, DependencyGraph
+from wade.models.task import TaskState
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.ai_resolution import (
@@ -250,6 +251,26 @@ def apply_deps_to_issues(
 # ---------------------------------------------------------------------------
 
 
+def _find_existing_tracking_issue(
+    provider: AbstractTaskProvider,
+    label: str,
+    title: str,
+) -> str | None:
+    """Check for an existing open tracking issue with the same title.
+
+    Returns the issue ID if found, None otherwise.
+    """
+    try:
+        open_issues = provider.list_tasks(label=label, state=TaskState.OPEN)
+        for issue in open_issues:
+            if issue.title == title:
+                return issue.id
+    except Exception:
+        # Non-fatal — fall through to create a new one
+        pass
+    return None
+
+
 def create_tracking_issue(
     provider: AbstractTaskProvider,
     config: ProjectConfig,
@@ -260,7 +281,22 @@ def create_tracking_issue(
     """Create a tracking issue with execution plan and dependency graph.
 
     Returns the tracking issue ID, or None on failure.
+    If a tracking issue with the same title already exists, returns
+    its ID instead of creating a duplicate.
     """
+    # Determine title first so we can check for duplicates
+    if len(issue_numbers) <= 3:
+        issue_refs = ", ".join(f"#{n}" for n in issue_numbers)
+        title = f"Tracking: {issue_refs}"
+    else:
+        title = f"Tracking: {len(issue_numbers)} issues"
+
+    # Check for existing tracking issue with the same title
+    existing_id = _find_existing_tracking_issue(provider, config.project.issue_label, title)
+    if existing_id:
+        console.info(f"Tracking issue #{existing_id} already exists — skipping creation")
+        return existing_id
+
     # Compute execution order
     try:
         ordered = graph.topo_sort(issue_numbers)
@@ -271,8 +307,8 @@ def create_tracking_issue(
     # Build checklist body
     lines = ["## Execution Plan", ""]
     for num in ordered:
-        title = task_titles.get(num, f"Issue #{num}")
-        lines.append(f"- [ ] #{num} — {title}")
+        title_text = task_titles.get(num, f"Issue #{num}")
+        lines.append(f"- [ ] #{num} — {title_text}")
     lines.append("")
 
     # Add Mermaid diagram
@@ -285,13 +321,6 @@ def create_tracking_issue(
     lines.append("")
 
     body = "\n".join(lines)
-
-    # Determine title
-    if len(issue_numbers) <= 3:
-        issue_refs = ", ".join(f"#{n}" for n in issue_numbers)
-        title = f"Tracking: {issue_refs}"
-    else:
-        title = f"Tracking: {len(issue_numbers)} issues"
 
     try:
         ensure_task_label(provider, config.project.issue_label)
