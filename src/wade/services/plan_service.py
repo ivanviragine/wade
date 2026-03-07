@@ -816,6 +816,12 @@ def _finalize_issues(
     return None
 
 
+def _print_implement_hint(issue_number: str) -> None:
+    """Print the hint for manually starting a work session."""
+    console.info("When you're ready to implement, run:")
+    console.detail(f"wade implement-task {issue_number}")
+
+
 def _offer_to_implement(issue_number: str) -> bool | None:
     """Prompt the user to start a work session on the newly planned issue.
 
@@ -823,8 +829,7 @@ def _offer_to_implement(issue_number: str) -> bool | None:
     or None if the prompt was skipped (non-TTY) or declined.
     """
     if not prompts.is_tty():
-        console.info("When you're ready to implement, run:")
-        console.detail(f"wade implement-task {issue_number}")
+        _print_implement_hint(issue_number)
         return None
 
     accepted = prompts.confirm(
@@ -832,8 +837,7 @@ def _offer_to_implement(issue_number: str) -> bool | None:
         default=True,
     )
     if not accepted:
-        console.info("When you're ready to implement, run:")
-        console.detail(f"wade implement-task {issue_number}")
+        _print_implement_hint(issue_number)
         return None
 
     try:
