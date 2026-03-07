@@ -93,7 +93,7 @@ class TestSmartStartOpenPR:
     ) -> None:
         mock_repo_root.return_value = tmp_path
         mock_get_provider.return_value.read_task.return_value = _make_task()
-        mock_pr.return_value = {"number": 99, "state": "OPEN"}
+        mock_pr.return_value = {"number": 99, "state": "OPEN", "isDraft": False}
 
         result = smart_start("42", project_root=tmp_path)
 
@@ -122,7 +122,7 @@ class TestSmartStartOpenPR:
     ) -> None:
         mock_repo_root.return_value = tmp_path
         mock_get_provider.return_value.read_task.return_value = _make_task()
-        mock_pr.return_value = {"number": 99, "state": "OPEN"}
+        mock_pr.return_value = {"number": 99, "state": "OPEN", "isDraft": False}
 
         result = smart_start("42", project_root=tmp_path)
 
@@ -152,12 +152,133 @@ class TestSmartStartOpenPR:
         mock_repo_root.return_value = tmp_path
         provider = mock_get_provider.return_value
         provider.read_task.return_value = _make_task()
-        mock_pr.return_value = {"number": 99, "state": "OPEN"}
+        mock_pr.return_value = {"number": 99, "state": "OPEN", "isDraft": False}
 
         result = smart_start("42", project_root=tmp_path)
 
         assert result is True
         mock_merge.assert_called_once()
+
+
+class TestSmartStartDraftPR:
+    """When a draft PR exists, shows context-aware menu based on worktree presence."""
+
+    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.ui.prompts.select", return_value=0)
+    @patch("wade.git.worktree.list_worktrees", return_value=[])
+    @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
+    @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.smart_start.git_repo.get_repo_root")
+    @patch("wade.services.smart_start.get_provider")
+    @patch("wade.services.smart_start.load_config")
+    def test_draft_pr_no_worktree_shows_start_implementation(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_branch: MagicMock,
+        mock_pr: MagicMock,
+        mock_worktrees: MagicMock,
+        mock_select: MagicMock,
+        mock_implement: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Draft PR with no worktree shows 'Start implementation' and calls _run_implement_task."""
+        mock_repo_root.return_value = tmp_path
+        mock_get_provider.return_value.read_task.return_value = _make_task()
+        mock_pr.return_value = {"number": 99, "state": "OPEN", "isDraft": True}
+        mock_worktrees.return_value = []
+
+        result = smart_start("42", project_root=tmp_path)
+
+        assert result is True
+        # Verify that prompts.select was called with a menu containing "Start implementation"
+        mock_select.assert_called_once()
+        call_args = mock_select.call_args
+        assert "Start implementation" in call_args[0][1]
+        # Verify that "Address reviews" and "Merge PR" are not in the menu
+        assert "Address reviews" not in call_args[0][1]
+        assert "Merge PR" not in call_args[0][1]
+        mock_implement.assert_called_once()
+
+    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.ui.prompts.select", return_value=0)
+    @patch(
+        "wade.git.worktree.list_worktrees",
+        return_value=[{"branch": "feat/42-fix", "path": "/tmp/wt"}],
+    )
+    @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
+    @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.smart_start.git_repo.get_repo_root")
+    @patch("wade.services.smart_start.get_provider")
+    @patch("wade.services.smart_start.load_config")
+    def test_draft_pr_with_worktree_shows_continue_working(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_branch: MagicMock,
+        mock_pr: MagicMock,
+        mock_worktrees: MagicMock,
+        mock_select: MagicMock,
+        mock_implement: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Draft PR with worktree shows 'Continue working' and calls _run_implement_task."""
+        mock_repo_root.return_value = tmp_path
+        mock_get_provider.return_value.read_task.return_value = _make_task()
+        mock_pr.return_value = {"number": 99, "state": "OPEN", "isDraft": True}
+
+        result = smart_start("42", project_root=tmp_path)
+
+        assert result is True
+        # Verify that prompts.select was called with a menu containing "Continue working"
+        mock_select.assert_called_once()
+        call_args = mock_select.call_args
+        assert "Continue working" in call_args[0][1]
+        # Verify that "Address reviews" and "Merge PR" are not in the menu
+        assert "Address reviews" not in call_args[0][1]
+        assert "Merge PR" not in call_args[0][1]
+        mock_implement.assert_called_once()
+
+    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.ui.prompts.select", return_value=0)
+    @patch("wade.git.worktree.list_worktrees", return_value=[])
+    @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
+    @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.smart_start.git_repo.get_repo_root")
+    @patch("wade.services.smart_start.get_provider")
+    @patch("wade.services.smart_start.load_config")
+    def test_draft_pr_no_address_reviews_or_merge_options(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_branch: MagicMock,
+        mock_pr: MagicMock,
+        mock_worktrees: MagicMock,
+        mock_select: MagicMock,
+        mock_implement: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Draft PR never shows 'Address reviews' or 'Merge PR' options."""
+        mock_repo_root.return_value = tmp_path
+        mock_get_provider.return_value.read_task.return_value = _make_task()
+        mock_pr.return_value = {"number": 99, "state": "OPEN", "isDraft": True}
+        mock_worktrees.return_value = []
+
+        smart_start("42", project_root=tmp_path)
+
+        # Verify that prompts.select was called
+        mock_select.assert_called_once()
+        call_args = mock_select.call_args
+        menu_options = call_args[0][1]
+
+        # Verify that only 1 option is present (either "Start implementation" or "Continue working")
+        assert len(menu_options) == 1
+        # Verify that "Address reviews" and "Merge PR" are not in the menu
+        assert "Address reviews" not in menu_options
+        assert "Merge PR" not in menu_options
 
 
 class TestSmartStartGitError:
