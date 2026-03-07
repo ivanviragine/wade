@@ -19,6 +19,7 @@ from wade.git import branch as git_branch
 from wade.git import pr as git_pr
 from wade.git import repo as git_repo
 from wade.git.repo import GitError
+from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.work_service import _merge_pr
 from wade.ui.console import console
@@ -214,7 +215,9 @@ def smart_start(
         menu_options.append(
             (
                 "Merge PR",
-                _run_merge_pr_wrapper(repo_root, branch_name, pr_number_int, task.id, worktrees),
+                _run_merge_pr_wrapper(
+                    repo_root, branch_name, pr_number_int, task.id, provider, worktrees
+                ),
             )
         )
 
@@ -335,19 +338,21 @@ def _run_merge_pr_wrapper(
     branch_name: str,
     pr_number: int,
     task_id: str,
+    provider: AbstractTaskProvider,
     worktrees: list[Any],
 ) -> Callable[[], bool]:
     """Return a callable that runs the merge PR logic with captured arguments."""
 
     def _impl() -> bool:
-        from wade.config.loader import load_config
-        from wade.providers.registry import get_provider
-
-        provider = get_provider(load_config())
         worktree_path = next(
             (Path(wt["path"]) for wt in worktrees if wt.get("branch") == branch_name),
             None,
         )
+        if worktree_path is None:
+            console.warn(
+                f"No local worktree found for branch '{branch_name}' — "
+                "local cleanup will be skipped after merge."
+            )
         _merge_pr(
             repo_root,
             branch_name,
