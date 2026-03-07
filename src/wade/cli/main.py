@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
 import typer
 
@@ -25,7 +24,7 @@ def cli_main() -> None:
         # Rewrite "wade 42 [flags]" → "wade smart-start 42 [flags]" so Typer
         # dispatches normally: the main callback runs (logging, update nag,
         # version banner) and any extra flags (--detach, --ai, etc.) are parsed.
-        # smart-start detects PR state and routes to implement-task or address-reviews.
+        # smart-start detects PR state and routes to implement or address-reviews.
         sys.argv = [sys.argv[0], "smart-start", *sys.argv[1:]]
     try:
         app()
@@ -92,16 +91,18 @@ def _interactive_main_menu() -> None:
 
     menu_items = [
         "Implement a task",
-        "List active worktrees",
-        "Create a new task",
+        "Address PR reviews",
         "Plan tasks with AI",
+        "Create a new task",
+        "List worktrees",
         "Show help",
     ]
     hints = [
-        "implement-task",
-        "work list",
-        "new-task",
-        "plan-task",
+        "implement / i",
+        "address-reviews / r",
+        "plan / p",
+        "task create",
+        "worktree list",
         "--help",
     ]
 
@@ -121,32 +122,41 @@ def _interactive_main_menu() -> None:
 
             success = do_start(target=target)
             raise typer.Exit(0 if success else 1)
-    elif idx == 1:  # List worktrees
-        from wade.services.work_service import list_sessions
+    elif idx == 1:  # Address reviews
+        from wade.services.task_service import prompt_task_selection
 
-        list_sessions()
-    elif idx == 2:  # Create task
-        from wade.services.task_service import create_interactive
+        target = prompt_task_selection("Issue number")
+        if target:
+            from wade.services.review_service import start as do_review
 
-        create_interactive()
-    elif idx == 3:  # Plan with AI
+            success = do_review(target=target)
+            raise typer.Exit(0 if success else 1)
+    elif idx == 2:  # Plan with AI
         from wade.services.plan_service import plan
 
         plan()
-    elif idx == 4:  # Help
+    elif idx == 3:  # Create task
+        from wade.services.task_service import create_interactive
+
+        create_interactive()
+    elif idx == 4:  # List worktrees
+        from wade.services.work_service import list_sessions
+
+        list_sessions()
+    elif idx == 5:  # Help
         typer.echo(app.info.help or "")
         raise typer.Exit(0)
 
     raise typer.Exit(0)
 
 
-# --- Top-level commands (clean break) ---
+# --- Top-level commands ---
 
 from wade.cli.autocomplete import complete_ai_tools, complete_effort_levels, complete_models  # noqa: E402, I001
 
 
-@app.command("plan-task")
-def plan_task_cmd(
+@app.command("plan", rich_help_panel="Workflow")
+def plan_cmd(
     issue: str | None = typer.Option(None, "--issue", "-i", help="Plan an existing issue by ID."),
     ai: str | None = typer.Option(
         None, "--ai", help="AI tool to use for planning.", autocompletion=complete_ai_tools
@@ -161,7 +171,7 @@ def plan_task_cmd(
         autocompletion=complete_effort_levels,
     ),
 ) -> None:
-    """Plan tasks with AI — creates lightweight issues + draft PRs."""
+    """Start a planning session with AI."""
     from wade.services.plan_service import plan as do_plan
 
     success = do_plan(
@@ -176,81 +186,8 @@ def plan_task_cmd(
     raise typer.Exit(0 if success else 1)
 
 
-@app.command("plan-done")
-def plan_done_cmd(
-    plan_dir: Path = typer.Argument(..., help="Path to the plan directory containing .md files."),  # noqa: B008
-) -> None:
-    """Validate plan files — run this before exiting a planning session."""
-    from wade.services.plan_service import plan_done as do_plan_done
-    from wade.ui.console import console
-
-    result = do_plan_done(plan_dir)
-
-    for diag in result.warnings:
-        console.warn(f"{diag.file}: {diag.message}")
-
-    for diag in result.errors:
-        console.error(f"{diag.file}: {diag.message}")
-
-    if result.has_errors:
-        n = len(result.errors)
-        console.error(f"Plan validation failed — {n} error(s) must be fixed before exiting.")
-        raise typer.Exit(1)
-
-    console.success(f"Plan validation passed ({len(result.warnings)} warning(s)).")
-    console.info(
-        "SESSION COMPLETE — do not implement anything. "
-        "Suggest the user to exit the session now. "
-        "wade will read the plan files and create GitHub issues automatically."
-    )
-    raise typer.Exit(0)
-
-
-@app.command("new-task")
-def new_task_cmd(
-    title: str | None = typer.Option(None, "--title", "-t", help="Issue title (non-interactive)."),
-    body: str | None = typer.Option(None, "--body", "-b", help="Issue body text."),
-    body_file: str | None = typer.Option(
-        None, "--body-file", help="Path to a file whose contents become the issue body."
-    ),
-    label: list[str] | None = typer.Option(  # noqa: B008
-        None, "--label", "-l", help="Extra label(s) to apply (can repeat)."
-    ),
-) -> None:
-    """Create a new GitHub Issue (interactive by default, non-interactive with --title)."""
-    from wade.ui.console import console
-
-    if title is not None:
-        from pathlib import Path
-
-        from wade.services.task_service import create_task
-
-        # Resolve body: --body-file takes precedence over --body
-        resolved_body = ""
-        if body_file:
-            bp = Path(body_file).expanduser()
-            if not bp.is_file():
-                console.error(f"File not found: {body_file}")
-                raise typer.Exit(1)
-            resolved_body = bp.read_text()
-        elif body:
-            resolved_body = body
-
-        task = create_task(title=title, body=resolved_body, extra_labels=list(label or []))
-    else:
-        from wade.services.task_service import create_interactive
-
-        task = create_interactive()
-
-    if task:
-        console.empty()
-        console.info("When you're ready to implement, run:")
-        console.detail(f"wade implement-task {task.id}")
-    raise typer.Exit(0 if task else 1)
-
-
-@app.command("implement-task")
-def implement_task_cmd(
+@app.command("implement", rich_help_panel="Workflow")
+def implement_cmd(
     target: str = typer.Argument(..., help="Issue number."),
     ai: list[str] | None = typer.Option(  # noqa: B008
         None, "--ai", help="AI tool to use.", autocompletion=complete_ai_tools
@@ -269,7 +206,7 @@ def implement_task_cmd(
         False, "--cd", help="Create worktree and print path (no AI launch)."
     ),
 ) -> None:
-    """Start an implementation session on an issue — detects draft PR plans."""
+    """Start an implementation session on an issue."""
     from wade.services.work_service import start as do_start
     from wade.ui import prompts
 
@@ -295,7 +232,61 @@ def implement_task_cmd(
     raise typer.Exit(0 if success else 1)
 
 
-@app.command("address-reviews")
+_BATCH_NUMBERS = typer.Argument(None, help="Issue numbers to work on.")
+
+
+@app.command("implement-batch", rich_help_panel="Workflow")
+def implement_batch_cmd(
+    numbers: list[int] | None = _BATCH_NUMBERS,
+    ai: str | None = typer.Option(
+        None, "--ai", help="AI tool to use.", autocompletion=complete_ai_tools
+    ),
+    model: str | None = typer.Option(
+        None, "--model", help="AI model to use.", autocompletion=complete_models
+    ),
+    effort: str | None = typer.Option(
+        None,
+        "--effort",
+        help="Reasoning effort level: low, medium, high, max.",
+        autocompletion=complete_effort_levels,
+    ),
+) -> None:
+    """Start parallel implementation sessions. [beta]"""
+    from wade.services.work_service import batch as do_batch
+    from wade.ui import prompts
+    from wade.ui.console import console
+
+    console.warn("Batch mode is in beta — please report issues.")
+    console.empty()
+
+    # Interactive picker if no numbers provided
+    if not numbers and prompts.is_tty():
+        from wade.services.task_service import prompt_multi_task_selection
+
+        selected_ids = prompt_multi_task_selection("Select issues for batch work")
+        if not selected_ids:
+            console.error("No issues selected.")
+            raise typer.Exit(1)
+
+        issue_ids = selected_ids
+    else:
+        if not numbers:
+            console.error("Provide at least one issue number.")
+            raise typer.Exit(1)
+        issue_ids = [str(n) for n in numbers]
+    success = do_batch(
+        issue_numbers=issue_ids,
+        ai_tool=ai,
+        model=model,
+        ai_explicit=ai is not None,
+        model_explicit=model is not None,
+        effort=effort,
+        effort_explicit=effort is not None,
+    )
+    raise typer.Exit(0 if success else 1)
+
+
+@app.command("address-reviews", rich_help_panel="Workflow")
 def address_reviews_cmd(
     target: str = typer.Argument(..., help="Issue number."),
     ai: list[str] | None = typer.Option(  # noqa: B008
@@ -306,7 +297,7 @@ def address_reviews_cmd(
     ),
     detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
 ) -> None:
-    """Address PR review comments — fetches unresolved threads and launches AI."""
+    """Address PR review comments."""
     from wade.services.review_service import start as do_start
     from wade.ui import prompts
 
@@ -328,29 +319,25 @@ def address_reviews_cmd(
     raise typer.Exit(0 if success else 1)
 
 
-@app.command("fetch-reviews")
-def fetch_reviews_cmd(
-    target: str = typer.Argument(..., help="Issue number."),
+@app.command("cd", rich_help_panel="Workflow")
+def cd_cmd(
+    target: str = typer.Argument(..., help="Issue number or worktree name."),
 ) -> None:
-    """Fetch unresolved PR review comments and print formatted markdown to stdout."""
-    from wade.services.review_service import fetch_reviews
+    """Navigate to a worktree (requires shell integration)."""
+    from wade.services.work_service import find_worktree_path
+    from wade.services.work_service import start as do_start
 
-    success = fetch_reviews(target=target)
+    path = find_worktree_path(target)
+    if path:
+        typer.echo(str(path))
+        raise typer.Exit(0)
+
+    # Worktree doesn't exist — create it (cd_only mode, no AI launch)
+    success = do_start(target=target, cd_only=True)
     raise typer.Exit(0 if success else 1)
 
 
-@app.command("resolve-thread")
-def resolve_thread_cmd(
-    thread_id: str = typer.Argument(..., help="GitHub review thread node ID."),
-) -> None:
-    """Mark a PR review thread as resolved on GitHub."""
-    from wade.services.review_service import resolve_thread
-
-    success = resolve_thread(thread_id=thread_id)
-    raise typer.Exit(0 if success else 1)
-
-
-@app.command("smart-start", hidden=True)
+@app.command("smart-start", rich_help_panel="Workflow")
 def smart_start_cmd(
     target: str = typer.Argument(..., help="Issue number."),
     ai: list[str] | None = typer.Option(  # noqa: B008
@@ -364,7 +351,7 @@ def smart_start_cmd(
         False, "--cd", help="Create worktree and print path (no AI launch)."
     ),
 ) -> None:
-    """Smart entry point — detects PR state and routes to the right command."""
+    """Smart start — routes to implement or address-reviews."""
     from wade.services.smart_start import smart_start
 
     selected_ai: str | None = None
@@ -388,15 +375,111 @@ def smart_start_cmd(
     raise typer.Exit(0 if success else 1)
 
 
-# Register subcommand groups
-from wade.cli.admin import admin_app  # noqa: E402
-from wade.cli.task import task_app  # noqa: E402
-from wade.cli.work import work_app  # noqa: E402
+# --- Hidden short aliases ---
 
-app.add_typer(task_app, name="task", help="GitHub Issue management.")
+
+@app.command("p", hidden=True)
+def plan_alias(
+    issue: str | None = typer.Option(None, "--issue", "-i", help="Plan an existing issue by ID."),
+    ai: str | None = typer.Option(
+        None, "--ai", help="AI tool to use for planning.", autocompletion=complete_ai_tools
+    ),
+    model: str | None = typer.Option(
+        None, "--model", help="AI model to use.", autocompletion=complete_models
+    ),
+    effort: str | None = typer.Option(
+        None,
+        "--effort",
+        help="Reasoning effort level: low, medium, high, max.",
+        autocompletion=complete_effort_levels,
+    ),
+) -> None:
+    """Alias for plan."""
+    plan_cmd(issue=issue, ai=ai, model=model, effort=effort)
+
+
+@app.command("i", hidden=True)
+def implement_alias(
+    target: str = typer.Argument(..., help="Issue number."),
+    ai: list[str] | None = typer.Option(  # noqa: B008
+        None, "--ai", help="AI tool to use.", autocompletion=complete_ai_tools
+    ),
+    model: str | None = typer.Option(
+        None, "--model", help="AI model to use.", autocompletion=complete_models
+    ),
+    effort: str | None = typer.Option(
+        None,
+        "--effort",
+        help="Reasoning effort level: low, medium, high, max.",
+        autocompletion=complete_effort_levels,
+    ),
+    detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
+    cd_only: bool = typer.Option(
+        False, "--cd", help="Create worktree and print path (no AI launch)."
+    ),
+) -> None:
+    """Alias for implement."""
+    implement_cmd(target=target, ai=ai, model=model, effort=effort, detach=detach, cd_only=cd_only)
+
+
+@app.command("r", hidden=True)
+def reviews_alias(
+    target: str = typer.Argument(..., help="Issue number."),
+    ai: list[str] | None = typer.Option(  # noqa: B008
+        None, "--ai", help="AI tool to use.", autocompletion=complete_ai_tools
+    ),
+    model: str | None = typer.Option(
+        None, "--model", help="AI model to use.", autocompletion=complete_models
+    ),
+    detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
+) -> None:
+    """Alias for address-reviews."""
+    address_reviews_cmd(target=target, ai=ai, model=model, detach=detach)
+
+
+# --- Register subcommand groups ---
+
+from wade.cli.address_reviews_session import reviews_session_app  # noqa: E402
+from wade.cli.admin import admin_app  # noqa: E402
+from wade.cli.implementation_session import impl_session_app  # noqa: E402
+from wade.cli.plan_session import plan_session_app  # noqa: E402
+from wade.cli.task import task_app  # noqa: E402
+from wade.cli.worktree import worktree_app  # noqa: E402
+
+app.add_typer(
+    task_app,
+    name="task",
+    help="Manage GitHub Issues (create, list, read, update, close, deps).",
+    rich_help_panel="Task Management",
+)
 app.add_typer(task_app, name="tasks", hidden=True)  # alias
-app.add_typer(work_app, name="work", help="Work session lifecycle.")
+app.add_typer(
+    worktree_app,
+    name="worktree",
+    help="Manage worktrees (list, remove, cd).",
+    rich_help_panel="Worktree Management",
+)
+
+app.add_typer(
+    plan_session_app,
+    name="plan-session",
+    help="Plan session commands (done).",
+    rich_help_panel="AI Session — Plan",
+)
+app.add_typer(
+    impl_session_app,
+    name="implementation-session",
+    help="Implementation session commands (check, sync, done).",
+    rich_help_panel="AI Session — Implementation",
+)
+app.add_typer(
+    reviews_session_app,
+    name="address-reviews-session",
+    help="Review session commands (check, sync, done, fetch, resolve).",
+    rich_help_panel="AI Session — Address Reviews",
+)
 
 # Admin commands are registered directly on the root app
 for command in admin_app.registered_commands:
+    command.rich_help_panel = "Setup"
     app.registered_commands.append(command)

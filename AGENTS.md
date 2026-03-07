@@ -108,7 +108,7 @@ When developing WADE, **only touch the left column**. Always edit `templates/ski
 - **Functions**: `snake_case` — `_` prefix for private helpers
 - **Constants**: `UPPER_SNAKE_CASE`
 - **Enums**: `StrEnum` for string-valued enums
-- **CLI commands**: top-level commands (`wade plan-task`, `wade implement-task`)
+- **CLI commands**: top-level commands (`wade plan`, `wade implement`)
 
 ### Commits
 
@@ -124,7 +124,7 @@ Before considering any work complete:
 - [ ] **Types + Lint** — `./scripts/check.sh` passes (or run both at once: `./scripts/check-all.sh`)
 - [ ] **`AGENTS.md`** — updated if architecture, conventions, or workflow changed
 - [ ] **`README.md`** — updated if user-facing behavior changed
-- [ ] **`templates/skills/`** — updated if agent-facing rules changed (plan-session for planning, work-session for implementation)
+- [ ] **`templates/skills/`** — updated if agent-facing rules changed (plan-session for planning, implementation-session for implementation, address-reviews-session for reviews)
 - [ ] **Commit** — uses conventional-commit prefix
 
 > Full 10-item checklist, documentation rules, feedback loop, and correction-driven docs: see `docs/dev/documentation-policies.md`
@@ -149,8 +149,8 @@ prompt for full session rules.
 
 Critical rules you must always follow:
 
-1. Never create GitHub Issues via `gh issue create` — use `wade new-task`
+1. Never create GitHub Issues via `gh issue create` — use `wade task create`
    or read @.claude/skills/task/SKILL.md
 2. Never create PRs manually (`gh pr create`) or push branches directly — use
-   `wade work done`
+   `wade implementation-session done`
 <!-- wade:pointer:end -->

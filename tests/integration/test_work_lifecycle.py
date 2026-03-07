@@ -1,6 +1,7 @@
 """Integration tests for the work session lifecycle.
 
-Tests the full flow: new-task → work start → work sync → work done.
+Tests the full flow:
+  task create → implement → implementation-session sync → implementation-session done.
 These tests use real git repos but mock the gh CLI and AI tools.
 """
 

@@ -1,29 +1,29 @@
 """Tests for terminal utilities."""
 
 from wade.utils.terminal import (
+    compose_implement_title,
     compose_plan_title,
     compose_review_title,
-    compose_work_title,
     start_title_keeper,
     stop_title_keeper,
 )
 
 
-class TestComposeWorkTitle:
+class TestComposeImplementTitle:
     def test_basic(self) -> None:
-        result = compose_work_title("42", "Add search command")
-        assert "wade work" in result
+        result = compose_implement_title("42", "Add search command")
+        assert "wade implement" in result
         assert "#42" in result
         assert "Add search command" in result
 
     def test_long_title_truncated(self) -> None:
         long_title = "A" * 100
-        result = compose_work_title("1", long_title)
+        result = compose_implement_title("1", long_title)
         assert "..." in result
         assert len(result) < 120
 
     def test_short_title_not_truncated(self) -> None:
-        result = compose_work_title("1", "Short")
+        result = compose_implement_title("1", "Short")
         assert "..." not in result
 
 

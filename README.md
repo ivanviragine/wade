@@ -31,10 +31,31 @@ wade 42
 
 WADE fetches the issue, detects whether it's been planned, and starts the right session automatically — planning if no plan exists yet, implementation if it does. Creates an isolated git worktree, launches your AI tool with the full issue loaded — title, description, labels, and all your project conventions — and Skills guide the AI from first commit to open PR without you touching git again.
 
+Finishing work and opening the PR:
+
+*Without* WADE:
+
+```bash
+git checkout main && git pull
+git checkout feat/issue-42-user-auth
+git merge main          # resolve conflicts yourself, if any
+git push
+gh pr create --title "User Auth (#42)" --body "..."   # write description manually
+# don't forget to link the issue, clean up the branch...
+```
+
+*With* WADE (the AI handles all of this):
+
+```bash
+wade implementation-session done
+```
+
+The AI merges the latest main into the branch, resolves any conflicts, writes the PR description from what it built, and marks it ready for review — you get a clean, already-integrated diff with no noise for your reviewer.
+
 Working on multiple issues at once:
 
 ```bash
-wade work batch 42 43 44   # three worktrees, three AI sessions, zero stashing
+wade implement-batch 42 43 44   # three worktrees, three AI sessions, zero stashing
 ```
 
 ## Why WADE
@@ -45,10 +66,11 @@ wade work batch 42 43 44   # three worktrees, three AI sessions, zero stashing
 | Copy-paste issue title + description into AI chat every time | Full issue context + project conventions loaded automatically |
 | One task at a time, or stash-juggle between branches | Parallel issues in isolated worktrees, zero conflicts |
 | Re-explain your branching rules, test commands, linters every session | Skills teach the AI your conventions once |
-| Forget to sync with main before opening a PR — merge conflicts for the reviewer | Branch synced with main automatically before every PR |
+| PRs opened on stale branches — reviewer sees conflict noise, asks for a rebase, CI fails | AI merges the latest main and resolves conflicts before the PR — reviewer sees only your changes |
 | Write the PR description, link the issue, clean up the branch — manually | The AI ships the PR. You just review |
 | Manually pick the right model for each task | Automatic model routing based on issue complexity |
-| Which terminal tab has which issue? No idea | Terminal title shows `wade work #42 — Feature Name` |
+| Which terminal tab has which issue? No idea | Terminal title shows `wade implement #42 — Feature Name` |
+| Which AI session worked on this issue? Which tool? Which model? | Every PR and issue logs the tool, model, and session resume command — for both Plan and Implement phases |
 
 ## Installation
 
@@ -61,8 +83,8 @@ curl -LsSf https://raw.githubusercontent.com/ivanviragine/wade/main/install.sh |
 Or, if you already have `uv` or `pipx`:
 
 ```bash
-uv tool install wade    # recommended
-pipx install wade
+uv tool install wade-cli    # recommended
+pipx install wade-cli
 ```
 
 Requires [gh CLI](https://cli.github.com/) (authenticated) and at least one supported AI coding tool.
@@ -83,7 +105,7 @@ Then start working:
 
 ```bash
 # Plan a feature — AI creates GitHub issues and draft PRs
-wade plan-task
+wade plan
 
 # Start working — WADE detects plan state and picks the right session automatically
 wade 42
@@ -93,19 +115,23 @@ wade 42
 
 | Command | Description |
 |---------|-------------|
-| `wade <N>` | Smart shorthand — routes to plan or implement automatically |
-| `wade work batch <N> <M> ...` | Start parallel sessions for multiple issues *(beta)* |
-| `wade plan-task` | AI planning session — creates issues + draft PRs |
-| `wade implement-task <N>` | Create worktree and start AI session for an issue |
-| `wade new-task` | Create a GitHub issue interactively |
+| `wade <N>` | Smart shorthand — routes to implement or address-reviews automatically |
+| `wade plan` | AI planning session — creates issues + draft PRs |
+| `wade implement <N>` | Create worktree and start AI session for an issue |
+| `wade implement-batch <N> <M> ...` | Start parallel sessions for multiple issues *(beta)* |
+| `wade address-reviews <N>` | Address PR review comments |
+| `wade cd <N>` | Navigate to a worktree (requires shell integration) |
+| `wade task create` | Create a GitHub issue interactively |
 | `wade task list` | List open issues |
 | `wade task read <N>` | Show issue details |
-| `wade work list` | List active worktrees |
-| `wade work remove <N>` | Remove a worktree |
+| `wade worktree list` | List active worktrees |
+| `wade worktree remove <N>` | Remove a worktree |
 | `wade init` | Initialize WADE in the current project |
 | `wade update` | Upgrade WADE and refresh project files |
 
-`plan-task` and `implement-task` accept `--ai <tool>` and `--model <model>` to override the configured defaults. `implement-task` also supports `--detach` (new terminal tab) and `--cd` (print worktree path only).
+Short aliases: `wade p` (plan), `wade i <N>` (implement), `wade r <N>` (address-reviews).
+
+`plan` and `implement` accept `--ai <tool>` and `--model <model>` to override the configured defaults. `implement` also supports `--detach` (new terminal tab) and `--cd` (print worktree path only).
 
 ## Supported AI Tools
 
@@ -127,12 +153,13 @@ wade 42
 |-------|---------|
 | `task` | GitHub issue creation and plan format |
 | `plan-session` | Planning session rules and workflow |
-| `work-session` | Implementation session rules and workflow |
+| `implementation-session` | Implementation session rules and workflow |
+| `address-reviews-session` | Review session rules and workflow |
 | `deps` | Dependency analysis between issues |
 
 ## Worktree Hooks
 
-Configure automated setup when worktrees are created via `wade implement-task` or `wade work batch`. Add a `hooks` section to `.wade.yml`:
+Configure automated setup when worktrees are created via `wade implement` or `wade implement-batch`. Add a `hooks` section to `.wade.yml`:
 
 ```yaml
 hooks:
@@ -150,7 +177,7 @@ See [`templates/setup-worktree.sh.example`](templates/setup-worktree.sh.example)
 
 ## Shell Integration
 
-To make `wade work cd <N>` actually change your directory (instead of just printing the path), add this to your shell profile:
+To make `wade cd <N>` actually change your directory (instead of just printing the path), add this to your shell profile:
 
 ```bash
 eval "$(wade shell-init)"

@@ -157,4 +157,4 @@ def test_issue_creation(tmp_wade_project: Path, mock_gh: Path) -> None:
 - Removed duplicate installed-binary CLI smoke (`--version`/`--help`) from E2E; kept canonical coverage in `tests/test_cli_basics.py`.
 - Replaced it with WADE-behavior live tests (`test_wade_live_gh.py`) and a gated live AI smoke (`test_wade_live_ai.py`).
 
-**When to skip re-running tests after `wade work sync`:** If the sync merge only brings in changes to documentation or template files (`templates/`, `docs/`, `README.md`, `AGENTS.md`, `CHANGELOG.md`), there is no need to re-run tests. Re-run tests after sync when the merged changes touch `src/`, `scripts/`, or `tests/`.
+**When to skip re-running tests after `wade implementation-session sync`:** If the sync merge only brings in changes to documentation or template files (`templates/`, `docs/`, `README.md`, `AGENTS.md`, `CHANGELOG.md`), there is no need to re-run tests. Re-run tests after sync when the merged changes touch `src/`, `scripts/`, or `tests/`.

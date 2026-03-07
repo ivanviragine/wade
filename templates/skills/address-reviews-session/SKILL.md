@@ -1,12 +1,12 @@
 ---
-name: review-session
+name: address-reviews-session
 description: >
   Rules for AI sessions that address PR review comments. Covers fetching
   review comments, verifying findings, making fixes, and pushing changes.
   Read this at the start of every review-addressing session.
 ---
 
-# Review Session Rules
+# Address Reviews Session Rules
 
 These rules govern AI sessions that address PR review comments.
 Read and follow them before performing any other action.
@@ -20,11 +20,11 @@ start.
 ## Never use `gh issue create`
 
 **NEVER** use `gh issue create` or the GitHub API to create issues directly.
-Always use `wade new-task` for interactive issue creation.
+Always use `wade task create` for interactive issue creation.
 
 ## First action: check your context
 
-Run `wade check` as your **first action**:
+Run `wade address-reviews-session check` as your **first action**:
 
 - `IN_WORKTREE` — you may proceed with work (code changes, commits, etc.)
 - `IN_MAIN_CHECKOUT` — **editing any source file is forbidden**. Tell the
@@ -33,7 +33,7 @@ Run `wade check` as your **first action**:
 
 ## Fetching review comments
 
-Use `wade fetch-reviews <issue-number>` to fetch all unresolved PR review
+Use `wade address-reviews-session fetch <issue-number>` to fetch all unresolved PR review
 comments. This outputs formatted markdown with:
 - Comments grouped by file
 - CodeRabbit AI-agent prompts extracted and highlighted
@@ -81,10 +81,10 @@ cohesive — don't mix unrelated fixes.
 After addressing a review comment, resolve the corresponding thread on GitHub:
 
 ```bash
-wade resolve-thread <thread-node-id>
+wade address-reviews-session resolve <thread-node-id>
 ```
 
-The thread ID is included in the output of `wade fetch-reviews`.
+The thread ID is included in the output of `wade address-reviews-session fetch`.
 
 ## Commit conventions
 
@@ -110,10 +110,10 @@ Add tests if a review comment identified a missing test case.
 Before finalizing, sync your branch with main:
 
 ```bash
-wade work sync --json
+wade address-reviews-session sync --json
 ```
 
-Handle conflicts as described in the work-session skill.
+Handle conflicts as described in the implementation-session skill.
 
 ## Closing the session
 
@@ -123,10 +123,10 @@ directly.
 To finalize your work:
 
 1. Write `PR-SUMMARY.md` in the worktree root describing what you addressed
-2. Run `wade work sync --json`
-3. Run `wade work done`
+2. Run `wade address-reviews-session sync --json`
+3. Run `wade address-reviews-session done`
 
-`wade work done` pushes changes to the existing PR branch.
+`wade address-reviews-session done` pushes changes to the existing PR branch.
 
 ## Skills reference
 

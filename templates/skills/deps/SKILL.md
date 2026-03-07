@@ -15,7 +15,7 @@ dependency graphs and update issue bodies.
 
 ## When to activate
 
-- After `wade plan-task` creates multiple issues
+- After `wade plan` creates multiple issues
 - When `wade task deps` is run on existing issues
 - When the user asks to analyze dependencies between issues
 

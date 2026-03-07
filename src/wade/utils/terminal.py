@@ -38,12 +38,12 @@ def set_terminal_title(title: str) -> None:
     sys.stderr.flush()
 
 
-def compose_work_title(issue_id: str, issue_title: str) -> str:
-    """Compose a terminal title for a work session.
+def compose_implement_title(issue_id: str, issue_title: str) -> str:
+    """Compose a terminal title for an implementation session.
 
-    Format: "wade work #42 — Feature Name"
+    Format: "wade implement #42 — Feature Name"
     """
-    return f"wade work #{issue_id} — {_truncate_terminal_title(issue_title)}"
+    return f"wade implement #{issue_id} — {_truncate_terminal_title(issue_title)}"
 
 
 def compose_review_title(issue_id: str, issue_title: str) -> str:

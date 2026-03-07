@@ -521,7 +521,7 @@ class TestReviewServiceStart:
         result = start(target="42")
         assert result is True
 
-        # Verify that no REVIEW-COMMENTS.md was written (AI uses wade fetch-reviews)
+        # Verify that no REVIEW-COMMENTS.md was written (AI uses wade address-reviews-session fetch)
         wt_paths = list(tmp_path.glob("wt"))
         assert len(wt_paths) == 1
         review_file = wt_paths[0] / "REVIEW-COMMENTS.md"

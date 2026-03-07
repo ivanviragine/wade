@@ -370,7 +370,7 @@ def test_lifecycle_skipped_in_detach_mode(
 @patch("wade.services.work_service.stop_title_keeper")
 @patch("wade.services.work_service.start_title_keeper")
 @patch("wade.services.work_service.set_terminal_title")
-@patch("wade.services.work_service.compose_work_title", return_value="title")
+@patch("wade.services.work_service.compose_implement_title", return_value="title")
 @patch("wade.services.work_service._detect_ai_cli_env", return_value=None)
 @patch("wade.services.work_service.add_in_progress_label")
 @patch("wade.services.work_service.bootstrap_worktree")

@@ -133,7 +133,7 @@ class TestBootstrapWorktree:
 
         # Create templates in the worktree (mimics a wade repo worktree checkout)
         skills_tpl = worktree / "templates" / "skills"
-        for skill_name in ("task", "plan-session", "work-session", "deps"):
+        for skill_name in ("task", "plan-session", "implementation-session", "deps"):
             (skills_tpl / skill_name).mkdir(parents=True, exist_ok=True)
             (skills_tpl / skill_name / "SKILL.md").write_text(f"# {skill_name}\n")
 
@@ -665,7 +665,7 @@ class TestWorkBatch:
         assert result is True
         assert mock_launch.call_count == 1  # Only the first in the chain
         launched_cmd = mock_launch.call_args[0][0]
-        assert launched_cmd[:3] == ["wade", "implement-task", "1"]
+        assert launched_cmd[:3] == ["wade", "implement", "1"]
 
     def test_warns_on_terminal_failure(self, tmp_path: Path) -> None:
         """One terminal fails → warns but continues and counts successful launches."""

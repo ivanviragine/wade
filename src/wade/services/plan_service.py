@@ -43,6 +43,7 @@ from wade.services.task_service import (
     ensure_task_label,
 )
 from wade.services.work_service import bootstrap_draft_pr
+from wade.services.work_service import start as start_work_session
 from wade.ui import prompts
 from wade.ui.console import console
 from wade.utils.markdown import append_session_to_body
@@ -383,7 +384,7 @@ def plan(
     # Resolve effort level
     resolved_effort = resolve_effort(effort, config, "plan", tool=resolved_tool)
 
-    console.rule("wade plan-task")
+    console.rule("wade plan")
 
     # Offer interactive confirmation unless both flags were explicitly provided.
     resolved_tool, resolved_model, resolved_effort = confirm_ai_selection(
@@ -485,7 +486,9 @@ def plan(
                 plan_files=plan_files,
                 repo_root=repo_root,
             )
-            _finalize_issues(
+            _cleanup_plan_dir(plan_dir)
+            stop_title_keeper()
+            offer_result = _finalize_issues(
                 provider=provider,
                 config=config,
                 issue_numbers=[existing_issue.id],
@@ -494,8 +497,8 @@ def plan(
                 usage=usage,
                 repo_root=repo_root,
             )
-            _cleanup_plan_dir(plan_dir)
-            stop_title_keeper()
+            if offer_result is not None:
+                return offer_result
             return True
         console.warn("No plan files found — the AI session may not have produced output.")
         _cleanup_plan_dir(plan_dir)
@@ -514,7 +517,9 @@ def plan(
             repo_root=repo_root,
         )
         if created_numbers:
-            _finalize_issues(
+            _cleanup_plan_dir(plan_dir)
+            stop_title_keeper()
+            offer_result = _finalize_issues(
                 provider=provider,
                 config=config,
                 issue_numbers=created_numbers,
@@ -523,8 +528,8 @@ def plan(
                 usage=usage,
                 repo_root=repo_root,
             )
-            _cleanup_plan_dir(plan_dir)
-            stop_title_keeper()
+            if offer_result is not None:
+                return offer_result
             return True
         console.warn("No issues were created from plan files.")
     else:
@@ -708,8 +713,12 @@ def _finalize_issues(
     model: str | None = None,
     usage: TokenUsage | None = None,
     repo_root: Path | None = None,
-) -> None:
-    """Finalize newly created issues: token summaries, labels, hints."""
+) -> bool | None:
+    """Finalize newly created issues: token summaries, labels, hints.
+
+    Returns a bool if the user accepted the offer to implement (single issue),
+    or None if no interactive offer was made.
+    """
     # Apply token usage to issue bodies
     if usage:
         apply_plan_token_usage(
@@ -796,9 +805,46 @@ def _finalize_issues(
 
     # Hint for next steps
     console.empty()
+    if len(issue_numbers) == 1:
+        result = _offer_to_implement(issue_numbers[0])
+        if result is not None:
+            return result
+    elif len(issue_numbers) >= 2:
+        console.info("When you're ready to implement, run:")
+        console.detail(f"wade implement-batch {' '.join(issue_numbers)}")
+
+    return None
+
+
+def _print_implement_hint(issue_number: str) -> None:
+    """Print the hint for manually starting a work session."""
     console.info("When you're ready to implement, run:")
-    if issue_numbers:
-        console.detail(f"wade implement-task {issue_numbers[0]}")
+    console.detail(f"wade implement {issue_number}")
+
+
+def _offer_to_implement(issue_number: str) -> bool | None:
+    """Prompt the user to start a work session on the newly planned issue.
+
+    Returns True/False if the user accepted/implementation session succeeded or failed,
+    or None if the prompt was skipped (non-TTY) or declined.
+    """
+    if not prompts.is_tty():
+        _print_implement_hint(issue_number)
+        return None
+
+    accepted = prompts.confirm(
+        f"Start implementing #{issue_number} now?",
+        default=True,
+    )
+    if not accepted:
+        _print_implement_hint(issue_number)
+        return None
+
+    try:
+        return start_work_session(target=issue_number)
+    except Exception:
+        logger.exception("plan.work_session_start_failed", issue=issue_number)
+        return False
 
 
 def _cleanup_plan_dir(plan_dir: str) -> None:
