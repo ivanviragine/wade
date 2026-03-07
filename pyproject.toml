@@ -90,6 +90,12 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-v --tb=short"
+markers = [
+    "live_gh: manual live tests requiring gh auth and network access",
+    "live_ai: manual live tests requiring real AI provider credentials",
+    "e2e_docker: deterministic e2e tests intended for docker/CI lanes",
+    "contract: behavior contract tests for CLI/service integration",
+]
 filterwarnings = [
     "error::ResourceWarning",
 ]

@@ -25,11 +25,17 @@ tests/
 │   ├── test_git.py
 │   ├── test_work_lifecycle.py
 │   └── test_skill_install.py
-├── e2e/                     # End-to-end smoke tests
-│   ├── test_live_workflow.py
-│   └── test_workflow_chain.py
-├── live/                    # Needs gh auth + network (gated by RUN_LIVE_GH_TESTS=1)
-│   └── test_gh_integration.py
+├── e2e/                     # End-to-end contract tests (mocked gh, deterministic)
+│   ├── conftest.py
+│   ├── _support.py
+│   ├── mock_gh_script.py
+│   ├── test_check_contract.py
+│   ├── test_task_contract.py
+│   ├── test_implement_work_done_contract.py
+│   └── test_work_sync_list_contract.py
+├── live/                    # Manual live lanes (env-gated)
+│   ├── test_wade_live_gh.py
+│   └── test_wade_live_ai.py
 └── fixtures/                # Static test data files
     ├── config_files/
     ├── plan_files/
@@ -57,9 +63,35 @@ tests/
 # With coverage
 ./scripts/test.sh --cov=wade --cov-report=term-missing
 
-# Live GitHub tests (requires real gh auth)
-RUN_LIVE_GH_TESTS=1 uv run python -m pytest tests/live/ -v
+# Deterministic end-to-end contract lane
+./scripts/test-e2e.sh
+
+# Manual live GitHub lane (requires real gh auth + repo)
+RUN_LIVE_GH_TESTS=1 WADE_LIVE_REPO=/path/to/repo ./scripts/test-live-gh.sh
+
+# Manual live AI lane (canonical: claude + haiku)
+RUN_LIVE_AI_TESTS=1 ANTHROPIC_API_KEY=... ./scripts/test-live-ai.sh
 ```
+
+Live scripts are strict by design: they fail fast when required env vars,
+credentials, or binaries are missing.
+
+## Pytest Markers
+
+- `e2e_docker`: deterministic e2e tests intended for docker/CI lanes
+- `contract`: behavior contract tests for CLI/service integration
+- `live_gh`: manual live tests requiring gh auth + network
+- `live_ai`: manual live tests requiring real AI credentials
+
+## Live Test Environment Contracts
+
+- `RUN_LIVE_GH_TESTS=1` enables live GitHub tests.
+- `RUN_LIVE_AI_TESTS=1` enables live AI tests.
+- `WADE_LIVE_AI_TOOL=claude` (default)
+- `WADE_LIVE_AI_MODEL=claude-haiku-4.5` (default)
+- `ANTHROPIC_API_KEY` is required for the canonical live AI smoke test.
+
+Live tests are manual by design. Default CI lanes must not require provider secrets.
 
 ## Test Fixtures
 
@@ -112,10 +144,17 @@ def test_issue_creation(tmp_wade_project: Path, mock_gh: Path) -> None:
 
 - Every bug fix must include a regression test that would fail before the fix.
 - Use mocks for `gh` CLI and AI tool subprocess calls in unit/integration tests.
-- For features that interact with GitHub, include at least one real `gh` integration test in `tests/live/`; mocks alone are not enough.
-- Gate live GitHub tests with `RUN_LIVE_GH_TESTS=1` and skip explicitly when prerequisites are missing.
+- Keep deterministic CI lanes secret-free (mocked `gh` and mocked AI tool process calls).
+- For features that interact with external providers, include at least one manual live WADE behavior test in `tests/live/`.
+- Gate live GitHub tests with `RUN_LIVE_GH_TESTS=1` and live AI tests with `RUN_LIVE_AI_TESTS=1`.
 - Prefer exact assertions over loose substring checks: verify outputs, side effects, and absence of wrong output.
 - For `--json` modes, parse stdout as JSON and fail if any non-JSON line appears.
 - Pure functions (parsing, formatting, model validation) can and should be tested without mocks.
+
+## Recent Cleanup
+
+- Removed low-value live smoke that only validated raw `gh` auth/repo access.
+- Removed duplicate installed-binary CLI smoke (`--version`/`--help`) from E2E; kept canonical coverage in `tests/test_cli_basics.py`.
+- Replaced it with WADE-behavior live tests (`test_wade_live_gh.py`) and a gated live AI smoke (`test_wade_live_ai.py`).
 
 **When to skip re-running tests after `wade work sync`:** If the sync merge only brings in changes to documentation or template files (`templates/`, `docs/`, `README.md`, `AGENTS.md`, `CHANGELOG.md`), there is no need to re-run tests. Re-run tests after sync when the merged changes touch `src/`, `scripts/`, or `tests/`.

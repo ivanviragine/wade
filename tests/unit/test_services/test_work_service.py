@@ -13,6 +13,7 @@ from wade.ai_tools.codex import CodexAdapter
 from wade.ai_tools.copilot import CopilotAdapter
 from wade.ai_tools.gemini import GeminiAdapter
 from wade.git.repo import GitError
+from wade.models.ai import TokenUsage
 from wade.models.config import (
     HooksConfig,
     ProjectConfig,
@@ -22,6 +23,7 @@ from wade.models.task import Task
 from wade.services.work_service import (
     _build_graph_from_issues,
     _build_work_issue_context_header,
+    _capture_post_session_usage,
     _parse_overwrite_paths,
     _pull_main_after_merge,
     _resolve_task_target,
@@ -836,3 +838,56 @@ class TestPullMainAfterMerge:
         mock_pop.assert_called_once_with(tmp_path)
         mock_console.warn.assert_called_once()
         mock_console.hint.assert_called_once()
+
+
+class TestCapturePostSessionUsage:
+    def test_session_only_updates_session_blocks_without_impl_usage(self, tmp_path: Path) -> None:
+        """Session-only transcript data should still be persisted to PR/issue bodies."""
+        transcript = tmp_path / ".transcript"
+        transcript.write_text("resume me\n")
+
+        adapter = MagicMock()
+        adapter.parse_transcript.return_value = TokenUsage(session_id="session-abc-123")
+
+        provider = MagicMock()
+        provider.read_task.return_value = Task(id="42", title="Test issue", body="Issue body\n")
+
+        with (
+            patch(
+                "wade.services.work_service.git_pr.get_pr_for_branch",
+                return_value={"number": 7},
+            ),
+            patch(
+                "wade.services.work_service.git_pr.get_pr_body",
+                return_value="PR body\n",
+            ),
+            patch(
+                "wade.services.work_service.git_pr.update_pr_body",
+                return_value=True,
+            ) as mock_update_pr,
+            patch("wade.services.work_service.console") as mock_console,
+        ):
+            model = _capture_post_session_usage(
+                transcript_path=transcript,
+                adapter=adapter,
+                repo_root=tmp_path,
+                branch="feat/42-test",
+                ai_tool="claude",
+                model=None,
+                issue_number="42",
+                provider=provider,
+            )
+
+        assert model is None
+        mock_console.warn.assert_not_called()
+
+        updated_pr_body = mock_update_pr.call_args.args[2]
+        assert "wade:sessions:start" in updated_pr_body
+        assert "session-abc-123" in updated_pr_body
+        assert "wade:impl-usage:start" not in updated_pr_body
+
+        provider.update_task.assert_called_once()
+        updated_issue_body = provider.update_task.call_args.kwargs["body"]
+        assert "wade:sessions:start" in updated_issue_body
+        assert "session-abc-123" in updated_issue_body
+        assert "wade:impl-usage:start" not in updated_issue_body

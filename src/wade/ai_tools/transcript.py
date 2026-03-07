@@ -205,7 +205,7 @@ def _extract_copilot_summary(text: str) -> tuple[TokenUsage | None, list[ModelBr
     # Per-model breakdown pattern (more specific, try first for breakdown)
     model_re = re.compile(
         r"^\s*"
-        r"(\S+)"  # model name
+        r"([A-Za-z]\S*)"  # model name must start with a letter
         r"\s+"
         r"([\d,.]+[kKmM]?)\s+in,\s+"
         r"([\d,.]+[kKmM]?)\s+out,\s+"
@@ -497,6 +497,38 @@ def _extract_generic_tokens(text: str) -> TokenUsage | None:
 
 
 # ---------------------------------------------------------------------------
+# Session ID extraction
+# ---------------------------------------------------------------------------
+
+_UUID_RE = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+
+_SESSION_ID_PATTERNS: list[re.Pattern[str]] = [
+    # Claude Code: "claude --resume <uuid>"
+    re.compile(r"claude\s+--resume\s+(" + _UUID_RE + r")", re.IGNORECASE),
+    # Copilot: "copilot --resume=<uuid>"
+    re.compile(r"copilot\s+--resume=(" + _UUID_RE + r")", re.IGNORECASE),
+    # Codex CLI: "codex resume <uuid>"
+    re.compile(r"codex\s+resume\s+(" + _UUID_RE + r")", re.IGNORECASE),
+    # Gemini CLI: "Session ID: <uuid>"
+    re.compile(r"Session\s+ID:\s+(" + _UUID_RE + r")", re.IGNORECASE),
+    # OpenCode: "opencode -s ses_<alphanum>"
+    re.compile(r"opencode\s+-s\s+(ses_[A-Za-z0-9]+)"),
+]
+
+
+def _extract_session_id(text: str) -> str | None:
+    """Extract the AI tool session ID from transcript text.
+
+    Returns the bare session ID (UUID or token), or ``None`` if none is found.
+    """
+    for pattern in _SESSION_ID_PATTERNS:
+        m = pattern.search(text)
+        if m:
+            return m.group(1)
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Unified extraction (cascading strategy)
 # ---------------------------------------------------------------------------
 
@@ -510,36 +542,49 @@ def extract_token_usage_from_text(text: str) -> TokenUsage:
     3. Claude footer format
     4. Codex footer format
     5. Generic keyword-based fallback
+
+    Session ID is extracted independently and attached to the result.
     """
     if not text.strip():
         return TokenUsage()
 
+    usage: TokenUsage | None = None
+
     # Strategy 1: Gemini table (most structured, highest priority)
     gemini_usage, _gemini_breakdowns = _extract_gemini_table(text)
     if gemini_usage is not None:
-        return gemini_usage
+        usage = gemini_usage
 
     # Strategy 2: Copilot summary (includes per-model + premium)
-    copilot_usage, _copilot_breakdowns = _extract_copilot_summary(text)
-    if copilot_usage is not None:
-        return copilot_usage
+    if usage is None:
+        copilot_usage, _copilot_breakdowns = _extract_copilot_summary(text)
+        if copilot_usage is not None:
+            usage = copilot_usage
 
     # Strategy 3: Claude footer
-    claude_usage = _extract_claude_footer(text)
-    if claude_usage is not None:
-        return claude_usage
+    if usage is None:
+        claude_usage = _extract_claude_footer(text)
+        if claude_usage is not None:
+            usage = claude_usage
 
     # Strategy 4: Codex footer
-    codex_usage = _extract_codex_footer(text)
-    if codex_usage is not None:
-        return codex_usage
+    if usage is None:
+        codex_usage = _extract_codex_footer(text)
+        if codex_usage is not None:
+            usage = codex_usage
 
     # Strategy 5: Generic fallback
-    generic_usage = _extract_generic_tokens(text)
-    if generic_usage is not None:
-        return generic_usage
+    if usage is None:
+        generic_usage = _extract_generic_tokens(text)
+        if generic_usage is not None:
+            usage = generic_usage
 
-    return TokenUsage()
+    if usage is None:
+        usage = TokenUsage()
+
+    # Always extract session ID regardless of token strategy used.
+    usage.session_id = _extract_session_id(text)
+    return usage
 
 
 def extract_model_breakdown_from_text(text: str) -> list[ModelBreakdown]:

@@ -182,10 +182,35 @@ class TestBuildImplUsageBlock:
         )
         block = build_impl_usage_block(ai_tool="claude", token_usage=usage)
         assert "### Model Breakdown" not in block
-        assert "| `claude-opus-4-6`" in block
-        assert "| `claude-haiku-4-5`" in block
-        assert "**3,000** in · **1,000** out · **500** cached" in block
-        assert "**400** in · **100** out" in block
+        # Multi-model: names appear as column headers, not row starters
+        assert "| Metric | Total | `claude-opus-4-6` | `claude-haiku-4-5` |" in block
+        assert "| Input tokens | **3,400** | **3,000** | **400** |" in block
+        assert "**400**" in block
+        # No standalone model-name rows (rows that start with the model name)
+        assert "\n| `claude-opus-4-6`" not in block
+        assert "\n| `claude-haiku-4-5`" not in block
+
+    def test_single_model_no_extra_row(self) -> None:
+        from wade.models.ai import ModelBreakdown
+
+        usage = TokenUsage(
+            total_tokens=1000,
+            input_tokens=800,
+            output_tokens=200,
+            model_breakdown=[
+                ModelBreakdown(model="claude-sonnet-4-6", input_tokens=800, output_tokens=200),
+            ],
+        )
+        block = build_impl_usage_block(
+            ai_tool="claude", model="claude-sonnet-4-6", token_usage=usage
+        )
+        # Single model stays 2-column
+        assert "| Metric | Value |" in block
+        assert "| Model | `claude-sonnet-4-6` |" in block
+        # No model-name column header
+        assert "| Metric | Total |" not in block
+        # No standalone breakdown row (rows that start with the model name)
+        assert "\n| `claude-sonnet-4-6`" not in block
 
     def test_with_premium_requests(self) -> None:
         usage = TokenUsage(

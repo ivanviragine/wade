@@ -12,7 +12,9 @@ uv pip install -e ".[dev]"
 ./scripts/test.sh                                                         # all tests (excludes live)
 ./scripts/test.sh tests/unit/                                             # unit tests only
 ./scripts/test.sh tests/integration/                                      # integration tests only
-RUN_LIVE_GH_TESTS=1 uv run python -m pytest tests/live/ -v               # live GitHub tests
+./scripts/test-e2e.sh                                                     # deterministic e2e contract lane
+RUN_LIVE_GH_TESTS=1 ./scripts/test-live-gh.sh                             # manual live GitHub lane
+RUN_LIVE_AI_TESTS=1 ./scripts/test-live-ai.sh                             # manual live AI lane
 
 # Run a single test file
 ./scripts/test.sh tests/unit/test_models/test_config.py

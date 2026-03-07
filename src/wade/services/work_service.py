@@ -389,20 +389,25 @@ def _capture_post_session_usage(
             current_body = git_pr.get_pr_body(repo_root, pr_number)
             if current_body is not None:
                 new_body = current_body
-                assert usage is not None
-                new_body = append_impl_usage_entry(
-                    new_body,
-                    ai_tool=ai_tool,
-                    model=effective_model,
-                    token_usage=usage,
-                )
+                if has_tokens:
+                    assert usage is not None
+                    new_body = append_impl_usage_entry(
+                        new_body,
+                        ai_tool=ai_tool,
+                        model=effective_model,
+                        token_usage=usage,
+                    )
                 if has_session:
                     assert usage is not None and usage.session_id is not None
                     new_body = append_session_to_body(
-                        new_body, phase="Implement", ai_tool=ai_tool, session_id=usage.session_id
+                        new_body,
+                        phase="Implement",
+                        ai_tool=ai_tool,
+                        session_id=usage.session_id,
                     )
                 if git_pr.update_pr_body(repo_root, pr_number, new_body):
-                    console.success("Updated PR with implementation usage stats.")
+                    if has_tokens:
+                        console.success("Updated PR with implementation usage stats.")
                     logger.info(
                         "work.impl_usage_updated",
                         pr=pr_number,
@@ -418,20 +423,25 @@ def _capture_post_session_usage(
         with contextlib.suppress(Exception):
             task = provider.read_task(str(issue_number))
             new_body = task.body
-            assert usage is not None
-            new_body = append_impl_usage_entry(
-                new_body,
-                ai_tool=ai_tool,
-                model=effective_model,
-                token_usage=usage,
-            )
+            if has_tokens:
+                assert usage is not None
+                new_body = append_impl_usage_entry(
+                    new_body,
+                    ai_tool=ai_tool,
+                    model=effective_model,
+                    token_usage=usage,
+                )
             if has_session:
                 assert usage is not None and usage.session_id is not None
                 new_body = append_session_to_body(
-                    new_body, phase="Implement", ai_tool=ai_tool, session_id=usage.session_id
+                    new_body,
+                    phase="Implement",
+                    ai_tool=ai_tool,
+                    session_id=usage.session_id,
                 )
             provider.update_task(str(issue_number), body=new_body)
-            console.success("Updated issue with implementation usage stats.")
+            if has_tokens:
+                console.success("Updated issue with implementation usage stats.")
             logger.info("work.impl_usage_issue_updated", issue=issue_number)
 
     return effective_model

@@ -229,6 +229,15 @@ class TestCopilotExtraction:
         premium = extract_premium_requests_from_text(text)
         assert premium == 2
 
+    def test_numeric_prefix_not_treated_as_model(self) -> None:
+        """A numeric 'model name' like 4 must not become a ModelBreakdown entry."""
+        text = "4 80 in, 2 out, 1 cached"
+        usage = extract_token_usage_from_text(text)
+        assert usage.input_tokens == 80
+        assert usage.output_tokens == 2
+        assert usage.cached_tokens == 1
+        assert usage.model_breakdown == []
+
     def test_fixture_file(self) -> None:
         """Real Copilot CLI transcript with ANSI escape codes."""
         usage = parse_copilot_transcript(FIXTURES / "copilot_session.txt")
@@ -552,3 +561,72 @@ class TestPremiumRequests:
     def test_case_insensitive(self) -> None:
         text = "Total usage est. 3 premium Requests"
         assert extract_premium_requests_from_text(text) == 3
+
+
+# ---------------------------------------------------------------------------
+# Session ID extraction
+# ---------------------------------------------------------------------------
+
+
+class TestSessionIdExtraction:
+    """Test that session IDs are extracted from transcript text into TokenUsage.session_id."""
+
+    def test_claude_session_id(self) -> None:
+        text = "Resume this session with:\nclaude --resume 144de606-0d30-4543-aa72-a68b78a48c7a\n"
+        usage = extract_token_usage_from_text(text)
+        assert usage.session_id == "144de606-0d30-4543-aa72-a68b78a48c7a"
+
+    def test_copilot_session_id(self) -> None:
+        text = "Resume this session with copilot --resume=dd37f445-a6a3-42f6-9e05-d248ff1ccd5f\n"
+        usage = extract_token_usage_from_text(text)
+        assert usage.session_id == "dd37f445-a6a3-42f6-9e05-d248ff1ccd5f"
+
+    def test_codex_session_id(self) -> None:
+        text = "To continue this session, run codex resume 019ca0aa-ab7c-78a0-b2df-1384ecc0a6aa\n"
+        usage = extract_token_usage_from_text(text)
+        assert usage.session_id == "019ca0aa-ab7c-78a0-b2df-1384ecc0a6aa"
+
+    def test_gemini_session_id(self) -> None:
+        text = "Session ID: 08a1bd70-9f2e-4de0-b3e0-74a1c5dc1920\n"
+        usage = extract_token_usage_from_text(text)
+        assert usage.session_id == "08a1bd70-9f2e-4de0-b3e0-74a1c5dc1920"
+
+    def test_opencode_session_id(self) -> None:
+        text = "Continue  opencode -s ses_34724f14cffeSB5NIFGTLdA0jN\n"
+        usage = extract_token_usage_from_text(text)
+        assert usage.session_id == "ses_34724f14cffeSB5NIFGTLdA0jN"
+
+    def test_no_session_id(self) -> None:
+        text = "Some output with no session information.\n"
+        usage = extract_token_usage_from_text(text)
+        assert usage.session_id is None
+
+    def test_empty_text(self) -> None:
+        usage = extract_token_usage_from_text("")
+        assert usage.session_id is None
+
+    def test_session_id_with_tokens(self) -> None:
+        """Session ID is extracted even when token usage is also present."""
+        text = (
+            "in: 45,000 · out: 3,200 · cache: 12,000\n"
+            "claude --resume a1b2c3d4-0000-0000-0000-000000000000\n"
+        )
+        usage = extract_token_usage_from_text(text)
+        assert usage.session_id == "a1b2c3d4-0000-0000-0000-000000000000"
+        assert usage.input_tokens == 45_000
+
+    def test_claude_fixture(self) -> None:
+        usage = parse_transcript_common(FIXTURES / "claude_session.txt")
+        assert usage.session_id == "144de606-0d30-4543-aa72-a68b78a48c7a"
+
+    def test_copilot_fixture(self) -> None:
+        usage = parse_transcript_common(FIXTURES / "copilot_session.txt")
+        assert usage.session_id == "dd37f445-a6a3-42f6-9e05-d248ff1ccd5f"
+
+    def test_codex_fixture(self) -> None:
+        usage = parse_transcript_common(FIXTURES / "codex_session.txt")
+        assert usage.session_id == "019ca0aa-ab7c-78a0-b2df-1384ecc0a6aa"
+
+    def test_gemini_fixture(self) -> None:
+        usage = parse_transcript_common(FIXTURES / "gemini_session.txt")
+        assert usage.session_id == "08a1bd70-9f2e-4de0-b3e0-74a1c5dc1920"

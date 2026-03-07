@@ -351,8 +351,12 @@ class TestRemoveWorktree:
 
 class TestPruneWorktrees:
     def test_prune_does_not_error_on_clean_repo(self, tmp_git_repo: Path) -> None:
-        # Should not raise even if there's nothing to prune
+        # Pruning a clean repo should preserve the existing worktree set.
+        before = list_worktrees(tmp_git_repo)
         prune_worktrees(tmp_git_repo)
+        after = list_worktrees(tmp_git_repo)
+        assert after == before
+        assert len(after) >= 1
 
 
 # ===========================================================================
