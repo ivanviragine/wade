@@ -18,6 +18,12 @@ logger = structlog.get_logger()
 _title_keeper_thread: threading.Thread | None = None
 _title_keeper_running = False
 
+_TERMINAL_TITLE_MAX_LEN = 50
+
+
+def _truncate_terminal_title(text: str) -> str:
+    return text[:_TERMINAL_TITLE_MAX_LEN] + "..." if len(text) > _TERMINAL_TITLE_MAX_LEN else text
+
 
 def is_tty() -> bool:
     """Check if stdout is connected to a terminal."""
@@ -37,9 +43,15 @@ def compose_work_title(issue_id: str, issue_title: str) -> str:
 
     Format: "wade work #42 — Feature Name"
     """
-    max_title = 50
-    title = issue_title[:max_title] + "..." if len(issue_title) > max_title else issue_title
-    return f"wade work #{issue_id} — {title}"
+    return f"wade work #{issue_id} — {_truncate_terminal_title(issue_title)}"
+
+
+def compose_review_title(issue_id: str, issue_title: str) -> str:
+    """Compose a terminal title for an address-reviews session.
+
+    Format: "wade address-reviews #42 — Feature Name"
+    """
+    return f"wade address-reviews #{issue_id} — {_truncate_terminal_title(issue_title)}"
 
 
 def compose_plan_title(issue_id: str | None, issue_title: str | None) -> str:
@@ -49,9 +61,7 @@ def compose_plan_title(issue_id: str | None, issue_title: str | None) -> str:
     """
     if not issue_id:
         return "wade plan"
-    max_title = 50
-    title = issue_title or ""
-    title = title[:max_title] + "..." if len(title) > max_title else title
+    title = _truncate_terminal_title(issue_title or "")
     return f"wade plan #{issue_id} — {title}" if title else f"wade plan #{issue_id}"
 
 

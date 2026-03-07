@@ -2,6 +2,7 @@
 
 from wade.utils.terminal import (
     compose_plan_title,
+    compose_review_title,
     compose_work_title,
     start_title_keeper,
     stop_title_keeper,
@@ -45,6 +46,24 @@ class TestComposePlanTitle:
 
     def test_short_title_not_truncated(self) -> None:
         result = compose_plan_title("1", "Short")
+        assert "..." not in result
+
+
+class TestComposeReviewTitle:
+    def test_basic(self) -> None:
+        result = compose_review_title("42", "Add search command")
+        assert "wade address-reviews" in result
+        assert "#42" in result
+        assert "Add search command" in result
+
+    def test_long_title_truncated(self) -> None:
+        long_title = "A" * 100
+        result = compose_review_title("1", long_title)
+        assert "..." in result
+        assert len(result) < 120
+
+    def test_short_title_not_truncated(self) -> None:
+        result = compose_review_title("1", "Short")
         assert "..." not in result
 
 

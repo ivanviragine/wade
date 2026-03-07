@@ -44,7 +44,7 @@ from wade.services.work_service import (
 from wade.ui.console import console
 from wade.utils.markdown import append_session_to_body
 from wade.utils.terminal import (
-    compose_work_title,
+    compose_review_title,
     launch_in_new_terminal,
     set_terminal_title,
     start_title_keeper,
@@ -323,9 +323,9 @@ def start(
         return True
 
     # Set terminal title
-    work_title = compose_work_title(task.id, task.title)
-    set_terminal_title(f"review {work_title}")
-    start_title_keeper(f"review {work_title}")
+    review_title = compose_review_title(task.id, task.title)
+    set_terminal_title(review_title)
+    start_title_keeper(review_title)
 
     # Transcript capture
     transcript_path: Path | None = None
@@ -350,7 +350,7 @@ def start(
             cmd = [resolved_tool]
 
         console.step(f"Launching {resolved_tool} in new terminal...")
-        if launch_in_new_terminal(cmd, cwd=str(worktree_path), title=f"review {work_title}"):
+        if launch_in_new_terminal(cmd, cwd=str(worktree_path), title=review_title):
             console.success(f"Detached review session for #{task.id}")
             stop_title_keeper()
             return True
