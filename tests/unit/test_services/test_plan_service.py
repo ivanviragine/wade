@@ -12,6 +12,7 @@ from wade.models.task import PlanFile
 from wade.services.ai_resolution import resolve_ai_tool, resolve_model
 from wade.services.plan_service import (
     _finalize_issues,
+    _offer_to_implement,
     discover_plan_files,
     get_plan_prompt_template,
     plan_done,
@@ -585,3 +586,149 @@ class TestPlanDone:
         result = plan_done(tmp_path)
         assert not result.has_errors
         assert result.warnings
+
+
+# ---------------------------------------------------------------------------
+# _offer_to_implement tests
+# ---------------------------------------------------------------------------
+
+
+class TestOfferToImplement:
+    """Tests for _offer_to_implement helper."""
+
+    def test_user_accepts_starts_work_session(self) -> None:
+        """Accepting the prompt calls start_work_session and returns its result."""
+        with (
+            patch("wade.services.plan_service.prompts") as mock_prompts,
+            patch("wade.services.plan_service.start_work_session") as mock_start,
+            patch("wade.services.plan_service.console"),
+        ):
+            mock_prompts.is_tty.return_value = True
+            mock_prompts.confirm.return_value = True
+            mock_start.return_value = True
+
+            result = _offer_to_implement("42")
+
+            assert result is True
+            mock_start.assert_called_once_with(target="42")
+
+    def test_user_declines_returns_none(self) -> None:
+        """Declining the prompt returns None without calling start."""
+        with (
+            patch("wade.services.plan_service.prompts") as mock_prompts,
+            patch("wade.services.plan_service.start_work_session") as mock_start,
+            patch("wade.services.plan_service.console"),
+        ):
+            mock_prompts.is_tty.return_value = True
+            mock_prompts.confirm.return_value = False
+
+            result = _offer_to_implement("42")
+
+            assert result is None
+            mock_start.assert_not_called()
+
+    def test_non_tty_prints_static_hint(self) -> None:
+        """Non-TTY environments skip the prompt and show a static hint."""
+        with (
+            patch("wade.services.plan_service.prompts") as mock_prompts,
+            patch("wade.services.plan_service.start_work_session") as mock_start,
+            patch("wade.services.plan_service.console") as mock_console,
+        ):
+            mock_prompts.is_tty.return_value = False
+
+            result = _offer_to_implement("42")
+
+            assert result is None
+            mock_prompts.confirm.assert_not_called()
+            mock_start.assert_not_called()
+            mock_console.detail.assert_called_once_with("wade implement-task 42")
+
+    def test_work_session_failure_returns_false(self) -> None:
+        """If start_work_session fails, the failure is propagated."""
+        with (
+            patch("wade.services.plan_service.prompts") as mock_prompts,
+            patch("wade.services.plan_service.start_work_session") as mock_start,
+            patch("wade.services.plan_service.console"),
+        ):
+            mock_prompts.is_tty.return_value = True
+            mock_prompts.confirm.return_value = True
+            mock_start.return_value = False
+
+            result = _offer_to_implement("42")
+
+            assert result is False
+
+    def test_work_session_exception_returns_false(self) -> None:
+        """If start_work_session raises, the exception is caught and False returned."""
+        with (
+            patch("wade.services.plan_service.prompts") as mock_prompts,
+            patch("wade.services.plan_service.start_work_session") as mock_start,
+            patch("wade.services.plan_service.console"),
+            patch("wade.services.plan_service.logger"),
+        ):
+            mock_prompts.is_tty.return_value = True
+            mock_prompts.confirm.return_value = True
+            mock_start.side_effect = RuntimeError("boom")
+
+            result = _offer_to_implement("42")
+
+            assert result is False
+
+
+# ---------------------------------------------------------------------------
+# _finalize_issues hint tests
+# ---------------------------------------------------------------------------
+
+
+class TestFinalizeIssuesHints:
+    """Tests for the next-steps hint logic in _finalize_issues."""
+
+    def _make_provider(self) -> MagicMock:
+        provider = MagicMock()
+        task = MagicMock()
+        task.id = "1"
+        task.title = "Test issue"
+        task.body = ""
+        provider.read_task.return_value = task
+        return provider
+
+    def _make_config(self) -> MagicMock:
+        return MagicMock()
+
+    def test_single_issue_calls_offer(self) -> None:
+        """Single issue triggers _offer_to_implement."""
+        with (
+            patch("wade.services.plan_service._offer_to_implement") as mock_offer,
+            patch("wade.services.plan_service.apply_plan_token_usage"),
+            patch("wade.services.plan_service.add_planned_by_labels"),
+            patch("wade.services.plan_service.console"),
+        ):
+            mock_offer.return_value = True
+
+            result = _finalize_issues(
+                provider=self._make_provider(),
+                config=self._make_config(),
+                issue_numbers=["1"],
+            )
+
+            mock_offer.assert_called_once_with("1")
+            assert result is True
+
+    def test_multiple_issues_shows_batch_hint(self) -> None:
+        """Multiple issues show wade work batch hint, not offer prompt."""
+        with (
+            patch("wade.services.plan_service._offer_to_implement") as mock_offer,
+            patch("wade.services.plan_service.apply_plan_token_usage"),
+            patch("wade.services.plan_service.add_planned_by_labels"),
+            patch("wade.services.plan_service.console") as mock_console,
+            patch("wade.services.deps_service.analyze_deps", return_value=None),
+        ):
+            result = _finalize_issues(
+                provider=self._make_provider(),
+                config=self._make_config(),
+                issue_numbers=["1", "2", "3"],
+            )
+
+            mock_offer.assert_not_called()
+            mock_console.detail.assert_called_with("wade work batch 1 2 3")
+            assert result is None
