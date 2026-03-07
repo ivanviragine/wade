@@ -15,8 +15,10 @@ jobs:
     steps:
       - name: Detect bump type
         id: detect
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
-          MSG="${{ github.event.head_commit.message }}"
+          MSG="$COMMIT_MSG"
           FIRST_LINE=$(echo "$MSG" | head -n 1)
 
           if echo "$MSG" | grep -q 'BREAKING CHANGE'; then
