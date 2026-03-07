@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.1.2] — 2026-03-06
+
+### CI/CD
+
+- add auto version bump workflow on PR merge (3a57876)
+
+### Other Changes
+
+- Add model thinking/effort mode support (#81) (7c57dc3)
+
 ## [v0.1.1] — 2026-03-06
 
 ### Bug Fixes
