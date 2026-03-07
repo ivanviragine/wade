@@ -125,7 +125,11 @@ def create(
             if not bp.is_file():
                 console.error(f"File not found: {body_file}")
                 raise typer.Exit(1)
-            resolved_body = bp.read_text()
+            try:
+                resolved_body = bp.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as e:
+                console.error(f"Could not read {body_file}: {e}")
+                raise typer.Exit(1) from None
         elif body:
             resolved_body = body
 

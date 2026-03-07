@@ -57,7 +57,7 @@ from wade.ui import prompts
 from wade.ui.console import console
 from wade.utils.markdown import append_session_to_body, remove_marker_block
 from wade.utils.terminal import (
-    compose_work_title,
+    compose_implement_title,
     launch_in_new_terminal,
     set_terminal_title,
     start_title_keeper,
@@ -907,7 +907,7 @@ def start(
             return True
 
         # Set terminal title
-        work_title = compose_work_title(task.id, task.title)
+        work_title = compose_implement_title(task.id, task.title)
         set_terminal_title(work_title)
         start_title_keeper(work_title)
 
@@ -2292,10 +2292,13 @@ def list_sessions(
     show_all: bool = False,
     json_output: bool = False,
     project_root: Path | None = None,
+    silent: bool = False,
 ) -> list[dict[str, Any]]:
     """List active work sessions / worktrees.
 
     Returns a list of dicts with worktree info (path, branch, issue, staleness).
+    When *silent* is True, skips all console output (useful for callers that
+    only need the data, e.g. interactive pickers).
     """
     config = load_config(project_root)
     cwd = project_root or Path.cwd()
@@ -2366,6 +2369,9 @@ def list_sessions(
             "commits_ahead": ahead,
         }
         sessions.append(session_info)
+
+    if silent:
+        return sessions
 
     if json_output:
         console.raw(json.dumps(sessions, indent=2))

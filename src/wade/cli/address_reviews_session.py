@@ -6,6 +6,8 @@ from pathlib import Path
 
 import typer
 
+from wade.models.work import SyncEventType
+
 reviews_session_app = typer.Typer(
     help="Review session commands (check, sync, done, fetch, resolve).",
 )
@@ -49,7 +51,7 @@ def sync(
     elif result.conflicts:
         raise typer.Exit(2)
     elif any(
-        e.event == "error"
+        e.event == SyncEventType.ERROR
         and e.data.get("reason")
         in (
             "not_git_repo",

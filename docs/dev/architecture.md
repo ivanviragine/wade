@@ -260,7 +260,7 @@ When wade installs skills into a target project (`wade init`), the skills refere
 - `--cd` — Create worktree, print its path to stdout, and exit (no AI launch). Used internally by `wade cd`.
 
 **`wade implementation-session done`:**
-- `target` (positional) — Optional issue number, worktree name, or plan file path. If a file path, creates the issue first. If a number/name, finds the worktree. If omitted, detects from current branch.
+- `target` (positional) — Optional issue number, worktree name, or plan file path. When a file path is given, creates the issue first; when a number/name, finds the worktree; when omitted, detects from current branch.
 - `--no-close` — Don't close the issue on merge.
 - `--draft` — Create PR as draft.
 - `--no-cleanup` — Keep the worktree after direct merge (no effect in PR strategy, which already preserves worktrees).

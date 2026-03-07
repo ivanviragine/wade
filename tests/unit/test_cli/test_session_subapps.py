@@ -36,7 +36,8 @@ class TestImplementationSessionSubApp:
         assert result.exit_code == 1
         assert "NOT_IN_GIT_REPO" in result.output
 
-    def test_sync_not_in_repo(self) -> None:
+    def test_sync_not_in_repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["implementation-session", "sync"])
         # Not in a worktree → preflight failure (exit 4)
         assert result.exit_code == 4
@@ -67,7 +68,8 @@ class TestAddressReviewsSessionSubApp:
         assert result.exit_code == 1
         assert "NOT_IN_GIT_REPO" in result.output
 
-    def test_sync_not_in_repo(self) -> None:
+    def test_sync_not_in_repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["address-reviews-session", "sync"])
         assert result.exit_code == 4
 
@@ -123,7 +125,8 @@ class TestWorktreeSubApp:
     """Tests for ``wade worktree`` sub-app."""
 
     @patch("wade.git.worktree.list_worktrees", return_value=[])
-    def test_list_empty(self, _mock: MagicMock) -> None:
+    @patch("wade.git.repo.get_repo_root", return_value=Path("/tmp/repo"))
+    def test_list_empty(self, _mock_root: MagicMock, _mock_wt: MagicMock) -> None:
         result = runner.invoke(app, ["worktree", "list"])
         assert result.exit_code == 0
 

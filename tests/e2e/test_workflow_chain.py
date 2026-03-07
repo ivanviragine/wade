@@ -345,7 +345,7 @@ class TestCLIBasics:
 # ---------------------------------------------------------------------------
 
 
-class TestCheckCommand:
+class TestImplementationSessionCheckCommand:
     """Test ``wade implementation-session check`` via CLI subprocess."""
 
     def test_check_in_main_checkout(self, e2e_repo: Path) -> None:

@@ -151,9 +151,11 @@ After creating all issues, list them clearly:
 Then show the next-step hint so the user knows how to proceed:
 
 > When you're ready to start, run:
+>
 > ```
 > wade implement <number>
 > ```
+>
 > For example: `wade implement 42`
 
 **Do NOT run this command yourself.** Do NOT ask the user to pick an issue and

@@ -40,7 +40,7 @@ dependency analysis hooks.
 6. **Stop** — once validation passes, suggest the user exits. wade reads
    the files and creates lightweight GitHub Issues + draft PRs automatically.
 
-You do **not** create issues, implement code, run `wade implement/implementation-session done/implementation-session sync`,
+You do **not** create issues, implement code, run `wade implement`, `wade implementation-session done`, or `wade implementation-session sync`,
 or make any code changes. Planning only.
 
 ## Plan file format
@@ -98,7 +98,7 @@ repo working directory.
 
 - Do not create GitHub Issues — wade does this after you exit
 - Do not implement any code (even after leaving planning mode)
-- Do not run `wade implement`, `implementation-session done`, or `implementation-session sync`
+- Do not run `wade implement`, `wade implementation-session done`, or `wade implementation-session sync`
 - Do not write files into the repo directory — only to the temp dir
 - Do not skip the review step — always present a plan summary and invite
   modifications before suggesting the user exits

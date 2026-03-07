@@ -237,7 +237,7 @@ _BATCH_NUMBERS = typer.Argument(None, help="Issue numbers to work on.")
 
 @app.command("implement-batch", rich_help_panel="Workflow")
 def implement_batch_cmd(
-    numbers: list[int] = _BATCH_NUMBERS,
+    numbers: list[int] | None = _BATCH_NUMBERS,
     ai: str | None = typer.Option(
         None, "--ai", help="AI tool to use.", autocompletion=complete_ai_tools
     ),
@@ -268,13 +268,12 @@ def implement_batch_cmd(
             console.error("No issues selected.")
             raise typer.Exit(1)
 
-        numbers = [int(id_str) for id_str in selected_ids]
-
-    if not numbers:
-        console.error("Provide at least one issue number.")
-        raise typer.Exit(1)
-
-    issue_ids = [str(n) for n in numbers]
+        issue_ids = selected_ids
+    else:
+        if not numbers:
+            console.error("Provide at least one issue number.")
+            raise typer.Exit(1)
+        issue_ids = [str(n) for n in numbers]
     success = do_batch(
         issue_numbers=issue_ids,
         ai_tool=ai,

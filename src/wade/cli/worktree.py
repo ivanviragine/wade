@@ -48,13 +48,15 @@ def worktree_callback(ctx: typer.Context) -> None:
             raise typer.Exit(0 if success else 1)
     elif selected == "cd":
         target = prompts.input_prompt("Issue number or worktree name")
-        if target:
-            from wade.services.work_service import find_worktree_path
+        if not target:
+            raise typer.Exit(0)  # User cancelled
+        from wade.services.work_service import find_worktree_path
 
-            path = find_worktree_path(target)
-            if path:
-                typer.echo(str(path))
-            raise typer.Exit(0 if path else 1)
+        path = find_worktree_path(target)
+        if path:
+            typer.echo(str(path))
+            raise typer.Exit(0)
+        raise typer.Exit(1)
 
     raise typer.Exit(0)
 
@@ -88,7 +90,7 @@ def remove(
 
     # Interactive picker if no target and not --stale
     if not target and not effective_stale and prompts.is_tty():
-        sessions = list_sessions(json_output=True)
+        sessions = list_sessions(silent=True)
         if not sessions:
             console.info("No worktrees to remove.")
             raise typer.Exit(0)
