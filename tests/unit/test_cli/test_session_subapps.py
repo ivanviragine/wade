@@ -124,9 +124,8 @@ class TestPlanSessionSubApp:
 class TestWorktreeSubApp:
     """Tests for ``wade worktree`` sub-app."""
 
-    @patch("wade.git.worktree.list_worktrees", return_value=[])
-    @patch("wade.git.repo.get_repo_root", return_value=Path("/tmp/repo"))
-    def test_list_empty(self, _mock_root: MagicMock, _mock_wt: MagicMock) -> None:
+    @patch("wade.services.work_service.list_sessions", return_value=[])
+    def test_list_empty(self, _mock: MagicMock) -> None:
         result = runner.invoke(app, ["worktree", "list"])
         assert result.exit_code == 0
 
