@@ -641,7 +641,7 @@ class TestOfferToImplement:
             assert result is None
             mock_prompts.confirm.assert_not_called()
             mock_start.assert_not_called()
-            mock_console.detail.assert_called_once_with("wade implement-task 42")
+            mock_console.detail.assert_called_once_with("wade implement 42")
 
     def test_work_session_failure_returns_false(self) -> None:
         """If start_work_session fails, the failure is propagated."""
@@ -715,7 +715,7 @@ class TestFinalizeIssuesHints:
             assert result is True
 
     def test_multiple_issues_shows_batch_hint(self) -> None:
-        """Multiple issues show wade work batch hint, not offer prompt."""
+        """Multiple issues show wade implement-batch hint, not offer prompt."""
         with (
             patch("wade.services.plan_service._offer_to_implement") as mock_offer,
             patch("wade.services.plan_service.apply_plan_token_usage"),
@@ -730,5 +730,5 @@ class TestFinalizeIssuesHints:
             )
 
             mock_offer.assert_not_called()
-            mock_console.detail.assert_called_with("wade work batch 1 2 3")
+            mock_console.detail.assert_called_with("wade implement-batch 1 2 3")
             assert result is None

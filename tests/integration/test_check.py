@@ -13,19 +13,21 @@ runner = CliRunner()
 
 
 class TestCheck:
+    """Test check via implementation-session sub-app (was top-level ``check``)."""
+
     def test_check_in_main_checkout(
         self, tmp_wade_project: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """check in a main checkout should exit 2 and report IN_MAIN_CHECKOUT."""
+        """implementation-session check in a main checkout should exit 2."""
         monkeypatch.chdir(tmp_wade_project)
-        result = runner.invoke(app, ["check"], catch_exceptions=False)
+        result = runner.invoke(app, ["implementation-session", "check"], catch_exceptions=False)
         assert result.exit_code == 2
         assert "IN_MAIN_CHECKOUT" in result.output
 
     def test_check_not_in_repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """check outside git should exit 1 and report NOT_IN_GIT_REPO."""
+        """implementation-session check outside git should exit 1."""
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(app, ["check"])
+        result = runner.invoke(app, ["implementation-session", "check"])
         assert result.exit_code == 1
         assert "NOT_IN_GIT_REPO" in result.output
 

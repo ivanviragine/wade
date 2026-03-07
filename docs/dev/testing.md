@@ -118,4 +118,4 @@ def test_issue_creation(tmp_wade_project: Path, mock_gh: Path) -> None:
 - For `--json` modes, parse stdout as JSON and fail if any non-JSON line appears.
 - Pure functions (parsing, formatting, model validation) can and should be tested without mocks.
 
-**When to skip re-running tests after `wade work sync`:** If the sync merge only brings in changes to documentation or template files (`templates/`, `docs/`, `README.md`, `AGENTS.md`, `CHANGELOG.md`), there is no need to re-run tests. Re-run tests after sync when the merged changes touch `src/`, `scripts/`, or `tests/`.
+**When to skip re-running tests after `wade implementation-session sync`:** If the sync merge only brings in changes to documentation or template files (`templates/`, `docs/`, `README.md`, `AGENTS.md`, `CHANGELOG.md`), there is no need to re-run tests. Re-run tests after sync when the merged changes touch `src/`, `scripts/`, or `tests/`.

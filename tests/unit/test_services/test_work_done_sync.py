@@ -851,7 +851,7 @@ class TestSummaryOrdering:
         assert final.endswith("New summary content.\n")
 
     def test_repeated_done_replaces_summary_idempotently(self) -> None:
-        """Running work done twice replaces the old summary, keeps ordering."""
+        """Running implementation-session done twice replaces the old summary, keeps ordering."""
         body_with_summary = (
             "Closes #42\n\n"
             "## Tasks\n- Login\n\n"

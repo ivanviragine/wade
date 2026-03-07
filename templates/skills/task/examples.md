@@ -34,7 +34,7 @@ Add a `GET /api/health` endpoint returning `{ "status": "ok", "version": "..." }
 ```
 
 ```bash
-wade new-task
+wade task create
 # Created issue #42: Add health check endpoint
 ```
 
@@ -65,10 +65,10 @@ notification settings.
 ### Issue creation
 
 ```bash
-wade new-task
+wade task create
 # Created issue #50: Add user preferences schema and API
 
-wade new-task
+wade task create
 # Created issue #51: Add preferences UI panel
 ```
 
@@ -86,7 +86,7 @@ Add the ability for users to save and manage display and notification preference
 ```
 
 ```bash
-wade new-task
+wade task create
 # Created issue #52: Epic: User preferences feature
 ```
 
@@ -100,7 +100,7 @@ Created 3 issues:
 
 ### Auto-dependency analysis (multi-issue plans)
 
-When `wade plan-task` creates 2+ issues, it automatically runs `wade task deps`
+When `wade plan` creates 2+ issues, it automatically runs `wade task deps`
 to analyze dependencies. It updates each issue and creates a tracking issue:
 
 ```

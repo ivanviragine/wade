@@ -54,15 +54,16 @@ def get_skills_templates_dir() -> Path:
 SKILL_FILES: dict[str, list[str]] = {
     "task": ["SKILL.md", "plan-format.md", "examples.md"],
     "plan-session": ["SKILL.md"],
-    "work-session": ["SKILL.md"],
+    "implementation-session": ["SKILL.md"],
+    "address-reviews-session": ["SKILL.md"],
     "deps": ["SKILL.md"],
 }
 
 # Skills that should always be overwritten on update
-ALWAYS_OVERWRITE = {"plan-session", "work-session"}
+ALWAYS_OVERWRITE = {"plan-session", "implementation-session", "address-reviews-session"}
 
 # Old skill names removed in the phase-skill refactor — cleaned up during update
-_LEGACY_SKILLS = {"workflow", "sync", "pr-summary"}
+_LEGACY_SKILLS = {"workflow", "sync", "pr-summary", "work-session", "review-session"}
 
 # Cross-tool directories that get symlinked to .claude/skills
 CROSS_TOOL_DIRS = [".github/skills", ".agents/skills", ".gemini/skills", ".cursor/skills"]

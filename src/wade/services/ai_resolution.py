@@ -26,7 +26,7 @@ def resolve_ai_tool(
     -> auto-detect (when *auto_detect* is True).
 
     Set *auto_detect=False* when the caller handles multi-tool selection
-    itself (e.g. TTY prompts in implement-task).
+    itself (e.g. TTY prompts in implement).
     """
     if ai_tool:
         return ai_tool
@@ -153,7 +153,7 @@ def confirm_ai_selection(
 
     Fires only when stdin is a TTY and at least one of the flags was not
     explicitly provided by the caller.  When all flags are explicit (e.g.
-    because ``wade work batch`` passes ``--ai``/``--model``/``--effort`` to
+    because ``wade implement-batch`` passes ``--ai``/``--model``/``--effort`` to
     child calls), this is a no-op.
 
     Returns the (tool, model, effort) triple after any user-driven changes.

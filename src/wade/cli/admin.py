@@ -1,4 +1,4 @@
-"""Admin commands — init, update, deinit, check, check-config, shell-init."""
+"""Admin commands — init, update, deinit, check-config, shell-init."""
 
 from __future__ import annotations
 
@@ -55,22 +55,6 @@ def deinit(
     raise typer.Exit(0 if success else 1)
 
 
-@admin_app.command()
-def check() -> None:
-    """Verify worktree safety for AI agents.
-
-    Exit codes:
-      0  IN_WORKTREE       — safe to work
-      1  NOT_IN_GIT_REPO   — not inside a git repository
-      2  IN_MAIN_CHECKOUT  — unsafe for agent work
-    """
-    from wade.services.check_service import check_worktree
-
-    result = check_worktree(Path.cwd())
-    typer.echo(result.format_output())
-    raise typer.Exit(result.exit_code)
-
-
 @admin_app.command("check-config")
 def check_config() -> None:
     """Validate .wade.yml with field-level errors.
@@ -95,16 +79,17 @@ def shell_init(
 
     Usage: eval "$(wade shell-init)"
 
-    The Problem: When you run 'wade work cd <n>', the command runs in a
-    subprocess and prints a directory path. But a subprocess cannot change
-    your shell's working directory — only the shell itself can do that
-    with the 'cd' builtin.
+    The Problem: When you run 'wade cd <n>' or 'wade worktree cd <n>',
+    the command runs in a subprocess and prints a directory path. But a
+    subprocess cannot change your shell's working directory — only the
+    shell itself can do that with the 'cd' builtin.
 
     The Solution: This outputs a shell function that intercepts
-    'wade work cd' calls and performs the actual 'cd' in your shell,
-    so you end up in the worktree directory instead of staying put.
+    'wade cd' and 'wade worktree cd' calls and performs the actual 'cd'
+    in your shell, so you end up in the worktree directory instead of
+    staying put.
 
-    Without this, 'wade work cd 5' just prints a path. With it, you'll
+    Without this, 'wade cd 5' just prints a path. With it, you'll
     actually change into the worktree.
     """
     # Detect shell from --shell flag or SHELL env var
@@ -114,8 +99,11 @@ def shell_init(
     if "fish" in detected:
         print("""\
 function wade
-  if test (count $argv) -ge 2; and test "$argv[1]" = "work"; and test "$argv[2]" = "cd"
-    set -l dir (command wade work cd $argv[3..])
+  if test (count $argv) -ge 1; and test "$argv[1]" = "cd"
+    set -l dir (command wade cd $argv[2..])
+    and builtin cd $dir
+  else if test (count $argv) -ge 2; and test "$argv[1]" = "worktree"; and test "$argv[2]" = "cd"
+    set -l dir (command wade worktree cd $argv[3..])
     and builtin cd $dir
   else
     command wade $argv
@@ -124,9 +112,13 @@ end""")
     else:
         print("""\
 wade() {
-  if [[ "${1:-}" == "work" && "${2:-}" == "cd" ]]; then
+  if [[ "${1:-}" == "cd" ]]; then
     local __p
-    __p=$(command wade "$@") && cd "$__p"
+    __p=$(command wade cd "${@:2}") && cd "$__p"
+    return $?
+  elif [[ "${1:-}" == "worktree" && "${2:-}" == "cd" ]]; then
+    local __p
+    __p=$(command wade worktree cd "${@:3}") && cd "$__p"
     return $?
   fi
   command wade "$@"
