@@ -15,7 +15,7 @@ def _make_task() -> Task:
 
 
 class TestSmartStartNoPR:
-    """When no PR exists, smart_start falls through to implement-task."""
+    """When no PR exists, smart_start falls through to implement."""
 
     @patch("wade.services.smart_start._run_implement_task", return_value=True)
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch", return_value=None)
@@ -286,7 +286,7 @@ class TestSmartStartDraftPR:
 
 
 class TestSmartStartGitError:
-    """When not in a git repo, falls through to implement-task."""
+    """When not in a git repo, falls through to implement."""
 
     @patch("wade.services.smart_start._run_implement_task", return_value=True)
     @patch("wade.services.smart_start.git_repo.get_repo_root", side_effect=GitError("nope"))

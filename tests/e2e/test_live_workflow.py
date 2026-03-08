@@ -86,13 +86,13 @@ class TestLiveWadeVersion:
 
 
 class TestLiveCheck:
-    """Test wade check against real E2E repo."""
+    """Test wade implementation-session check against real E2E repo."""
 
     def test_check_main_checkout(self) -> None:
-        """wade check on main branch exits 2 and reports IN_MAIN_CHECKOUT."""
+        """implementation-session check on main branch exits 2 and reports IN_MAIN_CHECKOUT."""
         _run(["git", "checkout", "main"])
 
-        result = _wade("check")
+        result = _wade("implementation-session", "check")
         assert result.returncode == 2
         assert "IN_MAIN_CHECKOUT" in result.stdout
 
@@ -120,7 +120,7 @@ class TestLiveTaskLifecycle:
         """Create an issue via gh, exercise wade read/close."""
         import re
 
-        # Create issue directly via gh (wade new-task is interactive)
+        # Create issue directly via gh (wade task create is interactive)
         result = _run(
             [
                 "gh",

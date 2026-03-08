@@ -62,7 +62,7 @@ def test_resolve_plan_no_matching_worktree_errors(tmp_path: Path) -> None:
 
     with (
         patch("wade.services.work_service.find_worktree_path", return_value=None),
-        pytest.raises(ValueError, match="wade work list"),
+        pytest.raises(ValueError, match="wade worktree list"),
     ):
         work_service._resolve_worktree_from_plan(plan_file)
 
@@ -122,10 +122,10 @@ def test_done_plan_flag_error_returns_false() -> None:
 
 
 def test_cli_plan_flag_passes_to_service() -> None:
-    from wade.cli.work import work_app
+    from wade.cli.implementation_session import impl_session_app
 
     with patch("wade.services.work_service.done", return_value=True) as mock_done:
-        result = runner.invoke(work_app, ["done", "--plan", "/tmp/PLAN.md"])
+        result = runner.invoke(impl_session_app, ["done", "--plan", "/tmp/PLAN.md"])
 
     assert result.exit_code == 0
     mock_done.assert_called_once_with(
@@ -138,9 +138,9 @@ def test_cli_plan_flag_passes_to_service() -> None:
 
 
 def test_done_plan_flag_shows_in_help() -> None:
-    from wade.cli.work import work_app
+    from wade.cli.implementation_session import impl_session_app
 
-    result = runner.invoke(work_app, ["done", "--help"])
+    result = runner.invoke(impl_session_app, ["done", "--help"])
     # Strip ANSI escape codes before checking — Rich/Typer may split
     # flags across styled spans (e.g. \x1b[1;36m-\x1b[0m\x1b[1;36m-plan\x1b[0m).
     import re

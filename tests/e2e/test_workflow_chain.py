@@ -337,7 +337,7 @@ class TestCLIBasics:
         assert result.returncode == 0
         output = result.stdout.lower()
         assert "task" in output
-        assert "work" in output
+        assert "worktree" in output
 
 
 # ---------------------------------------------------------------------------
@@ -345,33 +345,33 @@ class TestCLIBasics:
 # ---------------------------------------------------------------------------
 
 
-class TestCheckCommand:
-    """Test `wade check` via CLI subprocess."""
+class TestImplementationSessionCheckCommand:
+    """Test ``wade implementation-session check`` via CLI subprocess."""
 
     def test_check_in_main_checkout(self, e2e_repo: Path) -> None:
-        """wade check on main → exit 2, stdout contains IN_MAIN_CHECKOUT."""
-        result = _run(["check"], cwd=e2e_repo)
+        """implementation-session check on main → exit 2, IN_MAIN_CHECKOUT."""
+        result = _run(["implementation-session", "check"], cwd=e2e_repo)
         assert result.returncode == 2
         assert "IN_MAIN_CHECKOUT" in result.stdout
 
     def test_check_in_worktree(self, e2e_repo: Path) -> None:
-        """wade check in a worktree → exit 0, stdout contains IN_WORKTREE."""
+        """implementation-session check in a worktree → exit 0, IN_WORKTREE."""
         wt_dir = e2e_repo.parent / ".worktrees" / "42-test"
         _git(
             ["worktree", "add", "-b", "feat/42-test", str(wt_dir)],
             cwd=e2e_repo,
         )
 
-        result = _run(["check"], cwd=wt_dir)
+        result = _run(["implementation-session", "check"], cwd=wt_dir)
         assert result.returncode == 0
         assert "IN_WORKTREE" in result.stdout
 
     def test_check_not_in_git(self, tmp_path: Path) -> None:
-        """wade check outside git → exit 1, stdout contains NOT_IN_GIT_REPO."""
+        """implementation-session check outside git → exit 1, NOT_IN_GIT_REPO."""
         bare_dir = tmp_path / "not-a-repo"
         bare_dir.mkdir()
 
-        result = _run(["check"], cwd=bare_dir)
+        result = _run(["implementation-session", "check"], cwd=bare_dir)
         assert result.returncode == 1
         assert "NOT_IN_GIT_REPO" in result.stdout
 
@@ -429,15 +429,15 @@ class TestTaskCommands:
 
 
 # ---------------------------------------------------------------------------
-# Tests: work sync command
+# Tests: implementation-session sync command
 # ---------------------------------------------------------------------------
 
 
-class TestWorkSyncCommand:
-    """Test `wade work sync` via CLI subprocess."""
+class TestImplementationSessionSyncCommand:
+    """Test `wade implementation-session sync` via CLI subprocess."""
 
     def test_sync_clean_merge(self, e2e_repo: Path) -> None:
-        """wade work sync when main has diverged — clean merge."""
+        """wade implementation-session sync when main has diverged — clean merge."""
         # Create worktree
         wt_dir = e2e_repo.parent / ".worktrees" / "50-feature"
         _git(
@@ -457,25 +457,25 @@ class TestWorkSyncCommand:
         _git(["commit", "-m", "docs: add docs"], cwd=e2e_repo)
 
         # Sync via CLI
-        result = _run(["work", "sync"], cwd=wt_dir)
+        result = _run(["implementation-session", "sync"], cwd=wt_dir)
 
         assert result.returncode == 0
         assert (wt_dir / "docs.md").exists()  # main's change merged in
         assert (wt_dir / "feature.py").exists()  # feature work preserved
 
     def test_sync_already_up_to_date(self, e2e_repo: Path) -> None:
-        """wade work sync when already up to date — no-op."""
+        """wade implementation-session sync when already up to date — no-op."""
         wt_dir = e2e_repo.parent / ".worktrees" / "51-uptodate"
         _git(
             ["worktree", "add", "-b", "feat/51-uptodate", str(wt_dir)],
             cwd=e2e_repo,
         )
 
-        result = _run(["work", "sync"], cwd=wt_dir)
+        result = _run(["implementation-session", "sync"], cwd=wt_dir)
         assert result.returncode == 0
 
     def test_sync_conflict_exit_code(self, e2e_repo: Path) -> None:
-        """wade work sync with merge conflict → exit 2."""
+        """wade implementation-session sync with merge conflict → exit 2."""
         wt_dir = e2e_repo.parent / ".worktrees" / "60-conflict"
         _git(
             ["worktree", "add", "-b", "feat/60-conflict", str(wt_dir)],
@@ -492,21 +492,21 @@ class TestWorkSyncCommand:
         _git(["add", "."], cwd=e2e_repo)
         _git(["commit", "-m", "docs: update readme"], cwd=e2e_repo)
 
-        result = _run(["work", "sync"], cwd=wt_dir)
+        result = _run(["implementation-session", "sync"], cwd=wt_dir)
         assert result.returncode == 2
 
         # Clean up merge state
         subprocess.run(["git", "merge", "--abort"], cwd=wt_dir, capture_output=True)
 
     def test_sync_json_output(self, e2e_repo: Path) -> None:
-        """wade work sync --json emits structured events."""
+        """wade implementation-session sync --json emits structured events."""
         wt_dir = e2e_repo.parent / ".worktrees" / "52-json"
         _git(
             ["worktree", "add", "-b", "feat/52-json", str(wt_dir)],
             cwd=e2e_repo,
         )
 
-        result = _run(["work", "sync", "--json"], cwd=wt_dir)
+        result = _run(["implementation-session", "sync", "--json"], cwd=wt_dir)
         assert result.returncode == 0
 
         # Each non-empty line that starts with { should be valid JSON event
@@ -521,26 +521,26 @@ class TestWorkSyncCommand:
             assert "event" in parsed
 
     def test_sync_from_main_rejected(self, e2e_repo: Path) -> None:
-        """wade work sync from main branch → exit 4 (preflight failure)."""
-        result = _run(["work", "sync"], cwd=e2e_repo)
+        """wade implementation-session sync from main branch → exit 4 (preflight failure)."""
+        result = _run(["implementation-session", "sync"], cwd=e2e_repo)
         assert result.returncode == 4
 
 
 # ---------------------------------------------------------------------------
-# Tests: work list command
+# Tests: worktree list command
 # ---------------------------------------------------------------------------
 
 
-class TestWorkListCommand:
-    """Test `wade work list` via CLI subprocess."""
+class TestWorktreeListCommand:
+    """Test `wade worktree list` via CLI subprocess."""
 
     def test_list_empty(self, e2e_repo: Path) -> None:
-        """wade work list with no worktrees → exit 0."""
-        result = _run(["work", "list"], cwd=e2e_repo)
+        """wade worktree list with no worktrees → exit 0."""
+        result = _run(["worktree", "list"], cwd=e2e_repo)
         assert result.returncode == 0
 
     def test_list_with_worktrees(self, e2e_repo: Path) -> None:
-        """wade work list with worktrees → shows branch names in output."""
+        """wade worktree list with worktrees → shows branch names in output."""
         for num, slug in [("10", "auth"), ("11", "db")]:
             wt_dir = e2e_repo.parent / ".worktrees" / f"{num}-{slug}"
             _git(
@@ -548,7 +548,7 @@ class TestWorkListCommand:
                 cwd=e2e_repo,
             )
 
-        result = _run(["work", "list"], cwd=e2e_repo)
+        result = _run(["worktree", "list"], cwd=e2e_repo)
         assert result.returncode == 0
         assert "10" in result.stdout or "auth" in result.stdout, (
             f"Expected worktree '10-auth' in output, got: {result.stdout!r}"
@@ -558,14 +558,14 @@ class TestWorkListCommand:
         )
 
     def test_list_json(self, e2e_repo: Path) -> None:
-        """wade work list --json outputs valid JSON array."""
+        """wade worktree list --json outputs valid JSON array."""
         wt_dir = e2e_repo.parent / ".worktrees" / "20-test"
         _git(
             ["worktree", "add", "-b", "feat/20-test", str(wt_dir)],
             cwd=e2e_repo,
         )
 
-        result = _run(["work", "list", "--json"], cwd=e2e_repo)
+        result = _run(["worktree", "list", "--json"], cwd=e2e_repo)
         assert result.returncode == 0
         parsed = _parse_json_output(result.stdout)
         assert isinstance(parsed, list)

@@ -384,7 +384,7 @@ def plan(
     # Resolve effort level
     resolved_effort = resolve_effort(effort, config, "plan", tool=resolved_tool)
 
-    console.rule("wade plan-task")
+    console.rule("wade plan")
 
     # Offer interactive confirmation unless both flags were explicitly provided.
     resolved_tool, resolved_model, resolved_effort = confirm_ai_selection(
@@ -811,7 +811,7 @@ def _finalize_issues(
             return result
     elif len(issue_numbers) >= 2:
         console.info("When you're ready to implement, run:")
-        console.detail(f"wade work batch {' '.join(issue_numbers)}")
+        console.detail(f"wade implement-batch {' '.join(issue_numbers)}")
 
     return None
 
@@ -819,13 +819,13 @@ def _finalize_issues(
 def _print_implement_hint(issue_number: str) -> None:
     """Print the hint for manually starting a work session."""
     console.info("When you're ready to implement, run:")
-    console.detail(f"wade implement-task {issue_number}")
+    console.detail(f"wade implement {issue_number}")
 
 
 def _offer_to_implement(issue_number: str) -> bool | None:
     """Prompt the user to start a work session on the newly planned issue.
 
-    Returns True/False if the user accepted/work-session succeeded or failed,
+    Returns True/False if the user accepted/implementation session succeeded or failed,
     or None if the prompt was skipped (non-TTY) or declined.
     """
     if not prompts.is_tty():

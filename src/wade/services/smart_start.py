@@ -2,7 +2,7 @@
 
 When `wade <ISSUE_ID>` is invoked, this service checks if an open PR already
 exists for the issue and presents a contextual menu:
-- No PR → implement-task (normal flow)
+- No PR → implement (normal flow)
 - Open PR → "Continue working" / "Address reviews" / "Merge PR"
 """
 
@@ -43,7 +43,7 @@ def smart_start(
 ) -> bool:
     """Detect PR state for an issue and route to the right command.
 
-    If no open PR exists, falls through to implement-task.
+    If no open PR exists, falls through to implement.
     If an open PR exists, offers a contextual menu.
 
     Returns:
@@ -56,7 +56,7 @@ def smart_start(
     try:
         repo_root = git_repo.get_repo_root(cwd)
     except GitError:
-        # Not in a git repo — fall through to implement-task which will
+        # Not in a git repo — fall through to implement which will
         # give a proper error.
         return _run_implement_task(
             target,
@@ -74,7 +74,7 @@ def smart_start(
     try:
         task = provider.read_task(issue_number)
     except Exception:
-        # Can't read issue — fall through to implement-task.
+        # Can't read issue — fall through to implement.
         return _run_implement_task(
             target,
             ai_tool,
@@ -96,7 +96,7 @@ def smart_start(
     # Check for existing PR
     pr_info = git_pr.get_pr_for_branch(repo_root, branch_name)
     if not pr_info:
-        # No PR → normal implement-task flow
+        # No PR → normal implement flow
         return _run_implement_task(
             target,
             ai_tool,
@@ -110,7 +110,7 @@ def smart_start(
 
     pr_number = pr_info.get("number") or pr_info.get("pr_number")
     if not pr_number:
-        # Can't determine PR number — fall through to implement-task.
+        # Can't determine PR number — fall through to implement.
         return _run_implement_task(
             target,
             ai_tool,
@@ -251,7 +251,7 @@ def _run_implement_task(
     resume_session_id: str | None = None,
     resume_ai_tool: str | None = None,
 ) -> bool:
-    """Delegate to the implement-task service."""
+    """Delegate to the implement service."""
     from wade.services.work_service import start as do_start
 
     return do_start(

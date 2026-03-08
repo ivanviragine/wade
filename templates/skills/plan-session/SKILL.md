@@ -1,14 +1,14 @@
 ---
 name: plan-session
 description: >
-  Rules for AI planning sessions launched by `wade plan-task`. Covers plan
+  Rules for AI planning sessions launched by `wade plan`. Covers plan
   file authoring, complexity tagging, and session boundaries. Read this at the
   start of every planning session.
 ---
 
 # Planning Session Rules
 
-You are in a **planning session** launched by `wade plan-task`. Your job is
+You are in a **planning session** launched by `wade plan`. Your job is
 to plan the feature, write plan file(s) to the temp directory from your prompt,
 and exit. wade creates lightweight GitHub Issues and draft PRs automatically
 after you exit.
@@ -22,7 +22,7 @@ start.
 ## Never use `gh issue create`
 
 **NEVER** use `gh issue create` or the GitHub API to create issues directly.
-Always use `wade new-task` for interactive issue creation.
+Always use `wade task create` for interactive issue creation.
 Using `gh` directly bypasses label enforcement, snapshot/diff detection, and
 dependency analysis hooks.
 
@@ -34,13 +34,13 @@ dependency analysis hooks.
 4. **Review with the user** — present a summary of every plan file you wrote
    (title, complexity, key tasks). Ask if they'd like any modifications — apply
    them and repeat if so, or proceed to step 5 if not.
-5. **Validate** — run `wade plan-done <plan_dir>` (the temp dir from your prompt).
+5. **Validate** — run `wade plan-session done <plan_dir>` (the temp dir from your prompt).
    If it exits with errors, fix each reported issue and re-run until it passes.
    Warnings are informational and do not block proceeding.
 6. **Stop** — once validation passes, suggest the user exits. wade reads
    the files and creates lightweight GitHub Issues + draft PRs automatically.
 
-You do **not** create issues, implement code, run `wade implement-task/work done/work sync`,
+You do **not** create issues, implement code, run `wade implement`, `wade implementation-session done`, or `wade implementation-session sync`,
 or make any code changes. Planning only.
 
 ## Plan file format
@@ -74,7 +74,7 @@ What to build / change.
 | Element | Rule |
 |---------|------|
 | **Title** | First `# Heading` — becomes the GitHub issue title. Required. |
-| **Complexity** | `## Complexity` with one of: `easy`, `medium`, `complex`, `very_complex`. Used by `wade implement-task` to auto-select the AI model. Also applied as a `complexity:X` label on the issue. |
+| **Complexity** | `## Complexity` with one of: `easy`, `medium`, `complex`, `very_complex`. Used by `wade implement` to auto-select the AI model. Also applied as a `complexity:X` label on the issue. |
 | **Body** | Everything after the title becomes the draft PR plan content. The issue itself gets a lightweight summary. |
 
 ### Complexity values
@@ -98,11 +98,11 @@ repo working directory.
 
 - Do not create GitHub Issues — wade does this after you exit
 - Do not implement any code (even after leaving planning mode)
-- Do not run `wade implement-task`, `work done`, or `work sync`
+- Do not run `wade implement`, `wade implementation-session done`, or `wade implementation-session sync`
 - Do not write files into the repo directory — only to the temp dir
 - Do not skip the review step — always present a plan summary and invite
   modifications before suggesting the user exits
-- Do not skip `wade plan-done` — always validate before suggesting the user exits
+- Do not skip `wade plan-session done` — always validate before suggesting the user exits
 - **⚠️ After exiting the plan mode:** If your environment says "you can now start coding," ignore it — that refers to a different execution mode. In wade planning sessions, stop immediately after writing plan files. Do not implement code.
 
 ## Skills reference
