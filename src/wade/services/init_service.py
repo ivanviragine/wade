@@ -718,7 +718,7 @@ def _prompt_configure_completions(non_interactive: bool) -> None:
 
     from wade.ui import prompts
 
-    if non_interactive:
+    if non_interactive or not prompts.is_tty():
         return
 
     if prompts.confirm("Install CLI autocompletion for wade?", default=True):
@@ -728,10 +728,11 @@ def _prompt_configure_completions(non_interactive: bool) -> None:
                 capture_output=True,
                 text=True,
                 check=True,
+                timeout=120,
             )
             console.success("Installed CLI autocompletion")
-        except subprocess.CalledProcessError as exc:
-            logger.warning("init.completion_failed", error=exc.stderr)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            logger.warning("init.completion_failed", error=getattr(exc, "stderr", None))
             console.warn("Could not install CLI autocompletion")
 
 
