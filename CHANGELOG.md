@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.1.4] — 2026-03-08
+
+### Bug Fixes
+
+- prevent shell injection in auto-version workflow (#117) (513e69a)
+
+### Other Changes
+
+- Selective per-command skill installation (#114) (ad1b2ea)
+- Add "Resume session" option to "Continue working" menu (#112) (a208013)
+- Prompt for CLI completion install during init (#116) (8a4e117)
+- Reorganize CLI commands around workflow phases and audience separation (#110) (5aa1d00)
+- Offer to start working session after planning (#107) (4bd677d)
+
 ## [v0.1.3] — 2026-03-06
 
 ### Bug Fixes
