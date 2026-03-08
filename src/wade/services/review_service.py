@@ -276,7 +276,9 @@ def start(
     console.info(f"Found {comment_count} unresolved comment(s) across {file_count} location(s)")
 
     # 5. Re-bootstrap skills (ensures address-reviews-session skill is installed)
-    bootstrap_worktree(worktree_path, config, repo_root)
+    from wade.skills.installer import REVIEW_SKILLS
+
+    bootstrap_worktree(worktree_path, config, repo_root, skills=REVIEW_SKILLS)
 
     # 6. Resolve AI tool and model
     resolved_tool = resolve_ai_tool(ai_tool, config, "work")

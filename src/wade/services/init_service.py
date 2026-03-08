@@ -40,11 +40,6 @@ GITIGNORE_ENTRIES: Final = [
     ".wade/",
     ".wade-managed",
     ".wade.yml",
-    ".claude/",
-    ".github/skills",
-    ".agents/",
-    ".gemini/",
-    ".cursor/",
     "PLAN.md",
     "PR-SUMMARY.md",
 ]
@@ -174,21 +169,16 @@ def init(
         )
         console.success(f"Created {config_path.name}")
 
-    # 5. Install skills
-    is_self = root.resolve() == get_wade_root().resolve()
-    installed = installer.install_skills(root, is_self_init=is_self)
-    console.info(f"Installed {len(installed)} skill entries")
-
-    # 6. Update .gitignore
+    # 5. Update .gitignore
     _ensure_gitignore(root)
 
-    # 7. AGENTS.md pointer
+    # 6. AGENTS.md pointer
     pointer_path = pointer.ensure_pointer(root)
     if pointer_path:
         console.success(f"Workflow pointer in {Path(pointer_path).name}")
 
-    # 8. Write manifest
-    _write_manifest(root, installed)
+    # 7. Write manifest (no skills on main — skills are installed per-session in worktrees)
+    _write_manifest(root, [])
     console.success("Wrote .wade-managed manifest")
 
     # Validate the config we just wrote
@@ -202,8 +192,8 @@ def init(
         for err in check_result.errors:
             console.detail(err)
 
-    # 9. Commit or configure for local-only use
-    _prompt_commit_or_local(root, config_path, installed, non_interactive)
+    # 8. Commit or configure for local-only use
+    _prompt_commit_or_local(root, config_path, [], non_interactive)
 
     console.panel(
         "  Project initialized. Run [bold]wade plan[/] to get started.",
@@ -286,10 +276,12 @@ def update(
         model_mapping = _resolve_models(ai_tool)
         _patch_config(config_path, ai_tool, model_mapping)
 
-    # Step 7: Refresh skill files (force overwrite)
+    # Step 7: Migrate old skill files off main (skills now live in worktrees only)
     is_self = root.resolve() == get_wade_root().resolve()
-    installed = installer.install_skills(root, is_self_init=is_self, force=True)
-    console.info(f"Updated {len(installed)} skill entries")
+    if not is_self:
+        removed = _migrate_skills_off_main(root)
+        if removed:
+            console.info(f"Migrated {len(removed)} old skill entries off main")
 
     # Compute which tools are actually configured for this project
     tools_in_use: set[str] = set()
@@ -315,11 +307,57 @@ def update(
     _ensure_gitignore(root)
     pointer.ensure_pointer(root)
 
-    # Step 11: Rebuild manifest with version
-    _write_manifest(root, installed)
+    # Step 11: Rebuild manifest with version (no skills on main)
+    _write_manifest(root, [])
 
     console.panel("  All managed files are up to date.", title="WADE updated")
     return True
+
+
+def _migrate_skills_off_main(project_root: Path) -> list[str]:
+    """Remove old skill files from the main checkout.
+
+    Skills are now installed per-session in worktrees only.  This cleans up
+    skill directories and cross-tool symlinks left by previous ``wade init``
+    or ``wade update`` runs.
+
+    Returns list of removed paths (relative to project root).
+    """
+    removed: list[str] = []
+    primary_skills_dir = project_root / ".claude" / "skills"
+
+    # Remove known skill directories
+    for skill_name in installer.SKILL_FILES:
+        skill_dir = primary_skills_dir / skill_name
+        if skill_dir.is_symlink():
+            skill_dir.unlink()
+            removed.append(f".claude/skills/{skill_name}")
+        elif skill_dir.is_dir():
+            shutil.rmtree(skill_dir)
+            removed.append(f".claude/skills/{skill_name}")
+
+    # Remove cross-tool symlinks
+    for cross_dir in installer.CROSS_TOOL_DIRS:
+        cross_path = project_root / cross_dir
+        if cross_path.is_symlink():
+            cross_path.unlink()
+            removed.append(cross_dir)
+        elif cross_path.is_dir():
+            shutil.rmtree(cross_path)
+            removed.append(cross_dir)
+
+    # Clean up empty parent directories
+    for parent in [
+        primary_skills_dir,
+        project_root / ".github",
+        project_root / ".agents",
+        project_root / ".gemini",
+        project_root / ".cursor",
+    ]:
+        if parent.is_dir() and not any(parent.iterdir()):
+            parent.rmdir()
+
+    return removed
 
 
 def _maybe_self_upgrade() -> bool:

@@ -58,3 +58,95 @@ class TestSkillInstallation:
         # Primary skills dir should be gone
         skills_dir = tmp_git_repo / ".claude" / "skills"
         assert not skills_dir.exists()
+
+
+class TestSelectiveSkillInstallation:
+    """Tests for selective per-command skill installation (skills parameter)."""
+
+    def test_selective_install_only_listed_skills(self, tmp_git_repo: Path) -> None:
+        """When skills parameter is provided, only those skills are installed."""
+        from wade.skills.installer import install_skills
+
+        installed = install_skills(tmp_git_repo, skills=["task", "deps"])
+
+        skills_dir = tmp_git_repo / ".claude" / "skills"
+        assert (skills_dir / "task").is_dir()
+        assert (skills_dir / "deps").is_dir()
+        assert not (skills_dir / "implementation-session").exists()
+        assert not (skills_dir / "plan-session").exists()
+        assert not (skills_dir / "address-reviews-session").exists()
+
+        # Installed list should only contain task and deps entries (plus cross-tool)
+        skill_entries = [e for e in installed if "skills/" in e and "cross" not in e.lower()]
+        for entry in skill_entries:
+            assert "task" in entry or "deps" in entry
+
+    def test_selective_install_implement_skills(self, tmp_git_repo: Path) -> None:
+        """IMPLEMENT_SKILLS installs only implementation-session and task."""
+        from wade.skills.installer import IMPLEMENT_SKILLS, install_skills
+
+        install_skills(tmp_git_repo, skills=IMPLEMENT_SKILLS)
+
+        skills_dir = tmp_git_repo / ".claude" / "skills"
+        assert (skills_dir / "implementation-session").is_dir()
+        assert (skills_dir / "task").is_dir()
+        assert not (skills_dir / "plan-session").exists()
+        assert not (skills_dir / "deps").exists()
+        assert not (skills_dir / "address-reviews-session").exists()
+
+    def test_selective_install_review_skills(self, tmp_git_repo: Path) -> None:
+        """REVIEW_SKILLS installs only address-reviews-session and task."""
+        from wade.skills.installer import REVIEW_SKILLS, install_skills
+
+        install_skills(tmp_git_repo, skills=REVIEW_SKILLS)
+
+        skills_dir = tmp_git_repo / ".claude" / "skills"
+        assert (skills_dir / "address-reviews-session").is_dir()
+        assert (skills_dir / "task").is_dir()
+        assert not (skills_dir / "plan-session").exists()
+        assert not (skills_dir / "deps").exists()
+        assert not (skills_dir / "implementation-session").exists()
+
+    def test_selective_install_plan_skills(self, tmp_git_repo: Path) -> None:
+        """PLAN_SKILLS installs plan-session, task, and deps."""
+        from wade.skills.installer import PLAN_SKILLS, install_skills
+
+        install_skills(tmp_git_repo, skills=PLAN_SKILLS)
+
+        skills_dir = tmp_git_repo / ".claude" / "skills"
+        assert (skills_dir / "plan-session").is_dir()
+        assert (skills_dir / "task").is_dir()
+        assert (skills_dir / "deps").is_dir()
+        assert not (skills_dir / "implementation-session").exists()
+        assert not (skills_dir / "address-reviews-session").exists()
+
+    def test_selective_install_deps_skills(self, tmp_git_repo: Path) -> None:
+        """DEPS_SKILLS installs only deps."""
+        from wade.skills.installer import DEPS_SKILLS, install_skills
+
+        install_skills(tmp_git_repo, skills=DEPS_SKILLS)
+
+        skills_dir = tmp_git_repo / ".claude" / "skills"
+        assert (skills_dir / "deps").is_dir()
+        assert not (skills_dir / "task").exists()
+        assert not (skills_dir / "plan-session").exists()
+
+    def test_none_skills_installs_all(self, tmp_git_repo: Path) -> None:
+        """When skills=None (default), all skills are installed."""
+        from wade.skills.installer import SKILL_FILES, install_skills
+
+        install_skills(tmp_git_repo, skills=None)
+
+        skills_dir = tmp_git_repo / ".claude" / "skills"
+        for skill_name in SKILL_FILES:
+            assert (skills_dir / skill_name).is_dir(), f"{skill_name} should be installed"
+
+    def test_cross_tool_symlinks_always_created(self, tmp_git_repo: Path) -> None:
+        """Cross-tool symlinks are created even with selective install."""
+        from wade.skills.installer import install_skills
+
+        install_skills(tmp_git_repo, skills=["deps"])
+
+        for cross_dir in [".github/skills", ".agents/skills", ".gemini/skills"]:
+            link = tmp_git_repo / cross_dir
+            assert link.is_symlink(), f"{cross_dir} should be a symlink"

@@ -68,14 +68,22 @@ _LEGACY_SKILLS = {"workflow", "sync", "pr-summary", "work-session", "review-sess
 # Cross-tool directories that get symlinked to .claude/skills
 CROSS_TOOL_DIRS = [".github/skills", ".agents/skills", ".gemini/skills", ".cursor/skills"]
 
+# --- Command-to-skill mapping: which skills each session type needs ---
+
+PLAN_SKILLS: list[str] = ["plan-session", "task", "deps"]
+DEPS_SKILLS: list[str] = ["deps"]
+IMPLEMENT_SKILLS: list[str] = ["implementation-session", "task"]
+REVIEW_SKILLS: list[str] = ["address-reviews-session", "task"]
+
 
 def install_skills(
     project_root: Path,
     is_self_init: bool = False,
     force: bool = False,
     templates_dir: Path | None = None,
+    skills: list[str] | None = None,
 ) -> list[str]:
-    """Install all skill files to a project.
+    """Install skill files to a project.
 
     Args:
         project_root: Root of the target project.
@@ -83,6 +91,8 @@ def install_skills(
         force: If True, overwrite existing files.
         templates_dir: Override the skills templates directory.
             Useful for worktrees where templates live in the worktree itself.
+        skills: If provided, install only the listed skills instead of all
+            ``SKILL_FILES``.  When ``None`` (default), all skills are installed.
 
     Returns:
         List of installed file paths (relative to project root).
@@ -107,7 +117,14 @@ def install_skills(
             shutil.rmtree(legacy_dir)
             logger.debug("skills.removed_legacy", name=legacy_name)
 
-    for skill_name, files in SKILL_FILES.items():
+    # Determine which skills to install
+    skill_items = (
+        {name: SKILL_FILES[name] for name in skills if name in SKILL_FILES}
+        if skills is not None
+        else SKILL_FILES
+    )
+
+    for skill_name, files in skill_items.items():
         if is_self_init:
             # Symlink the whole directory
             _link_skill_dir(project_root, skill_name, templates_dir)

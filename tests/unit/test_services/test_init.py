@@ -821,6 +821,46 @@ class TestUpdate:
         success = update(project_root=tmp_git_repo)
         assert not success
 
+    def test_update_migrates_old_skills_off_main(self, tmp_git_repo: Path) -> None:
+        """update() removes old skill files from main when they exist."""
+        from wade.skills.installer import CROSS_TOOL_DIRS, SKILL_FILES
+
+        init(project_root=tmp_git_repo, non_interactive=True)
+
+        # Simulate old installation: manually create skill dirs on main
+        skills_dir = tmp_git_repo / ".claude" / "skills"
+        for skill_name in SKILL_FILES:
+            (skills_dir / skill_name).mkdir(parents=True, exist_ok=True)
+            (skills_dir / skill_name / "SKILL.md").write_text("# old\n")
+        for cross_dir in CROSS_TOOL_DIRS:
+            cross_path = tmp_git_repo / cross_dir
+            cross_path.parent.mkdir(parents=True, exist_ok=True)
+            cross_path.symlink_to(skills_dir)
+
+        # Run update
+        success = update(project_root=tmp_git_repo)
+        assert success
+
+        # Verify skills are removed from main
+        for skill_name in SKILL_FILES:
+            assert not (skills_dir / skill_name).exists()
+
+        # Verify cross-tool symlinks are removed
+        for cross_dir in CROSS_TOOL_DIRS:
+            assert not (tmp_git_repo / cross_dir).exists()
+
+    def test_init_no_skills_on_main(self, tmp_git_repo: Path) -> None:
+        """After init, no skills should be installed on main."""
+        from wade.skills.installer import SKILL_FILES
+
+        init(project_root=tmp_git_repo, non_interactive=True)
+
+        skills_dir = tmp_git_repo / ".claude" / "skills"
+        for skill_name in SKILL_FILES:
+            assert not (skills_dir / skill_name).exists(), (
+                f"Skill {skill_name} should NOT be on main after init"
+            )
+
 
 # ---------------------------------------------------------------------------
 # Deinit service tests
@@ -1016,11 +1056,13 @@ class TestGitignoreEntries:
     def test_contains_wade_config(self) -> None:
         assert ".wade.yml" in GITIGNORE_ENTRIES
 
-    def test_contains_skill_dirs(self) -> None:
-        assert ".claude/" in GITIGNORE_ENTRIES
-        assert ".github/skills" in GITIGNORE_ENTRIES
-        assert ".agents/" in GITIGNORE_ENTRIES
-        assert ".gemini/" in GITIGNORE_ENTRIES
+    def test_no_skill_dirs(self) -> None:
+        """Skills are per-session in worktrees — no tool dirs in gitignore."""
+        assert ".claude/" not in GITIGNORE_ENTRIES
+        assert ".github/skills" not in GITIGNORE_ENTRIES
+        assert ".agents/" not in GITIGNORE_ENTRIES
+        assert ".gemini/" not in GITIGNORE_ENTRIES
+        assert ".cursor/" not in GITIGNORE_ENTRIES
 
     def test_contains_internal_files(self) -> None:
         assert ".wade/" in GITIGNORE_ENTRIES
