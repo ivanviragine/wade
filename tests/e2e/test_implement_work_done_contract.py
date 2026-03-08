@@ -1,4 +1,4 @@
-"""Deterministic E2E contracts for implement-task and work done flows."""
+"""Deterministic E2E contracts for implement and done flows."""
 
 from __future__ import annotations
 
@@ -25,14 +25,14 @@ pytestmark = [
 
 
 class TestImplementTaskCommand:
-    """Test `wade implement-task` via CLI subprocess."""
+    """Test `wade implement` via CLI subprocess."""
 
     def test_implement_task_cd_bootstraps_worktree_and_draft_pr(
         self,
         e2e_repo: Path,
         mock_gh_cli: MockGhCli,
     ) -> None:
-        """implement-task --cd should create worktree, PLAN.md, and bootstrap draft PR."""
+        """implement --cd should create worktree, PLAN.md, and bootstrap draft PR."""
         from wade.git.branch import make_branch_name
 
         issue_number = 42
@@ -50,7 +50,7 @@ class TestImplementTaskCommand:
             e2e_repo.parent / ".worktrees" / e2e_repo.name / branch_name.replace("/", "-")
         )
 
-        result = _run(["implement-task", str(issue_number), "--cd"], cwd=e2e_repo)
+        result = _run(["implement", str(issue_number), "--cd"], cwd=e2e_repo)
         assert result.returncode == 0
         assert Path(result.stdout.strip()) == expected_worktree
         assert expected_worktree.is_dir()
@@ -83,11 +83,11 @@ class TestImplementTaskCommand:
         e2e_repo: Path,
         mock_gh_cli: MockGhCli,
     ) -> None:
-        """implement-task --cd should execute configured post-worktree hook."""
+        """implement --cd should execute configured post-worktree hook."""
         from wade.git.branch import make_branch_name
 
         issue_number = 44
-        issue_title = "Run setup hook from implement-task"
+        issue_title = "Run setup hook from implement"
         _seed_mock_issue(
             mock_gh_cli["state_file"],
             issue_number=issue_number,
@@ -123,7 +123,7 @@ class TestImplementTaskCommand:
             e2e_repo.parent / ".worktrees" / e2e_repo.name / branch_name.replace("/", "-")
         )
 
-        result = _run(["implement-task", str(issue_number), "--cd"], cwd=e2e_repo)
+        result = _run(["implement", str(issue_number), "--cd"], cwd=e2e_repo)
         assert result.returncode == 0
         assert Path(result.stdout.strip()) == expected_worktree
         hook_marker = expected_worktree / ".hook-ran"
@@ -132,14 +132,14 @@ class TestImplementTaskCommand:
 
 
 class TestWorkDoneCommand:
-    """Test `wade work done` via CLI subprocess."""
+    """Test `wade implementation-session done` via CLI subprocess."""
 
     def test_work_done_updates_existing_draft_pr_and_pushes_branch(
         self,
         e2e_repo: Path,
         mock_gh_cli: MockGhCli,
     ) -> None:
-        """work done should push branch and update the existing draft PR contract path."""
+        """implementation-session done should push branch and update draft PR path."""
         from wade.git.branch import make_branch_name
 
         issue_number = 43
@@ -154,7 +154,7 @@ class TestWorkDoneCommand:
 
         branch_name = make_branch_name("feat", issue_number, issue_title)
 
-        start_result = _run(["implement-task", str(issue_number), "--cd"], cwd=e2e_repo)
+        start_result = _run(["implement", str(issue_number), "--cd"], cwd=e2e_repo)
         assert start_result.returncode == 0
         worktree_path = Path(start_result.stdout.strip())
         assert worktree_path.is_dir()
@@ -167,7 +167,7 @@ class TestWorkDoneCommand:
         _git(["commit", "-m", f"feat: complete #{issue_number}"], cwd=worktree_path)
         assert _git(["status", "--porcelain"], cwd=worktree_path).stdout.strip() == ""
 
-        result = _run(["work", "done"], cwd=worktree_path)
+        result = _run(["implementation-session", "done"], cwd=worktree_path)
         assert result.returncode == 0
         assert "Work done" in result.stdout
         assert _remote_has_branch(origin_repo, branch_name)

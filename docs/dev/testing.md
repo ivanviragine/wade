@@ -66,6 +66,9 @@ tests/
 # Deterministic end-to-end contract lane
 ./scripts/test-e2e.sh
 
+# Deterministic end-to-end contract lane in Docker (CI-equivalent)
+./scripts/test-e2e-docker.sh
+
 # Manual live GitHub lane (requires real gh auth + repo)
 RUN_LIVE_GH_TESTS=1 WADE_LIVE_REPO=/path/to/repo ./scripts/test-live-gh.sh
 
@@ -78,7 +81,7 @@ credentials, or binaries are missing.
 
 ## Pytest Markers
 
-- `e2e_docker`: deterministic e2e tests intended for docker/CI lanes
+- `e2e_docker`: deterministic e2e tests executed in docker/CI lanes
 - `contract`: behavior contract tests for CLI/service integration
 - `live_gh`: manual live tests requiring gh auth + network
 - `live_ai`: manual live tests requiring real AI credentials
@@ -92,6 +95,12 @@ credentials, or binaries are missing.
 - `ANTHROPIC_API_KEY` is required for the canonical live AI smoke test.
 
 Live tests are manual by design. Default CI lanes must not require provider secrets.
+
+## CI Execution Model
+
+- Unit + integration run directly on the CI host.
+- Deterministic E2E contract tests run via `./scripts/test-e2e-docker.sh` and `docker-compose.e2e.yml`.
+- Live lanes remain manual and env-gated (`test-live-gh.sh`, `test-live-ai.sh`).
 
 ## Test Fixtures
 

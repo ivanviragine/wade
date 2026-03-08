@@ -1,4 +1,4 @@
-"""CLI-level regression tests for work subcommands."""
+"""CLI-level regression tests for implementation/worktree subcommands."""
 
 from __future__ import annotations
 
@@ -6,7 +6,9 @@ from unittest.mock import patch
 
 from typer.testing import CliRunner
 
-from wade.cli.work import work_app
+from wade.cli.implementation_session import impl_session_app
+from wade.cli.main import app
+from wade.cli.worktree import worktree_app
 from wade.models.work import SyncEvent, SyncEventType, SyncResult
 
 runner = CliRunner()
@@ -33,7 +35,7 @@ class TestWorkSyncExitCodes:
             "wade.services.work_service.sync",
             return_value=_sync_result(success=True),
         ):
-            result = runner.invoke(work_app, ["sync"])
+            result = runner.invoke(impl_session_app, ["sync"])
         assert result.exit_code == 0
 
     def test_sync_conflicts_map_to_exit_two(self) -> None:
@@ -41,7 +43,7 @@ class TestWorkSyncExitCodes:
             "wade.services.work_service.sync",
             return_value=_sync_result(success=False, conflicts=["README.md"]),
         ):
-            result = runner.invoke(work_app, ["sync"])
+            result = runner.invoke(impl_session_app, ["sync"])
         assert result.exit_code == 2
 
     def test_sync_preflight_error_maps_to_exit_four(self) -> None:
@@ -53,7 +55,7 @@ class TestWorkSyncExitCodes:
             "wade.services.work_service.sync",
             return_value=_sync_result(success=False, events=[preflight_event]),
         ):
-            result = runner.invoke(work_app, ["sync"])
+            result = runner.invoke(impl_session_app, ["sync"])
         assert result.exit_code == 4
 
     def test_sync_other_error_maps_to_exit_one(self) -> None:
@@ -65,19 +67,19 @@ class TestWorkSyncExitCodes:
             "wade.services.work_service.sync",
             return_value=_sync_result(success=False, events=[generic_error]),
         ):
-            result = runner.invoke(work_app, ["sync"])
+            result = runner.invoke(impl_session_app, ["sync"])
         assert result.exit_code == 1
 
 
 class TestWorkOtherCommands:
     def test_batch_requires_numbers_when_non_interactive(self) -> None:
         with patch("wade.ui.prompts.is_tty", return_value=False):
-            result = runner.invoke(work_app, ["batch"])
+            result = runner.invoke(app, ["implement-batch"])
         assert result.exit_code == 1
         assert "Provide at least one issue number." in result.output
 
     def test_remove_all_alias_sets_stale_mode(self) -> None:
         with patch("wade.services.work_service.remove", return_value=True) as mock_remove:
-            result = runner.invoke(work_app, ["remove", "--all", "--force"])
+            result = runner.invoke(worktree_app, ["remove", "--all", "--force"])
         assert result.exit_code == 0
         mock_remove.assert_called_once_with(target=None, stale=True, force=True)

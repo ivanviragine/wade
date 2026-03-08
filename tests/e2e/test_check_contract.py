@@ -1,4 +1,4 @@
-"""Deterministic E2E contracts for `wade check` and `wade check-config`."""
+"""Deterministic E2E contracts for session check and `wade check-config`."""
 
 from __future__ import annotations
 
@@ -15,32 +15,32 @@ pytestmark = [
 
 
 class TestCheckCommand:
-    """Test `wade check` via CLI subprocess."""
+    """Test `wade implementation-session check` via CLI subprocess."""
 
     def test_check_in_main_checkout(self, e2e_repo: Path) -> None:
-        """wade check on main -> exit 2, stdout contains IN_MAIN_CHECKOUT."""
-        result = _run(["check"], cwd=e2e_repo)
+        """wade implementation-session check on main -> exit 2."""
+        result = _run(["implementation-session", "check"], cwd=e2e_repo)
         assert result.returncode == 2
         assert "IN_MAIN_CHECKOUT" in result.stdout
 
     def test_check_in_worktree(self, e2e_repo: Path) -> None:
-        """wade check in a worktree -> exit 0, stdout contains IN_WORKTREE."""
+        """wade implementation-session check in worktree -> exit 0."""
         wt_dir = e2e_repo.parent / ".worktrees" / "42-test"
         _git(
             ["worktree", "add", "-b", "feat/42-test", str(wt_dir)],
             cwd=e2e_repo,
         )
 
-        result = _run(["check"], cwd=wt_dir)
+        result = _run(["implementation-session", "check"], cwd=wt_dir)
         assert result.returncode == 0
         assert "IN_WORKTREE" in result.stdout
 
     def test_check_not_in_git(self, tmp_path: Path) -> None:
-        """wade check outside git -> exit 1, stdout contains NOT_IN_GIT_REPO."""
+        """wade implementation-session check outside git -> exit 1."""
         bare_dir = tmp_path / "not-a-repo"
         bare_dir.mkdir()
 
-        result = _run(["check"], cwd=bare_dir)
+        result = _run(["implementation-session", "check"], cwd=bare_dir)
         assert result.returncode == 1
         assert "NOT_IN_GIT_REPO" in result.stdout
 

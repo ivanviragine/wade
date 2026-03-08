@@ -1,0 +1,22 @@
+services:
+  e2e:
+    image: ghcr.io/astral-sh/uv:python3.13-bookworm
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+    environment:
+      UV_LINK_MODE: copy
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTEST_ARGS: ""
+    command:
+      - bash
+      - -lc
+      - |
+        set -euo pipefail
+        uv sync --all-extras
+        if [ -n "$${PYTEST_ARGS}" ]; then
+          # shellcheck disable=SC2086
+          ./scripts/test-e2e.sh $${PYTEST_ARGS}
+        else
+          ./scripts/test-e2e.sh
+        fi

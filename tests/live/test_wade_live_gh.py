@@ -90,7 +90,7 @@ def restore_original_branch(require_live_repo: None) -> None:
 
 class TestLiveWadeGH:
     def test_check_and_task_list(self) -> None:
-        check_result = _wade("check")
+        check_result = _wade("implementation-session", "check")
         assert check_result.returncode in (0, 2)
         if check_result.returncode == 0:
             assert "IN_WORKTREE" in check_result.stdout
@@ -112,13 +112,14 @@ class TestLiveWadeGH:
         issue_num = ""
 
         created = _wade(
-            "new-task",
+            "task",
+            "create",
             "--title",
             title,
             "--body",
             "Created by WADE live GH smoke test. Auto-cleanup.",
         )
-        _assert_ok(created, "wade new-task")
+        _assert_ok(created, "wade task create")
 
         list_result = _wade("task", "list", "--json")
         _assert_ok(list_result, "wade task list --json")

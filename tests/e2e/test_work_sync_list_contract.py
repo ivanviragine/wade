@@ -1,4 +1,4 @@
-"""Deterministic E2E contracts for work sync and work list flows."""
+"""Deterministic E2E contracts for sync and worktree-list flows."""
 
 from __future__ import annotations
 
@@ -25,10 +25,10 @@ pytestmark = [
 
 
 class TestWorkSyncCommand:
-    """Test `wade work sync` via CLI subprocess."""
+    """Test `wade implementation-session sync` via CLI subprocess."""
 
     def test_sync_clean_merge(self, e2e_repo: Path) -> None:
-        """wade work sync when main has diverged - clean merge."""
+        """implementation-session sync when main has diverged - clean merge."""
         wt_dir = e2e_repo.parent / ".worktrees" / "50-feature"
         _git(
             ["worktree", "add", "-b", "feat/50-feature", str(wt_dir)],
@@ -44,26 +44,26 @@ class TestWorkSyncCommand:
         _git(["add", "."], cwd=e2e_repo)
         _git(["commit", "-m", "docs: add docs"], cwd=e2e_repo)
 
-        result = _run(["work", "sync"], cwd=wt_dir)
+        result = _run(["implementation-session", "sync"], cwd=wt_dir)
 
         assert result.returncode == 0
         assert (wt_dir / "docs.md").exists()
         assert (wt_dir / "feature.py").exists()
 
     def test_sync_already_up_to_date(self, e2e_repo: Path) -> None:
-        """wade work sync when already up to date - no-op."""
+        """implementation-session sync when already up to date - no-op."""
         wt_dir = e2e_repo.parent / ".worktrees" / "51-uptodate"
         _git(
             ["worktree", "add", "-b", "feat/51-uptodate", str(wt_dir)],
             cwd=e2e_repo,
         )
 
-        result = _run(["work", "sync"], cwd=wt_dir)
+        result = _run(["implementation-session", "sync"], cwd=wt_dir)
         assert result.returncode == 0
         assert "already up to date" in result.stdout.lower()
 
     def test_sync_conflict_exit_code(self, e2e_repo: Path) -> None:
-        """wade work sync with merge conflict -> exit 2."""
+        """implementation-session sync conflict emits structured conflict event."""
         wt_dir = e2e_repo.parent / ".worktrees" / "60-conflict"
         _git(
             ["worktree", "add", "-b", "feat/60-conflict", str(wt_dir)],
@@ -79,20 +79,29 @@ class TestWorkSyncCommand:
         _git(["add", "."], cwd=e2e_repo)
         _git(["commit", "-m", "docs: update readme"], cwd=e2e_repo)
 
-        result = _run(["work", "sync"], cwd=wt_dir)
+        result = _run(["implementation-session", "sync", "--json"], cwd=wt_dir)
         assert result.returncode == 2
+        non_empty_lines = [line for line in result.stdout.splitlines() if line.strip()]
+        assert non_empty_lines, "Expected JSON events for conflict path"
+        events = [json.loads(line) for line in non_empty_lines]
+        conflict_events = [event for event in events if event.get("event") == "conflict"]
+        assert conflict_events, f"Expected conflict event, got: {events!r}"
+        conflict = conflict_events[0]
+        assert "README.md" in str(conflict.get("files", ""))
+        assert conflict.get("source") == MAIN_BRANCH
+        assert conflict.get("target") == "feat/60-conflict"
 
         subprocess.run(["git", "merge", "--abort"], cwd=wt_dir, capture_output=True)
 
     def test_sync_json_output(self, e2e_repo: Path) -> None:
-        """wade work sync --json emits structured events."""
+        """implementation-session sync --json emits structured events."""
         wt_dir = e2e_repo.parent / ".worktrees" / "52-json"
         _git(
             ["worktree", "add", "-b", "feat/52-json", str(wt_dir)],
             cwd=e2e_repo,
         )
 
-        result = _run(["work", "sync", "--json"], cwd=wt_dir)
+        result = _run(["implementation-session", "sync", "--json"], cwd=wt_dir)
         assert result.returncode == 0
 
         non_empty_lines = [line for line in result.stdout.splitlines() if line.strip()]
@@ -107,22 +116,30 @@ class TestWorkSyncCommand:
             assert "event" in parsed
 
     def test_sync_from_main_rejected(self, e2e_repo: Path) -> None:
-        """wade work sync from main branch -> exit 4 (preflight failure)."""
-        result = _run(["work", "sync"], cwd=e2e_repo)
+        """implementation-session sync from main -> exit 4 preflight failure."""
+        result = _run(["implementation-session", "sync", "--json"], cwd=e2e_repo)
         assert result.returncode == 4
+        non_empty_lines = [line for line in result.stdout.splitlines() if line.strip()]
+        assert non_empty_lines, "Expected JSON events for preflight failure"
+        events = [json.loads(line) for line in non_empty_lines]
+        error_events = [event for event in events if event.get("event") == "error"]
+        assert error_events, f"Expected error event, got: {events!r}"
+        assert any(event.get("reason") == "on_main_branch" for event in error_events), (
+            f"Expected on_main_branch preflight reason, got: {error_events!r}"
+        )
 
 
 class TestWorkListCommand:
-    """Test `wade work list` via CLI subprocess."""
+    """Test `wade worktree list` via CLI subprocess."""
 
     def test_list_empty(self, e2e_repo: Path) -> None:
-        """wade work list with no worktrees should print explicit empty state."""
-        result = _run(["work", "list"], cwd=e2e_repo)
+        """worktree list with no worktrees should print explicit empty state."""
+        result = _run(["worktree", "list"], cwd=e2e_repo)
         assert result.returncode == 0
         assert "No active wade worktrees found." in result.stdout
 
     def test_list_with_worktrees(self, e2e_repo: Path, mock_gh_cli: MockGhCli) -> None:
-        """wade work list with worktrees should query issue state via gh."""
+        """worktree list with worktrees should query issue state via gh."""
         _seed_mock_issue(
             mock_gh_cli["state_file"],
             issue_number=10,
@@ -142,7 +159,7 @@ class TestWorkListCommand:
                 cwd=e2e_repo,
             )
 
-        result = _run(["work", "list"], cwd=e2e_repo)
+        result = _run(["worktree", "list"], cwd=e2e_repo)
         assert result.returncode == 0
         assert "10" in result.stdout or "auth" in result.stdout, (
             f"Expected worktree '10-auth' in output, got: {result.stdout!r}"
@@ -160,14 +177,14 @@ class TestWorkListCommand:
         )
 
     def test_list_json(self, e2e_repo: Path) -> None:
-        """wade work list --json outputs strict JSON with required keys."""
+        """worktree list --json outputs strict JSON with required keys."""
         wt_dir = e2e_repo.parent / ".worktrees" / "20-test"
         _git(
             ["worktree", "add", "-b", "feat/20-test", str(wt_dir)],
             cwd=e2e_repo,
         )
 
-        result = _run(["work", "list", "--json"], cwd=e2e_repo)
+        result = _run(["worktree", "list", "--json"], cwd=e2e_repo)
         assert result.returncode == 0
         parsed = _parse_json_output(result.stdout)
         assert isinstance(parsed, list)

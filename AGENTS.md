@@ -31,6 +31,8 @@ Two distinct worlds interact in this codebase. Always be clear which one you are
 |--------|---------|
 | `./scripts/test.sh` | Run all tests (excludes live) |
 | `./scripts/test.sh tests/unit/` | Unit tests only |
+| `./scripts/test-e2e.sh` | Deterministic E2E contract tests (host lane) |
+| `./scripts/test-e2e-docker.sh` | Deterministic E2E contract tests in Docker (CI-equivalent) |
 | `./scripts/check.sh` | Lint + type-check (both) |
 | `./scripts/check.sh --lint` | Lint + format check only |
 | `./scripts/check.sh --types` | Type check (strict mypy) only |

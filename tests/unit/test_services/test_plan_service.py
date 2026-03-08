@@ -698,7 +698,9 @@ class TestPlanOrchestrator:
             ),
             patch("wade.services.plan_service.validate_plan_files", return_value=[plan_file]),
             patch("wade.services.plan_service._create_issues_from_plans", return_value=["101"]),
-            patch("wade.services.plan_service._finalize_issues") as mock_finalize,
+            patch(
+                "wade.services.plan_service._finalize_issues", return_value=None
+            ) as mock_finalize,
             patch("wade.services.plan_service._cleanup_plan_dir"),
             patch("wade.services.plan_service.set_terminal_title"),
             patch("wade.services.plan_service.start_title_keeper"),

@@ -13,6 +13,7 @@ uv pip install -e ".[dev]"
 ./scripts/test.sh tests/unit/                                             # unit tests only
 ./scripts/test.sh tests/integration/                                      # integration tests only
 ./scripts/test-e2e.sh                                                     # deterministic e2e contract lane
+./scripts/test-e2e-docker.sh                                              # deterministic e2e in Docker (CI-equivalent)
 RUN_LIVE_GH_TESTS=1 ./scripts/test-live-gh.sh                             # manual live GitHub lane
 RUN_LIVE_AI_TESTS=1 ./scripts/test-live-ai.sh                             # manual live AI lane
 
