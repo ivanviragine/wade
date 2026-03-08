@@ -313,6 +313,17 @@ class TestFindExistingTrackingIssue:
         ]
         result = _find_existing_tracking_issue(provider, "feature-plan", "Tracking: #1, #2")
         assert result == "10"
+        provider.list_tasks.assert_called_once_with(label="feature-plan", state=None)
+
+    def test_finds_closed_tracking_issue(self) -> None:
+        """Should find tracking issues even if they are closed."""
+        provider = MagicMock()
+        provider.list_tasks.return_value = [
+            Task(id="42", title="Tracking: #1, #2", state=TaskState.CLOSED),
+        ]
+        result = _find_existing_tracking_issue(provider, "feature-plan", "Tracking: #1, #2")
+        assert result == "42"
+        provider.list_tasks.assert_called_once_with(label="feature-plan", state=None)
 
     def test_returns_none_when_no_match(self) -> None:
         provider = MagicMock()
