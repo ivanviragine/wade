@@ -65,8 +65,18 @@ ALWAYS_OVERWRITE = {"plan-session", "implementation-session", "address-reviews-s
 # Old skill names removed in the phase-skill refactor — cleaned up during update
 _LEGACY_SKILLS = {"workflow", "sync", "pr-summary", "work-session", "review-session"}
 
+# All skill names Wade manages (current + legacy) — used for safe pruning
+MANAGED_SKILL_NAMES: set[str] = set(SKILL_FILES) | _LEGACY_SKILLS
+
 # Cross-tool directories that get symlinked to .claude/skills
 CROSS_TOOL_DIRS = [".github/skills", ".agents/skills", ".gemini/skills", ".cursor/skills"]
+
+# --- Command-to-skill mapping: which skills each session type needs ---
+
+PLAN_SKILLS: list[str] = ["plan-session", "task", "deps"]
+DEPS_SKILLS: list[str] = ["deps"]
+IMPLEMENT_SKILLS: list[str] = ["implementation-session", "task"]
+REVIEW_SKILLS: list[str] = ["address-reviews-session", "task"]
 
 
 def install_skills(
@@ -74,8 +84,9 @@ def install_skills(
     is_self_init: bool = False,
     force: bool = False,
     templates_dir: Path | None = None,
+    skills: list[str] | None = None,
 ) -> list[str]:
-    """Install all skill files to a project.
+    """Install skill files to a project.
 
     Args:
         project_root: Root of the target project.
@@ -83,6 +94,8 @@ def install_skills(
         force: If True, overwrite existing files.
         templates_dir: Override the skills templates directory.
             Useful for worktrees where templates live in the worktree itself.
+        skills: If provided, install only the listed skills instead of all
+            ``SKILL_FILES``.  When ``None`` (default), all skills are installed.
 
     Returns:
         List of installed file paths (relative to project root).
@@ -107,7 +120,29 @@ def install_skills(
             shutil.rmtree(legacy_dir)
             logger.debug("skills.removed_legacy", name=legacy_name)
 
-    for skill_name, files in SKILL_FILES.items():
+    # Determine which skills to install
+    if skills is not None:
+        invalid = set(skills) - set(SKILL_FILES.keys())
+        if invalid:
+            logger.warning("skills.unknown_skill_names", names=sorted(invalid))
+        skill_items = {name: SKILL_FILES[name] for name in skills if name in SKILL_FILES}
+
+        # Prune stale skills: remove Wade-managed skills not in the requested
+        # set (ensures clean per-command isolation on worktree reuse).
+        # Only remove known Wade-managed names — leave user-owned dirs untouched.
+        if primary_skills_dir.is_dir():
+            stale_managed = MANAGED_SKILL_NAMES - set(skill_items)
+            for entry in primary_skills_dir.iterdir():
+                if entry.name in stale_managed and (entry.is_symlink() or entry.is_dir()):
+                    if entry.is_symlink():
+                        entry.unlink()
+                    else:
+                        shutil.rmtree(entry)
+                    logger.debug("skills.pruned_stale", name=entry.name)
+    else:
+        skill_items = SKILL_FILES
+
+    for skill_name, files in skill_items.items():
         if is_self_init:
             # Symlink the whole directory
             _link_skill_dir(project_root, skill_name, templates_dir)

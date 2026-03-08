@@ -247,13 +247,18 @@ def run_ai_planning_session(
     issue_context: str | None = None,
     effort: EffortLevel | None = None,
     allowed_commands: list[str] | None = None,
+    cwd: Path | None = None,
 ) -> int:
     """Launch the AI CLI for a planning session.
 
     Launches the AI tool with the plan prompt as an initial message,
     plan-mode and plan-directory permission args.
 
+    Args:
+        cwd: Working directory for the AI process. Defaults to ``Path.cwd()``.
     """
+    session_cwd = cwd or Path.cwd()
+
     # Build prompt
     prompt = render_plan_prompt(plan_dir, issue_context=issue_context)
 
@@ -273,7 +278,7 @@ def run_ai_planning_session(
     except (ValueError, KeyError):
         console.warn(f"Unknown AI tool: {ai_tool} — launching directly")
         try:
-            result = subprocess.run([ai_tool], cwd=None)
+            result = subprocess.run([ai_tool], cwd=str(session_cwd))
         except FileNotFoundError:
             console.error(f"AI tool binary not found: {ai_tool}")
             return 1
@@ -291,7 +296,7 @@ def run_ai_planning_session(
     cmd = adapter.build_launch_command(
         model=model,
         plan_mode=True,
-        trusted_dirs=[str(Path.cwd()), tempfile.gettempdir(), plan_dir],
+        trusted_dirs=[str(session_cwd), tempfile.gettempdir(), plan_dir],
         initial_message=prompt,
         effort=effort,
         allowed_commands=allowed_commands,
@@ -306,7 +311,7 @@ def run_ai_planning_session(
         cmd=" ".join(cmd),
     )
 
-    return run_with_transcript(cmd, transcript_path, cwd=Path.cwd())
+    return run_with_transcript(cmd, transcript_path, cwd=session_cwd)
 
 
 # ---------------------------------------------------------------------------
@@ -419,6 +424,9 @@ def plan(
 
     # Resolve repo root for draft PR creation
     from wade.git import repo as git_repo
+    from wade.git import worktree as git_worktree
+    from wade.services.work_service import _resolve_worktrees_dir, bootstrap_worktree
+    from wade.skills.installer import PLAN_SKILLS
 
     cwd = project_root or Path.cwd()
     try:
@@ -430,8 +438,29 @@ def plan(
     # Ensure task label exists
     ensure_task_label(provider, config.project.issue_label)
 
-    # Create temp directory for plan files
-    plan_dir = tempfile.mkdtemp(prefix="wade-plan-")
+    # Create a detached-HEAD planning worktree
+    planning_worktree: Path | None = None
+    if repo_root is not None:
+        worktrees_dir = _resolve_worktrees_dir(config, repo_root)
+        repo_name = repo_root.name
+        short_id = os.urandom(4).hex()
+        planning_worktree_dir = worktrees_dir / repo_name / f"plan-{short_id}"
+        try:
+            planning_worktree = git_worktree.create_detached_worktree(
+                repo_root=repo_root,
+                worktree_dir=planning_worktree_dir,
+            )
+            bootstrap_worktree(planning_worktree, config, repo_root, skills=PLAN_SKILLS)
+            console.kv("Planning worktree", str(planning_worktree))
+        except Exception as e:
+            console.warn(f"Could not create planning worktree: {e}")
+            planning_worktree = None
+
+    # Plan directory: use planning worktree if available, otherwise fall back to temp dir
+    if planning_worktree is not None:
+        plan_dir = str(planning_worktree)
+    else:
+        plan_dir = tempfile.mkdtemp(prefix="wade-plan-")
 
     # Set up transcript capture
     transcript_path = Path(plan_dir) / ".transcript"
@@ -440,6 +469,7 @@ def plan(
     # Launch AI session
     console.empty()
     issue_context = _build_issue_context_header(existing_issue) if existing_issue else None
+    session_cwd = planning_worktree or Path.cwd()
     exit_code = run_ai_planning_session(
         ai_tool=resolved_tool,
         plan_dir=plan_dir,
@@ -448,6 +478,7 @@ def plan(
         issue_context=issue_context,
         effort=resolved_effort,
         allowed_commands=config.permissions.allowed_commands,
+        cwd=session_cwd,
     )
     logger.info("plan.ai_exited", exit_code=exit_code)
 
@@ -465,6 +496,7 @@ def plan(
             console.info("Plan directory preserved — review output manually.")
             console.hint(f"Plan dir: {plan_dir}")
             stop_title_keeper()
+            _remove_planning_worktree(repo_root, planning_worktree)
             return False
 
     # Post-session: extract token usage (skip for non-blocking tools)
@@ -486,7 +518,6 @@ def plan(
                 plan_files=plan_files,
                 repo_root=repo_root,
             )
-            _cleanup_plan_dir(plan_dir)
             stop_title_keeper()
             offer_result = _finalize_issues(
                 provider=provider,
@@ -496,16 +527,18 @@ def plan(
                 model=resolved_model,
                 usage=usage,
                 repo_root=repo_root,
+                planning_worktree=planning_worktree,
             )
+            _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
             if offer_result is not None:
                 return offer_result
             return True
         console.warn("No plan files found — the AI session may not have produced output.")
-        _cleanup_plan_dir(plan_dir)
+        _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
         stop_title_keeper()
         return False
 
-    # Read plan files from temp dir and create issues
+    # Read plan files from worktree/temp dir and create issues
     plan_files = validate_plan_files(Path(plan_dir))
 
     if plan_files:
@@ -517,7 +550,6 @@ def plan(
             repo_root=repo_root,
         )
         if created_numbers:
-            _cleanup_plan_dir(plan_dir)
             stop_title_keeper()
             offer_result = _finalize_issues(
                 provider=provider,
@@ -527,7 +559,9 @@ def plan(
                 model=resolved_model,
                 usage=usage,
                 repo_root=repo_root,
+                planning_worktree=planning_worktree,
             )
+            _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
             if offer_result is not None:
                 return offer_result
             return True
@@ -536,7 +570,7 @@ def plan(
         console.warn("No plan files found.")
         console.hint("The AI session may not have produced any output.")
 
-    _cleanup_plan_dir(plan_dir)
+    _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
     stop_title_keeper()
     return False
 
@@ -713,6 +747,7 @@ def _finalize_issues(
     model: str | None = None,
     usage: TokenUsage | None = None,
     repo_root: Path | None = None,
+    planning_worktree: Path | None = None,
 ) -> bool | None:
     """Finalize newly created issues: token summaries, labels, hints.
 
@@ -782,6 +817,7 @@ def _finalize_issues(
                 model=model,
                 ai_explicit=True,
                 model_explicit=True,
+                planning_worktree=planning_worktree,
             )
             if graph and graph.edges:
                 console.success(f"Applied {len(graph.edges)} dependency edge(s)")
@@ -845,6 +881,28 @@ def _offer_to_implement(issue_number: str) -> bool | None:
     except Exception:
         logger.exception("plan.work_session_start_failed", issue=issue_number)
         return False
+
+
+def _remove_planning_worktree(repo_root: Path | None, worktree: Path | None) -> None:
+    """Remove a planning worktree if it exists."""
+    if repo_root is None or worktree is None:
+        return
+    with contextlib.suppress(Exception):
+        from wade.git import worktree as git_worktree
+
+        git_worktree.remove_worktree(repo_root, worktree, force=True)
+
+
+def _cleanup_plan_dir_or_worktree(
+    plan_dir: str,
+    repo_root: Path | None,
+    planning_worktree: Path | None,
+) -> None:
+    """Clean up the plan directory — either a worktree or a temp dir."""
+    if planning_worktree is not None:
+        _remove_planning_worktree(repo_root, planning_worktree)
+    else:
+        _cleanup_plan_dir(plan_dir)
 
 
 def _cleanup_plan_dir(plan_dir: str) -> None:

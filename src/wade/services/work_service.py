@@ -134,8 +134,16 @@ def bootstrap_worktree(
     worktree_path: Path,
     config: ProjectConfig,
     repo_root: Path,
+    skills: list[str] | None = None,
 ) -> None:
-    """Run post-creation bootstrap: copy files, install skills, run hooks."""
+    """Run post-creation bootstrap: copy files, install skills, run hooks.
+
+    Args:
+        worktree_path: Path to the worktree directory.
+        config: Project configuration.
+        repo_root: Root of the main repository checkout.
+        skills: If provided, install only the listed skills instead of all.
+    """
     # Copy configured files
     for filename in config.hooks.copy_to_worktree:
         src = repo_root / filename
@@ -152,9 +160,15 @@ def bootstrap_worktree(
     if is_self:
         # Worktree has its own templates/ checkout — symlink to those
         wt_templates = worktree_path / "templates" / "skills"
-        install_skills(worktree_path, is_self_init=True, force=True, templates_dir=wt_templates)
+        install_skills(
+            worktree_path,
+            is_self_init=True,
+            force=True,
+            templates_dir=wt_templates,
+            skills=skills,
+        )
     else:
-        install_skills(worktree_path, is_self_init=False, force=True)
+        install_skills(worktree_path, is_self_init=False, force=True, skills=skills)
     logger.debug("work.bootstrap_skills", path=str(worktree_path))
 
     # Propagate allowlist from project root to worktree if already configured
@@ -878,8 +892,10 @@ def start(
         console.empty()
 
         # Bootstrap
+        from wade.skills.installer import IMPLEMENT_SKILLS
+
         write_plan_md(worktree_path, task, plan_content=plan_content)
-        bootstrap_worktree(worktree_path, config, repo_root)
+        bootstrap_worktree(worktree_path, config, repo_root, skills=IMPLEMENT_SKILLS)
 
         # Add in-progress label and move to in-progress on project board (both non-critical)
         with contextlib.suppress(Exception):

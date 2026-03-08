@@ -346,11 +346,13 @@ def run_headless_analysis(
     prompt: str,
     model: str | None = None,
     allowed_commands: list[str] | None = None,
+    cwd: Path | None = None,
 ) -> str | None:
     """Run dependency analysis in headless mode.
 
     Returns the AI output text, or None if headless is not supported.
     """
+    session_cwd = cwd or Path.cwd()
     try:
         adapter = AbstractAITool.get(AIToolID(ai_tool))
     except (ValueError, KeyError):
@@ -364,12 +366,12 @@ def run_headless_analysis(
     cmd = adapter.build_launch_command(
         model=model,
         prompt=prompt,
-        trusted_dirs=[str(Path.cwd()), tempfile.gettempdir()],
+        trusted_dirs=[str(session_cwd), tempfile.gettempdir()],
         allowed_commands=allowed_commands,
     )
 
     try:
-        result = run(cmd, check=False, timeout=120)
+        result = run(cmd, check=False, timeout=120, cwd=session_cwd)
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout
     except (subprocess.TimeoutExpired, CommandError) as e:
@@ -389,6 +391,7 @@ def _run_interactive_analysis(
     model: str | None = None,
     plan_dir: str | None = None,
     allowed_commands: list[str] | None = None,
+    cwd: Path | None = None,
 ) -> str | None:
     """Run dependency analysis interactively when headless fails.
 
@@ -397,6 +400,8 @@ def _run_interactive_analysis(
     """
     from wade.ai_tools.base import AbstractAITool
     from wade.models.ai import AIToolID
+
+    session_cwd = cwd or Path.cwd()
 
     # Set up output file for the AI to write results to
     created_tmp = plan_dir is None
@@ -415,10 +420,10 @@ def _run_interactive_analysis(
             adapter = AbstractAITool.get(AIToolID(ai_tool))
             deliver_prompt_if_needed(adapter, interactive_prompt)
             adapter.launch(
-                worktree_path=Path.cwd(),
+                worktree_path=session_cwd,
                 model=model,
                 prompt=interactive_prompt,
-                trusted_dirs=[str(Path.cwd()), output_dir, tempfile.gettempdir()],
+                trusted_dirs=[str(session_cwd), output_dir, tempfile.gettempdir()],
                 allowed_commands=allowed_commands,
             )
 
@@ -465,6 +470,7 @@ def analyze_deps(
     model_explicit: bool = False,
     effort: str | None = None,
     effort_explicit: bool = False,
+    planning_worktree: Path | None = None,
 ) -> DependencyGraph | None:
     """Analyze dependencies between issues.
 
@@ -475,8 +481,16 @@ def analyze_deps(
     4. Apply cross-references to issues
     5. Create tracking issue (2+ issues)
 
+    Args:
+        planning_worktree: If provided (e.g. from plan auto-deps), reuse this
+            worktree instead of creating a new one.  The worktree already has
+            deps skill installed via ``PLAN_SKILLS``.
+
     Returns the DependencyGraph, or None on failure.
     """
+    import contextlib
+    import os
+
     config = load_config(project_root)
     provider = get_provider(config)
 
@@ -509,6 +523,37 @@ def analyze_deps(
         console.error("No AI tool selected.")
         return None
 
+    # Set up worktree for deps analysis
+    standalone_worktree: Path | None = None
+    deps_cwd: Path | None = None
+
+    if planning_worktree is not None:
+        # Reuse existing planning worktree (deps skill already installed)
+        deps_cwd = planning_worktree
+    else:
+        # Standalone invocation — create a detached-HEAD worktree
+        cwd = project_root or Path.cwd()
+        try:
+            from wade.git import repo as git_repo
+            from wade.git import worktree as git_worktree
+            from wade.services.work_service import _resolve_worktrees_dir, bootstrap_worktree
+            from wade.skills.installer import DEPS_SKILLS
+
+            repo_root = git_repo.get_repo_root(cwd)
+            worktrees_dir = _resolve_worktrees_dir(config, repo_root)
+            repo_name = repo_root.name
+            short_id = os.urandom(4).hex()
+            wt_dir = worktrees_dir / repo_name / f"deps-{short_id}"
+            standalone_worktree = git_worktree.create_detached_worktree(
+                repo_root=repo_root,
+                worktree_dir=wt_dir,
+            )
+            bootstrap_worktree(standalone_worktree, config, repo_root, skills=DEPS_SKILLS)
+            deps_cwd = standalone_worktree
+        except Exception as e:
+            logger.warning("deps.worktree_create_failed", error=str(e))
+            # Fall through — deps_cwd stays None, analysis runs in CWD
+
     # Build context
     context = build_context(provider, issue_numbers)
     prompt = build_deps_prompt(context)
@@ -528,7 +573,13 @@ def analyze_deps(
     # Run headless AI analysis
     console.step(f"Running {resolved_tool} for dependency analysis...")
     allowed_cmds = config.permissions.allowed_commands
-    output = run_headless_analysis(resolved_tool, prompt, resolved_model, allowed_cmds)
+    output = run_headless_analysis(
+        resolved_tool,
+        prompt,
+        resolved_model,
+        allowed_cmds,
+        cwd=deps_cwd,
+    )
 
     if output and output_is_parseable(output):
         console.success("Headless analysis complete.")
@@ -545,7 +596,17 @@ def analyze_deps(
             resolved_model,
             plan_dir=None,
             allowed_commands=allowed_cmds,
+            cwd=deps_cwd,
         )
+
+    # Clean up standalone worktree (planning worktree is cleaned by plan_service)
+    if standalone_worktree is not None:
+        with contextlib.suppress(Exception):
+            from wade.git import repo as git_repo
+            from wade.git import worktree as git_worktree
+
+            repo_root = git_repo.get_repo_root(project_root or Path.cwd())
+            git_worktree.remove_worktree(repo_root, standalone_worktree, force=True)
 
     # Parse edges
     edges = parse_deps_output(output, valid_numbers) if output else []
