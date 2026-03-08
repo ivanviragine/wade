@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from wade.models.task import Task, TaskState
+from wade.models.work import SessionRecord
 from wade.services.smart_start import (
     _get_latest_resumable_session,
     _run_continue_working,
@@ -53,8 +54,9 @@ class TestGetLatestResumableSession:
         mock_body.return_value = _SESSION_BODY
         result = _get_latest_resumable_session(tmp_path, 99)
         assert result is not None
-        assert result["ai_tool"] == "claude"
-        assert result["session_id"] == "abc-123-456"
+        assert isinstance(result, SessionRecord)
+        assert result.ai_tool == "claude"
+        assert result.session_id == "abc-123-456"
 
     @patch("wade.services.smart_start.git_pr.get_pr_body")
     def test_returns_latest_resumable_skipping_unsupported(
@@ -71,8 +73,9 @@ class TestGetLatestResumableSession:
         mock_body.return_value = body
         result = _get_latest_resumable_session(tmp_path, 99)
         assert result is not None
-        assert result["ai_tool"] == "claude"
-        assert result["session_id"] == "claude-sess"
+        assert isinstance(result, SessionRecord)
+        assert result.ai_tool == "claude"
+        assert result.session_id == "claude-sess"
 
     @patch("wade.services.smart_start.git_pr.get_pr_body")
     def test_returns_none_when_only_unsupported_tools(
@@ -92,7 +95,7 @@ class TestGetLatestResumableSession:
         mock_body.return_value = _MULTI_SESSION_BODY
         result = _get_latest_resumable_session(tmp_path, 99)
         assert result is not None
-        assert result["session_id"] == "abc-latest"
+        assert result.session_id == "abc-latest"
 
 
 class TestRunContinueWorking:
@@ -137,11 +140,11 @@ class TestRunContinueWorking:
         tmp_path: Path,
     ) -> None:
         """Selecting 'Resume last session' passes resume_session_id and resume_ai_tool."""
-        mock_get_session.return_value = {
-            "phase": "implementation",
-            "ai_tool": "claude",
-            "session_id": "abc-123",
-        }
+        mock_get_session.return_value = SessionRecord(
+            phase="implementation",
+            ai_tool="claude",
+            session_id="abc-123",
+        )
 
         result = _run_continue_working(
             target="42",
@@ -171,11 +174,11 @@ class TestRunContinueWorking:
         tmp_path: Path,
     ) -> None:
         """Selecting 'Start new session' calls implement_task without resume params."""
-        mock_get_session.return_value = {
-            "phase": "implementation",
-            "ai_tool": "claude",
-            "session_id": "abc-123",
-        }
+        mock_get_session.return_value = SessionRecord(
+            phase="implementation",
+            ai_tool="claude",
+            session_id="abc-123",
+        )
 
         result = _run_continue_working(
             target="42",
@@ -205,11 +208,11 @@ class TestRunContinueWorking:
         tmp_path: Path,
     ) -> None:
         """Sub-menu labels include tool name and truncated session ID."""
-        mock_get_session.return_value = {
-            "phase": "implementation",
-            "ai_tool": "claude",
-            "session_id": "a-very-long-session-identifier-here",
-        }
+        mock_get_session.return_value = SessionRecord(
+            phase="implementation",
+            ai_tool="claude",
+            session_id="a-very-long-session-identifier-here",
+        )
 
         _run_continue_working(
             target="42",
@@ -356,3 +359,41 @@ class TestSmartStartResumeIntegration:
         mock_select.assert_called_once()
         call_kwargs = mock_implement.call_args[1]
         assert call_kwargs.get("resume_session_id") is None
+
+    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.smart_start.git_pr.get_pr_body")
+    @patch("wade.ui.prompts.select")
+    @patch("wade.git.worktree.list_worktrees", return_value=[])
+    @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
+    @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.smart_start.git_repo.get_repo_root")
+    @patch("wade.services.smart_start.get_provider")
+    @patch("wade.services.smart_start.load_config")
+    def test_full_flow_no_worktree_resume_selected(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_branch: MagicMock,
+        mock_pr_for_branch: MagicMock,
+        mock_worktrees: MagicMock,
+        mock_select: MagicMock,
+        mock_pr_body: MagicMock,
+        mock_implement: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """No local worktree + non-draft PR with sessions → resume sub-menu → resume."""
+        mock_repo_root.return_value = tmp_path
+        mock_get_provider.return_value.read_task.return_value = _make_task()
+        # Non-draft PR so "Continue working" is shown even without a worktree
+        mock_pr_for_branch.return_value = {"number": 99, "state": "OPEN", "isDraft": False}
+        mock_pr_body.return_value = _SESSION_BODY
+        # First select: "Continue working" (index 0), second: "Resume last session" (index 0)
+        mock_select.side_effect = [0, 0]
+
+        result = smart_start("42", project_root=tmp_path)
+
+        assert result is True
+        call_kwargs = mock_implement.call_args[1]
+        assert call_kwargs["resume_session_id"] == "abc-123-456"
+        assert call_kwargs["resume_ai_tool"] == "claude"

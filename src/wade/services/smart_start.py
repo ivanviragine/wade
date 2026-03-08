@@ -21,6 +21,7 @@ from wade.git import pr as git_pr
 from wade.git import repo as git_repo
 from wade.git.repo import GitError
 from wade.models.ai import AIToolID
+from wade.models.work import SessionRecord
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.work_service import _merge_pr
@@ -382,10 +383,10 @@ def _run_merge_pr_wrapper(
 # ---------------------------------------------------------------------------
 
 
-def _get_latest_resumable_session(repo_root: Path, pr_number: int) -> dict[str, str] | None:
+def _get_latest_resumable_session(repo_root: Path, pr_number: int) -> SessionRecord | None:
     """Find the most recent session from the PR body whose tool supports resume.
 
-    Returns a dict with keys ``phase``, ``ai_tool``, ``session_id`` or None.
+    Returns a ``SessionRecord`` or ``None``.
     """
     pr_body = git_pr.get_pr_body(repo_root, pr_number)
     if not pr_body:
@@ -401,7 +402,7 @@ def _get_latest_resumable_session(repo_root: Path, pr_number: int) -> dict[str, 
         try:
             adapter = AbstractAITool.get(AIToolID(tool_id_str))
             if adapter.capabilities().supports_resume:
-                return session
+                return SessionRecord(**session)
         except (ValueError, KeyError):
             continue
 
@@ -436,8 +437,8 @@ def _run_continue_working(
             model_explicit=model_explicit,
         )
 
-    session_id = resumable["session_id"]
-    tool_name = resumable["ai_tool"]
+    session_id = resumable.session_id
+    tool_name = resumable.ai_tool
     short_id = session_id[:16] + "…" if len(session_id) > 16 else session_id
 
     labels = [
