@@ -80,10 +80,10 @@ class TestCreateDetachedWorktree:
         detached = [wt for wt in worktrees if wt.get("branch") == "(detached)"]
         assert len(detached) >= 2
 
-    def test_detached_worktree_nonexistent_dir_raises(
+    def test_detached_worktree_creates_nested_parent_dirs(
         self, tmp_git_repo: Path, tmp_path: Path
     ) -> None:
-        """Creating a worktree in a nonexistent parent with missing parent fails."""
+        """Creating a detached worktree in a nested path succeeds."""
         from wade.git.worktree import create_detached_worktree
 
         # Git creates intermediate dirs, but if we provide an impossible path...

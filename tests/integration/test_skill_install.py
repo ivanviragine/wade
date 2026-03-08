@@ -147,6 +147,25 @@ class TestSelectiveSkillInstallation:
 
         install_skills(tmp_git_repo, skills=["deps"])
 
-        for cross_dir in [".github/skills", ".agents/skills", ".gemini/skills"]:
+        for cross_dir in [".github/skills", ".agents/skills", ".gemini/skills", ".cursor/skills"]:
             link = tmp_git_repo / cross_dir
             assert link.is_symlink(), f"{cross_dir} should be a symlink"
+
+    def test_selective_install_prunes_stale_skills(self, tmp_git_repo: Path) -> None:
+        """Re-bootstrapping with different skills removes previously installed ones."""
+        from wade.skills.installer import IMPLEMENT_SKILLS, REVIEW_SKILLS, install_skills
+
+        # First install: implementation skills
+        install_skills(tmp_git_repo, skills=IMPLEMENT_SKILLS)
+        skills_dir = tmp_git_repo / ".claude" / "skills"
+        assert (skills_dir / "implementation-session").is_dir()
+        assert (skills_dir / "task").is_dir()
+
+        # Second install: review skills (simulates worktree reuse)
+        install_skills(tmp_git_repo, skills=REVIEW_SKILLS)
+        assert (skills_dir / "address-reviews-session").is_dir()
+        assert (skills_dir / "task").is_dir()
+        # Stale skill from first install should be gone
+        assert not (skills_dir / "implementation-session").exists(), (
+            "implementation-session should be pruned when re-bootstrapping with REVIEW_SKILLS"
+        )

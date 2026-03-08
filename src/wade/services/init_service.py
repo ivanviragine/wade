@@ -336,15 +336,17 @@ def _migrate_skills_off_main(project_root: Path) -> list[str]:
             shutil.rmtree(skill_dir)
             removed.append(f".claude/skills/{skill_name}")
 
-    # Remove cross-tool symlinks
+    # Remove cross-tool symlinks (only symlinks — real dirs may contain user data)
     for cross_dir in installer.CROSS_TOOL_DIRS:
         cross_path = project_root / cross_dir
         if cross_path.is_symlink():
             cross_path.unlink()
             removed.append(cross_dir)
         elif cross_path.is_dir():
-            shutil.rmtree(cross_path)
-            removed.append(cross_dir)
+            logger.warning(
+                "init.skip_non_symlink_cross_tool_dir",
+                path=str(cross_path),
+            )
 
     # Clean up empty parent directories
     for parent in [

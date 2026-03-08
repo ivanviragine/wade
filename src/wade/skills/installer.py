@@ -118,11 +118,25 @@ def install_skills(
             logger.debug("skills.removed_legacy", name=legacy_name)
 
     # Determine which skills to install
-    skill_items = (
-        {name: SKILL_FILES[name] for name in skills if name in SKILL_FILES}
-        if skills is not None
-        else SKILL_FILES
-    )
+    if skills is not None:
+        invalid = set(skills) - set(SKILL_FILES.keys())
+        if invalid:
+            logger.warning("skills.unknown_skill_names", names=sorted(invalid))
+        skill_items = {name: SKILL_FILES[name] for name in skills if name in SKILL_FILES}
+
+        # Prune stale skills: remove previously installed skills not in the
+        # requested set (ensures clean per-command isolation on worktree reuse).
+        if primary_skills_dir.is_dir():
+            keep = set(skill_items.keys()) | set(_LEGACY_SKILLS)
+            for entry in primary_skills_dir.iterdir():
+                if entry.name not in keep and (entry.is_symlink() or entry.is_dir()):
+                    if entry.is_symlink():
+                        entry.unlink()
+                    else:
+                        shutil.rmtree(entry)
+                    logger.debug("skills.pruned_stale", name=entry.name)
+    else:
+        skill_items = SKILL_FILES
 
     for skill_name, files in skill_items.items():
         if is_self_init:
