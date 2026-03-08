@@ -18,7 +18,6 @@ from wade.config.loader import load_config
 from wade.models.ai import AIToolID
 from wade.models.config import ProjectConfig
 from wade.models.deps import DependencyEdge, DependencyGraph
-from wade.models.task import TaskState
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.ai_resolution import (
@@ -256,13 +255,15 @@ def _find_existing_tracking_issue(
     label: str,
     title: str,
 ) -> str | None:
-    """Check for an existing open tracking issue with the same title.
+    """Check for an existing tracking issue with the same title (any state).
 
     Returns the issue ID if found, None otherwise.
+    Checks all states (open and closed) to prevent duplicate tracking issues
+    from being created after a previous one was closed.
     """
     try:
-        open_issues = provider.list_tasks(label=label, state=TaskState.OPEN)
-        for issue in open_issues:
+        all_issues = provider.list_tasks(label=label, state=None)
+        for issue in all_issues:
             if issue.title == title:
                 return issue.id
     except Exception:
