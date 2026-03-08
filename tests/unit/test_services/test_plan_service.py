@@ -170,15 +170,15 @@ class TestResolveModel:
 
 class TestDiscoverPlanFiles:
     def test_discover_sorts_by_name(self, tmp_path: Path) -> None:
-        (tmp_path / "plan-2-feature-b.md").write_text("# Feature B\n")
-        (tmp_path / "plan-1-feature-a.md").write_text("# Feature A\n")
-        (tmp_path / "plan-3-feature-c.md").write_text("# Feature C\n")
+        (tmp_path / "PLAN-2-feature-b.md").write_text("# Feature B\n")
+        (tmp_path / "PLAN-1-feature-a.md").write_text("# Feature A\n")
+        (tmp_path / "PLAN-3-feature-c.md").write_text("# Feature C\n")
 
         files = discover_plan_files(tmp_path)
         assert len(files) == 3
-        assert files[0].name == "plan-1-feature-a.md"
-        assert files[1].name == "plan-2-feature-b.md"
-        assert files[2].name == "plan-3-feature-c.md"
+        assert files[0].name == "PLAN-1-feature-a.md"
+        assert files[1].name == "PLAN-2-feature-b.md"
+        assert files[2].name == "PLAN-3-feature-c.md"
 
     def test_discover_ignores_non_md(self, tmp_path: Path) -> None:
         (tmp_path / "PLAN.md").write_text("# Plan\n")
@@ -200,8 +200,8 @@ class TestDiscoverPlanFiles:
 
 class TestValidatePlanFiles:
     def test_validate_all_valid(self, tmp_path: Path) -> None:
-        (tmp_path / "plan-1.md").write_text("# Feature A\n\n## Tasks\n- Do A\n")
-        (tmp_path / "plan-2.md").write_text("# Feature B\n\n## Tasks\n- Do B\n")
+        (tmp_path / "PLAN-1.md").write_text("# Feature A\n\n## Tasks\n- Do A\n")
+        (tmp_path / "PLAN-2.md").write_text("# Feature B\n\n## Tasks\n- Do B\n")
 
         valid = validate_plan_files(tmp_path)
         assert len(valid) == 2
@@ -209,8 +209,8 @@ class TestValidatePlanFiles:
         assert valid[1].title == "Feature B"
 
     def test_validate_skips_invalid(self, tmp_path: Path) -> None:
-        (tmp_path / "good.md").write_text("# Valid Plan\n\nContent\n")
-        (tmp_path / "bad.md").write_text("No title heading\n")
+        (tmp_path / "PLAN-good.md").write_text("# Valid Plan\n\nContent\n")
+        (tmp_path / "PLAN-bad.md").write_text("No title heading\n")
 
         valid = validate_plan_files(tmp_path)
         assert len(valid) == 1
@@ -555,9 +555,9 @@ class TestValidatePlanDir:
         assert len(result.errors) == 2
 
     def test_diagnostic_includes_filename(self, tmp_path: Path) -> None:
-        (tmp_path / "my-plan.md").write_text("No title\n")
+        (tmp_path / "PLAN-my-plan.md").write_text("No title\n")
         result = validate_plan_dir(tmp_path)
-        assert result.errors[0].file == "my-plan.md"
+        assert result.errors[0].file == "PLAN-my-plan.md"
 
 
 # ---------------------------------------------------------------------------

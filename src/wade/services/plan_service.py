@@ -102,10 +102,10 @@ def _build_issue_context_header(issue: Task) -> str:
 
 
 def discover_plan_files(plan_dir: Path) -> list[Path]:
-    """Find .md files in the plan directory, sorted by name."""
+    """Find PLAN*.md files in the plan directory, sorted by name."""
     if not plan_dir.is_dir():
         return []
-    return sorted(plan_dir.glob("*.md"))
+    return sorted(plan_dir.glob("PLAN*.md"))
 
 
 def validate_plan_files(plan_dir: Path) -> list[PlanFile]:
