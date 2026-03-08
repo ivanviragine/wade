@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.1.5] — 2026-03-08
+
+### Bug Fixes
+
+- check all issue states when detecting duplicate tracking issues (#119) (d4f6743)
+
 ## [v0.1.4] — 2026-03-08
 
 ### Bug Fixes
