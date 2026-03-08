@@ -44,6 +44,14 @@ class WorkSession(BaseModel):
     pr_url: str | None = None
 
 
+class SessionRecord(BaseModel):
+    """A parsed session row from a PR body — typed alternative to raw dicts."""
+
+    phase: str
+    ai_tool: str
+    session_id: str
+
+
 class SyncEventType(StrEnum):
     """Event types emitted during sync operations."""
 

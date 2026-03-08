@@ -40,6 +40,7 @@ class OpenCodeAdapter(AbstractAITool):
             headless_flag="run",
             supports_headless=True,
             supports_effort=True,
+            supports_resume=True,
         )
 
     def get_models(self) -> list[AIModel]:
@@ -54,6 +55,10 @@ class OpenCodeAdapter(AbstractAITool):
             )
             for mid in get_models_for_tool(str(self.TOOL_ID))
         ]
+
+    def build_resume_command(self, session_id: str) -> list[str] | None:
+        """Resume an OpenCode session: ``opencode -s <session_id>``."""
+        return ["opencode", "-s", session_id]
 
     def initial_message_args(self, prompt: str) -> list[str]:
         """OpenCode uses --prompt for the initial message."""

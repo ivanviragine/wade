@@ -37,7 +37,12 @@ class CodexAdapter(AbstractAITool):
             headless_flag=None,
             supports_headless=False,
             supports_effort=True,
+            supports_resume=True,
         )
+
+    def build_resume_command(self, session_id: str) -> list[str] | None:
+        """Resume a Codex session: ``codex resume <session_id>``."""
+        return ["codex", "resume", session_id]
 
     def initial_message_args(self, prompt: str) -> list[str]:
         """Codex accepts the initial message as a positional argument."""

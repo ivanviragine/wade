@@ -36,7 +36,12 @@ class ClaudeAdapter(AbstractAITool):
             headless_flag="--print",
             supports_headless=True,
             supports_effort=True,
+            supports_resume=True,
         )
+
+    def build_resume_command(self, session_id: str) -> list[str] | None:
+        """Resume a Claude session: ``claude --resume <session_id>``."""
+        return ["claude", "--resume", session_id]
 
     def initial_message_args(self, prompt: str) -> list[str]:
         """Claude accepts the initial message as a positional argument."""
