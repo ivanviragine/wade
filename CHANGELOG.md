@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.1.6] — 2026-03-08
+
+### Bug Fixes
+
+- scope plan file discovery to PLAN*.md in planning worktrees (e51516a)
+
 ## [v0.1.5] — 2026-03-08
 
 ### Bug Fixes
