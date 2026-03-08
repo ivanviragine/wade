@@ -456,9 +456,13 @@ def plan(
             console.warn(f"Could not create planning worktree: {e}")
             planning_worktree = None
 
-    # Plan directory: use planning worktree if available, otherwise fall back to temp dir
+    # Plan directory: when using a planning worktree, isolate outputs to a
+    # dedicated subdirectory so repo markdown files (e.g., README.md) are not
+    # misinterpreted as generated plans.
     if planning_worktree is not None:
-        plan_dir = str(planning_worktree)
+        plan_output_dir = planning_worktree / ".wade" / "plans"
+        plan_output_dir.mkdir(parents=True, exist_ok=True)
+        plan_dir = str(plan_output_dir)
     else:
         plan_dir = tempfile.mkdtemp(prefix="wade-plan-")
 
