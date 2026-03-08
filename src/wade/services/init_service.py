@@ -328,7 +328,7 @@ def _migrate_skills_off_main(project_root: Path) -> list[str]:
     primary_skills_dir = project_root / ".claude" / "skills"
 
     # Remove known skill directories
-    for skill_name in installer.SKILL_FILES:
+    for skill_name in installer.MANAGED_SKILL_NAMES:
         skill_dir = primary_skills_dir / skill_name
         if skill_dir.is_symlink():
             skill_dir.unlink()

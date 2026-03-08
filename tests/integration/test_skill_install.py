@@ -151,6 +151,25 @@ class TestSelectiveSkillInstallation:
             link = tmp_git_repo / cross_dir
             assert link.is_symlink(), f"{cross_dir} should be a symlink"
 
+    def test_selective_install_preserves_user_owned_skills(self, tmp_git_repo: Path) -> None:
+        """Pruning only removes Wade-managed skills, not user-owned directories."""
+        from wade.skills.installer import install_skills
+
+        # First install all skills
+        install_skills(tmp_git_repo, skills=["task", "deps"])
+        skills_dir = tmp_git_repo / ".claude" / "skills"
+
+        # Create a user-owned custom skill directory
+        custom_dir = skills_dir / "my-custom-skill"
+        custom_dir.mkdir(parents=True, exist_ok=True)
+        (custom_dir / "SKILL.md").write_text("# My Custom Skill")
+
+        # Re-bootstrap with different skills — user dir must survive
+        install_skills(tmp_git_repo, skills=["task"])
+        assert not (skills_dir / "deps").exists(), "deps should be pruned"
+        assert custom_dir.is_dir(), "user-owned skill dir should be preserved"
+        assert (custom_dir / "SKILL.md").read_text() == "# My Custom Skill"
+
     def test_selective_install_prunes_stale_skills(self, tmp_git_repo: Path) -> None:
         """Re-bootstrapping with different skills removes previously installed ones."""
         from wade.skills.installer import IMPLEMENT_SKILLS, REVIEW_SKILLS, install_skills

@@ -65,6 +65,9 @@ ALWAYS_OVERWRITE = {"plan-session", "implementation-session", "address-reviews-s
 # Old skill names removed in the phase-skill refactor — cleaned up during update
 _LEGACY_SKILLS = {"workflow", "sync", "pr-summary", "work-session", "review-session"}
 
+# All skill names Wade manages (current + legacy) — used for safe pruning
+MANAGED_SKILL_NAMES: set[str] = set(SKILL_FILES) | _LEGACY_SKILLS
+
 # Cross-tool directories that get symlinked to .claude/skills
 CROSS_TOOL_DIRS = [".github/skills", ".agents/skills", ".gemini/skills", ".cursor/skills"]
 
@@ -124,12 +127,13 @@ def install_skills(
             logger.warning("skills.unknown_skill_names", names=sorted(invalid))
         skill_items = {name: SKILL_FILES[name] for name in skills if name in SKILL_FILES}
 
-        # Prune stale skills: remove previously installed skills not in the
-        # requested set (ensures clean per-command isolation on worktree reuse).
+        # Prune stale skills: remove Wade-managed skills not in the requested
+        # set (ensures clean per-command isolation on worktree reuse).
+        # Only remove known Wade-managed names — leave user-owned dirs untouched.
         if primary_skills_dir.is_dir():
-            keep = set(skill_items.keys()) | set(_LEGACY_SKILLS)
+            stale_managed = MANAGED_SKILL_NAMES - set(skill_items)
             for entry in primary_skills_dir.iterdir():
-                if entry.name not in keep and (entry.is_symlink() or entry.is_dir()):
+                if entry.name in stale_managed and (entry.is_symlink() or entry.is_dir()):
                     if entry.is_symlink():
                         entry.unlink()
                     else:
