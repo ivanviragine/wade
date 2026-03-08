@@ -295,6 +295,15 @@ class AbstractAITool(ABC):
         """
         return []
 
+    def build_resume_command(self, session_id: str) -> list[str] | None:
+        """Build a command to resume a previous session.
+
+        Returns None if the tool does not support session resume.
+        Override in adapters that support resume (and set supports_resume=True
+        in capabilities).
+        """
+        return None
+
     def build_launch_command(
         self,
         model: str | None = None,

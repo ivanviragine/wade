@@ -72,6 +72,7 @@ class TestSmartStartOpenPR:
     """When an open PR exists, presents a contextual menu."""
 
     @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.smart_start.git_pr.get_pr_body", return_value=None)
     @patch("wade.ui.prompts.select", return_value=0)
     @patch("wade.git.worktree.list_worktrees", return_value=[])
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
@@ -88,6 +89,7 @@ class TestSmartStartOpenPR:
         mock_pr: MagicMock,
         mock_worktrees: MagicMock,
         mock_select: MagicMock,
+        mock_pr_body: MagicMock,
         mock_implement: MagicMock,
         tmp_path: Path,
     ) -> None:
@@ -202,6 +204,7 @@ class TestSmartStartDraftPR:
         mock_implement.assert_called_once()
 
     @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.smart_start.git_pr.get_pr_body", return_value=None)
     @patch("wade.ui.prompts.select", return_value=0)
     @patch(
         "wade.git.worktree.list_worktrees",
@@ -221,6 +224,7 @@ class TestSmartStartDraftPR:
         mock_pr: MagicMock,
         mock_worktrees: MagicMock,
         mock_select: MagicMock,
+        mock_pr_body: MagicMock,
         mock_implement: MagicMock,
         tmp_path: Path,
     ) -> None:

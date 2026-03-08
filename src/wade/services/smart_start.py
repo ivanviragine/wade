@@ -14,15 +14,18 @@ from typing import Any
 
 import structlog
 
+from wade.ai_tools.base import AbstractAITool
 from wade.config.loader import load_config
 from wade.git import branch as git_branch
 from wade.git import pr as git_pr
 from wade.git import repo as git_repo
 from wade.git.repo import GitError
+from wade.models.ai import AIToolID
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.work_service import _merge_pr
 from wade.ui.console import console
+from wade.utils.markdown import parse_sessions_from_body
 
 logger = structlog.get_logger()
 
@@ -159,7 +162,7 @@ def smart_start(
             menu_options.append(
                 (
                     "Continue working",
-                    _run_implement_task_wrapper(
+                    _run_continue_working_wrapper(
                         target,
                         ai_tool,
                         model,
@@ -168,6 +171,8 @@ def smart_start(
                         cd_only,
                         ai_explicit,
                         model_explicit,
+                        repo_root,
+                        pr_number_int,
                     ),
                 )
             )
@@ -192,7 +197,7 @@ def smart_start(
         menu_options.append(
             (
                 "Continue working",
-                _run_implement_task_wrapper(
+                _run_continue_working_wrapper(
                     target,
                     ai_tool,
                     model,
@@ -201,6 +206,8 @@ def smart_start(
                     cd_only,
                     ai_explicit,
                     model_explicit,
+                    repo_root,
+                    pr_number_int,
                 ),
             )
         )
@@ -241,6 +248,8 @@ def _run_implement_task(
     *,
     ai_explicit: bool = False,
     model_explicit: bool = False,
+    resume_session_id: str | None = None,
+    resume_ai_tool: str | None = None,
 ) -> bool:
     """Delegate to the implement-task service."""
     from wade.services.work_service import start as do_start
@@ -254,6 +263,8 @@ def _run_implement_task(
         cd_only=cd_only,
         ai_explicit=ai_explicit,
         model_explicit=model_explicit,
+        resume_session_id=resume_session_id,
+        resume_ai_tool=resume_ai_tool,
     )
 
 
@@ -362,5 +373,133 @@ def _run_merge_pr_wrapper(
             provider,
         )
         return True
+
+    return _impl
+
+
+# ---------------------------------------------------------------------------
+# Resume session helpers
+# ---------------------------------------------------------------------------
+
+
+def _get_latest_resumable_session(repo_root: Path, pr_number: int) -> dict[str, str] | None:
+    """Find the most recent session from the PR body whose tool supports resume.
+
+    Returns a dict with keys ``phase``, ``ai_tool``, ``session_id`` or None.
+    """
+    pr_body = git_pr.get_pr_body(repo_root, pr_number)
+    if not pr_body:
+        return None
+
+    sessions = parse_sessions_from_body(pr_body)
+    if not sessions:
+        return None
+
+    # Iterate in reverse (latest first) — find first tool with resume support
+    for session in reversed(sessions):
+        tool_id_str = session["ai_tool"]
+        try:
+            adapter = AbstractAITool.get(AIToolID(tool_id_str))
+            if adapter.capabilities().supports_resume:
+                return session
+        except (ValueError, KeyError):
+            continue
+
+    return None
+
+
+def _run_continue_working(
+    target: str,
+    ai_tool: str | None,
+    model: str | None,
+    project_root: Path | None,
+    detach: bool,
+    cd_only: bool,
+    ai_explicit: bool,
+    model_explicit: bool,
+    repo_root: Path,
+    pr_number: int,
+) -> bool:
+    """Show a resume sub-menu if a resumable session exists, else start new."""
+    from wade.ui import prompts
+
+    resumable = _get_latest_resumable_session(repo_root, pr_number)
+    if not resumable:
+        return _run_implement_task(
+            target=target,
+            ai_tool=ai_tool,
+            model=model,
+            project_root=project_root,
+            detach=detach,
+            cd_only=cd_only,
+            ai_explicit=ai_explicit,
+            model_explicit=model_explicit,
+        )
+
+    session_id = resumable["session_id"]
+    tool_name = resumable["ai_tool"]
+    short_id = session_id[:16] + "…" if len(session_id) > 16 else session_id
+
+    labels = [
+        f"Resume last session  ({tool_name}: {short_id})",
+        "Start new session",
+    ]
+    choice = prompts.select("How do you want to continue?", labels)
+
+    if choice == 0:
+        # Resume
+        return _run_implement_task(
+            target=target,
+            ai_tool=ai_tool,
+            model=model,
+            project_root=project_root,
+            detach=detach,
+            cd_only=cd_only,
+            ai_explicit=ai_explicit,
+            model_explicit=model_explicit,
+            resume_session_id=session_id,
+            resume_ai_tool=tool_name,
+        )
+    else:
+        # Start new session
+        return _run_implement_task(
+            target=target,
+            ai_tool=ai_tool,
+            model=model,
+            project_root=project_root,
+            detach=detach,
+            cd_only=cd_only,
+            ai_explicit=ai_explicit,
+            model_explicit=model_explicit,
+        )
+
+
+def _run_continue_working_wrapper(
+    target: str,
+    ai_tool: str | None,
+    model: str | None,
+    project_root: Path | None,
+    detach: bool,
+    cd_only: bool,
+    ai_explicit: bool,
+    model_explicit: bool,
+    repo_root: Path,
+    pr_number: int,
+) -> Callable[[], bool]:
+    """Return a callable that runs _run_continue_working with captured arguments."""
+
+    def _impl() -> bool:
+        return _run_continue_working(
+            target=target,
+            ai_tool=ai_tool,
+            model=model,
+            project_root=project_root,
+            detach=detach,
+            cd_only=cd_only,
+            ai_explicit=ai_explicit,
+            model_explicit=model_explicit,
+            repo_root=repo_root,
+            pr_number=pr_number,
+        )
 
     return _impl

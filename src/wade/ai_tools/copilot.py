@@ -28,7 +28,12 @@ class CopilotAdapter(AbstractAITool):
             supports_model_flag=True,
             headless_flag="--prompt",
             supports_headless=True,
+            supports_resume=True,
         )
+
+    def build_resume_command(self, session_id: str) -> list[str] | None:
+        """Resume a Copilot session: ``copilot --resume=<session_id>``."""
+        return ["copilot", f"--resume={session_id}"]
 
     def initial_message_args(self, prompt: str) -> list[str]:
         """Copilot uses -i for the initial message."""
