@@ -75,6 +75,7 @@ class AIToolCapabilities(BaseModel, frozen=True):
     supports_initial_message: bool = True
     blocks_until_exit: bool = True
     supports_effort: bool = False
+    supports_resume: bool = False
 
 
 class TokenUsage(BaseModel):

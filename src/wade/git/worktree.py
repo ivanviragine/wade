@@ -50,6 +50,41 @@ def create_worktree(
     return worktree_path
 
 
+def create_detached_worktree(
+    repo_root: Path,
+    worktree_dir: Path,
+    ref: str = "HEAD",
+) -> Path:
+    """Create a detached-HEAD worktree at the given ref.
+
+    Args:
+        repo_root: Root of the main repository checkout.
+        worktree_dir: Directory where the worktree will be created.
+        ref: Git ref to check out (default: HEAD).
+
+    Returns:
+        Absolute path to the created worktree directory.
+
+    Raises:
+        GitError: If the worktree could not be created.
+    """
+    worktree_path = worktree_dir.resolve()
+    log.info(
+        "worktree.create_detached",
+        worktree=str(worktree_path),
+        ref=ref,
+    )
+    _run_git_with_retry(
+        "worktree",
+        "add",
+        "--detach",
+        str(worktree_path),
+        ref,
+        cwd=repo_root,
+    )
+    return worktree_path
+
+
 def checkout_existing_branch_worktree(
     repo_root: Path,
     branch_name: str,

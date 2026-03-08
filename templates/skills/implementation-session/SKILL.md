@@ -184,4 +184,3 @@ create a GitHub Issue from it:
 ## Skills reference
 
 - **About to create GitHub Issues** → read @.claude/skills/task/SKILL.md first
-- **About to analyze issue dependencies** → read @.claude/skills/deps/SKILL.md first

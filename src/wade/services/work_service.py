@@ -134,8 +134,16 @@ def bootstrap_worktree(
     worktree_path: Path,
     config: ProjectConfig,
     repo_root: Path,
+    skills: list[str] | None = None,
 ) -> None:
-    """Run post-creation bootstrap: copy files, install skills, run hooks."""
+    """Run post-creation bootstrap: copy files, install skills, run hooks.
+
+    Args:
+        worktree_path: Path to the worktree directory.
+        config: Project configuration.
+        repo_root: Root of the main repository checkout.
+        skills: If provided, install only the listed skills instead of all.
+    """
     # Copy configured files
     for filename in config.hooks.copy_to_worktree:
         src = repo_root / filename
@@ -152,9 +160,15 @@ def bootstrap_worktree(
     if is_self:
         # Worktree has its own templates/ checkout — symlink to those
         wt_templates = worktree_path / "templates" / "skills"
-        install_skills(worktree_path, is_self_init=True, force=True, templates_dir=wt_templates)
+        install_skills(
+            worktree_path,
+            is_self_init=True,
+            force=True,
+            templates_dir=wt_templates,
+            skills=skills,
+        )
     else:
-        install_skills(worktree_path, is_self_init=False, force=True)
+        install_skills(worktree_path, is_self_init=False, force=True, skills=skills)
     logger.debug("work.bootstrap_skills", path=str(worktree_path))
 
     # Propagate allowlist from project root to worktree if already configured
@@ -700,6 +714,8 @@ def start(
     model_explicit: bool = False,
     effort: str | None = None,
     effort_explicit: bool = False,
+    resume_session_id: str | None = None,
+    resume_ai_tool: str | None = None,
 ) -> bool:
     """Start a work session on an issue.
 
@@ -760,6 +776,11 @@ def start(
 
         # Resolve effort level
         resolved_effort = resolve_effort(effort, config, "work", tool=resolved_tool)
+
+        # When resuming, override the resolved tool and skip interactive confirmation
+        if resume_ai_tool:
+            resolved_tool = resume_ai_tool
+            ai_explicit = True
 
         if task.complexity:
             console.kv("Complexity", task.complexity.value)
@@ -881,8 +902,10 @@ def start(
         console.empty()
 
         # Bootstrap
+        from wade.skills.installer import IMPLEMENT_SKILLS
+
         write_plan_md(worktree_path, task, plan_content=plan_content)
-        bootstrap_worktree(worktree_path, config, repo_root)
+        bootstrap_worktree(worktree_path, config, repo_root, skills=IMPLEMENT_SKILLS)
 
         # Add in-progress label and move to in-progress on project board (both non-critical)
         with contextlib.suppress(Exception):
@@ -890,10 +913,14 @@ def start(
         with contextlib.suppress(Exception):
             provider.move_to_in_progress(task.id)
 
-        # Build work prompt
-        prompt = build_work_prompt(task, resolved_tool, has_plan=bool(plan_content))
-        snippet = "\n".join(prompt.splitlines()[:5]) + "\n…"
-        console.panel(snippet, title="Work Prompt (preview)")
+        # Build work prompt (skipped when resuming a session)
+        prompt: str | None = None
+        if not resume_session_id:
+            prompt = build_work_prompt(task, resolved_tool, has_plan=bool(plan_content))
+            snippet = "\n".join(prompt.splitlines()[:5]) + "\n…"
+            console.panel(snippet, title="Work Prompt (preview)")
+        else:
+            console.info(f"Resuming session: {resume_session_id[:40]}…")
 
         # cd_only mode: just print the worktree path and return (no title, no AI)
         if cd_only:
@@ -932,20 +959,31 @@ def start(
 
         # Detach mode: launch AI tool in a new terminal, don't block
         if detach and resolved_tool:
+            cmd: list[str] | None = None
             try:
                 detach_adapter = AbstractAITool.get(AIToolID(resolved_tool))
-                deliver_prompt_if_needed(detach_adapter, prompt)
-                cmd = detach_adapter.build_launch_command(
-                    model=resolved_model,
-                    trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
-                    initial_message=prompt,
-                    effort=resolved_effort,
-                    allowed_commands=config.permissions.allowed_commands,
-                )
+                if resume_session_id:
+                    cmd = detach_adapter.build_resume_command(resume_session_id)
+                    if cmd is None:
+                        console.warn(
+                            f"{resolved_tool} does not support resume — starting new session"
+                        )
+                        resume_session_id = None  # fall back to new session
+                if not resume_session_id:
+                    if prompt:
+                        deliver_prompt_if_needed(detach_adapter, prompt)
+                    cmd = detach_adapter.build_launch_command(
+                        model=resolved_model,
+                        trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
+                        initial_message=prompt,
+                        effort=resolved_effort,
+                        allowed_commands=config.permissions.allowed_commands,
+                    )
             except (ValueError, KeyError):
                 cmd = [resolved_tool]
 
             console.step(f"Launching {resolved_tool} in new terminal...")
+            assert cmd is not None  # guaranteed by the two branches above
             if launch_in_new_terminal(cmd, cwd=str(worktree_path), title=work_title):
                 console.success(f"Detached AI session for #{task.id}")
                 stop_title_keeper()
@@ -955,7 +993,8 @@ def start(
 
         # Launch AI tool (inline)
         if not detach and resolved_tool:
-            console.step(f"Launching {resolved_tool}...")
+            resume_label = " (resuming)" if resume_session_id else ""
+            console.step(f"Launching {resolved_tool}{resume_label}...")
 
             adapter: AbstractAITool | None = None
             launch_completed = False
@@ -963,16 +1002,43 @@ def start(
             try:
                 adapter = AbstractAITool.get(AIToolID(resolved_tool))
 
-                deliver_prompt_if_needed(adapter, prompt)
-                exit_code = adapter.launch(
-                    worktree_path=worktree_path,
-                    model=resolved_model,
-                    prompt=prompt,
-                    transcript_path=transcript_path,
-                    trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
-                    effort=resolved_effort,
-                    allowed_commands=config.permissions.allowed_commands,
-                )
+                # Resume path: use build_resume_command() instead of launch()
+                resume_cmd: list[str] | None = None
+                if resume_session_id:
+                    from wade.utils.process import run_with_transcript
+
+                    resume_cmd = adapter.build_resume_command(resume_session_id)
+                    if resume_cmd is None:
+                        console.warn(
+                            f"{resolved_tool} does not support resume — starting new session"
+                        )
+                        resume_session_id = None  # fall back below
+
+                if resume_session_id and resume_cmd is not None:
+                    logger.info(
+                        "ai_tool.resume",
+                        tool=str(adapter.TOOL_ID),
+                        session_id=resume_session_id,
+                        cwd=str(worktree_path),
+                    )
+                    exit_code = run_with_transcript(
+                        resume_cmd,
+                        transcript_path,
+                        cwd=worktree_path,
+                    )
+                else:
+                    if prompt:
+                        deliver_prompt_if_needed(adapter, prompt)
+                    exit_code = adapter.launch(
+                        worktree_path=worktree_path,
+                        model=resolved_model,
+                        prompt=prompt,
+                        transcript_path=transcript_path,
+                        trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
+                        effort=resolved_effort,
+                        allowed_commands=config.permissions.allowed_commands,
+                    )
+
                 launch_completed = True
                 logger.info("work.ai_exited", exit_code=exit_code, tool=resolved_tool)
 
