@@ -139,6 +139,7 @@ def init(
     if "gemini" in tools_in_use:
         _prompt_configure_gemini_experimental(non_interactive)
     _prompt_configure_shell_integration(non_interactive)
+    _prompt_configure_completions(non_interactive)
 
     # Write phase
     if not non_interactive:
@@ -708,6 +709,31 @@ def _prompt_configure_shell_integration(non_interactive: bool) -> None:
     ):
         _configure_shell_integration(profile, is_fish=is_fish)
         console.success(f"Added shell integration to {profile}")
+
+
+def _prompt_configure_completions(non_interactive: bool) -> None:
+    """Prompt user to install CLI autocompletions."""
+    import subprocess
+    import sys
+
+    from wade.ui import prompts
+
+    if non_interactive or not prompts.is_tty():
+        return
+
+    if prompts.confirm("Install CLI autocompletion for wade?", default=True):
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "wade", "--install-completion"],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=120,
+            )
+            console.success("Installed CLI autocompletion")
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            logger.warning("init.completion_failed", error=getattr(exc, "stderr", None))
+            console.warn("Could not install CLI autocompletion")
 
 
 def _prompt_claude_code_settings(root: Path, non_interactive: bool) -> None:
