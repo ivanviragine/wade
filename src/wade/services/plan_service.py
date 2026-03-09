@@ -815,8 +815,8 @@ def _finalize_issues(
                 issue_numbers=issue_numbers,
                 ai_tool=ai_tool,
                 model=model,
-                ai_explicit=True,
-                model_explicit=True,
+                ai_explicit=False,
+                model_explicit=False,
                 planning_worktree=planning_worktree,
             )
             if graph and graph.edges:
