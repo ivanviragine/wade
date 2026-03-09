@@ -34,7 +34,7 @@ def resolve_mode(cmd_config: AICommandConfig) -> DelegationMode:
         try:
             return DelegationMode(cmd_config.mode)
         except ValueError:
-            pass
+            logger.warning("delegation.invalid_mode", mode=cmd_config.mode, fallback="prompt")
     return DelegationMode.PROMPT
 
 
@@ -170,6 +170,9 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
         output_file = Path(tmp_dir) / "delegation-output.txt"
     else:
         tmp_dir = None
+        if not output_file.is_absolute():
+            output_file = session_cwd / output_file
+        output_file.parent.mkdir(parents=True, exist_ok=True)
 
     # Append output instruction to prompt
     output_instruction = (
@@ -181,6 +184,8 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
     trusted = defaults + [d for d in request.trusted_dirs if d not in defaults]
     if tmp_dir:
         trusted.append(tmp_dir)
+    elif str(output_file.parent) not in trusted:
+        trusted.append(str(output_file.parent))
 
     try:
         try:

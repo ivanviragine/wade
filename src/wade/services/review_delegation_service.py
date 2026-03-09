@@ -53,13 +53,14 @@ def review_plan(
             exit_code=1,
         )
     resolved_tool = resolve_ai_tool(ai_tool, config, command="review_plan")
-    resolved_model = resolve_model(model, config, command="review_plan")
+    resolved_model = resolve_model(model, config, command="review_plan", tool=resolved_tool)
 
     request = DelegationRequest(
         mode=delegation_mode,
         prompt=prompt,
         ai_tool=resolved_tool,
         model=resolved_model,
+        effort=cmd_config.effort,
     )
 
     result = delegate(request)
@@ -121,13 +122,16 @@ def review_implementation(
             exit_code=1,
         )
     resolved_tool = resolve_ai_tool(ai_tool, config, command="review_implementation")
-    resolved_model = resolve_model(model, config, command="review_implementation")
+    resolved_model = resolve_model(
+        model, config, command="review_implementation", tool=resolved_tool
+    )
 
     request = DelegationRequest(
         mode=delegation_mode,
         prompt=prompt,
         ai_tool=resolved_tool,
         model=resolved_model,
+        effort=cmd_config.effort,
     )
 
     delegation_result = delegate(request)

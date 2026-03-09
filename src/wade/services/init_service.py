@@ -115,7 +115,7 @@ def init(
         return False
     work_setup = _prompt_work_setup(selected_tool, installed_tools, non_interactive)
     command_overrides = _prompt_command_overrides(
-        installed_tools, non_interactive, default_model=default_model
+        installed_tools, non_interactive, default_model=default_model, default_tool=selected_tool
     )
     # Compute which tools are actually in use (selected + per-command overrides)
     tools_in_use: set[str] = set()
@@ -1187,6 +1187,7 @@ def _prompt_command_overrides(
     installed_tools: list[str],
     non_interactive: bool,
     default_model: str | None = None,
+    default_tool: str | None = None,
 ) -> dict[str, dict[str, str]]:
     """Prompt for per-command AI tool and model overrides.
 
@@ -1264,12 +1265,17 @@ def _prompt_command_overrides(
 
         # For review commands, prompt for delegation mode
         if cmd_name.startswith("review_"):
-            mode_options = [
-                "prompt (self-review)",
-                "headless (AI one-shot)",
-                "interactive (AI session)",
-            ]
-            mode_values = ["prompt", "headless", "interactive"]
+            effective_tool = tool_for_cmd[cmd_idx] or default_tool
+            if effective_tool:
+                mode_options = [
+                    "prompt (self-review)",
+                    "headless (AI one-shot)",
+                    "interactive (AI session)",
+                ]
+                mode_values = ["prompt", "headless", "interactive"]
+            else:
+                mode_options = ["prompt (self-review)"]
+                mode_values = ["prompt"]
             mode_idx = prompts.select(f"  Delegation mode for {section.lower()}", mode_options)
             result[cmd_name]["mode"] = mode_values[mode_idx]
 

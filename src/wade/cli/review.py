@@ -5,6 +5,7 @@ from __future__ import annotations
 import typer
 
 from wade.cli.autocomplete import complete_ai_tools, complete_delegation_modes, complete_models
+from wade.models.delegation import DelegationMode
 
 review_app = typer.Typer(
     help="AI-powered review commands.",
@@ -29,7 +30,7 @@ def review_plan_cmd(
     model: str | None = typer.Option(
         None, "--model", help="AI model to use.", autocompletion=complete_models
     ),
-    mode: str | None = typer.Option(
+    mode: DelegationMode | None = typer.Option(  # noqa: B008
         None,
         "--mode",
         help="Delegation mode: prompt, interactive, headless.",
@@ -39,7 +40,7 @@ def review_plan_cmd(
     """Review a plan file."""
     from wade.services.review_delegation_service import review_plan
 
-    result = review_plan(plan_file, ai_tool=ai, model=model, mode=mode)
+    result = review_plan(plan_file, ai_tool=ai, model=model, mode=mode.value if mode else None)
     raise typer.Exit(0 if result.success else 1)
 
 
@@ -52,7 +53,7 @@ def review_implementation_cmd(
     model: str | None = typer.Option(
         None, "--model", help="AI model to use.", autocompletion=complete_models
     ),
-    mode: str | None = typer.Option(
+    mode: DelegationMode | None = typer.Option(  # noqa: B008
         None,
         "--mode",
         help="Delegation mode: prompt, interactive, headless.",
@@ -62,7 +63,9 @@ def review_implementation_cmd(
     """Review code changes."""
     from wade.services.review_delegation_service import review_implementation
 
-    result = review_implementation(staged=staged, ai_tool=ai, model=model, mode=mode)
+    result = review_implementation(
+        staged=staged, ai_tool=ai, model=model, mode=mode.value if mode else None
+    )
     raise typer.Exit(0 if result.success else 1)
 
 

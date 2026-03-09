@@ -48,6 +48,9 @@ class TestDelegationRequest:
         assert req.effort == "high"
         assert req.cwd == Path("/tmp/test")
         assert req.timeout == 300
+        assert req.output_file == Path("/tmp/out.txt")
+        assert req.trusted_dirs == ["/tmp"]
+        assert req.allowed_commands == ["wade *"]
 
 
 class TestDelegationResult:

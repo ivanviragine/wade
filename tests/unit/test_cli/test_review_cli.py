@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
@@ -21,7 +22,7 @@ class TestReviewPlanCli:
         mock_template: MagicMock,
         mock_config: MagicMock,
         mock_delegate: MagicMock,
-        tmp_path: MagicMock,
+        tmp_path: Path,
     ) -> None:
         plan_file = tmp_path / "PLAN.md"
         plan_file.write_text("# Test Plan\n\nContent.")

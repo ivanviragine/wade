@@ -384,9 +384,11 @@ def start(
 
                 console.empty()
                 if not ui_prompts.confirm("Have you finished the review session?", default=True):
-                    msg = "Worktree preserved — run "
-                    msg += "'wade review-pr-comments-session done' when ready."
-                    console.info(msg)
+                    console.info(
+                        "Worktree preserved — run"
+                        " 'wade review-pr-comments-session done'"
+                        " when ready."
+                    )
                     launch_completed = False
         except (ValueError, KeyError):
             console.warn(f"Unknown AI tool: {resolved_tool}")
