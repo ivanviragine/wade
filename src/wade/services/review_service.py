@@ -175,7 +175,7 @@ def start(
     2. Find existing worktree (or recover from remote branch)
     3. Find PR for the branch (error if missing or merged)
     4. Quick-check for unresolved review threads
-    5. Install address-reviews-session skill, build prompt, launch AI
+    5. Install review-pr-comments-session skill, build prompt, launch AI
     6. Post-session: capture token usage, update PR, add labels
     7. Post-review lifecycle: "Merge PR" / "Wait for new reviews"
 
@@ -200,7 +200,7 @@ def start(
         console.error(f"Could not read issue #{issue_number}: {e}")
         return False
 
-    console.rule(f"address-reviews #{task.id}")
+    console.rule(f"review pr-comments #{task.id}")
     console.kv("Issue", console.issue_ref(task.id, task.title))
 
     # 2. Find existing worktree for the issue (or recover from remote branch)
@@ -275,7 +275,7 @@ def start(
 
     console.info(f"Found {comment_count} unresolved comment(s) across {file_count} location(s)")
 
-    # 5. Re-bootstrap skills (ensures address-reviews-session skill is installed)
+    # 5. Re-bootstrap skills (ensures review-pr-comments-session skill is installed)
     from wade.skills.installer import REVIEW_SKILLS
 
     bootstrap_worktree(worktree_path, config, repo_root, skills=REVIEW_SKILLS)
@@ -384,9 +384,9 @@ def start(
 
                 console.empty()
                 if not ui_prompts.confirm("Have you finished the review session?", default=True):
-                    console.info(
-                        "Worktree preserved — run 'wade address-reviews-session done' when ready."
-                    )
+                    msg = "Worktree preserved — run "
+                    msg += "'wade review-pr-comments-session done' when ready."
+                    console.info(msg)
                     launch_completed = False
         except (ValueError, KeyError):
             console.warn(f"Unknown AI tool: {resolved_tool}")
@@ -425,7 +425,7 @@ def start(
             )
     else:
         console.info(
-            "No AI tool configured — use `wade address-reviews-session fetch` to view comments."
+            "No AI tool configured — use `wade review-pr-comments-session fetch` to view comments."
         )
         console.detail(f"cd {worktree_path}")
         stop_title_keeper()
@@ -510,7 +510,7 @@ def _post_review_lifecycle(
 
     if choice == 1:  # Wait for new reviews
         issue_hint = f" {issue_number}" if issue_number else ""
-        console.hint(f"Run `wade address-reviews{issue_hint}` when new reviews come in.")
+        console.hint(f"Run `wade review pr-comments{issue_hint}` when new reviews come in.")
         return
 
     # Merge flow — reuse the same merge logic as post-work lifecycle

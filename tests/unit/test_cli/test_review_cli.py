@@ -44,18 +44,18 @@ class TestReviewPlanCli:
         assert result.exit_code == 1
 
 
-class TestReviewCodeCli:
+class TestReviewImplementationCli:
     @patch("wade.services.review_delegation_service.run")
-    def test_review_code_no_diff(self, mock_run: MagicMock) -> None:
+    def test_review_implementation_no_diff(self, mock_run: MagicMock) -> None:
         mock_run.return_value = MagicMock(stdout="")
-        result = runner.invoke(app, ["review", "code"])
+        result = runner.invoke(app, ["review", "implementation"])
         assert result.exit_code == 0
 
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service._get_template")
     @patch("wade.services.review_delegation_service.run")
-    def test_review_code_with_diff(
+    def test_review_implementation_with_diff(
         self,
         mock_run: MagicMock,
         mock_template: MagicMock,
@@ -68,18 +68,18 @@ class TestReviewCodeCli:
         from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 
         mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_code=AICommandConfig(mode="prompt"))
+            ai=AIConfig(review_implementation=AICommandConfig(mode="prompt"))
         )
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="Clean code!", mode=DelegationMode.PROMPT
         )
 
-        result = runner.invoke(app, ["review", "code"])
+        result = runner.invoke(app, ["review", "implementation"])
         assert result.exit_code == 0
 
     @patch("wade.services.review_delegation_service.run")
-    def test_review_code_staged_flag(self, mock_run: MagicMock) -> None:
+    def test_review_implementation_staged_flag(self, mock_run: MagicMock) -> None:
         mock_run.return_value = MagicMock(stdout="")
-        runner.invoke(app, ["review", "code", "--staged"])
+        runner.invoke(app, ["review", "implementation", "--staged"])
         cmd = mock_run.call_args[0][0]
         assert "--staged" in cmd

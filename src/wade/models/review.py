@@ -1,6 +1,6 @@
 """Review domain models — ReviewComment, ReviewThread, and formatting helpers.
 
-Used by the ``address-reviews`` flow to represent unresolved PR review
+Used by the ``review pr-comments`` flow to represent unresolved PR review
 threads and render them as structured markdown for AI consumption.
 """
 

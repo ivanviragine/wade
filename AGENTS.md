@@ -151,7 +151,7 @@ Before considering any work complete:
 - [ ] **Types + Lint** — `./scripts/check.sh` passes (or run both at once: `./scripts/check-all.sh`)
 - [ ] **`AGENTS.md`** — updated if architecture, conventions, or workflow changed
 - [ ] **`README.md`** — updated if user-facing behavior changed
-- [ ] **`templates/skills/`** — updated if agent-facing rules changed (plan-session for planning, implementation-session for implementation, address-reviews-session for reviews)
+- [ ] **`templates/skills/`** — updated if agent-facing rules changed (plan-session for planning, implementation-session for implementation, review-pr-comments-session for reviews)
 - [ ] **Commit** — uses conventional-commit prefix
 
 > Full 10-item checklist, documentation rules, feedback loop, and correction-driven docs: see `docs/dev/documentation-policies.md`

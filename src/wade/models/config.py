@@ -84,7 +84,7 @@ class AIConfig(BaseModel):
     deps: AICommandConfig = AICommandConfig()
     work: AICommandConfig = AICommandConfig()
     review_plan: AICommandConfig = AICommandConfig()
-    review_code: AICommandConfig = AICommandConfig()
+    review_implementation: AICommandConfig = AICommandConfig()
 
 
 class PermissionsConfig(BaseModel):

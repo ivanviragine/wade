@@ -1194,14 +1194,14 @@ def _prompt_command_overrides(
 
     Returns a dict like:
         {"plan": {"tool": "claude", "model": "..."}, "deps": {},
-         "review_plan": {"mode": "prompt"}, "review_code": {"mode": "headless"}}
+         "review_plan": {"mode": "prompt"}, "review_implementation": {"mode": "headless"}}
 
     Empty dicts for commands with no overrides.
     """
     from wade.ui import prompts
 
     if non_interactive:
-        return {"plan": {}, "deps": {}, "review_plan": {}, "review_code": {}}
+        return {"plan": {}, "deps": {}, "review_plan": {}, "review_implementation": {}}
 
     # Build selectable list: installed tools + "Skip (use default)"
     skip_label = "Skip (use default)"
@@ -1213,13 +1213,13 @@ def _prompt_command_overrides(
         ("plan", "AI tool", "Planning"),
         ("deps", "AI tool", "Dependency analysis"),
         ("review_plan", "AI tool", "Plan review"),
-        ("review_code", "AI tool", "Code review"),
+        ("review_implementation", "AI tool", "Implementation review"),
     ]
     result: dict[str, dict[str, str]] = {
         "plan": {},
         "deps": {},
         "review_plan": {},
-        "review_code": {},
+        "review_implementation": {},
     }
     tool_for_cmd: list[str | None] = [None] * len(cmd_triples)
     for cmd_idx, (cmd_name, prompt_label, section) in enumerate(cmd_triples):
@@ -1340,9 +1340,9 @@ def _write_config(
     if work_tool and work_tool != ai_tool:
         ai_section["work"] = {"tool": work_tool}
 
-    # Write per-command overrides (plan, deps, review_plan, review_code)
+    # Write per-command overrides (plan, deps, review_plan, review_implementation)
     if command_overrides:
-        for cmd_name in ("plan", "deps", "review_plan", "review_code"):
+        for cmd_name in ("plan", "deps", "review_plan", "review_implementation"):
             overrides = command_overrides.get(cmd_name, {})
             if overrides:
                 cmd_section: dict[str, str] = {}

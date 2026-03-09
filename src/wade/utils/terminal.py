@@ -47,11 +47,11 @@ def compose_implement_title(issue_id: str, issue_title: str) -> str:
 
 
 def compose_review_title(issue_id: str, issue_title: str) -> str:
-    """Compose a terminal title for an address-reviews session.
+    """Compose a terminal title for a review pr-comments session.
 
-    Format: "wade address-reviews #42 — Feature Name"
+    Format: "wade review pr-comments #42 — Feature Name"
     """
-    return f"wade address-reviews #{issue_id} — {_truncate_terminal_title(issue_title)}"
+    return f"wade review pr-comments #{issue_id} — {_truncate_terminal_title(issue_title)}"
 
 
 def compose_plan_title(issue_id: str | None, issue_title: str | None) -> str:

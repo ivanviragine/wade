@@ -52,7 +52,7 @@ class TestComposePlanTitle:
 class TestComposeReviewTitle:
     def test_basic(self) -> None:
         result = compose_review_title("42", "Add search command")
-        assert "wade address-reviews" in result
+        assert "wade review pr-comments" in result
         assert "#42" in result
         assert "Add search command" in result
 

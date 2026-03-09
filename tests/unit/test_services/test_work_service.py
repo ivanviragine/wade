@@ -188,7 +188,7 @@ class TestBootstrapWorktree:
         # Other skills should NOT be installed
         assert not (skills_dir / "plan-session").exists()
         assert not (skills_dir / "deps").exists()
-        assert not (skills_dir / "address-reviews-session").exists()
+        assert not (skills_dir / "review-pr-comments-session").exists()
 
     def test_self_init_selective_skills(self, tmp_path: Path) -> None:
         """Self-init with skills parameter only symlinks listed skills."""

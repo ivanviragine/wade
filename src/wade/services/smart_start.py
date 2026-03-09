@@ -3,7 +3,7 @@
 When `wade <ISSUE_ID>` is invoked, this service checks if an open PR already
 exists for the issue and presents a contextual menu:
 - No PR → implement (normal flow)
-- Open PR → "Continue working" / "Address reviews" / "Merge PR"
+- Open PR → "Continue working" / "Review PR comments" / "Merge PR"
 """
 
 from __future__ import annotations
@@ -214,8 +214,8 @@ def smart_start(
         )
         menu_options.append(
             (
-                "Address reviews",
-                _run_address_reviews_wrapper(
+                "Review PR comments",
+                _run_review_pr_comments_wrapper(
                     target, ai_tool, model, project_root, detach, ai_explicit, model_explicit
                 ),
             )
@@ -269,7 +269,7 @@ def _run_implement_task(
     )
 
 
-def _run_address_reviews(
+def _run_review_pr_comments(
     target: str,
     ai_tool: str | None,
     model: str | None,
@@ -279,7 +279,7 @@ def _run_address_reviews(
     ai_explicit: bool = False,
     model_explicit: bool = False,
 ) -> bool:
-    """Delegate to the address-reviews service."""
+    """Delegate to the review pr-comments service."""
     from wade.services.review_service import start as do_start
 
     return do_start(
@@ -320,7 +320,7 @@ def _run_implement_task_wrapper(
     return _impl
 
 
-def _run_address_reviews_wrapper(
+def _run_review_pr_comments_wrapper(
     target: str,
     ai_tool: str | None,
     model: str | None,
@@ -329,10 +329,10 @@ def _run_address_reviews_wrapper(
     ai_explicit: bool,
     model_explicit: bool,
 ) -> Callable[[], bool]:
-    """Return a callable that runs _run_address_reviews with captured arguments."""
+    """Return a callable that runs _run_review_pr_comments with captured arguments."""
 
     def _impl() -> bool:
-        return _run_address_reviews(
+        return _run_review_pr_comments(
             target=target,
             ai_tool=ai_tool,
             model=model,

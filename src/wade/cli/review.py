@@ -1,4 +1,4 @@
-"""Review subcommands — plan review and code review via delegation."""
+"""Review subcommands — plan review, implementation review, and PR comment review."""
 
 from __future__ import annotations
 
@@ -42,8 +42,8 @@ def review_plan_cmd(
     raise typer.Exit(0 if result.success else 1)
 
 
-@review_app.command("code")
-def review_code_cmd(
+@review_app.command("implementation")
+def review_implementation_cmd(
     staged: bool = typer.Option(False, "--staged", help="Review only staged changes."),
     ai: str | None = typer.Option(
         None, "--ai", help="AI tool to use.", autocompletion=complete_ai_tools
@@ -58,7 +58,40 @@ def review_code_cmd(
     ),
 ) -> None:
     """Review code changes."""
-    from wade.services.review_delegation_service import review_code
+    from wade.services.review_delegation_service import review_implementation
 
-    result = review_code(staged=staged, ai_tool=ai, model=model, mode=mode)
+    result = review_implementation(staged=staged, ai_tool=ai, model=model, mode=mode)
     raise typer.Exit(0 if result.success else 1)
+
+
+@review_app.command("pr-comments")
+def review_pr_comments_cmd(
+    target: str = typer.Argument(..., help="Issue number."),
+    ai: list[str] | None = typer.Option(  # noqa: B008
+        None, "--ai", help="AI tool to use.", autocompletion=complete_ai_tools
+    ),
+    model: str | None = typer.Option(
+        None, "--model", help="AI model to use.", autocompletion=complete_models
+    ),
+    detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
+) -> None:
+    """Address PR review comments."""
+    from wade.services.review_service import start as do_start
+    from wade.ui import prompts
+
+    selected_ai: str | None = None
+    if ai and len(ai) > 1:
+        idx = prompts.select("Select AI tool", ai)
+        selected_ai = ai[idx]
+    elif ai and len(ai) == 1:
+        selected_ai = ai[0]
+
+    success = do_start(
+        target=target,
+        ai_tool=selected_ai,
+        model=model,
+        detach=detach,
+        ai_explicit=selected_ai is not None,
+        model_explicit=model is not None,
+    )
+    raise typer.Exit(0 if success else 1)

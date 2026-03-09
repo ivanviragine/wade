@@ -9,7 +9,7 @@ from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationResult
 from wade.services.review_delegation_service import (
     _resolve_mode,
-    review_code,
+    review_implementation,
     review_plan,
 )
 
@@ -111,7 +111,7 @@ class TestReviewPlan:
 
 
 # ---------------------------------------------------------------------------
-# review_code
+# review_implementation
 # ---------------------------------------------------------------------------
 
 
@@ -119,7 +119,7 @@ class TestReviewCode:
     @patch("wade.services.review_delegation_service.run")
     def test_no_diff_warns(self, mock_run: MagicMock) -> None:
         mock_run.return_value = MagicMock(stdout="")
-        result = review_code()
+        result = review_implementation()
         assert result.success is True
         assert "No changes" in result.feedback
 
@@ -137,7 +137,7 @@ class TestReviewCode:
         mock_run.return_value = MagicMock(stdout="diff --git a/foo.py b/foo.py\n+new line\n")
         mock_template.return_value = "Review:\n{diff_content}"
         mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_code=AICommandConfig(mode="prompt"))
+            ai=AIConfig(review_implementation=AICommandConfig(mode="prompt"))
         )
         mock_delegate.return_value = DelegationResult(
             success=True,
@@ -145,7 +145,7 @@ class TestReviewCode:
             mode=DelegationMode.PROMPT,
         )
 
-        result = review_code()
+        result = review_implementation()
         assert result.success is True
 
         call_args = mock_delegate.call_args[0][0]
@@ -155,6 +155,6 @@ class TestReviewCode:
     @patch("wade.services.review_delegation_service.run")
     def test_staged_flag_passed_to_git(self, mock_run: MagicMock) -> None:
         mock_run.return_value = MagicMock(stdout="")
-        review_code(staged=True)
+        review_implementation(staged=True)
         cmd = mock_run.call_args[0][0]
         assert "--staged" in cmd

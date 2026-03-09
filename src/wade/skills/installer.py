@@ -55,15 +55,22 @@ SKILL_FILES: dict[str, list[str]] = {
     "task": ["SKILL.md", "plan-format.md", "examples.md"],
     "plan-session": ["SKILL.md"],
     "implementation-session": ["SKILL.md"],
-    "address-reviews-session": ["SKILL.md"],
+    "review-pr-comments-session": ["SKILL.md"],
     "deps": ["SKILL.md"],
 }
 
 # Skills that should always be overwritten on update
-ALWAYS_OVERWRITE = {"plan-session", "implementation-session", "address-reviews-session"}
+ALWAYS_OVERWRITE = {"plan-session", "implementation-session", "review-pr-comments-session"}
 
 # Old skill names removed in the phase-skill refactor — cleaned up during update
-_LEGACY_SKILLS = {"workflow", "sync", "pr-summary", "work-session", "review-session"}
+_LEGACY_SKILLS = {
+    "workflow",
+    "sync",
+    "pr-summary",
+    "work-session",
+    "review-session",
+    "address-reviews-session",
+}
 
 # All skill names Wade manages (current + legacy) — used for safe pruning
 MANAGED_SKILL_NAMES: set[str] = set(SKILL_FILES) | _LEGACY_SKILLS
@@ -76,7 +83,7 @@ CROSS_TOOL_DIRS = [".github/skills", ".agents/skills", ".gemini/skills", ".curso
 PLAN_SKILLS: list[str] = ["plan-session", "task", "deps"]
 DEPS_SKILLS: list[str] = ["deps"]
 IMPLEMENT_SKILLS: list[str] = ["implementation-session", "task"]
-REVIEW_SKILLS: list[str] = ["address-reviews-session", "task"]
+REVIEW_SKILLS: list[str] = ["review-pr-comments-session", "task"]
 
 
 def install_skills(

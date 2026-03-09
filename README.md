@@ -115,11 +115,13 @@ wade 42
 
 | Command | Description |
 |---------|-------------|
-| `wade <N>` | Smart shorthand — routes to implement or address-reviews automatically |
+| `wade <N>` | Smart shorthand — routes to implement or review pr-comments automatically |
 | `wade plan` | AI planning session — creates issues + draft PRs |
 | `wade implement <N>` | Create worktree and start AI session for an issue |
 | `wade implement-batch <N> <M> ...` | Start parallel sessions for multiple issues *(beta)* |
-| `wade address-reviews <N>` | Address PR review comments |
+| `wade review pr-comments <N>` | Address PR review comments |
+| `wade review plan <file>` | AI-powered plan review |
+| `wade review implementation` | AI-powered code review |
 | `wade cd <N>` | Navigate to a worktree (requires shell integration) |
 | `wade task create` | Create a GitHub issue interactively |
 | `wade task list` | List open issues |
@@ -129,7 +131,7 @@ wade 42
 | `wade init` | Initialize WADE in the current project |
 | `wade update` | Upgrade WADE and refresh project files |
 
-Short aliases: `wade p` (plan), `wade i <N>` (implement), `wade r <N>` (address-reviews).
+Short aliases: `wade p` (plan), `wade i <N>` (implement), `wade r <N>` (review pr-comments).
 
 `plan` and `implement` accept `--ai <tool>` and `--model <model>` to override the configured defaults. `implement` also supports `--detach` (new terminal tab) and `--cd` (print worktree path only).
 
@@ -154,7 +156,7 @@ Short aliases: `wade p` (plan), `wade i <N>` (implement), `wade r <N>` (address-
 | `task` | GitHub issue creation and plan format |
 | `plan-session` | Planning session rules and workflow |
 | `implementation-session` | Implementation session rules and workflow |
-| `address-reviews-session` | Review session rules and workflow |
+| `review-pr-comments-session` | Review session rules and workflow |
 | `deps` | Dependency analysis between issues |
 
 ## Worktree Hooks

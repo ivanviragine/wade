@@ -1,4 +1,4 @@
-"""Review delegation service — plan review and code review via delegation infrastructure."""
+"""Review delegation service — plan review and implementation review via delegation."""
 
 from __future__ import annotations
 
@@ -81,14 +81,14 @@ def review_plan(
     return result
 
 
-def review_code(
+def review_implementation(
     *,
     staged: bool = False,
     ai_tool: str | None = None,
     model: str | None = None,
     mode: str | None = None,
 ) -> DelegationResult:
-    """Review code changes via the delegation infrastructure."""
+    """Review implementation changes via the delegation infrastructure."""
     diff_cmd = ["git", "diff"]
     if staged:
         diff_cmd.append("--staged")
@@ -109,11 +109,11 @@ def review_code(
     prompt = template.replace("{diff_content}", diff_content)
 
     config = load_config()
-    cmd_config = config.ai.review_code
+    cmd_config = config.ai.review_implementation
 
     delegation_mode = DelegationMode(mode) if mode else _resolve_mode(cmd_config)
-    resolved_tool = resolve_ai_tool(ai_tool, config, command="review_code")
-    resolved_model = resolve_model(model, config, command="review_code")
+    resolved_tool = resolve_ai_tool(ai_tool, config, command="review_implementation")
+    resolved_model = resolve_model(model, config, command="review_implementation")
 
     request = DelegationRequest(
         mode=delegation_mode,

@@ -24,7 +24,7 @@ def cli_main() -> None:
         # Rewrite "wade 42 [flags]" → "wade smart-start 42 [flags]" so Typer
         # dispatches normally: the main callback runs (logging, update nag,
         # version banner) and any extra flags (--detach, --ai, etc.) are parsed.
-        # smart-start detects PR state and routes to implement or address-reviews.
+        # smart-start detects PR state and routes to implement or review pr-comments.
         sys.argv = [sys.argv[0], "smart-start", *sys.argv[1:]]
     try:
         app()
@@ -99,7 +99,7 @@ def _interactive_main_menu() -> None:
     ]
     hints = [
         "implement / i",
-        "address-reviews / r",
+        "review pr-comments / r",
         "plan / p",
         "task create",
         "worktree list",
@@ -286,7 +286,7 @@ def implement_batch_cmd(
     raise typer.Exit(0 if success else 1)
 
 
-@app.command("address-reviews", rich_help_panel="Workflow")
+@app.command("address-reviews", hidden=True)
 def address_reviews_cmd(
     target: str = typer.Argument(..., help="Issue number."),
     ai: list[str] | None = typer.Option(  # noqa: B008
@@ -297,26 +297,10 @@ def address_reviews_cmd(
     ),
     detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
 ) -> None:
-    """Address PR review comments."""
-    from wade.services.review_service import start as do_start
-    from wade.ui import prompts
+    """Address PR review comments (hidden alias for review pr-comments)."""
+    from wade.cli.review import review_pr_comments_cmd
 
-    selected_ai: str | None = None
-    if ai and len(ai) > 1:
-        idx = prompts.select("Select AI tool", ai)
-        selected_ai = ai[idx]
-    elif ai and len(ai) == 1:
-        selected_ai = ai[0]
-
-    success = do_start(
-        target=target,
-        ai_tool=selected_ai,
-        model=model,
-        detach=detach,
-        ai_explicit=selected_ai is not None,
-        model_explicit=model is not None,
-    )
-    raise typer.Exit(0 if success else 1)
+    review_pr_comments_cmd(target=target, ai=ai, model=model, detach=detach)
 
 
 @app.command("cd", rich_help_panel="Workflow")
@@ -351,7 +335,7 @@ def smart_start_cmd(
         False, "--cd", help="Create worktree and print path (no AI launch)."
     ),
 ) -> None:
-    """Smart start — routes to implement or address-reviews."""
+    """Smart start — routes to implement or review pr-comments."""
     from wade.services.smart_start import smart_start
 
     selected_ai: str | None = None
@@ -433,17 +417,19 @@ def reviews_alias(
     ),
     detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
 ) -> None:
-    """Alias for address-reviews."""
-    address_reviews_cmd(target=target, ai=ai, model=model, detach=detach)
+    """Alias for review pr-comments."""
+    from wade.cli.review import review_pr_comments_cmd
+
+    review_pr_comments_cmd(target=target, ai=ai, model=model, detach=detach)
 
 
 # --- Register subcommand groups ---
 
-from wade.cli.address_reviews_session import reviews_session_app  # noqa: E402
 from wade.cli.admin import admin_app  # noqa: E402
 from wade.cli.implementation_session import impl_session_app  # noqa: E402
 from wade.cli.plan_session import plan_session_app  # noqa: E402
 from wade.cli.review import review_app  # noqa: E402
+from wade.cli.review_pr_comments_session import review_pr_comments_session_app  # noqa: E402
 from wade.cli.task import task_app  # noqa: E402
 from wade.cli.worktree import worktree_app  # noqa: E402
 
@@ -474,15 +460,20 @@ app.add_typer(
     rich_help_panel="AI Session — Implementation",
 )
 app.add_typer(
-    reviews_session_app,
+    review_pr_comments_session_app,
+    name="review-pr-comments-session",
+    help="PR comment review session commands (check, sync, done, fetch, resolve).",
+    rich_help_panel="AI Session — Review PR Comments",
+)
+app.add_typer(
+    review_pr_comments_session_app,
     name="address-reviews-session",
-    help="Review session commands (check, sync, done, fetch, resolve).",
-    rich_help_panel="AI Session — Address Reviews",
+    hidden=True,
 )
 app.add_typer(
     review_app,
     name="review",
-    help="AI-powered review commands (plan, code).",
+    help="AI-powered review commands (plan, implementation, pr-comments).",
     rich_help_panel="Review",
 )
 

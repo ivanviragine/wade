@@ -133,14 +133,14 @@ in repo, already on main) and suggest how to fix it.
 Before closing the session, run the code review command to catch issues early:
 
 ```bash
-wade review code
+wade review implementation
 ```
 
 If the review surfaces actionable feedback, address it and commit before
 proceeding. For staged-only review:
 
 ```bash
-wade review code --staged
+wade review implementation --staged
 ```
 
 ## Closing the session
