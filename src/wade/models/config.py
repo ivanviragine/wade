@@ -71,6 +71,7 @@ class AICommandConfig(BaseModel):
     tool: str | None = None
     model: str | None = None
     effort: str | None = None
+    mode: str | None = None
 
 
 class AIConfig(BaseModel):
@@ -82,6 +83,8 @@ class AIConfig(BaseModel):
     plan: AICommandConfig = AICommandConfig()
     deps: AICommandConfig = AICommandConfig()
     work: AICommandConfig = AICommandConfig()
+    review_plan: AICommandConfig = AICommandConfig()
+    review_implementation: AICommandConfig = AICommandConfig()
 
 
 class PermissionsConfig(BaseModel):

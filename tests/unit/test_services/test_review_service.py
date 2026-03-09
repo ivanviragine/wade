@@ -1,4 +1,4 @@
-"""Tests for review service — address-reviews orchestration, usage blocks, and labels."""
+"""Tests for review service — review pr-comments orchestration, usage blocks, and labels."""
 
 from __future__ import annotations
 
@@ -521,7 +521,7 @@ class TestReviewServiceStart:
         result = start(target="42")
         assert result is True
 
-        # Verify that no REVIEW-COMMENTS.md was written (AI uses wade address-reviews-session fetch)
+        # Verify no REVIEW-COMMENTS.md written (AI uses review-pr-comments-session fetch)
         wt_paths = list(tmp_path.glob("wt"))
         assert len(wt_paths) == 1
         review_file = wt_paths[0] / "REVIEW-COMMENTS.md"

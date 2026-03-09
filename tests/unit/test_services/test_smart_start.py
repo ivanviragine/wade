@@ -102,7 +102,7 @@ class TestSmartStartOpenPR:
         assert result is True
         mock_implement.assert_called_once()
 
-    @patch("wade.services.smart_start._run_address_reviews", return_value=True)
+    @patch("wade.services.smart_start._run_review_pr_comments", return_value=True)
     @patch("wade.ui.prompts.select", return_value=1)
     @patch("wade.git.worktree.list_worktrees", return_value=[])
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
@@ -110,7 +110,7 @@ class TestSmartStartOpenPR:
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")
     @patch("wade.services.smart_start.load_config")
-    def test_address_reviews_runs_review_service(
+    def test_review_pr_comments_runs_review_service(
         self,
         mock_config: MagicMock,
         mock_get_provider: MagicMock,
@@ -198,8 +198,8 @@ class TestSmartStartDraftPR:
         mock_select.assert_called_once()
         call_args = mock_select.call_args
         assert "Start implementation" in call_args[0][1]
-        # Verify that "Address reviews" and "Merge PR" are not in the menu
-        assert "Address reviews" not in call_args[0][1]
+        # Verify that "Review PR comments" and "Merge PR" are not in the menu
+        assert "Review PR comments" not in call_args[0][1]
         assert "Merge PR" not in call_args[0][1]
         mock_implement.assert_called_once()
 
@@ -240,8 +240,8 @@ class TestSmartStartDraftPR:
         mock_select.assert_called_once()
         call_args = mock_select.call_args
         assert "Continue working" in call_args[0][1]
-        # Verify that "Address reviews" and "Merge PR" are not in the menu
-        assert "Address reviews" not in call_args[0][1]
+        # Verify that "Review PR comments" and "Merge PR" are not in the menu
+        assert "Review PR comments" not in call_args[0][1]
         assert "Merge PR" not in call_args[0][1]
         mock_implement.assert_called_once()
 
@@ -253,7 +253,7 @@ class TestSmartStartDraftPR:
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")
     @patch("wade.services.smart_start.load_config")
-    def test_draft_pr_no_address_reviews_or_merge_options(
+    def test_draft_pr_no_review_pr_comments_or_merge_options(
         self,
         mock_config: MagicMock,
         mock_get_provider: MagicMock,
@@ -265,7 +265,7 @@ class TestSmartStartDraftPR:
         mock_implement: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Draft PR never shows 'Address reviews' or 'Merge PR' options."""
+        """Draft PR never shows 'Review PR comments' or 'Merge PR' options."""
         mock_repo_root.return_value = tmp_path
         mock_get_provider.return_value.read_task.return_value = _make_task()
         mock_pr.return_value = {"number": 99, "state": "OPEN", "isDraft": True}
@@ -280,8 +280,8 @@ class TestSmartStartDraftPR:
 
         # Verify that only 1 option is present (either "Start implementation" or "Continue working")
         assert len(menu_options) == 1
-        # Verify that "Address reviews" and "Merge PR" are not in the menu
-        assert "Address reviews" not in menu_options
+        # Verify that "Review PR comments" and "Merge PR" are not in the menu
+        assert "Review PR comments" not in menu_options
         assert "Merge PR" not in menu_options
 
 

@@ -1,4 +1,4 @@
-"""Address-reviews session subcommands — check, sync, done, fetch, resolve."""
+"""Review PR comments session subcommands — check, sync, done, fetch, resolve."""
 
 from __future__ import annotations
 
@@ -8,12 +8,12 @@ import typer
 
 from wade.models.work import SyncEventType
 
-reviews_session_app = typer.Typer(
-    help="Review session commands (check, sync, done, fetch, resolve).",
+review_pr_comments_session_app = typer.Typer(
+    help="Review PR comments session commands (check, sync, done, fetch, resolve).",
 )
 
 
-@reviews_session_app.command()
+@review_pr_comments_session_app.command()
 def check() -> None:
     """Verify worktree safety for AI agents.
 
@@ -29,7 +29,7 @@ def check() -> None:
     raise typer.Exit(result.exit_code)
 
 
-@reviews_session_app.command()
+@review_pr_comments_session_app.command()
 def sync(
     json_output: bool = typer.Option(False, "--json", help="Output structured JSON events."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview without merging."),
@@ -44,7 +44,7 @@ def sync(
         dry_run=dry_run,
         main_branch=main_branch,
         json_output=json_output,
-        session_type="address-reviews",
+        session_type="review-pr-comments",
     )
     if result.success:
         raise typer.Exit(0)
@@ -67,7 +67,7 @@ def sync(
         raise typer.Exit(1)
 
 
-@reviews_session_app.command()
+@review_pr_comments_session_app.command()
 def done(
     target: str | None = typer.Argument(None, help="Issue number, worktree name, or plan file."),
     plan: str | None = typer.Option(None, "--plan", help="Plan file to resolve worktree from."),
@@ -88,7 +88,7 @@ def done(
     raise typer.Exit(0 if success else 1)
 
 
-@reviews_session_app.command()
+@review_pr_comments_session_app.command()
 def fetch(
     target: str = typer.Argument(..., help="Issue number."),
 ) -> None:
@@ -99,7 +99,7 @@ def fetch(
     raise typer.Exit(0 if success else 1)
 
 
-@reviews_session_app.command()
+@review_pr_comments_session_app.command()
 def resolve(
     thread_id: str = typer.Argument(..., help="GitHub review thread node ID."),
 ) -> None:

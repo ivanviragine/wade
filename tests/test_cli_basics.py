@@ -57,12 +57,18 @@ class TestHelp:
         assert "sync" in result.output
         assert "check" in result.output
 
-    def test_address_reviews_session_help(self) -> None:
-        result = runner.invoke(app, ["address-reviews-session", "--help"])
+    def test_review_pr_comments_session_help(self) -> None:
+        result = runner.invoke(app, ["review-pr-comments-session", "--help"])
         assert result.exit_code == 0
         assert "done" in result.output
         assert "fetch" in result.output
         assert "resolve" in result.output
+
+    def test_address_reviews_session_hidden_alias(self) -> None:
+        """The old address-reviews-session alias should still work."""
+        result = runner.invoke(app, ["address-reviews-session", "--help"])
+        assert result.exit_code == 0
+        assert "done" in result.output
 
     def test_top_level_commands_in_help(self) -> None:
         result = runner.invoke(app, ["--help"])

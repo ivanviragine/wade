@@ -41,22 +41,16 @@ logger = structlog.get_logger()
 
 def get_deps_prompt_template() -> str:
     """Load the dependency analysis prompt template."""
-    from wade.skills.installer import get_templates_dir
+    from wade.skills.installer import load_prompt_template
 
-    template = get_templates_dir() / "prompts" / "deps-analysis.md"
-    if not template.is_file():
-        raise FileNotFoundError(f"Prompt template not found: {template}")
-    return template.read_text(encoding="utf-8")
+    return load_prompt_template("deps-analysis.md")
 
 
 def get_deps_interactive_template() -> str:
     """Load the interactive fallback output instruction template."""
-    from wade.skills.installer import get_templates_dir
+    from wade.skills.installer import load_prompt_template
 
-    template = get_templates_dir() / "prompts" / "deps-interactive.md"
-    if not template.is_file():
-        raise FileNotFoundError(f"Prompt template not found: {template}")
-    return template.read_text(encoding="utf-8").strip()
+    return load_prompt_template("deps-interactive.md")
 
 
 # ---------------------------------------------------------------------------

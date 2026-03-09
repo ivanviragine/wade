@@ -29,7 +29,7 @@ When `wade init` runs on this repo (self-init mode), the installer creates symli
 ```
 .claude/skills/plan-session              ->  ../../templates/skills/plan-session              (symlink)
 .claude/skills/implementation-session   ->  ../../templates/skills/implementation-session   (symlink)
-.claude/skills/address-reviews-session  ->  ../../templates/skills/address-reviews-session  (symlink)
+.claude/skills/review-pr-comments-session  ->  ../../templates/skills/review-pr-comments-session  (symlink)
 .claude/skills/task                     ->  ../../templates/skills/task                     (symlink)
 .claude/skills/deps                     ->  ../../templates/skills/deps                     (symlink)
 
@@ -51,7 +51,7 @@ In inited projects (normal init), `wade init` copies skill files (not symlinks),
 1. Create the skill template in `templates/skills/<name>/SKILL.md`
 2. Register the skill in `skills/installer.py` — add it to `SKILL_FILES` and optionally `ALWAYS_OVERWRITE`
 3. Add the skill directory to the cleanup logic in `init_service.py` (deinit path)
-4. Reference the skill from `plan-session/SKILL.md`, `implementation-session/SKILL.md`, or `address-reviews-session/SKILL.md` as appropriate
+4. Reference the skill from `plan-session/SKILL.md`, `implementation-session/SKILL.md`, or `review-pr-comments-session/SKILL.md` as appropriate
 
 The self-init path creates symlinks from `.claude/skills/<name>` -> `../../templates/skills/<name>` to avoid file duplication when working on wade itself.
 
@@ -70,14 +70,14 @@ Skills are organized into **phase skills** (one per session type) and **task ski
 1. **AGENTS.md pointer** — `wade init` reads `templates/agents-pointer.md` and inserts its content into the target project's `AGENTS.md`. It directs agents to read the skill referenced in their clipboard prompt. **To change what gets injected into inited projects, edit `templates/agents-pointer.md`** — not this repo's own `## Git Workflow` section, which is only the self-installed copy for this repo.
 2. **`templates/skills/plan-session/SKILL.md`** — Self-contained rules for planning sessions (`wade plan`). Covers plan file format, complexity tagging, session boundaries. No implementation rules.
 3. **`templates/skills/implementation-session/SKILL.md`** — Self-contained rules for implementation sessions (`wade implement`). Covers worktree safety, commit conventions, syncing, PR summaries, and session closing. No planning rules.
-4. **`templates/skills/address-reviews-session/SKILL.md`** — Self-contained rules for review sessions (`wade address-reviews`). Covers review fetching, thread resolution, syncing, and session closing. No planning or implementation rules.
+4. **`templates/skills/review-pr-comments-session/SKILL.md`** — Self-contained rules for review sessions (`wade review pr-comments`). Covers review fetching, thread resolution, syncing, and session closing. No planning or implementation rules.
 5. **`templates/skills/task/SKILL.md`** — On-demand skill for standalone issue creation outside of planning sessions.
 6. **`templates/skills/deps/SKILL.md`** — On-demand skill for dependency analysis.
 
 Each phase skill is self-contained — agents only read the skill for their current phase. This eliminates noise from irrelevant rules. When adding new agent-facing commands or workflows:
 - **Put implementation rules** in `implementation-session/SKILL.md`
 - **Put planning rules** in `plan-session/SKILL.md`
-- **Put review rules** in `address-reviews-session/SKILL.md`
+- **Put review rules** in `review-pr-comments-session/SKILL.md`
 - **Create or update a task skill** in `templates/skills/` for on-demand reference
 - Keep the AGENTS.md pointer minimal — it should only direct agents to their phase skill
 

@@ -34,10 +34,12 @@ dependency analysis hooks.
 4. **Review with the user** — present a summary of every plan file you wrote
    (title, complexity, key tasks). Ask if they'd like any modifications — apply
    them and repeat if so, or proceed to step 5 if not.
-5. **Validate** — run `wade plan-session done <plan_dir>` (the temp dir from your prompt).
+5. **Review** — after writing plan files, run `wade review plan <plan_file>` to get
+   review feedback. Address any actionable feedback before proceeding.
+6. **Validate** — run `wade plan-session done <plan_dir>` (the temp dir from your prompt).
    If it exits with errors, fix each reported issue and re-run until it passes.
    Warnings are informational and do not block proceeding.
-6. **Stop** — once validation passes, suggest the user exits. wade reads
+7. **Stop** — once validation passes, suggest the user exits. wade reads
    the files and creates lightweight GitHub Issues + draft PRs automatically.
 
 You do **not** create issues, implement code, run `wade implement`, `wade implementation-session done`, or `wade implementation-session sync`,

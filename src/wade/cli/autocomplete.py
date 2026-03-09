@@ -35,6 +35,14 @@ def complete_models(ctx: typer.Context, incomplete: str) -> list[str]:
     return [m for m in unique_candidates if m.startswith(incomplete)]
 
 
+def complete_delegation_modes(incomplete: str) -> list[str]:
+    """Autocomplete delegation mode values."""
+    from wade.models.delegation import DelegationMode
+
+    modes = [m.value for m in DelegationMode]
+    return sorted([m for m in modes if m.startswith(incomplete)])
+
+
 def complete_effort_levels(incomplete: str) -> list[str]:
     """Autocomplete effort levels."""
     from wade.models.ai import EffortLevel
