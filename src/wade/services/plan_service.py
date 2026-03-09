@@ -528,6 +528,7 @@ def plan(
                 usage=usage,
                 repo_root=repo_root,
                 planning_worktree=planning_worktree,
+                effort=resolved_effort,
             )
             _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
             if offer_result is not None:
@@ -560,6 +561,7 @@ def plan(
                 usage=usage,
                 repo_root=repo_root,
                 planning_worktree=planning_worktree,
+                effort=resolved_effort,
             )
             _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
             if offer_result is not None:
@@ -748,6 +750,7 @@ def _finalize_issues(
     usage: TokenUsage | None = None,
     repo_root: Path | None = None,
     planning_worktree: Path | None = None,
+    effort: EffortLevel | None = None,
 ) -> bool | None:
     """Finalize newly created issues: token summaries, labels, hints.
 
@@ -842,7 +845,7 @@ def _finalize_issues(
     # Hint for next steps
     console.empty()
     if len(issue_numbers) == 1:
-        result = _offer_to_implement(issue_numbers[0])
+        result = _offer_to_implement(issue_numbers[0], ai_tool=ai_tool, model=model, effort=effort)
         if result is not None:
             return result
     elif len(issue_numbers) >= 2:
@@ -858,7 +861,12 @@ def _print_implement_hint(issue_number: str) -> None:
     console.detail(f"wade implement {issue_number}")
 
 
-def _offer_to_implement(issue_number: str) -> bool | None:
+def _offer_to_implement(
+    issue_number: str,
+    ai_tool: str | None = None,
+    model: str | None = None,
+    effort: EffortLevel | None = None,
+) -> bool | None:
     """Prompt the user to start a work session on the newly planned issue.
 
     Returns True/False if the user accepted/implementation session succeeded or failed,
@@ -877,7 +885,15 @@ def _offer_to_implement(issue_number: str) -> bool | None:
         return None
 
     try:
-        return start_work_session(target=issue_number)
+        return start_work_session(
+            target=issue_number,
+            ai_tool=ai_tool,
+            model=model,
+            effort=effort.value if effort is not None else None,
+            ai_explicit=ai_tool is not None,
+            model_explicit=model is not None,
+            effort_explicit=effort is not None,
+        )
     except Exception:
         logger.exception("plan.work_session_start_failed", issue=issue_number)
         return False
