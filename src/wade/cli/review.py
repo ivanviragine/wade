@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import typer
 
-from wade.cli.autocomplete import complete_ai_tools, complete_models
+from wade.cli.autocomplete import complete_ai_tools, complete_delegation_modes, complete_models
 
 review_app = typer.Typer(
     help="AI-powered review commands.",
@@ -33,6 +33,7 @@ def review_plan_cmd(
         None,
         "--mode",
         help="Delegation mode: prompt, interactive, headless.",
+        autocompletion=complete_delegation_modes,
     ),
 ) -> None:
     """Review a plan file."""
@@ -55,6 +56,7 @@ def review_implementation_cmd(
         None,
         "--mode",
         help="Delegation mode: prompt, interactive, headless.",
+        autocompletion=complete_delegation_modes,
     ),
 ) -> None:
     """Review code changes."""

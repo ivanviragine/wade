@@ -15,7 +15,7 @@ runner = CliRunner()
 class TestReviewPlanCli:
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
-    @patch("wade.services.review_delegation_service._get_template")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
     def test_review_plan_success(
         self,
         mock_template: MagicMock,
@@ -53,7 +53,7 @@ class TestReviewImplementationCli:
 
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
-    @patch("wade.services.review_delegation_service._get_template")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
     @patch("wade.services.review_delegation_service.run")
     def test_review_implementation_with_diff(
         self,

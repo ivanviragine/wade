@@ -25,14 +25,19 @@ class TestDelegatePrompt:
         req = DelegationRequest(mode=DelegationMode.PROMPT, prompt="Review this plan.")
         result = delegate(req)
         assert result.success is True
-        assert result.feedback == "Review this plan."
+        assert "Review this plan." in result.feedback
         assert result.mode == DelegationMode.PROMPT
 
     def test_prompt_mode_directly(self) -> None:
         req = DelegationRequest(mode=DelegationMode.PROMPT, prompt="Some prompt text")
         result = _delegate_prompt(req)
         assert result.success is True
-        assert result.feedback == "Some prompt text"
+        assert "Some prompt text" in result.feedback
+
+    def test_prompt_mode_includes_copy_header(self) -> None:
+        req = DelegationRequest(mode=DelegationMode.PROMPT, prompt="My prompt")
+        result = _delegate_prompt(req)
+        assert result.feedback.startswith("Copy the prompt below")
 
 
 # ---------------------------------------------------------------------------

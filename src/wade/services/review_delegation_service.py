@@ -7,34 +7,14 @@ from pathlib import Path
 import structlog
 
 from wade.config.loader import load_config
-from wade.models.config import AICommandConfig
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
 from wade.services.ai_resolution import resolve_ai_tool, resolve_model
-from wade.services.delegation_service import delegate
+from wade.services.delegation_service import delegate, resolve_mode
+from wade.skills.installer import load_prompt_template
 from wade.ui.console import console
 from wade.utils.process import run
 
 logger = structlog.get_logger()
-
-
-def _get_template(name: str) -> str:
-    """Load a prompt template by name from templates/prompts/."""
-    from wade.skills.installer import get_templates_dir
-
-    template = get_templates_dir() / "prompts" / name
-    if not template.is_file():
-        raise FileNotFoundError(f"Prompt template not found: {template}")
-    return template.read_text(encoding="utf-8")
-
-
-def _resolve_mode(cmd_config: AICommandConfig) -> DelegationMode:
-    """Resolve the delegation mode from config, defaulting to prompt."""
-    if cmd_config.mode:
-        try:
-            return DelegationMode(cmd_config.mode)
-        except ValueError:
-            pass
-    return DelegationMode.PROMPT
 
 
 def review_plan(
@@ -56,14 +36,14 @@ def review_plan(
         )
 
     plan_content = plan_path.read_text(encoding="utf-8")
-    template = _get_template("review-plan.md")
+    template = load_prompt_template("review-plan.md")
     prompt = template.replace("{plan_content}", plan_content)
 
     config = load_config()
     cmd_config = config.ai.review_plan
 
     try:
-        delegation_mode = DelegationMode(mode) if mode else _resolve_mode(cmd_config)
+        delegation_mode = DelegationMode(mode) if mode else resolve_mode(cmd_config)
     except ValueError:
         console.error(f"Invalid delegation mode: {mode}")
         return DelegationResult(
@@ -124,14 +104,14 @@ def review_implementation(
             mode=DelegationMode.PROMPT,
         )
 
-    template = _get_template("review-code.md")
+    template = load_prompt_template("review-code.md")
     prompt = template.replace("{diff_content}", diff_content)
 
     config = load_config()
     cmd_config = config.ai.review_implementation
 
     try:
-        delegation_mode = DelegationMode(mode) if mode else _resolve_mode(cmd_config)
+        delegation_mode = DelegationMode(mode) if mode else resolve_mode(cmd_config)
     except ValueError:
         console.error(f"Invalid delegation mode: {mode}")
         return DelegationResult(

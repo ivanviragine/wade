@@ -49,6 +49,21 @@ def get_skills_templates_dir() -> Path:
     return get_templates_dir() / "skills"
 
 
+def load_prompt_template(name: str) -> str:
+    """Load a prompt template by name from templates/prompts/.
+
+    Args:
+        name: Template filename (e.g. "review-plan.md").
+
+    Raises:
+        FileNotFoundError: If the template does not exist.
+    """
+    template = get_templates_dir() / "prompts" / name
+    if not template.is_file():
+        raise FileNotFoundError(f"Prompt template not found: {template}")
+    return template.read_text(encoding="utf-8")
+
+
 # --- Skill registry: name → list of files ---
 
 SKILL_FILES: dict[str, list[str]] = {

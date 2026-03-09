@@ -18,6 +18,7 @@ import structlog
 
 from wade.ai_tools.base import AbstractAITool
 from wade.models.ai import AIToolID, EffortLevel
+from wade.models.config import AICommandConfig
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.ui import prompts
@@ -25,6 +26,16 @@ from wade.ui.console import console
 from wade.utils.process import CommandError, run
 
 logger = structlog.get_logger()
+
+
+def resolve_mode(cmd_config: AICommandConfig) -> DelegationMode:
+    """Resolve the delegation mode from config, defaulting to prompt."""
+    if cmd_config.mode:
+        try:
+            return DelegationMode(cmd_config.mode)
+        except ValueError:
+            pass
+    return DelegationMode.PROMPT
 
 
 def _parse_effort(raw: str | None) -> EffortLevel | None:
@@ -55,10 +66,11 @@ def delegate(request: DelegationRequest) -> DelegationResult:
 
 
 def _delegate_prompt(request: DelegationRequest) -> DelegationResult:
-    """Return the prompt text directly — caller self-reviews."""
+    """Return the prompt text directly — caller copies into their AI tool."""
+    header = "Copy the prompt below into your AI tool:\n\n---\n"
     return DelegationResult(
         success=True,
-        feedback=request.prompt,
+        feedback=header + request.prompt,
         mode=DelegationMode.PROMPT,
     )
 
@@ -94,7 +106,8 @@ def _delegate_headless(request: DelegationRequest) -> DelegationResult:
             exit_code=1,
         )
 
-    trusted = list(request.trusted_dirs) or [str(session_cwd), tempfile.gettempdir()]
+    defaults = [str(session_cwd), tempfile.gettempdir()]
+    trusted = defaults + [d for d in request.trusted_dirs if d not in defaults]
     cmd = adapter.build_launch_command(
         model=request.model,
         prompt=request.prompt,
@@ -164,13 +177,23 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
     )
     interactive_prompt = request.prompt + output_instruction
 
-    trusted = list(request.trusted_dirs) or [str(session_cwd), tempfile.gettempdir()]
+    defaults = [str(session_cwd), tempfile.gettempdir()]
+    trusted = defaults + [d for d in request.trusted_dirs if d not in defaults]
     if tmp_dir:
         trusted.append(tmp_dir)
 
     try:
         try:
             adapter = AbstractAITool.get(AIToolID(request.ai_tool))
+        except (ValueError, KeyError):
+            return DelegationResult(
+                success=False,
+                feedback=f"Unknown AI tool: {request.ai_tool}",
+                mode=DelegationMode.INTERACTIVE,
+                exit_code=1,
+            )
+
+        try:
             deliver_prompt_if_needed(adapter, interactive_prompt)
             adapter.launch(
                 worktree_path=session_cwd,
@@ -191,14 +214,7 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
                         mode=DelegationMode.INTERACTIVE,
                         exit_code=1,
                     )
-        except (ValueError, KeyError):
-            return DelegationResult(
-                success=False,
-                feedback=f"Unknown AI tool: {request.ai_tool}",
-                mode=DelegationMode.INTERACTIVE,
-                exit_code=1,
-            )
-        except Exception as e:
+        except (OSError, subprocess.SubprocessError) as e:
             return DelegationResult(
                 success=False,
                 feedback=f"AI tool launch failed: {e}",

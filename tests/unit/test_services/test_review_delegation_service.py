@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 
 from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationResult
+from wade.services.delegation_service import resolve_mode
 from wade.services.review_delegation_service import (
-    _resolve_mode,
     review_implementation,
     review_plan,
 )
@@ -21,19 +21,19 @@ from wade.services.review_delegation_service import (
 class TestResolveMode:
     def test_defaults_to_prompt(self) -> None:
         cfg = AICommandConfig()
-        assert _resolve_mode(cfg) == DelegationMode.PROMPT
+        assert resolve_mode(cfg) == DelegationMode.PROMPT
 
     def test_reads_mode_from_config(self) -> None:
         cfg = AICommandConfig(mode="headless")
-        assert _resolve_mode(cfg) == DelegationMode.HEADLESS
+        assert resolve_mode(cfg) == DelegationMode.HEADLESS
 
     def test_interactive_mode(self) -> None:
         cfg = AICommandConfig(mode="interactive")
-        assert _resolve_mode(cfg) == DelegationMode.INTERACTIVE
+        assert resolve_mode(cfg) == DelegationMode.INTERACTIVE
 
     def test_invalid_mode_defaults_to_prompt(self) -> None:
         cfg = AICommandConfig(mode="bad_value")
-        assert _resolve_mode(cfg) == DelegationMode.PROMPT
+        assert resolve_mode(cfg) == DelegationMode.PROMPT
 
 
 # ---------------------------------------------------------------------------
@@ -49,7 +49,7 @@ class TestReviewPlan:
 
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
-    @patch("wade.services.review_delegation_service._get_template")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
     def test_prompt_mode_returns_plan_content(
         self,
         mock_template: MagicMock,
@@ -86,7 +86,7 @@ class TestReviewPlan:
 
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
-    @patch("wade.services.review_delegation_service._get_template")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
     def test_mode_override_from_arg(
         self,
         mock_template: MagicMock,
@@ -110,7 +110,7 @@ class TestReviewPlan:
         assert call_args.mode == DelegationMode.HEADLESS
 
     @patch("wade.services.review_delegation_service.load_config")
-    @patch("wade.services.review_delegation_service._get_template")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
     def test_invalid_mode_returns_error(
         self,
         mock_template: MagicMock,
@@ -155,7 +155,7 @@ class TestReviewCode:
 
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
-    @patch("wade.services.review_delegation_service._get_template")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
     @patch("wade.services.review_delegation_service.run")
     def test_code_review_with_diff(
         self,
@@ -192,7 +192,7 @@ class TestReviewCode:
         assert "--staged" in cmd
 
     @patch("wade.services.review_delegation_service.load_config")
-    @patch("wade.services.review_delegation_service._get_template")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
     @patch("wade.services.review_delegation_service.run")
     def test_invalid_mode_returns_error(
         self,
