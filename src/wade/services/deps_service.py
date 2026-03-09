@@ -50,7 +50,7 @@ def get_deps_interactive_template() -> str:
     """Load the interactive fallback output instruction template."""
     from wade.skills.installer import load_prompt_template
 
-    return load_prompt_template("deps-interactive.md").strip()
+    return load_prompt_template("deps-interactive.md")
 
 
 # ---------------------------------------------------------------------------

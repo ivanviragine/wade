@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class DelegationMode(StrEnum):
@@ -27,8 +27,8 @@ class DelegationRequest(BaseModel):
     cwd: Path | None = None
     timeout: int = 120
     output_file: Path | None = None
-    trusted_dirs: list[str] = []
-    allowed_commands: list[str] = []
+    trusted_dirs: list[str] = Field(default_factory=list)
+    allowed_commands: list[str] = Field(default_factory=list)
 
 
 class DelegationResult(BaseModel):

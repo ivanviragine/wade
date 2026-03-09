@@ -61,7 +61,7 @@ def load_prompt_template(name: str) -> str:
     template = get_templates_dir() / "prompts" / name
     if not template.is_file():
         raise FileNotFoundError(f"Prompt template not found: {template}")
-    return template.read_text(encoding="utf-8")
+    return template.read_text(encoding="utf-8").strip()
 
 
 # --- Skill registry: name → list of files ---

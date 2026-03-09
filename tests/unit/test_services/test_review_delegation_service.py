@@ -7,34 +7,10 @@ from unittest.mock import MagicMock, patch
 
 from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationResult
-from wade.services.delegation_service import resolve_mode
 from wade.services.review_delegation_service import (
     review_implementation,
     review_plan,
 )
-
-# ---------------------------------------------------------------------------
-# Mode resolution
-# ---------------------------------------------------------------------------
-
-
-class TestResolveMode:
-    def test_defaults_to_prompt(self) -> None:
-        cfg = AICommandConfig()
-        assert resolve_mode(cfg) == DelegationMode.PROMPT
-
-    def test_reads_mode_from_config(self) -> None:
-        cfg = AICommandConfig(mode="headless")
-        assert resolve_mode(cfg) == DelegationMode.HEADLESS
-
-    def test_interactive_mode(self) -> None:
-        cfg = AICommandConfig(mode="interactive")
-        assert resolve_mode(cfg) == DelegationMode.INTERACTIVE
-
-    def test_invalid_mode_defaults_to_prompt(self) -> None:
-        cfg = AICommandConfig(mode="bad_value")
-        assert resolve_mode(cfg) == DelegationMode.PROMPT
-
 
 # ---------------------------------------------------------------------------
 # review_plan

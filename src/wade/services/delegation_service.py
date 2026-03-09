@@ -173,7 +173,7 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
 
     # Append output instruction to prompt
     output_instruction = (
-        f"\n\n---\nWrite your review feedback to: {output_file}\nWhen done, exit the session."
+        f"\n\n---\nWrite your output to: {output_file}\nWhen done, exit the session."
     )
     interactive_prompt = request.prompt + output_instruction
 

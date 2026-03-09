@@ -7,13 +7,38 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import wade.ai_tools  # noqa: F401 — triggers adapter auto-registration
+from wade.models.config import AICommandConfig
 from wade.models.delegation import DelegationMode, DelegationRequest
 from wade.services.delegation_service import (
     _delegate_headless,
     _delegate_interactive,
     _delegate_prompt,
     delegate,
+    resolve_mode,
 )
+
+# ---------------------------------------------------------------------------
+# Mode resolution
+# ---------------------------------------------------------------------------
+
+
+class TestResolveMode:
+    def test_defaults_to_prompt(self) -> None:
+        cfg = AICommandConfig()
+        assert resolve_mode(cfg) == DelegationMode.PROMPT
+
+    def test_reads_mode_from_config(self) -> None:
+        cfg = AICommandConfig(mode="headless")
+        assert resolve_mode(cfg) == DelegationMode.HEADLESS
+
+    def test_interactive_mode(self) -> None:
+        cfg = AICommandConfig(mode="interactive")
+        assert resolve_mode(cfg) == DelegationMode.INTERACTIVE
+
+    def test_invalid_mode_defaults_to_prompt(self) -> None:
+        cfg = AICommandConfig(mode="bad_value")
+        assert resolve_mode(cfg) == DelegationMode.PROMPT
+
 
 # ---------------------------------------------------------------------------
 # Prompt mode
