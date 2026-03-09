@@ -128,6 +128,21 @@ in repo, already on main) and suggest how to fix it.
 
 **Never re-implement git operations yourself.** Always use `wade implementation-session sync`.
 
+## Self-review before closing
+
+Before closing the session, run the code review command to catch issues early:
+
+```bash
+wade review code
+```
+
+If the review surfaces actionable feedback, address it and commit before
+proceeding. For staged-only review:
+
+```bash
+wade review code --staged
+```
+
 ## Closing the session
 
 **NEVER** create Pull Requests manually (`gh pr create`) or push branches

@@ -498,13 +498,14 @@ class TestPromptModelMapping:
 class TestPromptCommandOverrides:
     def test_non_interactive_returns_empty(self) -> None:
         result = _prompt_command_overrides(["claude"], non_interactive=True)
-        assert result == {"plan": {}, "deps": {}}
+        assert result == {"plan": {}, "deps": {}, "review_plan": {}, "review_code": {}}
 
     @patch("wade.ui.prompts.select")
     def test_interactive_no_overrides(self, mock_select: MagicMock) -> None:
-        # Select "Skip (use default)" for plan and deps only
+        # Select "Skip (use default)" for plan, deps, review_plan, review_code
         # With installed_tools=["claude"], options are: ["claude", "Skip (use default)"]
-        mock_select.side_effect = [1, 1]  # index 1 = Skip
+        # Review commands also get a mode prompt (index 0 = "prompt")
+        mock_select.side_effect = [1, 1, 1, 0, 1, 0]  # Skip tool x4, mode x2
         result = _prompt_command_overrides(["claude"], non_interactive=False)
         assert result["plan"] == {}
         assert result["deps"] == {}
@@ -519,7 +520,9 @@ class TestPromptCommandOverrides:
         # installed_tools=["claude", "gemini"], tool_options=["claude", "gemini", "Skip"]
         # plan: idx 1 = gemini; model for plan: idx 1 = "gemini-2.5-pro" (2nd in gemini list);
         # deps: idx 2 = "Skip (use default)"
-        mock_select.side_effect = [1, 1, 2]
+        # review_plan: idx 2 = Skip, mode: idx 0 = prompt
+        # review_code: idx 2 = Skip, mode: idx 0 = prompt
+        mock_select.side_effect = [1, 1, 2, 2, 0, 2, 0]
         result = _prompt_command_overrides(["claude", "gemini"], non_interactive=False)
         assert result["plan"]["tool"] == "gemini"
         assert result["plan"]["model"] == "gemini-2.5-pro"

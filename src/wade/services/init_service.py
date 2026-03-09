@@ -1188,19 +1188,20 @@ def _prompt_command_overrides(
     non_interactive: bool,
     default_model: str | None = None,
 ) -> dict[str, dict[str, str]]:
-    """Prompt for per-command AI tool and model overrides for plan and deps.
+    """Prompt for per-command AI tool and model overrides.
 
     Work configuration is handled separately by ``_prompt_work_setup()``.
 
     Returns a dict like:
-        {"plan": {"tool": "claude", "model": "claude-sonnet-4-6"}, "deps": {}}
+        {"plan": {"tool": "claude", "model": "..."}, "deps": {},
+         "review_plan": {"mode": "prompt"}, "review_code": {"mode": "headless"}}
 
     Empty dicts for commands with no overrides.
     """
     from wade.ui import prompts
 
     if non_interactive:
-        return {"plan": {}, "deps": {}}
+        return {"plan": {}, "deps": {}, "review_plan": {}, "review_code": {}}
 
     # Build selectable list: installed tools + "Skip (use default)"
     skip_label = "Skip (use default)"
@@ -1208,8 +1209,18 @@ def _prompt_command_overrides(
         skip_label
     ]
 
-    cmd_triples = [("plan", "AI tool", "Planning"), ("deps", "AI tool", "Dependency analysis")]
-    result: dict[str, dict[str, str]] = {"plan": {}, "deps": {}}
+    cmd_triples = [
+        ("plan", "AI tool", "Planning"),
+        ("deps", "AI tool", "Dependency analysis"),
+        ("review_plan", "AI tool", "Plan review"),
+        ("review_code", "AI tool", "Code review"),
+    ]
+    result: dict[str, dict[str, str]] = {
+        "plan": {},
+        "deps": {},
+        "review_plan": {},
+        "review_code": {},
+    }
     tool_for_cmd: list[str | None] = [None] * len(cmd_triples)
     for cmd_idx, (cmd_name, prompt_label, section) in enumerate(cmd_triples):
         console.rule(section)
@@ -1250,6 +1261,17 @@ def _prompt_command_overrides(
                 )
             if chosen and chosen != skip_model_label:
                 result[cmd_name]["model"] = chosen
+
+        # For review commands, prompt for delegation mode
+        if cmd_name.startswith("review_"):
+            mode_options = [
+                "prompt (self-review)",
+                "headless (AI one-shot)",
+                "interactive (AI session)",
+            ]
+            mode_values = ["prompt", "headless", "interactive"]
+            mode_idx = prompts.select(f"  Delegation mode for {section.lower()}", mode_options)
+            result[cmd_name]["mode"] = mode_values[mode_idx]
 
     return result
 
@@ -1318,9 +1340,9 @@ def _write_config(
     if work_tool and work_tool != ai_tool:
         ai_section["work"] = {"tool": work_tool}
 
-    # Write plan/deps per-command overrides
+    # Write per-command overrides (plan, deps, review_plan, review_code)
     if command_overrides:
-        for cmd_name in ("plan", "deps"):
+        for cmd_name in ("plan", "deps", "review_plan", "review_code"):
             overrides = command_overrides.get(cmd_name, {})
             if overrides:
                 cmd_section: dict[str, str] = {}
@@ -1328,6 +1350,8 @@ def _write_config(
                     cmd_section["tool"] = overrides["tool"]
                 if overrides.get("model"):
                     cmd_section["model"] = overrides["model"]
+                if overrides.get("mode"):
+                    cmd_section["mode"] = overrides["mode"]
                 if cmd_section:
                     ai_section[cmd_name] = cmd_section
 

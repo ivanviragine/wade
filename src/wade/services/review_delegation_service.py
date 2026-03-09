@@ -1,0 +1,130 @@
+"""Review delegation service — plan review and code review via delegation infrastructure."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import structlog
+
+from wade.config.loader import load_config
+from wade.models.config import AICommandConfig
+from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
+from wade.services.ai_resolution import resolve_ai_tool, resolve_model
+from wade.services.delegation_service import delegate
+from wade.ui.console import console
+from wade.utils.process import run
+
+logger = structlog.get_logger()
+
+
+def _get_template(name: str) -> str:
+    """Load a prompt template by name from templates/prompts/."""
+    from wade.skills.installer import get_templates_dir
+
+    template = get_templates_dir() / "prompts" / name
+    if not template.is_file():
+        raise FileNotFoundError(f"Prompt template not found: {template}")
+    return template.read_text(encoding="utf-8")
+
+
+def _resolve_mode(cmd_config: AICommandConfig) -> DelegationMode:
+    """Resolve the delegation mode from config, defaulting to prompt."""
+    if cmd_config.mode:
+        try:
+            return DelegationMode(cmd_config.mode)
+        except ValueError:
+            pass
+    return DelegationMode.PROMPT
+
+
+def review_plan(
+    plan_file: str,
+    *,
+    ai_tool: str | None = None,
+    model: str | None = None,
+    mode: str | None = None,
+) -> DelegationResult:
+    """Review a plan file via the delegation infrastructure."""
+    plan_path = Path(plan_file)
+    if not plan_path.is_file():
+        console.error(f"Plan file not found: {plan_file}")
+        return DelegationResult(
+            success=False,
+            feedback=f"Plan file not found: {plan_file}",
+            mode=DelegationMode.PROMPT,
+            exit_code=1,
+        )
+
+    plan_content = plan_path.read_text(encoding="utf-8")
+    template = _get_template("review-plan.md")
+    prompt = template.replace("{plan_content}", plan_content)
+
+    config = load_config()
+    cmd_config = config.ai.review_plan
+
+    delegation_mode = DelegationMode(mode) if mode else _resolve_mode(cmd_config)
+    resolved_tool = resolve_ai_tool(ai_tool, config, command="review_plan")
+    resolved_model = resolve_model(model, config, command="review_plan")
+
+    request = DelegationRequest(
+        mode=delegation_mode,
+        prompt=prompt,
+        ai_tool=resolved_tool,
+        model=resolved_model,
+    )
+
+    result = delegate(request)
+    if result.success:
+        console.out.print(result.feedback)
+    else:
+        console.error(result.feedback)
+    return result
+
+
+def review_code(
+    *,
+    staged: bool = False,
+    ai_tool: str | None = None,
+    model: str | None = None,
+    mode: str | None = None,
+) -> DelegationResult:
+    """Review code changes via the delegation infrastructure."""
+    diff_cmd = ["git", "diff"]
+    if staged:
+        diff_cmd.append("--staged")
+
+    result = run(diff_cmd, check=False)
+    diff_content = result.stdout.strip() if result.stdout else ""
+
+    if not diff_content:
+        label = "staged changes" if staged else "changes"
+        console.warn(f"No {label} to review.")
+        return DelegationResult(
+            success=True,
+            feedback=f"No {label} to review.",
+            mode=DelegationMode.PROMPT,
+        )
+
+    template = _get_template("review-code.md")
+    prompt = template.replace("{diff_content}", diff_content)
+
+    config = load_config()
+    cmd_config = config.ai.review_code
+
+    delegation_mode = DelegationMode(mode) if mode else _resolve_mode(cmd_config)
+    resolved_tool = resolve_ai_tool(ai_tool, config, command="review_code")
+    resolved_model = resolve_model(model, config, command="review_code")
+
+    request = DelegationRequest(
+        mode=delegation_mode,
+        prompt=prompt,
+        ai_tool=resolved_tool,
+        model=resolved_model,
+    )
+
+    delegation_result = delegate(request)
+    if delegation_result.success:
+        console.out.print(delegation_result.feedback)
+    else:
+        console.error(delegation_result.feedback)
+    return delegation_result

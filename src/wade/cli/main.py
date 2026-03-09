@@ -443,6 +443,7 @@ from wade.cli.address_reviews_session import reviews_session_app  # noqa: E402
 from wade.cli.admin import admin_app  # noqa: E402
 from wade.cli.implementation_session import impl_session_app  # noqa: E402
 from wade.cli.plan_session import plan_session_app  # noqa: E402
+from wade.cli.review import review_app  # noqa: E402
 from wade.cli.task import task_app  # noqa: E402
 from wade.cli.worktree import worktree_app  # noqa: E402
 
@@ -477,6 +478,12 @@ app.add_typer(
     name="address-reviews-session",
     help="Review session commands (check, sync, done, fetch, resolve).",
     rich_help_panel="AI Session — Address Reviews",
+)
+app.add_typer(
+    review_app,
+    name="review",
+    help="AI-powered review commands (plan, code).",
+    rich_help_panel="Review",
 )
 
 # Admin commands are registered directly on the root app
