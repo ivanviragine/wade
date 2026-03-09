@@ -47,7 +47,7 @@ class TestReviewPlanCli:
 class TestReviewImplementationCli:
     @patch("wade.services.review_delegation_service.run")
     def test_review_implementation_no_diff(self, mock_run: MagicMock) -> None:
-        mock_run.return_value = MagicMock(stdout="")
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
         result = runner.invoke(app, ["review", "implementation"])
         assert result.exit_code == 0
 
@@ -62,7 +62,7 @@ class TestReviewImplementationCli:
         mock_config: MagicMock,
         mock_delegate: MagicMock,
     ) -> None:
-        mock_run.return_value = MagicMock(stdout="diff --git a/f.py\n+line\n")
+        mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
         mock_template.return_value = "{diff_content}"
 
         from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
@@ -79,7 +79,7 @@ class TestReviewImplementationCli:
 
     @patch("wade.services.review_delegation_service.run")
     def test_review_implementation_staged_flag(self, mock_run: MagicMock) -> None:
-        mock_run.return_value = MagicMock(stdout="")
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
         runner.invoke(app, ["review", "implementation", "--staged"])
         cmd = mock_run.call_args[0][0]
         assert "--staged" in cmd

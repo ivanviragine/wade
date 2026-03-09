@@ -105,16 +105,17 @@ def _delegate_headless(request: DelegationRequest) -> DelegationResult:
 
     try:
         result = run(cmd, check=False, timeout=request.timeout, cwd=session_cwd)
-        if result.returncode == 0 and result.stdout.strip():
+        stdout = result.stdout.strip() if result.stdout else ""
+        if result.returncode == 0:
             return DelegationResult(
                 success=True,
-                feedback=result.stdout.strip(),
+                feedback=stdout,
                 mode=DelegationMode.HEADLESS,
                 exit_code=0,
             )
         return DelegationResult(
             success=False,
-            feedback=result.stdout.strip() if result.stdout else "No output from headless session",
+            feedback=stdout or "Headless session failed with no output",
             mode=DelegationMode.HEADLESS,
             exit_code=result.returncode,
         )

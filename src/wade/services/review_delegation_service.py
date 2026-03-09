@@ -62,7 +62,16 @@ def review_plan(
     config = load_config()
     cmd_config = config.ai.review_plan
 
-    delegation_mode = DelegationMode(mode) if mode else _resolve_mode(cmd_config)
+    try:
+        delegation_mode = DelegationMode(mode) if mode else _resolve_mode(cmd_config)
+    except ValueError:
+        console.error(f"Invalid delegation mode: {mode}")
+        return DelegationResult(
+            success=False,
+            feedback=f"Invalid delegation mode: {mode}",
+            mode=DelegationMode.PROMPT,
+            exit_code=1,
+        )
     resolved_tool = resolve_ai_tool(ai_tool, config, command="review_plan")
     resolved_model = resolve_model(model, config, command="review_plan")
 
@@ -94,6 +103,16 @@ def review_implementation(
         diff_cmd.append("--staged")
 
     result = run(diff_cmd, check=False)
+    if result.returncode != 0:
+        stderr = result.stderr.strip() if result.stderr else "unknown error"
+        console.error(f"git diff failed: {stderr}")
+        return DelegationResult(
+            success=False,
+            feedback=f"git diff failed: {stderr}",
+            mode=DelegationMode.PROMPT,
+            exit_code=result.returncode,
+        )
+
     diff_content = result.stdout.strip() if result.stdout else ""
 
     if not diff_content:
@@ -111,7 +130,16 @@ def review_implementation(
     config = load_config()
     cmd_config = config.ai.review_implementation
 
-    delegation_mode = DelegationMode(mode) if mode else _resolve_mode(cmd_config)
+    try:
+        delegation_mode = DelegationMode(mode) if mode else _resolve_mode(cmd_config)
+    except ValueError:
+        console.error(f"Invalid delegation mode: {mode}")
+        return DelegationResult(
+            success=False,
+            feedback=f"Invalid delegation mode: {mode}",
+            mode=DelegationMode.PROMPT,
+            exit_code=1,
+        )
     resolved_tool = resolve_ai_tool(ai_tool, config, command="review_implementation")
     resolved_model = resolve_model(model, config, command="review_implementation")
 

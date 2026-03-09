@@ -82,7 +82,7 @@ class TestDelegateHeadless:
         assert "--print" in cmd
 
     @patch("wade.services.delegation_service.run")
-    def test_headless_empty_output(self, mock_run: MagicMock) -> None:
+    def test_headless_empty_output_still_success(self, mock_run: MagicMock) -> None:
         mock_run.return_value = MagicMock(returncode=0, stdout="")
         req = DelegationRequest(
             mode=DelegationMode.HEADLESS,
@@ -90,8 +90,9 @@ class TestDelegateHeadless:
             ai_tool="claude",
         )
         result = _delegate_headless(req)
-        assert result.success is False
-        assert "No output" in result.feedback
+        assert result.success is True
+        assert result.feedback == ""
+        assert result.exit_code == 0
 
     @patch("wade.services.delegation_service.run")
     def test_headless_nonzero_exit(self, mock_run: MagicMock) -> None:
