@@ -667,6 +667,79 @@ class TestWorkStart:
         captured = capsys.readouterr()
         assert "42" in captured.out  # Worktree path containing issue ID was printed
 
+    def test_no_plan_plan_first_skips_ai_selection(self, tmp_path: Path) -> None:
+        """No plan + 'Plan first' → plan_service called, confirm_ai_selection NOT called."""
+        task = self._make_task()
+        mock_provider = MagicMock()
+        mock_provider.read_task.return_value = task
+
+        with (
+            patch("wade.services.work_service.load_config", return_value=self._make_config()),
+            patch("wade.services.work_service.get_provider", return_value=mock_provider),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch("wade.git.pr.get_pr_for_branch", return_value=None),
+            patch("wade.services.work_service.prompts") as mock_prompts,
+            patch("wade.services.work_service.confirm_ai_selection") as mock_confirm,
+            patch("wade.services.plan_service.plan", return_value=True) as mock_plan,
+        ):
+            mock_prompts.is_tty.return_value = True
+            mock_prompts.select.return_value = 0  # "Plan first (recommended)"
+
+            result = start("42", project_root=tmp_path)
+
+        assert result is True
+        mock_plan.assert_called_once_with(issue_id="42", project_root=tmp_path)
+        mock_confirm.assert_not_called()
+
+    def test_no_plan_proceed_calls_ai_selection_and_bootstrap(self, tmp_path: Path) -> None:
+        """No plan + 'Proceed' → confirm_ai_selection called, bootstrap_draft_pr called."""
+        task = self._make_task()
+        mock_provider = MagicMock()
+        mock_provider.read_task.return_value = task
+
+        with (
+            patch("wade.services.work_service.load_config", return_value=self._make_config()),
+            patch("wade.services.work_service.get_provider", return_value=mock_provider),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch("wade.git.worktree.list_worktrees", return_value=[]),
+            patch("wade.git.worktree.create_worktree"),
+            patch("wade.services.work_service.write_plan_md"),
+            patch("wade.services.work_service.bootstrap_worktree"),
+            patch("wade.services.work_service._detect_ai_cli_env", return_value=None),
+            patch("wade.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
+            patch("wade.git.pr.get_pr_for_branch", return_value=None),
+            patch(
+                "wade.services.work_service.bootstrap_draft_pr",
+                return_value={"number": 1, "url": "http://test"},
+            ) as mock_bootstrap,
+            patch(
+                "wade.services.work_service.confirm_ai_selection",
+                return_value=("claude", "claude-sonnet-4-6", None),
+            ) as mock_confirm,
+            patch("wade.services.work_service.prompts") as mock_prompts,
+        ):
+            call_order: list[str] = []
+
+            def _confirm(*args: object, **kwargs: object) -> tuple[str, str, None]:
+                call_order.append("confirm")
+                return ("claude", "claude-sonnet-4-6", None)
+
+            def _bootstrap(*args: object, **kwargs: object) -> dict[str, object]:
+                call_order.append("bootstrap")
+                return {"number": 1, "url": "http://test"}
+
+            mock_confirm.side_effect = _confirm
+            mock_bootstrap.side_effect = _bootstrap
+            mock_prompts.is_tty.return_value = True
+            mock_prompts.select.return_value = 1  # "Proceed without plan"
+
+            result = start("42", project_root=tmp_path)
+
+        assert result is True
+        mock_confirm.assert_called_once()
+        mock_bootstrap.assert_called_once()
+        assert call_order == ["confirm", "bootstrap"]
+
 
 # ---------------------------------------------------------------------------
 # Work batch tests
