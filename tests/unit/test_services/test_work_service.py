@@ -718,6 +718,18 @@ class TestWorkStart:
             ) as mock_confirm,
             patch("wade.services.work_service.prompts") as mock_prompts,
         ):
+            call_order: list[str] = []
+
+            def _confirm(*args: object, **kwargs: object) -> tuple[str, str, None]:
+                call_order.append("confirm")
+                return ("claude", "claude-sonnet-4-6", None)
+
+            def _bootstrap(*args: object, **kwargs: object) -> dict[str, object]:
+                call_order.append("bootstrap")
+                return {"number": 1, "url": "http://test"}
+
+            mock_confirm.side_effect = _confirm
+            mock_bootstrap.side_effect = _bootstrap
             mock_prompts.is_tty.return_value = True
             mock_prompts.select.return_value = 1  # "Proceed without plan"
 
@@ -726,6 +738,7 @@ class TestWorkStart:
         assert result is True
         mock_confirm.assert_called_once()
         mock_bootstrap.assert_called_once()
+        assert call_order == ["confirm", "bootstrap"]
 
 
 # ---------------------------------------------------------------------------

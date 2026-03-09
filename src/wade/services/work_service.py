@@ -768,6 +768,7 @@ def start(
         plan_content: str | None = None
         proceed_needs_bootstrap = False
 
+        has_plan = False
         if existing_pr:
             console.info(f"Found existing PR #{existing_pr['number']} for this task")
             # Extract plan content from PR body
@@ -775,9 +776,10 @@ def start(
             if pr_body:
                 plan_content = extract_plan_from_pr_body(pr_body)
                 if plan_content:
+                    has_plan = True
                     console.detail("Plan content extracted from draft PR")
-        else:
-            # No draft PR — warn and prompt (skip prompt when cd_only, consistent with
+        if not has_plan:
+            # No plan — warn and prompt (skip prompt when cd_only, consistent with
             # cd_only skipping the AI confirm menu).
             if not cd_only:
                 console.warn("This task has no plan attached.")
@@ -788,8 +790,8 @@ def start(
                         from wade.services.plan_service import plan as do_plan
 
                         return do_plan(issue_id=task.id, project_root=project_root)
-            # Defer bootstrap_draft_pr until after AI selection
-            proceed_needs_bootstrap = True
+            # Only bootstrap when there is no PR yet.
+            proceed_needs_bootstrap = existing_pr is None
 
         if task.complexity:
             console.kv("Complexity", task.complexity.value)
