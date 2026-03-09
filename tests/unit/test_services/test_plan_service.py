@@ -497,6 +497,8 @@ class TestFinalizeIssues:
         # Verify analyze_deps was called with ai_explicit=False, model_explicit=False
         mock_analyze_deps.assert_called_once()
         call_kwargs = mock_analyze_deps.call_args.kwargs
+        assert call_kwargs["ai_tool"] == "claude"
+        assert call_kwargs["model"] == "opus"
         assert call_kwargs["ai_explicit"] is False
         assert call_kwargs["model_explicit"] is False
 
