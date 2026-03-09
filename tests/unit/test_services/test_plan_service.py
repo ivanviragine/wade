@@ -474,6 +474,34 @@ class TestFinalizeIssues:
         # Warnings emitted for both issues
         assert mock_console.warn.call_count == 2
 
+    def test_auto_deps_explicit_flags_are_false(self) -> None:
+        """Auto-deps call must use ai_explicit=False and model_explicit=False."""
+        provider = MagicMock()
+        config = ProjectConfig()
+
+        with (
+            patch("wade.services.plan_service.add_planned_by_labels"),
+            patch("wade.services.plan_service.apply_plan_token_usage"),
+            patch("wade.services.deps_service.analyze_deps") as mock_analyze_deps,
+            patch("wade.services.plan_service.console"),
+        ):
+            _finalize_issues(
+                provider=provider,
+                config=config,
+                issue_numbers=["1", "2"],
+                ai_tool="claude",
+                model="opus",
+                usage=None,
+            )
+
+        # Verify analyze_deps was called with ai_explicit=False, model_explicit=False
+        mock_analyze_deps.assert_called_once()
+        call_kwargs = mock_analyze_deps.call_args.kwargs
+        assert call_kwargs["ai_tool"] == "claude"
+        assert call_kwargs["model"] == "opus"
+        assert call_kwargs["ai_explicit"] is False
+        assert call_kwargs["model_explicit"] is False
+
 
 # ---------------------------------------------------------------------------
 # validate_plan_dir tests

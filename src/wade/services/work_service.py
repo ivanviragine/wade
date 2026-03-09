@@ -754,6 +754,48 @@ def start(
         console.rule(f"implement #{task.id}")
         console.kv("Issue", console.issue_ref(task.id, task.title))
 
+        # Generate deterministic branch name early — only needs config + task, so it
+        # can be computed before AI selection to allow the PR/plan check below.
+        branch_name = git_branch.make_branch_name(
+            config.project.branch_prefix,
+            int(task.id),
+            task.title,
+        )
+
+        # Check for existing draft PR (from plan flow) before AI selection so that
+        # "Plan first" can short-circuit without ever showing the AI confirmation menu.
+        existing_pr = git_pr.get_pr_for_branch(repo_root, branch_name)
+        plan_content: str | None = None
+        proceed_needs_bootstrap = False
+
+        has_plan = False
+        if existing_pr:
+            console.info(f"Found existing PR #{existing_pr['number']} for this task")
+            # Extract plan content from PR body
+            pr_body = git_pr.get_pr_body(repo_root, int(existing_pr["number"]))
+            if pr_body:
+                plan_content = extract_plan_from_pr_body(pr_body)
+                if plan_content:
+                    has_plan = True
+                    console.detail("Plan content extracted from draft PR")
+        if not has_plan:
+            # No plan — warn and prompt (skip prompt when cd_only, consistent with
+            # cd_only skipping the AI confirm menu).
+            if not cd_only:
+                console.warn("This task has no plan attached.")
+                if prompts.is_tty():
+                    choices = ["Plan first (recommended)", "Proceed without plan"]
+                    idx = prompts.select("How would you like to proceed?", choices)
+                    if idx == 0:
+                        from wade.services.plan_service import plan as do_plan
+
+                        return do_plan(issue_id=task.id, project_root=project_root)
+            # Only bootstrap when there is no PR yet.
+            proceed_needs_bootstrap = existing_pr is None
+
+        if task.complexity:
+            console.kv("Complexity", task.complexity.value)
+
         # Resolve AI tool and model
         resolved_tool = resolve_ai_tool(ai_tool, config, "work")
         resolved_model = resolve_model(
@@ -772,9 +814,6 @@ def start(
             resolved_tool = resume_ai_tool
             ai_explicit = True
 
-        if task.complexity:
-            console.kv("Complexity", task.complexity.value)
-
         # Offer interactive confirmation (skipped when cd_only or both flags explicit).
         if not cd_only:
             resolved_tool, resolved_model, resolved_effort = confirm_ai_selection(
@@ -786,43 +825,16 @@ def start(
                 effort_explicit=effort_explicit,
             )
 
-        # Resolve main branch
+        # Resolve main branch and compute worktree path (only needed for worktree creation)
         main_branch = config.project.main_branch or git_repo.detect_main_branch(repo_root)
-
-        # Generate deterministic branch name
-        branch_name = git_branch.make_branch_name(
-            config.project.branch_prefix,
-            int(task.id),
-            task.title,
-        )
 
         worktrees_dir = _resolve_worktrees_dir(config, repo_root)
         repo_name = repo_root.name
         worktree_path = worktrees_dir / repo_name / branch_name.replace("/", "-")
 
-        # Check for existing draft PR (from plan flow)
-        existing_pr = git_pr.get_pr_for_branch(repo_root, branch_name)
-        plan_content: str | None = None
-
-        if existing_pr:
-            console.info(f"Found existing PR #{existing_pr['number']} for this task")
-            # Extract plan content from PR body
-            pr_body = git_pr.get_pr_body(repo_root, int(existing_pr["number"]))
-            if pr_body:
-                plan_content = extract_plan_from_pr_body(pr_body)
-                if plan_content:
-                    console.detail("Plan content extracted from draft PR")
-        else:
-            # No draft PR — warn and prompt
-            console.warn("This task has no plan attached.")
-            if prompts.is_tty():
-                choices = ["Plan first (recommended)", "Proceed without plan"]
-                idx = prompts.select("How would you like to proceed?", choices)
-                if idx == 0:
-                    from wade.services.plan_service import plan as do_plan
-
-                    return do_plan(issue_id=task.id, project_root=project_root)
-            # Proceed: bootstrap a draft PR with the issue body
+        # Bootstrap draft PR for "Proceed without plan" path (deferred from above so it
+        # runs after AI selection rather than before).
+        if proceed_needs_bootstrap:
             console.step("Bootstrapping draft PR...")
             pr_info = bootstrap_draft_pr(
                 issue_number=task.id,
