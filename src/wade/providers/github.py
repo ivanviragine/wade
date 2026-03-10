@@ -484,6 +484,40 @@ mutation($threadId: ID!) {
             )
             return False
 
+    def get_pr_issue_comments(
+        self,
+        pr_number: int,
+    ) -> list[dict[str, str]]:
+        """Fetch PR issue comments via gh API.
+
+        Returns list of dicts with ``login`` and ``body`` keys.
+        """
+        try:
+            nwo = self.get_repo_nwo()
+        except CommandError:
+            logger.warning("github.get_pr_issue_comments_nwo_failed")
+            return []
+
+        try:
+            result = run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{nwo}/issues/{pr_number}/comments",
+                    "--jq",
+                    "[.[] | {login: .user.login, body: .body}]",
+                ],
+                check=True,
+            )
+            return json.loads(result.stdout)  # type: ignore[no-any-return]
+        except (CommandError, json.JSONDecodeError) as e:
+            logger.warning(
+                "github.get_pr_issue_comments_failed",
+                pr_number=pr_number,
+                error=str(e),
+            )
+            return []
+
     # --- Repository info ---
 
     def get_repo_nwo(self) -> str:

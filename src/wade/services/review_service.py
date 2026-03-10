@@ -21,6 +21,8 @@ from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
 from wade.models.ai import AIToolID
 from wade.models.review import (
+    ReviewBotStatus,
+    detect_coderabbit_review_status,
     filter_actionable_threads,
     format_review_threads_markdown,
 )
@@ -118,7 +120,15 @@ def fetch_reviews(
     actionable = filter_actionable_threads(all_threads)
 
     if not actionable:
-        print("No unresolved review comments found.")
+        bot_status = _check_review_bot_status(provider, pr_number)
+        if bot_status == ReviewBotStatus.PAUSED:
+            print("No unresolved review comments found, but CodeRabbit review is paused.")
+            print("Comments may arrive when the review is resumed.")
+        elif bot_status == ReviewBotStatus.IN_PROGRESS:
+            print("No unresolved review comments found, but CodeRabbit is still reviewing.")
+            print("Try fetching again shortly.")
+        else:
+            print("No unresolved review comments found.")
         return True
 
     # Output formatted markdown to stdout (for AI consumption)
@@ -272,6 +282,17 @@ def start(
         logger.debug("review.quick_check_failed", exc_info=True)
 
     if comment_count == 0:
+        # Before declaring victory, check if a review bot is still working
+        bot_status = _check_review_bot_status(provider, pr_number)
+        if bot_status == ReviewBotStatus.PAUSED:
+            console.warn(
+                "CodeRabbit review is paused — comments may arrive when resumed.\n"
+                "    Run '@coderabbitai resume' on the PR to trigger a new review."
+            )
+            return True
+        if bot_status == ReviewBotStatus.IN_PROGRESS:
+            console.warn("CodeRabbit is still reviewing — try again shortly.")
+            return True
         console.success("All review comments resolved — nothing to address! 🎉")
         return True
 
@@ -524,6 +545,19 @@ def _post_review_lifecycle(
 
     # Merge flow — reuse the same merge logic as post-work lifecycle
     _merge_pr(repo_root, branch, pr_number, issue_number, worktree_path, provider)
+
+
+def _check_review_bot_status(
+    provider: AbstractTaskProvider,
+    pr_number: int,
+) -> ReviewBotStatus | None:
+    """Check if a review bot (e.g. CodeRabbit) has a pending review on the PR."""
+    try:
+        comments = provider.get_pr_issue_comments(pr_number)
+    except Exception:
+        logger.debug("review.bot_status_check_failed", exc_info=True)
+        return None
+    return detect_coderabbit_review_status(comments)
 
 
 def build_review_prompt(

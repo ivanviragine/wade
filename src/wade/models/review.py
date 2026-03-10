@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from enum import StrEnum
 
 from pydantic import BaseModel
 
@@ -40,6 +41,46 @@ class ReviewThread(BaseModel):
 # ---------------------------------------------------------------------------
 # CodeRabbit AI-agent prompt extraction
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Review bot status detection
+# ---------------------------------------------------------------------------
+
+
+class ReviewBotStatus(StrEnum):
+    """Status of a review bot's review on a PR."""
+
+    PAUSED = "paused"
+    IN_PROGRESS = "in_progress"
+
+
+def detect_coderabbit_review_status(
+    comments: list[dict[str, str]],
+) -> ReviewBotStatus | None:
+    """Detect CodeRabbit review status from PR issue comments.
+
+    Looks for the ``coderabbitai[bot]`` summary comment and checks for
+    status markers embedded as HTML comments.
+
+    Args:
+        comments: List of dicts with ``login`` and ``body`` keys.
+
+    Returns:
+        A :class:`ReviewBotStatus` if CodeRabbit is mid-review, else ``None``.
+    """
+    # Find CodeRabbit comments (newest first to get latest status)
+    coderabbit_bodies: list[str] = [
+        c["body"] for c in reversed(comments) if "coderabbit" in c.get("login", "").lower()
+    ]
+
+    for body in coderabbit_bodies:
+        if "review paused by coderabbit.ai" in body:
+            return ReviewBotStatus.PAUSED
+        if "review in progress by coderabbit.ai" in body:
+            return ReviewBotStatus.IN_PROGRESS
+
+    return None
+
 
 _CODERABBIT_PROMPT_RE = re.compile(
     r"<details>\s*<summary>🤖\s*Prompt for AI Agents</summary>\s*(.*?)\s*</details>",
