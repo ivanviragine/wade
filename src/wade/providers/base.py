@@ -9,6 +9,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
+from wade.models.config import ProviderConfig
 from wade.models.review import ReviewThread
 from wade.models.task import Label, Task, TaskState
 
@@ -16,9 +17,13 @@ from wade.models.task import Label, Task, TaskState
 class AbstractTaskProvider(ABC):
     """Base for all task backends.
 
-    Only GitHub is implemented initially.
-    Future: Linear, Asana, Trello, ClickUp, Jira.
+    Each concrete provider wraps a project management system
+    (GitHub Issues, ClickUp, Jira, Linear, etc.) and exposes
+    a uniform interface for task CRUD, label management, and PR ops.
     """
+
+    def __init__(self, config: ProviderConfig | None = None) -> None:
+        self._config = config or ProviderConfig()
 
     # --- Issue CRUD ---
 

@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from wade.models.config import ProjectConfig
+from wade.models.config import ProjectConfig, ProviderConfig, ProviderID
 from wade.models.task import Complexity, Label, TaskState
 from wade.providers.github import GitHubProvider, _extract_number_from_url, _parse_gh_task
 from wade.providers.registry import get_provider
@@ -564,8 +564,23 @@ class TestRegistry:
         provider = get_provider(config)
         assert isinstance(provider, GitHubProvider)
 
+    @patch.dict("os.environ", {"CLICKUP_API_TOKEN": "pk_test"})
+    def test_clickup_from_config(self) -> None:
+        from wade.providers.clickup import ClickUpProvider
+
+        config = ProjectConfig(
+            provider=ProviderConfig(
+                name=ProviderID.CLICKUP,
+                api_token_env="CLICKUP_API_TOKEN",
+                settings={"list_id": "123", "team_id": "456"},
+            )
+        )
+        provider = get_provider(config)
+        assert isinstance(provider, ClickUpProvider)
+
     def test_unknown_provider_raises(self) -> None:
         config = ProjectConfig()
-        config.provider.name = "linear"  # Not implemented yet
+        # Bypass Pydantic validation to inject an invalid provider name
+        config.provider.__dict__["name"] = "nonexistent"
         with pytest.raises(ValueError, match="Unknown provider"):
             get_provider(config)

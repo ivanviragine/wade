@@ -42,6 +42,7 @@ class ProviderID(StrEnum):
     """Canonical identifiers for task providers."""
 
     GITHUB = "github"
+    CLICKUP = "clickup"
 
 
 class ComplexityModelMapping(BaseModel):
@@ -63,6 +64,7 @@ class ProviderConfig(BaseModel):
     name: ProviderID = ProviderID.GITHUB
     project: str | None = None
     api_token_env: str | None = None
+    settings: dict[str, str] = {}
 
 
 class AICommandConfig(BaseModel):

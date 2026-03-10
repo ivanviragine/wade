@@ -191,6 +191,38 @@ class TestParseCommandConfigModeEffort:
         assert config.ai.effort == "medium"
 
 
+class TestProviderSettings:
+    """Tests that provider settings dict is parsed from config."""
+
+    def test_settings_parsed(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\n"
+            "provider:\n"
+            "  name: clickup\n"
+            "  api_token_env: CLICKUP_API_TOKEN\n"
+            "  settings:\n"
+            "    list_id: '901'\n"
+            "    team_id: '123'\n"
+        )
+        config = parse_config_file(config_path)
+        assert config.provider.name == "clickup"
+        assert config.provider.api_token_env == "CLICKUP_API_TOKEN"
+        assert config.provider.settings == {"list_id": "901", "team_id": "123"}
+
+    def test_settings_default_empty(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nprovider:\n  name: github\n")
+        config = parse_config_file(config_path)
+        assert config.provider.settings == {}
+
+    def test_settings_null_treated_as_empty(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nprovider:\n  name: github\n  settings:\n")
+        config = parse_config_file(config_path)
+        assert config.provider.settings == {}
+
+
 class TestParseConfigFileErrors:
     def test_malformed_yaml_raises_config_error(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
