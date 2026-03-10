@@ -346,7 +346,7 @@ def _validate_ai_section(ai: dict[str, Any], errors: list[str]) -> None:
         )
 
     # Validate per-command sections
-    for cmd in ("plan", "deps", "work"):
+    for cmd in ("plan", "deps", "work", "review_plan", "review_implementation"):
         cmd_section = ai.get(cmd)
         if cmd_section is not None:
             if not isinstance(cmd_section, dict):
@@ -359,7 +359,16 @@ def _validate_ai_section(ai: dict[str, Any], errors: list[str]) -> None:
                         f"Use one of: {', '.join(sorted(_VALID_AI_TOOLS))}"
                     )
 
-    valid_keys = {"default_tool", "default_model", "plan", "deps", "work"}
+    valid_keys = {
+        "default_tool",
+        "default_model",
+        "effort",
+        "plan",
+        "deps",
+        "work",
+        "review_plan",
+        "review_implementation",
+    }
     for key in ai:
         if key not in valid_keys:
             errors.append(f"ai.{key}: unsupported key")

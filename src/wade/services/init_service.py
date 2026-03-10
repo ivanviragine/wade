@@ -1095,15 +1095,25 @@ def _prompt_provider_setup(
 
     # Prompt for token with validation
     token = ""
+    token_validated = False
     for attempt in range(3):
         token = prompts.input_prompt("ClickUp API token").strip()
+        if not token:
+            if attempt < 2:
+                console.warn("Token cannot be empty — try again")
+            continue
         if _validate_clickup_token(token):
             console.success("ClickUp token validated")
+            token_validated = True
             break
         if attempt < 2:
             console.warn("Token validation failed — check the token and try again")
         else:
             console.warn("Token validation failed — continuing anyway")
+
+    if not token and not token_validated:
+        console.error("No token provided — falling back to GitHub")
+        return {"name": "github"}
 
     # Env var name — validate format
     import re
@@ -1144,7 +1154,7 @@ def _prompt_provider_setup(
         "ClickUp space ID",
         default="",
         allow_empty=True,
-    )
+    ).strip()
 
     settings: dict[str, str] = {"team_id": team_id, "list_id": list_id}
     if space_id:

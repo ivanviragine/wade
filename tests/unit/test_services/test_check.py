@@ -249,6 +249,15 @@ class TestValidateConfig:
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("YAML" in e or "parse" in e for e in result.errors)
 
+    def test_valid_ai_effort_and_review_keys(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text(
+            "version: 2\nai:\n  effort: high\n  review_plan:\n    tool: claude\n"
+            "  review_implementation:\n    tool: copilot\n"
+        )
+        result = validate_config(tmp_path)
+        assert result.is_valid, f"Errors: {result.errors}"
+
     def test_output_format_invalid(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"
         config.write_text("version: 99\n")
