@@ -629,6 +629,7 @@ def _merge_pr(
 
     # Remove the worktree only after a successful merge.
     if worktree_path:
+        _preserve_session_data(repo_root, worktree_path)
         console.step(f"Removing worktree: {worktree_path.name}")
         with contextlib.suppress(Exception):
             git_worktree.remove_worktree(repo_root, worktree_path)
