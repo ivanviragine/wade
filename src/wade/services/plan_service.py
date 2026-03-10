@@ -399,13 +399,15 @@ def plan(
     console.rule("wade plan")
 
     # Offer interactive confirmation unless both flags were explicitly provided.
-    resolved_tool, resolved_model, resolved_effort = confirm_ai_selection(
+    resolved_tool, resolved_model, resolved_effort, resolved_yolo = confirm_ai_selection(
         resolved_tool,
         resolved_model,
         tool_explicit=ai_explicit,
         model_explicit=model_explicit,
         resolved_effort=resolved_effort,
         effort_explicit=effort_explicit,
+        resolved_yolo=resolved_yolo,
+        yolo_explicit=yolo is not None,
     )
     if not resolved_tool:
         console.error("No AI tool selected.")

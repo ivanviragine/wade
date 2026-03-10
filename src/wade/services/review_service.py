@@ -294,11 +294,13 @@ def start(
     resolved_yolo = resolve_yolo(yolo, config, "work", tool=resolved_tool)
 
     if not detach:
-        resolved_tool, resolved_model, _effort = confirm_ai_selection(
+        resolved_tool, resolved_model, _effort, resolved_yolo = confirm_ai_selection(
             resolved_tool,
             resolved_model,
             tool_explicit=ai_explicit,
             model_explicit=model_explicit,
+            resolved_yolo=resolved_yolo,
+            yolo_explicit=yolo is not None,
         )
 
     # 7. Build review prompt

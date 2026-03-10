@@ -822,13 +822,15 @@ def start(
 
         # Offer interactive confirmation (skipped when cd_only or both flags explicit).
         if not cd_only:
-            resolved_tool, resolved_model, resolved_effort = confirm_ai_selection(
+            resolved_tool, resolved_model, resolved_effort, resolved_yolo = confirm_ai_selection(
                 resolved_tool,
                 resolved_model,
                 tool_explicit=ai_explicit,
                 model_explicit=model_explicit,
                 resolved_effort=resolved_effort,
                 effort_explicit=effort_explicit,
+                resolved_yolo=resolved_yolo,
+                yolo_explicit=yolo is not None,
             )
 
         # Resolve main branch and compute worktree path (only needed for worktree creation)
@@ -1197,13 +1199,15 @@ def batch(
     resolved_model = resolve_model(model, config, "work", tool=resolved_tool)
     resolved_effort = resolve_effort(effort, config, "work", tool=resolved_tool)
     resolved_yolo = resolve_yolo(yolo, config, "work", tool=resolved_tool)
-    resolved_tool, resolved_model, resolved_effort = confirm_ai_selection(
+    resolved_tool, resolved_model, resolved_effort, resolved_yolo = confirm_ai_selection(
         resolved_tool,
         resolved_model,
         tool_explicit=ai_explicit,
         model_explicit=model_explicit,
         resolved_effort=resolved_effort,
         effort_explicit=effort_explicit,
+        resolved_yolo=resolved_yolo,
+        yolo_explicit=yolo is not None,
     )
 
     # Check for dependency ordering

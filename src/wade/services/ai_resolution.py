@@ -186,27 +186,30 @@ def confirm_ai_selection(
     model_explicit: bool,
     resolved_effort: EffortLevel | None = None,
     effort_explicit: bool = False,
-) -> tuple[str | None, str | None, EffortLevel | None]:
-    """Interactively confirm (and optionally change) the resolved AI tool/model/effort.
+    resolved_yolo: bool = False,
+    yolo_explicit: bool = False,
+) -> tuple[str | None, str | None, EffortLevel | None, bool]:
+    """Interactively confirm (and optionally change) the resolved AI tool/model/effort/yolo.
 
     Fires only when stdin is a TTY and at least one of the flags was not
     explicitly provided by the caller.  When all flags are explicit (e.g.
     because ``wade implement-batch`` passes ``--ai``/``--model``/``--effort`` to
     child calls), this is a no-op.
 
-    Returns the (tool, model, effort) triple after any user-driven changes.
+    Returns the (tool, model, effort, yolo) tuple after any user-driven changes.
     """
     from wade.ui import prompts
     from wade.ui.console import console
 
     # Skip when non-TTY, no tool resolved, or all flags were explicit.
-    all_explicit = tool_explicit and model_explicit and effort_explicit
+    all_explicit = tool_explicit and model_explicit and effort_explicit and yolo_explicit
     if not prompts.is_tty() or resolved_tool is None or all_explicit:
-        return resolved_tool, resolved_model, resolved_effort
+        return resolved_tool, resolved_model, resolved_effort, resolved_yolo
 
     tool = resolved_tool
     model = resolved_model
     effort = resolved_effort
+    yolo = resolved_yolo
 
     while True:
         # Display current selection
@@ -215,6 +218,8 @@ def confirm_ai_selection(
             console.kv("Model", model)
         if effort:
             console.kv("Effort", effort.value)
+        if yolo:
+            console.kv("YOLO mode", "on")
 
         # Build menu dynamically based on which flags were NOT explicit.
         menu_items: list[str] = ["Proceed"]
@@ -227,13 +232,19 @@ def confirm_ai_selection(
 
         # Show "Change effort" only when the tool supports it
         tool_supports_effort = False
+        tool_supports_yolo = False
         try:
             adapter = AbstractAITool.get(AIToolID(tool))
-            tool_supports_effort = adapter.capabilities().supports_effort
+            caps = adapter.capabilities()
+            tool_supports_effort = caps.supports_effort
+            tool_supports_yolo = caps.supports_yolo
         except (ValueError, KeyError):
             pass
         if not effort_explicit and tool_supports_effort:
             menu_items.append("Change effort")
+        if not yolo_explicit and tool_supports_yolo:
+            label = "Turn off YOLO mode" if yolo else "Turn on YOLO mode"
+            menu_items.append(label)
 
         if len(menu_items) == 1:
             break
@@ -252,14 +263,17 @@ def confirm_ai_selection(
             if new_tool != tool:
                 tool = new_tool
                 model = _prompt_model_selection(tool)
-                # Clear stale effort when the new tool doesn't support it.
-                if effort is not None:
-                    try:
-                        new_adapter = AbstractAITool.get(AIToolID(tool))
-                        if not new_adapter.capabilities().supports_effort:
-                            effort = None
-                    except (ValueError, KeyError):
+                # Clear stale effort/yolo when the new tool doesn't support them.
+                try:
+                    new_adapter = AbstractAITool.get(AIToolID(tool))
+                    new_caps = new_adapter.capabilities()
+                    if effort is not None and not new_caps.supports_effort:
                         effort = None
+                    if yolo and not new_caps.supports_yolo:
+                        yolo = False
+                except (ValueError, KeyError):
+                    effort = None
+                    yolo = False
 
         elif choice == "Change model":
             model = _prompt_model_selection(tool)
@@ -267,7 +281,10 @@ def confirm_ai_selection(
         elif choice == "Change effort":
             effort = _prompt_effort_selection(effort)
 
-    return tool, model, effort
+        elif choice in ("Turn on YOLO mode", "Turn off YOLO mode"):
+            yolo = not yolo
+
+    return tool, model, effort, yolo
 
 
 def _prompt_model_selection(tool: str) -> str | None:

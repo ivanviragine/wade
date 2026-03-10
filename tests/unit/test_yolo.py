@@ -311,3 +311,226 @@ class TestResolveYolo:
         config = ProjectConfig()
         resolve_yolo(True, config, "work", tool="opencode")
         assert mock_logger.warning.called  # type: ignore[union-attr]
+
+
+# ---------------------------------------------------------------------------
+# confirm_ai_selection() — YOLO in interactive menu
+# ---------------------------------------------------------------------------
+
+_IS_TTY = "wade.ui.prompts.is_tty"
+_SELECT = "wade.ui.prompts.select"
+_DETECT = "wade.services.ai_resolution.AbstractAITool.detect_installed"
+_CONSOLE_KV = "wade.ui.console.console.kv"
+
+
+def _make_installed(*names: str) -> list:
+    from wade.models.ai import AIToolID
+
+    return [AIToolID(n) for n in names]
+
+
+class TestConfirmYolo:
+    """YOLO-specific behaviour in confirm_ai_selection."""
+
+    def test_yolo_explicit_skips_menu_option(self) -> None:
+        """When yolo_explicit=True, 'Turn on YOLO mode' is not in the menu."""
+        from wade.services.ai_resolution import confirm_ai_selection
+
+        menu_items_seen: list[list[str]] = []
+
+        def fake_select(title: str, items: list[str], **kwargs: object) -> int:
+            menu_items_seen.append(list(items))
+            return 0  # Proceed
+
+        with (
+            patch(_IS_TTY, return_value=True),
+            patch(_SELECT, side_effect=fake_select),
+            patch(_DETECT, return_value=_make_installed("claude")),
+            patch(_CONSOLE_KV),
+        ):
+            confirm_ai_selection(
+                "claude",
+                "claude-sonnet-4-6",
+                tool_explicit=False,
+                model_explicit=False,
+                effort_explicit=True,
+                yolo_explicit=True,
+            )
+
+        assert len(menu_items_seen) >= 1
+        assert "Turn on YOLO mode" not in menu_items_seen[0]
+        assert "Turn off YOLO mode" not in menu_items_seen[0]
+
+    def test_menu_shows_turn_on_yolo_for_supported_tool(self) -> None:
+        """Claude supports yolo → 'Turn on YOLO mode' appears in menu."""
+        from wade.services.ai_resolution import confirm_ai_selection
+
+        menu_items_seen: list[list[str]] = []
+
+        def fake_select(title: str, items: list[str], **kwargs: object) -> int:
+            menu_items_seen.append(list(items))
+            return 0  # Proceed
+
+        with (
+            patch(_IS_TTY, return_value=True),
+            patch(_SELECT, side_effect=fake_select),
+            patch(_DETECT, return_value=_make_installed("claude")),
+            patch(_CONSOLE_KV),
+        ):
+            confirm_ai_selection(
+                "claude",
+                "claude-sonnet-4-6",
+                tool_explicit=False,
+                model_explicit=True,
+                effort_explicit=True,
+            )
+
+        assert len(menu_items_seen) >= 1
+        assert "Turn on YOLO mode" in menu_items_seen[0]
+
+    def test_menu_shows_turn_off_when_yolo_on(self) -> None:
+        """When resolved_yolo=True, menu shows 'Turn off YOLO mode'."""
+        from wade.services.ai_resolution import confirm_ai_selection
+
+        menu_items_seen: list[list[str]] = []
+
+        def fake_select(title: str, items: list[str], **kwargs: object) -> int:
+            menu_items_seen.append(list(items))
+            return 0  # Proceed
+
+        with (
+            patch(_IS_TTY, return_value=True),
+            patch(_SELECT, side_effect=fake_select),
+            patch(_DETECT, return_value=_make_installed("claude")),
+            patch(_CONSOLE_KV),
+        ):
+            confirm_ai_selection(
+                "claude",
+                "claude-sonnet-4-6",
+                tool_explicit=False,
+                model_explicit=True,
+                effort_explicit=True,
+                resolved_yolo=True,
+            )
+
+        assert len(menu_items_seen) >= 1
+        assert "Turn off YOLO mode" in menu_items_seen[0]
+
+    def test_menu_excludes_yolo_for_unsupported_tool(self) -> None:
+        """OpenCode does not support yolo → no YOLO option in menu."""
+        from wade.services.ai_resolution import confirm_ai_selection
+
+        menu_items_seen: list[list[str]] = []
+
+        def fake_select(title: str, items: list[str], **kwargs: object) -> int:
+            menu_items_seen.append(list(items))
+            return 0  # Proceed
+
+        with (
+            patch(_IS_TTY, return_value=True),
+            patch(_SELECT, side_effect=fake_select),
+            patch(_DETECT, return_value=_make_installed("opencode")),
+            patch(_CONSOLE_KV),
+        ):
+            confirm_ai_selection(
+                "opencode",
+                None,
+                tool_explicit=False,
+                model_explicit=False,
+            )
+
+        assert len(menu_items_seen) >= 1
+        assert "Turn on YOLO mode" not in menu_items_seen[0]
+
+    def test_toggle_yolo_on(self) -> None:
+        """User selects 'Turn on YOLO mode' → yolo becomes True."""
+        from wade.services.ai_resolution import confirm_ai_selection
+
+        call_count = 0
+
+        def fake_select(title: str, items: list[str], **kwargs: object) -> int:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return items.index("Turn on YOLO mode")
+            return 0  # Proceed
+
+        with (
+            patch(_IS_TTY, return_value=True),
+            patch(_SELECT, side_effect=fake_select),
+            patch(_DETECT, return_value=_make_installed("claude")),
+            patch(_CONSOLE_KV),
+        ):
+            _, _, _, yolo = confirm_ai_selection(
+                "claude",
+                "claude-sonnet-4-6",
+                tool_explicit=False,
+                model_explicit=True,
+                effort_explicit=True,
+            )
+
+        assert yolo is True
+
+    def test_toggle_yolo_off(self) -> None:
+        """User selects 'Turn off YOLO mode' → yolo becomes False."""
+        from wade.services.ai_resolution import confirm_ai_selection
+
+        call_count = 0
+
+        def fake_select(title: str, items: list[str], **kwargs: object) -> int:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return items.index("Turn off YOLO mode")
+            return 0  # Proceed
+
+        with (
+            patch(_IS_TTY, return_value=True),
+            patch(_SELECT, side_effect=fake_select),
+            patch(_DETECT, return_value=_make_installed("claude")),
+            patch(_CONSOLE_KV),
+        ):
+            _, _, _, yolo = confirm_ai_selection(
+                "claude",
+                "claude-sonnet-4-6",
+                tool_explicit=False,
+                model_explicit=True,
+                effort_explicit=True,
+                resolved_yolo=True,
+            )
+
+        assert yolo is False
+
+    def test_tool_switch_clears_yolo_for_unsupported_tool(self) -> None:
+        """Switching to a tool that doesn't support yolo clears it."""
+        from wade.services.ai_resolution import confirm_ai_selection
+
+        call_count = 0
+
+        def fake_select(title: str, items: list[str], **kwargs: object) -> int:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return items.index("Change AI tool")
+            if call_count == 2:
+                return items.index("opencode")
+            if call_count == 3:
+                return 0  # first model
+            return 0  # Proceed
+
+        with (
+            patch(_IS_TTY, return_value=True),
+            patch(_SELECT, side_effect=fake_select),
+            patch(_DETECT, return_value=_make_installed("claude", "opencode")),
+            patch("wade.data.get_models_for_tool", return_value=["gpt-4o"]),
+            patch(_CONSOLE_KV),
+        ):
+            _, _, _, yolo = confirm_ai_selection(
+                "claude",
+                "claude-sonnet-4-6",
+                tool_explicit=False,
+                model_explicit=False,
+                resolved_yolo=True,
+            )
+
+        assert yolo is False
