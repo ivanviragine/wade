@@ -438,6 +438,7 @@ class TestConfirmYolo:
                 None,
                 tool_explicit=False,
                 model_explicit=False,
+                yolo_explicit=False,
             )
 
         assert len(menu_items_seen) >= 1
