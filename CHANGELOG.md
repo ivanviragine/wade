@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.3.3] — 2026-03-10
+
+### Bug Fixes
+
+- hide smart-start from help, show `wade <N>` shorthand instead (aaa44a3)
+
 ## [v0.3.2] — 2026-03-10
 
 ### Bug Fixes
