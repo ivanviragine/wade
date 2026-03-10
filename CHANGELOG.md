@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.2.1] — 2026-03-09
+
+### Bug Fixes
+
+- correct Claude Code session path encoding and add preservation to PR merge (6b698bf)
+
 ## [v0.2.0] — 2026-03-09
 
 ### Features
