@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.4.0] — 2026-03-10
+
+### Features
+
+- detect CodeRabbit review bot status and clarify review prompt wording (0b34717)
+
+### Other Changes
+
+- Add YOLO mode: skip AI tool permission prompts during work sessions (#135) (c9728aa)
+
 ## [v0.3.3] — 2026-03-10
 
 ### Bug Fixes
