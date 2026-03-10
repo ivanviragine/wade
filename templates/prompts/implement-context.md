@@ -1,5 +1,7 @@
 Let's implement @PLAN.md. Working on Issue #{issue_number}: {issue_title}
 
+If you cannot see the plan contents above, read the file `PLAN.md` in the root of your current directory.
+
 Follow @.claude/skills/implementation-session/SKILL.md for session rules.
 
 # Critical rules
