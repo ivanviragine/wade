@@ -537,6 +537,7 @@ def plan(
                 repo_root=repo_root,
                 planning_worktree=planning_worktree,
                 effort=resolved_effort,
+                yolo=resolved_yolo,
             )
             _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
             if offer_result is not None:
@@ -570,6 +571,7 @@ def plan(
                 repo_root=repo_root,
                 planning_worktree=planning_worktree,
                 effort=resolved_effort,
+                yolo=resolved_yolo,
             )
             _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
             if offer_result is not None:
@@ -759,6 +761,7 @@ def _finalize_issues(
     repo_root: Path | None = None,
     planning_worktree: Path | None = None,
     effort: EffortLevel | None = None,
+    yolo: bool = False,
 ) -> bool | None:
     """Finalize newly created issues: token summaries, labels, hints.
 
@@ -853,7 +856,9 @@ def _finalize_issues(
     # Hint for next steps
     console.empty()
     if len(issue_numbers) == 1:
-        result = _offer_to_implement(issue_numbers[0], ai_tool=ai_tool, model=model, effort=effort)
+        result = _offer_to_implement(
+            issue_numbers[0], ai_tool=ai_tool, model=model, effort=effort, yolo=yolo
+        )
         if result is not None:
             return result
     elif len(issue_numbers) >= 2:
@@ -874,6 +879,7 @@ def _offer_to_implement(
     ai_tool: str | None = None,
     model: str | None = None,
     effort: EffortLevel | None = None,
+    yolo: bool = False,
 ) -> bool | None:
     """Prompt the user to start a work session on the newly planned issue.
 
@@ -901,6 +907,7 @@ def _offer_to_implement(
             ai_explicit=ai_tool is not None,
             model_explicit=model is not None,
             effort_explicit=effort is not None,
+            yolo=yolo or None,
         )
     except Exception:
         logger.exception("plan.work_session_start_failed", issue=issue_number)

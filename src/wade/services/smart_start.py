@@ -217,6 +217,7 @@ def smart_start(
                     model_explicit,
                     repo_root,
                     pr_number_int,
+                    yolo,
                 ),
             )
         )
