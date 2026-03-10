@@ -34,6 +34,7 @@ from wade.services.ai_resolution import (
     resolve_ai_tool,
     resolve_effort,
     resolve_model,
+    resolve_yolo,
 )
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import (
@@ -248,6 +249,7 @@ def run_ai_planning_session(
     effort: EffortLevel | None = None,
     allowed_commands: list[str] | None = None,
     cwd: Path | None = None,
+    yolo: bool = False,
 ) -> int:
     """Launch the AI CLI for a planning session.
 
@@ -300,6 +302,7 @@ def run_ai_planning_session(
         initial_message=prompt,
         effort=effort,
         allowed_commands=allowed_commands,
+        yolo=yolo,
     )
     console.info(f"Plan directory: {plan_dir}")
 
@@ -366,6 +369,7 @@ def plan(
     model_explicit: bool = False,
     effort: str | None = None,
     effort_explicit: bool = False,
+    yolo: bool | None = None,
 ) -> bool:
     """Run an AI-assisted planning session.
 
@@ -388,6 +392,9 @@ def plan(
 
     # Resolve effort level
     resolved_effort = resolve_effort(effort, config, "plan", tool=resolved_tool)
+
+    # Resolve YOLO mode
+    resolved_yolo = resolve_yolo(yolo, config, "plan", tool=resolved_tool)
 
     console.rule("wade plan")
 
@@ -479,6 +486,7 @@ def plan(
         effort=resolved_effort,
         allowed_commands=config.permissions.allowed_commands,
         cwd=session_cwd,
+        yolo=resolved_yolo,
     )
     logger.info("plan.ai_exited", exit_code=exit_code)
 

@@ -140,6 +140,44 @@ def resolve_effort(
     return level
 
 
+def resolve_yolo(
+    yolo: bool | None,
+    config: ProjectConfig,
+    command: str = "plan",
+    *,
+    tool: str | None = None,
+) -> bool:
+    """Resolve YOLO mode from args -> config -> False.
+
+    Fallback chain:
+      1. Explicit *yolo* arg (e.g. ``--yolo`` CLI flag)
+      2. Command-specific config (``ai.<command>.yolo``)
+      3. Global config (``ai.yolo``)
+
+    When *tool* is provided and the tool does not support YOLO, a warning
+    is logged and ``False`` is returned.
+    """
+    resolved: bool | None = yolo
+
+    if resolved is None:
+        resolved = config.get_yolo(command)
+
+    if not resolved:
+        return False
+
+    # Check tool support
+    if tool:
+        try:
+            adapter = AbstractAITool.get(AIToolID(tool))
+            if not adapter.capabilities().supports_yolo:
+                logger.warning("yolo.unsupported_tool", tool=tool)
+                return False
+        except (ValueError, KeyError):
+            pass
+
+    return True
+
+
 def confirm_ai_selection(
     resolved_tool: str | None,
     resolved_model: str | None,

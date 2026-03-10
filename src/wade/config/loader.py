@@ -112,6 +112,7 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
         default_tool=ai_raw.get("default_tool"),
         default_model=ai_raw.get("default_model"),
         effort=ai_raw.get("effort"),
+        yolo=ai_raw.get("yolo"),
         plan=_parse_command_config(ai_raw.get("plan", {})),
         deps=_parse_command_config(ai_raw.get("deps", {})),
         work=_parse_command_config(ai_raw.get("work", {})),
@@ -168,4 +169,5 @@ def _parse_command_config(raw: dict[str, Any] | None) -> AICommandConfig:
         model=raw.get("model") or None,  # Treat empty string as None
         mode=raw.get("mode"),
         effort=raw.get("effort"),
+        yolo=raw.get("yolo"),
     )

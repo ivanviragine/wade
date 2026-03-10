@@ -132,6 +132,7 @@ class AbstractAITool(ABC):
         trusted_dirs: list[str] | None = None,
         effort: EffortLevel | None = None,
         allowed_commands: list[str] | None = None,
+        yolo: bool = False,
     ) -> int:
         """Launch the AI tool in the given worktree.
 
@@ -152,6 +153,7 @@ class AbstractAITool(ABC):
             effort: Optional reasoning effort level for the AI tool.
             allowed_commands: Optional list of canonical command patterns to
                 pre-authorize (e.g. ``["wade *", "./scripts/check.sh *"]``).
+            yolo: If True, skip all permission prompts (YOLO mode).
 
         Returns:
             Exit code from the tool process (0 for detached).
@@ -164,6 +166,7 @@ class AbstractAITool(ABC):
             trusted_dirs=trusted_dirs,
             effort=effort,
             allowed_commands=allowed_commands,
+            yolo=yolo,
         )
         logger.info("ai_tool.launch", tool=str(self.TOOL_ID), model=model, cwd=str(worktree_path))
         return run_with_transcript(cmd, transcript_path, cwd=worktree_path)
@@ -258,6 +261,13 @@ class AbstractAITool(ABC):
         """
         return []
 
+    def yolo_args(self) -> list[str]:
+        """Get extra CLI args to skip all permission prompts (YOLO mode).
+
+        Default: return empty list. Override per tool.
+        """
+        return []
+
     def resolve_effort_model(self, model: str | None, effort: EffortLevel) -> str | None:
         """Resolve model variant based on effort level.
 
@@ -314,6 +324,7 @@ class AbstractAITool(ABC):
         initial_message: str | None = None,
         effort: EffortLevel | None = None,
         allowed_commands: list[str] | None = None,
+        yolo: bool = False,
     ) -> list[str]:
         """Build the command line for launching this tool."""
         caps = self.capabilities()
@@ -337,7 +348,12 @@ class AbstractAITool(ABC):
         if prompt and caps.supports_headless and caps.headless_flag:
             cmd.extend([caps.headless_flag, prompt])
 
-        if plan_mode:
+        # YOLO mode supersedes plan_mode: YOLO grants full-auto permissions
+        # which is a superset of plan permissions. If the tool doesn't support
+        # YOLO, fall back to plan_mode_args.
+        if yolo and caps.supports_yolo:
+            cmd.extend(self.yolo_args())
+        elif plan_mode:
             cmd.extend(self.plan_mode_args())
 
         if json_schema:

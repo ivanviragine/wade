@@ -26,6 +26,7 @@ class GeminiAdapter(AbstractAITool):
             supports_model_flag=True,
             headless_flag=None,
             supports_headless=False,
+            supports_yolo=True,
         )
 
     def initial_message_args(self, prompt: str) -> list[str]:
@@ -43,6 +44,10 @@ class GeminiAdapter(AbstractAITool):
     def plan_dir_args(self, plan_dir: str) -> list[str]:
         """Gemini uses --include-directories for plan directory access."""
         return ["--include-directories", plan_dir]
+
+    def yolo_args(self) -> list[str]:
+        """Gemini uses ``--yolo``."""
+        return ["--yolo"]
 
     def allowed_commands_args(self, commands: list[str]) -> list[str]:
         """Translate canonical patterns to Gemini --allowedTools flags.

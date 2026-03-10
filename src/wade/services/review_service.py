@@ -31,6 +31,7 @@ from wade.services.ai_resolution import (
     confirm_ai_selection,
     resolve_ai_tool,
     resolve_model,
+    resolve_yolo,
 )
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import add_review_addressed_by_labels
@@ -167,6 +168,7 @@ def start(
     *,
     ai_explicit: bool = False,
     model_explicit: bool = False,
+    yolo: bool | None = None,
 ) -> bool:
     """Start a review-addressing session on an issue.
 
@@ -289,6 +291,7 @@ def start(
         tool=resolved_tool,
         complexity=task.complexity.value if task.complexity else None,
     )
+    resolved_yolo = resolve_yolo(yolo, config, "work", tool=resolved_tool)
 
     if not detach:
         resolved_tool, resolved_model, _effort = confirm_ai_selection(
@@ -347,6 +350,7 @@ def start(
                 model=resolved_model,
                 trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
                 initial_message=prompt,
+                yolo=resolved_yolo,
             )
         except (ValueError, KeyError):
             cmd = [resolved_tool]
@@ -375,6 +379,7 @@ def start(
                 prompt=prompt,
                 transcript_path=transcript_path,
                 trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
+                yolo=resolved_yolo,
             )
             launch_completed = True
             logger.info("review.ai_exited", exit_code=exit_code, tool=resolved_tool)
