@@ -18,6 +18,7 @@ from wade.config.loader import (
 from wade.git import repo
 from wade.git.repo import GitError
 from wade.models.ai import AIToolID
+from wade.models.config import ProviderID
 from wade.models.work import MergeStrategy
 
 logger = structlog.get_logger()
@@ -395,14 +396,18 @@ def _validate_models_section(models: dict[str, Any], errors: list[str]) -> None:
 def _validate_provider_section(provider: dict[str, Any], errors: list[str]) -> None:
     """Validate the provider section."""
     name = provider.get("name")
-    valid_providers = {"github"}  # Only GitHub is supported now
+    valid_providers = {p.value for p in ProviderID}
     if name is not None and str(name) not in valid_providers:
         errors.append(
-            f"provider.name: '{name}' is not yet supported. "
-            f"Currently supported: {', '.join(sorted(valid_providers))}"
+            f"provider.name: '{name}' is not supported. "
+            f"Supported: {', '.join(sorted(valid_providers))}"
         )
 
-    valid_keys = {"name", "project", "api_token_env"}
+    settings = provider.get("settings")
+    if settings is not None and not isinstance(settings, dict):
+        errors.append("provider.settings: must be a mapping of key-value pairs")
+
+    valid_keys = {"name", "project", "api_token_env", "settings"}
     for key in provider:
         if key not in valid_keys:
             errors.append(f"provider.{key}: unsupported key")

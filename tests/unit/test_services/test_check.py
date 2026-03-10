@@ -218,6 +218,23 @@ class TestValidateConfig:
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("allowed_commands" in e and "list" in e for e in result.errors)
 
+    def test_invalid_provider_settings_not_dict(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nprovider:\n  name: github\n  settings:\n    - item1\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("provider.settings" in e and "mapping" in e for e in result.errors)
+
+    def test_valid_provider_with_settings(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text(
+            "version: 2\nprovider:\n  name: clickup\n"
+            "  api_token_env: CLICKUP_API_TOKEN\n"
+            "  settings:\n    list_id: '901'\n    team_id: '123'\n"
+        )
+        result = validate_config(tmp_path)
+        assert result.is_valid, f"Errors: {result.errors}"
+
     def test_invalid_permissions_unsupported_key(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"
         config.write_text("version: 2\npermissions:\n  forbidden_commands: []\n")

@@ -137,6 +137,7 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
         name=provider_raw.get("name", "github"),
         project=provider_raw.get("project"),
         api_token_env=provider_raw.get("api_token_env"),
+        settings=provider_raw.get("settings") or {},
     )
 
     # Parse hooks section

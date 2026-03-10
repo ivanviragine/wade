@@ -4,21 +4,31 @@ from __future__ import annotations
 
 from wade.models.config import ProjectConfig, ProviderID
 from wade.providers.base import AbstractTaskProvider
-from wade.providers.github import GitHubProvider
+
+_PROVIDER_FACTORIES: dict[ProviderID, type[AbstractTaskProvider]] = {}
+
+
+def register_provider(provider_id: ProviderID, cls: type[AbstractTaskProvider]) -> None:
+    """Register a provider class for a given ID."""
+    _PROVIDER_FACTORIES[provider_id] = cls
 
 
 def get_provider(config: ProjectConfig | None = None) -> AbstractTaskProvider:
     """Get the configured task provider.
 
-    Currently only GitHub is supported. Future providers (Linear, Jira, etc.)
-    will be added here with a registry pattern similar to AI tools.
+    Instantiates the provider registered for ``config.provider.name``,
+    passing the ``ProviderConfig`` to its constructor.
     """
     if config is None:
+        from wade.providers.github import GitHubProvider
+
         return GitHubProvider()
 
-    provider_name = config.provider.name
+    provider_id = config.provider.name
 
-    if provider_name == ProviderID.GITHUB:
-        return GitHubProvider()
+    if provider_id not in _PROVIDER_FACTORIES:
+        supported = ", ".join(sorted(str(p) for p in _PROVIDER_FACTORIES))
+        raise ValueError(f"Unknown provider: {provider_id}. Supported: {supported}")
 
-    raise ValueError(f"Unknown provider: {provider_name}")
+    cls = _PROVIDER_FACTORIES[provider_id]
+    return cls(config.provider)

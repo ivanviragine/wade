@@ -14,6 +14,7 @@ from typing import Any
 
 import structlog
 
+from wade.models.config import ProviderConfig
 from wade.models.review import ReviewComment, ReviewThread
 from wade.models.task import (
     Label,
@@ -72,6 +73,9 @@ def _parse_gh_task(raw: dict[str, Any]) -> Task:
 
 class GitHubProvider(AbstractTaskProvider):
     """GitHub Issues + PRs via the gh CLI."""
+
+    def __init__(self, config: ProviderConfig | None = None) -> None:
+        super().__init__(config)
 
     def list_tasks(
         self,

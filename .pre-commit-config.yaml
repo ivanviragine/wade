@@ -19,6 +19,7 @@ repos:
           - pyyaml>=6.0
           - rich>=13.0
           - structlog>=24.0
+          - httpx>=0.27
           - types-PyYAML>=6.0
         pass_filenames: false
         entry: mypy src/
