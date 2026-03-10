@@ -15,6 +15,7 @@ from wade.services.init_service import (
     GITIGNORE_MARKER_END,
     GITIGNORE_MARKER_START,
     MANIFEST_FILENAME,
+    _check_gh_auth,
     _clean_gitignore,
     _commit_wade_files,
     _ensure_gitignore,
@@ -24,9 +25,12 @@ from wade.services.init_service import (
     _prompt_hooks_setup,
     _prompt_model_mapping,
     _prompt_project_settings,
+    _prompt_provider_setup,
     _read_manifest_version,
     _resolve_models,
+    _save_token_to_env,
     _select_ai_tool,
+    _validate_clickup_token,
     _write_config,
     deinit,
     init,
@@ -1320,3 +1324,449 @@ class TestPromptCommitOrLocal:
 
         config = yaml.safe_load((tmp_git_repo / ".wade.yml").read_text())
         assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
+
+
+# ---------------------------------------------------------------------------
+# Provider setup helpers
+# ---------------------------------------------------------------------------
+
+
+class TestCheckGhAuth:
+    @patch("subprocess.run")
+    def test_returns_true_when_authenticated(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(returncode=0)
+        assert _check_gh_auth() is True
+
+    @patch(
+        "subprocess.run",
+        side_effect=__import__("subprocess").CalledProcessError(1, "gh"),
+    )
+    def test_returns_false_when_not_authenticated(self, _mock_run: MagicMock) -> None:
+        assert _check_gh_auth() is False
+
+    @patch("subprocess.run", side_effect=FileNotFoundError)
+    def test_returns_false_when_gh_not_installed(self, _mock_run: MagicMock) -> None:
+        assert _check_gh_auth() is False
+
+    @patch(
+        "subprocess.run",
+        side_effect=__import__("subprocess").TimeoutExpired("gh", 10),
+    )
+    def test_returns_false_on_timeout(self, _mock_run: MagicMock) -> None:
+        assert _check_gh_auth() is False
+
+
+class TestValidateClickupToken:
+    @patch("wade.utils.http.HTTPClient")
+    def test_valid_token(self, mock_client_cls: MagicMock) -> None:
+        mock_instance = MagicMock()
+        mock_client_cls.return_value = mock_instance
+        mock_instance.__enter__ = MagicMock(return_value=mock_instance)
+        mock_instance.__exit__ = MagicMock(return_value=False)
+        mock_instance.get.return_value = {"user": {"id": 123}}
+
+        assert _validate_clickup_token("pk_123_abc") is True
+
+    @patch("wade.utils.http.HTTPClient")
+    def test_invalid_token(self, mock_client_cls: MagicMock) -> None:
+        from wade.utils.http import APIError
+
+        mock_instance = MagicMock()
+        mock_client_cls.return_value = mock_instance
+        mock_instance.__enter__ = MagicMock(return_value=mock_instance)
+        mock_instance.__exit__ = MagicMock(return_value=False)
+        mock_instance.get.side_effect = APIError(401, "Unauthorized")
+
+        assert _validate_clickup_token("bad_token") is False
+
+
+class TestSaveTokenToEnv:
+    def test_creates_env_file(self, tmp_path: Path) -> None:
+        _save_token_to_env(tmp_path, "CLICKUP_API_TOKEN", "pk_123")
+        env_path = tmp_path / ".env"
+        assert env_path.exists()
+        content = env_path.read_text()
+        assert "CLICKUP_API_TOKEN=pk_123" in content
+
+    def test_appends_to_existing_env(self, tmp_path: Path) -> None:
+        env_path = tmp_path / ".env"
+        env_path.write_text("EXISTING_VAR=value\n")
+        _save_token_to_env(tmp_path, "CLICKUP_API_TOKEN", "pk_123")
+        content = env_path.read_text()
+        assert "EXISTING_VAR=value" in content
+        assert "CLICKUP_API_TOKEN=pk_123" in content
+
+    def test_skips_if_already_present(self, tmp_path: Path) -> None:
+        env_path = tmp_path / ".env"
+        env_path.write_text("CLICKUP_API_TOKEN=pk_existing\n")
+        _save_token_to_env(tmp_path, "CLICKUP_API_TOKEN", "pk_new")
+        content = env_path.read_text()
+        # Should NOT have overwritten or duplicated
+        assert content.count("CLICKUP_API_TOKEN=") == 1
+        assert "pk_existing" in content
+
+    def test_appends_newline_when_file_lacks_trailing_newline(self, tmp_path: Path) -> None:
+        env_path = tmp_path / ".env"
+        env_path.write_text("FOO=bar")  # no trailing newline
+        _save_token_to_env(tmp_path, "CLICKUP_API_TOKEN", "pk_123")
+        content = env_path.read_text()
+        # Must not merge onto the FOO=bar line
+        assert content == "FOO=bar\nCLICKUP_API_TOKEN=pk_123\n"
+
+    def test_no_false_positive_on_substring_env_var(self, tmp_path: Path) -> None:
+        """MY_CLICKUP_API_TOKEN= should NOT match CLICKUP_API_TOKEN=."""
+        env_path = tmp_path / ".env"
+        env_path.write_text("MY_CLICKUP_API_TOKEN=pk_old\n")
+        assert _save_token_to_env(tmp_path, "CLICKUP_API_TOKEN", "pk_new") is True
+        content = env_path.read_text()
+        # Both entries should exist
+        assert "MY_CLICKUP_API_TOKEN=pk_old" in content
+        assert "CLICKUP_API_TOKEN=pk_new" in content
+
+    def test_returns_false_on_write_failure(self, tmp_path: Path) -> None:
+        """Should return False and not crash when .env is not writable."""
+        env_path = tmp_path / ".env"
+        env_path.write_text("")
+        env_path.chmod(0o444)  # read-only
+
+        result = _save_token_to_env(tmp_path, "CLICKUP_API_TOKEN", "pk_123")
+
+        assert result is False
+        env_path.chmod(0o644)  # restore for cleanup
+
+    def test_returns_true_when_already_present(self, tmp_path: Path) -> None:
+        env_path = tmp_path / ".env"
+        env_path.write_text("CLICKUP_API_TOKEN=pk_existing\n")
+        assert _save_token_to_env(tmp_path, "CLICKUP_API_TOKEN", "pk_new") is True
+
+
+# ---------------------------------------------------------------------------
+# Provider setup prompt
+# ---------------------------------------------------------------------------
+
+
+class TestPromptProviderSetup:
+    def test_non_interactive_returns_github(self, tmp_path: Path) -> None:
+        result = _prompt_provider_setup(tmp_path, non_interactive=True)
+        assert result == {"name": "github"}
+
+    @patch("wade.services.init_service._check_gh_auth", return_value=True)
+    @patch("wade.ui.prompts.select", return_value=0)
+    def test_github_already_authed(
+        self,
+        _mock_select: MagicMock,
+        _mock_auth: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        result = _prompt_provider_setup(tmp_path, non_interactive=False)
+        assert result["name"] == "github"
+
+    @patch("wade.services.init_service._check_gh_auth", return_value=False)
+    @patch("wade.ui.prompts.confirm", return_value=False)  # skip auth
+    @patch("wade.ui.prompts.select", return_value=0)
+    def test_github_not_authed_skip(
+        self,
+        _mock_select: MagicMock,
+        _mock_confirm: MagicMock,
+        _mock_auth: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        result = _prompt_provider_setup(tmp_path, non_interactive=False)
+        assert result["name"] == "github"
+
+    @patch("wade.services.init_service._check_gh_auth")
+    @patch("subprocess.run")  # gh auth login
+    @patch("wade.ui.prompts.confirm", return_value=True)  # yes, try auth
+    @patch("wade.ui.prompts.select", return_value=0)
+    def test_github_auth_login_succeeds(
+        self,
+        _mock_select: MagicMock,
+        _mock_confirm: MagicMock,
+        _mock_subprocess: MagicMock,
+        mock_auth: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """User is not authed, runs gh auth login, then _check_gh_auth returns True."""
+        mock_auth.side_effect = [False, True]  # first call: not authed, second: authed
+
+        result = _prompt_provider_setup(tmp_path, non_interactive=False)
+        assert result["name"] == "github"
+        assert mock_auth.call_count == 2
+
+    @patch("wade.services.init_service._validate_clickup_token", return_value=True)
+    @patch("wade.ui.prompts.confirm")
+    @patch("wade.ui.prompts.input_prompt")
+    @patch("wade.ui.prompts.select", return_value=1)  # ClickUp
+    def test_clickup_full_flow(
+        self,
+        _mock_select: MagicMock,
+        mock_input: MagicMock,
+        mock_confirm: MagicMock,
+        _mock_validate: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        # input_prompt calls: token, env_var, team_id, list_id, space_id
+        mock_input.side_effect = ["pk_123_abc", "CLICKUP_API_TOKEN", "team1", "list1", ""]
+        # confirm calls: open browser?, save to .env?
+        mock_confirm.side_effect = [False, False]
+
+        result = _prompt_provider_setup(tmp_path, non_interactive=False)
+
+        assert result["name"] == "clickup"
+        assert result["api_token_env"] == "CLICKUP_API_TOKEN"
+        assert result["settings"]["team_id"] == "team1"
+        assert result["settings"]["list_id"] == "list1"
+        assert "space_id" not in result["settings"]
+
+    @patch("wade.services.init_service._validate_clickup_token", return_value=True)
+    @patch("wade.ui.prompts.confirm")
+    @patch("wade.ui.prompts.input_prompt")
+    @patch("wade.ui.prompts.select", return_value=1)
+    def test_clickup_with_space_id(
+        self,
+        _mock_select: MagicMock,
+        mock_input: MagicMock,
+        mock_confirm: MagicMock,
+        _mock_validate: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_input.side_effect = ["pk_123", "CLICKUP_API_TOKEN", "team1", "list1", "space1"]
+        mock_confirm.side_effect = [False, False]
+
+        result = _prompt_provider_setup(tmp_path, non_interactive=False)
+        assert result["settings"]["space_id"] == "space1"
+
+    @patch("wade.services.init_service._validate_clickup_token", return_value=True)
+    @patch("wade.services.init_service._save_token_to_env")
+    @patch("wade.ui.prompts.confirm")
+    @patch("wade.ui.prompts.input_prompt")
+    @patch("wade.ui.prompts.select", return_value=1)
+    def test_clickup_save_to_env(
+        self,
+        _mock_select: MagicMock,
+        mock_input: MagicMock,
+        mock_confirm: MagicMock,
+        mock_save: MagicMock,
+        _mock_validate: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_input.side_effect = ["pk_123", "MY_TOKEN", "team1", "list1", ""]
+        mock_confirm.side_effect = [False, True]  # no browser, yes save to .env
+
+        result = _prompt_provider_setup(tmp_path, non_interactive=False)
+
+        assert result["add_env_to_copy"] is True
+        mock_save.assert_called_once_with(tmp_path, "MY_TOKEN", "pk_123")
+
+    def test_current_provider_preselects(self, tmp_path: Path) -> None:
+        """When current_provider='clickup', default index should be 1."""
+        with (
+            patch("wade.ui.prompts.select", return_value=1) as mock_select,
+            patch("wade.services.init_service._validate_clickup_token", return_value=True),
+            patch("wade.ui.prompts.input_prompt", side_effect=["pk_1", "TOK", "t", "l", ""]),
+            patch("wade.ui.prompts.confirm", side_effect=[False, False]),
+        ):
+            _prompt_provider_setup(tmp_path, non_interactive=False, current_provider="clickup")
+            # Verify default=1 was passed (ClickUp pre-selected)
+            mock_select.assert_called_once()
+            _, kwargs = mock_select.call_args
+            assert kwargs.get("default") == 1
+
+    @patch("wade.services.init_service._validate_clickup_token")
+    @patch("wade.ui.prompts.confirm")
+    @patch("wade.ui.prompts.input_prompt")
+    @patch("wade.ui.prompts.select", return_value=1)
+    def test_clickup_token_retry_then_success(
+        self,
+        _mock_select: MagicMock,
+        mock_input: MagicMock,
+        mock_confirm: MagicMock,
+        mock_validate: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """First two validation attempts fail, third succeeds."""
+        mock_validate.side_effect = [False, False, True]
+        # token (attempt 1), token (attempt 2), token (attempt 3), env_var, team, list, space
+        mock_input.side_effect = ["bad1", "bad2", "pk_good", "TOK", "t", "l", ""]
+        mock_confirm.side_effect = [False, False]
+
+        result = _prompt_provider_setup(tmp_path, non_interactive=False)
+        assert result["name"] == "clickup"
+        assert mock_validate.call_count == 3
+
+    @patch("wade.services.init_service._validate_clickup_token", return_value=False)
+    @patch("wade.ui.prompts.confirm")
+    @patch("wade.ui.prompts.input_prompt")
+    @patch("wade.ui.prompts.select", return_value=1)
+    def test_clickup_token_all_attempts_fail(
+        self,
+        _mock_select: MagicMock,
+        mock_input: MagicMock,
+        mock_confirm: MagicMock,
+        _mock_validate: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """All 3 token validation attempts fail — continues anyway."""
+        mock_input.side_effect = ["bad1", "bad2", "bad3", "TOK", "t", "l", ""]
+        mock_confirm.side_effect = [False, False]
+
+        result = _prompt_provider_setup(tmp_path, non_interactive=False)
+        # Should still return clickup config despite failures
+        assert result["name"] == "clickup"
+
+    @patch("wade.services.init_service._check_gh_auth", return_value=False)
+    @patch("wade.ui.prompts.confirm", return_value=True)  # yes, try auth
+    @patch("wade.ui.prompts.select", return_value=0)
+    def test_github_gh_not_installed_for_login(
+        self,
+        _mock_select: MagicMock,
+        _mock_confirm: MagicMock,
+        _mock_auth: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """When gh CLI is not installed, gh auth login should not crash."""
+        with patch("subprocess.run", side_effect=FileNotFoundError):
+            result = _prompt_provider_setup(tmp_path, non_interactive=False)
+        assert result["name"] == "github"
+
+
+# ---------------------------------------------------------------------------
+# Write / patch config provider
+# ---------------------------------------------------------------------------
+
+
+class TestWriteConfigProvider:
+    def test_default_github_provider(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        _write_config(config_path, "claude", ComplexityModelMapping())
+        config = yaml.safe_load(config_path.read_text())
+        assert config["provider"]["name"] == "github"
+
+    def test_github_provider_explicit(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        _write_config(
+            config_path, "claude", ComplexityModelMapping(), provider_setup={"name": "github"}
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["provider"]["name"] == "github"
+        assert "api_token_env" not in config["provider"]
+
+    def test_clickup_provider_with_settings(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        provider_setup = {
+            "name": "clickup",
+            "api_token_env": "CLICKUP_API_TOKEN",
+            "settings": {"list_id": "123", "team_id": "456"},
+        }
+        _write_config(
+            config_path, "claude", ComplexityModelMapping(), provider_setup=provider_setup
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["provider"]["name"] == "clickup"
+        assert config["provider"]["api_token_env"] == "CLICKUP_API_TOKEN"
+        assert config["provider"]["settings"]["list_id"] == "123"
+        assert config["provider"]["settings"]["team_id"] == "456"
+
+
+class TestPatchConfigProvider:
+    def test_patch_adds_provider_when_missing(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\n")
+        provider_setup = {
+            "name": "clickup",
+            "api_token_env": "CLICKUP_API_TOKEN",
+            "settings": {"list_id": "123", "team_id": "456"},
+        }
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), provider_setup=provider_setup
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["provider"]["name"] == "clickup"
+        assert config["provider"]["settings"]["list_id"] == "123"
+
+    def test_patch_preserves_provider_when_no_setup(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nprovider:\n  name: clickup\n")
+        _patch_config(config_path, "claude", ComplexityModelMapping())
+        config = yaml.safe_load(config_path.read_text())
+        assert config["provider"]["name"] == "clickup"
+
+    def test_force_overwrites_provider(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nprovider:\n  name: github\n")
+        provider_setup = {
+            "name": "clickup",
+            "api_token_env": "CLICKUP_API_TOKEN",
+            "settings": {"list_id": "123", "team_id": "456"},
+        }
+        _patch_config(
+            config_path,
+            "claude",
+            ComplexityModelMapping(),
+            provider_setup=provider_setup,
+            force=True,
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["provider"]["name"] == "clickup"
+
+    def test_no_force_preserves_existing_provider(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nprovider:\n  name: github\n")
+        provider_setup = {"name": "clickup"}
+        _patch_config(
+            config_path,
+            "claude",
+            ComplexityModelMapping(),
+            provider_setup=provider_setup,
+            force=False,
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["provider"]["name"] == "github"  # preserved
+
+    def test_force_same_provider_preserves_settings(self, tmp_path: Path) -> None:
+        """Force re-init of the same provider should NOT delete existing settings."""
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nprovider:\n  name: clickup\n"
+            "  api_token_env: CLICKUP_API_TOKEN\n"
+            "  settings:\n    list_id: '123'\n    team_id: '456'\n"
+        )
+        # Partial setup with same provider name — should not wipe existing keys
+        _patch_config(
+            config_path,
+            "claude",
+            ComplexityModelMapping(),
+            provider_setup={"name": "clickup"},
+            force=True,
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["provider"]["name"] == "clickup"
+        assert config["provider"]["api_token_env"] == "CLICKUP_API_TOKEN"
+        assert config["provider"]["settings"]["list_id"] == "123"
+
+    def test_force_switch_clickup_to_github_removes_orphan_keys(self, tmp_path: Path) -> None:
+        """Switching from ClickUp to GitHub with force should remove api_token_env and settings."""
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nprovider:\n  name: clickup\n"
+            "  api_token_env: CLICKUP_API_TOKEN\n"
+            "  settings:\n    list_id: '123'\n    team_id: '456'\n"
+        )
+        _patch_config(
+            config_path,
+            "claude",
+            ComplexityModelMapping(),
+            provider_setup={"name": "github"},
+            force=True,
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["provider"]["name"] == "github"
+        assert "api_token_env" not in config["provider"]
+        assert "settings" not in config["provider"]
+
+
+class TestInitProvider:
+    def test_init_non_interactive_defaults_to_github(self, tmp_git_repo: Path) -> None:
+        init(project_root=tmp_git_repo, non_interactive=True)
+        config = yaml.safe_load((tmp_git_repo / ".wade.yml").read_text())
+        assert config["provider"]["name"] == "github"
