@@ -1497,17 +1497,16 @@ def _patch_config(
             raw["ai"] = ai
             changed = True
 
-    # Patch command overrides (plan, deps)
+    # Patch command overrides (plan, deps, review_plan, review_implementation)
     if command_overrides is not None:
-        for cmd_name in ("plan", "deps"):
+        for cmd_name in ("plan", "deps", "review_plan", "review_implementation"):
             overrides = command_overrides.get(cmd_name, {})
             if force:
                 if overrides:
                     cmd_section: dict[str, str] = {}
-                    if overrides.get("tool"):
-                        cmd_section["tool"] = overrides["tool"]
-                    if overrides.get("model"):
-                        cmd_section["model"] = overrides["model"]
+                    for key in ("tool", "model", "mode", "effort"):
+                        if overrides.get(key):
+                            cmd_section[key] = overrides[key]
                     if cmd_section:
                         ai[cmd_name] = cmd_section
                         raw["ai"] = ai
@@ -1518,10 +1517,9 @@ def _patch_config(
                     changed = True
             elif overrides and not ai.get(cmd_name):
                 cmd_section = {}
-                if overrides.get("tool"):
-                    cmd_section["tool"] = overrides["tool"]
-                if overrides.get("model"):
-                    cmd_section["model"] = overrides["model"]
+                for key in ("tool", "model", "mode", "effort"):
+                    if overrides.get(key):
+                        cmd_section[key] = overrides[key]
                 if cmd_section:
                     ai[cmd_name] = cmd_section
                     raw["ai"] = ai

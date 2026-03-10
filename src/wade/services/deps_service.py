@@ -13,6 +13,7 @@ from pathlib import Path
 import structlog
 
 from wade.config.loader import load_config
+from wade.models.ai import EffortLevel
 from wade.models.config import ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationRequest
 from wade.models.deps import DependencyEdge, DependencyGraph
@@ -404,9 +405,8 @@ def analyze_deps(
             console.error(f"Invalid delegation mode: {mode}")
             return None
     else:
-        resolved = resolve_mode(cmd_config)
         # deps defaults to headless (not prompt) when no mode is configured
-        delegation_mode = resolved if cmd_config.mode else DelegationMode.HEADLESS
+        delegation_mode = resolve_mode(cmd_config) if cmd_config.mode else DelegationMode.HEADLESS
 
     # Resolve AI tool
     resolved_tool = resolve_ai_tool(ai_tool, config, "deps")
@@ -481,7 +481,7 @@ def analyze_deps(
             task_titles[num] = f"Issue #{num}"
 
     # Run AI analysis via delegation infrastructure
-    effort_str = resolved_effort.value if resolved_effort else None
+    effort_str = resolved_effort.value if isinstance(resolved_effort, EffortLevel) else None
     console.step(f"Running {resolved_tool} ({delegation_mode.value}) for dependency analysis...")
     output = _run_delegation(
         resolved_tool,
@@ -506,6 +506,15 @@ def analyze_deps(
 
             repo_root = git_repo.get_repo_root(project_root or Path.cwd())
             git_worktree.remove_worktree(repo_root, standalone_worktree, force=True)
+
+    # Prompt mode: the output is the raw template text, not AI output.
+    # The user must run the prompt manually and re-run with a different mode.
+    if delegation_mode == DelegationMode.PROMPT:
+        console.info(
+            "Prompt mode: copy the prompt above and run it manually. "
+            "Then re-run with --mode headless or --mode interactive to parse results."
+        )
+        return DependencyGraph()
 
     # Parse edges
     edges = parse_deps_output(output, valid_numbers) if output else []

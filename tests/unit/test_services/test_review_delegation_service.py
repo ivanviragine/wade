@@ -5,9 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from wade.models.ai import EffortLevel
 from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationResult
 from wade.services.review_delegation_service import (
+    _run_review_delegation,
     review_implementation,
     review_plan,
 )
@@ -186,3 +188,104 @@ class TestReviewCode:
         assert result.success is False
         assert "Invalid delegation mode" in result.feedback
         assert result.exit_code == 1
+
+
+# ---------------------------------------------------------------------------
+# _run_review_delegation effort + confirm tests
+# ---------------------------------------------------------------------------
+
+
+class TestRunReviewDelegationEffort:
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.confirm_ai_selection")
+    @patch("wade.services.review_delegation_service.resolve_effort")
+    @patch("wade.services.review_delegation_service.resolve_model")
+    @patch("wade.services.review_delegation_service.resolve_ai_tool")
+    @patch("wade.services.review_delegation_service.load_config")
+    def test_effort_passed_to_delegation(
+        self,
+        mock_config: MagicMock,
+        mock_tool: MagicMock,
+        mock_model: MagicMock,
+        mock_effort: MagicMock,
+        mock_confirm: MagicMock,
+        mock_delegate: MagicMock,
+    ) -> None:
+        """Effort from resolve_effort should be passed through to delegation request."""
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(review_plan=AICommandConfig(mode="headless"))
+        )
+        mock_tool.return_value = "claude"
+        mock_model.return_value = None
+        mock_effort.return_value = EffortLevel.LOW
+        mock_confirm.return_value = ("claude", None, EffortLevel.LOW)
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.HEADLESS
+        )
+
+        _run_review_delegation("test prompt", "review_plan")
+
+        call_args = mock_delegate.call_args[0][0]
+        assert call_args.effort == "low"
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.confirm_ai_selection")
+    @patch("wade.services.review_delegation_service.resolve_effort")
+    @patch("wade.services.review_delegation_service.resolve_model")
+    @patch("wade.services.review_delegation_service.resolve_ai_tool")
+    @patch("wade.services.review_delegation_service.load_config")
+    def test_prompt_mode_skips_confirm(
+        self,
+        mock_config: MagicMock,
+        mock_tool: MagicMock,
+        mock_model: MagicMock,
+        mock_effort: MagicMock,
+        mock_confirm: MagicMock,
+        mock_delegate: MagicMock,
+    ) -> None:
+        """In prompt mode, confirm_ai_selection should be skipped."""
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(review_plan=AICommandConfig(mode="prompt"))
+        )
+        mock_tool.return_value = "claude"
+        mock_model.return_value = None
+        mock_effort.return_value = None
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.PROMPT
+        )
+
+        _run_review_delegation("test prompt", "review_plan")
+
+        mock_confirm.assert_not_called()
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.confirm_ai_selection")
+    @patch("wade.services.review_delegation_service.resolve_effort")
+    @patch("wade.services.review_delegation_service.resolve_model")
+    @patch("wade.services.review_delegation_service.resolve_ai_tool")
+    @patch("wade.services.review_delegation_service.load_config")
+    def test_effort_none_when_not_effort_level(
+        self,
+        mock_config: MagicMock,
+        mock_tool: MagicMock,
+        mock_model: MagicMock,
+        mock_effort: MagicMock,
+        mock_confirm: MagicMock,
+        mock_delegate: MagicMock,
+    ) -> None:
+        """When resolve_effort returns None, effort in request should be None."""
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(review_plan=AICommandConfig(mode="headless"))
+        )
+        mock_tool.return_value = "claude"
+        mock_model.return_value = None
+        mock_effort.return_value = None
+        mock_confirm.return_value = ("claude", None, None)
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.HEADLESS
+        )
+
+        _run_review_delegation("test prompt", "review_plan")
+
+        call_args = mock_delegate.call_args[0][0]
+        assert call_args.effort is None

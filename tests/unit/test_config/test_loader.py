@@ -142,6 +142,55 @@ class TestParseConfigFile:
         assert config.project_root == str(tmp_path)
 
 
+class TestParseCommandConfigModeEffort:
+    """Tests that mode and effort fields are parsed from per-command AI config."""
+
+    def test_mode_parsed_from_deps(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  deps:\n    tool: claude\n    mode: headless\n")
+        config = parse_config_file(config_path)
+        assert config.ai.deps.mode == "headless"
+
+    def test_effort_parsed_from_review_plan(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nai:\n  review_plan:\n    tool: claude\n    effort: low\n"
+        )
+        config = parse_config_file(config_path)
+        assert config.ai.review_plan.effort == "low"
+
+    def test_mode_and_effort_default_to_none(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  plan:\n    tool: claude\n")
+        config = parse_config_file(config_path)
+        assert config.ai.plan.mode is None
+        assert config.ai.plan.effort is None
+
+    def test_review_plan_and_review_implementation_parsed(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\n"
+            "ai:\n"
+            "  review_plan:\n"
+            "    tool: claude\n"
+            "    mode: prompt\n"
+            "  review_implementation:\n"
+            "    tool: copilot\n"
+            "    mode: headless\n"
+        )
+        config = parse_config_file(config_path)
+        assert config.ai.review_plan.tool == "claude"
+        assert config.ai.review_plan.mode == "prompt"
+        assert config.ai.review_implementation.tool == "copilot"
+        assert config.ai.review_implementation.mode == "headless"
+
+    def test_global_effort_parsed(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  effort: medium\n")
+        config = parse_config_file(config_path)
+        assert config.ai.effort == "medium"
+
+
 class TestParseConfigFileErrors:
     def test_malformed_yaml_raises_config_error(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"

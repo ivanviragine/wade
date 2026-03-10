@@ -805,6 +805,34 @@ class TestPatchConfig:
         config = yaml.safe_load(config_path.read_text())
         assert config["provider"]["name"] == "github"
 
+    def test_force_sets_mode_and_effort_in_command_overrides(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
+        overrides = {
+            "deps": {"tool": "claude", "mode": "headless"},
+            "review_plan": {"tool": "claude", "effort": "low", "mode": "prompt"},
+        }
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), command_overrides=overrides, force=True
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["deps"]["mode"] == "headless"
+        assert config["ai"]["review_plan"]["effort"] == "low"
+        assert config["ai"]["review_plan"]["mode"] == "prompt"
+
+    def test_force_sets_review_implementation_overrides(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
+        overrides = {
+            "review_implementation": {"tool": "copilot", "mode": "headless"},
+        }
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), command_overrides=overrides, force=True
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["review_implementation"]["tool"] == "copilot"
+        assert config["ai"]["review_implementation"]["mode"] == "headless"
+
 
 # ---------------------------------------------------------------------------
 # Update service tests

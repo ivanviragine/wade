@@ -111,9 +111,12 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
     ai = AIConfig(
         default_tool=ai_raw.get("default_tool"),
         default_model=ai_raw.get("default_model"),
+        effort=ai_raw.get("effort"),
         plan=_parse_command_config(ai_raw.get("plan", {})),
         deps=_parse_command_config(ai_raw.get("deps", {})),
         work=_parse_command_config(ai_raw.get("work", {})),
+        review_plan=_parse_command_config(ai_raw.get("review_plan", {})),
+        review_implementation=_parse_command_config(ai_raw.get("review_implementation", {})),
     )
 
     # Parse models section (nested: tool → complexity → model)
@@ -162,4 +165,6 @@ def _parse_command_config(raw: dict[str, Any] | None) -> AICommandConfig:
     return AICommandConfig(
         tool=raw.get("tool"),
         model=raw.get("model") or None,  # Treat empty string as None
+        mode=raw.get("mode"),
+        effort=raw.get("effort"),
     )

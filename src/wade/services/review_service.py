@@ -528,7 +528,7 @@ def build_review_prompt(
     """Build the initial prompt for a review session."""
     from wade.skills.installer import get_templates_dir
 
-    template_path = get_templates_dir() / "prompts" / "review-context.md"
+    template_path = get_templates_dir() / "prompts" / "review-pr-comments.md"
     if not template_path.is_file():
         raise FileNotFoundError(f"Review prompt template not found: {template_path}")
     template = template_path.read_text(encoding="utf-8")

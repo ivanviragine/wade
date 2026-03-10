@@ -11,6 +11,7 @@ from wade.models.task import Task, TaskState
 from wade.services.deps_service import (
     _find_existing_tracking_issue,
     _run_delegation,
+    analyze_deps,
     apply_deps_to_issues,
     build_context,
     build_deps_prompt,
@@ -397,3 +398,116 @@ class TestRunDelegation:
         assert result == "1 -> 2 # reason"
         call_args = mock_delegate.call_args[0][0]
         assert call_args.mode == DelegationMode.INTERACTIVE
+
+
+# ---------------------------------------------------------------------------
+# analyze_deps mode / prompt tests
+# ---------------------------------------------------------------------------
+
+
+class TestAnalyzeDepsMode:
+    """Tests for analyze_deps with mode parameter and prompt-mode early return."""
+
+    @patch("wade.services.deps_service.create_tracking_issue")
+    @patch("wade.services.deps_service.apply_deps_to_issues")
+    @patch("wade.services.deps_service.delegate")
+    @patch("wade.services.deps_service.confirm_ai_selection")
+    @patch("wade.services.deps_service.resolve_effort")
+    @patch("wade.services.deps_service.resolve_model")
+    @patch("wade.services.deps_service.resolve_ai_tool")
+    @patch("wade.services.deps_service.get_provider")
+    @patch("wade.services.deps_service.load_config")
+    def test_prompt_mode_returns_empty_graph(
+        self,
+        mock_config: MagicMock,
+        mock_provider: MagicMock,
+        mock_resolve_tool: MagicMock,
+        mock_resolve_model: MagicMock,
+        mock_resolve_effort: MagicMock,
+        mock_confirm: MagicMock,
+        mock_delegate: MagicMock,
+        mock_apply: MagicMock,
+        mock_tracking: MagicMock,
+    ) -> None:
+        """Prompt mode should return empty graph and skip edge parsing."""
+        from wade.models.config import AICommandConfig, AIConfig
+
+        mock_config.return_value = ProjectConfig(ai=AIConfig(deps=AICommandConfig(tool="claude")))
+        provider = MagicMock()
+        provider.read_task.side_effect = [
+            Task(id="1", title="Auth", body="Login"),
+            Task(id="2", title="DB", body="Schema"),
+            Task(id="1", title="Auth", body="Login"),
+            Task(id="2", title="DB", body="Schema"),
+        ]
+        mock_provider.return_value = provider
+        mock_resolve_tool.return_value = "claude"
+        mock_resolve_model.return_value = None
+        mock_resolve_effort.return_value = None
+        mock_confirm.return_value = ("claude", None, None)
+        mock_delegate.return_value = DelegationResult(
+            success=True,
+            feedback="Copy the prompt below...",
+            mode=DelegationMode.PROMPT,
+        )
+
+        result = analyze_deps(["1", "2"], mode="prompt")
+        assert result is not None
+        assert result.edges == []
+        # Edge parsing and apply should be skipped
+        mock_apply.assert_not_called()
+        mock_tracking.assert_not_called()
+
+    @patch("wade.services.deps_service.create_tracking_issue")
+    @patch("wade.services.deps_service.apply_deps_to_issues")
+    @patch("wade.services.deps_service.delegate")
+    @patch("wade.services.deps_service.confirm_ai_selection")
+    @patch("wade.services.deps_service.resolve_effort")
+    @patch("wade.services.deps_service.resolve_model")
+    @patch("wade.services.deps_service.resolve_ai_tool")
+    @patch("wade.services.deps_service.get_provider")
+    @patch("wade.services.deps_service.load_config")
+    def test_explicit_mode_override(
+        self,
+        mock_config: MagicMock,
+        mock_provider: MagicMock,
+        mock_resolve_tool: MagicMock,
+        mock_resolve_model: MagicMock,
+        mock_resolve_effort: MagicMock,
+        mock_confirm: MagicMock,
+        mock_delegate: MagicMock,
+        mock_apply: MagicMock,
+        mock_tracking: MagicMock,
+    ) -> None:
+        """Explicit mode='headless' should override config mode."""
+        from wade.models.config import AICommandConfig, AIConfig
+
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(deps=AICommandConfig(tool="claude", mode="prompt"))
+        )
+        provider = MagicMock()
+        provider.read_task.side_effect = [
+            Task(id="1", title="Auth", body="Login"),
+            Task(id="2", title="DB", body="Schema"),
+            Task(id="1", title="Auth", body="Login"),
+            Task(id="2", title="DB", body="Schema"),
+        ]
+        mock_provider.return_value = provider
+        mock_resolve_tool.return_value = "claude"
+        mock_resolve_model.return_value = None
+        mock_resolve_effort.return_value = None
+        mock_confirm.return_value = ("claude", None, None)
+        mock_delegate.return_value = DelegationResult(
+            success=True,
+            feedback="1 -> 2 # auth before UI",
+            mode=DelegationMode.HEADLESS,
+        )
+        mock_apply.return_value = 2
+        mock_tracking.return_value = "10"
+
+        result = analyze_deps(["1", "2"], mode="headless")
+        assert result is not None
+        # Should have parsed the edge since not in prompt mode
+        assert len(result.edges) == 1
+        call_args = mock_delegate.call_args[0][0]
+        assert call_args.mode == DelegationMode.HEADLESS
