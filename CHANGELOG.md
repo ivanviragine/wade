@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.3.0] — 2026-03-10
+
+### Features
+
+- add multi-provider support with ClickUp (#134) (6188856)
+
 ## [v0.2.2] — 2026-03-10
 
 ### Bug Fixes
