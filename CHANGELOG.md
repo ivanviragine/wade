@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.2.0] — 2026-03-09
+
+### Features
+
+- unify delegation infrastructure across deps and review commands (#123, #124, #125) (805cabe)
+
+### Other Changes
+
+- Add generic AI delegation infrastructure with plan review and code review as first consumers (#122) (8cdcf43)
+- Pass AI params through _offer_to_implement after planning (#129) (e4291d0)
+- Defer AI selection until after plan check in work_service.start() (#127) (63ea499)
+- Allow changing AI tool and model in auto-deps confirmation prompt (#132) (98017e1)
+
 ## [v0.1.6] — 2026-03-08
 
 ### Bug Fixes
