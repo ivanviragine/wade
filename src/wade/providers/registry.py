@@ -2,15 +2,35 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import cast
+
 from wade.models.config import ProjectConfig, ProviderID
 from wade.providers.base import AbstractTaskProvider
 
-_PROVIDER_FACTORIES: dict[ProviderID, type[AbstractTaskProvider]] = {}
+# Values are either a class or a lazy callable that returns one.
+_PROVIDER_FACTORIES: dict[
+    ProviderID, type[AbstractTaskProvider] | Callable[[], type[AbstractTaskProvider]]
+] = {}
 
 
-def register_provider(provider_id: ProviderID, cls: type[AbstractTaskProvider]) -> None:
-    """Register a provider class for a given ID."""
+def register_provider(
+    provider_id: ProviderID,
+    cls: type[AbstractTaskProvider] | Callable[[], type[AbstractTaskProvider]],
+) -> None:
+    """Register a provider class (or lazy loader) for a given ID."""
     _PROVIDER_FACTORIES[provider_id] = cls
+
+
+def _resolve(
+    entry: type[AbstractTaskProvider] | Callable[[], type[AbstractTaskProvider]],
+) -> type[AbstractTaskProvider]:
+    """Resolve a registry entry to an actual class."""
+    if isinstance(entry, type) and issubclass(entry, AbstractTaskProvider):
+        return entry
+    # Lazy callable — invoke and return.
+    loader = cast(Callable[[], type[AbstractTaskProvider]], entry)
+    return loader()
 
 
 def registered_provider_names() -> set[str]:
@@ -35,5 +55,5 @@ def get_provider(config: ProjectConfig | None = None) -> AbstractTaskProvider:
         supported = ", ".join(sorted(str(p) for p in _PROVIDER_FACTORIES))
         raise ValueError(f"Unknown provider: {provider_id}. Supported: {supported}")
 
-    cls = _PROVIDER_FACTORIES[provider_id]
+    cls = _resolve(_PROVIDER_FACTORIES[provider_id])
     return cls(config.provider)
