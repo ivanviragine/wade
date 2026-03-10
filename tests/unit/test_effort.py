@@ -391,7 +391,7 @@ class TestConfirmEffort:
     """Effort-specific behaviour in confirm_ai_selection."""
 
     def test_effort_explicit_skips_prompts(self) -> None:
-        """All three explicit → no prompt."""
+        """All four explicit → no prompt."""
         from wade.services.ai_resolution import confirm_ai_selection
 
         with patch(_IS_TTY, return_value=True), patch(_SELECT) as mock_select:
@@ -402,8 +402,9 @@ class TestConfirmEffort:
                 model_explicit=True,
                 resolved_effort=EffortLevel.HIGH,
                 effort_explicit=True,
+                yolo_explicit=True,
             )
-        assert result == ("claude", "claude-sonnet-4-6", EffortLevel.HIGH)
+        assert result == ("claude", "claude-sonnet-4-6", EffortLevel.HIGH, False)
         mock_select.assert_not_called()
 
     def test_non_tty_preserves_effort(self) -> None:
@@ -417,7 +418,7 @@ class TestConfirmEffort:
                 model_explicit=False,
                 resolved_effort=EffortLevel.MAX,
             )
-        assert result == ("claude", "claude-sonnet-4-6", EffortLevel.MAX)
+        assert result == ("claude", "claude-sonnet-4-6", EffortLevel.MAX, False)
 
     def test_menu_includes_change_effort_for_supported_tool(self) -> None:
         """Claude supports effort → 'Change effort' appears in menu."""
@@ -493,7 +494,7 @@ class TestConfirmEffort:
             patch(_DETECT, return_value=_make_installed("claude")),
             patch(_CONSOLE_KV),
         ):
-            _, _, effort = confirm_ai_selection(
+            _, _, effort, _yolo = confirm_ai_selection(
                 "claude",
                 "claude-sonnet-4-6",
                 tool_explicit=False,
@@ -523,7 +524,7 @@ class TestConfirmEffort:
             patch(_DETECT, return_value=_make_installed("claude")),
             patch(_CONSOLE_KV),
         ):
-            _, _, effort = confirm_ai_selection(
+            _, _, effort, _yolo = confirm_ai_selection(
                 "claude",
                 "claude-sonnet-4-6",
                 tool_explicit=False,

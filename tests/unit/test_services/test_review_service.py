@@ -431,7 +431,7 @@ class TestReviewServiceStart:
             ),
             "confirm_ai_selection": patch(
                 "wade.services.review_service.confirm_ai_selection",
-                return_value=(None, None, None),
+                return_value=(None, None, None, False),
             ),
             "_detect_ai_cli_env": patch(
                 "wade.services.work_service._detect_ai_cli_env",

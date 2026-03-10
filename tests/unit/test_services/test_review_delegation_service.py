@@ -218,7 +218,7 @@ class TestRunReviewDelegationEffort:
         mock_tool.return_value = "claude"
         mock_model.return_value = None
         mock_effort.return_value = EffortLevel.LOW
-        mock_confirm.return_value = ("claude", None, EffortLevel.LOW)
+        mock_confirm.return_value = ("claude", None, EffortLevel.LOW, False)
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="ok", mode=DelegationMode.HEADLESS
         )
@@ -280,7 +280,7 @@ class TestRunReviewDelegationEffort:
         mock_tool.return_value = "claude"
         mock_model.return_value = None
         mock_effort.return_value = None
-        mock_confirm.return_value = ("claude", None, None)
+        mock_confirm.return_value = ("claude", None, None, False)
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="ok", mode=DelegationMode.HEADLESS
         )

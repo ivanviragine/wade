@@ -444,7 +444,7 @@ class TestAnalyzeDepsMode:
         mock_resolve_tool.return_value = "claude"
         mock_resolve_model.return_value = None
         mock_resolve_effort.return_value = None
-        mock_confirm.return_value = ("claude", None, None)
+        mock_confirm.return_value = ("claude", None, None, False)
         mock_delegate.return_value = DelegationResult(
             success=True,
             feedback="Copy the prompt below...",
@@ -496,7 +496,7 @@ class TestAnalyzeDepsMode:
         mock_resolve_tool.return_value = "claude"
         mock_resolve_model.return_value = None
         mock_resolve_effort.return_value = None
-        mock_confirm.return_value = ("claude", None, None)
+        mock_confirm.return_value = ("claude", None, None, False)
         mock_delegate.return_value = DelegationResult(
             success=True,
             feedback="1 -> 2 # auth before UI",

@@ -37,6 +37,7 @@ class CodexAdapter(AbstractAITool):
             headless_flag=None,
             supports_headless=False,
             supports_effort=True,
+            supports_yolo=True,
             supports_resume=True,
         )
 
@@ -71,3 +72,7 @@ class CodexAdapter(AbstractAITool):
         """Codex uses ``-c model_reasoning_effort="<mapped>"``."""
         mapped = _CODEX_EFFORT_MAP.get(effort, effort.value)
         return ["-c", f'model_reasoning_effort="{mapped}"']
+
+    def yolo_args(self) -> list[str]:
+        """Codex uses ``--approval-mode full-auto``."""
+        return ["--approval-mode", "full-auto"]

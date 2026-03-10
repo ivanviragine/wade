@@ -716,15 +716,15 @@ class TestWorkStart:
             ) as mock_bootstrap,
             patch(
                 "wade.services.work_service.confirm_ai_selection",
-                return_value=("claude", "claude-sonnet-4-6", None),
+                return_value=("claude", "claude-sonnet-4-6", None, False),
             ) as mock_confirm,
             patch("wade.services.work_service.prompts") as mock_prompts,
         ):
             call_order: list[str] = []
 
-            def _confirm(*args: object, **kwargs: object) -> tuple[str, str, None]:
+            def _confirm(*args: object, **kwargs: object) -> tuple[str, str, None, bool]:
                 call_order.append("confirm")
-                return ("claude", "claude-sonnet-4-6", None)
+                return ("claude", "claude-sonnet-4-6", None, False)
 
             def _bootstrap(*args: object, **kwargs: object) -> dict[str, object]:
                 call_order.append("bootstrap")

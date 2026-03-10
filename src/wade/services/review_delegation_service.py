@@ -57,7 +57,7 @@ def _run_review_delegation(
 
     # Confirmation prompt (skipped in prompt mode — no AI tool needed)
     if delegation_mode != DelegationMode.PROMPT and resolved_tool:
-        resolved_tool, resolved_model, resolved_effort = confirm_ai_selection(
+        resolved_tool, resolved_model, resolved_effort, _yolo = confirm_ai_selection(
             resolved_tool,
             resolved_model,
             tool_explicit=ai_explicit,

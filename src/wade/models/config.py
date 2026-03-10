@@ -74,6 +74,7 @@ class AICommandConfig(BaseModel):
     model: str | None = None
     effort: str | None = None
     mode: str | None = None
+    yolo: bool | None = None
 
 
 class AIConfig(BaseModel):
@@ -82,6 +83,7 @@ class AIConfig(BaseModel):
     default_tool: str | None = None
     default_model: str | None = None
     effort: str | None = None
+    yolo: bool | None = None
     plan: AICommandConfig = AICommandConfig()
     deps: AICommandConfig = AICommandConfig()
     work: AICommandConfig = AICommandConfig()
@@ -175,3 +177,14 @@ class ProjectConfig(BaseModel):
             if isinstance(cmd_config, AICommandConfig) and cmd_config.effort:
                 return cmd_config.effort
         return self.ai.effort
+
+    def get_yolo(self, command: str | None = None) -> bool | None:
+        """Get the yolo setting for a command, with fallback chain.
+
+        Fallback: command-specific yolo → global ai.yolo → None.
+        """
+        if command:
+            cmd_config = getattr(self.ai, command, None)
+            if isinstance(cmd_config, AICommandConfig) and cmd_config.yolo is not None:
+                return cmd_config.yolo
+        return self.ai.yolo

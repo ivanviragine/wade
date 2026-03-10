@@ -46,6 +46,7 @@ from wade.services.ai_resolution import (
     resolve_ai_tool,
     resolve_effort,
     resolve_model,
+    resolve_yolo,
 )
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import (
@@ -717,6 +718,7 @@ def start(
     effort_explicit: bool = False,
     resume_session_id: str | None = None,
     resume_ai_tool: str | None = None,
+    yolo: bool | None = None,
 ) -> bool:
     """Start a work session on an issue.
 
@@ -820,6 +822,9 @@ def start(
         # Resolve effort level
         resolved_effort = resolve_effort(effort, config, "work", tool=resolved_tool)
 
+        # Resolve YOLO mode
+        resolved_yolo = resolve_yolo(yolo, config, "work", tool=resolved_tool)
+
         # When resuming, override the resolved tool and skip interactive confirmation
         if resume_ai_tool:
             resolved_tool = resume_ai_tool
@@ -827,13 +832,15 @@ def start(
 
         # Offer interactive confirmation (skipped when cd_only or both flags explicit).
         if not cd_only:
-            resolved_tool, resolved_model, resolved_effort = confirm_ai_selection(
+            resolved_tool, resolved_model, resolved_effort, resolved_yolo = confirm_ai_selection(
                 resolved_tool,
                 resolved_model,
                 tool_explicit=ai_explicit,
                 model_explicit=model_explicit,
                 resolved_effort=resolved_effort,
                 effort_explicit=effort_explicit,
+                resolved_yolo=resolved_yolo,
+                yolo_explicit=yolo is not None,
             )
 
         # Resolve main branch and compute worktree path (only needed for worktree creation)
@@ -991,6 +998,7 @@ def start(
                         initial_message=prompt,
                         effort=resolved_effort,
                         allowed_commands=config.permissions.allowed_commands,
+                        yolo=resolved_yolo,
                     )
             except (ValueError, KeyError):
                 cmd = [resolved_tool]
@@ -1050,6 +1058,7 @@ def start(
                         trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
                         effort=resolved_effort,
                         allowed_commands=config.permissions.allowed_commands,
+                        yolo=resolved_yolo,
                     )
 
                 launch_completed = True
@@ -1172,6 +1181,7 @@ def batch(
     model_explicit: bool = False,
     effort: str | None = None,
     effort_explicit: bool = False,
+    yolo: bool | None = None,
 ) -> bool:
     """Start parallel work sessions for multiple issues.
 
@@ -1198,13 +1208,16 @@ def batch(
     resolved_tool = resolve_ai_tool(ai_tool, config, "work")
     resolved_model = resolve_model(model, config, "work", tool=resolved_tool)
     resolved_effort = resolve_effort(effort, config, "work", tool=resolved_tool)
-    resolved_tool, resolved_model, resolved_effort = confirm_ai_selection(
+    resolved_yolo = resolve_yolo(yolo, config, "work", tool=resolved_tool)
+    resolved_tool, resolved_model, resolved_effort, resolved_yolo = confirm_ai_selection(
         resolved_tool,
         resolved_model,
         tool_explicit=ai_explicit,
         model_explicit=model_explicit,
         resolved_effort=resolved_effort,
         effort_explicit=effort_explicit,
+        resolved_yolo=resolved_yolo,
+        yolo_explicit=yolo is not None,
     )
 
     # Check for dependency ordering
@@ -1230,6 +1243,8 @@ def batch(
             cmd.extend(["--model", resolved_model])
         if resolved_effort:
             cmd.extend(["--effort", resolved_effort.value])
+        if resolved_yolo:
+            cmd.append("--yolo")
 
         console.step(f"Launching #{issue_id} ({label}) in new terminal")
         if launch_in_new_terminal(cmd, cwd=str(repo_root), title=f"wade #{issue_id}"):
