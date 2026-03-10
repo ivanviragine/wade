@@ -13,6 +13,11 @@ def register_provider(provider_id: ProviderID, cls: type[AbstractTaskProvider]) 
     _PROVIDER_FACTORIES[provider_id] = cls
 
 
+def registered_provider_names() -> set[str]:
+    """Return the set of provider name strings currently registered."""
+    return {str(pid) for pid in _PROVIDER_FACTORIES}
+
+
 def get_provider(config: ProjectConfig | None = None) -> AbstractTaskProvider:
     """Get the configured task provider.
 

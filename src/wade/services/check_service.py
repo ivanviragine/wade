@@ -18,8 +18,8 @@ from wade.config.loader import (
 from wade.git import repo
 from wade.git.repo import GitError
 from wade.models.ai import AIToolID
-from wade.models.config import ProviderID
 from wade.models.work import MergeStrategy
+from wade.providers import registered_provider_names
 
 logger = structlog.get_logger()
 
@@ -396,7 +396,7 @@ def _validate_models_section(models: dict[str, Any], errors: list[str]) -> None:
 def _validate_provider_section(provider: dict[str, Any], errors: list[str]) -> None:
     """Validate the provider section."""
     name = provider.get("name")
-    valid_providers = {p.value for p in ProviderID}
+    valid_providers = registered_provider_names()
     if name is not None and str(name) not in valid_providers:
         errors.append(
             f"provider.name: '{name}' is not supported. "

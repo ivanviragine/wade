@@ -246,8 +246,8 @@ class ClickUpProvider(AbstractTaskProvider):
             )
             logger.info("clickup.tag_created", name=label.name)
         except APIError as e:
-            # Already exists is fine
-            if e.status_code == 400:
+            # Duplicate tag is fine — any other 400 should surface
+            if e.status_code == 400 and "already exists" in str(e).lower():
                 return
             raise
 
