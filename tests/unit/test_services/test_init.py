@@ -1905,6 +1905,21 @@ class TestPatchConfigProvider:
         config = yaml.safe_load(config_path.read_text())
         assert config["provider"]["api_token_env"] == "NEW_TOKEN"
 
+    def test_patch_handles_scalar_provider(self, tmp_path: Path) -> None:
+        """When provider is a scalar (e.g. 'provider: github'), patch should not crash."""
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nprovider: github\n")
+        _patch_config(
+            config_path,
+            "claude",
+            ComplexityModelMapping(),
+            provider_setup={"name": "clickup", "settings": {"list_id": "1", "team_id": "2"}},
+            force=True,
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["provider"]["name"] == "clickup"
+        assert config["provider"]["settings"]["list_id"] == "1"
+
 
 class TestInitProvider:
     def test_init_non_interactive_defaults_to_github(self, tmp_git_repo: Path) -> None:

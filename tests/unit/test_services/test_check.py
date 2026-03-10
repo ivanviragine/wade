@@ -258,6 +258,20 @@ class TestValidateConfig:
         result = validate_config(tmp_path)
         assert result.is_valid, f"Errors: {result.errors}"
 
+    def test_invalid_review_plan_tool(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nai:\n  review_plan:\n    tool: nonexistent\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("ai.review_plan.tool" in e for e in result.errors)
+
+    def test_invalid_review_implementation_tool(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nai:\n  review_implementation:\n    tool: bad\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("ai.review_implementation.tool" in e for e in result.errors)
+
     def test_output_format_invalid(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"
         config.write_text("version: 99\n")

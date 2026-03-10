@@ -1825,7 +1825,8 @@ def _patch_config(
 
     # Patch provider section
     if provider_setup:
-        provider = raw.get("provider", {}) or {}
+        provider_raw = raw.get("provider")
+        provider = provider_raw if isinstance(provider_raw, dict) else {}
         name = provider_setup.get("name")
         if name and (force or not provider.get("name")):
             old_name = provider.get("name")
@@ -1845,7 +1846,10 @@ def _patch_config(
                 changed = True
             settings = provider_setup.get("settings")
             if settings:
-                existing_settings: dict[str, str] = provider.get("settings", {}) or {}
+                settings_raw = provider.get("settings")
+                existing_settings: dict[str, str] = (
+                    settings_raw if isinstance(settings_raw, dict) else {}
+                )
                 for key, value in settings.items():
                     if value and (force or not existing_settings.get(key)):
                         existing_settings[key] = value
