@@ -12,6 +12,7 @@ from wade.config.loader import ConfigError
 app = typer.Typer(
     name="wade",
     help="AI-agent-driven git workflow management CLI.",
+    epilog="Shorthand: wade <N>  — start working on issue N (routes to implement or review).",
     no_args_is_help=False,
     invoke_without_command=True,
     add_completion=True,
@@ -321,7 +322,7 @@ def cd_cmd(
     raise typer.Exit(0 if success else 1)
 
 
-@app.command("smart-start", rich_help_panel="Workflow")
+@app.command("smart-start", hidden=True)
 def smart_start_cmd(
     target: str = typer.Argument(..., help="Issue number."),
     ai: list[str] | None = typer.Option(  # noqa: B008
@@ -335,7 +336,7 @@ def smart_start_cmd(
         False, "--cd", help="Create worktree and print path (no AI launch)."
     ),
 ) -> None:
-    """Smart start — routes to implement or review pr-comments."""
+    """Internal dispatch for `wade <N>` — routes to implement or review pr-comments."""
     from wade.services.smart_start import smart_start
 
     selected_ai: str | None = None
