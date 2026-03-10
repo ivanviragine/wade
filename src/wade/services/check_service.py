@@ -19,6 +19,7 @@ from wade.git import repo
 from wade.git.repo import GitError
 from wade.models.ai import AIToolID
 from wade.models.work import MergeStrategy
+from wade.providers import registered_provider_names
 
 logger = structlog.get_logger()
 
@@ -345,7 +346,7 @@ def _validate_ai_section(ai: dict[str, Any], errors: list[str]) -> None:
         )
 
     # Validate per-command sections
-    for cmd in ("plan", "deps", "work"):
+    for cmd in ("plan", "deps", "work", "review_plan", "review_implementation"):
         cmd_section = ai.get(cmd)
         if cmd_section is not None:
             if not isinstance(cmd_section, dict):
@@ -358,7 +359,16 @@ def _validate_ai_section(ai: dict[str, Any], errors: list[str]) -> None:
                         f"Use one of: {', '.join(sorted(_VALID_AI_TOOLS))}"
                     )
 
-    valid_keys = {"default_tool", "default_model", "plan", "deps", "work"}
+    valid_keys = {
+        "default_tool",
+        "default_model",
+        "effort",
+        "plan",
+        "deps",
+        "work",
+        "review_plan",
+        "review_implementation",
+    }
     for key in ai:
         if key not in valid_keys:
             errors.append(f"ai.{key}: unsupported key")
@@ -395,14 +405,18 @@ def _validate_models_section(models: dict[str, Any], errors: list[str]) -> None:
 def _validate_provider_section(provider: dict[str, Any], errors: list[str]) -> None:
     """Validate the provider section."""
     name = provider.get("name")
-    valid_providers = {"github"}  # Only GitHub is supported now
+    valid_providers = registered_provider_names()
     if name is not None and str(name) not in valid_providers:
         errors.append(
-            f"provider.name: '{name}' is not yet supported. "
-            f"Currently supported: {', '.join(sorted(valid_providers))}"
+            f"provider.name: '{name}' is not supported. "
+            f"Supported: {', '.join(sorted(valid_providers))}"
         )
 
-    valid_keys = {"name", "project", "api_token_env"}
+    settings = provider.get("settings")
+    if settings is not None and not isinstance(settings, dict):
+        errors.append("provider.settings: must be a mapping of key-value pairs")
+
+    valid_keys = {"name", "project", "api_token_env", "settings"}
     for key in provider:
         if key not in valid_keys:
             errors.append(f"provider.{key}: unsupported key")

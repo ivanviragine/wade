@@ -106,8 +106,33 @@ def init(
     installed_tools = [str(t) for t in AbstractAITool.detect_installed()]
 
     # Interactive wizard — all prompts before any writes
+
+    # Detect existing provider for re-init pre-selection
+    config_path = root / ".wade.yml"
+    current_provider: str | None = None
+    if config_path.exists():
+        try:
+            existing_raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            if isinstance(existing_raw, dict):
+                provider_raw = existing_raw.get("provider")
+                if isinstance(provider_raw, dict):
+                    current_provider = provider_raw.get("name")
+        except (yaml.YAMLError, OSError):
+            pass
+
+    provider_setup = _prompt_provider_setup(
+        root, non_interactive, current_provider=current_provider
+    )
+
     project_settings = _prompt_project_settings(root, non_interactive)
     hooks_setup = _prompt_hooks_setup(non_interactive)
+
+    # If provider setup requested adding .env to copy_to_worktree, inject it
+    if provider_setup.get("add_env_to_copy"):
+        copy_list: list[str] = hooks_setup.get("copy_to_worktree", [])
+        if ".env" not in copy_list:
+            copy_list.append(".env")
+        hooks_setup["copy_to_worktree"] = copy_list
     try:
         selected_tool, default_model, default_effort = _prompt_ai_section(ai_tool, non_interactive)
     except ValueError as exc:
@@ -141,7 +166,6 @@ def init(
         console.rule("Initing")
 
     # Generate config
-    config_path = root / ".wade.yml"
     if config_path.exists():
         console.info("Config .wade.yml already exists — updating with selected values")
         _patch_config(
@@ -155,6 +179,7 @@ def init(
             command_overrides=command_overrides,
             hooks_setup=hooks_setup,
             force=not non_interactive,
+            provider_setup=provider_setup,
         )
     else:
         _write_config(
@@ -167,6 +192,7 @@ def init(
             default_effort=default_effort,
             command_overrides=command_overrides,
             hooks_setup=hooks_setup,
+            provider_setup=provider_setup,
         )
         console.success(f"Created {config_path.name}")
 
@@ -925,6 +951,223 @@ def _normalize_mapping(
     )
 
 
+def _check_gh_auth() -> bool:
+    """Check whether the ``gh`` CLI is authenticated."""
+    import subprocess
+
+    try:
+        subprocess.run(
+            ["gh", "auth", "status"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def _validate_clickup_token(token: str) -> bool:
+    """Validate a ClickUp API token by hitting the authenticated user endpoint."""
+    from wade.utils.http import HTTPClient
+
+    try:
+        with HTTPClient(
+            base_url="https://api.clickup.com",
+            headers={"Authorization": token, "Content-Type": "application/json"},
+            timeout=10.0,
+        ) as client:
+            client.get("/api/v2/user")
+        return True
+    except Exception:
+        return False
+
+
+def _save_token_to_env(
+    project_root: Path,
+    env_var: str,
+    token: str,
+) -> bool:
+    """Append a token to the project's ``.env`` file (skip if already present).
+
+    Returns ``True`` when the file was written (or already had the var),
+    ``False`` on write failure.
+    """
+    import re
+
+    env_path = project_root / ".env"
+    if env_path.exists():
+        content = env_path.read_text(encoding="utf-8")
+        if re.search(rf"^{re.escape(env_var)}=", content, re.MULTILINE):
+            console.info(f"{env_var} already present in .env")
+            return True
+    else:
+        content = ""
+
+    try:
+        with env_path.open("a", encoding="utf-8") as f:
+            if content and not content.endswith("\n"):
+                f.write("\n")
+            f.write(f"{env_var}={token}\n")
+    except OSError as exc:
+        console.warn(f"Could not write to .env: {exc}")
+        return False
+
+    console.success(f"Token saved to .env as {env_var}")
+
+    # Check if .env is gitignored
+    gitignore_path = project_root / ".gitignore"
+    env_ignored = False
+    if gitignore_path.exists():
+        for line in gitignore_path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped in (".env", ".env/", "/.env"):
+                env_ignored = True
+                break
+    if not env_ignored:
+        console.hint("Consider adding .env to your .gitignore to avoid committing secrets")
+    return True
+
+
+def _prompt_provider_setup(
+    project_root: Path,
+    non_interactive: bool,
+    current_provider: str | None = None,
+) -> dict[str, Any]:
+    """Collect task provider selection and authentication setup.
+
+    Returns a dict with keys: name, api_token_env (optional),
+    settings (optional), add_env_to_copy (optional).
+    """
+    import subprocess
+    import webbrowser
+
+    from wade.ui import prompts
+
+    default_result: dict[str, Any] = {"name": "github"}
+
+    if non_interactive:
+        return default_result
+
+    console.rule("Provider")
+
+    providers = ["GitHub Issues", "ClickUp"]
+    hints = ["gh CLI", "API token"]
+    default_idx = 0
+    if current_provider == "clickup":
+        default_idx = 1
+
+    idx = prompts.select("Task management provider", providers, default=default_idx, hints=hints)
+
+    # --- GitHub path ---
+    if idx == 0:
+        if _check_gh_auth():
+            console.success("GitHub CLI authenticated")
+        else:
+            console.warn("GitHub CLI is not authenticated")
+            if prompts.confirm("Set up GitHub authentication now?", default=True):
+                console.info("Running gh auth login...")
+                try:
+                    subprocess.run(["gh", "auth", "login"], check=False)
+                except FileNotFoundError:
+                    console.error_with_fix(
+                        "gh CLI is not installed",
+                        "Install it from https://cli.github.com/",
+                    )
+                    return {"name": "github"}
+                if _check_gh_auth():
+                    console.success("GitHub CLI authenticated")
+                else:
+                    console.hint("Run 'gh auth login' before using wade commands")
+            else:
+                console.hint("Run 'gh auth login' or set GH_TOKEN before using wade commands")
+        return {"name": "github"}
+
+    # --- ClickUp path ---
+    console.info("To get your ClickUp API token:")
+    console.detail("1. Go to https://app.clickup.com/settings/apps")
+    console.detail('2. Under "API Token", click Generate')
+    console.detail("3. Copy the token (starts with pk_)")
+
+    if prompts.confirm("Open ClickUp settings in browser?", default=True):
+        webbrowser.open("https://app.clickup.com/settings/apps")
+
+    # Prompt for token with validation
+    token = ""
+    token_validated = False
+    for attempt in range(3):
+        token = prompts.input_prompt("ClickUp API token").strip()
+        if not token:
+            if attempt < 2:
+                console.warn("Token cannot be empty — try again")
+            continue
+        if _validate_clickup_token(token):
+            console.success("ClickUp token validated")
+            token_validated = True
+            break
+        if attempt < 2:
+            console.warn("Token validation failed — check the token and try again")
+        else:
+            console.warn("Token validation failed — continuing anyway")
+
+    if not token and not token_validated:
+        console.error("No token provided — falling back to GitHub")
+        return {"name": "github"}
+
+    # Env var name — validate format
+    import re
+
+    env_var = ""
+    while not env_var:
+        candidate = prompts.input_prompt(
+            "Environment variable name for the token", default="CLICKUP_API_TOKEN"
+        )
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", candidate):
+            env_var = candidate
+        else:
+            console.warn("Invalid env var name — use letters, digits, and underscores only")
+
+    # Offer to save to .env
+    add_env_to_copy = False
+    if (
+        token
+        and prompts.confirm("Save token to .env file? (recommended — never committed to git)")
+        and _save_token_to_env(project_root, env_var, token)
+    ):
+        add_env_to_copy = True
+
+    # Required IDs — re-prompt until non-empty
+    team_id = ""
+    while not team_id:
+        team_id = prompts.input_prompt("ClickUp team/workspace ID").strip()
+        if not team_id:
+            console.warn("Team/workspace ID is required")
+    list_id = ""
+    while not list_id:
+        list_id = prompts.input_prompt("ClickUp list ID").strip()
+        if not list_id:
+            console.warn("List ID is required")
+
+    # Optional space ID
+    space_id = prompts.input_prompt(
+        "ClickUp space ID",
+        default="",
+        allow_empty=True,
+    ).strip()
+
+    settings: dict[str, str] = {"team_id": team_id, "list_id": list_id}
+    if space_id:
+        settings["space_id"] = space_id
+
+    return {
+        "name": "clickup",
+        "api_token_env": env_var,
+        "settings": settings,
+        "add_env_to_copy": add_env_to_copy,
+    }
+
+
 def _prompt_project_settings(
     project_root: Path,
     non_interactive: bool,
@@ -1320,6 +1563,7 @@ def _write_config(
     default_effort: str | None = None,
     command_overrides: dict[str, dict[str, str]] | None = None,
     hooks_setup: dict[str, Any] | None = None,
+    provider_setup: dict[str, Any] | None = None,
 ) -> None:
     """Write a fresh .wade.yml config file."""
     config_dict: dict[str, Any] = {"version": 2}
@@ -1386,7 +1630,15 @@ def _write_config(
             }
         }
 
-    config_dict["provider"] = {"name": "github"}
+    # Build provider section from setup results
+    provider_name = provider_setup.get("name", "github") if provider_setup else "github"
+    provider_dict: dict[str, Any] = {"name": provider_name}
+    if provider_setup:
+        if provider_setup.get("api_token_env"):
+            provider_dict["api_token_env"] = provider_setup["api_token_env"]
+        if provider_setup.get("settings"):
+            provider_dict["settings"] = provider_setup["settings"]
+    config_dict["provider"] = provider_dict
 
     # Build permissions section with auto-detected scripts
     allowed_commands = _build_permissions_commands(config_path.parent)
@@ -1421,6 +1673,7 @@ def _patch_config(
     command_overrides: dict[str, dict[str, str]] | None = None,
     hooks_setup: dict[str, Any] | None = None,
     force: bool = False,
+    provider_setup: dict[str, Any] | None = None,
 ) -> None:
     """Patch values into an existing config.
 
@@ -1569,6 +1822,41 @@ def _patch_config(
         changed = True
     hooks["copy_to_worktree"] = copy_list
     raw["hooks"] = hooks
+
+    # Patch provider section
+    if provider_setup:
+        provider_raw = raw.get("provider")
+        provider = provider_raw if isinstance(provider_raw, dict) else {}
+        name = provider_setup.get("name")
+        if name and (force or not provider.get("name")):
+            old_name = provider.get("name")
+            provider["name"] = name
+            changed = True
+            # When force-switching providers, clean up keys from the old provider
+            if force and old_name != name:
+                for orphan_key in ("api_token_env", "settings"):
+                    if orphan_key not in provider_setup and orphan_key in provider:
+                        del provider[orphan_key]
+        # Only merge provider-specific fields when the effective provider matches
+        effective_name = provider.get("name")
+        if effective_name == provider_setup.get("name"):
+            token_env = provider_setup.get("api_token_env")
+            if token_env and (force or not provider.get("api_token_env")):
+                provider["api_token_env"] = token_env
+                changed = True
+            settings = provider_setup.get("settings")
+            if settings:
+                settings_raw = provider.get("settings")
+                existing_settings: dict[str, str] = (
+                    settings_raw if isinstance(settings_raw, dict) else {}
+                )
+                for key, value in settings.items():
+                    if value and (force or not existing_settings.get(key)):
+                        existing_settings[key] = value
+                        changed = True
+                if existing_settings:
+                    provider["settings"] = existing_settings
+        raw["provider"] = provider
 
     if changed:
         config_path.write_text(
