@@ -58,7 +58,8 @@ src/wade/
 │   ├── task.py          # task create/list/read/update/close/deps
 │   ├── worktree.py      # worktree list/remove/cd (interactive menu)
 │   ├── implementation_session.py  # implementation-session check/sync/done
-│   ├── address_reviews_session.py # address-reviews-session check/sync/done/fetch/resolve
+│   ├── review_pr_comments_session.py # review-pr-comments-session check/sync/done/fetch/resolve
+│   ├── review.py        # review plan/implementation/pr-comments
 │   ├── plan_session.py  # plan-session done
 │   └── autocomplete.py  # Shell autocompletion helpers
 ├── models/              # Pydantic domain models (pure data, no I/O)
@@ -128,11 +129,11 @@ src/wade/
 
 ## Command Dispatch
 
-`src/wade/cli/main.py` is the root Typer application. It registers subcommand groups (`task`, `worktree`, `plan-session`, `implementation-session`, `address-reviews-session`) and admin commands (`init`, `update`, `deinit`, `check`, `check-config`, `shell-init`). The `tasks` alias is registered as a hidden Typer group pointing to the same `task_app`. The `wade` entry point (defined in `pyproject.toml` as `wade.cli.main:cli_main`) invokes the root app.
+`src/wade/cli/main.py` is the root Typer application. It registers subcommand groups (`task`, `worktree`, `plan-session`, `implementation-session`, `review-pr-comments-session`, `review`) and admin commands (`init`, `update`, `deinit`, `check`, `check-config`, `shell-init`). The `tasks` alias is registered as a hidden Typer group pointing to the same `task_app`. The `wade` entry point (defined in `pyproject.toml` as `wade.cli.main:cli_main`) invokes the root app.
 
 CLI modules are **thin dispatch layers** — they parse flags via Typer, then call service methods. Business logic lives in `services/`, not in `cli/`.
 
-**Interactive menus**: `wade task` and `wade worktree` with no subcommand show interactive menus. `wade task create` prompts interactively for title and body. Top-level commands `plan`, `implement`, `implement-batch`, `address-reviews`, `cd`, and `smart-start` are registered directly on the root app. Hidden short aliases `p`, `i`, and `r` map to `plan`, `implement`, and `address-reviews` respectively.
+**Interactive menus**: `wade task` and `wade worktree` with no subcommand show interactive menus. `wade task create` prompts interactively for title and body. Top-level commands `plan`, `implement`, `implement-batch`, `cd`, and `smart-start` are registered directly on the root app. The `review` subcommand group provides `plan`, `implementation`, and `pr-comments` commands. Hidden short aliases `p`, `i`, and `r` map to `plan`, `implement`, and `review pr-comments` respectively.
 
 **Shell integration**: `wade shell-init` outputs a shell function wrapper for `eval "$(wade shell-init)"` that intercepts `wade cd <n>` and `wade worktree cd <n>` to perform a real `cd` in the caller's shell.
 

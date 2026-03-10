@@ -8,7 +8,7 @@ Every change **must** include documentation updates as part of the implementatio
 
 1. **`AGENTS.md`** — Update if the change affects architecture, commands, conventions, design principles, or development workflow.
 2. **`README.md`** — Update if the change affects user-facing behavior: new commands, flags, install steps, configuration options, or supported tools.
-3. **`templates/skills/plan-session/SKILL.md`** / **`templates/skills/implementation-session/SKILL.md`** / **`templates/skills/address-reviews-session/SKILL.md`** — *(inited-project artifacts)* Update if the change affects phase-specific session rules (planning rules in plan-session, implementation rules in implementation-session, review rules in address-reviews-session).
+3. **`templates/skills/plan-session/SKILL.md`** / **`templates/skills/implementation-session/SKILL.md`** / **`templates/skills/review-pr-comments-session/SKILL.md`** — *(inited-project artifacts)* Update if the change affects phase-specific session rules (planning rules in plan-session, implementation rules in implementation-session, review rules in review-pr-comments-session).
 4. **`templates/skills/`** (task, deps) — *(inited-project artifacts)* Update if the change affects how AI agents in inited projects should use wade commands. This is where command references, flags, workflows, and examples belong.
 5. **`templates/agents-pointer.md`** — *(inited-project artifact)* The pointer text that `wade init` injects into target projects' `AGENTS.md`. Update this when the critical inline rules or pointer wording changes. **This is not the same as this repo's own `## Git Workflow` section** — that is the self-installed copy, written once by `wade init` and never overwritten by `wade update`.
 6. **`docs/dev/`** — Update the relevant supplementary doc if the change affects architecture details, testing patterns, extension guides, or skills system internals.
@@ -23,10 +23,10 @@ Before considering any work complete, verify each item:
 - [ ] **Types + Lint** — `./scripts/check.sh` passes (or run both at once: `./scripts/check-all.sh`)
 - [ ] **`AGENTS.md`** — updated if architecture, conventions, design principles, or workflow changed
 - [ ] **`README.md`** — updated if user-facing behavior changed (commands, flags, config, install)
-- [ ] **`templates/skills/plan-session/SKILL.md`** / **`implementation-session/SKILL.md`** / **`address-reviews-session/SKILL.md`** — updated if phase-specific session rules changed
+- [ ] **`templates/skills/plan-session/SKILL.md`** / **`implementation-session/SKILL.md`** / **`review-pr-comments-session/SKILL.md`** — updated if phase-specific session rules changed
 - [ ] **`templates/agents-pointer.md`** — updated if the critical inline rules or pointer wording changed
 - [ ] **`templates/skills/`** (task, deps) — updated if agent-facing command workflows, flags, or examples changed
-- [ ] **Phase skills** *(inited-project artifacts)* — planning rules go in plan-session, implementation rules go in implementation-session, review rules go in address-reviews-session, AGENTS.md pointer stays minimal
+- [ ] **Phase skills** *(inited-project artifacts)* — planning rules go in plan-session, implementation rules go in implementation-session, review rules go in review-pr-comments-session, AGENTS.md pointer stays minimal
 - [ ] **`docs/dev/`** — updated if architecture details, testing patterns, extension guides, or skills system docs changed
 - [ ] **Commit** — uses conventional-commit prefix for correct auto-versioning
 

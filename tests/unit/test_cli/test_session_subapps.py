@@ -2,7 +2,7 @@
 
 Covers the new CLI modules introduced in #109:
 - implementation-session (check, sync, done)
-- address-reviews-session (check, sync, done, fetch, resolve)
+- review-pr-comments-session (check, sync, done, fetch, resolve)
 - plan-session (done)
 - worktree (list, remove, cd)
 - top-level cd
@@ -55,39 +55,39 @@ class TestImplementationSessionSubApp:
 
 
 # ---------------------------------------------------------------------------
-# Address-reviews session sub-app
+# Review PR comments session sub-app
 # ---------------------------------------------------------------------------
 
 
-class TestAddressReviewsSessionSubApp:
-    """Tests for ``wade address-reviews-session`` sub-app."""
+class TestReviewPrCommentsSessionSubApp:
+    """Tests for ``wade review-pr-comments-session`` sub-app."""
 
     def test_check_not_in_repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(app, ["address-reviews-session", "check"])
+        result = runner.invoke(app, ["review-pr-comments-session", "check"])
         assert result.exit_code == 1
         assert "NOT_IN_GIT_REPO" in result.output
 
     def test_sync_not_in_repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(app, ["address-reviews-session", "sync"])
+        result = runner.invoke(app, ["review-pr-comments-session", "sync"])
         assert result.exit_code == 4
 
     def test_done_no_issue(self) -> None:
         with patch("wade.git.repo.get_current_branch", return_value="main"):
-            result = runner.invoke(app, ["address-reviews-session", "done"])
+            result = runner.invoke(app, ["review-pr-comments-session", "done"])
         assert result.exit_code == 1
 
     def test_fetch_requires_target(self) -> None:
-        result = runner.invoke(app, ["address-reviews-session", "fetch"])
+        result = runner.invoke(app, ["review-pr-comments-session", "fetch"])
         assert result.exit_code != 0
 
     def test_resolve_requires_thread_id(self) -> None:
-        result = runner.invoke(app, ["address-reviews-session", "resolve"])
+        result = runner.invoke(app, ["review-pr-comments-session", "resolve"])
         assert result.exit_code != 0
 
     def test_help_shows_all_commands(self) -> None:
-        result = runner.invoke(app, ["address-reviews-session", "--help"])
+        result = runner.invoke(app, ["review-pr-comments-session", "--help"])
         assert result.exit_code == 0
         for cmd in ("check", "sync", "done", "fetch", "resolve"):
             assert cmd in result.output
@@ -184,7 +184,7 @@ class TestShortAliases:
         mock_start.assert_called_once()
         assert mock_start.call_args.kwargs.get("target") == "42"
 
-    def test_r_alias_invokes_address_reviews(self) -> None:
+    def test_r_alias_invokes_review_pr_comments(self) -> None:
         with patch("wade.services.review_service.start", return_value=True) as mock_start:
             result = runner.invoke(app, ["r", "42"])
         assert result.exit_code == 0

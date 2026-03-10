@@ -598,7 +598,7 @@ def _post_work_lifecycle_pr(
 
     if choice == 1:  # Wait for reviews
         issue_hint = f" {issue_number}" if issue_number else ""
-        console.hint(f"Run `wade address-reviews{issue_hint}` when reviews come in.")
+        console.hint(f"Run `wade review pr-comments{issue_hint}` when reviews come in.")
         return
 
     # Merge flow

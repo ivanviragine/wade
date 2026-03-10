@@ -74,7 +74,7 @@ class TestSelectiveSkillInstallation:
         assert (skills_dir / "deps").is_dir()
         assert not (skills_dir / "implementation-session").exists()
         assert not (skills_dir / "plan-session").exists()
-        assert not (skills_dir / "address-reviews-session").exists()
+        assert not (skills_dir / "review-pr-comments-session").exists()
 
         # Installed list should only contain task and deps entries (plus cross-tool)
         skill_entries = [e for e in installed if "skills/" in e and "cross" not in e.lower()]
@@ -92,16 +92,16 @@ class TestSelectiveSkillInstallation:
         assert (skills_dir / "task").is_dir()
         assert not (skills_dir / "plan-session").exists()
         assert not (skills_dir / "deps").exists()
-        assert not (skills_dir / "address-reviews-session").exists()
+        assert not (skills_dir / "review-pr-comments-session").exists()
 
     def test_selective_install_review_skills(self, tmp_git_repo: Path) -> None:
-        """REVIEW_SKILLS installs only address-reviews-session and task."""
+        """REVIEW_SKILLS installs only review-pr-comments-session and task."""
         from wade.skills.installer import REVIEW_SKILLS, install_skills
 
         install_skills(tmp_git_repo, skills=REVIEW_SKILLS)
 
         skills_dir = tmp_git_repo / ".claude" / "skills"
-        assert (skills_dir / "address-reviews-session").is_dir()
+        assert (skills_dir / "review-pr-comments-session").is_dir()
         assert (skills_dir / "task").is_dir()
         assert not (skills_dir / "plan-session").exists()
         assert not (skills_dir / "deps").exists()
@@ -118,7 +118,7 @@ class TestSelectiveSkillInstallation:
         assert (skills_dir / "task").is_dir()
         assert (skills_dir / "deps").is_dir()
         assert not (skills_dir / "implementation-session").exists()
-        assert not (skills_dir / "address-reviews-session").exists()
+        assert not (skills_dir / "review-pr-comments-session").exists()
 
     def test_selective_install_deps_skills(self, tmp_git_repo: Path) -> None:
         """DEPS_SKILLS installs only deps."""
@@ -182,7 +182,7 @@ class TestSelectiveSkillInstallation:
 
         # Second install: review skills (simulates worktree reuse)
         install_skills(tmp_git_repo, skills=REVIEW_SKILLS)
-        assert (skills_dir / "address-reviews-session").is_dir()
+        assert (skills_dir / "review-pr-comments-session").is_dir()
         assert (skills_dir / "task").is_dir()
         # Stale skill from first install should be gone
         assert not (skills_dir / "implementation-session").exists(), (
