@@ -44,6 +44,7 @@ class CursorAdapter(AbstractAITool):
             headless_flag="--print",
             supports_headless=True,
             supports_effort=True,
+            supports_yolo=True,
         )
 
     def initial_message_args(self, prompt: str) -> list[str]:
@@ -57,6 +58,10 @@ class CursorAdapter(AbstractAITool):
     def plan_mode_args(self) -> list[str]:
         """Cursor supports ``--mode plan``."""
         return ["--mode", "plan"]
+
+    def yolo_args(self) -> list[str]:
+        """Cursor uses ``--force`` (``--yolo`` is an alias)."""
+        return ["--force"]
 
     def resolve_effort_model(self, model: str | None, effort: EffortLevel) -> str | None:
         """For high/max effort, append ``-thinking`` to the model ID."""

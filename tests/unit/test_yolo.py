@@ -113,17 +113,17 @@ class TestAdapterYoloArgs:
         result = CodexAdapter().yolo_args()
         assert result == ["--approval-mode", "full-auto"]
 
-    def test_copilot_yolo_args_empty(self) -> None:
+    def test_copilot_yolo_args(self) -> None:
         from wade.ai_tools.copilot import CopilotAdapter
 
         result = CopilotAdapter().yolo_args()
-        assert result == []
+        assert result == ["--yolo"]
 
-    def test_cursor_yolo_args_empty(self) -> None:
+    def test_cursor_yolo_args(self) -> None:
         from wade.ai_tools.cursor import CursorAdapter
 
         result = CursorAdapter().yolo_args()
-        assert result == []
+        assert result == ["--force"]
 
     def test_opencode_yolo_args_empty(self) -> None:
         from wade.ai_tools.opencode import OpenCodeAdapter
@@ -153,15 +153,15 @@ class TestAdapterSupportsYolo:
 
         assert CodexAdapter().capabilities().supports_yolo is True
 
-    def test_copilot_does_not_support_yolo(self) -> None:
+    def test_copilot_supports_yolo(self) -> None:
         from wade.ai_tools.copilot import CopilotAdapter
 
-        assert CopilotAdapter().capabilities().supports_yolo is False
+        assert CopilotAdapter().capabilities().supports_yolo is True
 
-    def test_cursor_does_not_support_yolo(self) -> None:
+    def test_cursor_supports_yolo(self) -> None:
         from wade.ai_tools.cursor import CursorAdapter
 
-        assert CursorAdapter().capabilities().supports_yolo is False
+        assert CursorAdapter().capabilities().supports_yolo is True
 
     def test_opencode_does_not_support_yolo(self) -> None:
         from wade.ai_tools.opencode import OpenCodeAdapter
@@ -195,6 +195,18 @@ class TestBuildLaunchCommandYolo:
         idx = cmd.index("--approval-mode")
         assert cmd[idx + 1] == "full-auto"
 
+    def test_copilot_yolo_includes_flag(self) -> None:
+        from wade.ai_tools.copilot import CopilotAdapter
+
+        cmd = CopilotAdapter().build_launch_command(yolo=True)
+        assert "--yolo" in cmd
+
+    def test_cursor_yolo_includes_flag(self) -> None:
+        from wade.ai_tools.cursor import CursorAdapter
+
+        cmd = CursorAdapter().build_launch_command(yolo=True)
+        assert "--force" in cmd
+
     def test_yolo_false_excludes_flag(self) -> None:
         from wade.ai_tools.claude import ClaudeAdapter
 
@@ -213,12 +225,15 @@ class TestBuildLaunchCommandYolo:
     def test_yolo_unsupported_falls_back_to_plan_mode(self) -> None:
         """When yolo=True but tool doesn't support it, plan_mode_args should
         still be used."""
-        from wade.ai_tools.cursor import CursorAdapter
+        from wade.ai_tools.opencode import OpenCodeAdapter
 
-        cmd = CursorAdapter().build_launch_command(plan_mode=True, yolo=True)
-        # Cursor doesn't support yolo → should fall back to plan mode
-        assert "--mode" in cmd
-        assert "plan" in cmd
+        cmd = OpenCodeAdapter().build_launch_command(plan_mode=True, yolo=True)
+        # OpenCode doesn't support yolo → should fall back to plan mode
+        # OpenCode has no plan_mode_args, so plan_mode flag has no effect,
+        # but the key assertion is that yolo_args are NOT in the command
+        assert "--force" not in cmd
+        assert "--dangerously-skip-permissions" not in cmd
+        assert "--yolo" not in cmd
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +292,7 @@ class TestResolveYolo:
         from wade.services.ai_resolution import resolve_yolo
 
         config = ProjectConfig()
-        result = resolve_yolo(True, config, "work", tool="copilot")
+        result = resolve_yolo(True, config, "work", tool="opencode")
         assert result is False
 
     def test_supported_tool_returns_true(self) -> None:
@@ -294,5 +309,5 @@ class TestResolveYolo:
         from wade.services.ai_resolution import resolve_yolo
 
         config = ProjectConfig()
-        resolve_yolo(True, config, "work", tool="copilot")
+        resolve_yolo(True, config, "work", tool="opencode")
         assert mock_logger.warning.called  # type: ignore[union-attr]
