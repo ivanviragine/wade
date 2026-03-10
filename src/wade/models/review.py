@@ -39,10 +39,6 @@ class ReviewThread(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# CodeRabbit AI-agent prompt extraction
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
 # Review bot status detection
 # ---------------------------------------------------------------------------
 
@@ -68,19 +64,27 @@ def detect_coderabbit_review_status(
     Returns:
         A :class:`ReviewBotStatus` if CodeRabbit is mid-review, else ``None``.
     """
-    # Find CodeRabbit comments (newest first to get latest status)
-    coderabbit_bodies: list[str] = [
-        c["body"] for c in reversed(comments) if "coderabbit" in c.get("login", "").lower()
-    ]
+    # Find the latest CodeRabbit comment (last in the list = most recent)
+    latest_body: str | None = None
+    for c in reversed(comments):
+        if "coderabbit" in c.get("login", "").lower():
+            latest_body = c.get("body", "")
+            break
 
-    for body in coderabbit_bodies:
-        if "review paused by coderabbit.ai" in body:
-            return ReviewBotStatus.PAUSED
-        if "review in progress by coderabbit.ai" in body:
-            return ReviewBotStatus.IN_PROGRESS
+    if latest_body is None:
+        return None
+
+    if "review paused by coderabbit.ai" in latest_body:
+        return ReviewBotStatus.PAUSED
+    if "review in progress by coderabbit.ai" in latest_body:
+        return ReviewBotStatus.IN_PROGRESS
 
     return None
 
+
+# ---------------------------------------------------------------------------
+# CodeRabbit AI-agent prompt extraction
+# ---------------------------------------------------------------------------
 
 _CODERABBIT_PROMPT_RE = re.compile(
     r"<details>\s*<summary>🤖\s*Prompt for AI Agents</summary>\s*(.*?)\s*</details>",

@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.4.1] — 2026-03-10
+
+### Bug Fixes
+
+- check only latest CodeRabbit comment for review bot status (fd5626e)
+
 ## [v0.4.0] — 2026-03-10
 
 ### Features
