@@ -2,24 +2,23 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from wade.models.config import ProjectConfig, ProjectSettings
+from wade.models.delegation import DelegationMode, DelegationResult
 from wade.models.deps import DependencyEdge, DependencyGraph
 from wade.models.task import Task, TaskState
 from wade.services.deps_service import (
     _find_existing_tracking_issue,
-    _run_interactive_analysis,
+    _run_delegation,
+    analyze_deps,
     apply_deps_to_issues,
     build_context,
     build_deps_prompt,
     build_deps_section,
     create_tracking_issue,
     get_deps_prompt_template,
-    output_is_parseable,
     parse_deps_output,
-    run_headless_analysis,
     strip_deps_section,
 )
 
@@ -119,20 +118,6 @@ class TestParseEdges:
         text = "1 -> 2 # valid\n1 -> 99 # invalid\n3 -> 2 # valid\n"
         edges = parse_deps_output(text, {"1", "2", "3"})
         assert len(edges) == 2
-
-
-class TestOutputParseable:
-    def test_with_edges(self) -> None:
-        assert output_is_parseable("1 -> 2 # reason\n") is True
-
-    def test_with_no_deps_marker(self) -> None:
-        assert output_is_parseable("# No dependencies found\n") is True
-
-    def test_empty_output(self) -> None:
-        assert output_is_parseable("") is False
-
-    def test_prose_only(self) -> None:
-        assert output_is_parseable("These issues are independent.\n") is False
 
 
 # ---------------------------------------------------------------------------
@@ -341,97 +326,188 @@ class TestFindExistingTrackingIssue:
 
 
 # ---------------------------------------------------------------------------
-# Interactive fallback tests
+# Delegation helper tests
 # ---------------------------------------------------------------------------
 
 
-class TestInteractiveFallback:
-    def test_reads_output_file(self, tmp_path: Path) -> None:
-        """_run_interactive_analysis should read deps-output.txt after AI exits."""
-        output_file = tmp_path / "deps-output.txt"
-        output_file.write_text("1 -> 2 # auth before UI\n")
+class TestRunDelegation:
+    """Tests for _run_delegation which wraps the generic delegate() infrastructure."""
 
-        with patch("wade.services.deps_service.AbstractAITool.get") as mock_get:
-            adapter = MagicMock()
-            mock_get.return_value = adapter
+    @patch("wade.services.deps_service.delegate")
+    def test_successful_delegation(self, mock_delegate: MagicMock) -> None:
+        mock_delegate.return_value = DelegationResult(
+            success=True,
+            feedback="1 -> 2 # auth before UI",
+            mode=DelegationMode.HEADLESS,
+        )
+        result = _run_delegation("claude", "Analyze deps", DelegationMode.HEADLESS)
+        assert result == "1 -> 2 # auth before UI"
 
-            result = _run_interactive_analysis("claude", "prompt", None, str(tmp_path))
-            assert result == "1 -> 2 # auth before UI"
+        call_args = mock_delegate.call_args[0][0]
+        assert call_args.mode == DelegationMode.HEADLESS
+        assert call_args.ai_tool == "claude"
+        assert call_args.prompt == "Analyze deps"
 
-    def test_returns_none_when_no_output(self, tmp_path: Path) -> None:
-        """_run_interactive_analysis should return None when no output file."""
-        with patch("wade.services.deps_service.AbstractAITool.get") as mock_get:
-            adapter = MagicMock()
-            mock_get.return_value = adapter
-
-            result = _run_interactive_analysis("claude", "prompt", None, str(tmp_path))
-            assert result is None
-
-    def test_returns_none_for_unknown_tool(self) -> None:
-        """_run_interactive_analysis returns None for unknown AI tool."""
-        result = _run_interactive_analysis("nonexistent-tool", "prompt", None, None)
+    @patch("wade.services.deps_service.delegate")
+    def test_failed_delegation_returns_none(self, mock_delegate: MagicMock) -> None:
+        mock_delegate.return_value = DelegationResult(
+            success=False,
+            feedback="AI tool does not support headless mode",
+            mode=DelegationMode.HEADLESS,
+            exit_code=1,
+        )
+        result = _run_delegation("gemini", "Analyze deps", DelegationMode.HEADLESS)
         assert result is None
 
+    @patch("wade.services.deps_service.delegate")
+    def test_empty_feedback_returns_none(self, mock_delegate: MagicMock) -> None:
+        mock_delegate.return_value = DelegationResult(
+            success=True,
+            feedback="",
+            mode=DelegationMode.HEADLESS,
+        )
+        result = _run_delegation("claude", "Analyze deps", DelegationMode.HEADLESS)
+        assert result is None
+
+    @patch("wade.services.deps_service.delegate")
+    def test_passes_model_and_effort(self, mock_delegate: MagicMock) -> None:
+        mock_delegate.return_value = DelegationResult(
+            success=True,
+            feedback="1 -> 2",
+            mode=DelegationMode.HEADLESS,
+        )
+        _run_delegation(
+            "claude",
+            "Analyze",
+            DelegationMode.HEADLESS,
+            model="claude-haiku-4-5",
+            effort="low",
+        )
+        call_args = mock_delegate.call_args[0][0]
+        assert call_args.model == "claude-haiku-4-5"
+        assert call_args.effort == "low"
+
+    @patch("wade.services.deps_service.delegate")
+    def test_interactive_mode(self, mock_delegate: MagicMock) -> None:
+        mock_delegate.return_value = DelegationResult(
+            success=True,
+            feedback="1 -> 2 # reason",
+            mode=DelegationMode.INTERACTIVE,
+        )
+        result = _run_delegation("claude", "Analyze", DelegationMode.INTERACTIVE)
+        assert result == "1 -> 2 # reason"
+        call_args = mock_delegate.call_args[0][0]
+        assert call_args.mode == DelegationMode.INTERACTIVE
+
 
 # ---------------------------------------------------------------------------
-# Headless command assembly tests
+# analyze_deps mode / prompt tests
 # ---------------------------------------------------------------------------
 
 
-class TestHeadlessCommandAssembly:
-    """Verify run_headless_analysis builds the correct subprocess commands."""
+class TestAnalyzeDepsMode:
+    """Tests for analyze_deps with mode parameter and prompt-mode early return."""
 
-    def test_claude_headless_uses_print_flag(self) -> None:
-        """Claude headless should use --print flag with capture_output=True."""
-        prompt = "Analyze deps between #1 and #2"
+    @patch("wade.services.deps_service.create_tracking_issue")
+    @patch("wade.services.deps_service.apply_deps_to_issues")
+    @patch("wade.services.deps_service.delegate")
+    @patch("wade.services.deps_service.confirm_ai_selection")
+    @patch("wade.services.deps_service.resolve_effort")
+    @patch("wade.services.deps_service.resolve_model")
+    @patch("wade.services.deps_service.resolve_ai_tool")
+    @patch("wade.services.deps_service.get_provider")
+    @patch("wade.services.deps_service.load_config")
+    def test_prompt_mode_returns_empty_graph(
+        self,
+        mock_config: MagicMock,
+        mock_provider: MagicMock,
+        mock_resolve_tool: MagicMock,
+        mock_resolve_model: MagicMock,
+        mock_resolve_effort: MagicMock,
+        mock_confirm: MagicMock,
+        mock_delegate: MagicMock,
+        mock_apply: MagicMock,
+        mock_tracking: MagicMock,
+    ) -> None:
+        """Prompt mode should return empty graph and skip edge parsing."""
+        from wade.models.config import AICommandConfig, AIConfig
 
-        with patch("wade.services.deps_service.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="1 -> 2 # reason\n")
-            result = run_headless_analysis("claude", prompt, "claude-haiku-4-5")
+        mock_config.return_value = ProjectConfig(ai=AIConfig(deps=AICommandConfig(tool="claude")))
+        provider = MagicMock()
+        provider.read_task.side_effect = [
+            Task(id="1", title="Auth", body="Login"),
+            Task(id="2", title="DB", body="Schema"),
+            Task(id="1", title="Auth", body="Login"),
+            Task(id="2", title="DB", body="Schema"),
+        ]
+        mock_provider.return_value = provider
+        mock_resolve_tool.return_value = "claude"
+        mock_resolve_model.return_value = None
+        mock_resolve_effort.return_value = None
+        mock_confirm.return_value = ("claude", None, None)
+        mock_delegate.return_value = DelegationResult(
+            success=True,
+            feedback="Copy the prompt below...",
+            mode=DelegationMode.PROMPT,
+        )
 
-            mock_run.assert_called_once()
-            cmd = mock_run.call_args[0][0]
-            assert cmd[0] == "claude"
-            assert "--model" in cmd
-            assert "claude-haiku-4-5" in cmd
-            assert "--print" in cmd
-            assert prompt in cmd
-            assert mock_run.call_args[1]["capture_output"] is True
-            assert mock_run.call_args[1]["timeout"] == 120
-            assert result == "1 -> 2 # reason\n"
+        result = analyze_deps(["1", "2"], mode="prompt")
+        assert result is not None
+        assert result.edges == []
+        # Edge parsing and apply should be skipped
+        mock_apply.assert_not_called()
+        mock_tracking.assert_not_called()
 
-    def test_copilot_headless_uses_prompt_flag(self) -> None:
-        """Copilot headless should use --prompt flag."""
-        prompt = "Analyze deps"
+    @patch("wade.services.deps_service.create_tracking_issue")
+    @patch("wade.services.deps_service.apply_deps_to_issues")
+    @patch("wade.services.deps_service.delegate")
+    @patch("wade.services.deps_service.confirm_ai_selection")
+    @patch("wade.services.deps_service.resolve_effort")
+    @patch("wade.services.deps_service.resolve_model")
+    @patch("wade.services.deps_service.resolve_ai_tool")
+    @patch("wade.services.deps_service.get_provider")
+    @patch("wade.services.deps_service.load_config")
+    def test_explicit_mode_override(
+        self,
+        mock_config: MagicMock,
+        mock_provider: MagicMock,
+        mock_resolve_tool: MagicMock,
+        mock_resolve_model: MagicMock,
+        mock_resolve_effort: MagicMock,
+        mock_confirm: MagicMock,
+        mock_delegate: MagicMock,
+        mock_apply: MagicMock,
+        mock_tracking: MagicMock,
+    ) -> None:
+        """Explicit mode='headless' should override config mode."""
+        from wade.models.config import AICommandConfig, AIConfig
 
-        with patch("wade.services.deps_service.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="1 -> 2\n")
-            run_headless_analysis("copilot", prompt, "claude-sonnet-4.6")
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(deps=AICommandConfig(tool="claude", mode="prompt"))
+        )
+        provider = MagicMock()
+        provider.read_task.side_effect = [
+            Task(id="1", title="Auth", body="Login"),
+            Task(id="2", title="DB", body="Schema"),
+            Task(id="1", title="Auth", body="Login"),
+            Task(id="2", title="DB", body="Schema"),
+        ]
+        mock_provider.return_value = provider
+        mock_resolve_tool.return_value = "claude"
+        mock_resolve_model.return_value = None
+        mock_resolve_effort.return_value = None
+        mock_confirm.return_value = ("claude", None, None)
+        mock_delegate.return_value = DelegationResult(
+            success=True,
+            feedback="1 -> 2 # auth before UI",
+            mode=DelegationMode.HEADLESS,
+        )
+        mock_apply.return_value = 2
+        mock_tracking.return_value = "10"
 
-            cmd = mock_run.call_args[0][0]
-            assert cmd[0] == "copilot"
-            assert "--prompt" in cmd
-            assert prompt in cmd
-
-    def test_gemini_returns_none_no_headless(self) -> None:
-        """Gemini has no headless support — should return None without calling subprocess."""
-        with patch("wade.services.deps_service.subprocess.run") as mock_run:
-            result = run_headless_analysis("gemini", "prompt", "gemini-2.5-pro")
-            assert result is None
-            mock_run.assert_not_called()
-
-    def test_codex_returns_none_no_headless(self) -> None:
-        """Codex has no headless support — should return None without calling subprocess."""
-        with patch("wade.services.deps_service.subprocess.run") as mock_run:
-            result = run_headless_analysis("codex", "prompt", "o4-mini")
-            assert result is None
-            mock_run.assert_not_called()
-
-    def test_headless_timeout_returns_none(self) -> None:
-        """TimeoutExpired should be caught and return None gracefully."""
-        import subprocess as sp
-
-        with patch("wade.services.deps_service.subprocess.run") as mock_run:
-            mock_run.side_effect = sp.TimeoutExpired(cmd=["claude"], timeout=120)
-            result = run_headless_analysis("claude", "prompt", "claude-haiku-4-5")
-            assert result is None
+        result = analyze_deps(["1", "2"], mode="headless")
+        assert result is not None
+        # Should have parsed the edge since not in prompt mode
+        assert len(result.edges) == 1
+        call_args = mock_delegate.call_args[0][0]
+        assert call_args.mode == DelegationMode.HEADLESS

@@ -484,7 +484,7 @@ def build_work_prompt(task: Task, ai_tool: str | None = None, has_plan: bool = F
     """
     from wade.skills.installer import get_templates_dir
 
-    template_path = get_templates_dir() / "prompts" / "work-context.md"
+    template_path = get_templates_dir() / "prompts" / "implement-context.md"
     if not template_path.is_file():
         raise FileNotFoundError(f"Prompt template not found: {template_path}")
     template = template_path.read_text(encoding="utf-8")
@@ -639,6 +639,7 @@ def _merge_pr(
 
     # Remove the worktree only after a successful merge.
     if worktree_path:
+        _preserve_session_data(repo_root, worktree_path)
         console.step(f"Removing worktree: {worktree_path.name}")
         with contextlib.suppress(Exception):
             git_worktree.remove_worktree(repo_root, worktree_path)

@@ -21,6 +21,14 @@ from wade.models.ai import (
 logger = structlog.get_logger()
 
 
+def _encode_claude_path(path: Path) -> str:
+    """Encode a filesystem path the way Claude Code does for project directories.
+
+    Claude Code replaces ``/`` with ``-`` **and** ``.`` with ``-``.
+    """
+    return str(path).replace("/", "-").replace(".", "-")
+
+
 class ClaudeAdapter(AbstractAITool):
     """Adapter for Claude Code CLI."""
 
@@ -88,8 +96,9 @@ class ClaudeAdapter(AbstractAITool):
         """Copy Claude Code session data from worktree to main checkout's project dir.
 
         Claude Code stores sessions in ``~/.claude/projects/<encoded-path>/``.
-        The path encoding replaces every ``/`` with ``-``, so
-        ``/Users/foo/bar`` becomes ``-Users-foo-bar``.
+        The path encoding replaces every ``/`` with ``-`` **and** every ``.``
+        with ``-``, so ``/Users/foo/.worktrees/bar`` becomes
+        ``-Users-foo--worktrees-bar``.
 
         Files are copied without overwriting any that already exist in the
         main checkout's session directory, so existing memory and settings are
@@ -97,8 +106,8 @@ class ClaudeAdapter(AbstractAITool):
         """
         claude_projects_dir = Path.home() / ".claude" / "projects"
 
-        wt_encoded = str(worktree_path).replace("/", "-")
-        main_encoded = str(main_checkout_path).replace("/", "-")
+        wt_encoded = _encode_claude_path(worktree_path)
+        main_encoded = _encode_claude_path(main_checkout_path)
 
         wt_session_dir = claude_projects_dir / wt_encoded
         main_session_dir = claude_projects_dir / main_encoded

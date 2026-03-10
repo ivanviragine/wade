@@ -84,3 +84,57 @@ class TestReviewImplementationCli:
         runner.invoke(app, ["review", "implementation", "--staged"])
         cmd = mock_run.call_args[0][0]
         assert "--staged" in cmd
+
+
+class TestReviewCliEffortFlag:
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    def test_review_plan_effort_flag(
+        self,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        plan_file = tmp_path / "PLAN.md"
+        plan_file.write_text("# Plan")
+        mock_template.return_value = "{plan_content}"
+
+        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
+
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(review_plan=AICommandConfig(mode="prompt"))
+        )
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.PROMPT
+        )
+
+        result = runner.invoke(app, ["review", "plan", str(plan_file), "--effort", "low"])
+        assert result.exit_code == 0
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    @patch("wade.services.review_delegation_service.run")
+    def test_review_implementation_effort_flag(
+        self,
+        mock_run: MagicMock,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+    ) -> None:
+        mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
+        mock_template.return_value = "{diff_content}"
+
+        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
+
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(review_implementation=AICommandConfig(mode="prompt"))
+        )
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.PROMPT
+        )
+
+        result = runner.invoke(app, ["review", "implementation", "--effort", "high"])
+        assert result.exit_code == 0

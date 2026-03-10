@@ -335,7 +335,7 @@ class TestBuildReviewPrompt:
         # Create a fake templates dir
         prompts_dir = tmp_path / "prompts"
         prompts_dir.mkdir()
-        template = prompts_dir / "review-context.md"
+        template = prompts_dir / "review-pr-comments.md"
         template.write_text(
             "PR #{pr_number} for #{issue_number}: {issue_title}\n"
             "{comment_count} comments in {file_count} files\n"

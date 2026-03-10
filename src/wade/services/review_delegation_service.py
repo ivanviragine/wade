@@ -7,8 +7,15 @@ from pathlib import Path
 import structlog
 
 from wade.config.loader import load_config
+from wade.models.ai import EffortLevel
+from wade.models.config import AICommandConfig
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
-from wade.services.ai_resolution import resolve_ai_tool, resolve_model
+from wade.services.ai_resolution import (
+    confirm_ai_selection,
+    resolve_ai_tool,
+    resolve_effort,
+    resolve_model,
+)
 from wade.services.delegation_service import delegate, resolve_mode
 from wade.skills.installer import load_prompt_template
 from wade.ui.console import console
@@ -17,12 +24,76 @@ from wade.utils.process import run
 logger = structlog.get_logger()
 
 
+def _run_review_delegation(
+    prompt: str,
+    command: str,
+    *,
+    ai_tool: str | None = None,
+    model: str | None = None,
+    mode: str | None = None,
+    effort: str | None = None,
+    ai_explicit: bool = False,
+    model_explicit: bool = False,
+    effort_explicit: bool = False,
+) -> DelegationResult:
+    """Shared pipeline: config load → mode resolve → AI resolve → confirm → delegate → display."""
+    config = load_config()
+    cmd_config: AICommandConfig = getattr(config.ai, command)
+
+    try:
+        delegation_mode = DelegationMode(mode) if mode else resolve_mode(cmd_config)
+    except ValueError:
+        console.error(f"Invalid delegation mode: {mode}")
+        return DelegationResult(
+            success=False,
+            feedback=f"Invalid delegation mode: {mode}",
+            mode=DelegationMode.PROMPT,
+            exit_code=1,
+        )
+
+    resolved_tool = resolve_ai_tool(ai_tool, config, command=command)
+    resolved_model = resolve_model(model, config, command=command, tool=resolved_tool)
+    resolved_effort = resolve_effort(effort, config, command=command, tool=resolved_tool)
+
+    # Confirmation prompt (skipped in prompt mode — no AI tool needed)
+    if delegation_mode != DelegationMode.PROMPT and resolved_tool:
+        resolved_tool, resolved_model, resolved_effort = confirm_ai_selection(
+            resolved_tool,
+            resolved_model,
+            tool_explicit=ai_explicit,
+            model_explicit=model_explicit,
+            resolved_effort=resolved_effort,
+            effort_explicit=effort_explicit,
+        )
+
+    effort_str = resolved_effort.value if isinstance(resolved_effort, EffortLevel) else None
+
+    request = DelegationRequest(
+        mode=delegation_mode,
+        prompt=prompt,
+        ai_tool=resolved_tool,
+        model=resolved_model,
+        effort=effort_str,
+    )
+
+    result = delegate(request)
+    if result.success:
+        console.out.print(result.feedback)
+    else:
+        console.error(result.feedback)
+    return result
+
+
 def review_plan(
     plan_file: str,
     *,
     ai_tool: str | None = None,
     model: str | None = None,
     mode: str | None = None,
+    effort: str | None = None,
+    ai_explicit: bool = False,
+    model_explicit: bool = False,
+    effort_explicit: bool = False,
 ) -> DelegationResult:
     """Review a plan file via the delegation infrastructure."""
     plan_path = Path(plan_file)
@@ -39,36 +110,17 @@ def review_plan(
     template = load_prompt_template("review-plan.md")
     prompt = template.replace("{plan_content}", plan_content)
 
-    config = load_config()
-    cmd_config = config.ai.review_plan
-
-    try:
-        delegation_mode = DelegationMode(mode) if mode else resolve_mode(cmd_config)
-    except ValueError:
-        console.error(f"Invalid delegation mode: {mode}")
-        return DelegationResult(
-            success=False,
-            feedback=f"Invalid delegation mode: {mode}",
-            mode=DelegationMode.PROMPT,
-            exit_code=1,
-        )
-    resolved_tool = resolve_ai_tool(ai_tool, config, command="review_plan")
-    resolved_model = resolve_model(model, config, command="review_plan", tool=resolved_tool)
-
-    request = DelegationRequest(
-        mode=delegation_mode,
-        prompt=prompt,
-        ai_tool=resolved_tool,
-        model=resolved_model,
-        effort=cmd_config.effort,
+    return _run_review_delegation(
+        prompt,
+        "review_plan",
+        ai_tool=ai_tool,
+        model=model,
+        mode=mode,
+        effort=effort,
+        ai_explicit=ai_explicit,
+        model_explicit=model_explicit,
+        effort_explicit=effort_explicit,
     )
-
-    result = delegate(request)
-    if result.success:
-        console.out.print(result.feedback)
-    else:
-        console.error(result.feedback)
-    return result
 
 
 def review_implementation(
@@ -77,6 +129,10 @@ def review_implementation(
     ai_tool: str | None = None,
     model: str | None = None,
     mode: str | None = None,
+    effort: str | None = None,
+    ai_explicit: bool = False,
+    model_explicit: bool = False,
+    effort_explicit: bool = False,
 ) -> DelegationResult:
     """Review implementation changes via the delegation infrastructure."""
     diff_cmd = ["git", "diff"]
@@ -108,35 +164,14 @@ def review_implementation(
     template = load_prompt_template("review-code.md")
     prompt = template.replace("{diff_content}", diff_content)
 
-    config = load_config()
-    cmd_config = config.ai.review_implementation
-
-    try:
-        delegation_mode = DelegationMode(mode) if mode else resolve_mode(cmd_config)
-    except ValueError:
-        console.error(f"Invalid delegation mode: {mode}")
-        return DelegationResult(
-            success=False,
-            feedback=f"Invalid delegation mode: {mode}",
-            mode=DelegationMode.PROMPT,
-            exit_code=1,
-        )
-    resolved_tool = resolve_ai_tool(ai_tool, config, command="review_implementation")
-    resolved_model = resolve_model(
-        model, config, command="review_implementation", tool=resolved_tool
+    return _run_review_delegation(
+        prompt,
+        "review_implementation",
+        ai_tool=ai_tool,
+        model=model,
+        mode=mode,
+        effort=effort,
+        ai_explicit=ai_explicit,
+        model_explicit=model_explicit,
+        effort_explicit=effort_explicit,
     )
-
-    request = DelegationRequest(
-        mode=delegation_mode,
-        prompt=prompt,
-        ai_tool=resolved_tool,
-        model=resolved_model,
-        effort=cmd_config.effort,
-    )
-
-    delegation_result = delegate(request)
-    if delegation_result.success:
-        console.out.print(delegation_result.feedback)
-    else:
-        console.error(delegation_result.feedback)
-    return delegation_result

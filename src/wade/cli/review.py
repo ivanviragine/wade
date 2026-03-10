@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import typer
 
-from wade.cli.autocomplete import complete_ai_tools, complete_delegation_modes, complete_models
+from wade.cli.autocomplete import (
+    complete_ai_tools,
+    complete_delegation_modes,
+    complete_effort_levels,
+    complete_models,
+)
 from wade.models.delegation import DelegationMode
 
 review_app = typer.Typer(
@@ -36,11 +41,23 @@ def review_plan_cmd(
         help="Delegation mode: prompt, interactive, headless.",
         autocompletion=complete_delegation_modes,
     ),
+    effort: str | None = typer.Option(
+        None, "--effort", help="Effort level for AI.", autocompletion=complete_effort_levels
+    ),
 ) -> None:
     """Review a plan file."""
     from wade.services.review_delegation_service import review_plan
 
-    result = review_plan(plan_file, ai_tool=ai, model=model, mode=mode.value if mode else None)
+    result = review_plan(
+        plan_file,
+        ai_tool=ai,
+        model=model,
+        mode=mode.value if mode else None,
+        effort=effort,
+        ai_explicit=ai is not None,
+        model_explicit=model is not None,
+        effort_explicit=effort is not None,
+    )
     raise typer.Exit(0 if result.success else 1)
 
 
@@ -59,12 +76,22 @@ def review_implementation_cmd(
         help="Delegation mode: prompt, interactive, headless.",
         autocompletion=complete_delegation_modes,
     ),
+    effort: str | None = typer.Option(
+        None, "--effort", help="Effort level for AI.", autocompletion=complete_effort_levels
+    ),
 ) -> None:
     """Review code changes."""
     from wade.services.review_delegation_service import review_implementation
 
     result = review_implementation(
-        staged=staged, ai_tool=ai, model=model, mode=mode.value if mode else None
+        staged=staged,
+        ai_tool=ai,
+        model=model,
+        mode=mode.value if mode else None,
+        effort=effort,
+        ai_explicit=ai is not None,
+        model_explicit=model is not None,
+        effort_explicit=effort is not None,
     )
     raise typer.Exit(0 if result.success else 1)
 
