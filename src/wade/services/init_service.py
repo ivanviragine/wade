@@ -1263,20 +1263,27 @@ def _prompt_command_overrides(
             if chosen and chosen != skip_model_label:
                 result[cmd_name]["model"] = chosen
 
-        # For review commands, prompt for delegation mode
-        if cmd_name.startswith("review_"):
+        # For delegation-aware commands, prompt for delegation mode
+        if cmd_name.startswith("review_") or cmd_name == "deps":
             effective_tool = tool_for_cmd[cmd_idx] or default_tool
             if effective_tool:
                 mode_options = [
-                    "prompt (self-review)",
                     "headless (AI one-shot)",
                     "interactive (AI session)",
+                    "prompt (self-review)",
                 ]
-                mode_values = ["prompt", "headless", "interactive"]
+                mode_values = ["headless", "interactive", "prompt"]
+                # deps defaults to headless; review defaults to prompt
+                default_mode_idx = 2 if cmd_name.startswith("review_") else 0
             else:
                 mode_options = ["prompt (self-review)"]
                 mode_values = ["prompt"]
-            mode_idx = prompts.select(f"  Delegation mode for {section.lower()}", mode_options)
+                default_mode_idx = 0
+            mode_idx = prompts.select(
+                f"  Delegation mode for {section.lower()}",
+                mode_options,
+                default=default_mode_idx,
+            )
             result[cmd_name]["mode"] = mode_values[mode_idx]
 
     return result

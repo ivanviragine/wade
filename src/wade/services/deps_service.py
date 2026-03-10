@@ -1,22 +1,20 @@
 """Dependency analysis service — parse, graph, apply, track.
 
-Orchestrates: building context from issues, running AI analysis (headless),
-parsing edges, applying cross-references, and creating tracking issues.
+Orchestrates: building context from issues, running AI analysis via the
+generic delegation infrastructure, parsing edges, applying cross-references,
+and creating tracking issues.
 """
 
 from __future__ import annotations
 
 import re
-import subprocess
-import tempfile
 from pathlib import Path
 
 import structlog
 
-from wade.ai_tools.base import AbstractAITool
 from wade.config.loader import load_config
-from wade.models.ai import AIToolID
 from wade.models.config import ProjectConfig
+from wade.models.delegation import DelegationMode, DelegationRequest
 from wade.models.deps import DependencyEdge, DependencyGraph
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
@@ -26,11 +24,9 @@ from wade.services.ai_resolution import (
     resolve_effort,
     resolve_model,
 )
-from wade.services.prompt_delivery import deliver_prompt_if_needed
+from wade.services.delegation_service import delegate, resolve_mode
 from wade.services.task_service import ensure_task_label
-from wade.ui import prompts
 from wade.ui.console import console
-from wade.utils.process import CommandError, run
 
 logger = structlog.get_logger()
 
@@ -44,13 +40,6 @@ def get_deps_prompt_template() -> str:
     from wade.skills.installer import load_prompt_template
 
     return load_prompt_template("deps-analysis.md")
-
-
-def get_deps_interactive_template() -> str:
-    """Load the interactive fallback output instruction template."""
-    from wade.skills.installer import load_prompt_template
-
-    return load_prompt_template("deps-interactive.md")
 
 
 # ---------------------------------------------------------------------------
@@ -144,13 +133,6 @@ def parse_deps_output(
         edges.append(DependencyEdge(from_task=from_id, to_task=to_id, reason=reason))
 
     return edges
-
-
-def output_is_parseable(text: str) -> bool:
-    """Check if AI output contains parseable dependency edges or "no deps"."""
-    if "# No dependencies found" in text:
-        return True
-    return bool(_ARROW_RE.search(text))
 
 
 # ---------------------------------------------------------------------------
@@ -332,122 +314,39 @@ def create_tracking_issue(
 
 
 # ---------------------------------------------------------------------------
-# AI runner (headless)
+# AI delegation helpers
 # ---------------------------------------------------------------------------
 
 
-def run_headless_analysis(
+def _run_delegation(
     ai_tool: str,
     prompt: str,
+    mode: DelegationMode,
+    *,
     model: str | None = None,
+    effort: str | None = None,
     allowed_commands: list[str] | None = None,
     cwd: Path | None = None,
 ) -> str | None:
-    """Run dependency analysis in headless mode.
+    """Run dependency analysis via the generic delegation infrastructure.
 
-    Returns the AI output text, or None if headless is not supported.
+    Returns the AI output text, or None on failure.
     """
-    session_cwd = cwd or Path.cwd()
-    try:
-        adapter = AbstractAITool.get(AIToolID(ai_tool))
-    except (ValueError, KeyError):
-        return None
-
-    caps = adapter.capabilities()
-    if not caps.supports_headless or not caps.headless_flag:
-        return None
-
-    # Build command
-    cmd = adapter.build_launch_command(
-        model=model,
+    request = DelegationRequest(
+        mode=mode,
         prompt=prompt,
-        trusted_dirs=[str(session_cwd), tempfile.gettempdir()],
-        allowed_commands=allowed_commands,
+        ai_tool=ai_tool,
+        model=model,
+        effort=effort,
+        cwd=cwd,
+        allowed_commands=allowed_commands or [],
     )
-
-    try:
-        result = run(cmd, check=False, timeout=120, cwd=session_cwd)
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout
-    except (subprocess.TimeoutExpired, CommandError) as e:
-        logger.warning("deps.headless_failed", tool=ai_tool, error=str(e))
-
+    result = delegate(request)
+    if result.success and result.feedback:
+        return result.feedback
+    if not result.success:
+        logger.warning("deps.delegation_failed", mode=mode.value, feedback=result.feedback)
     return None
-
-
-# ---------------------------------------------------------------------------
-# Interactive fallback
-# ---------------------------------------------------------------------------
-
-
-def _run_interactive_analysis(
-    ai_tool: str,
-    prompt: str,
-    model: str | None = None,
-    plan_dir: str | None = None,
-    allowed_commands: list[str] | None = None,
-    cwd: Path | None = None,
-) -> str | None:
-    """Run dependency analysis interactively when headless fails.
-
-    Launches AI interactively with the prompt as an initial message, then reads
-    the output from a temp file.
-    """
-    from wade.ai_tools.base import AbstractAITool
-    from wade.models.ai import AIToolID
-
-    session_cwd = cwd or Path.cwd()
-
-    # Set up output file for the AI to write results to
-    created_tmp = plan_dir is None
-    output_dir = plan_dir or tempfile.mkdtemp(prefix="wade-deps-")
-    output_file = Path(output_dir) / "deps-output.txt"
-
-    # Append output instruction to prompt
-    output_instruction = get_deps_interactive_template().replace("{output_file}", str(output_file))
-    interactive_prompt = f"{prompt}\n\n{output_instruction}"
-
-    console.empty()
-
-    try:
-        # Launch AI interactively
-        try:
-            adapter = AbstractAITool.get(AIToolID(ai_tool))
-            deliver_prompt_if_needed(adapter, interactive_prompt)
-            adapter.launch(
-                worktree_path=session_cwd,
-                model=model,
-                prompt=interactive_prompt,
-                trusted_dirs=[str(session_cwd), output_dir, tempfile.gettempdir()],
-                allowed_commands=allowed_commands,
-            )
-
-            # Non-blocking tools return immediately — wait for user.
-            if not adapter.capabilities().blocks_until_exit:
-                console.empty()
-                if not prompts.confirm("Have you finished the session?", default=True):
-                    return None
-        except (ValueError, KeyError):
-            console.warn(f"Unknown AI tool: {ai_tool}")
-            return None
-        except Exception as e:
-            console.warn(f"AI tool launch failed: {e}")
-            return None
-
-        # Read output file after AI exits
-        if output_file.is_file():
-            text = output_file.read_text(encoding="utf-8").strip()
-            if text:
-                return text
-
-        console.warn("No dependency output file found after interactive session.")
-        return None
-    finally:
-        # Clean up temp dir if we created it
-        if created_tmp:
-            import shutil
-
-            shutil.rmtree(output_dir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -465,18 +364,21 @@ def analyze_deps(
     model_explicit: bool = False,
     effort: str | None = None,
     effort_explicit: bool = False,
+    mode: str | None = None,
     planning_worktree: Path | None = None,
 ) -> DependencyGraph | None:
     """Analyze dependencies between issues.
 
     Steps:
     1. Build context from issue details
-    2. Run AI analysis (headless preferred, interactive fallback)
+    2. Run AI analysis via delegation infrastructure
     3. Parse edges
     4. Apply cross-references to issues
     5. Create tracking issue (2+ issues)
 
     Args:
+        mode: Delegation mode override (prompt/headless/interactive).
+            Defaults to config ``ai.deps.mode``, then ``headless``.
         planning_worktree: If provided (e.g. from plan auto-deps), reuse this
             worktree instead of creating a new one.  The worktree already has
             deps skill installed via ``PLAN_SKILLS``.
@@ -493,6 +395,19 @@ def analyze_deps(
         console.error("Need at least 2 issues for dependency analysis.")
         return None
 
+    # Resolve delegation mode (default to headless for deps)
+    cmd_config = config.ai.deps
+    if mode:
+        try:
+            delegation_mode = DelegationMode(mode)
+        except ValueError:
+            console.error(f"Invalid delegation mode: {mode}")
+            return None
+    else:
+        resolved = resolve_mode(cmd_config)
+        # deps defaults to headless (not prompt) when no mode is configured
+        delegation_mode = resolved if cmd_config.mode else DelegationMode.HEADLESS
+
     # Resolve AI tool
     resolved_tool = resolve_ai_tool(ai_tool, config, "deps")
     if not resolved_tool:
@@ -505,7 +420,7 @@ def analyze_deps(
     console.rule("wade task deps")
     console.kv("Issues", str(len(issue_numbers)))
 
-    # Offer interactive confirmation unless both flags were explicitly provided.
+    # Offer interactive confirmation unless all flags were explicitly provided.
     resolved_tool, resolved_model, resolved_effort = confirm_ai_selection(
         resolved_tool,
         resolved_model,
@@ -565,34 +480,23 @@ def analyze_deps(
             logger.debug("deps.issue_read_failed", issue_num=num, exc_info=True)
             task_titles[num] = f"Issue #{num}"
 
-    # Run headless AI analysis
-    console.step(f"Running {resolved_tool} for dependency analysis...")
-    allowed_cmds = config.permissions.allowed_commands
-    output = run_headless_analysis(
+    # Run AI analysis via delegation infrastructure
+    effort_str = resolved_effort.value if resolved_effort else None
+    console.step(f"Running {resolved_tool} ({delegation_mode.value}) for dependency analysis...")
+    output = _run_delegation(
         resolved_tool,
         prompt,
-        resolved_model,
-        allowed_cmds,
+        delegation_mode,
+        model=resolved_model,
+        effort=effort_str,
+        allowed_commands=config.permissions.allowed_commands,
         cwd=deps_cwd,
     )
 
-    if output and output_is_parseable(output):
-        console.success("Headless analysis complete.")
+    if output:
+        console.success(f"Analysis complete ({delegation_mode.value} mode).")
     else:
-        if output:
-            console.warn("Headless output not parseable — falling back to interactive...")
-        else:
-            console.info(
-                f"Headless mode not available for {resolved_tool}. Falling back to interactive..."
-            )
-        output = _run_interactive_analysis(
-            resolved_tool,
-            prompt,
-            resolved_model,
-            plan_dir=None,
-            allowed_commands=allowed_cmds,
-            cwd=deps_cwd,
-        )
+        console.error(f"Delegation failed ({delegation_mode.value} mode).")
 
     # Clean up standalone worktree (planning worktree is cleaned by plan_service)
     if standalone_worktree is not None:
