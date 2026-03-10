@@ -10,7 +10,7 @@ There are {comment_count} unresolved comment(s) across {file_count} file(s).
 # Critical rules
 
 1. **First action**: run `wade review-pr-comments-session check` to verify you're in a worktree.
-2. **Fetch comments** with `wade review-pr-comments-session fetch {issue_number}` — read and address each one.
+2. **Fetch comments** with `wade review-pr-comments-session fetch {issue_number}` — read every comment.
 3. **Verify each finding** against the current code first — only fix it if it's actually a problem.
 4. **Resolve threads** with `wade review-pr-comments-session resolve <thread-id>` after addressing each comment.
 5. **Never** push branches or create PRs manually — use `wade review-pr-comments-session done`.

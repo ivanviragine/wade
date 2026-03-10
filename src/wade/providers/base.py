@@ -130,6 +130,13 @@ class AbstractTaskProvider(ABC):
         """Mark a PR review thread as resolved. Returns True on success."""
         raise NotImplementedError(f"{type(self).__name__} does not support resolving threads")
 
+    def get_pr_issue_comments(
+        self,
+        pr_number: int,
+    ) -> list[dict[str, str]]:
+        """Fetch PR issue comments. Returns list of dicts with login/body keys."""
+        return []
+
     # --- Repository info ---
 
     def get_repo_nwo(self) -> str:
