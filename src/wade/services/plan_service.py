@@ -34,6 +34,7 @@ from wade.services.ai_resolution import (
     resolve_ai_tool,
     resolve_effort,
     resolve_model,
+    resolve_yolo,
 )
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import (
@@ -248,6 +249,7 @@ def run_ai_planning_session(
     effort: EffortLevel | None = None,
     allowed_commands: list[str] | None = None,
     cwd: Path | None = None,
+    yolo: bool = False,
 ) -> int:
     """Launch the AI CLI for a planning session.
 
@@ -300,6 +302,7 @@ def run_ai_planning_session(
         initial_message=prompt,
         effort=effort,
         allowed_commands=allowed_commands,
+        yolo=yolo,
     )
     console.info(f"Plan directory: {plan_dir}")
 
@@ -366,6 +369,7 @@ def plan(
     model_explicit: bool = False,
     effort: str | None = None,
     effort_explicit: bool = False,
+    yolo: bool | None = None,
 ) -> bool:
     """Run an AI-assisted planning session.
 
@@ -389,16 +393,21 @@ def plan(
     # Resolve effort level
     resolved_effort = resolve_effort(effort, config, "plan", tool=resolved_tool)
 
+    # Resolve YOLO mode
+    resolved_yolo = resolve_yolo(yolo, config, "plan", tool=resolved_tool)
+
     console.rule("wade plan")
 
     # Offer interactive confirmation unless both flags were explicitly provided.
-    resolved_tool, resolved_model, resolved_effort = confirm_ai_selection(
+    resolved_tool, resolved_model, resolved_effort, resolved_yolo = confirm_ai_selection(
         resolved_tool,
         resolved_model,
         tool_explicit=ai_explicit,
         model_explicit=model_explicit,
         resolved_effort=resolved_effort,
         effort_explicit=effort_explicit,
+        resolved_yolo=resolved_yolo,
+        yolo_explicit=yolo is not None,
     )
     if not resolved_tool:
         console.error("No AI tool selected.")
@@ -479,6 +488,7 @@ def plan(
         effort=resolved_effort,
         allowed_commands=config.permissions.allowed_commands,
         cwd=session_cwd,
+        yolo=resolved_yolo,
     )
     logger.info("plan.ai_exited", exit_code=exit_code)
 
@@ -529,6 +539,7 @@ def plan(
                 repo_root=repo_root,
                 planning_worktree=planning_worktree,
                 effort=resolved_effort,
+                yolo=resolved_yolo,
             )
             _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
             if offer_result is not None:
@@ -562,6 +573,7 @@ def plan(
                 repo_root=repo_root,
                 planning_worktree=planning_worktree,
                 effort=resolved_effort,
+                yolo=resolved_yolo,
             )
             _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
             if offer_result is not None:
@@ -751,6 +763,7 @@ def _finalize_issues(
     repo_root: Path | None = None,
     planning_worktree: Path | None = None,
     effort: EffortLevel | None = None,
+    yolo: bool = False,
 ) -> bool | None:
     """Finalize newly created issues: token summaries, labels, hints.
 
@@ -845,7 +858,9 @@ def _finalize_issues(
     # Hint for next steps
     console.empty()
     if len(issue_numbers) == 1:
-        result = _offer_to_implement(issue_numbers[0], ai_tool=ai_tool, model=model, effort=effort)
+        result = _offer_to_implement(
+            issue_numbers[0], ai_tool=ai_tool, model=model, effort=effort, yolo=yolo
+        )
         if result is not None:
             return result
     elif len(issue_numbers) >= 2:
@@ -866,6 +881,7 @@ def _offer_to_implement(
     ai_tool: str | None = None,
     model: str | None = None,
     effort: EffortLevel | None = None,
+    yolo: bool = False,
 ) -> bool | None:
     """Prompt the user to start a work session on the newly planned issue.
 
@@ -893,6 +909,7 @@ def _offer_to_implement(
             ai_explicit=ai_tool is not None,
             model_explicit=model is not None,
             effort_explicit=effort is not None,
+            yolo=yolo or None,
         )
     except Exception:
         logger.exception("plan.work_session_start_failed", issue=issue_number)

@@ -28,6 +28,7 @@ class CopilotAdapter(AbstractAITool):
             supports_model_flag=True,
             headless_flag="--prompt",
             supports_headless=True,
+            supports_yolo=True,
             supports_resume=True,
         )
 
@@ -65,6 +66,10 @@ class CopilotAdapter(AbstractAITool):
             pattern = f"shell({binary}:{args})" if args else f"shell({binary})"
             result.extend(["--allow-tool", pattern])
         return result
+
+    def yolo_args(self) -> list[str]:
+        """Copilot uses ``--yolo`` (alias for ``--allow-all``)."""
+        return ["--yolo"]
 
     def normalize_model_format(self, model_id: str) -> str:
         """Copilot uses dotted format for Claude models."""

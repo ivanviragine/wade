@@ -106,6 +106,7 @@ def review_pr_comments_cmd(
         None, "--model", help="AI model to use.", autocompletion=complete_models
     ),
     detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
+    yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
 ) -> None:
     """Address PR review comments."""
     from wade.services.review_service import start as do_start
@@ -125,5 +126,6 @@ def review_pr_comments_cmd(
         detach=detach,
         ai_explicit=selected_ai is not None,
         model_explicit=model is not None,
+        yolo=yolo or None,
     )
     raise typer.Exit(0 if success else 1)

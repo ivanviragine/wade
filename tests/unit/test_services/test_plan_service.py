@@ -646,6 +646,7 @@ class TestOfferToImplement:
                 ai_explicit=False,
                 model_explicit=False,
                 effort_explicit=False,
+                yolo=None,
             )
 
     def test_ai_params_passed_to_work_session(self) -> None:
@@ -677,6 +678,7 @@ class TestOfferToImplement:
                 ai_explicit=True,
                 model_explicit=True,
                 effort_explicit=True,
+                yolo=None,
             )
 
     def test_user_declines_returns_none(self) -> None:
@@ -778,7 +780,9 @@ class TestFinalizeIssuesHints:
                 issue_numbers=["1"],
             )
 
-            mock_offer.assert_called_once_with("1", ai_tool=None, model=None, effort=None)
+            mock_offer.assert_called_once_with(
+                "1", ai_tool=None, model=None, effort=None, yolo=False
+            )
             assert result is True
 
     def test_multiple_issues_shows_batch_hint(self) -> None:

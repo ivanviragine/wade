@@ -171,6 +171,7 @@ def plan_cmd(
         help="Reasoning effort level: low, medium, high, max.",
         autocompletion=complete_effort_levels,
     ),
+    yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
 ) -> None:
     """Start a planning session with AI."""
     from wade.services.plan_service import plan as do_plan
@@ -183,6 +184,7 @@ def plan_cmd(
         model_explicit=model is not None,
         effort=effort,
         effort_explicit=effort is not None,
+        yolo=yolo or None,
     )
     raise typer.Exit(0 if success else 1)
 
@@ -206,6 +208,7 @@ def implement_cmd(
     cd_only: bool = typer.Option(
         False, "--cd", help="Create worktree and print path (no AI launch)."
     ),
+    yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
 ) -> None:
     """Start an implementation session on an issue."""
     from wade.services.work_service import start as do_start
@@ -229,6 +232,7 @@ def implement_cmd(
         model_explicit=model is not None,
         effort=effort,
         effort_explicit=effort is not None,
+        yolo=yolo or None,
     )
     raise typer.Exit(0 if success else 1)
 
@@ -251,6 +255,7 @@ def implement_batch_cmd(
         help="Reasoning effort level: low, medium, high, max.",
         autocompletion=complete_effort_levels,
     ),
+    yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
 ) -> None:
     """Start parallel implementation sessions. [beta]"""
     from wade.services.work_service import batch as do_batch
@@ -283,6 +288,7 @@ def implement_batch_cmd(
         model_explicit=model is not None,
         effort=effort,
         effort_explicit=effort is not None,
+        yolo=yolo or None,
     )
     raise typer.Exit(0 if success else 1)
 
@@ -297,11 +303,12 @@ def address_reviews_cmd(
         None, "--model", help="AI model to use.", autocompletion=complete_models
     ),
     detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
+    yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
 ) -> None:
     """Address PR review comments (hidden alias for review pr-comments)."""
     from wade.cli.review import review_pr_comments_cmd
 
-    review_pr_comments_cmd(target=target, ai=ai, model=model, detach=detach)
+    review_pr_comments_cmd(target=target, ai=ai, model=model, detach=detach, yolo=yolo)
 
 
 @app.command("cd", rich_help_panel="Workflow")
@@ -335,6 +342,7 @@ def smart_start_cmd(
     cd_only: bool = typer.Option(
         False, "--cd", help="Create worktree and print path (no AI launch)."
     ),
+    yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
 ) -> None:
     """Internal dispatch for `wade <N>` — routes to implement or review pr-comments."""
     from wade.services.smart_start import smart_start
@@ -356,6 +364,7 @@ def smart_start_cmd(
         cd_only=cd_only,
         ai_explicit=selected_ai is not None,
         model_explicit=model is not None,
+        yolo=yolo or None,
     )
     raise typer.Exit(0 if success else 1)
 
@@ -378,9 +387,10 @@ def plan_alias(
         help="Reasoning effort level: low, medium, high, max.",
         autocompletion=complete_effort_levels,
     ),
+    yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
 ) -> None:
     """Alias for plan."""
-    plan_cmd(issue=issue, ai=ai, model=model, effort=effort)
+    plan_cmd(issue=issue, ai=ai, model=model, effort=effort, yolo=yolo)
 
 
 @app.command("i", hidden=True)
@@ -402,9 +412,12 @@ def implement_alias(
     cd_only: bool = typer.Option(
         False, "--cd", help="Create worktree and print path (no AI launch)."
     ),
+    yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
 ) -> None:
     """Alias for implement."""
-    implement_cmd(target=target, ai=ai, model=model, effort=effort, detach=detach, cd_only=cd_only)
+    implement_cmd(
+        target=target, ai=ai, model=model, effort=effort, detach=detach, cd_only=cd_only, yolo=yolo
+    )
 
 
 @app.command("r", hidden=True)
@@ -417,11 +430,12 @@ def reviews_alias(
         None, "--model", help="AI model to use.", autocompletion=complete_models
     ),
     detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
+    yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
 ) -> None:
     """Alias for review pr-comments."""
     from wade.cli.review import review_pr_comments_cmd
 
-    review_pr_comments_cmd(target=target, ai=ai, model=model, detach=detach)
+    review_pr_comments_cmd(target=target, ai=ai, model=model, detach=detach, yolo=yolo)
 
 
 # --- Register subcommand groups ---

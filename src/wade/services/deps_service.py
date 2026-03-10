@@ -421,7 +421,7 @@ def analyze_deps(
     console.kv("Issues", str(len(issue_numbers)))
 
     # Offer interactive confirmation unless all flags were explicitly provided.
-    resolved_tool, resolved_model, resolved_effort = confirm_ai_selection(
+    resolved_tool, resolved_model, resolved_effort, _yolo = confirm_ai_selection(
         resolved_tool,
         resolved_model,
         tool_explicit=ai_explicit,

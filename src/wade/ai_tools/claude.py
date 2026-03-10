@@ -44,6 +44,7 @@ class ClaudeAdapter(AbstractAITool):
             headless_flag="--print",
             supports_headless=True,
             supports_effort=True,
+            supports_yolo=True,
             supports_resume=True,
         )
 
@@ -162,3 +163,7 @@ class ClaudeAdapter(AbstractAITool):
     def effort_args(self, effort: EffortLevel) -> list[str]:
         """Claude uses ``--settings '{"effortLevel": "<level>"}'``."""
         return ["--settings", json.dumps({"effortLevel": effort.value})]
+
+    def yolo_args(self) -> list[str]:
+        """Claude uses ``--dangerously-skip-permissions``."""
+        return ["--dangerously-skip-permissions"]

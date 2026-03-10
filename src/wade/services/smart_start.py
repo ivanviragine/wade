@@ -41,6 +41,7 @@ def smart_start(
     *,
     ai_explicit: bool = False,
     model_explicit: bool = False,
+    yolo: bool | None = None,
 ) -> bool:
     """Detect PR state for an issue and route to the right command.
 
@@ -68,6 +69,7 @@ def smart_start(
             cd_only,
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
+            yolo=yolo,
         )
 
     # Read the issue
@@ -85,6 +87,7 @@ def smart_start(
             cd_only,
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
+            yolo=yolo,
         )
 
     # Build the expected branch name
@@ -107,6 +110,7 @@ def smart_start(
             cd_only,
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
+            yolo=yolo,
         )
 
     pr_number = pr_info.get("number") or pr_info.get("pr_number")
@@ -121,6 +125,7 @@ def smart_start(
             cd_only,
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
+            yolo=yolo,
         )
     pr_number_int = int(pr_number)
     pr_state = str(pr_info.get("state", "")).upper()
@@ -140,6 +145,7 @@ def smart_start(
             cd_only,
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
+            yolo=yolo,
         )
 
     # Open PR exists — present contextual menu
@@ -174,6 +180,7 @@ def smart_start(
                         model_explicit,
                         repo_root,
                         pr_number_int,
+                        yolo,
                     ),
                 )
             )
@@ -190,6 +197,7 @@ def smart_start(
                         cd_only,
                         ai_explicit,
                         model_explicit,
+                        yolo,
                     ),
                 )
             )
@@ -209,6 +217,7 @@ def smart_start(
                     model_explicit,
                     repo_root,
                     pr_number_int,
+                    yolo,
                 ),
             )
         )
@@ -216,7 +225,7 @@ def smart_start(
             (
                 "Review PR comments",
                 _run_review_pr_comments_wrapper(
-                    target, ai_tool, model, project_root, detach, ai_explicit, model_explicit
+                    target, ai_tool, model, project_root, detach, ai_explicit, model_explicit, yolo
                 ),
             )
         )
@@ -251,6 +260,7 @@ def _run_implement_task(
     model_explicit: bool = False,
     resume_session_id: str | None = None,
     resume_ai_tool: str | None = None,
+    yolo: bool | None = None,
 ) -> bool:
     """Delegate to the implement service."""
     from wade.services.work_service import start as do_start
@@ -266,6 +276,7 @@ def _run_implement_task(
         model_explicit=model_explicit,
         resume_session_id=resume_session_id,
         resume_ai_tool=resume_ai_tool,
+        yolo=yolo,
     )
 
 
@@ -278,6 +289,7 @@ def _run_review_pr_comments(
     *,
     ai_explicit: bool = False,
     model_explicit: bool = False,
+    yolo: bool | None = None,
 ) -> bool:
     """Delegate to the review pr-comments service."""
     from wade.services.review_service import start as do_start
@@ -290,6 +302,7 @@ def _run_review_pr_comments(
         detach=detach,
         ai_explicit=ai_explicit,
         model_explicit=model_explicit,
+        yolo=yolo,
     )
 
 
@@ -302,6 +315,7 @@ def _run_implement_task_wrapper(
     cd_only: bool,
     ai_explicit: bool,
     model_explicit: bool,
+    yolo: bool | None = None,
 ) -> Callable[[], bool]:
     """Return a callable that runs _run_implement_task with captured arguments."""
 
@@ -315,6 +329,7 @@ def _run_implement_task_wrapper(
             cd_only=cd_only,
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
+            yolo=yolo,
         )
 
     return _impl
@@ -328,6 +343,7 @@ def _run_review_pr_comments_wrapper(
     detach: bool,
     ai_explicit: bool,
     model_explicit: bool,
+    yolo: bool | None = None,
 ) -> Callable[[], bool]:
     """Return a callable that runs _run_review_pr_comments with captured arguments."""
 
@@ -340,6 +356,7 @@ def _run_review_pr_comments_wrapper(
             detach=detach,
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
+            yolo=yolo,
         )
 
     return _impl
@@ -420,6 +437,7 @@ def _run_continue_working(
     model_explicit: bool,
     repo_root: Path,
     pr_number: int,
+    yolo: bool | None = None,
 ) -> bool:
     """Show a resume sub-menu if a resumable session exists, else start new."""
     from wade.ui import prompts
@@ -435,6 +453,7 @@ def _run_continue_working(
             cd_only=cd_only,
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
+            yolo=yolo,
         )
 
     session_id = resumable.session_id
@@ -460,6 +479,7 @@ def _run_continue_working(
             model_explicit=model_explicit,
             resume_session_id=session_id,
             resume_ai_tool=tool_name,
+            yolo=yolo,
         )
     else:
         # Start new session
@@ -472,6 +492,7 @@ def _run_continue_working(
             cd_only=cd_only,
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
+            yolo=yolo,
         )
 
 
@@ -486,6 +507,7 @@ def _run_continue_working_wrapper(
     model_explicit: bool,
     repo_root: Path,
     pr_number: int,
+    yolo: bool | None = None,
 ) -> Callable[[], bool]:
     """Return a callable that runs _run_continue_working with captured arguments."""
 
@@ -501,6 +523,7 @@ def _run_continue_working_wrapper(
             model_explicit=model_explicit,
             repo_root=repo_root,
             pr_number=pr_number,
+            yolo=yolo,
         )
 
     return _impl

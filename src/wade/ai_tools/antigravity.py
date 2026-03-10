@@ -48,6 +48,7 @@ class AntigravityAdapter(AbstractAITool):
         trusted_dirs: list[str] | None = None,
         effort: EffortLevel | None = None,
         allowed_commands: list[str] | None = None,
+        yolo: bool = False,
     ) -> int:
         cmd = [self.capabilities().binary, "."]
         logger.info("ai_tool.launch", tool="antigravity", cwd=str(worktree_path))
