@@ -114,7 +114,9 @@ def init(
         try:
             existing_raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
             if isinstance(existing_raw, dict):
-                current_provider = (existing_raw.get("provider") or {}).get("name")
+                provider_raw = existing_raw.get("provider")
+                if isinstance(provider_raw, dict):
+                    current_provider = provider_raw.get("name")
         except (yaml.YAMLError, OSError):
             pass
 
@@ -1103,10 +1105,18 @@ def _prompt_provider_setup(
         else:
             console.warn("Token validation failed — continuing anyway")
 
-    # Env var name
-    env_var = prompts.input_prompt(
-        "Environment variable name for the token", default="CLICKUP_API_TOKEN"
-    )
+    # Env var name — validate format
+    import re
+
+    env_var = ""
+    while not env_var:
+        candidate = prompts.input_prompt(
+            "Environment variable name for the token", default="CLICKUP_API_TOKEN"
+        )
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", candidate):
+            env_var = candidate
+        else:
+            console.warn("Invalid env var name — use letters, digits, and underscores only")
 
     # Offer to save to .env
     add_env_to_copy = False
@@ -1816,19 +1826,22 @@ def _patch_config(
                 for orphan_key in ("api_token_env", "settings"):
                     if orphan_key not in provider_setup and orphan_key in provider:
                         del provider[orphan_key]
-        token_env = provider_setup.get("api_token_env")
-        if token_env and (force or not provider.get("api_token_env")):
-            provider["api_token_env"] = token_env
-            changed = True
-        settings = provider_setup.get("settings")
-        if settings:
-            existing_settings: dict[str, str] = provider.get("settings", {}) or {}
-            for key, value in settings.items():
-                if value and (force or not existing_settings.get(key)):
-                    existing_settings[key] = value
-                    changed = True
-            if existing_settings:
-                provider["settings"] = existing_settings
+        # Only merge provider-specific fields when the effective provider matches
+        effective_name = provider.get("name")
+        if effective_name == provider_setup.get("name"):
+            token_env = provider_setup.get("api_token_env")
+            if token_env and (force or not provider.get("api_token_env")):
+                provider["api_token_env"] = token_env
+                changed = True
+            settings = provider_setup.get("settings")
+            if settings:
+                existing_settings: dict[str, str] = provider.get("settings", {}) or {}
+                for key, value in settings.items():
+                    if value and (force or not existing_settings.get(key)):
+                        existing_settings[key] = value
+                        changed = True
+                if existing_settings:
+                    provider["settings"] = existing_settings
         raw["provider"] = provider
 
     if changed:

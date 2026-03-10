@@ -1425,14 +1425,9 @@ class TestSaveTokenToEnv:
 
     def test_returns_false_on_write_failure(self, tmp_path: Path) -> None:
         """Should return False and not crash when .env is not writable."""
-        env_path = tmp_path / ".env"
-        env_path.write_text("")
-        env_path.chmod(0o444)  # read-only
-
-        result = _save_token_to_env(tmp_path, "CLICKUP_API_TOKEN", "pk_123")
-
+        with patch.object(Path, "open", side_effect=OSError("permission denied")):
+            result = _save_token_to_env(tmp_path, "CLICKUP_API_TOKEN", "pk_123")
         assert result is False
-        env_path.chmod(0o644)  # restore for cleanup
 
     def test_returns_true_when_already_present(self, tmp_path: Path) -> None:
         env_path = tmp_path / ".env"
@@ -1629,6 +1624,33 @@ class TestPromptProviderSetup:
             result = _prompt_provider_setup(tmp_path, non_interactive=False)
         assert result["name"] == "github"
 
+    @patch("wade.services.init_service._validate_clickup_token", return_value=True)
+    @patch("wade.ui.prompts.confirm")
+    @patch("wade.ui.prompts.input_prompt")
+    @patch("wade.ui.prompts.select", return_value=1)
+    def test_clickup_invalid_env_var_reprompts(
+        self,
+        _mock_select: MagicMock,
+        mock_input: MagicMock,
+        mock_confirm: MagicMock,
+        _mock_validate: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Invalid env var names should be rejected until a valid one is given."""
+        # token, bad env var, good env var, team_id, list_id, space_id
+        mock_input.side_effect = [
+            "pk_123",
+            "has spaces!",
+            "CLICKUP_TOKEN",
+            "team1",
+            "list1",
+            "",
+        ]
+        mock_confirm.side_effect = [False, False]
+
+        result = _prompt_provider_setup(tmp_path, non_interactive=False)
+        assert result["api_token_env"] == "CLICKUP_TOKEN"
+
 
 # ---------------------------------------------------------------------------
 # Write / patch config provider
@@ -1763,6 +1785,27 @@ class TestPatchConfigProvider:
         assert config["provider"]["name"] == "github"
         assert "api_token_env" not in config["provider"]
         assert "settings" not in config["provider"]
+
+    def test_no_force_mismatched_provider_skips_settings(self, tmp_path: Path) -> None:
+        """When force=False and existing name is preserved, don't merge mismatched settings."""
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nprovider:\n  name: github\n")
+        provider_setup = {
+            "name": "clickup",
+            "api_token_env": "CLICKUP_API_TOKEN",
+            "settings": {"list_id": "123", "team_id": "456"},
+        }
+        _patch_config(
+            config_path,
+            "claude",
+            ComplexityModelMapping(),
+            provider_setup=provider_setup,
+            force=False,
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["provider"]["name"] == "github"  # preserved
+        assert "api_token_env" not in config["provider"]  # not backfilled
+        assert "settings" not in config["provider"]  # not backfilled
 
 
 class TestInitProvider:
