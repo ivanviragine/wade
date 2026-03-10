@@ -1441,6 +1441,12 @@ class TestSaveTokenToEnv:
 
 
 class TestPromptProviderSetup:
+    @pytest.fixture(autouse=True)
+    def _no_browser(self) -> None:  # type: ignore[override]
+        """Prevent any test from opening a real browser."""
+        with patch("webbrowser.open"):
+            yield  # type: ignore[misc]
+
     def test_non_interactive_returns_github(self, tmp_path: Path) -> None:
         result = _prompt_provider_setup(tmp_path, non_interactive=True)
         assert result == {"name": "github"}
