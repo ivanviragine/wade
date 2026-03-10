@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
-
-import pytest
 
 # ---------------------------------------------------------------------------
 # Config model — yolo fields and get_yolo()
@@ -69,22 +68,22 @@ class TestConfigYolo:
 
 
 class TestConfigLoaderYolo:
-    def test_parse_yolo_global(self, tmp_path: pytest.TempPathFactory) -> None:
+    def test_parse_yolo_global(self, tmp_path: Path) -> None:
         from wade.config.loader import load_config
 
-        config_file = tmp_path / ".wade.yml"  # type: ignore[operator]
+        config_file = tmp_path / ".wade.yml"
         config_file.write_text("ai:\n  yolo: true\n")
 
-        config = load_config(tmp_path)  # type: ignore[arg-type]
+        config = load_config(tmp_path)
         assert config.ai.yolo is True
 
-    def test_parse_yolo_per_command(self, tmp_path: pytest.TempPathFactory) -> None:
+    def test_parse_yolo_per_command(self, tmp_path: Path) -> None:
         from wade.config.loader import load_config
 
-        config_file = tmp_path / ".wade.yml"  # type: ignore[operator]
+        config_file = tmp_path / ".wade.yml"
         config_file.write_text("ai:\n  work:\n    yolo: true\n")
 
-        config = load_config(tmp_path)  # type: ignore[arg-type]
+        config = load_config(tmp_path)
         assert config.ai.work.yolo is True
         assert config.ai.yolo is None
 
@@ -383,6 +382,7 @@ class TestConfirmYolo:
                 tool_explicit=False,
                 model_explicit=True,
                 effort_explicit=True,
+                yolo_explicit=False,
             )
 
         assert len(menu_items_seen) >= 1
@@ -411,6 +411,7 @@ class TestConfirmYolo:
                 model_explicit=True,
                 effort_explicit=True,
                 resolved_yolo=True,
+                yolo_explicit=False,
             )
 
         assert len(menu_items_seen) >= 1
@@ -467,6 +468,7 @@ class TestConfirmYolo:
                 tool_explicit=False,
                 model_explicit=True,
                 effort_explicit=True,
+                yolo_explicit=False,
             )
 
         assert yolo is True
@@ -497,6 +499,7 @@ class TestConfirmYolo:
                 model_explicit=True,
                 effort_explicit=True,
                 resolved_yolo=True,
+                yolo_explicit=False,
             )
 
         assert yolo is False

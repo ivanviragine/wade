@@ -187,7 +187,7 @@ def confirm_ai_selection(
     resolved_effort: EffortLevel | None = None,
     effort_explicit: bool = False,
     resolved_yolo: bool = False,
-    yolo_explicit: bool = False,
+    yolo_explicit: bool = True,
 ) -> tuple[str | None, str | None, EffortLevel | None, bool]:
     """Interactively confirm (and optionally change) the resolved AI tool/model/effort/yolo.
 

@@ -350,9 +350,19 @@ class AbstractAITool(ABC):
 
         # YOLO mode supersedes plan_mode: YOLO grants full-auto permissions
         # which is a superset of plan permissions. If the tool doesn't support
-        # YOLO, fall back to plan_mode_args.
-        if yolo and caps.supports_yolo:
-            cmd.extend(self.yolo_args())
+        # YOLO, emit a warning and fall back to plan_mode_args.
+        if yolo:
+            if caps.supports_yolo:
+                cmd.extend(self.yolo_args())
+            else:
+                warnings.warn(
+                    f"{caps.display_name} does not support YOLO mode; "
+                    f"{'falling back to plan mode' if plan_mode else 'ignoring yolo'}",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                if plan_mode:
+                    cmd.extend(self.plan_mode_args())
         elif plan_mode:
             cmd.extend(self.plan_mode_args())
 
