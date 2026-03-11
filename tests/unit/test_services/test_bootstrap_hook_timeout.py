@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from wade.models.config import HooksConfig, ProjectConfig, ProjectSettings
-from wade.services.work_service import bootstrap_worktree
+from wade.services.implementation_service import bootstrap_worktree
 
 
 class TestBootstrapHookTimeout:

@@ -1,4 +1,4 @@
-"""Integration tests for the work session lifecycle.
+"""Integration tests for the implementation session lifecycle.
 
 Tests the full flow:
   task create → implement → implementation-session sync → implementation-session done.
@@ -12,12 +12,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from wade.models.config import ProjectConfig, ProjectSettings
+from wade.models.session import WorktreeState
 from wade.models.task import Task
-from wade.models.work import WorktreeState
 
 
-class TestWorkLifecycle:
-    """Test work session lifecycle with real git, mocked gh/AI."""
+class TestImplementationLifecycle:
+    """Test implementation session lifecycle with real git, mocked gh/AI."""
 
     def _setup_feature_branch(self, repo: Path, branch: str) -> None:
         """Create and checkout a feature branch."""
@@ -41,7 +41,7 @@ class TestWorkLifecycle:
 
     def test_sync_after_main_advances(self, tmp_git_repo: Path) -> None:
         """Full sync flow: feature branch syncs with main after main advances."""
-        from wade.services.work_service import sync
+        from wade.services.implementation_service import sync
 
         # Create feature branch
         self._setup_feature_branch(tmp_git_repo, "feat/42-add-auth")
@@ -68,7 +68,7 @@ class TestWorkLifecycle:
 
         # Sync
         with patch(
-            "wade.services.work_service.load_config",
+            "wade.services.implementation_service.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -83,7 +83,7 @@ class TestWorkLifecycle:
 
     def test_sync_with_conflict(self, tmp_git_repo: Path) -> None:
         """Sync detects merge conflicts and reports them."""
-        from wade.services.work_service import sync
+        from wade.services.implementation_service import sync
 
         # Create feature branch
         self._setup_feature_branch(tmp_git_repo, "feat/42-conflict")
@@ -120,7 +120,7 @@ class TestWorkLifecycle:
 
         # Sync should detect conflict
         with patch(
-            "wade.services.work_service.load_config",
+            "wade.services.implementation_service.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -141,7 +141,7 @@ class TestWorkLifecycle:
     def test_worktree_bootstrap_and_context(self, tmp_git_repo: Path) -> None:
         """Bootstrap creates PLAN.md in worktree."""
         from wade.git.worktree import create_worktree
-        from wade.services.work_service import write_plan_md
+        from wade.services.implementation_service import write_plan_md
 
         wt_dir = tmp_git_repo.parent / "wt-42"
         create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
@@ -163,7 +163,7 @@ class TestWorkLifecycle:
     def test_extract_issue_and_staleness_flow(self, tmp_git_repo: Path) -> None:
         """Extract issue number and classify worktree staleness."""
         from wade.git.worktree import create_worktree
-        from wade.services.work_service import (
+        from wade.services.implementation_service import (
             classify_staleness,
             extract_issue_from_branch,
         )
@@ -196,7 +196,7 @@ class TestWorkLifecycle:
     def test_list_and_remove_flow(self, tmp_git_repo: Path) -> None:
         """List worktrees and remove them."""
         from wade.git.worktree import create_worktree
-        from wade.services.work_service import list_sessions, remove
+        from wade.services.implementation_service import list_sessions, remove
 
         # Create two worktrees
         wt1 = tmp_git_repo.parent / "wt-42"
@@ -205,7 +205,7 @@ class TestWorkLifecycle:
         create_worktree(tmp_git_repo, "feat/43-db", wt2, "main")
 
         with patch(
-            "wade.services.work_service.load_config",
+            "wade.services.implementation_service.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -227,11 +227,11 @@ class TestWorkLifecycle:
 
     def test_pr_body_composition(self, tmp_path: Path) -> None:
         """PR body includes Part of, Closes, and Summary — but NOT plan summary."""
+        from wade.services.implementation_service import _build_pr_body
         from wade.services.task_service import (
             PLAN_SUMMARY_MARKER_END,
             PLAN_SUMMARY_MARKER_START,
         )
-        from wade.services.work_service import _build_pr_body
 
         # Create PR summary file
         pr_summary = tmp_path / "PR-SUMMARY-42.md"

@@ -35,7 +35,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
-from wade.models.work import MergeStrategy
+from wade.models.session import MergeStrategy
 
 
 class ProviderID(StrEnum):
@@ -86,7 +86,7 @@ class AIConfig(BaseModel):
     yolo: bool | None = None
     plan: AICommandConfig = AICommandConfig()
     deps: AICommandConfig = AICommandConfig()
-    work: AICommandConfig = AICommandConfig()
+    implement: AICommandConfig = AICommandConfig()
     review_plan: AICommandConfig = AICommandConfig()
     review_implementation: AICommandConfig = AICommandConfig()
 

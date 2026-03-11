@@ -6,14 +6,14 @@ from pathlib import Path
 
 import typer
 
-from wade.models.work import SyncEventType
+from wade.models.session import SyncEventType
 
-impl_session_app = typer.Typer(
+implementation_session_app = typer.Typer(
     help="Implementation session commands (check, sync, done).",
 )
 
 
-@impl_session_app.command()
+@implementation_session_app.command()
 def check() -> None:
     """Verify worktree safety for AI agents.
 
@@ -29,7 +29,7 @@ def check() -> None:
     raise typer.Exit(result.exit_code)
 
 
-@impl_session_app.command()
+@implementation_session_app.command()
 def sync(
     json_output: bool = typer.Option(False, "--json", help="Output structured JSON events."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview without merging."),
@@ -38,7 +38,7 @@ def sync(
     ),
 ) -> None:
     """Sync current branch with main."""
-    from wade.services.work_service import sync as do_sync
+    from wade.services.implementation_service import sync as do_sync
 
     result = do_sync(
         dry_run=dry_run,
@@ -79,7 +79,7 @@ def sync(
         raise typer.Exit(1)
 
 
-@impl_session_app.command()
+@implementation_session_app.command()
 def done(
     target: str | None = typer.Argument(None, help="Issue number, worktree name, or plan file."),
     plan: str | None = typer.Option(None, "--plan", help="Plan file to resolve worktree from."),
@@ -87,8 +87,8 @@ def done(
     draft: bool = typer.Option(False, "--draft", help="Create PR as draft."),
     no_cleanup: bool = typer.Option(False, "--no-cleanup", help="Don't remove worktree."),
 ) -> None:
-    """Finalize work — push branch and create PR (or direct merge)."""
-    from wade.services.work_service import done as do_done
+    """Finalize implementation — push branch and create PR (or direct merge)."""
+    from wade.services.implementation_service import done as do_done
 
     success = do_done(
         target=target,

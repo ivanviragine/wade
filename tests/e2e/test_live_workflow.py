@@ -82,7 +82,7 @@ class TestLiveWadeVersion:
         result = _wade("--help")
         assert result.returncode == 0
         assert "task" in result.stdout.lower()
-        assert "work" in result.stdout.lower()
+        assert "implement" in result.stdout.lower()
 
 
 class TestLiveCheck:

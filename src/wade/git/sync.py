@@ -7,7 +7,7 @@ from pathlib import Path
 import structlog
 
 from wade.git.repo import GitError, _run_git, get_current_branch
-from wade.models.work import SyncResult
+from wade.models.session import SyncResult
 
 log = structlog.get_logger(__name__)
 

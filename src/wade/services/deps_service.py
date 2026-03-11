@@ -446,7 +446,10 @@ def analyze_deps(
         try:
             from wade.git import repo as git_repo
             from wade.git import worktree as git_worktree
-            from wade.services.work_service import _resolve_worktrees_dir, bootstrap_worktree
+            from wade.services.implementation_service import (
+                _resolve_worktrees_dir,
+                bootstrap_worktree,
+            )
             from wade.skills.installer import DEPS_SKILLS
 
             repo_root = git_repo.get_repo_root(cwd)

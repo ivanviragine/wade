@@ -115,7 +115,9 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
         yolo=ai_raw.get("yolo"),
         plan=_parse_command_config(ai_raw.get("plan", {})),
         deps=_parse_command_config(ai_raw.get("deps", {})),
-        work=_parse_command_config(ai_raw.get("work", {})),
+        implement=_parse_command_config(
+            ai_raw.get("implement") if "implement" in ai_raw else ai_raw.get("work", {})
+        ),
         review_plan=_parse_command_config(ai_raw.get("review_plan", {})),
         review_implementation=_parse_command_config(ai_raw.get("review_implementation", {})),
     )

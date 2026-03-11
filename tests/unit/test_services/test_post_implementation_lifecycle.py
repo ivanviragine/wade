@@ -5,16 +5,16 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from wade.models.config import AIConfig, ProjectConfig, ProjectSettings
+from wade.models.session import MergeStrategy
 from wade.models.task import Task
-from wade.models.work import MergeStrategy
-from wade.services.work_service import _post_work_lifecycle, start
+from wade.services.implementation_service import _post_implementation_lifecycle, start
 
-_PULL_FF = "wade.services.work_service.git_repo.pull_ff_only"
-_CHECKOUT = "wade.services.work_service.git_repo.checkout"
-_CHECKOUT_DETACH = "wade.services.work_service.git_repo.checkout_detach"
-_MERGE_SQUASH = "wade.services.work_service.git_repo.merge_squash"
-_COMMIT_NO_EDIT = "wade.services.work_service.git_repo.commit_no_edit"
-_PUSH = "wade.services.work_service.git_repo.push"
+_PULL_FF = "wade.services.implementation_service.git_repo.pull_ff_only"
+_CHECKOUT = "wade.services.implementation_service.git_repo.checkout"
+_CHECKOUT_DETACH = "wade.services.implementation_service.git_repo.checkout_detach"
+_MERGE_SQUASH = "wade.services.implementation_service.git_repo.merge_squash"
+_COMMIT_NO_EDIT = "wade.services.implementation_service.git_repo.commit_no_edit"
+_PUSH = "wade.services.implementation_service.git_repo.push"
 
 
 def _config(strategy: MergeStrategy) -> ProjectConfig:
@@ -26,15 +26,15 @@ def _config(strategy: MergeStrategy) -> ProjectConfig:
 
 @patch(_PULL_FF)
 @patch(_CHECKOUT_DETACH)
-@patch("wade.services.work_service.git_worktree.prune_worktrees")
-@patch("wade.services.work_service.git_worktree.remove_worktree")
-@patch("wade.services.work_service.git_pr.merge_pr")
-@patch("wade.services.work_service.git_repo.is_clean", return_value=True)
-@patch("wade.services.work_service.prompts.select", return_value=0)
-@patch("wade.services.work_service.prompts.confirm", return_value=True)
-@patch("wade.services.work_service.webbrowser.open")
+@patch("wade.services.implementation_service.git_worktree.prune_worktrees")
+@patch("wade.services.implementation_service.git_worktree.remove_worktree")
+@patch("wade.services.implementation_service.git_pr.merge_pr")
+@patch("wade.services.implementation_service.git_repo.is_clean", return_value=True)
+@patch("wade.services.implementation_service.prompts.select", return_value=0)
+@patch("wade.services.implementation_service.prompts.confirm", return_value=True)
+@patch("wade.services.implementation_service.webbrowser.open")
 @patch(
-    "wade.services.work_service.git_pr.get_pr_for_branch",
+    "wade.services.implementation_service.git_pr.get_pr_for_branch",
     return_value={"number": 99, "url": "https://example/pr/99"},
 )
 def test_pr_strategy_prompts_merge_on_existing_pr(
@@ -55,7 +55,7 @@ def test_pr_strategy_prompts_merge_on_existing_pr(
     repo_root = tmp_path / "repo"
     wt_path = tmp_path / "wt"
     wt_path.mkdir()  # Needs to exist for is_dir() check
-    _post_work_lifecycle(
+    _post_implementation_lifecycle(
         repo_root, "feat/42-test", 42, wt_path, _config(MergeStrategy.PR), provider
     )
 
@@ -70,9 +70,9 @@ def test_pr_strategy_prompts_merge_on_existing_pr(
     mock_pull_ff.assert_called_once_with(repo_root)
 
 
-@patch("wade.services.work_service.git_pr.merge_pr")
-@patch("wade.services.work_service.prompts.confirm")
-@patch("wade.services.work_service.git_pr.get_pr_for_branch", return_value=None)
+@patch("wade.services.implementation_service.git_pr.merge_pr")
+@patch("wade.services.implementation_service.prompts.confirm")
+@patch("wade.services.implementation_service.git_pr.get_pr_for_branch", return_value=None)
 def test_pr_strategy_no_pr_warns_and_returns(
     _mock_get_pr: MagicMock,
     mock_confirm: MagicMock,
@@ -80,7 +80,7 @@ def test_pr_strategy_no_pr_warns_and_returns(
     tmp_path: Path,
 ) -> None:
     provider = MagicMock()
-    _post_work_lifecycle(
+    _post_implementation_lifecycle(
         tmp_path / "repo",
         "feat/42-test",
         42,
@@ -93,11 +93,11 @@ def test_pr_strategy_no_pr_warns_and_returns(
     mock_merge_pr.assert_not_called()
 
 
-@patch("wade.services.work_service.git_pr.merge_pr")
-@patch("wade.services.work_service.prompts.select", return_value=1)
-@patch("wade.services.work_service.prompts.confirm", return_value=False)
+@patch("wade.services.implementation_service.git_pr.merge_pr")
+@patch("wade.services.implementation_service.prompts.select", return_value=1)
+@patch("wade.services.implementation_service.prompts.confirm", return_value=False)
 @patch(
-    "wade.services.work_service.git_pr.get_pr_for_branch",
+    "wade.services.implementation_service.git_pr.get_pr_for_branch",
     return_value={"number": 99, "url": "https://example/pr/99"},
 )
 def test_pr_strategy_user_declines_merge(
@@ -108,7 +108,7 @@ def test_pr_strategy_user_declines_merge(
     tmp_path: Path,
 ) -> None:
     provider = MagicMock()
-    _post_work_lifecycle(
+    _post_implementation_lifecycle(
         tmp_path / "repo",
         "feat/42-test",
         42,
@@ -123,12 +123,12 @@ def test_pr_strategy_user_declines_merge(
 
 
 @patch(_CHECKOUT)
-@patch("wade.services.work_service.git_pr.merge_pr")
-@patch("wade.services.work_service.prompts.select", return_value=0)
-@patch("wade.services.work_service.prompts.confirm", return_value=True)
-@patch("wade.services.work_service.webbrowser.open")
+@patch("wade.services.implementation_service.git_pr.merge_pr")
+@patch("wade.services.implementation_service.prompts.select", return_value=0)
+@patch("wade.services.implementation_service.prompts.confirm", return_value=True)
+@patch("wade.services.implementation_service.webbrowser.open")
 @patch(
-    "wade.services.work_service.git_pr.get_pr_for_branch",
+    "wade.services.implementation_service.git_pr.get_pr_for_branch",
     return_value={"number": 99, "url": "https://example/pr/99"},
 )
 def test_pr_strategy_merge_failure_preserves_branch(
@@ -143,7 +143,7 @@ def test_pr_strategy_merge_failure_preserves_branch(
     provider = MagicMock()
     mock_merge_pr.side_effect = subprocess.CalledProcessError(1, ["gh", "pr", "merge"])
 
-    _post_work_lifecycle(
+    _post_implementation_lifecycle(
         tmp_path / "repo",
         "feat/42-test",
         42,
@@ -158,13 +158,13 @@ def test_pr_strategy_merge_failure_preserves_branch(
 
 @patch(_CHECKOUT)
 @patch(_CHECKOUT_DETACH)
-@patch("wade.services.work_service.git_pr.merge_pr")
-@patch("wade.services.work_service.git_repo.is_clean", return_value=True)
-@patch("wade.services.work_service.prompts.select", return_value=0)
-@patch("wade.services.work_service.prompts.confirm", return_value=True)
-@patch("wade.services.work_service.webbrowser.open")
+@patch("wade.services.implementation_service.git_pr.merge_pr")
+@patch("wade.services.implementation_service.git_repo.is_clean", return_value=True)
+@patch("wade.services.implementation_service.prompts.select", return_value=0)
+@patch("wade.services.implementation_service.prompts.confirm", return_value=True)
+@patch("wade.services.implementation_service.webbrowser.open")
 @patch(
-    "wade.services.work_service.git_pr.get_pr_for_branch",
+    "wade.services.implementation_service.git_pr.get_pr_for_branch",
     return_value={"number": 99, "url": "https://example/pr/99"},
 )
 def test_pr_strategy_merge_failure_restores_branch(
@@ -184,7 +184,7 @@ def test_pr_strategy_merge_failure_restores_branch(
     wt_path.mkdir()
     mock_merge_pr.side_effect = subprocess.CalledProcessError(1, ["gh", "pr", "merge"])
 
-    _post_work_lifecycle(
+    _post_implementation_lifecycle(
         tmp_path / "repo",
         "feat/42-test",
         42,
@@ -199,14 +199,14 @@ def test_pr_strategy_merge_failure_restores_branch(
 
 @patch(_PULL_FF)
 @patch(_CHECKOUT_DETACH)
-@patch("wade.services.work_service.git_worktree.prune_worktrees")
-@patch("wade.services.work_service.git_worktree.remove_worktree")
-@patch("wade.services.work_service.git_pr.merge_pr")
-@patch("wade.services.work_service.git_repo.is_clean", return_value=True)
-@patch("wade.services.work_service.prompts.confirm", return_value=True)
-@patch("wade.services.work_service.webbrowser.open")
+@patch("wade.services.implementation_service.git_worktree.prune_worktrees")
+@patch("wade.services.implementation_service.git_worktree.remove_worktree")
+@patch("wade.services.implementation_service.git_pr.merge_pr")
+@patch("wade.services.implementation_service.git_repo.is_clean", return_value=True)
+@patch("wade.services.implementation_service.prompts.confirm", return_value=True)
+@patch("wade.services.implementation_service.webbrowser.open")
 @patch(
-    "wade.services.work_service.git_pr.get_pr_for_branch",
+    "wade.services.implementation_service.git_pr.get_pr_for_branch",
     return_value={"number": 99, "url": "https://example/pr/99"},
 )
 def test_pr_strategy_cleanup_and_pull_after_merge(
@@ -227,7 +227,7 @@ def test_pr_strategy_cleanup_and_pull_after_merge(
     wt_path = tmp_path / "wt"
     wt_path.mkdir()  # Needs to exist for is_dir() check
 
-    _post_work_lifecycle(
+    _post_implementation_lifecycle(
         repo_root, "feat/42-test", 42, wt_path, _config(MergeStrategy.PR), provider
     )
 
@@ -236,8 +236,8 @@ def test_pr_strategy_cleanup_and_pull_after_merge(
     mock_pull_ff.assert_called_once_with(repo_root)
 
 
-@patch("wade.services.work_service.prompts.confirm", return_value=False)
-@patch("wade.services.work_service.git_branch.commits_ahead", return_value=0)
+@patch("wade.services.implementation_service.prompts.confirm", return_value=False)
+@patch("wade.services.implementation_service.git_branch.commits_ahead", return_value=0)
 def test_direct_strategy_zero_ahead_offers_delete(
     _mock_ahead: MagicMock,
     mock_confirm: MagicMock,
@@ -245,7 +245,7 @@ def test_direct_strategy_zero_ahead_offers_delete(
 ) -> None:
     provider = MagicMock()
 
-    _post_work_lifecycle(
+    _post_implementation_lifecycle(
         tmp_path / "repo",
         "feat/42-test",
         42,
@@ -258,8 +258,8 @@ def test_direct_strategy_zero_ahead_offers_delete(
     assert "delete" in mock_confirm.call_args[0][0].lower()
 
 
-@patch("wade.services.work_service.prompts.select", return_value=2)
-@patch("wade.services.work_service.git_branch.commits_ahead", return_value=3)
+@patch("wade.services.implementation_service.prompts.select", return_value=2)
+@patch("wade.services.implementation_service.git_branch.commits_ahead", return_value=3)
 def test_direct_strategy_commits_ahead_shows_menu(
     _mock_ahead: MagicMock,
     mock_select: MagicMock,
@@ -267,7 +267,7 @@ def test_direct_strategy_commits_ahead_shows_menu(
 ) -> None:
     provider = MagicMock()
 
-    _post_work_lifecycle(
+    _post_implementation_lifecycle(
         tmp_path / "repo",
         "feat/42-test",
         42,
@@ -283,12 +283,12 @@ def test_direct_strategy_commits_ahead_shows_menu(
     assert "Skip" in joined
 
 
-@patch("wade.services.work_service._cleanup_worktree")
-@patch("wade.services.work_service.prompts.select", return_value=1)
+@patch("wade.services.implementation_service._cleanup_worktree")
+@patch("wade.services.implementation_service.prompts.select", return_value=1)
 @patch(_PUSH)
 @patch(_COMMIT_NO_EDIT)
 @patch(_MERGE_SQUASH)
-@patch("wade.services.work_service.git_branch.commits_ahead", return_value=3)
+@patch("wade.services.implementation_service.git_branch.commits_ahead", return_value=3)
 def test_direct_strategy_merge_and_close(
     _mock_ahead: MagicMock,
     mock_merge_squash: MagicMock,
@@ -302,7 +302,7 @@ def test_direct_strategy_merge_and_close(
     wt_path = tmp_path / "wt"
     provider = MagicMock()
 
-    _post_work_lifecycle(
+    _post_implementation_lifecycle(
         repo_root, "feat/42-test", 42, wt_path, _config(MergeStrategy.DIRECT), provider
     )
 
@@ -311,25 +311,25 @@ def test_direct_strategy_merge_and_close(
     provider.close_task.assert_called_once_with("42")
 
 
-@patch("wade.services.work_service.write_plan_md")
-@patch("wade.services.work_service._post_work_lifecycle")
-@patch("wade.services.work_service.launch_in_new_terminal", return_value=True)
-@patch("wade.services.work_service.AbstractAITool.get")
-@patch("wade.services.work_service._detect_ai_cli_env", return_value=None)
-@patch("wade.services.work_service.add_in_progress_label")
-@patch("wade.services.work_service.bootstrap_worktree")
-@patch("wade.services.work_service.git_worktree.list_worktrees", return_value=[])
-@patch("wade.services.work_service.git_worktree.create_worktree")
-@patch("wade.services.work_service.git_repo.get_repo_root")
-@patch("wade.services.work_service._resolve_task_target")
-@patch("wade.services.work_service.get_provider")
-@patch("wade.services.work_service.load_config")
-@patch("wade.services.work_service.git_pr.get_pr_for_branch", return_value=None)
+@patch("wade.services.implementation_service.write_plan_md")
+@patch("wade.services.implementation_service._post_implementation_lifecycle")
+@patch("wade.services.implementation_service.launch_in_new_terminal", return_value=True)
+@patch("wade.services.implementation_service.AbstractAITool.get")
+@patch("wade.services.implementation_service._detect_ai_cli_env", return_value=None)
+@patch("wade.services.implementation_service.add_in_progress_label")
+@patch("wade.services.implementation_service.bootstrap_worktree")
+@patch("wade.services.implementation_service.git_worktree.list_worktrees", return_value=[])
+@patch("wade.services.implementation_service.git_worktree.create_worktree")
+@patch("wade.services.implementation_service.git_repo.get_repo_root")
+@patch("wade.services.implementation_service._resolve_task_target")
+@patch("wade.services.implementation_service.get_provider")
+@patch("wade.services.implementation_service.load_config")
+@patch("wade.services.implementation_service.git_pr.get_pr_for_branch", return_value=None)
 @patch(
-    "wade.services.work_service.bootstrap_draft_pr",
+    "wade.services.implementation_service.bootstrap_draft_pr",
     return_value={"number": 1, "url": "http://test"},
 )
-@patch("wade.services.work_service.prompts")
+@patch("wade.services.implementation_service.prompts")
 def test_lifecycle_skipped_in_detach_mode(
     mock_prompts: MagicMock,
     _mock_bootstrap_pr: MagicMock,
@@ -363,30 +363,30 @@ def test_lifecycle_skipped_in_detach_mode(
     mock_lifecycle.assert_not_called()
 
 
-@patch("wade.services.work_service.write_plan_md")
-@patch("wade.services.work_service._post_work_lifecycle")
-@patch("wade.services.work_service.add_worked_by_labels")
-@patch("wade.services.work_service._capture_post_session_usage")
-@patch("wade.services.work_service.stop_title_keeper")
-@patch("wade.services.work_service.start_title_keeper")
-@patch("wade.services.work_service.set_terminal_title")
-@patch("wade.services.work_service.compose_implement_title", return_value="title")
-@patch("wade.services.work_service._detect_ai_cli_env", return_value=None)
-@patch("wade.services.work_service.add_in_progress_label")
-@patch("wade.services.work_service.bootstrap_worktree")
-@patch("wade.services.work_service.git_worktree.list_worktrees", return_value=[])
-@patch("wade.services.work_service.git_worktree.create_worktree")
-@patch("wade.services.work_service.git_repo.get_repo_root")
-@patch("wade.services.work_service._resolve_task_target")
-@patch("wade.services.work_service.AbstractAITool.get")
-@patch("wade.services.work_service.get_provider")
-@patch("wade.services.work_service.load_config")
-@patch("wade.services.work_service.git_pr.get_pr_for_branch", return_value=None)
+@patch("wade.services.implementation_service.write_plan_md")
+@patch("wade.services.implementation_service._post_implementation_lifecycle")
+@patch("wade.services.implementation_service.add_implemented_by_labels")
+@patch("wade.services.implementation_service._capture_post_session_usage")
+@patch("wade.services.implementation_service.stop_title_keeper")
+@patch("wade.services.implementation_service.start_title_keeper")
+@patch("wade.services.implementation_service.set_terminal_title")
+@patch("wade.services.implementation_service.compose_implement_title", return_value="title")
+@patch("wade.services.implementation_service._detect_ai_cli_env", return_value=None)
+@patch("wade.services.implementation_service.add_in_progress_label")
+@patch("wade.services.implementation_service.bootstrap_worktree")
+@patch("wade.services.implementation_service.git_worktree.list_worktrees", return_value=[])
+@patch("wade.services.implementation_service.git_worktree.create_worktree")
+@patch("wade.services.implementation_service.git_repo.get_repo_root")
+@patch("wade.services.implementation_service._resolve_task_target")
+@patch("wade.services.implementation_service.AbstractAITool.get")
+@patch("wade.services.implementation_service.get_provider")
+@patch("wade.services.implementation_service.load_config")
+@patch("wade.services.implementation_service.git_pr.get_pr_for_branch", return_value=None)
 @patch(
-    "wade.services.work_service.bootstrap_draft_pr",
+    "wade.services.implementation_service.bootstrap_draft_pr",
     return_value={"number": 1, "url": "http://test"},
 )
-@patch("wade.services.work_service.prompts")
+@patch("wade.services.implementation_service.prompts")
 def test_lifecycle_skipped_after_ai_crash(
     mock_prompts: MagicMock,
     _mock_bootstrap_pr: MagicMock,
@@ -406,7 +406,7 @@ def test_lifecycle_skipped_after_ai_crash(
     _mock_start_keeper: MagicMock,
     _mock_stop_keeper: MagicMock,
     _mock_capture_post_session_usage: MagicMock,
-    _mock_add_worked_by: MagicMock,
+    _mock_add_implemented_by: MagicMock,
     mock_lifecycle: MagicMock,
     _mock_write_plan_md: MagicMock,
     tmp_path: Path,

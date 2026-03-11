@@ -1,4 +1,4 @@
-"""Work service — session lifecycle: start, done, sync, list, batch, remove.
+"""Implementation service — session lifecycle: start, done, sync, list, batch, remove.
 
 Orchestrates: worktree creation, bootstrap, AI tool launch, PR/merge,
 sync, list, batch topology.
@@ -31,14 +31,14 @@ from wade.git.repo import GitError
 from wade.models.ai import AIToolID, TokenUsage
 from wade.models.config import ProjectConfig
 from wade.models.deps import DependencyGraph
-from wade.models.task import Task
-from wade.models.work import (
+from wade.models.session import (
     MergeStrategy,
     SyncEvent,
     SyncEventType,
     SyncResult,
     WorktreeState,
 )
+from wade.models.task import Task
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.ai_resolution import (
@@ -50,8 +50,8 @@ from wade.services.ai_resolution import (
 )
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import (
+    add_implemented_by_labels,
     add_in_progress_label,
-    add_worked_by_labels,
     remove_in_progress_label,
 )
 from wade.ui import prompts
@@ -127,7 +127,7 @@ def write_plan_md(
         lines.append(f"URL: {task.url}")
 
     plan_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    logger.info("work.plan_md_written", path=str(plan_path))
+    logger.info("implementation.plan_md_written", path=str(plan_path))
     return plan_path
 
 
@@ -152,7 +152,7 @@ def bootstrap_worktree(
         if src.is_file():
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dest)
-            logger.debug("work.bootstrap_copy", file=filename)
+            logger.debug("implementation.bootstrap_copy", file=filename)
 
     # Install skill files — not tracked by git so worktrees don't inherit them
     from wade.skills.installer import get_wade_repo_root, install_skills
@@ -170,7 +170,7 @@ def bootstrap_worktree(
         )
     else:
         install_skills(worktree_path, is_self_init=False, force=True, skills=skills)
-    logger.debug("work.bootstrap_skills", path=str(worktree_path))
+    logger.debug("implementation.bootstrap_skills", path=str(worktree_path))
 
     # Propagate allowlist from project root to worktree if already configured
     from wade.config.claude_allowlist import configure_allowlist, is_allowlist_configured
@@ -199,13 +199,13 @@ def bootstrap_worktree(
                     capture_output=True,
                     timeout=60,
                 )
-                logger.info("work.hook_ran", hook=config.hooks.post_worktree_create)
+                logger.info("implementation.hook_ran", hook=config.hooks.post_worktree_create)
             except subprocess.TimeoutExpired as e:
                 raise RuntimeError(f"Bootstrap hook timed out after 60 seconds: {hook_path}") from e
             except subprocess.CalledProcessError as e:
                 hook_path_str = str(hook_path)
                 logger.warning(
-                    "work.hook_failed",
+                    "implementation.hook_failed",
                     hook=config.hooks.post_worktree_create,
                     hook_path=hook_path_str,
                     error=e.stderr.decode("utf-8", errors="replace") if e.stderr else "",
@@ -241,7 +241,7 @@ def _detect_ai_cli_env() -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Draft PR bootstrap (shared by plan and work flows)
+# Draft PR bootstrap (shared by plan and implementation flows)
 # ---------------------------------------------------------------------------
 
 PLAN_MARKER_START = "<!-- wade:plan:start -->"
@@ -284,7 +284,7 @@ def bootstrap_draft_pr(
 ) -> dict[str, str | int] | None:
     """Create branch + push + draft PR for an issue.
 
-    Reusable by both plan and work flows. Idempotent — if the branch and
+    Reusable by both plan and implementation flows. Idempotent — if the branch and
     PR already exist, returns the existing PR info.
 
     Args:
@@ -371,7 +371,7 @@ def _capture_post_session_usage(
 ) -> str | None:
     """Post-AI-exit processing: parse transcript, update PR and issue with token usage.
 
-    Returns the primary model detected from the transcript (for worked-model label),
+    Returns the primary model detected from the transcript (for implemented-model label),
     or the explicitly passed model if no breakdown is available.
     """
     if not transcript_path or not transcript_path.is_file():
@@ -381,13 +381,13 @@ def _capture_post_session_usage(
     try:
         usage = adapter.parse_transcript(transcript_path)
     except Exception as e:
-        logger.warning("work.transcript_parse_failed", error=str(e))
+        logger.warning("implementation.transcript_parse_failed", error=str(e))
         return None
 
     has_tokens = usage and (usage.total_tokens or usage.input_tokens)
     has_session = usage and usage.session_id
     if not has_tokens and not has_session:
-        logger.warning("work.no_token_usage", transcript=str(transcript_path))
+        logger.warning("implementation.no_token_usage", transcript=str(transcript_path))
         console.warn(f"No token usage found in transcript: {transcript_path}")
         return None
 
@@ -419,14 +419,14 @@ def _capture_post_session_usage(
                 if git_pr.update_pr_body(repo_root, pr_number, new_body):
                     console.success("Updated PR with implementation usage stats.")
                     logger.info(
-                        "work.impl_usage_updated",
+                        "implementation.impl_usage_updated",
                         pr=pr_number,
                         total_tokens=usage.total_tokens if usage else None,
                     )
         except Exception:
-            logger.debug("work.pr_body_read_failed", exc_info=True)
+            logger.debug("implementation.pr_body_read_failed", exc_info=True)
     else:
-        logger.debug("work.no_pr_for_branch", branch=branch)
+        logger.debug("implementation.no_pr_for_branch", branch=branch)
 
     # Embed usage stats and session ID in the issue body
     if issue_number and provider:
@@ -447,13 +447,13 @@ def _capture_post_session_usage(
                 )
             provider.update_task(str(issue_number), body=new_body)
             console.success("Updated issue with implementation usage stats.")
-            logger.info("work.impl_usage_issue_updated", issue=issue_number)
+            logger.info("implementation.impl_usage_issue_updated", issue=issue_number)
 
     return effective_model
 
 
-def _build_work_issue_context_header(task: Task) -> str:
-    """Build an issue description block to prepend to the work prompt."""
+def _build_implementation_issue_context_header(task: Task) -> str:
+    """Build an issue description block to prepend to the implementation prompt."""
     lines = [
         "## Issue Description",
         "",
@@ -465,8 +465,10 @@ def _build_work_issue_context_header(task: Task) -> str:
     return "\n".join(lines)
 
 
-def build_work_prompt(task: Task, ai_tool: str | None = None, has_plan: bool = False) -> str:
-    """Build the initial prompt for a work session.
+def build_implementation_prompt(
+    task: Task, ai_tool: str | None = None, has_plan: bool = False
+) -> str:
+    """Build the initial prompt for an implementation session.
 
     When *has_plan* is False (no plan content in the draft PR), the issue
     description is prepended inline so the AI has it without relying on
@@ -481,11 +483,11 @@ def build_work_prompt(task: Task, ai_tool: str | None = None, has_plan: bool = F
     template = template_path.read_text(encoding="utf-8")
     prompt = template.format(issue_number=task.id, issue_title=task.title)
     if task.body and not has_plan:
-        prompt = _build_work_issue_context_header(task) + prompt
+        prompt = _build_implementation_issue_context_header(task) + prompt
     return prompt
 
 
-def _post_work_lifecycle(
+def _post_implementation_lifecycle(
     repo_root: Path,
     branch: str,
     issue_number: str | int | None,
@@ -494,9 +496,9 @@ def _post_work_lifecycle(
     provider: AbstractTaskProvider,
 ) -> None:
     if config.project.merge_strategy == MergeStrategy.PR:
-        _post_work_lifecycle_pr(repo_root, branch, issue_number, worktree_path, provider)
+        _post_implementation_lifecycle_pr(repo_root, branch, issue_number, worktree_path, provider)
     else:
-        _post_work_lifecycle_direct(
+        _post_implementation_lifecycle_direct(
             repo_root, branch, issue_number, worktree_path, config, provider
         )
 
@@ -561,7 +563,7 @@ def _pull_main_after_merge(repo_root: Path) -> None:
         _warn_pull_sync_failed()
 
 
-def _post_work_lifecycle_pr(
+def _post_implementation_lifecycle_pr(
     repo_root: Path,
     branch: str,
     issue_number: str | int | None,
@@ -645,7 +647,7 @@ def _merge_pr(
             provider.close_task(str(issue_number))
 
 
-def _post_work_lifecycle_direct(
+def _post_implementation_lifecycle_direct(
     repo_root: Path,
     branch: str,
     issue_number: str | int | None,
@@ -657,7 +659,7 @@ def _post_work_lifecycle_direct(
     try:
         ahead = git_branch.commits_ahead(repo_root, branch, main_branch)
     except GitError:
-        console.warn("Could not determine commit count; skipping post-work lifecycle.")
+        console.warn("Could not determine commit count; skipping post-implementation lifecycle.")
         return
 
     if ahead == 0:
@@ -690,7 +692,7 @@ def _post_work_lifecycle_direct(
 
 
 # ---------------------------------------------------------------------------
-# Work start
+# Implementation start
 # ---------------------------------------------------------------------------
 
 
@@ -710,14 +712,14 @@ def start(
     resume_ai_tool: str | None = None,
     yolo: bool | None = None,
 ) -> bool:
-    """Start a work session on an issue.
+    """Start an implementation session on an issue.
 
     Steps:
     1. Read the issue from the provider
     2. Create worktree and branch
     3. Bootstrap worktree (copy files, hooks, issue context)
     4. Resolve model from complexity
-    5. Build work prompt and pass it as initial message to the AI tool
+    5. Build implementation prompt and pass it as initial message to the AI tool
     6. Launch AI tool (or print path if cd_only / detach)
     7. Post-exit processing
 
@@ -800,20 +802,20 @@ def start(
             console.kv("Complexity", task.complexity.value)
 
         # Resolve AI tool and model
-        resolved_tool = resolve_ai_tool(ai_tool, config, "work")
+        resolved_tool = resolve_ai_tool(ai_tool, config, "implement")
         resolved_model = resolve_model(
             model,
             config,
-            "work",
+            "implement",
             tool=resolved_tool,
             complexity=task.complexity.value if task.complexity else None,
         )
 
         # Resolve effort level
-        resolved_effort = resolve_effort(effort, config, "work", tool=resolved_tool)
+        resolved_effort = resolve_effort(effort, config, "implement", tool=resolved_tool)
 
         # Resolve YOLO mode
-        resolved_yolo = resolve_yolo(yolo, config, "work", tool=resolved_tool)
+        resolved_yolo = resolve_yolo(yolo, config, "implement", tool=resolved_tool)
 
         # When resuming, override the resolved tool and skip interactive confirmation
         if resume_ai_tool:
@@ -923,12 +925,12 @@ def start(
         with contextlib.suppress(Exception):
             provider.move_to_in_progress(task.id)
 
-        # Build work prompt (skipped when resuming a session)
+        # Build implementation prompt (skipped when resuming a session)
         prompt: str | None = None
         if not resume_session_id:
-            prompt = build_work_prompt(task, resolved_tool, has_plan=bool(plan_content))
+            prompt = build_implementation_prompt(task, resolved_tool, has_plan=bool(plan_content))
             snippet = "\n".join(prompt.splitlines()[:5]) + "\n…"
-            console.panel(snippet, title="Work Prompt (preview)")
+            console.panel(snippet, title="Implementation Prompt (preview)")
         else:
             console.info(f"Resuming session: {resume_session_id[:40]}…")
 
@@ -942,7 +944,7 @@ def start(
         detected_env = _detect_ai_cli_env()
         if detected_env:
             logger.info(
-                "work.ai_launch_skipped",
+                "implementation.ai_launch_skipped",
                 reason="inside_ai_cli",
                 env_var=detected_env,
             )
@@ -961,11 +963,11 @@ def start(
         # Set up transcript capture
         transcript_path: Path | None = None
         try:
-            transcript_dir = tempfile.mkdtemp(prefix="wade-work-")
+            transcript_dir = tempfile.mkdtemp(prefix="wade-implement-")
             transcript_path = Path(transcript_dir) / f"transcript-{task.id}.log"
             console.hint(f"Transcript: {transcript_path}")
         except OSError:
-            logger.warning("work.transcript_dir_failed")
+            logger.warning("implementation.transcript_dir_failed")
 
         # Detach mode: launch AI tool in a new terminal, don't block
         if detach and resolved_tool:
@@ -1052,7 +1054,7 @@ def start(
                     )
 
                 launch_completed = True
-                logger.info("work.ai_exited", exit_code=exit_code, tool=resolved_tool)
+                logger.info("implementation.ai_exited", exit_code=exit_code, tool=resolved_tool)
 
                 # Non-blocking tools (VS Code, Antigravity) return immediately.
                 # Wait for the user to confirm they're done before post-session steps.
@@ -1092,7 +1094,7 @@ def start(
 
                 if launch_completed:
                     try:
-                        _post_work_lifecycle(
+                        _post_implementation_lifecycle(
                             repo_root=repo_root,
                             branch=branch_name,
                             issue_number=task.id,
@@ -1101,15 +1103,15 @@ def start(
                             provider=provider,
                         )
                     except Exception:
-                        logger.exception("post_work_lifecycle.failed")
+                        logger.exception("post_implementation_lifecycle.failed")
 
             # Use CLI-resolved model, falling back to transcript-detected model.
             effective_model = resolved_model or detected_model
             try:
-                add_worked_by_labels(provider, task.id, resolved_tool, effective_model)
+                add_implemented_by_labels(provider, task.id, resolved_tool, effective_model)
             except Exception as e:
-                console.warn(f"Could not apply worked-by labels: {e}")
-                logger.warning("work.worked_by_labels_failed", error=str(e))
+                console.warn(f"Could not apply implemented-by labels: {e}")
+                logger.warning("implementation.implemented_by_labels_failed", error=str(e))
         elif not resolved_tool:
             console.info("No AI tool configured. Worktree ready for manual work.")
             console.detail(f"cd {worktree_path}")
@@ -1118,7 +1120,7 @@ def start(
         lines = []
         lines.append(f"  Worktree   {console.git_ref(branch_name)}")
         lines.append(f"  Issue      {console.issue_ref(task.id, task.title)}")
-        console.panel("\n".join(lines), title="Work session complete")
+        console.panel("\n".join(lines), title="Implementation session complete")
 
         return True
     finally:
@@ -1153,7 +1155,7 @@ def _resolve_task_target(
 
 
 # ---------------------------------------------------------------------------
-# Work batch
+# Implementation batch
 # ---------------------------------------------------------------------------
 
 
@@ -1173,7 +1175,7 @@ def batch(
     effort_explicit: bool = False,
     yolo: bool | None = None,
 ) -> bool:
-    """Start parallel work sessions for multiple issues.
+    """Start parallel implementation sessions for multiple issues.
 
     Independent issues launch in parallel terminals.
     Dependent chains: only the first issue in each chain is launched; the
@@ -1195,10 +1197,10 @@ def batch(
     console.rule(f"implement-batch ({len(issue_numbers)} issues)")
 
     # Resolve AI tool and model, then offer interactive confirmation.
-    resolved_tool = resolve_ai_tool(ai_tool, config, "work")
-    resolved_model = resolve_model(model, config, "work", tool=resolved_tool)
-    resolved_effort = resolve_effort(effort, config, "work", tool=resolved_tool)
-    resolved_yolo = resolve_yolo(yolo, config, "work", tool=resolved_tool)
+    resolved_tool = resolve_ai_tool(ai_tool, config, "implement")
+    resolved_model = resolve_model(model, config, "implement", tool=resolved_tool)
+    resolved_effort = resolve_effort(effort, config, "implement", tool=resolved_tool)
+    resolved_yolo = resolve_yolo(yolo, config, "implement", tool=resolved_tool)
     resolved_tool, resolved_model, resolved_effort, resolved_yolo = confirm_ai_selection(
         resolved_tool,
         resolved_model,
@@ -1260,7 +1262,7 @@ def batch(
             remaining = ", ".join(f"#{n}" for n in chain[1:])
             console.info(f"After completing #{chain[0]}, work on these in order: {remaining}")
 
-    console.panel(f"  Launched {launched} work session(s)", title="Batch started")
+    console.panel(f"  Launched {launched} implementation session(s)", title="Batch started")
     return launched > 0
 
 
@@ -1294,7 +1296,7 @@ def _build_graph_from_issues(
 
 
 # ---------------------------------------------------------------------------
-# Work cd
+# Implementation cd
 # ---------------------------------------------------------------------------
 
 
@@ -1795,7 +1797,7 @@ def _build_pr_body(
 
 
 # ---------------------------------------------------------------------------
-# Work sync
+# Implementation sync
 # ---------------------------------------------------------------------------
 
 
@@ -1986,7 +1988,7 @@ def sync(
 
 
 # ---------------------------------------------------------------------------
-# Work done
+# Implementation done
 # ---------------------------------------------------------------------------
 
 
@@ -1998,7 +2000,7 @@ def done(
     no_cleanup: bool = False,
     project_root: Path | None = None,
 ) -> bool:
-    """Complete work session — create PR or merge directly.
+    """Complete implementation session — create PR or merge directly.
 
     Detects current branch, extracts issue number, reads merge strategy
     from config, and delegates to _done_via_pr or _done_via_direct.
@@ -2143,7 +2145,7 @@ def _done_via_pr(
     config: ProjectConfig,
     worktree_path: Path | None = None,
 ) -> bool:
-    """Finalize work — update existing draft PR or create a new one.
+    """Finalize implementation — update existing draft PR or create a new one.
 
     In the new workflow, a draft PR should already exist (created by plan
     or implement). This function:
@@ -2208,7 +2210,7 @@ def _done_via_pr(
             if parent_issue:
                 console.detail(f"Detected parent tracking issue: #{parent_issue}")
         except Exception:
-            logger.debug("work.parent_issue_detection_failed", exc_info=True)
+            logger.debug("implementation.parent_issue_detection_failed", exc_info=True)
 
         # Build updated body: keep existing content, add close/parent references + summary
         updated_body = _apply_pr_refs(current_body, issue_number, close_issue, parent_issue)
@@ -2252,7 +2254,7 @@ def _done_via_pr(
             if parent_issue:
                 console.detail(f"Detected parent tracking issue: #{parent_issue}")
         except Exception:
-            logger.debug("work.parent_issue_detection_failed", exc_info=True)
+            logger.debug("implementation.parent_issue_detection_failed", exc_info=True)
 
         body = _build_pr_body(
             task,
@@ -2284,7 +2286,7 @@ def _done_via_pr(
     lines = []
     lines.append(f"  PR      [url]{pr_url}[/]")
     lines.append(f"  Issue   {console.issue_ref(issue_number, task.title)}")
-    console.panel("\n".join(lines), title="Work done")
+    console.panel("\n".join(lines), title="Implementation done")
 
     return True
 
@@ -2372,13 +2374,13 @@ def _done_via_direct(
     lines = []
     lines.append(f"  Branch   {console.git_ref(branch)} merged into {console.git_ref(main_branch)}")
     lines.append(f"  Issue    #{issue_number}")
-    console.panel("\n".join(lines), title="Work done")
+    console.panel("\n".join(lines), title="Implementation done")
 
     return True
 
 
 # ---------------------------------------------------------------------------
-# Work list
+# Implementation list
 # ---------------------------------------------------------------------------
 
 
@@ -2388,7 +2390,7 @@ def list_sessions(
     project_root: Path | None = None,
     silent: bool = False,
 ) -> list[dict[str, Any]]:
-    """List active work sessions / worktrees.
+    """List active implementation sessions / worktrees.
 
     Returns a list of dicts with worktree info (path, branch, issue, staleness).
     When *silent* is True, skips all console output (useful for callers that
@@ -2445,7 +2447,7 @@ def list_sessions(
                 issue_state = task_info.state.value
                 issue_title = task_info.title
             except Exception:
-                logger.debug("work.issue_read_failed", issue=issue_number, exc_info=True)
+                logger.debug("implementation.issue_read_failed", issue=issue_number, exc_info=True)
 
         # Count commits ahead
         try:
@@ -2475,7 +2477,7 @@ def list_sessions(
         console.info("No active wade worktrees found.")
         return sessions
 
-    console.rule(f"Work sessions ({len(sessions)})")
+    console.rule(f"Implementation sessions ({len(sessions)})")
     for s in sessions:
         staleness_label = s["staleness"].upper().replace("_", " ")
         issue_str = f"#{s['issue']}" if s["issue"] else "(no issue)"
@@ -2489,7 +2491,7 @@ def list_sessions(
 
 
 # ---------------------------------------------------------------------------
-# Work remove
+# Implementation remove
 # ---------------------------------------------------------------------------
 
 

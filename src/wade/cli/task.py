@@ -171,7 +171,7 @@ def list_tasks(
         items.append("(none — exit)")
         idx = prompts.select("Start work on an issue?", items)
         if idx < len(tasks):
-            from wade.services.work_service import start as do_start
+            from wade.services.implementation_service import start as do_start
 
             success = do_start(target=tasks[idx].id)
             raise typer.Exit(0 if success else 1)

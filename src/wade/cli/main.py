@@ -119,7 +119,7 @@ def _interactive_main_menu() -> None:
 
         target = prompt_task_selection("Issue number")
         if target:
-            from wade.services.work_service import start as do_start
+            from wade.services.implementation_service import start as do_start
 
             success = do_start(target=target)
             raise typer.Exit(0 if success else 1)
@@ -141,7 +141,7 @@ def _interactive_main_menu() -> None:
 
         create_interactive()
     elif idx == 4:  # List worktrees
-        from wade.services.work_service import list_sessions
+        from wade.services.implementation_service import list_sessions
 
         list_sessions()
     elif idx == 5:  # Help
@@ -211,7 +211,7 @@ def implement_cmd(
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
 ) -> None:
     """Start an implementation session on an issue."""
-    from wade.services.work_service import start as do_start
+    from wade.services.implementation_service import start as do_start
     from wade.ui import prompts
 
     # Resolve multiple --ai flags to a single value
@@ -258,7 +258,7 @@ def implement_batch_cmd(
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
 ) -> None:
     """Start parallel implementation sessions. [beta]"""
-    from wade.services.work_service import batch as do_batch
+    from wade.services.implementation_service import batch as do_batch
     from wade.ui import prompts
     from wade.ui.console import console
 
@@ -316,8 +316,8 @@ def cd_cmd(
     target: str = typer.Argument(..., help="Issue number or worktree name."),
 ) -> None:
     """Navigate to a worktree (requires shell integration)."""
-    from wade.services.work_service import find_worktree_path
-    from wade.services.work_service import start as do_start
+    from wade.services.implementation_service import find_worktree_path
+    from wade.services.implementation_service import start as do_start
 
     path = find_worktree_path(target)
     if path:
@@ -441,7 +441,7 @@ def reviews_alias(
 # --- Register subcommand groups ---
 
 from wade.cli.admin import admin_app  # noqa: E402
-from wade.cli.implementation_session import impl_session_app  # noqa: E402
+from wade.cli.implementation_session import implementation_session_app  # noqa: E402
 from wade.cli.plan_session import plan_session_app  # noqa: E402
 from wade.cli.review import review_app  # noqa: E402
 from wade.cli.review_pr_comments_session import review_pr_comments_session_app  # noqa: E402
@@ -469,7 +469,7 @@ app.add_typer(
     rich_help_panel="AI Session — Plan",
 )
 app.add_typer(
-    impl_session_app,
+    implementation_session_app,
     name="implementation-session",
     help="Implementation session commands (check, sync, done).",
     rich_help_panel="AI Session — Implementation",

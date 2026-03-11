@@ -35,15 +35,15 @@ from wade.services.ai_resolution import (
     resolve_model,
     resolve_yolo,
 )
-from wade.services.prompt_delivery import deliver_prompt_if_needed
-from wade.services.task_service import add_review_addressed_by_labels
-from wade.services.work_service import (
+from wade.services.implementation_service import (
     _detect_ai_cli_env,
     _merge_pr,
     _resolve_worktrees_dir,
     append_review_usage_entry,
     bootstrap_worktree,
 )
+from wade.services.prompt_delivery import deliver_prompt_if_needed
+from wade.services.task_service import add_review_addressed_by_labels
 from wade.ui.console import console
 from wade.utils.markdown import append_session_to_body
 from wade.utils.terminal import (
@@ -173,7 +173,7 @@ def count_unresolved_threads(
         Number of unresolved threads, or None if the check could not be performed
         (no git repo, no branch, no PR, provider error).
     """
-    from wade.services.work_service import extract_issue_from_branch
+    from wade.services.implementation_service import extract_issue_from_branch
 
     config = load_config(project_root)
     provider = get_provider(config)
@@ -344,15 +344,15 @@ def start(
     bootstrap_worktree(worktree_path, config, repo_root, skills=REVIEW_SKILLS)
 
     # 6. Resolve AI tool and model
-    resolved_tool = resolve_ai_tool(ai_tool, config, "work")
+    resolved_tool = resolve_ai_tool(ai_tool, config, "implement")
     resolved_model = resolve_model(
         model,
         config,
-        "work",
+        "implement",
         tool=resolved_tool,
         complexity=task.complexity.value if task.complexity else None,
     )
-    resolved_yolo = resolve_yolo(yolo, config, "work", tool=resolved_tool)
+    resolved_yolo = resolve_yolo(yolo, config, "implement", tool=resolved_tool)
 
     if not detach:
         resolved_tool, resolved_model, _effort, resolved_yolo = confirm_ai_selection(
@@ -583,7 +583,7 @@ def _post_review_lifecycle(
         console.hint(f"Run `wade review pr-comments{issue_hint}` when new reviews come in.")
         return
 
-    # Merge flow — reuse the same merge logic as post-work lifecycle
+    # Merge flow — reuse the same merge logic as post-implementation lifecycle
     _merge_pr(repo_root, branch, pr_number, issue_number, worktree_path, provider)
 
 
