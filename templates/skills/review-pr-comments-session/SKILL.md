@@ -113,11 +113,9 @@ Add tests if a review comment identified a missing test case.
 
 ## Syncing with main
 
-Before finalizing, sync your branch with main:
-
-```bash
-wade review-pr-comments-session sync --json
-```
+> **Reference section** — this describes how syncing works and how to handle
+> conflicts. The actual sync is performed as part of the closing workflow below
+> (Step 2). Do not run sync separately.
 
 ### Handling sync results
 

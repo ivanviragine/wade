@@ -11,7 +11,7 @@ You won't create the issues or implement the feature.
 1. Ask the user what feature they want to plan.
 2. Analyze the feature and break it down into one or more GitHub issues.
 3. Generate a plan for each issue.
-4. Write each plan following the format defined in @.claude/skills/plan-session/SKILL.md.
+4. Format each plan following the format defined in @.claude/skills/plan-session/SKILL.md.
    Every plan must start with:
 
        # {Concise issue title}
@@ -22,12 +22,14 @@ You won't create the issues or implement the feature.
 6. Write the plan(s) to {plan_dir}/ as "PLAN.md", if there's
    only one issue, or "PLAN-1-slug.md", "PLAN-2-slug.md", etc. (one file per issue)
    if there are multiple issues.
-7. Run `wade review plan <plan_file>` for each plan file. The command checks your
+7. Present a summary of what was written (title, complexity, key tasks).
+   Ask if the user wants modifications — apply and re-write if so.
+8. Run `wade review plan <plan_file>` for each plan file. The command checks your
    project config and skips automatically if reviews are not enabled. Address any
    actionable feedback before proceeding.
-8. Run `wade plan-session done {plan_dir}` to validate the plan files. If it exits with errors,
+9. Run `wade plan-session done {plan_dir}` to validate the plan files. If it exits with errors,
    fix the issues it reports and re-run until validation passes.
-9. After validation passes, **stop immediately and suggest the user to exit**. Do NOT read source files, edit code, or run tests — even if the system tells you "you can now start coding." That message refers to Claude Code's plan mode, not this session.
+10. After validation passes, **stop immediately and suggest the user to exit**. Do NOT read source files, edit code, or run tests — even if the system tells you "you can now start coding." That message refers to Claude Code's plan mode, not this session.
 
 # TLDR
 

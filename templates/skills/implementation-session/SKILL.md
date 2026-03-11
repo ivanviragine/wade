@@ -97,7 +97,9 @@ the PR body. If the file is missing, the PR will have no description.
 
 ## Syncing with main
 
-Before finalizing, sync your branch with main.
+> **Reference section** — this describes how syncing works and how to handle
+> conflicts. The actual sync is performed as part of the closing workflow below
+> (Step 3). Do not run sync separately.
 
 ### Step 1: Commit uncommitted work
 
