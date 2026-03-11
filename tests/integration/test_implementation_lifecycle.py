@@ -1,4 +1,4 @@
-"""Integration tests for the work session lifecycle.
+"""Integration tests for the implementation session lifecycle.
 
 Tests the full flow:
   task create → implement → implementation-session sync → implementation-session done.

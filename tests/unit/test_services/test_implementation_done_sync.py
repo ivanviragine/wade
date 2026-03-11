@@ -1,4 +1,4 @@
-"""Tests for work service — done, sync, list, remove, and helpers."""
+"""Tests for implementation service — done, sync, list, remove, and helpers."""
 
 from __future__ import annotations
 

@@ -127,7 +127,7 @@ def write_plan_md(
         lines.append(f"URL: {task.url}")
 
     plan_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    logger.info("work.plan_md_written", path=str(plan_path))
+    logger.info("implementation.plan_md_written", path=str(plan_path))
     return plan_path
 
 
@@ -152,7 +152,7 @@ def bootstrap_worktree(
         if src.is_file():
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dest)
-            logger.debug("work.bootstrap_copy", file=filename)
+            logger.debug("implementation.bootstrap_copy", file=filename)
 
     # Install skill files — not tracked by git so worktrees don't inherit them
     from wade.skills.installer import get_wade_repo_root, install_skills
@@ -170,7 +170,7 @@ def bootstrap_worktree(
         )
     else:
         install_skills(worktree_path, is_self_init=False, force=True, skills=skills)
-    logger.debug("work.bootstrap_skills", path=str(worktree_path))
+    logger.debug("implementation.bootstrap_skills", path=str(worktree_path))
 
     # Propagate allowlist from project root to worktree if already configured
     from wade.config.claude_allowlist import configure_allowlist, is_allowlist_configured
@@ -199,13 +199,13 @@ def bootstrap_worktree(
                     capture_output=True,
                     timeout=60,
                 )
-                logger.info("work.hook_ran", hook=config.hooks.post_worktree_create)
+                logger.info("implementation.hook_ran", hook=config.hooks.post_worktree_create)
             except subprocess.TimeoutExpired as e:
                 raise RuntimeError(f"Bootstrap hook timed out after 60 seconds: {hook_path}") from e
             except subprocess.CalledProcessError as e:
                 hook_path_str = str(hook_path)
                 logger.warning(
-                    "work.hook_failed",
+                    "implementation.hook_failed",
                     hook=config.hooks.post_worktree_create,
                     hook_path=hook_path_str,
                     error=e.stderr.decode("utf-8", errors="replace") if e.stderr else "",
@@ -381,13 +381,13 @@ def _capture_post_session_usage(
     try:
         usage = adapter.parse_transcript(transcript_path)
     except Exception as e:
-        logger.warning("work.transcript_parse_failed", error=str(e))
+        logger.warning("implementation.transcript_parse_failed", error=str(e))
         return None
 
     has_tokens = usage and (usage.total_tokens or usage.input_tokens)
     has_session = usage and usage.session_id
     if not has_tokens and not has_session:
-        logger.warning("work.no_token_usage", transcript=str(transcript_path))
+        logger.warning("implementation.no_token_usage", transcript=str(transcript_path))
         console.warn(f"No token usage found in transcript: {transcript_path}")
         return None
 
@@ -419,14 +419,14 @@ def _capture_post_session_usage(
                 if git_pr.update_pr_body(repo_root, pr_number, new_body):
                     console.success("Updated PR with implementation usage stats.")
                     logger.info(
-                        "work.impl_usage_updated",
+                        "implementation.impl_usage_updated",
                         pr=pr_number,
                         total_tokens=usage.total_tokens if usage else None,
                     )
         except Exception:
-            logger.debug("work.pr_body_read_failed", exc_info=True)
+            logger.debug("implementation.pr_body_read_failed", exc_info=True)
     else:
-        logger.debug("work.no_pr_for_branch", branch=branch)
+        logger.debug("implementation.no_pr_for_branch", branch=branch)
 
     # Embed usage stats and session ID in the issue body
     if issue_number and provider:
@@ -447,7 +447,7 @@ def _capture_post_session_usage(
                 )
             provider.update_task(str(issue_number), body=new_body)
             console.success("Updated issue with implementation usage stats.")
-            logger.info("work.impl_usage_issue_updated", issue=issue_number)
+            logger.info("implementation.impl_usage_issue_updated", issue=issue_number)
 
     return effective_model
 
@@ -692,7 +692,7 @@ def _post_implementation_lifecycle_direct(
 
 
 # ---------------------------------------------------------------------------
-# Work start
+# Implementation start
 # ---------------------------------------------------------------------------
 
 
@@ -944,7 +944,7 @@ def start(
         detected_env = _detect_ai_cli_env()
         if detected_env:
             logger.info(
-                "work.ai_launch_skipped",
+                "implementation.ai_launch_skipped",
                 reason="inside_ai_cli",
                 env_var=detected_env,
             )
@@ -967,7 +967,7 @@ def start(
             transcript_path = Path(transcript_dir) / f"transcript-{task.id}.log"
             console.hint(f"Transcript: {transcript_path}")
         except OSError:
-            logger.warning("work.transcript_dir_failed")
+            logger.warning("implementation.transcript_dir_failed")
 
         # Detach mode: launch AI tool in a new terminal, don't block
         if detach and resolved_tool:
@@ -1054,7 +1054,7 @@ def start(
                     )
 
                 launch_completed = True
-                logger.info("work.ai_exited", exit_code=exit_code, tool=resolved_tool)
+                logger.info("implementation.ai_exited", exit_code=exit_code, tool=resolved_tool)
 
                 # Non-blocking tools (VS Code, Antigravity) return immediately.
                 # Wait for the user to confirm they're done before post-session steps.
@@ -1103,7 +1103,7 @@ def start(
                             provider=provider,
                         )
                     except Exception:
-                        logger.exception("post_work_lifecycle.failed")
+                        logger.exception("post_implementation_lifecycle.failed")
 
             # Use CLI-resolved model, falling back to transcript-detected model.
             effective_model = resolved_model or detected_model
@@ -1155,7 +1155,7 @@ def _resolve_task_target(
 
 
 # ---------------------------------------------------------------------------
-# Work batch
+# Implementation batch
 # ---------------------------------------------------------------------------
 
 
@@ -1296,7 +1296,7 @@ def _build_graph_from_issues(
 
 
 # ---------------------------------------------------------------------------
-# Work cd
+# Implementation cd
 # ---------------------------------------------------------------------------
 
 
@@ -1797,7 +1797,7 @@ def _build_pr_body(
 
 
 # ---------------------------------------------------------------------------
-# Work sync
+# Implementation sync
 # ---------------------------------------------------------------------------
 
 
@@ -1988,7 +1988,7 @@ def sync(
 
 
 # ---------------------------------------------------------------------------
-# Work done
+# Implementation done
 # ---------------------------------------------------------------------------
 
 
@@ -2210,7 +2210,7 @@ def _done_via_pr(
             if parent_issue:
                 console.detail(f"Detected parent tracking issue: #{parent_issue}")
         except Exception:
-            logger.debug("work.parent_issue_detection_failed", exc_info=True)
+            logger.debug("implementation.parent_issue_detection_failed", exc_info=True)
 
         # Build updated body: keep existing content, add close/parent references + summary
         updated_body = _apply_pr_refs(current_body, issue_number, close_issue, parent_issue)
@@ -2254,7 +2254,7 @@ def _done_via_pr(
             if parent_issue:
                 console.detail(f"Detected parent tracking issue: #{parent_issue}")
         except Exception:
-            logger.debug("work.parent_issue_detection_failed", exc_info=True)
+            logger.debug("implementation.parent_issue_detection_failed", exc_info=True)
 
         body = _build_pr_body(
             task,
@@ -2380,7 +2380,7 @@ def _done_via_direct(
 
 
 # ---------------------------------------------------------------------------
-# Work list
+# Implementation list
 # ---------------------------------------------------------------------------
 
 
@@ -2447,7 +2447,7 @@ def list_sessions(
                 issue_state = task_info.state.value
                 issue_title = task_info.title
             except Exception:
-                logger.debug("work.issue_read_failed", issue=issue_number, exc_info=True)
+                logger.debug("implementation.issue_read_failed", issue=issue_number, exc_info=True)
 
         # Count commits ahead
         try:
@@ -2491,7 +2491,7 @@ def list_sessions(
 
 
 # ---------------------------------------------------------------------------
-# Work remove
+# Implementation remove
 # ---------------------------------------------------------------------------
 
 

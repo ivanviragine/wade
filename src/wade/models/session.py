@@ -74,7 +74,7 @@ class SyncEvent(BaseModel):
 
 
 class SyncResult(BaseModel):
-    """Result of a work sync operation."""
+    """Result of an implementation sync operation."""
 
     success: bool
     current_branch: str

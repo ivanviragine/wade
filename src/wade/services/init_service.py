@@ -138,7 +138,9 @@ def init(
     except ValueError as exc:
         console.error(str(exc))
         return False
-    work_setup = _prompt_work_setup(selected_tool, installed_tools, non_interactive)
+    implementation_setup = _prompt_implementation_setup(
+        selected_tool, installed_tools, non_interactive
+    )
     command_overrides = _prompt_command_overrides(
         installed_tools, non_interactive, default_model=default_model, default_tool=selected_tool
     )
@@ -146,8 +148,8 @@ def init(
     tools_in_use: set[str] = set()
     if selected_tool:
         tools_in_use.add(selected_tool)
-    if work_setup.get("tool"):
-        tools_in_use.add(work_setup["tool"])
+    if implementation_setup.get("tool"):
+        tools_in_use.add(implementation_setup["tool"])
     for cmd_cfg in command_overrides.values():
         if cmd_cfg.get("tool"):
             tools_in_use.add(cmd_cfg["tool"])
@@ -171,11 +173,11 @@ def init(
         _patch_config(
             config_path,
             selected_tool,
-            work_setup["model_mapping"],
+            implementation_setup["model_mapping"],
             default_model=default_model,
             default_effort=default_effort,
             project_settings=project_settings,
-            work_tool=work_setup["tool"],
+            implement_tool=implementation_setup["tool"],
             command_overrides=command_overrides,
             hooks_setup=hooks_setup,
             force=not non_interactive,
@@ -185,9 +187,9 @@ def init(
         _write_config(
             config_path,
             selected_tool,
-            work_setup["model_mapping"],
+            implementation_setup["model_mapping"],
             project_settings=project_settings,
-            work_tool=work_setup["tool"],
+            implement_tool=implementation_setup["tool"],
             default_model=default_model,
             default_effort=default_effort,
             command_overrides=command_overrides,
@@ -312,7 +314,7 @@ def update(
 
     # Compute which tools are actually configured for this project
     tools_in_use: set[str] = set()
-    for cmd in [None, "plan", "deps", "implement"]:
+    for cmd in [None, "plan", "deps", "implement", "review_plan", "review_implementation"]:
         t = config.get_ai_tool(cmd)
         if t:
             tools_in_use.add(t)
@@ -1389,7 +1391,7 @@ def _suggest_model_for_tool(tool: str) -> str:
     return fallback.complex or ""
 
 
-def _prompt_work_setup(
+def _prompt_implementation_setup(
     default_tool: str | None,
     installed_tools: list[str],
     non_interactive: bool,
@@ -1419,13 +1421,13 @@ def _prompt_work_setup(
     idx = prompts.select(
         "AI tool for implementation work", tool_options, default=len(tool_options) - 1
     )
-    work_tool = None if tool_options[idx] == skip_label else tool_options[idx]
+    implement_tool = None if tool_options[idx] == skip_label else tool_options[idx]
 
-    current_effective = work_tool or default_tool
+    current_effective = implement_tool or default_tool
     mapping = _resolve_models(current_effective)
     mapping = _prompt_model_mapping(current_effective, mapping, non_interactive=False)
 
-    return {"tool": work_tool, "model_mapping": mapping}
+    return {"tool": implement_tool, "model_mapping": mapping}
 
 
 def _prompt_command_overrides(
@@ -1436,7 +1438,7 @@ def _prompt_command_overrides(
 ) -> dict[str, dict[str, str]]:
     """Prompt for per-command AI tool and model overrides.
 
-    Implementation configuration is handled separately by ``_prompt_work_setup()``.
+    Implementation configuration is handled separately by ``_prompt_implementation_setup()``.
 
     Returns a dict like:
         {"plan": {"tool": "claude", "model": "..."}, "deps": {},
@@ -1560,7 +1562,7 @@ def _write_config(
     ai_tool: str | None,
     model_mapping: ComplexityModelMapping,
     project_settings: dict[str, str] | None = None,
-    work_tool: str | None = None,
+    implement_tool: str | None = None,
     default_model: str | None = None,
     default_effort: str | None = None,
     command_overrides: dict[str, dict[str, str]] | None = None,
@@ -1596,8 +1598,8 @@ def _write_config(
         ai_section["effort"] = default_effort
 
     # Write implement tool override (only when different from default_tool)
-    if work_tool and work_tool != ai_tool:
-        ai_section["implement"] = {"tool": work_tool}
+    if implement_tool and implement_tool != ai_tool:
+        ai_section["implement"] = {"tool": implement_tool}
 
     # Write per-command overrides (plan, deps, review_plan, review_implementation)
     if command_overrides:
@@ -1617,7 +1619,7 @@ def _write_config(
     config_dict["ai"] = ai_section
 
     # models section keyed by work tool (or default tool)
-    models_key = work_tool or ai_tool
+    models_key = implement_tool or ai_tool
     if models_key and (model_mapping.easy or model_mapping.complex):
         config_dict["models"] = {
             str(models_key): {
@@ -1671,7 +1673,7 @@ def _patch_config(
     default_model: str | None = None,
     default_effort: str | None = None,
     project_settings: dict[str, str] | None = None,
-    work_tool: str | None = None,
+    implement_tool: str | None = None,
     command_overrides: dict[str, dict[str, str]] | None = None,
     hooks_setup: dict[str, Any] | None = None,
     force: bool = False,
@@ -1738,17 +1740,17 @@ def _patch_config(
             changed = True
 
     # Patch implement tool override
-    if work_tool:
+    if implement_tool:
         if force:
-            if work_tool != ai_tool:
-                ai["implement"] = {"tool": work_tool}
+            if implement_tool != ai_tool:
+                ai["implement"] = {"tool": implement_tool}
                 changed = True
             elif "implement" in ai:
                 del ai["implement"]
                 changed = True
             raw["ai"] = ai
-        elif work_tool != ai_tool and not ai.get("implement"):
-            ai["implement"] = {"tool": work_tool}
+        elif implement_tool != ai_tool and not ai.get("implement"):
+            ai["implement"] = {"tool": implement_tool}
             raw["ai"] = ai
             changed = True
 
@@ -1780,8 +1782,8 @@ def _patch_config(
                     raw["ai"] = ai
                     changed = True
 
-    # Patch models — keyed by work_tool when provided (matching _write_config)
-    tool_key = str(work_tool or ai_tool) if (work_tool or ai_tool) else None
+    # Patch models — keyed by implement_tool when provided (matching _write_config)
+    tool_key = str(implement_tool or ai_tool) if (implement_tool or ai_tool) else None
     has_any_model = any(
         getattr(model_mapping, k, None) for k in ("easy", "medium", "complex", "very_complex")
     )

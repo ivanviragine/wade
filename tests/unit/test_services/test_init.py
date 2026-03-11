@@ -577,7 +577,7 @@ class TestWriteConfig:
             config_path,
             "claude",
             ComplexityModelMapping(),
-            work_tool="copilot",
+            implement_tool="copilot",
             command_overrides=overrides,
         )
         config = yaml.safe_load(config_path.read_text())
@@ -612,7 +612,7 @@ class TestWriteConfig:
             config_path,
             "claude",
             mapping,
-            work_tool="gemini",
+            implement_tool="gemini",
             default_model="gemini-2.5-pro",
         )
         config = yaml.safe_load(config_path.read_text())
@@ -620,13 +620,13 @@ class TestWriteConfig:
         assert config["ai"]["default_model"] == "gemini-2.5-pro"
         # implement tool written only when different from default_tool
         assert config["ai"]["implement"]["tool"] == "gemini"
-        # models keyed by work_tool, not default_tool
+        # models keyed by implement_tool, not default_tool
         assert "gemini" in config["models"]
         assert "claude" not in config.get("models", {})
 
     def test_implement_tool_same_as_ai_tool_omits_implement_section(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
-        _write_config(config_path, "claude", ComplexityModelMapping(), work_tool="claude")
+        _write_config(config_path, "claude", ComplexityModelMapping(), implement_tool="claude")
         config = yaml.safe_load(config_path.read_text())
         # implement section omitted when tool matches default
         assert "implement" not in config.get("ai", {})
@@ -674,7 +674,7 @@ class TestPatchConfig:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
         _patch_config(
-            config_path, "claude", ComplexityModelMapping(), work_tool="gemini", force=True
+            config_path, "claude", ComplexityModelMapping(), implement_tool="gemini", force=True
         )
         config = yaml.safe_load(config_path.read_text())
         assert config["ai"]["implement"]["tool"] == "gemini"
@@ -685,7 +685,7 @@ class TestPatchConfig:
             "version: 2\nai:\n  default_tool: claude\n  implement:\n    tool: gemini\n"
         )
         _patch_config(
-            config_path, "claude", ComplexityModelMapping(), work_tool="claude", force=True
+            config_path, "claude", ComplexityModelMapping(), implement_tool="claude", force=True
         )
         config = yaml.safe_load(config_path.read_text())
         assert "implement" not in config["ai"]
@@ -753,11 +753,11 @@ class TestPatchConfig:
         assert config["models"]["claude"]["easy"] == "existing-haiku"
         assert config["models"]["claude"]["complex"] == "sonnet"
 
-    def test_models_keyed_by_work_tool_when_provided(self, tmp_path: Path) -> None:
+    def test_models_keyed_by_implement_tool_when_provided(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
         mapping = ComplexityModelMapping(easy="haiku", complex="sonnet")
-        _patch_config(config_path, "claude", mapping, work_tool="gemini", force=True)
+        _patch_config(config_path, "claude", mapping, implement_tool="gemini", force=True)
         config = yaml.safe_load(config_path.read_text())
         assert "gemini" in config["models"]
         assert "claude" not in config.get("models", {})
