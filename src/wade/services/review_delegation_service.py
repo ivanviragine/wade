@@ -41,7 +41,7 @@ def _run_review_delegation(
     cmd_config: AICommandConfig = getattr(config.ai, command)
 
     # Check if this review type is enabled in config
-    if not cmd_config.enabled:
+    if cmd_config.enabled is False:
         config_key = f"ai.{command}.enabled"
         console.info(f"Review skipped — not enabled in .wade.yml ({config_key}).")
         return DelegationResult(

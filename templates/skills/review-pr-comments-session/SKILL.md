@@ -178,13 +178,13 @@ wade review-pr-comments-session done
 
 `wade review-pr-comments-session done` pushes changes to the existing PR branch.
 
-This is a **mandatory** final step. If it fails, debug and fix the error —
+This is a **mandatory** completion step. If it fails, debug and fix the error —
 do NOT bypass it.
 
 **Step 4 — Review with the user:**
 
 Present the PR link and a brief recap of what was addressed. Ask if they'd
-like any further changes — apply them and repeat Steps 1–3 if so, or confirm
+like any further changes — apply them and repeat Steps 1–4 if so, or confirm
 the session is complete if not.
 
 ## Skills reference

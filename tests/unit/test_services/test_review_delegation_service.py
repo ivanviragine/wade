@@ -107,6 +107,53 @@ class TestReviewPlan:
         assert "Invalid delegation mode" in result.feedback
         assert result.exit_code == 1
 
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    def test_enabled_false_skips_review(
+        self,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        plan_file = tmp_path / "PLAN.md"
+        plan_file.write_text("# Plan")
+        mock_template.return_value = "{plan_content}"
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(review_plan=AICommandConfig(mode="prompt", enabled=False))
+        )
+
+        result = review_plan(str(plan_file))
+        assert result.success is True
+        assert "skipped" in result.feedback.lower()
+        mock_delegate.assert_not_called()
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    def test_enabled_none_does_not_skip(
+        self,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Legacy configs without 'enabled' key should NOT skip reviews."""
+        plan_file = tmp_path / "PLAN.md"
+        plan_file.write_text("# Plan")
+        mock_template.return_value = "{plan_content}"
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(review_plan=AICommandConfig(mode="prompt", enabled=None))
+        )
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.PROMPT
+        )
+
+        result = review_plan(str(plan_file))
+        assert result.success is True
+        mock_delegate.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # review_implementation

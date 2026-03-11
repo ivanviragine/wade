@@ -40,9 +40,10 @@ dependency analysis hooks.
 4. **Review with the user** — present a summary of every plan file you wrote
    (title, complexity, key tasks). Ask if they'd like any modifications — apply
    them and repeat if so, or proceed to step 5 if not.
-5. **Review** — after writing plan files, run `wade review plan <plan_file>` to get
-   review feedback. The command checks your project config and skips if reviews
-   are not enabled. Address any actionable feedback before proceeding.
+5. **Review** — after writing plan files, run `wade review plan <plan_file>` for
+   each plan file you created. If the command reports that reviews are disabled
+   in project config, proceed directly to validation; otherwise address any
+   actionable feedback before proceeding.
 6. **Validate** — run `wade plan-session done <plan_dir>` (the temp dir from your prompt).
    If it exits with errors, fix each reported issue and re-run until it passes.
    Warnings are informational and do not block proceeding.
