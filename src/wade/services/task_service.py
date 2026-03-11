@@ -401,6 +401,33 @@ def apply_plan_token_usage(
 
 
 # ---------------------------------------------------------------------------
+# Plan status helper
+# ---------------------------------------------------------------------------
+
+
+def _task_has_plan(task: Task) -> bool:
+    """Return True if the task has any PLANNED_BY label."""
+    return any(label.label_type == LabelType.PLANNED_BY for label in task.labels)
+
+
+def _plan_badge_label(task: Task, has_plan: bool | None = None) -> str:
+    """Return the plan status label string ('PLANNED' or 'NO PLAN').
+
+    Args:
+        task: The task to check.
+        has_plan: Optional cached result of _task_has_plan(task) to avoid redundant computation.
+    """
+    if has_plan is None:
+        has_plan = _task_has_plan(task)
+    return "PLANNED" if has_plan else "NO PLAN"
+
+
+def _plain_badge(label: str) -> str:
+    """Return a plain-text badge string for non-Rich contexts."""
+    return f"[{label}]"
+
+
+# ---------------------------------------------------------------------------
 # CRUD operations
 # ---------------------------------------------------------------------------
 
@@ -559,7 +586,11 @@ def list_tasks(
     for task in tasks:
         state_badge = "OPEN" if task.state == TaskState.OPEN else "CLOSED"
         badge = console.badge_str(state_badge, "open" if task.state == TaskState.OPEN else "closed")
-        console.out.print(f"  {console.issue_ref(task.id, task.title)}  {badge}")
+        has_plan = _task_has_plan(task)
+        plan_label = _plan_badge_label(task, has_plan=has_plan)
+        plan_variant = "planned" if has_plan else "unplanned"
+        plan_badge = console.badge_str(plan_label, plan_variant)
+        console.out.print(f"  {console.issue_ref(task.id, task.title)}  {badge}  {plan_badge}")
         if task.labels:
             label_str = " ".join(f"[{label.name}]" for label in task.labels)
             console.detail(label_str)
@@ -598,7 +629,9 @@ def prompt_task_selection(
     items = []
     for t in tasks:
         state_badge = "OPEN" if t.state == TaskState.OPEN else "CLOSED"
-        items.append(f"#{t.id}  {t.title}  [{state_badge}]")
+        items.append(
+            f"#{t.id}  {t.title}  {_plain_badge(state_badge)}  {_plain_badge(_plan_badge_label(t))}"
+        )
 
     fallback = "(Enter manually...)"
     if allow_manual:
