@@ -371,7 +371,7 @@ def _capture_post_session_usage(
 ) -> str | None:
     """Post-AI-exit processing: parse transcript, update PR and issue with token usage.
 
-    Returns the primary model detected from the transcript (for worked-model label),
+    Returns the primary model detected from the transcript (for implemented-model label),
     or the explicitly passed model if no breakdown is available.
     """
     if not transcript_path or not transcript_path.is_file():
@@ -1110,7 +1110,7 @@ def start(
             try:
                 add_implemented_by_labels(provider, task.id, resolved_tool, effective_model)
             except Exception as e:
-                console.warn(f"Could not apply worked-by labels: {e}")
+                console.warn(f"Could not apply implemented-by labels: {e}")
                 logger.warning("work.worked_by_labels_failed", error=str(e))
         elif not resolved_tool:
             console.info("No AI tool configured. Worktree ready for manual work.")

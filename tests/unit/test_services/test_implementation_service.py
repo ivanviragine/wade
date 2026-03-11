@@ -1,4 +1,4 @@
-"""Tests for work service — start, batch, bootstrap, cd."""
+"""Tests for implementation service — start, batch, bootstrap, cd."""
 
 from __future__ import annotations
 
@@ -497,12 +497,12 @@ class TestImplementationLaunchCommandAssembly:
 
 
 # ---------------------------------------------------------------------------
-# Work start tests
+# Implementation start tests
 # ---------------------------------------------------------------------------
 
 
 class TestImplementationStart:
-    """Tests for work_service.start() — exercises the full start() orchestration."""
+    """Tests for implementation_service.start() — exercises the full start() orchestration."""
 
     def _make_task(self) -> Task:
         return Task(id="42", title="Test task")
@@ -759,12 +759,12 @@ class TestImplementationStart:
 
 
 # ---------------------------------------------------------------------------
-# Work batch tests
+# Implementation batch tests
 # ---------------------------------------------------------------------------
 
 
 class TestImplementationBatch:
-    """Tests for work_service.batch() — exercises topology and launch dispatch."""
+    """Tests for implementation_service.batch() — exercises topology and launch dispatch."""
 
     def test_launches_independent_issues(self, tmp_path: Path) -> None:
         """No deps graph → all issues launched in separate terminals."""

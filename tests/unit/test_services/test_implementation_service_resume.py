@@ -1,4 +1,4 @@
-"""Tests for work_service resume session launch path."""
+"""Tests for implementation_service resume session launch path."""
 
 from __future__ import annotations
 
