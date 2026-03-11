@@ -17,7 +17,7 @@ from wade.models.task import Task
 
 
 class TestImplementationLifecycle:
-    """Test work session lifecycle with real git, mocked gh/AI."""
+    """Test implementation session lifecycle with real git, mocked gh/AI."""
 
     def _setup_feature_branch(self, repo: Path, branch: str) -> None:
         """Create and checkout a feature branch."""

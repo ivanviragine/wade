@@ -1340,8 +1340,8 @@ def _prompt_default_model(
     """Prompt the user to select a default model for the AI tool.
 
     This is the fallback model used when no complexity tier is matched and
-    no --model flag is passed. It is written to ai.{plan,deps,implement}.model
-    for any command that does not have an explicit model override.
+    no --model flag is passed. It is written to ai.default_model so every
+    command inherits it unless an explicit per-command model override exists.
 
     The complexity tier mapping (easy/medium/complex/very_complex) is left
     unchanged.

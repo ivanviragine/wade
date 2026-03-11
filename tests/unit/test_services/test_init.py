@@ -513,7 +513,8 @@ class TestPromptCommandOverrides:
         result = _prompt_command_overrides(["claude"], non_interactive=False)
         assert result["plan"] == {}
         assert result["deps"] == {"mode": "prompt"}
-        assert "implement" not in result
+        assert result["review_plan"] == {"mode": "prompt"}
+        assert result["review_implementation"] == {"mode": "prompt"}
 
     @patch("wade.services.init_service._suggest_model_for_tool")
     @patch("wade.ui.prompts.select")
@@ -531,7 +532,8 @@ class TestPromptCommandOverrides:
         assert result["plan"]["tool"] == "gemini"
         assert result["plan"]["model"] == "gemini-2.5-pro"
         assert result["deps"] == {"mode": "prompt"}
-        assert "implement" not in result
+        assert result["review_plan"] == {"mode": "prompt"}
+        assert result["review_implementation"] == {"mode": "prompt"}
 
 
 # ---------------------------------------------------------------------------

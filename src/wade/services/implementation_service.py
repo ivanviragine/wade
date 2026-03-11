@@ -1111,7 +1111,7 @@ def start(
                 add_implemented_by_labels(provider, task.id, resolved_tool, effective_model)
             except Exception as e:
                 console.warn(f"Could not apply implemented-by labels: {e}")
-                logger.warning("work.worked_by_labels_failed", error=str(e))
+                logger.warning("implementation.implemented_by_labels_failed", error=str(e))
         elif not resolved_tool:
             console.info("No AI tool configured. Worktree ready for manual work.")
             console.detail(f"cd {worktree_path}")
