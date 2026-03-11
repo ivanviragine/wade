@@ -2145,7 +2145,7 @@ def _done_via_pr(
     config: ProjectConfig,
     worktree_path: Path | None = None,
 ) -> bool:
-    """Finalize work — update existing draft PR or create a new one.
+    """Finalize implementation — update existing draft PR or create a new one.
 
     In the new workflow, a draft PR should already exist (created by plan
     or implement). This function:
