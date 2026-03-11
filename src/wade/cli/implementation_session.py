@@ -48,8 +48,19 @@ def sync(
     )
     # Exit codes: 0=success, 2=conflict, 4=preflight failure, 1=other error
     if result.success:
+        if not json_output:
+            from wade.ui.console import console
+
+            console.info("Sync complete — proceed to wade implementation-session done.")
         raise typer.Exit(0)
     elif result.conflicts:
+        if not json_output:
+            from wade.ui.console import console
+
+            console.info(
+                "ACTION REQUIRED — resolve the conflicts listed above, "
+                "then re-run wade implementation-session sync."
+            )
         raise typer.Exit(2)
     elif any(
         e.event == SyncEventType.ERROR
@@ -86,4 +97,11 @@ def done(
         draft=draft,
         no_cleanup=no_cleanup,
     )
+    if success:
+        from wade.ui.console import console
+
+        console.info(
+            "SESSION COMPLETE — do not make further changes. "
+            "Present the PR link to the user and suggest they exit the session."
+        )
     raise typer.Exit(0 if success else 1)
