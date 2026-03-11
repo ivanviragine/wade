@@ -99,16 +99,16 @@ class TestParseConfigFile:
         config = parse_config_file(config_path)
         # Plan has specific tool override
         assert config.get_ai_tool("plan") == "claude"
-        # Work falls back to global
-        assert config.get_ai_tool("work") == "copilot"
+        # Implement falls back to global (old "work:" YAML key maps to "implement" field)
+        assert config.get_ai_tool("implement") == "copilot"
 
     def test_default_model_fallback(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text(SAMPLE_V2_CONFIG)
 
         config = parse_config_file(config_path)
-        # Work has no explicit model, should fall back to default_model
-        assert config.get_model("work") == "claude-haiku-4.5"
+        # Implement has no explicit model, should fall back to default_model
+        assert config.get_model("implement") == "claude-haiku-4.5"
 
     def test_no_default_model(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"

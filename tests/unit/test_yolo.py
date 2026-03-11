@@ -40,7 +40,7 @@ class TestConfigYolo:
 
         config = ProjectConfig(ai=AIConfig(yolo=True))
         assert config.get_yolo() is True
-        assert config.get_yolo("work") is True
+        assert config.get_yolo("implement") is True
 
     def test_get_yolo_command_override(self) -> None:
         from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
@@ -48,10 +48,10 @@ class TestConfigYolo:
         config = ProjectConfig(
             ai=AIConfig(
                 yolo=False,
-                work=AICommandConfig(yolo=True),
+                implement=AICommandConfig(yolo=True),
             )
         )
-        assert config.get_yolo("work") is True
+        assert config.get_yolo("implement") is True
         assert config.get_yolo("plan") is False
 
     def test_get_yolo_no_config(self) -> None:
@@ -59,7 +59,7 @@ class TestConfigYolo:
 
         config = ProjectConfig()
         assert config.get_yolo() is None
-        assert config.get_yolo("work") is None
+        assert config.get_yolo("implement") is None
 
 
 # ---------------------------------------------------------------------------
@@ -84,7 +84,7 @@ class TestConfigLoaderYolo:
         config_file.write_text("ai:\n  work:\n    yolo: true\n")
 
         config = load_config(tmp_path)
-        assert config.ai.work.yolo is True
+        assert config.ai.implement.yolo is True
         assert config.ai.yolo is None
 
 
@@ -246,7 +246,7 @@ class TestResolveYolo:
         from wade.services.ai_resolution import resolve_yolo
 
         config = ProjectConfig()
-        result = resolve_yolo(True, config, "work")
+        result = resolve_yolo(True, config, "implement")
         assert result is True
 
     def test_explicit_false(self) -> None:
@@ -254,7 +254,7 @@ class TestResolveYolo:
         from wade.services.ai_resolution import resolve_yolo
 
         config = ProjectConfig()
-        result = resolve_yolo(False, config, "work")
+        result = resolve_yolo(False, config, "implement")
         assert result is False
 
     def test_none_falls_to_config(self) -> None:
@@ -262,7 +262,7 @@ class TestResolveYolo:
         from wade.services.ai_resolution import resolve_yolo
 
         config = ProjectConfig(ai=AIConfig(yolo=True))
-        result = resolve_yolo(None, config, "work")
+        result = resolve_yolo(None, config, "implement")
         assert result is True
 
     def test_none_with_no_config_returns_false(self) -> None:
@@ -270,7 +270,7 @@ class TestResolveYolo:
         from wade.services.ai_resolution import resolve_yolo
 
         config = ProjectConfig()
-        result = resolve_yolo(None, config, "work")
+        result = resolve_yolo(None, config, "implement")
         assert result is False
 
     def test_command_config_override(self) -> None:
@@ -280,10 +280,10 @@ class TestResolveYolo:
         config = ProjectConfig(
             ai=AIConfig(
                 yolo=False,
-                work=AICommandConfig(yolo=True),
+                implement=AICommandConfig(yolo=True),
             )
         )
-        result = resolve_yolo(None, config, "work")
+        result = resolve_yolo(None, config, "implement")
         assert result is True
 
     def test_unsupported_tool_returns_false(self) -> None:
@@ -291,7 +291,7 @@ class TestResolveYolo:
         from wade.services.ai_resolution import resolve_yolo
 
         config = ProjectConfig()
-        result = resolve_yolo(True, config, "work", tool="opencode")
+        result = resolve_yolo(True, config, "implement", tool="opencode")
         assert result is False
 
     def test_supported_tool_returns_true(self) -> None:
@@ -299,7 +299,7 @@ class TestResolveYolo:
         from wade.services.ai_resolution import resolve_yolo
 
         config = ProjectConfig()
-        result = resolve_yolo(True, config, "work", tool="claude")
+        result = resolve_yolo(True, config, "implement", tool="claude")
         assert result is True
 
     @patch("wade.services.ai_resolution.logger")
@@ -308,7 +308,7 @@ class TestResolveYolo:
         from wade.services.ai_resolution import resolve_yolo
 
         config = ProjectConfig()
-        resolve_yolo(True, config, "work", tool="opencode")
+        resolve_yolo(True, config, "implement", tool="opencode")
         assert mock_logger.warning.called  # type: ignore[union-attr]
 
 

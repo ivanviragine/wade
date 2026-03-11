@@ -32,7 +32,7 @@ class TaskRecord(SQLModel, table=True):
 
 
 class SessionRecord(SQLModel, table=True):
-    """A work session — one AI agent on one task."""
+    """An implementation session — one AI agent on one task."""
 
     __tablename__ = "sessions"
 

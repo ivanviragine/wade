@@ -62,7 +62,7 @@ src/wade/
 ├── models/              # Pydantic domain models (pure data, no I/O)
 │   ├── config.py        # ProjectConfig, ProjectSettings, AIConfig, ComplexityModelMapping
 │   ├── task.py          # Task, PlanFile, Complexity, Label, TaskState
-│   ├── work.py          # WorkSession, WorktreeState, SyncResult, SyncEvent, MergeStrategy
+│   ├── session.py       # ImplementationSession, WorktreeState, SyncResult, SyncEvent, MergeStrategy
 │   ├── ai.py            # AIToolID, AIModel, ModelTier, TokenUsage, AIToolCapabilities
 │   ├── deps.py          # DependencyEdge, DependencyGraph
 │   └── events.py        # Typed event models
@@ -72,7 +72,7 @@ src/wade/
 │   └── repositories.py  # Repository classes
 ├── services/            # Business logic (orchestration)
 │   ├── task_service.py  # Task CRUD, plan parsing, labels
-│   ├── work_service.py  # Work session lifecycle
+│   ├── implementation_service.py  # Implementation session lifecycle
 │   ├── plan_service.py  # AI planning sessions
 │   ├── deps_service.py  # Dependency analysis
 │   ├── init_service.py  # Project initialization

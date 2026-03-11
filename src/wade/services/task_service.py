@@ -1,7 +1,7 @@
 """Task service — CRUD operations and label management.
 
 Orchestrates: issue creation from plan files, list/read/update/close,
-label ensure/add/remove for planned-by/worked-by metadata.
+label ensure/add/remove for planned-by/implemented-by metadata.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ LABEL_COLOR_ISSUE = "0E8A16"  # Green
 LABEL_COLOR_IN_PROGRESS = "FBCA04"  # Yellow
 LABEL_COLOR_COMPLEXITY = "C5DEF5"  # Pale blue
 LABEL_COLOR_PLANNED = "BFD4F2"  # Light blue
-LABEL_COLOR_WORKED = "D4C5F9"  # Light purple
+LABEL_COLOR_IMPLEMENTED = "D4C5F9"  # Light purple
 LABEL_COLOR_REVIEWED = "E8D5F5"  # Lighter purple
 LABEL_COLOR_DEFAULT = "D3D3D3"  # Gray
 
@@ -48,8 +48,8 @@ def _label_for_type(
         LabelType.COMPLEXITY: LABEL_COLOR_COMPLEXITY,
         LabelType.PLANNED_BY: LABEL_COLOR_PLANNED,
         LabelType.PLANNED_MODEL: LABEL_COLOR_PLANNED,
-        LabelType.WORKED_BY: LABEL_COLOR_WORKED,
-        LabelType.WORKED_MODEL: LABEL_COLOR_WORKED,
+        LabelType.IMPLEMENTED_BY: LABEL_COLOR_IMPLEMENTED,
+        LabelType.IMPLEMENTED_MODEL: LABEL_COLOR_IMPLEMENTED,
         LabelType.REVIEW_ADDRESSED_BY: LABEL_COLOR_REVIEWED,
         LabelType.REVIEW_ADDRESSED_MODEL: LABEL_COLOR_REVIEWED,
     }
@@ -157,19 +157,19 @@ def add_planned_by_labels(
     )
 
 
-def add_worked_by_labels(
+def add_implemented_by_labels(
     provider: AbstractTaskProvider,
     task_id: str,
     ai_tool: str | None = None,
     model: str | None = None,
 ) -> None:
-    """Add worked-by labels (tool + optional model) to a task."""
+    """Add implemented-by labels (tool + optional model) to a task."""
     if not ai_tool:
         return
 
     tool_label = _label_for_type(
-        LabelType.WORKED_BY,
-        f"worked-by:{ai_tool}",
+        LabelType.IMPLEMENTED_BY,
+        f"implemented-by:{ai_tool}",
         f"Issue implemented using {ai_tool}",
     )
     provider.ensure_label(tool_label)
@@ -177,15 +177,15 @@ def add_worked_by_labels(
 
     if model:
         model_label = _label_for_type(
-            LabelType.WORKED_MODEL,
-            f"worked-model:{model}",
+            LabelType.IMPLEMENTED_MODEL,
+            f"implemented-model:{model}",
             f"Issue implemented with model {model}",
         )
         provider.ensure_label(model_label)
         provider.add_label(task_id, model_label.name)
 
     logger.info(
-        "labels.worked_by",
+        "labels.implemented_by",
         task_id=task_id,
         tool=ai_tool,
         model=model,

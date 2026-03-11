@@ -590,7 +590,8 @@ def _prompt_configure_allowlist(root: Path, non_interactive: bool) -> None:
         return
 
     if prompts.confirm(
-        "Auto-approve wade commands in Claude Code? (skips Bash approval in work sessions)",
+        "Auto-approve wade commands in Claude Code?"
+        " (skips Bash approval in implementation sessions)",
         default=True,
     ):
         extra = _build_permissions_commands(root)
@@ -611,7 +612,8 @@ def _prompt_cursor_settings(root: Path, non_interactive: bool) -> None:
 
     console.rule("Cursor CLI")
     if prompts.confirm(
-        "Auto-approve wade commands in Cursor CLI? (skips Shell approval in work sessions)",
+        "Auto-approve wade commands in Cursor CLI?"
+        " (skips Shell approval in implementation sessions)",
         default=True,
     ):
         extra = _build_permissions_commands(root)

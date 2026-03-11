@@ -11,6 +11,12 @@ from wade.git.repo import GitError
 from wade.models.ai import ModelBreakdown, TokenUsage
 from wade.models.review import ReviewComment, ReviewThread
 from wade.models.task import Task, TaskState
+from wade.services.implementation_service import (
+    REVIEW_USAGE_MARKER_END,
+    REVIEW_USAGE_MARKER_START,
+    _strip_review_usage_block,
+    build_review_usage_block,
+)
 from wade.services.review_service import (
     _capture_review_session_usage,
     _post_review_lifecycle,
@@ -19,12 +25,6 @@ from wade.services.review_service import (
     fetch_reviews,
     resolve_thread,
     start,
-)
-from wade.services.work_service import (
-    REVIEW_USAGE_MARKER_END,
-    REVIEW_USAGE_MARKER_START,
-    _strip_review_usage_block,
-    build_review_usage_block,
 )
 
 # ---------------------------------------------------------------------------
@@ -126,7 +126,10 @@ class TestStripReviewUsageBlock:
 
     def test_strip_preserves_impl_block(self) -> None:
         """Review strip should not touch implementation usage blocks."""
-        from wade.services.work_service import IMPL_USAGE_MARKER_END, IMPL_USAGE_MARKER_START
+        from wade.services.implementation_service import (
+            IMPL_USAGE_MARKER_END,
+            IMPL_USAGE_MARKER_START,
+        )
 
         body = (
             f"{IMPL_USAGE_MARKER_START}\n## Impl\n{IMPL_USAGE_MARKER_END}\n\n"
@@ -146,7 +149,7 @@ class TestAppendReviewUsageEntry:
     """Test that review usage entries accumulate across sessions."""
 
     def test_fresh_body(self) -> None:
-        from wade.services.work_service import append_review_usage_entry
+        from wade.services.implementation_service import append_review_usage_entry
 
         usage = TokenUsage(total_tokens=5000, input_tokens=4000, output_tokens=1000)
         result = append_review_usage_entry("Some PR body", ai_tool="claude", token_usage=usage)
@@ -158,7 +161,7 @@ class TestAppendReviewUsageEntry:
         assert "Some PR body" in result
 
     def test_append_to_existing_single_session(self) -> None:
-        from wade.services.work_service import append_review_usage_entry
+        from wade.services.implementation_service import append_review_usage_entry
 
         usage1 = TokenUsage(total_tokens=5000, input_tokens=4000, output_tokens=1000)
         body = append_review_usage_entry("PR body", ai_tool="claude", token_usage=usage1)
@@ -174,7 +177,7 @@ class TestAppendReviewUsageEntry:
         assert "8,000" in result
 
     def test_append_multiple_sessions(self) -> None:
-        from wade.services.work_service import append_review_usage_entry
+        from wade.services.implementation_service import append_review_usage_entry
 
         body = "Initial body"
         for i in range(3):
@@ -193,7 +196,7 @@ class TestAppendImplUsageEntry:
     """Test that impl usage entries accumulate across sessions."""
 
     def test_fresh_body(self) -> None:
-        from wade.services.work_service import (
+        from wade.services.implementation_service import (
             IMPL_USAGE_MARKER_END,
             IMPL_USAGE_MARKER_START,
             append_impl_usage_entry,
@@ -207,7 +210,7 @@ class TestAppendImplUsageEntry:
         assert "10,000" in result
 
     def test_append_to_existing(self) -> None:
-        from wade.services.work_service import append_impl_usage_entry
+        from wade.services.implementation_service import append_impl_usage_entry
 
         usage1 = TokenUsage(total_tokens=10000)
         body = append_impl_usage_entry("Body", ai_tool="claude", token_usage=usage1)
@@ -224,7 +227,7 @@ class TestAppendToOldFormatBlock:
     """Test appending to a usage block that has no ### Session headers (old format)."""
 
     def test_append_to_old_format_review_block(self) -> None:
-        from wade.services.work_service import append_review_usage_entry
+        from wade.services.implementation_service import append_review_usage_entry
 
         # Simulate an old-format block: markers present, content inside, but no ### Session headers
         old_block = (
@@ -248,7 +251,7 @@ class TestAppendToOldFormatBlock:
         assert "PR description" in result
 
     def test_append_to_old_format_impl_block(self) -> None:
-        from wade.services.work_service import (
+        from wade.services.implementation_service import (
             IMPL_USAGE_MARKER_END,
             IMPL_USAGE_MARKER_START,
             append_impl_usage_entry,
@@ -274,17 +277,17 @@ class TestAppendToOldFormatBlock:
 
 class TestCountSessions:
     def test_zero_sessions(self) -> None:
-        from wade.services.work_service import _count_sessions
+        from wade.services.implementation_service import _count_sessions
 
         assert _count_sessions("## Token Usage\n\nSome content") == 0
 
     def test_one_session(self) -> None:
-        from wade.services.work_service import _count_sessions
+        from wade.services.implementation_service import _count_sessions
 
         assert _count_sessions("### Session 1\n\n| Metric | Value |") == 1
 
     def test_three_sessions(self) -> None:
-        from wade.services.work_service import _count_sessions
+        from wade.services.implementation_service import _count_sessions
 
         content = "### Session 1\n\ntable1\n\n### Session 2\n\ntable2\n\n### Session 3\n\ntable3"
         assert _count_sessions(content) == 3
@@ -292,7 +295,7 @@ class TestCountSessions:
 
 class TestBuildSessionUsageTable:
     def test_single_model(self) -> None:
-        from wade.services.work_service import _build_session_usage_table
+        from wade.services.implementation_service import _build_session_usage_table
 
         usage = TokenUsage(total_tokens=5000, input_tokens=4000, output_tokens=1000)
         table = _build_session_usage_table(ai_tool="claude", model="sonnet", token_usage=usage)
@@ -302,7 +305,7 @@ class TestBuildSessionUsageTable:
         assert "5,000" in table
 
     def test_multi_model(self) -> None:
-        from wade.services.work_service import _build_session_usage_table
+        from wade.services.implementation_service import _build_session_usage_table
 
         usage = TokenUsage(
             total_tokens=15000,
@@ -318,7 +321,7 @@ class TestBuildSessionUsageTable:
         assert "`haiku`" in table
 
     def test_no_tokens(self) -> None:
-        from wade.services.work_service import _build_session_usage_table
+        from wade.services.implementation_service import _build_session_usage_table
 
         table = _build_session_usage_table(ai_tool="claude")
         assert "*unavailable*" in table
@@ -434,7 +437,7 @@ class TestReviewServiceStart:
                 return_value=(None, None, None, False),
             ),
             "_detect_ai_cli_env": patch(
-                "wade.services.work_service._detect_ai_cli_env",
+                "wade.services.implementation_service._detect_ai_cli_env",
                 return_value=None,
             ),
             "_post_review_lifecycle": patch(

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import typer
 
-from wade.models.work import SyncEventType
+from wade.models.session import SyncEventType
 
 review_pr_comments_session_app = typer.Typer(
     help="Review PR comments session commands (check, sync, done, fetch, resolve).",
@@ -38,7 +38,7 @@ def sync(
     ),
 ) -> None:
     """Sync current branch with main."""
-    from wade.services.work_service import sync as do_sync
+    from wade.services.implementation_service import sync as do_sync
 
     result = do_sync(
         dry_run=dry_run,
@@ -76,7 +76,7 @@ def done(
     no_cleanup: bool = typer.Option(False, "--no-cleanup", help="Don't remove worktree."),
 ) -> None:
     """Finalize work — push branch and create PR (or direct merge)."""
-    from wade.services.work_service import done as do_done
+    from wade.services.implementation_service import done as do_done
 
     success = do_done(
         target=target,

@@ -22,8 +22,14 @@ from wade.models.config import (
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
 from wade.models.deps import DependencyEdge, DependencyGraph
 from wade.models.events import EventType, WorkflowEvent
+from wade.models.session import (
+    ImplementationSession,
+    MergeStrategy,
+    SyncEvent,
+    SyncResult,
+    WorktreeState,
+)
 from wade.models.task import Complexity, Label, LabelType, PlanFile, Task, TaskState
-from wade.models.work import MergeStrategy, SyncEvent, SyncResult, WorkSession, WorktreeState
 
 __all__ = [
     "AICommandConfig",
@@ -41,6 +47,7 @@ __all__ = [
     "DependencyGraph",
     "EventType",
     "HooksConfig",
+    "ImplementationSession",
     "Label",
     "LabelType",
     "MergeStrategy",
@@ -56,7 +63,6 @@ __all__ = [
     "Task",
     "TaskState",
     "TokenUsage",
-    "WorkSession",
     "WorkflowEvent",
     "WorktreeState",
 ]

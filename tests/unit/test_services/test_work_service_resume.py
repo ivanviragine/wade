@@ -6,7 +6,7 @@ from wade.ai_tools.claude import ClaudeAdapter
 from wade.ai_tools.gemini import GeminiAdapter
 
 
-class TestWorkServiceResumeLaunch:
+class TestImplementationServiceResumeLaunch:
     """Verify that resume-capable adapters produce correct resume commands."""
 
     def test_resume_calls_build_resume_command(self) -> None:

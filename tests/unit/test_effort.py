@@ -85,7 +85,7 @@ class TestConfigEffort:
             )
         )
         assert config.get_effort("plan") == "max"
-        assert config.get_effort("work") == "low"
+        assert config.get_effort("implement") == "low"
 
     def test_get_effort_returns_none_when_unset(self) -> None:
         from wade.models.config import ProjectConfig
@@ -98,9 +98,9 @@ class TestConfigEffort:
         from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 
         config = ProjectConfig(
-            ai=AIConfig(work=AICommandConfig(effort="medium")),
+            ai=AIConfig(implement=AICommandConfig(effort="medium")),
         )
-        assert config.get_effort("work") == "medium"
+        assert config.get_effort("implement") == "medium"
         assert config.get_effort("plan") is None
 
 

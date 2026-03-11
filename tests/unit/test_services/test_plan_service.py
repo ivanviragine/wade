@@ -96,7 +96,7 @@ class TestResolveModel:
         from wade.models.config import ComplexityModelMapping
 
         config = ProjectConfig(models={"claude": ComplexityModelMapping(easy="claude-haiku-4-5")})
-        result = resolve_model(None, config, "work", tool="claude", complexity="easy")
+        result = resolve_model(None, config, "implement", tool="claude", complexity="easy")
         assert result == "claude-haiku-4-5"
 
     def test_complexity_maps_complex(self) -> None:
@@ -105,17 +105,17 @@ class TestResolveModel:
         config = ProjectConfig(
             models={"claude": ComplexityModelMapping(complex="claude-sonnet-4-6")}
         )
-        result = resolve_model(None, config, "work", tool="claude", complexity="complex")
+        result = resolve_model(None, config, "implement", tool="claude", complexity="complex")
         assert result == "claude-sonnet-4-6"
 
     def test_complexity_no_mapping_falls_to_default(self) -> None:
         config = ProjectConfig(ai=AIConfig(default_model="claude-sonnet-4-6"))
-        result = resolve_model(None, config, "work", tool="claude", complexity="easy")
+        result = resolve_model(None, config, "implement", tool="claude", complexity="easy")
         assert result == "claude-sonnet-4-6"
 
     def test_complexity_none_falls_to_default(self) -> None:
         config = ProjectConfig(ai=AIConfig(default_model="claude-sonnet-4-6"))
-        result = resolve_model(None, config, "work", tool="claude", complexity=None)
+        result = resolve_model(None, config, "implement", tool="claude", complexity=None)
         assert result == "claude-sonnet-4-6"
 
     def test_complexity_beats_default_model(self) -> None:
@@ -126,7 +126,7 @@ class TestResolveModel:
             ai=AIConfig(default_model="claude-sonnet-4-6"),
             models={"claude": ComplexityModelMapping(easy="claude-haiku-4-5")},
         )
-        result = resolve_model(None, config, "work", tool="claude", complexity="easy")
+        result = resolve_model(None, config, "implement", tool="claude", complexity="easy")
         assert result == "claude-haiku-4-5"
 
     def test_command_specific_beats_complexity(self) -> None:
@@ -134,10 +134,10 @@ class TestResolveModel:
         from wade.models.config import AICommandConfig, ComplexityModelMapping
 
         config = ProjectConfig(
-            ai=AIConfig(work=AICommandConfig(model="claude-opus-4-6")),
+            ai=AIConfig(implement=AICommandConfig(model="claude-opus-4-6")),
             models={"claude": ComplexityModelMapping(easy="claude-haiku-4-5")},
         )
-        result = resolve_model(None, config, "work", tool="claude", complexity="easy")
+        result = resolve_model(None, config, "implement", tool="claude", complexity="easy")
         assert result == "claude-opus-4-6"
 
     def test_explicit_beats_everything(self) -> None:
@@ -146,20 +146,20 @@ class TestResolveModel:
         config = ProjectConfig(
             ai=AIConfig(
                 default_model="default-model",
-                work=AICommandConfig(model="cmd-model"),
+                implement=AICommandConfig(model="cmd-model"),
             ),
             models={"claude": ComplexityModelMapping(easy="complexity-model")},
         )
         # Omit tool= so the compatibility gate doesn't interfere;
         # this test validates fallback *priority*, not compatibility.
-        result = resolve_model("explicit-model", config, "work", complexity="easy")
+        result = resolve_model("explicit-model", config, "implement", complexity="easy")
         assert result == "explicit-model"
 
     def test_incompatible_model_returns_none(self) -> None:
         """When the resolved model is incompatible with the tool, return None."""
         config = ProjectConfig(ai=AIConfig(default_model="claude-sonnet-4-6"))
         # gemini tool won't accept a claude model
-        result = resolve_model(None, config, "work", tool="gemini")
+        result = resolve_model(None, config, "implement", tool="gemini")
         assert result is None
 
 
@@ -624,11 +624,11 @@ class TestPlanDone:
 class TestOfferToImplement:
     """Tests for _offer_to_implement helper."""
 
-    def test_user_accepts_starts_work_session(self) -> None:
-        """Accepting the prompt calls start_work_session and returns its result."""
+    def test_user_accepts_starts_implementation_session(self) -> None:
+        """Accepting the prompt calls start_implementation_session and returns its result."""
         with (
             patch("wade.services.plan_service.prompts") as mock_prompts,
-            patch("wade.services.plan_service.start_work_session") as mock_start,
+            patch("wade.services.plan_service.start_implementation_session") as mock_start,
             patch("wade.services.plan_service.console"),
         ):
             mock_prompts.is_tty.return_value = True
@@ -649,13 +649,13 @@ class TestOfferToImplement:
                 yolo=None,
             )
 
-    def test_ai_params_passed_to_work_session(self) -> None:
-        """AI params from plan session are threaded through to start_work_session."""
+    def test_ai_params_passed_to_implementation_session(self) -> None:
+        """AI params from plan session are threaded through to start_implementation_session."""
         from wade.models.ai import EffortLevel
 
         with (
             patch("wade.services.plan_service.prompts") as mock_prompts,
-            patch("wade.services.plan_service.start_work_session") as mock_start,
+            patch("wade.services.plan_service.start_implementation_session") as mock_start,
             patch("wade.services.plan_service.console"),
         ):
             mock_prompts.is_tty.return_value = True
@@ -685,7 +685,7 @@ class TestOfferToImplement:
         """Declining the prompt returns None without calling start."""
         with (
             patch("wade.services.plan_service.prompts") as mock_prompts,
-            patch("wade.services.plan_service.start_work_session") as mock_start,
+            patch("wade.services.plan_service.start_implementation_session") as mock_start,
             patch("wade.services.plan_service.console"),
         ):
             mock_prompts.is_tty.return_value = True
@@ -700,7 +700,7 @@ class TestOfferToImplement:
         """Non-TTY environments skip the prompt and show a static hint."""
         with (
             patch("wade.services.plan_service.prompts") as mock_prompts,
-            patch("wade.services.plan_service.start_work_session") as mock_start,
+            patch("wade.services.plan_service.start_implementation_session") as mock_start,
             patch("wade.services.plan_service.console") as mock_console,
         ):
             mock_prompts.is_tty.return_value = False
@@ -712,11 +712,11 @@ class TestOfferToImplement:
             mock_start.assert_not_called()
             mock_console.detail.assert_called_once_with("wade implement 42")
 
-    def test_work_session_failure_returns_false(self) -> None:
-        """If start_work_session fails, the failure is propagated."""
+    def test_implementation_session_failure_returns_false(self) -> None:
+        """If start_implementation_session fails, the failure is propagated."""
         with (
             patch("wade.services.plan_service.prompts") as mock_prompts,
-            patch("wade.services.plan_service.start_work_session") as mock_start,
+            patch("wade.services.plan_service.start_implementation_session") as mock_start,
             patch("wade.services.plan_service.console"),
         ):
             mock_prompts.is_tty.return_value = True
@@ -727,11 +727,11 @@ class TestOfferToImplement:
 
             assert result is False
 
-    def test_work_session_exception_returns_false(self) -> None:
-        """If start_work_session raises, the exception is caught and False returned."""
+    def test_implementation_session_exception_returns_false(self) -> None:
+        """If start_implementation_session raises, the exception is caught and False returned."""
         with (
             patch("wade.services.plan_service.prompts") as mock_prompts,
-            patch("wade.services.plan_service.start_work_session") as mock_start,
+            patch("wade.services.plan_service.start_implementation_session") as mock_start,
             patch("wade.services.plan_service.console"),
             patch("wade.services.plan_service.logger"),
         ):
