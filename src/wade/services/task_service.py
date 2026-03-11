@@ -410,9 +410,16 @@ def _task_has_plan(task: Task) -> bool:
     return any(label.label_type == LabelType.PLANNED_BY for label in task.labels)
 
 
-def _plan_badge_label(task: Task) -> str:
-    """Return the plan status label string ('PLANNED' or 'NO PLAN')."""
-    return "PLANNED" if _task_has_plan(task) else "NO PLAN"
+def _plan_badge_label(task: Task, has_plan: bool | None = None) -> str:
+    """Return the plan status label string ('PLANNED' or 'NO PLAN').
+
+    Args:
+        task: The task to check.
+        has_plan: Optional cached result of _task_has_plan(task) to avoid redundant computation.
+    """
+    if has_plan is None:
+        has_plan = _task_has_plan(task)
+    return "PLANNED" if has_plan else "NO PLAN"
 
 
 # ---------------------------------------------------------------------------
@@ -574,8 +581,9 @@ def list_tasks(
     for task in tasks:
         state_badge = "OPEN" if task.state == TaskState.OPEN else "CLOSED"
         badge = console.badge_str(state_badge, "open" if task.state == TaskState.OPEN else "closed")
-        plan_label = _plan_badge_label(task)
-        plan_variant = "planned" if _task_has_plan(task) else "unplanned"
+        has_plan = _task_has_plan(task)
+        plan_label = _plan_badge_label(task, has_plan=has_plan)
+        plan_variant = "planned" if has_plan else "unplanned"
         plan_badge = console.badge_str(plan_label, plan_variant)
         console.out.print(f"  {console.issue_ref(task.id, task.title)}  {badge}  {plan_badge}")
         if task.labels:
