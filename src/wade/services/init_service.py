@@ -312,7 +312,7 @@ def update(
 
     # Compute which tools are actually configured for this project
     tools_in_use: set[str] = set()
-    for cmd in [None, "plan", "deps", "work"]:
+    for cmd in [None, "plan", "deps", "implement"]:
         t = config.get_ai_tool(cmd)
         if t:
             tools_in_use.add(t)
@@ -1340,7 +1340,7 @@ def _prompt_default_model(
     """Prompt the user to select a default model for the AI tool.
 
     This is the fallback model used when no complexity tier is matched and
-    no --model flag is passed. It is written to ai.{plan,deps,work}.model
+    no --model flag is passed. It is written to ai.{plan,deps,implement}.model
     for any command that does not have an explicit model override.
 
     The complexity tier mapping (easy/medium/complex/very_complex) is left
@@ -1394,13 +1394,13 @@ def _prompt_work_setup(
     installed_tools: list[str],
     non_interactive: bool,
 ) -> dict[str, Any]:
-    """Prompt for implementation-work tool and per-complexity model overrides.
+    """Prompt for implementation tool and per-complexity model overrides.
 
     The default tool and default model are set in the AI section. This section
     only handles implementation-specific overrides that fall back to those defaults.
 
     Returns a dict with keys:
-        ``tool``          - work-specific tool override, or None (use default_tool)
+        ``tool``          - implement-specific tool override, or None (use default_tool)
         ``model_mapping`` - ComplexityModelMapping for the effective tool
     """
     if non_interactive:
@@ -1436,7 +1436,7 @@ def _prompt_command_overrides(
 ) -> dict[str, dict[str, str]]:
     """Prompt for per-command AI tool and model overrides.
 
-    Work configuration is handled separately by ``_prompt_work_setup()``.
+    Implementation configuration is handled separately by ``_prompt_work_setup()``.
 
     Returns a dict like:
         {"plan": {"tool": "claude", "model": "..."}, "deps": {},
@@ -1595,9 +1595,9 @@ def _write_config(
     if default_effort:
         ai_section["effort"] = default_effort
 
-    # Write work tool override (only when different from default_tool)
+    # Write implement tool override (only when different from default_tool)
     if work_tool and work_tool != ai_tool:
-        ai_section["work"] = {"tool": work_tool}
+        ai_section["implement"] = {"tool": work_tool}
 
     # Write per-command overrides (plan, deps, review_plan, review_implementation)
     if command_overrides:
@@ -1737,18 +1737,18 @@ def _patch_config(
             raw["ai"] = ai
             changed = True
 
-    # Patch work tool override
+    # Patch implement tool override
     if work_tool:
         if force:
             if work_tool != ai_tool:
-                ai["work"] = {"tool": work_tool}
+                ai["implement"] = {"tool": work_tool}
                 changed = True
-            elif "work" in ai:
-                del ai["work"]
+            elif "implement" in ai:
+                del ai["implement"]
                 changed = True
             raw["ai"] = ai
-        elif work_tool != ai_tool and not ai.get("work"):
-            ai["work"] = {"tool": work_tool}
+        elif work_tool != ai_tool and not ai.get("implement"):
+            ai["implement"] = {"tool": work_tool}
             raw["ai"] = ai
             changed = True
 

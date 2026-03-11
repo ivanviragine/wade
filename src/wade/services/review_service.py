@@ -308,7 +308,7 @@ def start(
     resolved_model = resolve_model(
         model,
         config,
-        "work",
+        "implement",
         tool=resolved_tool,
         complexity=task.complexity.value if task.complexity else None,
     )
@@ -543,7 +543,7 @@ def _post_review_lifecycle(
         console.hint(f"Run `wade review pr-comments{issue_hint}` when new reviews come in.")
         return
 
-    # Merge flow — reuse the same merge logic as post-work lifecycle
+    # Merge flow — reuse the same merge logic as post-implementation lifecycle
     _merge_pr(repo_root, branch, pr_number, issue_number, worktree_path, provider)
 
 

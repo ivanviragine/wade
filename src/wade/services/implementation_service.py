@@ -241,7 +241,7 @@ def _detect_ai_cli_env() -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Draft PR bootstrap (shared by plan and work flows)
+# Draft PR bootstrap (shared by plan and implementation flows)
 # ---------------------------------------------------------------------------
 
 PLAN_MARKER_START = "<!-- wade:plan:start -->"
@@ -284,7 +284,7 @@ def bootstrap_draft_pr(
 ) -> dict[str, str | int] | None:
     """Create branch + push + draft PR for an issue.
 
-    Reusable by both plan and work flows. Idempotent — if the branch and
+    Reusable by both plan and implementation flows. Idempotent — if the branch and
     PR already exist, returns the existing PR info.
 
     Args:
@@ -659,7 +659,7 @@ def _post_implementation_lifecycle_direct(
     try:
         ahead = git_branch.commits_ahead(repo_root, branch, main_branch)
     except GitError:
-        console.warn("Could not determine commit count; skipping post-work lifecycle.")
+        console.warn("Could not determine commit count; skipping post-implementation lifecycle.")
         return
 
     if ahead == 0:
@@ -806,7 +806,7 @@ def start(
         resolved_model = resolve_model(
             model,
             config,
-            "work",
+            "implement",
             tool=resolved_tool,
             complexity=task.complexity.value if task.complexity else None,
         )
@@ -963,7 +963,7 @@ def start(
         # Set up transcript capture
         transcript_path: Path | None = None
         try:
-            transcript_dir = tempfile.mkdtemp(prefix="wade-work-")
+            transcript_dir = tempfile.mkdtemp(prefix="wade-implement-")
             transcript_path = Path(transcript_dir) / f"transcript-{task.id}.log"
             console.hint(f"Transcript: {transcript_path}")
         except OSError:
