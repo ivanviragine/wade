@@ -10,6 +10,7 @@ import pytest
 from tests.e2e._support import (
     MockGhCli,
     _assert_gh_called_with,
+    _gh_call_count_total,
     _init_origin_remote,
     _run,
 )
@@ -42,6 +43,9 @@ def _find_plan_dir(argv: list[str]) -> Path | None:
         i += 1
 
     for path in reversed(add_dirs):
+        if path.name == "plans" and path.parent.name == ".wade":
+            return path
+    for path in reversed(add_dirs):
         if "wade-plan-" in str(path):
             return path
     if add_dirs:
@@ -52,7 +56,7 @@ def _find_plan_dir(argv: list[str]) -> Path | None:
 plan_dir = _find_plan_dir(sys.argv[1:])
 if plan_dir is not None:
     plan_dir.mkdir(parents=True, exist_ok=True)
-    (plan_dir / "001-deterministic-plan.md").write_text(
+    (plan_dir / "PLAN-001-deterministic-plan.md").write_text(
         "\\n".join(
             [
                 "# Deterministic plan from fake claude",
@@ -135,21 +139,36 @@ class TestPlanCommand:
 class TestPlanSessionDoneCommand:
     """Test `wade plan-session done` validation behavior."""
 
-    def test_plan_session_done_fails_for_invalid_plan_dir(self, e2e_repo: Path) -> None:
+    def test_plan_session_done_fails_for_invalid_plan_dir(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
         """plan-session done should fail when plan files are invalid."""
         invalid_dir = e2e_repo / "invalid-plans"
         invalid_dir.mkdir()
-        (invalid_dir / "bad.md").write_text("## Missing title heading\n", encoding="utf-8")
+        (invalid_dir / "PLAN-bad.md").write_text("## Missing title heading\n", encoding="utf-8")
 
+        before_calls = _gh_call_count_total(mock_gh_cli["log_file"])
+        before_state = json.loads(mock_gh_cli["state_file"].read_text(encoding="utf-8"))
         result = _run(["plan-session", "done", str(invalid_dir)], cwd=e2e_repo)
         assert result.returncode == 1
         assert "Plan validation failed" in result.stderr
+        after_calls = _gh_call_count_total(mock_gh_cli["log_file"])
+        after_state = json.loads(mock_gh_cli["state_file"].read_text(encoding="utf-8"))
+        assert after_calls == before_calls, "plan-session done validation should not invoke gh"
+        assert after_state.get("issues", {}) == before_state.get("issues", {})
+        assert after_state.get("prs", {}) == before_state.get("prs", {})
 
-    def test_plan_session_done_succeeds_for_valid_plan_dir(self, e2e_repo: Path) -> None:
+    def test_plan_session_done_succeeds_for_valid_plan_dir(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
         """plan-session done should pass when required sections are valid."""
         valid_dir = e2e_repo / "valid-plans"
         valid_dir.mkdir()
-        (valid_dir / "good.md").write_text(
+        (valid_dir / "PLAN-good.md").write_text(
             "\n".join(
                 [
                     "# Valid plan",
@@ -168,6 +187,13 @@ class TestPlanSessionDoneCommand:
             encoding="utf-8",
         )
 
+        before_calls = _gh_call_count_total(mock_gh_cli["log_file"])
+        before_state = json.loads(mock_gh_cli["state_file"].read_text(encoding="utf-8"))
         result = _run(["plan-session", "done", str(valid_dir)], cwd=e2e_repo)
         assert result.returncode == 0
         assert "Plan validation passed" in result.stdout
+        after_calls = _gh_call_count_total(mock_gh_cli["log_file"])
+        after_state = json.loads(mock_gh_cli["state_file"].read_text(encoding="utf-8"))
+        assert after_calls == before_calls, "plan-session done validation should not invoke gh"
+        assert after_state.get("issues", {}) == before_state.get("issues", {})
+        assert after_state.get("prs", {}) == before_state.get("prs", {})

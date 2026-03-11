@@ -715,7 +715,7 @@ class TestPlanOrchestrator:
             patch("wade.services.plan_service.resolve_model", return_value=None),
             patch(
                 "wade.services.plan_service.confirm_ai_selection",
-                return_value=("claude", None, None),
+                return_value=("claude", None, None, False),
             ),
             patch("wade.services.plan_service.ensure_task_label"),
             patch("wade.services.plan_service.run_ai_planning_session", return_value=0),

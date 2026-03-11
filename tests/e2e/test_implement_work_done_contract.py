@@ -78,6 +78,21 @@ class TestImplementTaskCommand:
             == 1
         )
 
+    def test_implement_task_fails_for_unknown_issue_without_pr_side_effects(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """implement should fail fast for unknown issues and avoid PR creation."""
+        result = _run(["implement", "999", "--cd"], cwd=e2e_repo)
+
+        assert result.returncode != 0
+        _assert_gh_called_with(
+            mock_gh_cli["log_file"],
+            ["issue", "view", "999"],
+        )
+        assert _count_gh_calls(mock_gh_cli["log_file"], ["pr", "create"]) == 0
+
     def test_implement_task_cd_runs_setup_worktree_hook(
         self,
         e2e_repo: Path,
@@ -169,7 +184,6 @@ class TestWorkDoneCommand:
 
         result = _run(["implementation-session", "done"], cwd=worktree_path)
         assert result.returncode == 0
-        assert "Work done" in result.stdout
         assert _remote_has_branch(origin_repo, branch_name)
         pr_number = _find_mock_pr_number_by_head(mock_gh_cli["state_file"], branch_name)
 

@@ -1,0 +1,531 @@
+"""Deterministic E2E contracts for review delegation workflows."""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+
+import pytest
+
+from tests.e2e._support import (
+    MockGhCli,
+    _assert_gh_called_with,
+    _count_gh_calls,
+    _find_mock_pr_number_by_head,
+    _git,
+    _init_origin_remote,
+    _remote_has_branch,
+    _run,
+    _seed_mock_issue,
+    _seed_mock_review_threads,
+)
+
+pytestmark = [
+    pytest.mark.e2e_docker,
+    pytest.mark.contract,
+]
+
+
+def _install_fake_claude(mock_bin: Path) -> None:
+    """Install a deterministic fake `claude` binary into the mocked PATH."""
+    claude_script = mock_bin / "claude"
+    claude_script.write_text(
+        """#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+import os
+import sys
+
+
+log_path = os.environ.get("WADE_FAKE_CLAUDE_LOG")
+if log_path:
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(sys.argv[1:]))
+        f.write("\\n")
+
+print("FAKE REVIEW FEEDBACK")
+sys.exit(0)
+""",
+        encoding="utf-8",
+    )
+    claude_script.chmod(0o755)
+
+
+def _read_fake_claude_log(log_file: Path) -> list[list[str]]:
+    """Read JSONL argv entries emitted by the fake claude binary."""
+    if not log_file.exists():
+        return []
+    invocations: list[list[str]] = []
+    for line in log_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        invocations.append(json.loads(line))
+    return invocations
+
+
+def _flag_value(argv: list[str], flag: str) -> str | None:
+    try:
+        index = argv.index(flag)
+    except ValueError:
+        return None
+    if index + 1 >= len(argv):
+        return None
+    return argv[index + 1]
+
+
+def _assert_claude_headless_config(argv: list[str], expected_effort: str) -> None:
+    model_value = _flag_value(argv, "--model")
+    assert model_value, f"Expected --model argument in delegated invocation: {argv!r}"
+    assert model_value.replace(".", "-") == "claude-haiku-4-5"
+
+    settings_value = _flag_value(argv, "--settings")
+    assert settings_value, f"Expected --settings argument in delegated invocation: {argv!r}"
+    parsed_settings = json.loads(settings_value)
+    assert isinstance(parsed_settings, dict)
+    assert parsed_settings.get("effortLevel") == expected_effort
+
+
+def _bootstrap_review_target(
+    e2e_repo: Path,
+    mock_gh_cli: MockGhCli,
+    issue_number: int,
+    issue_title: str,
+) -> tuple[Path, str]:
+    """Create issue + draft PR + worktree and return (worktree_path, pr_number)."""
+    _seed_mock_issue(
+        mock_gh_cli["state_file"],
+        issue_number=issue_number,
+        title=issue_title,
+        body="## Tasks\n- Address review feedback\n",
+    )
+    _init_origin_remote(e2e_repo)
+
+    start_result = _run(["implement", str(issue_number), "--cd"], cwd=e2e_repo)
+    assert start_result.returncode == 0
+    worktree_path = Path(start_result.stdout.strip())
+    assert worktree_path.is_dir()
+
+    from wade.git.branch import make_branch_name
+
+    branch_name = make_branch_name("feat", issue_number, issue_title)
+    pr_number = _find_mock_pr_number_by_head(mock_gh_cli["state_file"], branch_name)
+    return worktree_path, pr_number
+
+
+class TestReviewPlanCommand:
+    """Test `wade review plan` deterministic headless delegation contracts."""
+
+    def test_review_plan_headless_runs_fake_ai(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """review plan --mode headless should execute AI with model+effort flags."""
+        _install_fake_claude(mock_gh_cli["mock_bin"])
+        log_file = e2e_repo / ".fake-claude-log.jsonl"
+
+        plan_file = e2e_repo / "PLAN-review.md"
+        plan_file.write_text(
+            "\n".join(
+                [
+                    "# Review contract plan",
+                    "",
+                    "## Tasks",
+                    "- Validate deterministic review behavior",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        result = _run(
+            [
+                "review",
+                "plan",
+                str(plan_file),
+                "--mode",
+                "headless",
+                "--ai",
+                "claude",
+                "--model",
+                "claude-haiku-4.5",
+                "--effort",
+                "high",
+            ],
+            cwd=e2e_repo,
+            env={"WADE_FAKE_CLAUDE_LOG": str(log_file)},
+        )
+
+        assert result.returncode == 0
+        assert "FAKE REVIEW FEEDBACK" in result.stdout
+
+        invocations = _read_fake_claude_log(log_file)
+        assert len(invocations) == 1
+        argv = invocations[0]
+        assert "--print" in argv
+        _assert_claude_headless_config(argv, expected_effort="high")
+        assert any("Review contract plan" in token for token in argv)
+
+
+class TestReviewImplementationCommand:
+    """Test `wade review implementation` deterministic headless contracts."""
+
+    def test_review_implementation_headless_uses_staged_diff(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """review implementation --staged should include git diff in AI prompt."""
+        _install_fake_claude(mock_gh_cli["mock_bin"])
+        log_file = e2e_repo / ".fake-claude-log.jsonl"
+
+        app_file = e2e_repo / "src" / "app.py"
+        app_file.write_text('print("hello from staged review test")\n', encoding="utf-8")
+        _git(["add", str(app_file.relative_to(e2e_repo))], cwd=e2e_repo)
+
+        result = _run(
+            [
+                "review",
+                "implementation",
+                "--staged",
+                "--mode",
+                "headless",
+                "--ai",
+                "claude",
+                "--model",
+                "claude-haiku-4.5",
+                "--effort",
+                "medium",
+            ],
+            cwd=e2e_repo,
+            env={"WADE_FAKE_CLAUDE_LOG": str(log_file)},
+        )
+
+        assert result.returncode == 0
+        assert "FAKE REVIEW FEEDBACK" in result.stdout
+
+        invocations = _read_fake_claude_log(log_file)
+        assert len(invocations) == 1
+        argv = invocations[0]
+        assert "--print" in argv
+        _assert_claude_headless_config(argv, expected_effort="medium")
+        assert any("diff --git" in token for token in argv), (
+            "Expected staged git diff content to be included in delegated prompt."
+        )
+
+    def test_review_implementation_no_diff_skips_ai(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """review implementation with no changes should return success without AI call."""
+        _install_fake_claude(mock_gh_cli["mock_bin"])
+        log_file = e2e_repo / ".fake-claude-log.jsonl"
+
+        result = _run(
+            [
+                "review",
+                "implementation",
+                "--mode",
+                "headless",
+                "--ai",
+                "claude",
+                "--model",
+                "claude-haiku-4.5",
+            ],
+            cwd=e2e_repo,
+            env={"WADE_FAKE_CLAUDE_LOG": str(log_file)},
+        )
+
+        assert result.returncode == 0
+        assert "No changes to review" in (result.stdout + result.stderr)
+        assert _read_fake_claude_log(log_file) == []
+
+
+class TestReviewPrCommentsCommand:
+    """Test `wade review pr-comments` deterministic contracts."""
+
+    def test_review_pr_comments_actionable_threads_in_ai_env_skip_nested_launch(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """review pr-comments should avoid nested AI launch when CODEX_CLI is detected."""
+        issue_number = 51
+        issue_title = "Address actionable review comments"
+        worktree_path, pr_number = _bootstrap_review_target(
+            e2e_repo=e2e_repo,
+            mock_gh_cli=mock_gh_cli,
+            issue_number=issue_number,
+            issue_title=issue_title,
+        )
+
+        _seed_mock_review_threads(
+            mock_gh_cli["state_file"],
+            pr_number=pr_number,
+            threads=[
+                {
+                    "id": "PRRT_actionable",
+                    "isResolved": False,
+                    "isOutdated": False,
+                    "comments": [
+                        {
+                            "author": "alice",
+                            "body": "Refactor this conditional.",
+                            "path": "src/app.py",
+                            "line": 4,
+                            "url": "https://example.com/review/0",
+                        }
+                    ],
+                }
+            ],
+        )
+
+        result = _run(
+            ["review", "pr-comments", str(issue_number)],
+            cwd=e2e_repo,
+            env={"CODEX_CLI": "1"},
+        )
+
+        assert result.returncode == 0
+        output = result.stdout + result.stderr
+        assert "Skipping AI launch: already inside AI session" in output
+        assert str(worktree_path) in output
+        _assert_gh_called_with(
+            mock_gh_cli["log_file"],
+            ["api", "graphql", "-F", f"pr={pr_number}"],
+        )
+
+    def test_review_pr_comments_fails_for_unknown_issue_without_graphql_side_effects(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """review pr-comments should fail fast when the issue does not exist."""
+        result = _run(["review", "pr-comments", "999"], cwd=e2e_repo)
+
+        assert result.returncode != 0
+        _assert_gh_called_with(
+            mock_gh_cli["log_file"],
+            ["issue", "view", "999"],
+        )
+        assert _count_gh_calls(mock_gh_cli["log_file"], ["api", "graphql"]) == 0
+
+    def test_review_pr_comments_no_actionable_threads(
+        self, e2e_repo: Path, mock_gh_cli: MockGhCli
+    ) -> None:
+        """review pr-comments should return success when all threads are already resolved."""
+        issue_number = 52
+        issue_title = "Address review comments workflow"
+        _worktree_path, pr_number = _bootstrap_review_target(
+            e2e_repo=e2e_repo,
+            mock_gh_cli=mock_gh_cli,
+            issue_number=issue_number,
+            issue_title=issue_title,
+        )
+
+        _seed_mock_review_threads(
+            mock_gh_cli["state_file"],
+            pr_number=pr_number,
+            threads=[
+                {
+                    "id": "PRRT_resolved",
+                    "isResolved": True,
+                    "isOutdated": False,
+                    "comments": [
+                        {
+                            "author": "alice",
+                            "body": "Already fixed",
+                            "path": "src/app.py",
+                            "line": 1,
+                            "url": "https://example.com/review/1",
+                        }
+                    ],
+                }
+            ],
+        )
+
+        result = _run(["review", "pr-comments", str(issue_number)], cwd=e2e_repo)
+
+        assert result.returncode == 0
+        output = result.stdout + result.stderr
+        assert "All review comments resolved" in output
+        _assert_gh_called_with(
+            mock_gh_cli["log_file"],
+            ["api", "graphql", "-F", f"pr={pr_number}"],
+        )
+
+
+class TestReviewPrCommentsSessionCommands:
+    """Test review-pr-comments-session deterministic contracts."""
+
+    def test_fetch_outputs_structured_markdown(
+        self, e2e_repo: Path, mock_gh_cli: MockGhCli
+    ) -> None:
+        """fetch should print actionable comments grouped by file with thread IDs."""
+        issue_number = 53
+        issue_title = "Fetch review comment context"
+        _worktree_path, pr_number = _bootstrap_review_target(
+            e2e_repo=e2e_repo,
+            mock_gh_cli=mock_gh_cli,
+            issue_number=issue_number,
+            issue_title=issue_title,
+        )
+
+        thread_id = "PRRT_fetch_1"
+        _seed_mock_review_threads(
+            mock_gh_cli["state_file"],
+            pr_number=pr_number,
+            threads=[
+                {
+                    "id": thread_id,
+                    "isResolved": False,
+                    "isOutdated": False,
+                    "comments": [
+                        {
+                            "author": "alice",
+                            "body": "Please improve error handling.",
+                            "path": "src/app.py",
+                            "line": 12,
+                            "url": "https://example.com/review/2",
+                        },
+                        {
+                            "author": "bob",
+                            "body": "Agreed.",
+                            "path": "src/app.py",
+                            "line": 12,
+                            "url": "https://example.com/review/3",
+                        },
+                    ],
+                }
+            ],
+        )
+
+        result = _run(
+            ["review-pr-comments-session", "fetch", str(issue_number)],
+            cwd=e2e_repo,
+        )
+
+        assert result.returncode == 0
+        assert "# Review Comments to Address" in result.stdout
+        assert f"`{thread_id}`" in result.stdout
+        assert "`src/app.py:12`" in result.stdout
+        assert "@alice" in result.stdout
+        assert "@bob" in result.stdout
+        _assert_gh_called_with(
+            mock_gh_cli["log_file"],
+            ["api", "graphql", "-F", f"pr={pr_number}"],
+        )
+
+    def test_resolve_marks_thread_resolved_via_graphql(
+        self, e2e_repo: Path, mock_gh_cli: MockGhCli
+    ) -> None:
+        """resolve should call GraphQL mutation and persist resolved state in mock gh."""
+        issue_number = 54
+        issue_title = "Resolve review thread from session"
+        _worktree_path, pr_number = _bootstrap_review_target(
+            e2e_repo=e2e_repo,
+            mock_gh_cli=mock_gh_cli,
+            issue_number=issue_number,
+            issue_title=issue_title,
+        )
+
+        thread_id = "PRRT_resolve_1"
+        _seed_mock_review_threads(
+            mock_gh_cli["state_file"],
+            pr_number=pr_number,
+            threads=[
+                {
+                    "id": thread_id,
+                    "isResolved": False,
+                    "isOutdated": False,
+                    "comments": [
+                        {
+                            "author": "alice",
+                            "body": "Nit: rename variable",
+                            "path": "src/app.py",
+                            "line": 7,
+                        }
+                    ],
+                }
+            ],
+        )
+
+        result = _run(
+            ["review-pr-comments-session", "resolve", thread_id],
+            cwd=e2e_repo,
+        )
+
+        assert result.returncode == 0
+        output = result.stdout + result.stderr
+        assert re.search(rf"Thread\s+{re.escape(thread_id)}\s+resolved", output)
+        _assert_gh_called_with(
+            mock_gh_cli["log_file"],
+            ["api", "graphql", "-f", f"threadId={thread_id}"],
+        )
+
+        state_data = json.loads(mock_gh_cli["state_file"].read_text(encoding="utf-8"))
+        review_threads = state_data.get("review_threads", {})
+        assert isinstance(review_threads, dict)
+        threads = review_threads.get(str(pr_number), [])
+        assert isinstance(threads, list)
+        matched = [t for t in threads if isinstance(t, dict) and t.get("id") == thread_id]
+        assert len(matched) == 1
+        assert bool(matched[0].get("isResolved")) is True
+
+    def test_done_updates_existing_draft_pr(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """review-pr-comments-session done should push and update the draft PR path."""
+        from wade.git.branch import make_branch_name
+
+        issue_number = 55
+        issue_title = "Finalize review comments session"
+        worktree_path, pr_number = _bootstrap_review_target(
+            e2e_repo=e2e_repo,
+            mock_gh_cli=mock_gh_cli,
+            issue_number=issue_number,
+            issue_title=issue_title,
+        )
+        branch_name = make_branch_name("feat", issue_number, issue_title)
+
+        (worktree_path / "PR-SUMMARY.md").write_text(
+            "Addressed review feedback and validated behavior.\n",
+            encoding="utf-8",
+        )
+        (worktree_path / "review-fixes.txt").write_text(
+            "resolved review comments\n",
+            encoding="utf-8",
+        )
+        _git(["add", "-A"], cwd=worktree_path)
+        _git(["commit", "-m", "fix: address review comments"], cwd=worktree_path)
+
+        result = _run(["review-pr-comments-session", "done"], cwd=worktree_path)
+
+        assert result.returncode == 0
+        origin_repo = e2e_repo.parent / "origin.git"
+        assert _remote_has_branch(origin_repo, branch_name)
+        _assert_gh_called_with(
+            mock_gh_cli["log_file"],
+            ["pr", "edit", pr_number, "--body"],
+        )
+        _assert_gh_called_with(
+            mock_gh_cli["log_file"],
+            ["pr", "ready", pr_number],
+        )
+        _assert_gh_called_with(
+            mock_gh_cli["log_file"],
+            ["issue", "edit", str(issue_number), "--remove-label", "in-progress"],
+        )
+        assert (
+            _count_gh_calls(
+                mock_gh_cli["log_file"],
+                ["pr", "create", "--head", branch_name],
+            )
+            == 1
+        )

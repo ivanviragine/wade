@@ -75,6 +75,7 @@ def mock_gh_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> MockGhCli:
         "issues": {},
         "prs": {},
         "labels": {},
+        "review_threads": {},
     }
     state_file.write_text(json.dumps(state), encoding="utf-8")
 

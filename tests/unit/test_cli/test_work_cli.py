@@ -6,10 +6,10 @@ from unittest.mock import patch
 
 from typer.testing import CliRunner
 
-from wade.cli.implementation_session import impl_session_app
+from wade.cli.implementation_session import implementation_session_app
 from wade.cli.main import app
 from wade.cli.worktree import worktree_app
-from wade.models.work import SyncEvent, SyncEventType, SyncResult
+from wade.models.session import SyncEvent, SyncEventType, SyncResult
 
 runner = CliRunner()
 
@@ -32,19 +32,31 @@ def _sync_result(
 class TestWorkSyncExitCodes:
     def test_sync_success_maps_to_exit_zero(self) -> None:
         with patch(
-            "wade.services.work_service.sync",
+            "wade.services.implementation_service.sync",
             return_value=_sync_result(success=True),
-        ):
-            result = runner.invoke(impl_session_app, ["sync"])
+        ) as mock_sync:
+            result = runner.invoke(implementation_session_app, ["sync"])
         assert result.exit_code == 0
+        mock_sync.assert_called_once_with(
+            dry_run=False,
+            main_branch=None,
+            json_output=False,
+            session_type="implementation",
+        )
 
     def test_sync_conflicts_map_to_exit_two(self) -> None:
         with patch(
-            "wade.services.work_service.sync",
+            "wade.services.implementation_service.sync",
             return_value=_sync_result(success=False, conflicts=["README.md"]),
-        ):
-            result = runner.invoke(impl_session_app, ["sync"])
+        ) as mock_sync:
+            result = runner.invoke(implementation_session_app, ["sync"])
         assert result.exit_code == 2
+        mock_sync.assert_called_once_with(
+            dry_run=False,
+            main_branch=None,
+            json_output=False,
+            session_type="implementation",
+        )
 
     def test_sync_preflight_error_maps_to_exit_four(self) -> None:
         preflight_event = SyncEvent(
@@ -52,11 +64,17 @@ class TestWorkSyncExitCodes:
             data={"reason": "on_main_branch"},
         )
         with patch(
-            "wade.services.work_service.sync",
+            "wade.services.implementation_service.sync",
             return_value=_sync_result(success=False, events=[preflight_event]),
-        ):
-            result = runner.invoke(impl_session_app, ["sync"])
+        ) as mock_sync:
+            result = runner.invoke(implementation_session_app, ["sync"])
         assert result.exit_code == 4
+        mock_sync.assert_called_once_with(
+            dry_run=False,
+            main_branch=None,
+            json_output=False,
+            session_type="implementation",
+        )
 
     def test_sync_other_error_maps_to_exit_one(self) -> None:
         generic_error = SyncEvent(
@@ -64,11 +82,17 @@ class TestWorkSyncExitCodes:
             data={"reason": "unknown"},
         )
         with patch(
-            "wade.services.work_service.sync",
+            "wade.services.implementation_service.sync",
             return_value=_sync_result(success=False, events=[generic_error]),
-        ):
-            result = runner.invoke(impl_session_app, ["sync"])
+        ) as mock_sync:
+            result = runner.invoke(implementation_session_app, ["sync"])
         assert result.exit_code == 1
+        mock_sync.assert_called_once_with(
+            dry_run=False,
+            main_branch=None,
+            json_output=False,
+            session_type="implementation",
+        )
 
 
 class TestWorkOtherCommands:
@@ -79,7 +103,7 @@ class TestWorkOtherCommands:
         assert "Provide at least one issue number." in result.output
 
     def test_remove_all_alias_sets_stale_mode(self) -> None:
-        with patch("wade.services.work_service.remove", return_value=True) as mock_remove:
+        with patch("wade.services.implementation_service.remove", return_value=True) as mock_remove:
             result = runner.invoke(worktree_app, ["remove", "--all", "--force"])
         assert result.exit_code == 0
         mock_remove.assert_called_once_with(target=None, stale=True, force=True)

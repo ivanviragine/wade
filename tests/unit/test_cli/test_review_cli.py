@@ -31,7 +31,7 @@ class TestReviewPlanCli:
         from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 
         mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="prompt"))
+            ai=AIConfig(default_tool="claude", review_plan=AICommandConfig(mode="prompt"))
         )
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="LGTM", mode=DelegationMode.PROMPT
@@ -39,10 +39,16 @@ class TestReviewPlanCli:
 
         result = runner.invoke(app, ["review", "plan", str(plan_file)])
         assert result.exit_code == 0
+        assert "REVIEW COMPLETE" in result.output
+        mock_delegate.assert_called_once()
+        request = mock_delegate.call_args[0][0]
+        assert "# Test Plan" in request.prompt
+        assert request.mode == DelegationMode.PROMPT
 
     def test_review_plan_missing_file(self) -> None:
         result = runner.invoke(app, ["review", "plan", "/nonexistent/PLAN.md"])
         assert result.exit_code == 1
+        assert "Plan file not found" in result.output
 
 
 class TestReviewImplementationCli:
@@ -51,6 +57,7 @@ class TestReviewImplementationCli:
         mock_run.return_value = MagicMock(returncode=0, stdout="")
         result = runner.invoke(app, ["review", "implementation"])
         assert result.exit_code == 0
+        assert "No changes to review." in result.output
 
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
@@ -69,7 +76,10 @@ class TestReviewImplementationCli:
         from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 
         mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_implementation=AICommandConfig(mode="prompt"))
+            ai=AIConfig(
+                default_tool="claude",
+                review_implementation=AICommandConfig(mode="prompt"),
+            )
         )
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="Clean code!", mode=DelegationMode.PROMPT
@@ -77,6 +87,10 @@ class TestReviewImplementationCli:
 
         result = runner.invoke(app, ["review", "implementation"])
         assert result.exit_code == 0
+        mock_delegate.assert_called_once()
+        request = mock_delegate.call_args[0][0]
+        assert "diff --git a/f.py" in request.prompt
+        assert request.mode == DelegationMode.PROMPT
 
     @patch("wade.services.review_delegation_service.run")
     def test_review_implementation_staged_flag(self, mock_run: MagicMock) -> None:
@@ -104,7 +118,7 @@ class TestReviewCliEffortFlag:
         from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 
         mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="prompt"))
+            ai=AIConfig(default_tool="claude", review_plan=AICommandConfig(mode="prompt"))
         )
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="ok", mode=DelegationMode.PROMPT
@@ -112,6 +126,9 @@ class TestReviewCliEffortFlag:
 
         result = runner.invoke(app, ["review", "plan", str(plan_file), "--effort", "low"])
         assert result.exit_code == 0
+        mock_delegate.assert_called_once()
+        request = mock_delegate.call_args[0][0]
+        assert request.effort == "low"
 
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
@@ -130,7 +147,10 @@ class TestReviewCliEffortFlag:
         from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 
         mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_implementation=AICommandConfig(mode="prompt"))
+            ai=AIConfig(
+                default_tool="claude",
+                review_implementation=AICommandConfig(mode="prompt"),
+            )
         )
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="ok", mode=DelegationMode.PROMPT
@@ -138,3 +158,6 @@ class TestReviewCliEffortFlag:
 
         result = runner.invoke(app, ["review", "implementation", "--effort", "high"])
         assert result.exit_code == 0
+        mock_delegate.assert_called_once()
+        request = mock_delegate.call_args[0][0]
+        assert request.effort == "high"

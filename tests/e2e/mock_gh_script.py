@@ -29,6 +29,7 @@ def _default_state() -> dict[str, object]:
         "issues": {},
         "prs": {},
         "labels": {},
+        "review_threads": {},
     }
 
 
@@ -62,8 +63,70 @@ def _find_all_flags(args: list[str], *names: str) -> list[str]:
     return values
 
 
+def _find_form_value(args: list[str], key: str) -> str | None:
+    prefix = f"{key}="
+    i = 0
+    while i < len(args):
+        if args[i] in ("-f", "-F") and i + 1 < len(args):
+            value = args[i + 1]
+            if value.startswith(prefix):
+                return value[len(prefix) :]
+            i += 2
+            continue
+        i += 1
+    return None
+
+
 def _issue_labels_as_json(labels: list[str]) -> list[dict[str, str]]:
     return [{"name": name, "color": "ededed", "description": ""} for name in labels]
+
+
+def _review_threads_as_graphql_nodes(raw_threads: object) -> list[dict[str, object]]:
+    if not isinstance(raw_threads, list):
+        return []
+
+    nodes: list[dict[str, object]] = []
+    for raw_thread in raw_threads:
+        if not isinstance(raw_thread, dict):
+            continue
+
+        comments_raw = raw_thread.get("comments", [])
+        if isinstance(comments_raw, dict):
+            comments_raw = comments_raw.get("nodes", [])
+        if not isinstance(comments_raw, list):
+            comments_raw = []
+
+        comment_nodes: list[dict[str, object]] = []
+        for raw_comment in comments_raw:
+            if not isinstance(raw_comment, dict):
+                continue
+            author_raw = raw_comment.get("author")
+            if isinstance(author_raw, dict):
+                author = {"login": str(author_raw.get("login", ""))}
+            else:
+                author_name = str(author_raw or "")
+                author = {"login": author_name} if author_name else None
+
+            comment_nodes.append(
+                {
+                    "body": str(raw_comment.get("body", "")),
+                    "path": raw_comment.get("path"),
+                    "line": raw_comment.get("line"),
+                    "author": author,
+                    "createdAt": raw_comment.get("createdAt"),
+                    "url": raw_comment.get("url"),
+                }
+            )
+
+        nodes.append(
+            {
+                "id": str(raw_thread.get("id", "")),
+                "isResolved": bool(raw_thread.get("isResolved", False)),
+                "isOutdated": bool(raw_thread.get("isOutdated", False)),
+                "comments": {"nodes": comment_nodes},
+            }
+        )
+    return nodes
 
 
 def _handle_issue(args: list[str], state: dict[str, object]) -> int:
@@ -136,9 +199,10 @@ def _handle_issue(args: list[str], state: dict[str, object]) -> int:
         target = "1"
         if len(args) >= 2 and not args[1].startswith("-"):
             target = args[1]
-        raw = issues.get(target, {})
+        raw = issues.get(target)
         if not isinstance(raw, dict):
-            raw = {}
+            print(f"Issue not found: {target}", file=sys.stderr)
+            return 1
         labels = raw.get("labels", [])
         if not isinstance(labels, list):
             labels = []
@@ -160,7 +224,10 @@ def _handle_issue(args: list[str], state: dict[str, object]) -> int:
         if len(args) < 2:
             return 1
         target = args[1]
-        raw = issues.setdefault(target, {"title": "", "body": "", "state": "OPEN", "labels": []})
+        raw = issues.get(target)
+        if not isinstance(raw, dict):
+            print(f"Issue not found: {target}", file=sys.stderr)
+            return 1
         assert isinstance(raw, dict)
         labels = raw.setdefault("labels", [])
         if not isinstance(labels, list):
@@ -192,7 +259,10 @@ def _handle_issue(args: list[str], state: dict[str, object]) -> int:
         if len(args) < 2:
             return 1
         target = args[1]
-        raw = issues.setdefault(target, {"title": "", "body": "", "state": "OPEN", "labels": []})
+        raw = issues.get(target)
+        if not isinstance(raw, dict):
+            print(f"Issue not found: {target}", file=sys.stderr)
+            return 1
         assert isinstance(raw, dict)
         raw["state"] = "CLOSED"
         _save_state(state)
@@ -275,8 +345,8 @@ def _handle_pr(args: list[str], state: dict[str, object]) -> int:
         if len(args) < 2:
             return 1
         target = args[1]
-        pr = prs.get(target)
-        if not isinstance(pr, dict):
+        _pr_num, pr = _find_pr(prs, target)
+        if not pr:
             return 1
         body = _find_flag(args, "--body")
         if body is not None:
@@ -288,8 +358,8 @@ def _handle_pr(args: list[str], state: dict[str, object]) -> int:
         if len(args) < 2:
             return 1
         target = args[1]
-        pr = prs.get(target)
-        if not isinstance(pr, dict):
+        _pr_num, pr = _find_pr(prs, target)
+        if not pr:
             return 1
         pr["isDraft"] = False
         _save_state(state)
@@ -299,8 +369,8 @@ def _handle_pr(args: list[str], state: dict[str, object]) -> int:
         if len(args) < 2:
             return 1
         target = args[1]
-        pr = prs.get(target)
-        if not isinstance(pr, dict):
+        _pr_num, pr = _find_pr(prs, target)
+        if not pr:
             return 1
         pr["state"] = "MERGED"
         _save_state(state)
@@ -352,6 +422,139 @@ def _handle_repo(args: list[str]) -> int:
     return 0
 
 
+def _query_contains(query: str, *parts: str) -> bool:
+    normalized = " ".join(query.split())
+    return all(part in normalized for part in parts)
+
+
+def _has_form_values(args: list[str], *keys: str) -> bool:
+    return all(bool((_find_form_value(args, key) or "").strip()) for key in keys)
+
+
+def _handle_api(args: list[str], state: dict[str, object]) -> int:
+    if not args:
+        return 1
+    if args[0] != "graphql":
+        return 1
+
+    query = _find_form_value(args, "query") or ""
+    if not query:
+        return 1
+
+    # review_service.get_pr_review_threads query
+    if (
+        _query_contains(
+            query,
+            "repository(owner: $owner, name: $repo)",
+            "pullRequest(number: $pr)",
+            "reviewThreads(first:",
+        )
+        and _has_form_values(args, "owner", "repo", "pr", "query")
+    ):
+        pr_value = _find_form_value(args, "pr") or "0"
+        review_threads = state.setdefault("review_threads", {})
+        assert isinstance(review_threads, dict)
+        raw_threads = review_threads.get(str(pr_value), [])
+        nodes = _review_threads_as_graphql_nodes(raw_threads)
+        print(
+            json.dumps(
+                {
+                    "data": {
+                        "repository": {
+                            "pullRequest": {
+                                "reviewThreads": {
+                                    "pageInfo": {
+                                        "hasNextPage": False,
+                                        "endCursor": None,
+                                    },
+                                    "nodes": nodes,
+                                }
+                            }
+                        }
+                    }
+                }
+            )
+        )
+        return 0
+
+    # review_service.resolve_thread mutation
+    if (
+        _query_contains(
+            query,
+            "resolveReviewThread(input: {threadId: $threadId})",
+        )
+        and _has_form_values(args, "threadId", "query")
+    ):
+        thread_id = _find_form_value(args, "threadId") or ""
+        review_threads = state.setdefault("review_threads", {})
+        assert isinstance(review_threads, dict)
+
+        is_resolved = False
+        for raw_threads in review_threads.values():
+            if not isinstance(raw_threads, list):
+                continue
+            for raw_thread in raw_threads:
+                if isinstance(raw_thread, dict) and str(raw_thread.get("id", "")) == thread_id:
+                    raw_thread["isResolved"] = True
+                    is_resolved = True
+
+        _save_state(state)
+        print(
+            json.dumps(
+                {
+                    "data": {
+                        "resolveReviewThread": {
+                            "thread": {"isResolved": is_resolved}
+                        }
+                    }
+                }
+            )
+        )
+        return 0
+
+    # provider.move_to_in_progress query can return empty project items.
+    if (
+        _query_contains(
+            query,
+            "issue(number: $number)",
+            "projectItems(first: 10)",
+        )
+        and _has_form_values(args, "owner", "repo", "number", "query")
+    ):
+        print(
+            json.dumps(
+                {
+                    "data": {
+                        "repository": {
+                            "issue": {
+                                "projectItems": {"nodes": []}
+                            }
+                        }
+                    }
+                }
+            )
+        )
+        return 0
+
+    if (
+        _query_contains(
+            query,
+            "updateProjectV2ItemFieldValue",
+            "singleSelectOptionId: $option_id",
+        )
+        and _has_form_values(args, "project_id", "item_id", "field_id", "option_id", "query")
+    ):
+        print(
+            json.dumps(
+                {"data": {"updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "item"}}}}
+            )
+        )
+        return 0
+
+    print("mock-gh: unsupported graphql query", file=sys.stderr)
+    return 1
+
+
 def main() -> int:
     argv = sys.argv[1:]
     _log_invocation(argv)
@@ -370,6 +573,8 @@ def main() -> int:
         return _handle_label(argv[1:], state)
     if argv[0] == "repo":
         return _handle_repo(argv[1:])
+    if argv[0] == "api":
+        return _handle_api(argv[1:], state)
 
     print(f"mock-gh: unknown command: {argv[0]}", file=sys.stderr)
     return 1

@@ -46,6 +46,7 @@ class TestImplementationSessionSubApp:
         with patch("wade.git.repo.get_current_branch", return_value="main"):
             result = runner.invoke(app, ["implementation-session", "done"])
         assert result.exit_code == 1
+        assert "Cannot extract issue number" in result.output
 
     def test_help_shows_all_commands(self) -> None:
         result = runner.invoke(app, ["implementation-session", "--help"])
@@ -77,14 +78,17 @@ class TestReviewPrCommentsSessionSubApp:
         with patch("wade.git.repo.get_current_branch", return_value="main"):
             result = runner.invoke(app, ["review-pr-comments-session", "done"])
         assert result.exit_code == 1
+        assert "Cannot extract issue number" in result.output
 
     def test_fetch_requires_target(self) -> None:
         result = runner.invoke(app, ["review-pr-comments-session", "fetch"])
         assert result.exit_code != 0
+        assert "Missing argument" in result.output
 
     def test_resolve_requires_thread_id(self) -> None:
         result = runner.invoke(app, ["review-pr-comments-session", "resolve"])
         assert result.exit_code != 0
+        assert "Missing argument" in result.output
 
     def test_help_shows_all_commands(self) -> None:
         result = runner.invoke(app, ["review-pr-comments-session", "--help"])
@@ -104,6 +108,7 @@ class TestPlanSessionSubApp:
     def test_done_requires_plan_dir(self) -> None:
         result = runner.invoke(app, ["plan-session", "done"])
         assert result.exit_code != 0
+        assert "Missing argument" in result.output
 
     def test_done_nonexistent_dir(self, tmp_path: Path) -> None:
         missing = tmp_path / "nonexistent"
@@ -128,10 +133,12 @@ class TestWorktreeSubApp:
     def test_list_empty(self, _mock: MagicMock) -> None:
         result = runner.invoke(app, ["worktree", "list"])
         assert result.exit_code == 0
+        _mock.assert_called_once_with(show_all=False, json_output=False)
 
     def test_cd_requires_target(self) -> None:
         result = runner.invoke(app, ["worktree", "cd"])
         assert result.exit_code != 0
+        assert "Missing argument" in result.output
 
     def test_help_shows_all_commands(self) -> None:
         result = runner.invoke(app, ["worktree", "--help"])
@@ -151,6 +158,7 @@ class TestTopLevelCd:
     def test_cd_requires_target(self) -> None:
         result = runner.invoke(app, ["cd"])
         assert result.exit_code != 0
+        assert "Missing argument" in result.output
 
     @patch("wade.services.implementation_service.find_worktree_path", return_value=Path("/tmp/wt"))
     def test_cd_prints_path_when_worktree_exists(self, _mock: MagicMock) -> None:
@@ -176,6 +184,7 @@ class TestShortAliases:
         ):
             result = runner.invoke(app, ["p"])
         assert result.exit_code == 1  # no AI tool → exits 1
+        assert "No AI tool specified and none detected" in result.output
 
     def test_i_alias_invokes_implement(self) -> None:
         with patch("wade.services.implementation_service.start", return_value=True) as mock_start:

@@ -30,6 +30,9 @@ tests/
 │   ├── _support.py
 │   ├── mock_gh_script.py
 │   ├── test_check_contract.py
+│   ├── test_plan_contract.py
+│   ├── test_review_contract.py # review plan/implementation/pr-comments + session fetch/resolve
+│   ├── test_smart_start_contract.py
 │   ├── test_task_contract.py
 │   ├── test_implement_work_done_contract.py
 │   └── test_work_sync_list_contract.py
@@ -55,7 +58,7 @@ tests/
 ./scripts/test.sh tests/integration/
 
 # Specific test file
-./scripts/test.sh tests/unit/test_services/test_work_done_sync.py
+./scripts/test.sh tests/unit/test_services/test_implementation_done_sync.py
 
 # Run tests matching a pattern
 ./scripts/test.sh -k "test_check"
@@ -68,6 +71,9 @@ tests/
 
 # Deterministic end-to-end contract lane in Docker (CI-equivalent)
 ./scripts/test-e2e-docker.sh
+
+# Docker lane is isolated from host .venv (container uses /tmp/wade-e2e-venv)
+# so running it does not mutate local development environments.
 
 # Manual live GitHub lane (requires real gh auth + repo)
 RUN_LIVE_GH_TESTS=1 WADE_LIVE_REPO=/path/to/repo ./scripts/test-live-gh.sh
@@ -96,9 +102,13 @@ credentials, or binaries are missing.
 
 Live tests are manual by design. Default CI lanes must not require provider secrets.
 
+Current live GH lane exercises WADE behavior (not raw `gh` checks), including:
+- task lifecycle (`task create/read/list/close`)
+- PR-backed workflow smoke (`implement --cd` + `review pr-comments` no-comment path)
+
 ## CI Execution Model
 
-- Unit + integration run directly on the CI host.
+- Unit + integration + top-level CLI smoke (`tests/test_cli_basics.py`) run directly on the CI host.
 - Deterministic E2E contract tests run via `./scripts/test-e2e-docker.sh` and `docker-compose.e2e.yml`.
 - Live lanes remain manual and env-gated (`test-live-gh.sh`, `test-live-ai.sh`).
 

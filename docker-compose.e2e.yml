@@ -6,6 +6,9 @@ services:
       - .:/workspace
     environment:
       UV_LINK_MODE: copy
+      # Keep container venv off the bind mount so Docker E2E does not
+      # mutate/break the host workspace .venv.
+      UV_PROJECT_ENVIRONMENT: /tmp/wade-e2e-venv
       PYTHONDONTWRITEBYTECODE: "1"
       PYTEST_ARGS: ""
     command:

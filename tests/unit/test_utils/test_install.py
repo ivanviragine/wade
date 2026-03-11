@@ -185,13 +185,13 @@ class TestReExec:
             patch("wade.utils.install.os.execv") as mock_execv,
             patch("wade.utils.install.os.path.isabs", return_value=True),
         ):
-            mock_sys.argv = ["/usr/local/bin/wade", "work", "start", "42"]
+            mock_sys.argv = ["/usr/local/bin/wade", "implement", "42"]
 
             re_exec()
 
         mock_execv.assert_called_once_with(
             "/usr/local/bin/wade",
-            ["/usr/local/bin/wade", "work", "start", "42"],
+            ["/usr/local/bin/wade", "implement", "42"],
         )
 
     def test_resolves_relative_path_via_which(self) -> None:

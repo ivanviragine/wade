@@ -38,6 +38,8 @@ class TestCheckConfig:
         monkeypatch.chdir(tmp_wade_project)
         result = runner.invoke(app, ["check-config"])
         assert result.exit_code == 0
+        assert "VALID_CONFIG" in result.output
+        assert str(tmp_wade_project / ".wade.yml") in result.output
 
     def test_missing_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """check-config without .wade.yml should exit 1 and report CONFIG_NOT_FOUND."""

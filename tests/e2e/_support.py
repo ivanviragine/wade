@@ -94,7 +94,7 @@ def _assert_gh_called_with(
     """
     invocations = _read_gh_log(log_file)
     for inv in invocations:
-        if _is_ordered_subsequence(inv, expected_args):
+        if _invocation_matches(inv, expected_args):
             return
     pytest.fail(f"No gh invocation contained all of {expected_args}.\nInvocations: {invocations}")
 
@@ -120,13 +120,84 @@ def _seed_mock_issue(
     state_file.write_text(json.dumps(state_data))
 
 
+def _seed_mock_review_threads(
+    state_file: Path,
+    pr_number: int | str,
+    threads: list[dict[str, Any]],
+) -> None:
+    """Seed mock GraphQL review thread state for a pull request number."""
+    state_data = json.loads(state_file.read_text())
+    state_data.setdefault("review_threads", {})
+    review_threads = state_data["review_threads"]
+    if not isinstance(review_threads, dict):
+        pytest.fail(f"Mock gh state has invalid review_threads payload: {review_threads!r}")
+    review_threads[str(pr_number)] = threads
+    state_file.write_text(json.dumps(state_data))
+
+
+def _seed_mock_pr(
+    state_file: Path,
+    pr_number: int,
+    *,
+    head_branch: str,
+    title: str = "Seeded PR",
+    body: str = "",
+    pr_state: str = "OPEN",
+    is_draft: bool = False,
+    base_branch: str = MAIN_BRANCH,
+) -> None:
+    """Seed the mock gh state with a deterministic PR entry."""
+    state_data = json.loads(state_file.read_text())
+    state_data.setdefault("prs", {})
+    prs = state_data["prs"]
+    if not isinstance(prs, dict):
+        pytest.fail(f"Mock gh state has invalid prs payload: {prs!r}")
+    prs[str(pr_number)] = {
+        "title": title,
+        "body": body,
+        "state": pr_state,
+        "isDraft": is_draft,
+        "base": base_branch,
+        "head": head_branch,
+        "url": f"https://github.com/test/e2e-project/pull/{pr_number}",
+    }
+    state_data["next_pr"] = max(int(state_data.get("next_pr", 1)), pr_number + 1)
+    state_file.write_text(json.dumps(state_data))
+
+
 def _count_gh_calls(
     log_file: Path,
     expected_args: list[str],
 ) -> int:
     """Count gh invocations that contain expected args in order."""
     invocations = _read_gh_log(log_file)
-    return sum(1 for inv in invocations if _is_ordered_subsequence(inv, expected_args))
+    return sum(1 for inv in invocations if _invocation_matches(inv, expected_args))
+
+
+def _gh_call_count_total(log_file: Path) -> int:
+    """Return total number of logged mock gh invocations."""
+    return len(_read_gh_log(log_file))
+
+
+def _invocation_matches(actual: list[str], expected: list[str]) -> bool:
+    """Match command+subcommand exactly, then allow ordered-subsequence flags/args.
+
+    This avoids false positives where unrelated commands happen to contain
+    overlapping tokens.
+    """
+    if not expected:
+        return True
+
+    if not actual:
+        return False
+
+    if len(expected) == 1:
+        return actual[0] == expected[0]
+
+    if len(actual) < 2 or actual[0] != expected[0] or actual[1] != expected[1]:
+        return False
+
+    return _is_ordered_subsequence(actual[2:], expected[2:])
 
 
 def _is_ordered_subsequence(actual: list[str], expected: list[str]) -> bool:

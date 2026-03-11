@@ -18,11 +18,12 @@ class TestInit:
         monkeypatch.chdir(tmp_git_repo)
 
         # Run init in non-interactive mode (provide inputs)
-        runner.invoke(
+        result = runner.invoke(
             app,
             ["init"],
             input="y\n",  # Confirm any prompts
         )
+        assert result.exit_code == 0
         config_path = tmp_git_repo / ".wade.yml"
         assert config_path.exists(), "init should create .wade.yml"
         assert "version" in config_path.read_text()

@@ -1016,18 +1016,18 @@ class TestCapturePostSessionUsage:
 
         with (
             patch(
-                "wade.services.work_service.git_pr.get_pr_for_branch",
+                "wade.services.implementation_service.git_pr.get_pr_for_branch",
                 return_value={"number": 7},
             ),
             patch(
-                "wade.services.work_service.git_pr.get_pr_body",
+                "wade.services.implementation_service.git_pr.get_pr_body",
                 return_value="PR body\n",
             ),
             patch(
-                "wade.services.work_service.git_pr.update_pr_body",
+                "wade.services.implementation_service.git_pr.update_pr_body",
                 return_value=True,
             ) as mock_update_pr,
-            patch("wade.services.work_service.console") as mock_console,
+            patch("wade.services.implementation_service.console") as mock_console,
         ):
             model = _capture_post_session_usage(
                 transcript_path=transcript,
