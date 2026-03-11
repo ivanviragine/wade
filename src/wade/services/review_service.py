@@ -173,7 +173,7 @@ def count_unresolved_threads(
         Number of unresolved threads, or None if the check could not be performed
         (no git repo, no branch, no PR, provider error).
     """
-    from wade.services.work_service import extract_issue_from_branch
+    from wade.services.implementation_service import extract_issue_from_branch
 
     config = load_config(project_root)
     provider = get_provider(config)

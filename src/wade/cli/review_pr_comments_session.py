@@ -86,7 +86,7 @@ def done(
     draft: bool = typer.Option(False, "--draft", help="Create PR as draft."),
     no_cleanup: bool = typer.Option(False, "--no-cleanup", help="Don't remove worktree."),
 ) -> None:
-    """Finalize work — push branch and create PR (or direct merge)."""
+    """Finalize review — push branch and update PR."""
     from wade.services.implementation_service import done as do_done
 
     success = do_done(
