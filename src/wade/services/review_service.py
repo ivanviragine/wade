@@ -41,6 +41,7 @@ from wade.services.implementation_service import (
     _resolve_worktrees_dir,
     append_review_usage_entry,
     bootstrap_worktree,
+    extract_issue_from_branch,
 )
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import add_review_addressed_by_labels
@@ -92,12 +93,25 @@ def fetch_reviews(
         console.error(f"Could not read issue #{issue_number}: {e}")
         return False
 
-    # Find branch and PR
-    branch_name = git_branch.make_branch_name(
-        config.project.branch_prefix,
-        int(task.id),
-        task.title,
-    )
+    # Find branch and PR — prefer actual checked-out branch (authoritative);
+    # fall back to reconstructed name for out-of-worktree or detached-HEAD callers.
+    try:
+        current_branch = git_repo.get_current_branch(repo_root)
+        extracted = extract_issue_from_branch(current_branch)
+        if extracted == str(int(task.id)):
+            branch_name = current_branch
+        else:
+            branch_name = git_branch.make_branch_name(
+                config.project.branch_prefix,
+                int(task.id),
+                task.title,
+            )
+    except GitError:
+        branch_name = git_branch.make_branch_name(
+            config.project.branch_prefix,
+            int(task.id),
+            task.title,
+        )
 
     pr_info = git_pr.get_pr_for_branch(repo_root, branch_name)
     if not pr_info:
@@ -173,8 +187,6 @@ def count_unresolved_threads(
         Number of unresolved threads, or None if the check could not be performed
         (no git repo, no branch, no PR, provider error).
     """
-    from wade.services.implementation_service import extract_issue_from_branch
-
     config = load_config(project_root)
     provider = get_provider(config)
 
