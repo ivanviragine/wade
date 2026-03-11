@@ -7,4 +7,5 @@ Critical rules you must always follow:
 
 1. Never create GitHub Issues via `gh issue create` — use `wade task create`
 2. Never create PRs manually (`gh pr create`) or push branches directly — use
-   `wade implementation-session done`
+   the session's `done` command (`wade implementation-session done` or
+   `wade review-pr-comments-session done`)

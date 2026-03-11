@@ -17,6 +17,12 @@ Run `wade` and `gh` commands with the required permissions/capabilities (not
 in sandboxed mode). Do not "try sandbox first" — run them unsandboxed from the
 start.
 
+## Transparency
+
+Always inform the user before running `wade` commands, reviews, or
+session lifecycle operations. Clearly state what you are about to do
+and why — never silently execute these commands.
+
 ## Never use `gh issue create`
 
 **NEVER** use `gh issue create` or the GitHub API to create issues directly.
@@ -113,20 +119,75 @@ Before finalizing, sync your branch with main:
 wade review-pr-comments-session sync --json
 ```
 
-Handle conflicts as described in the implementation-session skill.
+### Handling sync results
+
+**Exit code 0 — Success**: Branch is up to date with main. Proceed to closing.
+
+**Exit code 2 — Conflict**: The merge is paused due to conflicts:
+1. Run `git diff --name-only --diff-filter=U` to list conflicted files
+2. Read each conflicted file — understand both sides of the conflict
+3. Resolve the conflict markers in each file
+4. Stage only the resolved files: `git add <file1> <file2> ...`
+5. Complete the merge: `git commit --no-edit`
+6. Re-run `wade review-pr-comments-session sync --json` to verify clean
+
+**Exit code 4 — Pre-flight failure**: Report the issue and suggest how to fix it.
+
+## PR summary
+
+Before closing the session, write **`PR-SUMMARY.md`** in the worktree root.
+`wade review-pr-comments-session done` reads this file to update the PR body.
+
+> **Never commit this file** — it is a session artifact (already in `.gitignore`).
+
+### Format
+
+```markdown
+## What was addressed
+[Summary of review comments handled]
+
+## Changes
+- Fixed X per reviewer feedback
+- Resolved CodeRabbit finding on Y
+
+## Remaining
+[Any threads intentionally left unresolved, with reasoning]
+```
 
 ## Closing the session
 
 **NEVER** create Pull Requests manually (`gh pr create`) or push branches
 directly.
 
-To finalize your work:
+To finalize your work, follow these steps in order:
 
-1. Write `PR-SUMMARY.md` in the worktree root describing what you addressed
-2. Run `wade review-pr-comments-session sync --json`
-3. Run `wade review-pr-comments-session done`
+**Step 1 — Write PR summary:**
+
+Write `PR-SUMMARY.md` in the worktree root (see format above). If the file
+already exists, update it.
+
+**Step 2 — Sync with main:**
+
+```bash
+wade review-pr-comments-session sync --json
+```
+
+**Step 3 — Done:**
+
+```bash
+wade review-pr-comments-session done
+```
 
 `wade review-pr-comments-session done` pushes changes to the existing PR branch.
+
+This is a **mandatory** final step. If it fails, debug and fix the error —
+do NOT bypass it.
+
+**Step 4 — Review with the user:**
+
+Present the PR link and a brief recap of what was addressed. Ask if they'd
+like any further changes — apply them and repeat Steps 1–3 if so, or confirm
+the session is complete if not.
 
 ## Skills reference
 

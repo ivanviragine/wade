@@ -506,15 +506,25 @@ class TestPromptCommandOverrides:
 
     @patch("wade.ui.prompts.select")
     def test_interactive_no_overrides(self, mock_select: MagicMock) -> None:
-        # Select "Skip (use default)" for plan, deps, review_plan, review_implementation
+        # Select "Skip (use default)" for plan, deps; enable + skip for reviews
         # With installed_tools=["claude"], options are: ["claude", "Skip (use default)"]
         # deps + review commands get a mode prompt (no tool → only "prompt" option → idx 0)
-        mock_select.side_effect = [1, 1, 0, 1, 0, 1, 0]  # Skip x4, mode x3
+        mock_select.side_effect = [
+            1,  # plan: Skip tool
+            1,
+            0,  # deps: Skip tool, mode=prompt
+            0,
+            1,
+            0,  # review_plan: Enable=Yes, Skip tool, mode=prompt
+            0,
+            1,
+            0,  # review_implementation: Enable=Yes, Skip tool, mode=prompt
+        ]
         result = _prompt_command_overrides(["claude"], non_interactive=False)
         assert result["plan"] == {}
         assert result["deps"] == {"mode": "prompt"}
-        assert result["review_plan"] == {"mode": "prompt"}
-        assert result["review_implementation"] == {"mode": "prompt"}
+        assert result["review_plan"] == {"enabled": "true", "mode": "prompt"}
+        assert result["review_implementation"] == {"enabled": "true", "mode": "prompt"}
 
     @patch("wade.services.init_service._suggest_model_for_tool")
     @patch("wade.ui.prompts.select")
@@ -525,15 +535,15 @@ class TestPromptCommandOverrides:
         # installed_tools=["claude", "gemini"], tool_options=["claude", "gemini", "Skip"]
         # plan: idx 1 = gemini; model for plan: idx 1 = "gemini-2.5-pro" (2nd in gemini list);
         # deps: idx 2 = "Skip (use default)", mode: idx 0 = prompt (no tool → only option)
-        # review_plan: idx 2 = Skip, mode: idx 0 = prompt
-        # review_implementation: idx 2 = Skip, mode: idx 0 = prompt
-        mock_select.side_effect = [1, 1, 2, 0, 2, 0, 2, 0]
+        # review_plan: Enable=Yes, idx 2 = Skip, mode: idx 0 = prompt
+        # review_implementation: Enable=Yes, idx 2 = Skip, mode: idx 0 = prompt
+        mock_select.side_effect = [1, 1, 2, 0, 0, 2, 0, 0, 2, 0]
         result = _prompt_command_overrides(["claude", "gemini"], non_interactive=False)
         assert result["plan"]["tool"] == "gemini"
         assert result["plan"]["model"] == "gemini-2.5-pro"
         assert result["deps"] == {"mode": "prompt"}
-        assert result["review_plan"] == {"mode": "prompt"}
-        assert result["review_implementation"] == {"mode": "prompt"}
+        assert result["review_plan"] == {"enabled": "true", "mode": "prompt"}
+        assert result["review_implementation"] == {"enabled": "true", "mode": "prompt"}
 
 
 # ---------------------------------------------------------------------------

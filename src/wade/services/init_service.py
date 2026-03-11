@@ -1442,9 +1442,11 @@ def _prompt_command_overrides(
 
     Returns a dict like:
         {"plan": {"tool": "claude", "model": "..."}, "deps": {},
-         "review_plan": {"mode": "prompt"}, "review_implementation": {"mode": "headless"}}
+         "review_plan": {"enabled": "true", "mode": "prompt"},
+         "review_implementation": {"enabled": "false"}}
 
     Empty dicts for commands with no overrides.
+    Review commands include an "enabled" key ("true"/"false" as strings).
     """
     from wade.ui import prompts
 
@@ -1472,10 +1474,24 @@ def _prompt_command_overrides(
     tool_for_cmd: list[str | None] = [None] * len(cmd_triples)
     for cmd_idx, (cmd_name, prompt_label, section) in enumerate(cmd_triples):
         console.rule(section)
+
+        # For review commands, ask if reviews are enabled first
+        if cmd_name.startswith("review_"):
+            enable_idx = prompts.select(
+                f"Enable {section.lower()}?",
+                ["Yes", "No"],
+                default=0,
+            )
+            if enable_idx == 1:
+                result[cmd_name] = {"enabled": "false"}
+                continue
+            result[cmd_name] = {"enabled": "true"}
+        else:
+            result[cmd_name] = {}
+
         idx = prompts.select(prompt_label, tool_options, default=len(tool_options) - 1)
         selected_tool = tool_options[idx]
         tool_for_cmd[cmd_idx] = None if selected_tool == skip_label else selected_tool
-        result[cmd_name] = {}
 
         if tool_for_cmd[cmd_idx] is not None:
             result[cmd_name]["tool"] = selected_tool
@@ -1606,10 +1622,13 @@ def _write_config(
         for cmd_name in ("plan", "deps", "review_plan", "review_implementation"):
             overrides = command_overrides.get(cmd_name, {})
             if overrides:
-                cmd_section: dict[str, str] = {}
+                cmd_section: dict[str, Any] = {}
                 for key in ("tool", "model", "mode", "effort"):
                     if overrides.get(key):
                         cmd_section[key] = overrides[key]
+                # Handle boolean 'enabled' field (stored as string in overrides)
+                if "enabled" in overrides:
+                    cmd_section["enabled"] = overrides["enabled"] == "true"
                 if cmd_section:
                     ai_section[cmd_name] = cmd_section
 
@@ -1756,10 +1775,12 @@ def _patch_config(
             overrides = command_overrides.get(cmd_name, {})
             if force:
                 if overrides:
-                    cmd_section: dict[str, str] = {}
+                    cmd_section: dict[str, Any] = {}
                     for key in ("tool", "model", "mode", "effort"):
                         if overrides.get(key):
                             cmd_section[key] = overrides[key]
+                    if "enabled" in overrides:
+                        cmd_section["enabled"] = overrides["enabled"] == "true"
                     if cmd_section:
                         ai[cmd_name] = cmd_section
                         raw["ai"] = ai
@@ -1773,6 +1794,8 @@ def _patch_config(
                 for key in ("tool", "model", "mode", "effort"):
                     if overrides.get(key):
                         cmd_section[key] = overrides[key]
+                if "enabled" in overrides:
+                    cmd_section["enabled"] = overrides["enabled"] == "true"
                 if cmd_section:
                     ai[cmd_name] = cmd_section
                     raw["ai"] = ai

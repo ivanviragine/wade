@@ -44,7 +44,7 @@ class TestReviewPlan:
 
         # Config
         mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="prompt"))
+            ai=AIConfig(review_plan=AICommandConfig(mode="prompt", enabled=True))
         )
 
         # Delegation returns success
@@ -76,7 +76,7 @@ class TestReviewPlan:
         plan_file.write_text("# Plan")
         mock_template.return_value = "{plan_content}"
         mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="prompt"))
+            ai=AIConfig(review_plan=AICommandConfig(mode="prompt", enabled=True))
         )
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="ok", mode=DelegationMode.HEADLESS
@@ -99,7 +99,7 @@ class TestReviewPlan:
         plan_file.write_text("# Plan")
         mock_template.return_value = "{plan_content}"
         mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="prompt"))
+            ai=AIConfig(review_plan=AICommandConfig(mode="prompt", enabled=True))
         )
 
         result = review_plan(str(plan_file), mode="bad_value")
@@ -147,7 +147,7 @@ class TestReviewCode:
         )
         mock_template.return_value = "Review:\n{diff_content}"
         mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_implementation=AICommandConfig(mode="prompt"))
+            ai=AIConfig(review_implementation=AICommandConfig(mode="prompt", enabled=True))
         )
         mock_delegate.return_value = DelegationResult(
             success=True,
@@ -181,7 +181,7 @@ class TestReviewCode:
         mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
         mock_template.return_value = "{diff_content}"
         mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_implementation=AICommandConfig(mode="prompt"))
+            ai=AIConfig(review_implementation=AICommandConfig(mode="prompt", enabled=True))
         )
 
         result = review_implementation(mode="bad_value")
@@ -213,7 +213,7 @@ class TestRunReviewDelegationEffort:
     ) -> None:
         """Effort from resolve_effort should be passed through to delegation request."""
         mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="headless"))
+            ai=AIConfig(review_plan=AICommandConfig(mode="headless", enabled=True))
         )
         mock_tool.return_value = "claude"
         mock_model.return_value = None
@@ -245,7 +245,7 @@ class TestRunReviewDelegationEffort:
     ) -> None:
         """In prompt mode, confirm_ai_selection should be skipped."""
         mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="prompt"))
+            ai=AIConfig(review_plan=AICommandConfig(mode="prompt", enabled=True))
         )
         mock_tool.return_value = "claude"
         mock_model.return_value = None
@@ -275,7 +275,7 @@ class TestRunReviewDelegationEffort:
     ) -> None:
         """When resolve_effort returns None, effort in request should be None."""
         mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="headless"))
+            ai=AIConfig(review_plan=AICommandConfig(mode="headless", enabled=True))
         )
         mock_tool.return_value = "claude"
         mock_model.return_value = None

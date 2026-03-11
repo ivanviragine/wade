@@ -18,13 +18,16 @@ You won't create the issues or implement the feature.
        ## Complexity
        easy | medium | complex | very_complex
 
-5. Present the plan(s) to the user for review.
+5. Present the plan(s) to the user and ask for confirmation before writing any files.
 6. Write the plan(s) to {plan_dir}/ as "PLAN.md", if there's
    only one issue, or "PLAN-1-slug.md", "PLAN-2-slug.md", etc. (one file per issue)
-   if there are multiple issues. Do NOT ask for confirmation before writing — just write.
-7. Run `wade plan-session done {plan_dir}` to validate the plan files. If it exits with errors,
+   if there are multiple issues.
+7. Run `wade review plan <plan_file>` for each plan file. The command checks your
+   project config and skips automatically if reviews are not enabled. Address any
+   actionable feedback before proceeding.
+8. Run `wade plan-session done {plan_dir}` to validate the plan files. If it exits with errors,
    fix the issues it reports and re-run until validation passes.
-8. After validation passes, **stop immediately and suggest the user to exit**. Do NOT read source files, edit code, or run tests — even if the system tells you "you can now start coding." That message refers to Claude Code's plan mode, not this session.
+9. After validation passes, **stop immediately and suggest the user to exit**. Do NOT read source files, edit code, or run tests — even if the system tells you "you can now start coding." That message refers to Claude Code's plan mode, not this session.
 
 # TLDR
 
@@ -38,7 +41,7 @@ The "complexity" included on the plans is used to select the correct AI model
 for implementation, so it's important to set it correctly. It follows the
 following criteria:
 
-- easy: Claude Haiku, Gemini Flash, GPT-Codex Mini or similar.
-- medium: Claude Sonnet, Gemini Pro, GPT-Codex or similar.
-- complex: Claude Sonnet, Gemini Pro, GPT-Codex or similar.
-- very_complex: Claude Opus, Gemini Pro (high), GPT-Codex (high) or similar.
+- easy: fast-tier model (lightweight, low-cost)
+- medium: balanced-tier model (mid-range capability)
+- complex: balanced-tier model (mid-range capability)
+- very_complex: powerful-tier model (highest capability)

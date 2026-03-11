@@ -19,6 +19,12 @@ Run `wade` and `gh` commands with the required permissions/capabilities (not
 in sandboxed mode). Do not "try sandbox first" — run them unsandboxed from the
 start.
 
+## Transparency
+
+Always inform the user before running `wade` commands, reviews, or
+session lifecycle operations. Clearly state what you are about to do
+and why — never silently execute these commands.
+
 ## Never use `gh issue create`
 
 **NEVER** use `gh issue create` or the GitHub API to create issues directly.
@@ -35,7 +41,8 @@ dependency analysis hooks.
    (title, complexity, key tasks). Ask if they'd like any modifications — apply
    them and repeat if so, or proceed to step 5 if not.
 5. **Review** — after writing plan files, run `wade review plan <plan_file>` to get
-   review feedback. Address any actionable feedback before proceeding.
+   review feedback. The command checks your project config and skips if reviews
+   are not enabled. Address any actionable feedback before proceeding.
 6. **Validate** — run `wade plan-session done <plan_dir>` (the temp dir from your prompt).
    If it exits with errors, fix each reported issue and re-run until it passes.
    Warnings are informational and do not block proceeding.
