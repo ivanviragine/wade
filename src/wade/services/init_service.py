@@ -1607,18 +1607,15 @@ def _write_config(
             overrides = command_overrides.get(cmd_name, {})
             if overrides:
                 cmd_section: dict[str, str] = {}
-                if overrides.get("tool"):
-                    cmd_section["tool"] = overrides["tool"]
-                if overrides.get("model"):
-                    cmd_section["model"] = overrides["model"]
-                if overrides.get("mode"):
-                    cmd_section["mode"] = overrides["mode"]
+                for key in ("tool", "model", "mode", "effort"):
+                    if overrides.get(key):
+                        cmd_section[key] = overrides[key]
                 if cmd_section:
                     ai_section[cmd_name] = cmd_section
 
     config_dict["ai"] = ai_section
 
-    # models section keyed by work tool (or default tool)
+    # models section keyed by implement_tool (or default tool)
     models_key = implement_tool or ai_tool
     if models_key and (model_mapping.easy or model_mapping.complex):
         config_dict["models"] = {
