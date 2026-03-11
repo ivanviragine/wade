@@ -762,6 +762,7 @@ class TestFetchReviews:
         mock_repo_root.return_value = tmp_path
         provider = mock_get_provider.return_value
         provider.read_task.return_value = self._make_task()
+        provider.get_pr_issue_comments.return_value = []
         mock_pr.return_value = {"number": 99, "state": "OPEN"}
         mock_filter.return_value = []
         provider.get_pr_review_threads.return_value = []
@@ -799,6 +800,7 @@ class TestFetchReviews:
         mock_repo_root.return_value = tmp_path
         provider = mock_get_provider.return_value
         provider.read_task.return_value = self._make_task()
+        provider.get_pr_issue_comments.return_value = []
         mock_pr.return_value = {"number": 99, "state": "OPEN"}
         mock_filter.return_value = []
         provider.get_pr_review_threads.return_value = []

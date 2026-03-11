@@ -20,6 +20,7 @@ from wade.git import repo as git_repo
 from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
 from wade.models.ai import AIToolID
+from wade.models.config import ProjectConfig
 from wade.models.review import (
     ReviewBotStatus,
     detect_coderabbit_review_status,
@@ -63,6 +64,26 @@ logger = structlog.get_logger()
 # ---------------------------------------------------------------------------
 
 
+def _resolve_task_branch(config: ProjectConfig, task: Task, repo_root: Path) -> str:
+    """Resolve the branch name for a task.
+
+    Prefers the currently checked-out branch when its issue number matches the
+    task; falls back to make_branch_name for out-of-worktree or detached-HEAD
+    callers.
+    """
+    try:
+        current_branch = git_repo.get_current_branch(repo_root)
+        if extract_issue_from_branch(current_branch) == str(int(task.id)):
+            return current_branch
+    except GitError:
+        pass
+    return git_branch.make_branch_name(
+        config.project.branch_prefix,
+        int(task.id),
+        task.title,
+    )
+
+
 def fetch_reviews(
     target: str,
     project_root: Path | None = None,
@@ -95,23 +116,7 @@ def fetch_reviews(
 
     # Find branch and PR — prefer actual checked-out branch (authoritative);
     # fall back to reconstructed name for out-of-worktree or detached-HEAD callers.
-    try:
-        current_branch = git_repo.get_current_branch(repo_root)
-        extracted = extract_issue_from_branch(current_branch)
-        if extracted == str(int(task.id)):
-            branch_name = current_branch
-        else:
-            branch_name = git_branch.make_branch_name(
-                config.project.branch_prefix,
-                int(task.id),
-                task.title,
-            )
-    except GitError:
-        branch_name = git_branch.make_branch_name(
-            config.project.branch_prefix,
-            int(task.id),
-            task.title,
-        )
+    branch_name = _resolve_task_branch(config, task, repo_root)
 
     pr_info = git_pr.get_pr_for_branch(repo_root, branch_name)
     if not pr_info:
@@ -268,11 +273,7 @@ def start(
     console.kv("Issue", console.issue_ref(task.id, task.title))
 
     # 2. Find existing worktree for the issue (or recover from remote branch)
-    branch_name = git_branch.make_branch_name(
-        config.project.branch_prefix,
-        int(task.id),
-        task.title,
-    )
+    branch_name = _resolve_task_branch(config, task, repo_root)
 
     existing_wt = next(
         (
