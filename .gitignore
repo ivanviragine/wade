@@ -40,6 +40,12 @@ uv.lock
 # Local archive (pre-reset export)
 archive/
 
+# AI tool config (local symlinks installed by wade init, not part of the repo)
+.agents/
+.claude/
+.gemini/
+.github/skills
+
 # wade:start — managed by wade (do not edit — run `wade update` to refresh)
 .wade/
 .wade-managed
