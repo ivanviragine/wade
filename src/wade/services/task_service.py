@@ -410,6 +410,11 @@ def _task_has_plan(task: Task) -> bool:
     return any(label.label_type == LabelType.PLANNED_BY for label in task.labels)
 
 
+def _plan_badge_label(task: Task) -> str:
+    """Return the plan status label string ('PLANNED' or 'NO PLAN')."""
+    return "PLANNED" if _task_has_plan(task) else "NO PLAN"
+
+
 # ---------------------------------------------------------------------------
 # CRUD operations
 # ---------------------------------------------------------------------------
@@ -569,11 +574,9 @@ def list_tasks(
     for task in tasks:
         state_badge = "OPEN" if task.state == TaskState.OPEN else "CLOSED"
         badge = console.badge_str(state_badge, "open" if task.state == TaskState.OPEN else "closed")
-        plan_badge = (
-            console.badge_str("PLANNED", "planned")
-            if _task_has_plan(task)
-            else console.badge_str("NO PLAN", "unplanned")
-        )
+        plan_label = _plan_badge_label(task)
+        plan_variant = "planned" if _task_has_plan(task) else "unplanned"
+        plan_badge = console.badge_str(plan_label, plan_variant)
         console.out.print(f"  {console.issue_ref(task.id, task.title)}  {badge}  {plan_badge}")
         if task.labels:
             label_str = " ".join(f"[{label.name}]" for label in task.labels)
@@ -613,7 +616,7 @@ def prompt_task_selection(
     items = []
     for t in tasks:
         state_badge = "OPEN" if t.state == TaskState.OPEN else "CLOSED"
-        plan_suffix = "[PLANNED]" if _task_has_plan(t) else "[NO PLAN]"
+        plan_suffix = f"[{_plan_badge_label(t)}]"
         items.append(f"#{t.id}  {t.title}  [{state_badge}]  {plan_suffix}")
 
     fallback = "(Enter manually...)"

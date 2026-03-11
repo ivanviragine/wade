@@ -297,10 +297,11 @@ class Console:
     def badge_str(self, label: str, variant: str = "open") -> str:
         """Return a styled state badge string for inline use.
 
-        Variant maps to badge.* theme entries.
+        Variant maps to badge.* theme entries. The label is wrapped in
+        literal square brackets, e.g. "[OPEN]" or "[PLANNED]".
         """
         style = f"badge.{variant}"
-        return f"[{style}]{label.upper()}[/]"
+        return f"[{style}]\\[{label.upper()}\\][/]"
 
     def issue_ref(self, number: str, title: str = "") -> str:
         """Return a styled #N Title reference string."""
