@@ -438,7 +438,7 @@ class TestReviewServiceStart:
                 return_value=(None, None, None, False),
             ),
             "_detect_ai_cli_env": patch(
-                "wade.services.implementation_service._detect_ai_cli_env",
+                "wade.services.review_service._detect_ai_cli_env",
                 return_value=None,
             ),
             "_post_review_lifecycle": patch(

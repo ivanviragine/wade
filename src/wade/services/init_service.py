@@ -1740,19 +1740,18 @@ def _patch_config(
             changed = True
 
     # Patch implement tool override
-    if implement_tool:
-        if force:
-            if implement_tool != ai_tool:
-                ai["implement"] = {"tool": implement_tool}
-                changed = True
-            elif "implement" in ai:
-                del ai["implement"]
-                changed = True
-            raw["ai"] = ai
-        elif implement_tool != ai_tool and not ai.get("implement"):
+    if force:
+        if implement_tool and implement_tool != ai_tool:
             ai["implement"] = {"tool": implement_tool}
-            raw["ai"] = ai
             changed = True
+        elif "implement" in ai:
+            del ai["implement"]
+            changed = True
+        raw["ai"] = ai
+    elif implement_tool and implement_tool != ai_tool and not ai.get("implement"):
+        ai["implement"] = {"tool": implement_tool}
+        raw["ai"] = ai
+        changed = True
 
     # Patch command overrides (plan, deps, review_plan, review_implementation)
     if command_overrides is not None:
