@@ -58,6 +58,13 @@ def review_plan_cmd(
         model_explicit=model is not None,
         effort_explicit=effort is not None,
     )
+    if result.success:
+        from wade.ui.console import console
+
+        console.info(
+            "REVIEW COMPLETE — address any actionable feedback above, "
+            "then proceed to wade plan-session done."
+        )
     raise typer.Exit(0 if result.success else 1)
 
 
@@ -93,6 +100,13 @@ def review_implementation_cmd(
         model_explicit=model is not None,
         effort_explicit=effort is not None,
     )
+    if result.success:
+        from wade.ui.console import console
+
+        console.info(
+            "REVIEW COMPLETE — address any actionable feedback above, "
+            "then proceed to wade implementation-session done."
+        )
     raise typer.Exit(0 if result.success else 1)
 
 

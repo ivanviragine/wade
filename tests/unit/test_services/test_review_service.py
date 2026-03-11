@@ -22,6 +22,7 @@ from wade.services.review_service import (
     _post_review_lifecycle,
     _recover_worktree,
     build_review_prompt,
+    count_unresolved_threads,
     fetch_reviews,
     resolve_thread,
     start,
@@ -782,6 +783,178 @@ class TestResolveThread:
         result = resolve_thread("PRRT_abc123")
 
         assert result is False
+
+
+# ---------------------------------------------------------------------------
+# count_unresolved_threads()
+# ---------------------------------------------------------------------------
+
+
+class TestCountUnresolvedThreads:
+    """Tests for the count_unresolved_threads() function."""
+
+    @patch("wade.services.review_service.filter_actionable_threads")
+    @patch("wade.services.review_service.git_pr.get_pr_for_branch")
+    @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.review_service.git_repo.get_current_branch", return_value="feat/42-fix")
+    @patch("wade.services.review_service.git_repo.get_repo_root")
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_returns_count_of_actionable_threads(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_branch: MagicMock,
+        mock_make_branch: MagicMock,
+        mock_pr: MagicMock,
+        mock_filter: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_repo_root.return_value = tmp_path
+        provider = mock_get_provider.return_value
+        provider.read_task.return_value = Task(id="42", title="Fix", state=TaskState.OPEN, body="")
+        mock_pr.return_value = {"number": 99, "state": "OPEN"}
+        threads = [
+            ReviewThread(comments=[ReviewComment(author="a", body="Fix this")]),
+            ReviewThread(comments=[ReviewComment(author="b", body="And this")]),
+        ]
+        mock_filter.return_value = threads
+        provider.get_pr_review_threads.return_value = threads
+
+        result = count_unresolved_threads(project_root=tmp_path)
+
+        assert result == 2
+
+    @patch("wade.services.review_service.filter_actionable_threads")
+    @patch("wade.services.review_service.git_pr.get_pr_for_branch")
+    @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.review_service.git_repo.get_current_branch", return_value="feat/42-fix")
+    @patch("wade.services.review_service.git_repo.get_repo_root")
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_returns_zero_when_all_resolved(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_branch: MagicMock,
+        mock_make_branch: MagicMock,
+        mock_pr: MagicMock,
+        mock_filter: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_repo_root.return_value = tmp_path
+        provider = mock_get_provider.return_value
+        provider.read_task.return_value = Task(id="42", title="Fix", state=TaskState.OPEN, body="")
+        mock_pr.return_value = {"number": 99, "state": "OPEN"}
+        provider.get_pr_review_threads.return_value = []
+        mock_filter.return_value = []
+
+        result = count_unresolved_threads(project_root=tmp_path)
+
+        assert result == 0
+
+    @patch("wade.services.review_service.git_repo.get_repo_root", side_effect=GitError("nope"))
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_returns_none_when_not_in_repo(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        result = count_unresolved_threads(project_root=tmp_path)
+        assert result is None
+
+    @patch(
+        "wade.services.review_service.git_repo.get_current_branch",
+        side_effect=GitError("detached"),
+    )
+    @patch("wade.services.review_service.git_repo.get_repo_root")
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_returns_none_on_detached_head(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_branch: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_repo_root.return_value = tmp_path
+
+        result = count_unresolved_threads(project_root=tmp_path)
+
+        assert result is None
+
+    @patch("wade.services.review_service.git_repo.get_current_branch", return_value="main")
+    @patch("wade.services.review_service.git_repo.get_repo_root")
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_returns_none_when_no_issue_in_branch(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_branch: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_repo_root.return_value = tmp_path
+
+        result = count_unresolved_threads(project_root=tmp_path)
+
+        assert result is None
+
+    @patch("wade.services.review_service.git_pr.get_pr_for_branch", return_value=None)
+    @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.review_service.git_repo.get_current_branch", return_value="feat/42-fix")
+    @patch("wade.services.review_service.git_repo.get_repo_root")
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_returns_none_when_no_pr(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_branch: MagicMock,
+        mock_make_branch: MagicMock,
+        mock_pr: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_repo_root.return_value = tmp_path
+        provider = mock_get_provider.return_value
+        provider.read_task.return_value = Task(id="42", title="Fix", state=TaskState.OPEN, body="")
+
+        result = count_unresolved_threads(project_root=tmp_path)
+
+        assert result is None
+
+    @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.review_service.git_repo.get_current_branch", return_value="feat/42-fix")
+    @patch("wade.services.review_service.git_repo.get_repo_root")
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_returns_none_when_provider_thread_fetch_fails(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_branch: MagicMock,
+        mock_make_branch: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_repo_root.return_value = tmp_path
+        provider = mock_get_provider.return_value
+        provider.read_task.return_value = Task(id="42", title="Fix", state=TaskState.OPEN, body="")
+        provider.get_pr_review_threads.side_effect = RuntimeError("API down")
+        from wade.git import pr as git_pr_mod
+
+        with patch.object(git_pr_mod, "get_pr_for_branch", return_value={"number": 99}):
+            result = count_unresolved_threads(project_root=tmp_path)
+
+        assert result is None
 
 
 # ---------------------------------------------------------------------------

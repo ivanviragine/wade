@@ -47,8 +47,19 @@ def sync(
         session_type="review-pr-comments",
     )
     if result.success:
+        if not json_output:
+            from wade.ui.console import console
+
+            console.info("Sync complete — proceed to wade review-pr-comments-session done.")
         raise typer.Exit(0)
     elif result.conflicts:
+        if not json_output:
+            from wade.ui.console import console
+
+            console.info(
+                "ACTION REQUIRED — resolve the conflicts listed above, "
+                "then re-run wade review-pr-comments-session sync."
+            )
         raise typer.Exit(2)
     elif any(
         e.event == SyncEventType.ERROR
@@ -85,6 +96,24 @@ def done(
         draft=draft,
         no_cleanup=no_cleanup,
     )
+    if success:
+        from wade.services.review_service import count_unresolved_threads
+        from wade.ui.console import console
+
+        unresolved = count_unresolved_threads()
+        if unresolved == 0:
+            console.info("SESSION COMPLETE — all review threads resolved.")
+        elif unresolved is None:
+            console.warn(
+                "SESSION COMPLETE — push succeeded, but unresolved review threads "
+                "could not be verified."
+            )
+        else:
+            console.warn(
+                f"{unresolved} unresolved review thread(s) remain. "
+                "Consider running wade review-pr-comments-session resolve for each."
+            )
+            console.info("SESSION COMPLETE — push succeeded but unresolved threads remain.")
     raise typer.Exit(0 if success else 1)
 
 

@@ -164,6 +164,46 @@ def resolve_thread(
     return success
 
 
+def count_unresolved_threads(
+    project_root: Path | None = None,
+) -> int | None:
+    """Count unresolved, actionable review threads for the current branch's PR.
+
+    Returns:
+        Number of unresolved threads, or None if the check could not be performed
+        (no git repo, no branch, no PR, provider error).
+    """
+    from wade.services.work_service import extract_issue_from_branch
+
+    config = load_config(project_root)
+    provider = get_provider(config)
+
+    try:
+        cwd = project_root or Path.cwd()
+        repo_root = git_repo.get_repo_root(cwd)
+        branch = git_repo.get_current_branch(repo_root)
+    except (FileNotFoundError, GitError):
+        return None
+
+    issue_number = extract_issue_from_branch(branch)
+    if not issue_number:
+        return None
+
+    pr_info = git_pr.get_pr_for_branch(repo_root, branch)
+    if not pr_info:
+        return None
+
+    pr_number = int(pr_info["number"])
+
+    try:
+        all_threads = provider.get_pr_review_threads(repo_root, pr_number)
+    except Exception:
+        return None
+
+    actionable = filter_actionable_threads(all_threads)
+    return len(actionable)
+
+
 # ---------------------------------------------------------------------------
 # Main orchestration
 # ---------------------------------------------------------------------------
