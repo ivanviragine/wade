@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from wade.models.session import SessionRecord
 from wade.models.task import Task, TaskState
-from wade.models.work import SessionRecord
 from wade.services.smart_start import (
     _get_latest_resumable_session,
     _run_continue_working,

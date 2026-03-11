@@ -6,7 +6,7 @@ from pathlib import Path
 
 import typer
 
-from wade.models.work import SyncEventType
+from wade.models.session import SyncEventType
 
 review_pr_comments_session_app = typer.Typer(
     help="Review PR comments session commands (check, sync, done, fetch, resolve).",
@@ -38,7 +38,7 @@ def sync(
     ),
 ) -> None:
     """Sync current branch with main."""
-    from wade.services.work_service import sync as do_sync
+    from wade.services.implementation_service import sync as do_sync
 
     result = do_sync(
         dry_run=dry_run,
@@ -47,8 +47,19 @@ def sync(
         session_type="review-pr-comments",
     )
     if result.success:
+        if not json_output:
+            from wade.ui.console import console
+
+            console.info("Sync complete — proceed to wade review-pr-comments-session done.")
         raise typer.Exit(0)
     elif result.conflicts:
+        if not json_output:
+            from wade.ui.console import console
+
+            console.info(
+                "ACTION REQUIRED — resolve the conflicts listed above, "
+                "then re-run wade review-pr-comments-session sync."
+            )
         raise typer.Exit(2)
     elif any(
         e.event == SyncEventType.ERROR
@@ -75,8 +86,8 @@ def done(
     draft: bool = typer.Option(False, "--draft", help="Create PR as draft."),
     no_cleanup: bool = typer.Option(False, "--no-cleanup", help="Don't remove worktree."),
 ) -> None:
-    """Finalize work — push branch and create PR (or direct merge)."""
-    from wade.services.work_service import done as do_done
+    """Finalize review — push branch and update PR."""
+    from wade.services.implementation_service import done as do_done
 
     success = do_done(
         target=target,
@@ -85,6 +96,24 @@ def done(
         draft=draft,
         no_cleanup=no_cleanup,
     )
+    if success:
+        from wade.services.review_service import count_unresolved_threads
+        from wade.ui.console import console
+
+        unresolved = count_unresolved_threads()
+        if unresolved == 0:
+            console.info("SESSION COMPLETE — all review threads resolved.")
+        elif unresolved is None:
+            console.warn(
+                "SESSION COMPLETE — push succeeded, but unresolved review threads "
+                "could not be verified."
+            )
+        else:
+            console.warn(
+                f"{unresolved} unresolved review thread(s) remain. "
+                "Consider running wade review-pr-comments-session resolve for each."
+            )
+            console.info("SESSION COMPLETE — push succeeded but unresolved threads remain.")
     raise typer.Exit(0 if success else 1)
 
 

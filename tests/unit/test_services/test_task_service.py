@@ -10,16 +10,16 @@ import pytest
 from wade.models.config import ProjectConfig, ProjectSettings
 from wade.models.task import Task, TaskState
 from wade.services.task_service import (
+    LABEL_COLOR_IMPLEMENTED,
     LABEL_COLOR_IN_PROGRESS,
     LABEL_COLOR_ISSUE,
     LABEL_COLOR_PLANNED,
-    LABEL_COLOR_WORKED,
     PLAN_SUMMARY_MARKER_END,
     PLAN_SUMMARY_MARKER_START,
     _strip_plan_summary,
+    add_implemented_by_labels,
     add_in_progress_label,
     add_planned_by_labels,
-    add_worked_by_labels,
     apply_plan_token_usage,
     build_plan_summary_block,
     close_task,
@@ -118,13 +118,13 @@ class TestLabels:
         mock_provider.ensure_label.assert_not_called()
         mock_provider.add_label.assert_not_called()
 
-    def test_add_worked_by_labels(self, mock_provider: MagicMock) -> None:
-        add_worked_by_labels(mock_provider, "42", ai_tool="copilot", model="claude-sonnet-4-6")
+    def test_add_implemented_by_labels(self, mock_provider: MagicMock) -> None:
+        add_implemented_by_labels(mock_provider, "42", ai_tool="copilot", model="claude-sonnet-4-6")
         assert mock_provider.ensure_label.call_count == 2
         labels = [mock_provider.ensure_label.call_args_list[i][0][0] for i in range(2)]
-        assert labels[0].name == "worked-by:copilot"
-        assert labels[0].color == LABEL_COLOR_WORKED
-        assert labels[1].name == "worked-model:claude-sonnet-4-6"
+        assert labels[0].name == "implemented-by:copilot"
+        assert labels[0].color == LABEL_COLOR_IMPLEMENTED
+        assert labels[1].name == "implemented-model:claude-sonnet-4-6"
 
 
 # ---------------------------------------------------------------------------

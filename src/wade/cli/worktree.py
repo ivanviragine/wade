@@ -35,14 +35,14 @@ def worktree_callback(ctx: typer.Context) -> None:
     selected = subcommands[idx]
 
     if selected == "list":
-        from wade.services.work_service import list_sessions as do_list
+        from wade.services.implementation_service import list_sessions as do_list
 
         do_list()
         raise typer.Exit(0)
     elif selected == "remove":
         target = prompts.input_prompt("Issue number or worktree name")
         if target:
-            from wade.services.work_service import remove as do_remove
+            from wade.services.implementation_service import remove as do_remove
 
             success = do_remove(target=target)
             raise typer.Exit(0 if success else 1)
@@ -50,7 +50,7 @@ def worktree_callback(ctx: typer.Context) -> None:
         target = prompts.input_prompt("Issue number or worktree name")
         if not target:
             raise typer.Exit(0)  # User cancelled
-        from wade.services.work_service import find_worktree_path
+        from wade.services.implementation_service import find_worktree_path
 
         path = find_worktree_path(target)
         if path:
@@ -67,7 +67,7 @@ def list_worktrees(
     show_all: bool = typer.Option(False, "--all", help="Show all worktrees including main."),
 ) -> None:
     """List active worktrees."""
-    from wade.services.work_service import list_sessions as do_list
+    from wade.services.implementation_service import list_sessions as do_list
 
     do_list(show_all=show_all, json_output=json_output)
     raise typer.Exit(0)
@@ -81,8 +81,8 @@ def remove(
     force: bool = typer.Option(False, "--force", help="Skip confirmation."),
 ) -> None:
     """Remove a worktree."""
-    from wade.services.work_service import list_sessions
-    from wade.services.work_service import remove as do_remove
+    from wade.services.implementation_service import list_sessions
+    from wade.services.implementation_service import remove as do_remove
     from wade.ui import prompts
     from wade.ui.console import console
 
@@ -117,8 +117,8 @@ def cd(
     target: str = typer.Argument(..., help="Issue number or worktree name."),
 ) -> None:
     """Print the path to a worktree (for shell cd). Creates worktree if needed."""
-    from wade.services.work_service import find_worktree_path
-    from wade.services.work_service import start as do_start
+    from wade.services.implementation_service import find_worktree_path
+    from wade.services.implementation_service import start as do_start
 
     path = find_worktree_path(target)
     if path:

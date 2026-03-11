@@ -124,7 +124,7 @@ class TestPlanSessionSubApp:
 class TestWorktreeSubApp:
     """Tests for ``wade worktree`` sub-app."""
 
-    @patch("wade.services.work_service.list_sessions", return_value=[])
+    @patch("wade.services.implementation_service.list_sessions", return_value=[])
     def test_list_empty(self, _mock: MagicMock) -> None:
         result = runner.invoke(app, ["worktree", "list"])
         assert result.exit_code == 0
@@ -152,7 +152,7 @@ class TestTopLevelCd:
         result = runner.invoke(app, ["cd"])
         assert result.exit_code != 0
 
-    @patch("wade.services.work_service.find_worktree_path", return_value=Path("/tmp/wt"))
+    @patch("wade.services.implementation_service.find_worktree_path", return_value=Path("/tmp/wt"))
     def test_cd_prints_path_when_worktree_exists(self, _mock: MagicMock) -> None:
         result = runner.invoke(app, ["cd", "42"])
         assert result.exit_code == 0
@@ -178,7 +178,7 @@ class TestShortAliases:
         assert result.exit_code == 1  # no AI tool → exits 1
 
     def test_i_alias_invokes_implement(self) -> None:
-        with patch("wade.services.work_service.start", return_value=True) as mock_start:
+        with patch("wade.services.implementation_service.start", return_value=True) as mock_start:
             result = runner.invoke(app, ["i", "42"])
         assert result.exit_code == 0
         mock_start.assert_called_once()

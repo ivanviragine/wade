@@ -65,7 +65,7 @@ src/wade/
 ├── models/              # Pydantic domain models (pure data, no I/O)
 │   ├── config.py        # ProjectConfig, ProjectSettings, AIConfig, ComplexityModelMapping
 │   ├── task.py          # Task, PlanFile, Complexity, Label, TaskState
-│   ├── work.py          # WorkSession, WorktreeState, SyncResult, SyncEvent, MergeStrategy
+│   ├── session.py       # ImplementationSession, WorktreeState, SyncResult, SyncEvent, MergeStrategy
 │   ├── ai.py            # AIToolID, AIModel, ModelTier, TokenUsage, AIToolCapabilities
 │   ├── deps.py          # DependencyEdge, DependencyGraph
 │   └── events.py        # Typed event models
@@ -75,7 +75,7 @@ src/wade/
 │   └── repositories.py  # Repository classes
 ├── services/            # Business logic (orchestration)
 │   ├── task_service.py  # Task CRUD, plan parsing, labels
-│   ├── work_service.py  # Work session lifecycle
+│   ├── implementation_service.py  # Implementation session lifecycle
 │   ├── plan_service.py  # AI planning sessions
 │   ├── deps_service.py  # Dependency analysis
 │   ├── init_service.py  # Project initialization
@@ -156,7 +156,7 @@ ai:
     model: ""
   deps:
     tool: claude
-  work:
+  implement:
     tool: claude
 models:
   claude:
@@ -174,7 +174,7 @@ hooks:
 
 **Model complexity mapping**: The `models` section maps AI tool names to complexity-tiered model IDs (`easy`, `medium`, `complex`, `very_complex`). When `wade implement` is invoked, the service reads the `complexity:X` label from the issue (falling back to `## Complexity` in the body), maps it to the appropriate configured model, and passes it as `--model` to the AI tool — unless the user explicitly passed `--model` themselves.
 
-**Per-command AI tool and model overrides**: The `ai` section supports `plan`, `deps`, and `work` sub-sections, each with optional `tool` and `model` keys. The fallback chain is: CLI `--ai`/`--model` flag -> command-specific config -> global `default_tool`. This is implemented in `ProjectConfig.get_ai_tool(command)` and `ProjectConfig.get_model(command)`.
+**Per-command AI tool and model overrides**: The `ai` section supports `plan`, `deps`, `implement`, `review_plan`, and `review_implementation` sub-sections, each with optional `tool`, `model`, and `mode` keys. The fallback chain is: CLI `--ai`/`--model` flag -> command-specific config -> global `default_tool`. This is implemented in `ProjectConfig.get_ai_tool(command)` and `ProjectConfig.get_model(command)`.
 
 **Worktree hooks**: The `hooks` section lets projects run setup automatically when a worktree is created. `post_worktree_create` points to a script that runs in the new worktree (e.g., installing dependencies). `copy_to_worktree` lists files to copy from the project root into the worktree before the hook runs (e.g., `.env`). Hook failures are non-fatal — a warning is logged and the session continues.
 

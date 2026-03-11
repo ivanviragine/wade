@@ -1,4 +1,4 @@
-"""Tests for work service — start, batch, bootstrap, cd."""
+"""Tests for implementation service — start, batch, bootstrap, cd."""
 
 from __future__ import annotations
 
@@ -20,9 +20,9 @@ from wade.models.config import (
     ProjectSettings,
 )
 from wade.models.task import Task
-from wade.services.work_service import (
+from wade.services.implementation_service import (
     _build_graph_from_issues,
-    _build_work_issue_context_header,
+    _build_implementation_issue_context_header,
     _capture_post_session_usage,
     _parse_overwrite_paths,
     _pull_main_after_merge,
@@ -30,7 +30,7 @@ from wade.services.work_service import (
     _resolve_worktrees_dir,
     batch,
     bootstrap_worktree,
-    build_work_prompt,
+    build_implementation_prompt,
     find_worktree_path,
     start,
 )
@@ -217,39 +217,39 @@ class TestBootstrapWorktree:
         assert not (skills_dir / "plan-session").exists()
 
 
-class TestBuildWorkPrompt:
+class TestBuildImplementationPrompt:
     def test_includes_issue_info(self) -> None:
         task = Task(id="42", title="Add auth")
-        prompt = build_work_prompt(task)
+        prompt = build_implementation_prompt(task)
         assert "#42" in prompt
         assert "Add auth" in prompt
         assert "PLAN.md" in prompt
 
     def test_includes_body_when_no_plan(self) -> None:
         task = Task(id="42", title="Add auth", body="Implement OAuth2 login flow.")
-        prompt = build_work_prompt(task, has_plan=False)
+        prompt = build_implementation_prompt(task, has_plan=False)
         assert "Implement OAuth2 login flow." in prompt
         assert "## Issue Description" in prompt
 
     def test_omits_body_when_plan_exists(self) -> None:
         task = Task(id="42", title="Add auth", body="Implement OAuth2 login flow.")
-        prompt = build_work_prompt(task, has_plan=True)
+        prompt = build_implementation_prompt(task, has_plan=True)
         assert "## Issue Description" not in prompt
         assert "Implement OAuth2 login flow." not in prompt
 
     def test_no_body_section_when_body_empty(self) -> None:
         task = Task(id="42", title="Add auth", body="")
-        prompt = build_work_prompt(task, has_plan=False)
+        prompt = build_implementation_prompt(task, has_plan=False)
         assert "## Issue Description" not in prompt
         # Template content still present
         assert "#42" in prompt
         assert "Add auth" in prompt
 
 
-class TestBuildWorkIssueContextHeader:
+class TestBuildImplementationIssueContextHeader:
     def test_contains_body_not_title(self) -> None:
         task = Task(id="7", title="Fix bug", body="Something is broken.")
-        header = _build_work_issue_context_header(task)
+        header = _build_implementation_issue_context_header(task)
         # Title is already in the template — header only adds the description
         assert "# Issue #7" not in header
         assert "Something is broken." in header
@@ -257,7 +257,7 @@ class TestBuildWorkIssueContextHeader:
 
     def test_ends_with_separator(self) -> None:
         task = Task(id="1", title="T", body="Body text.")
-        header = _build_work_issue_context_header(task)
+        header = _build_implementation_issue_context_header(task)
         assert "---" in header
 
 
@@ -321,7 +321,7 @@ class TestBuildGraphFromIssues:
             ),
         ]
 
-        with patch("wade.services.work_service.get_provider", return_value=provider):
+        with patch("wade.services.implementation_service.get_provider", return_value=provider):
             config = ProjectConfig()
             graph = _build_graph_from_issues(["1", "2"], config)
             assert graph is not None
@@ -336,7 +336,7 @@ class TestBuildGraphFromIssues:
             Task(id="2", title="B", body="Also no deps"),
         ]
 
-        with patch("wade.services.work_service.get_provider", return_value=provider):
+        with patch("wade.services.implementation_service.get_provider", return_value=provider):
             config = ProjectConfig()
             graph = _build_graph_from_issues(["1", "2"], config)
             assert graph is None
@@ -379,7 +379,7 @@ class TestFindWorktreePath:
 # ---------------------------------------------------------------------------
 
 
-class TestWorkLaunchCommandAssembly:
+class TestImplementationLaunchCommandAssembly:
     """Verify each adapter builds the correct command for work sessions."""
 
     def test_claude_launch_with_transcript(self, tmp_path: Path) -> None:
@@ -474,7 +474,7 @@ class TestWorkLaunchCommandAssembly:
             assert "o4-mini" in cmd
             assert mock_run.call_args[1]["cwd"] == tmp_path
 
-    def test_no_plan_mode_in_work_session(self, tmp_path: Path) -> None:
+    def test_no_plan_mode_in_implementation_session(self, tmp_path: Path) -> None:
         """Work session launches should NOT include plan/approval mode flags."""
         adapters: list[AbstractAITool] = [
             ClaudeAdapter(),
@@ -499,12 +499,12 @@ class TestWorkLaunchCommandAssembly:
 
 
 # ---------------------------------------------------------------------------
-# Work start tests
+# Implementation start tests
 # ---------------------------------------------------------------------------
 
 
-class TestWorkStart:
-    """Tests for work_service.start() — exercises the full start() orchestration."""
+class TestImplementationStart:
+    """Tests for implementation_service.start() — exercises the full start() orchestration."""
 
     def _make_task(self) -> Task:
         return Task(id="42", title="Test task")
@@ -520,21 +520,23 @@ class TestWorkStart:
         mock_provider.read_task.return_value = task
 
         with (
-            patch("wade.services.work_service.load_config", return_value=self._make_config()),
-            patch("wade.services.work_service.get_provider", return_value=mock_provider),
+            patch(
+                "wade.services.implementation_service.load_config", return_value=self._make_config()
+            ),
+            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
             patch("wade.git.worktree.list_worktrees", return_value=[]),
             patch("wade.git.worktree.create_worktree") as mock_create,
-            patch("wade.services.work_service.write_plan_md"),
-            patch("wade.services.work_service.bootstrap_worktree"),
+            patch("wade.services.implementation_service.write_plan_md"),
+            patch("wade.services.implementation_service.bootstrap_worktree"),
             patch("wade.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
-            patch("wade.services.work_service._detect_ai_cli_env", return_value=None),
+            patch("wade.services.implementation_service._detect_ai_cli_env", return_value=None),
             patch("wade.git.pr.get_pr_for_branch", return_value=None),
             patch(
-                "wade.services.work_service.bootstrap_draft_pr",
+                "wade.services.implementation_service.bootstrap_draft_pr",
                 return_value={"number": 1, "url": "http://test"},
             ),
-            patch("wade.services.work_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.prompts") as mock_prompts,
         ):
             mock_prompts.is_tty.return_value = False
             result = start("42", project_root=tmp_path)
@@ -554,24 +556,26 @@ class TestWorkStart:
         mock_provider.read_task.return_value = task
 
         with (
-            patch("wade.services.work_service.load_config", return_value=self._make_config()),
-            patch("wade.services.work_service.get_provider", return_value=mock_provider),
+            patch(
+                "wade.services.implementation_service.load_config", return_value=self._make_config()
+            ),
+            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
             patch(
                 "wade.git.worktree.list_worktrees",
                 return_value=[{"path": str(existing_wt), "branch": branch_name}],
             ),
             patch("wade.git.worktree.create_worktree") as mock_create,
-            patch("wade.services.work_service.write_plan_md"),
-            patch("wade.services.work_service.bootstrap_worktree"),
+            patch("wade.services.implementation_service.write_plan_md"),
+            patch("wade.services.implementation_service.bootstrap_worktree"),
             patch("wade.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
-            patch("wade.services.work_service._detect_ai_cli_env", return_value=None),
+            patch("wade.services.implementation_service._detect_ai_cli_env", return_value=None),
             patch("wade.git.pr.get_pr_for_branch", return_value=None),
             patch(
-                "wade.services.work_service.bootstrap_draft_pr",
+                "wade.services.implementation_service.bootstrap_draft_pr",
                 return_value={"number": 1, "url": "http://test"},
             ),
-            patch("wade.services.work_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.prompts") as mock_prompts,
         ):
             mock_prompts.is_tty.return_value = False
             result = start("42", project_root=tmp_path)
@@ -585,8 +589,10 @@ class TestWorkStart:
         mock_provider.read_task.return_value = task
 
         with (
-            patch("wade.services.work_service.load_config", return_value=self._make_config()),
-            patch("wade.services.work_service.get_provider", return_value=mock_provider),
+            patch(
+                "wade.services.implementation_service.load_config", return_value=self._make_config()
+            ),
+            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
             patch("wade.git.worktree.list_worktrees", return_value=[]),
             patch(
@@ -595,10 +601,10 @@ class TestWorkStart:
             ),
             patch("wade.git.pr.get_pr_for_branch", return_value=None),
             patch(
-                "wade.services.work_service.bootstrap_draft_pr",
+                "wade.services.implementation_service.bootstrap_draft_pr",
                 return_value={"number": 1, "url": "http://test"},
             ),
-            patch("wade.services.work_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.prompts") as mock_prompts,
         ):
             mock_prompts.is_tty.return_value = False
             result = start("42", project_root=tmp_path)
@@ -612,21 +618,23 @@ class TestWorkStart:
         mock_provider.read_task.return_value = task
 
         with (
-            patch("wade.services.work_service.load_config", return_value=self._make_config()),
-            patch("wade.services.work_service.get_provider", return_value=mock_provider),
+            patch(
+                "wade.services.implementation_service.load_config", return_value=self._make_config()
+            ),
+            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
             patch("wade.git.worktree.list_worktrees", return_value=[]),
             patch("wade.git.worktree.create_worktree"),
-            patch("wade.services.work_service.write_plan_md"),
-            patch("wade.services.work_service.bootstrap_worktree"),
-            patch("wade.services.work_service._detect_ai_cli_env", return_value=None),
+            patch("wade.services.implementation_service.write_plan_md"),
+            patch("wade.services.implementation_service.bootstrap_worktree"),
+            patch("wade.services.implementation_service._detect_ai_cli_env", return_value=None),
             patch("wade.ai_tools.base.AbstractAITool.get") as mock_get,
             patch("wade.git.pr.get_pr_for_branch", return_value=None),
             patch(
-                "wade.services.work_service.bootstrap_draft_pr",
+                "wade.services.implementation_service.bootstrap_draft_pr",
                 return_value={"number": 1, "url": "http://test"},
             ),
-            patch("wade.services.work_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.prompts") as mock_prompts,
         ):
             mock_prompts.is_tty.return_value = False
             result = start("42", project_root=tmp_path, cd_only=True)
@@ -645,21 +653,26 @@ class TestWorkStart:
         mock_provider.read_task.return_value = task
 
         with (
-            patch("wade.services.work_service.load_config", return_value=self._make_config()),
-            patch("wade.services.work_service.get_provider", return_value=mock_provider),
+            patch(
+                "wade.services.implementation_service.load_config", return_value=self._make_config()
+            ),
+            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
             patch("wade.git.worktree.list_worktrees", return_value=[]),
             patch("wade.git.worktree.create_worktree"),
-            patch("wade.services.work_service.write_plan_md"),
-            patch("wade.services.work_service.bootstrap_worktree"),
-            patch("wade.services.work_service._detect_ai_cli_env", return_value="CLAUDE_CODE"),
+            patch("wade.services.implementation_service.write_plan_md"),
+            patch("wade.services.implementation_service.bootstrap_worktree"),
+            patch(
+                "wade.services.implementation_service._detect_ai_cli_env",
+                return_value="CLAUDE_CODE",
+            ),
             patch("wade.ai_tools.base.AbstractAITool.get") as mock_get,
             patch("wade.git.pr.get_pr_for_branch", return_value=None),
             patch(
-                "wade.services.work_service.bootstrap_draft_pr",
+                "wade.services.implementation_service.bootstrap_draft_pr",
                 return_value={"number": 1, "url": "http://test"},
             ),
-            patch("wade.services.work_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.prompts") as mock_prompts,
         ):
             mock_prompts.is_tty.return_value = False
             result = start("42", project_root=tmp_path)
@@ -676,12 +689,14 @@ class TestWorkStart:
         mock_provider.read_task.return_value = task
 
         with (
-            patch("wade.services.work_service.load_config", return_value=self._make_config()),
-            patch("wade.services.work_service.get_provider", return_value=mock_provider),
+            patch(
+                "wade.services.implementation_service.load_config", return_value=self._make_config()
+            ),
+            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
             patch("wade.git.pr.get_pr_for_branch", return_value=None),
-            patch("wade.services.work_service.prompts") as mock_prompts,
-            patch("wade.services.work_service.confirm_ai_selection") as mock_confirm,
+            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.confirm_ai_selection") as mock_confirm,
             patch("wade.services.plan_service.plan", return_value=True) as mock_plan,
         ):
             mock_prompts.is_tty.return_value = True
@@ -700,25 +715,27 @@ class TestWorkStart:
         mock_provider.read_task.return_value = task
 
         with (
-            patch("wade.services.work_service.load_config", return_value=self._make_config()),
-            patch("wade.services.work_service.get_provider", return_value=mock_provider),
+            patch(
+                "wade.services.implementation_service.load_config", return_value=self._make_config()
+            ),
+            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
             patch("wade.git.worktree.list_worktrees", return_value=[]),
             patch("wade.git.worktree.create_worktree"),
-            patch("wade.services.work_service.write_plan_md"),
-            patch("wade.services.work_service.bootstrap_worktree"),
-            patch("wade.services.work_service._detect_ai_cli_env", return_value=None),
+            patch("wade.services.implementation_service.write_plan_md"),
+            patch("wade.services.implementation_service.bootstrap_worktree"),
+            patch("wade.services.implementation_service._detect_ai_cli_env", return_value=None),
             patch("wade.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
             patch("wade.git.pr.get_pr_for_branch", return_value=None),
             patch(
-                "wade.services.work_service.bootstrap_draft_pr",
+                "wade.services.implementation_service.bootstrap_draft_pr",
                 return_value={"number": 1, "url": "http://test"},
             ) as mock_bootstrap,
             patch(
-                "wade.services.work_service.confirm_ai_selection",
+                "wade.services.implementation_service.confirm_ai_selection",
                 return_value=("claude", "claude-sonnet-4-6", None, False),
             ) as mock_confirm,
-            patch("wade.services.work_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.prompts") as mock_prompts,
         ):
             call_order: list[str] = []
 
@@ -744,21 +761,23 @@ class TestWorkStart:
 
 
 # ---------------------------------------------------------------------------
-# Work batch tests
+# Implementation batch tests
 # ---------------------------------------------------------------------------
 
 
-class TestWorkBatch:
-    """Tests for work_service.batch() — exercises topology and launch dispatch."""
+class TestImplementationBatch:
+    """Tests for implementation_service.batch() — exercises topology and launch dispatch."""
 
     def test_launches_independent_issues(self, tmp_path: Path) -> None:
         """No deps graph → all issues launched in separate terminals."""
         with (
-            patch("wade.services.work_service.load_config", return_value=ProjectConfig()),
+            patch("wade.services.implementation_service.load_config", return_value=ProjectConfig()),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
-            patch("wade.services.work_service._build_graph_from_issues", return_value=None),
             patch(
-                "wade.services.work_service.launch_in_new_terminal", return_value=True
+                "wade.services.implementation_service._build_graph_from_issues", return_value=None
+            ),
+            patch(
+                "wade.services.implementation_service.launch_in_new_terminal", return_value=True
             ) as mock_launch,
         ):
             result = batch(["1", "2", "3"], project_root=tmp_path)
@@ -773,14 +792,14 @@ class TestWorkBatch:
         mock_graph.partition.return_value = ([], [["1", "2", "3"]])
 
         with (
-            patch("wade.services.work_service.load_config", return_value=ProjectConfig()),
+            patch("wade.services.implementation_service.load_config", return_value=ProjectConfig()),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
             patch(
-                "wade.services.work_service._build_graph_from_issues",
+                "wade.services.implementation_service._build_graph_from_issues",
                 return_value=mock_graph,
             ),
             patch(
-                "wade.services.work_service.launch_in_new_terminal", return_value=True
+                "wade.services.implementation_service.launch_in_new_terminal", return_value=True
             ) as mock_launch,
         ):
             result = batch(["1", "2", "3"], project_root=tmp_path)
@@ -793,11 +812,13 @@ class TestWorkBatch:
     def test_warns_on_terminal_failure(self, tmp_path: Path) -> None:
         """One terminal fails → warns but continues and counts successful launches."""
         with (
-            patch("wade.services.work_service.load_config", return_value=ProjectConfig()),
+            patch("wade.services.implementation_service.load_config", return_value=ProjectConfig()),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
-            patch("wade.services.work_service._build_graph_from_issues", return_value=None),
             patch(
-                "wade.services.work_service.launch_in_new_terminal",
+                "wade.services.implementation_service._build_graph_from_issues", return_value=None
+            ),
+            patch(
+                "wade.services.implementation_service.launch_in_new_terminal",
                 side_effect=[False, True],
             ) as mock_launch,
         ):
@@ -809,10 +830,14 @@ class TestWorkBatch:
     def test_returns_false_when_none_launched(self, tmp_path: Path) -> None:
         """All launch_in_new_terminal calls fail → batch() returns False."""
         with (
-            patch("wade.services.work_service.load_config", return_value=ProjectConfig()),
+            patch("wade.services.implementation_service.load_config", return_value=ProjectConfig()),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
-            patch("wade.services.work_service._build_graph_from_issues", return_value=None),
-            patch("wade.services.work_service.launch_in_new_terminal", return_value=False),
+            patch(
+                "wade.services.implementation_service._build_graph_from_issues", return_value=None
+            ),
+            patch(
+                "wade.services.implementation_service.launch_in_new_terminal", return_value=False
+            ),
         ):
             result = batch(["1", "2"], project_root=tmp_path)
 
@@ -821,11 +846,13 @@ class TestWorkBatch:
     def test_deduplicates_issue_numbers(self, tmp_path: Path) -> None:
         """Duplicate issue numbers are removed, launching each only once."""
         with (
-            patch("wade.services.work_service.load_config", return_value=ProjectConfig()),
+            patch("wade.services.implementation_service.load_config", return_value=ProjectConfig()),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
-            patch("wade.services.work_service._build_graph_from_issues", return_value=None),
             patch(
-                "wade.services.work_service.launch_in_new_terminal", return_value=True
+                "wade.services.implementation_service._build_graph_from_issues", return_value=None
+            ),
+            patch(
+                "wade.services.implementation_service.launch_in_new_terminal", return_value=True
             ) as mock_launch,
         ):
             result = batch(["1", "2", "1", "3", "2"], project_root=tmp_path)
@@ -836,11 +863,13 @@ class TestWorkBatch:
     def test_staggers_launches(self, tmp_path: Path) -> None:
         """Launches are staggered with a delay between each terminal spawn."""
         with (
-            patch("wade.services.work_service.load_config", return_value=ProjectConfig()),
+            patch("wade.services.implementation_service.load_config", return_value=ProjectConfig()),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
-            patch("wade.services.work_service._build_graph_from_issues", return_value=None),
-            patch("wade.services.work_service.launch_in_new_terminal", return_value=True),
-            patch("wade.services.work_service.time.sleep") as mock_sleep,
+            patch(
+                "wade.services.implementation_service._build_graph_from_issues", return_value=None
+            ),
+            patch("wade.services.implementation_service.launch_in_new_terminal", return_value=True),
+            patch("wade.services.implementation_service.time.sleep") as mock_sleep,
         ):
             batch(["1", "2", "3"], project_root=tmp_path)
 
@@ -890,7 +919,8 @@ class TestPullMainAfterMerge:
         ok_result = MagicMock(returncode=0, stderr="")
 
         with patch(
-            "wade.services.work_service.subprocess.run", side_effect=[fail_result, ok_result]
+            "wade.services.implementation_service.subprocess.run",
+            side_effect=[fail_result, ok_result],
         ):
             _pull_main_after_merge(tmp_path)
 
@@ -910,11 +940,15 @@ class TestPullMainAfterMerge:
 
         with (
             patch(
-                "wade.services.work_service.git_repo.pull_ff_only",
+                "wade.services.implementation_service.git_repo.pull_ff_only",
                 side_effect=[fail_result, pull_ok],
             ),
-            patch("wade.services.work_service.git_repo.stash", return_value=stash_ok) as mock_stash,
-            patch("wade.services.work_service.git_repo.stash_pop", return_value=pop_ok) as mock_pop,
+            patch(
+                "wade.services.implementation_service.git_repo.stash", return_value=stash_ok
+            ) as mock_stash,
+            patch(
+                "wade.services.implementation_service.git_repo.stash_pop", return_value=pop_ok
+            ) as mock_pop,
         ):
             _pull_main_after_merge(tmp_path)
 
@@ -929,10 +963,13 @@ class TestPullMainAfterMerge:
         stash_fail = MagicMock(returncode=1)
 
         with (
-            patch("wade.services.work_service.git_repo.pull_ff_only", return_value=fail_result),
-            patch("wade.services.work_service.git_repo.stash", return_value=stash_fail),
-            patch("wade.services.work_service.git_repo.stash_pop") as mock_pop,
-            patch("wade.services.work_service.console") as mock_console,
+            patch(
+                "wade.services.implementation_service.git_repo.pull_ff_only",
+                return_value=fail_result,
+            ),
+            patch("wade.services.implementation_service.git_repo.stash", return_value=stash_fail),
+            patch("wade.services.implementation_service.git_repo.stash_pop") as mock_pop,
+            patch("wade.services.implementation_service.console") as mock_console,
         ):
             _pull_main_after_merge(tmp_path)
 
@@ -949,12 +986,14 @@ class TestPullMainAfterMerge:
 
         with (
             patch(
-                "wade.services.work_service.git_repo.pull_ff_only",
+                "wade.services.implementation_service.git_repo.pull_ff_only",
                 side_effect=[fail_result, pull_fail],
             ),
-            patch("wade.services.work_service.git_repo.stash", return_value=stash_ok),
-            patch("wade.services.work_service.git_repo.stash_pop", return_value=pop_ok) as mock_pop,
-            patch("wade.services.work_service.console") as mock_console,
+            patch("wade.services.implementation_service.git_repo.stash", return_value=stash_ok),
+            patch(
+                "wade.services.implementation_service.git_repo.stash_pop", return_value=pop_ok
+            ) as mock_pop,
+            patch("wade.services.implementation_service.console") as mock_console,
         ):
             _pull_main_after_merge(tmp_path)
 

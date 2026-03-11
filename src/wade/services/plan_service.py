@@ -36,6 +36,8 @@ from wade.services.ai_resolution import (
     resolve_model,
     resolve_yolo,
 )
+from wade.services.implementation_service import bootstrap_draft_pr
+from wade.services.implementation_service import start as start_implementation_session
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import (
     add_complexity_label,
@@ -43,8 +45,6 @@ from wade.services.task_service import (
     apply_plan_token_usage,
     ensure_task_label,
 )
-from wade.services.work_service import bootstrap_draft_pr
-from wade.services.work_service import start as start_work_session
 from wade.ui import prompts
 from wade.ui.console import console
 from wade.utils.markdown import append_session_to_body
@@ -434,7 +434,7 @@ def plan(
     # Resolve repo root for draft PR creation
     from wade.git import repo as git_repo
     from wade.git import worktree as git_worktree
-    from wade.services.work_service import _resolve_worktrees_dir, bootstrap_worktree
+    from wade.services.implementation_service import _resolve_worktrees_dir, bootstrap_worktree
     from wade.skills.installer import PLAN_SKILLS
 
     cwd = project_root or Path.cwd()
@@ -875,7 +875,7 @@ def _finalize_issues(
 
 
 def _print_implement_hint(issue_number: str) -> None:
-    """Print the hint for manually starting a work session."""
+    """Print the hint for manually starting an implementation session."""
     console.info("When you're ready to implement, run:")
     console.detail(f"wade implement {issue_number}")
 
@@ -887,7 +887,7 @@ def _offer_to_implement(
     effort: EffortLevel | None = None,
     yolo: bool = False,
 ) -> bool | None:
-    """Prompt the user to start a work session on the newly planned issue.
+    """Prompt the user to start an implementation session on the newly planned issue.
 
     Returns True/False if the user accepted/implementation session succeeded or failed,
     or None if the prompt was skipped (non-TTY) or declined.
@@ -905,7 +905,7 @@ def _offer_to_implement(
         return None
 
     try:
-        return start_work_session(
+        return start_implementation_session(
             target=issue_number,
             ai_tool=ai_tool,
             model=model,

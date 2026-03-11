@@ -11,20 +11,21 @@ from wade.git.repo import GitError
 from wade.models.ai import ModelBreakdown, TokenUsage
 from wade.models.review import ReviewComment, ReviewThread
 from wade.models.task import Task, TaskState
+from wade.services.implementation_service import (
+    REVIEW_USAGE_MARKER_END,
+    REVIEW_USAGE_MARKER_START,
+    _strip_review_usage_block,
+    build_review_usage_block,
+)
 from wade.services.review_service import (
     _capture_review_session_usage,
     _post_review_lifecycle,
     _recover_worktree,
     build_review_prompt,
+    count_unresolved_threads,
     fetch_reviews,
     resolve_thread,
     start,
-)
-from wade.services.work_service import (
-    REVIEW_USAGE_MARKER_END,
-    REVIEW_USAGE_MARKER_START,
-    _strip_review_usage_block,
-    build_review_usage_block,
 )
 
 # ---------------------------------------------------------------------------
@@ -126,7 +127,10 @@ class TestStripReviewUsageBlock:
 
     def test_strip_preserves_impl_block(self) -> None:
         """Review strip should not touch implementation usage blocks."""
-        from wade.services.work_service import IMPL_USAGE_MARKER_END, IMPL_USAGE_MARKER_START
+        from wade.services.implementation_service import (
+            IMPL_USAGE_MARKER_END,
+            IMPL_USAGE_MARKER_START,
+        )
 
         body = (
             f"{IMPL_USAGE_MARKER_START}\n## Impl\n{IMPL_USAGE_MARKER_END}\n\n"
@@ -146,7 +150,7 @@ class TestAppendReviewUsageEntry:
     """Test that review usage entries accumulate across sessions."""
 
     def test_fresh_body(self) -> None:
-        from wade.services.work_service import append_review_usage_entry
+        from wade.services.implementation_service import append_review_usage_entry
 
         usage = TokenUsage(total_tokens=5000, input_tokens=4000, output_tokens=1000)
         result = append_review_usage_entry("Some PR body", ai_tool="claude", token_usage=usage)
@@ -158,7 +162,7 @@ class TestAppendReviewUsageEntry:
         assert "Some PR body" in result
 
     def test_append_to_existing_single_session(self) -> None:
-        from wade.services.work_service import append_review_usage_entry
+        from wade.services.implementation_service import append_review_usage_entry
 
         usage1 = TokenUsage(total_tokens=5000, input_tokens=4000, output_tokens=1000)
         body = append_review_usage_entry("PR body", ai_tool="claude", token_usage=usage1)
@@ -174,7 +178,7 @@ class TestAppendReviewUsageEntry:
         assert "8,000" in result
 
     def test_append_multiple_sessions(self) -> None:
-        from wade.services.work_service import append_review_usage_entry
+        from wade.services.implementation_service import append_review_usage_entry
 
         body = "Initial body"
         for i in range(3):
@@ -193,7 +197,7 @@ class TestAppendImplUsageEntry:
     """Test that impl usage entries accumulate across sessions."""
 
     def test_fresh_body(self) -> None:
-        from wade.services.work_service import (
+        from wade.services.implementation_service import (
             IMPL_USAGE_MARKER_END,
             IMPL_USAGE_MARKER_START,
             append_impl_usage_entry,
@@ -207,7 +211,7 @@ class TestAppendImplUsageEntry:
         assert "10,000" in result
 
     def test_append_to_existing(self) -> None:
-        from wade.services.work_service import append_impl_usage_entry
+        from wade.services.implementation_service import append_impl_usage_entry
 
         usage1 = TokenUsage(total_tokens=10000)
         body = append_impl_usage_entry("Body", ai_tool="claude", token_usage=usage1)
@@ -224,7 +228,7 @@ class TestAppendToOldFormatBlock:
     """Test appending to a usage block that has no ### Session headers (old format)."""
 
     def test_append_to_old_format_review_block(self) -> None:
-        from wade.services.work_service import append_review_usage_entry
+        from wade.services.implementation_service import append_review_usage_entry
 
         # Simulate an old-format block: markers present, content inside, but no ### Session headers
         old_block = (
@@ -248,7 +252,7 @@ class TestAppendToOldFormatBlock:
         assert "PR description" in result
 
     def test_append_to_old_format_impl_block(self) -> None:
-        from wade.services.work_service import (
+        from wade.services.implementation_service import (
             IMPL_USAGE_MARKER_END,
             IMPL_USAGE_MARKER_START,
             append_impl_usage_entry,
@@ -274,17 +278,17 @@ class TestAppendToOldFormatBlock:
 
 class TestCountSessions:
     def test_zero_sessions(self) -> None:
-        from wade.services.work_service import _count_sessions
+        from wade.services.implementation_service import _count_sessions
 
         assert _count_sessions("## Token Usage\n\nSome content") == 0
 
     def test_one_session(self) -> None:
-        from wade.services.work_service import _count_sessions
+        from wade.services.implementation_service import _count_sessions
 
         assert _count_sessions("### Session 1\n\n| Metric | Value |") == 1
 
     def test_three_sessions(self) -> None:
-        from wade.services.work_service import _count_sessions
+        from wade.services.implementation_service import _count_sessions
 
         content = "### Session 1\n\ntable1\n\n### Session 2\n\ntable2\n\n### Session 3\n\ntable3"
         assert _count_sessions(content) == 3
@@ -292,7 +296,7 @@ class TestCountSessions:
 
 class TestBuildSessionUsageTable:
     def test_single_model(self) -> None:
-        from wade.services.work_service import _build_session_usage_table
+        from wade.services.implementation_service import _build_session_usage_table
 
         usage = TokenUsage(total_tokens=5000, input_tokens=4000, output_tokens=1000)
         table = _build_session_usage_table(ai_tool="claude", model="sonnet", token_usage=usage)
@@ -302,7 +306,7 @@ class TestBuildSessionUsageTable:
         assert "5,000" in table
 
     def test_multi_model(self) -> None:
-        from wade.services.work_service import _build_session_usage_table
+        from wade.services.implementation_service import _build_session_usage_table
 
         usage = TokenUsage(
             total_tokens=15000,
@@ -318,7 +322,7 @@ class TestBuildSessionUsageTable:
         assert "`haiku`" in table
 
     def test_no_tokens(self) -> None:
-        from wade.services.work_service import _build_session_usage_table
+        from wade.services.implementation_service import _build_session_usage_table
 
         table = _build_session_usage_table(ai_tool="claude")
         assert "*unavailable*" in table
@@ -434,7 +438,7 @@ class TestReviewServiceStart:
                 return_value=(None, None, None, False),
             ),
             "_detect_ai_cli_env": patch(
-                "wade.services.work_service._detect_ai_cli_env",
+                "wade.services.review_service._detect_ai_cli_env",
                 return_value=None,
             ),
             "_post_review_lifecycle": patch(
@@ -779,6 +783,178 @@ class TestResolveThread:
         result = resolve_thread("PRRT_abc123")
 
         assert result is False
+
+
+# ---------------------------------------------------------------------------
+# count_unresolved_threads()
+# ---------------------------------------------------------------------------
+
+
+class TestCountUnresolvedThreads:
+    """Tests for the count_unresolved_threads() function."""
+
+    @patch("wade.services.review_service.filter_actionable_threads")
+    @patch("wade.services.review_service.git_pr.get_pr_for_branch")
+    @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.review_service.git_repo.get_current_branch", return_value="feat/42-fix")
+    @patch("wade.services.review_service.git_repo.get_repo_root")
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_returns_count_of_actionable_threads(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_branch: MagicMock,
+        mock_make_branch: MagicMock,
+        mock_pr: MagicMock,
+        mock_filter: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_repo_root.return_value = tmp_path
+        provider = mock_get_provider.return_value
+        provider.read_task.return_value = Task(id="42", title="Fix", state=TaskState.OPEN, body="")
+        mock_pr.return_value = {"number": 99, "state": "OPEN"}
+        threads = [
+            ReviewThread(comments=[ReviewComment(author="a", body="Fix this")]),
+            ReviewThread(comments=[ReviewComment(author="b", body="And this")]),
+        ]
+        mock_filter.return_value = threads
+        provider.get_pr_review_threads.return_value = threads
+
+        result = count_unresolved_threads(project_root=tmp_path)
+
+        assert result == 2
+
+    @patch("wade.services.review_service.filter_actionable_threads")
+    @patch("wade.services.review_service.git_pr.get_pr_for_branch")
+    @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.review_service.git_repo.get_current_branch", return_value="feat/42-fix")
+    @patch("wade.services.review_service.git_repo.get_repo_root")
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_returns_zero_when_all_resolved(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_branch: MagicMock,
+        mock_make_branch: MagicMock,
+        mock_pr: MagicMock,
+        mock_filter: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_repo_root.return_value = tmp_path
+        provider = mock_get_provider.return_value
+        provider.read_task.return_value = Task(id="42", title="Fix", state=TaskState.OPEN, body="")
+        mock_pr.return_value = {"number": 99, "state": "OPEN"}
+        provider.get_pr_review_threads.return_value = []
+        mock_filter.return_value = []
+
+        result = count_unresolved_threads(project_root=tmp_path)
+
+        assert result == 0
+
+    @patch("wade.services.review_service.git_repo.get_repo_root", side_effect=GitError("nope"))
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_returns_none_when_not_in_repo(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        result = count_unresolved_threads(project_root=tmp_path)
+        assert result is None
+
+    @patch(
+        "wade.services.review_service.git_repo.get_current_branch",
+        side_effect=GitError("detached"),
+    )
+    @patch("wade.services.review_service.git_repo.get_repo_root")
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_returns_none_on_detached_head(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_branch: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_repo_root.return_value = tmp_path
+
+        result = count_unresolved_threads(project_root=tmp_path)
+
+        assert result is None
+
+    @patch("wade.services.review_service.git_repo.get_current_branch", return_value="main")
+    @patch("wade.services.review_service.git_repo.get_repo_root")
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_returns_none_when_no_issue_in_branch(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_branch: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_repo_root.return_value = tmp_path
+
+        result = count_unresolved_threads(project_root=tmp_path)
+
+        assert result is None
+
+    @patch("wade.services.review_service.git_pr.get_pr_for_branch", return_value=None)
+    @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.review_service.git_repo.get_current_branch", return_value="feat/42-fix")
+    @patch("wade.services.review_service.git_repo.get_repo_root")
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_returns_none_when_no_pr(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_branch: MagicMock,
+        mock_make_branch: MagicMock,
+        mock_pr: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_repo_root.return_value = tmp_path
+        provider = mock_get_provider.return_value
+        provider.read_task.return_value = Task(id="42", title="Fix", state=TaskState.OPEN, body="")
+
+        result = count_unresolved_threads(project_root=tmp_path)
+
+        assert result is None
+
+    @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.review_service.git_repo.get_current_branch", return_value="feat/42-fix")
+    @patch("wade.services.review_service.git_repo.get_repo_root")
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_returns_none_when_provider_thread_fetch_fails(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_branch: MagicMock,
+        mock_make_branch: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_repo_root.return_value = tmp_path
+        provider = mock_get_provider.return_value
+        provider.read_task.return_value = Task(id="42", title="Fix", state=TaskState.OPEN, body="")
+        provider.get_pr_review_threads.side_effect = RuntimeError("API down")
+        from wade.git import pr as git_pr_mod
+
+        with patch.object(git_pr_mod, "get_pr_for_branch", return_value={"number": 99}):
+            result = count_unresolved_threads(project_root=tmp_path)
+
+        assert result is None
 
 
 # ---------------------------------------------------------------------------

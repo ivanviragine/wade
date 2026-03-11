@@ -9,7 +9,7 @@ from wade.models.config import (
     PermissionsConfig,
     ProjectConfig,
 )
-from wade.models.work import MergeStrategy
+from wade.models.session import MergeStrategy
 
 
 class TestPermissionsConfig:
@@ -53,26 +53,26 @@ class TestProjectConfig:
             )
         )
         assert config.get_ai_tool("plan") == "claude"
-        assert config.get_ai_tool("work") == "copilot"
+        assert config.get_ai_tool("implement") == "copilot"
 
     def test_get_model_command_specific(self) -> None:
         config = ProjectConfig(
             ai=AIConfig(
                 default_model="default-model",
-                work=AICommandConfig(model="work-model"),
+                implement=AICommandConfig(model="implement-model"),
             )
         )
-        assert config.get_model("work") == "work-model"
+        assert config.get_model("implement") == "implement-model"
 
     def test_get_model_falls_back_to_default_model(self) -> None:
         config = ProjectConfig(ai=AIConfig(default_model="my-default"))
-        assert config.get_model("work") == "my-default"
+        assert config.get_model("implement") == "my-default"
         assert config.get_model("plan") == "my-default"
         assert config.get_model() == "my-default"
 
     def test_get_model_returns_none_when_unset(self) -> None:
         config = ProjectConfig()
-        assert config.get_model("work") is None
+        assert config.get_model("implement") is None
         assert config.get_model() is None
 
     def test_get_complexity_model(self) -> None:

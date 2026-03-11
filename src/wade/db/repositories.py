@@ -74,7 +74,7 @@ class TaskRepository:
 
 
 class SessionRepository:
-    """CRUD operations for work sessions."""
+    """CRUD operations for implementation sessions."""
 
     def __init__(self, engine: Any) -> None:
         self.engine = engine

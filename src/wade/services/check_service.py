@@ -18,7 +18,7 @@ from wade.config.loader import (
 from wade.git import repo
 from wade.git.repo import GitError
 from wade.models.ai import AIToolID
-from wade.models.work import MergeStrategy
+from wade.models.session import MergeStrategy
 from wade.providers import registered_provider_names
 
 logger = structlog.get_logger()
@@ -346,7 +346,7 @@ def _validate_ai_section(ai: dict[str, Any], errors: list[str]) -> None:
         )
 
     # Validate per-command sections
-    for cmd in ("plan", "deps", "work", "review_plan", "review_implementation"):
+    for cmd in ("plan", "deps", "implement", "work", "review_plan", "review_implementation"):
         cmd_section = ai.get(cmd)
         if cmd_section is not None:
             if not isinstance(cmd_section, dict):
@@ -365,6 +365,7 @@ def _validate_ai_section(ai: dict[str, Any], errors: list[str]) -> None:
         "effort",
         "plan",
         "deps",
+        "implement",
         "work",
         "review_plan",
         "review_implementation",

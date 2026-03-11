@@ -1,4 +1,4 @@
-"""Work session domain models — WorkSession, WorktreeState, SyncResult."""
+"""Session domain models — ImplementationSession, WorktreeState, SyncResult."""
 
 from __future__ import annotations
 
@@ -28,8 +28,8 @@ class WorktreeState(StrEnum):
     STALE_REMOTE_GONE = "stale_remote_gone"
 
 
-class WorkSession(BaseModel):
-    """A work session — one AI agent working on one task in one worktree."""
+class ImplementationSession(BaseModel):
+    """An implementation session — one AI agent working on one task in one worktree."""
 
     id: str
     task_id: str
@@ -74,7 +74,7 @@ class SyncEvent(BaseModel):
 
 
 class SyncResult(BaseModel):
-    """Result of a work sync operation."""
+    """Result of an implementation sync operation."""
 
     success: bool
     current_branch: str

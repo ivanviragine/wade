@@ -9,7 +9,7 @@ from unittest.mock import patch
 from wade.config.claude_allowlist import WADE_ALLOW_PATTERN
 from wade.config.cursor_allowlist import WADE_ALLOW_PATTERN as CURSOR_WADE_ALLOW_PATTERN
 from wade.models.config import HooksConfig, PermissionsConfig, ProjectConfig, ProjectSettings
-from wade.services.work_service import bootstrap_worktree
+from wade.services.implementation_service import bootstrap_worktree
 
 
 class TestBootstrapAllowlistPropagation:

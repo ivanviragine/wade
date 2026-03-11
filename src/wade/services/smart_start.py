@@ -21,10 +21,10 @@ from wade.git import pr as git_pr
 from wade.git import repo as git_repo
 from wade.git.repo import GitError
 from wade.models.ai import AIToolID
-from wade.models.work import SessionRecord
+from wade.models.session import SessionRecord
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
-from wade.services.work_service import _merge_pr
+from wade.services.implementation_service import _merge_pr
 from wade.ui.console import console
 from wade.utils.markdown import parse_sessions_from_body
 
@@ -263,7 +263,7 @@ def _run_implement_task(
     yolo: bool | None = None,
 ) -> bool:
     """Delegate to the implement service."""
-    from wade.services.work_service import start as do_start
+    from wade.services.implementation_service import start as do_start
 
     return do_start(
         target=target,
