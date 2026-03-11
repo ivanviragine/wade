@@ -181,10 +181,10 @@ def count_unresolved_threads(
     cwd = project_root or Path.cwd()
     try:
         repo_root = git_repo.get_repo_root(cwd)
+        branch = git_repo.get_current_branch(repo_root)
     except GitError:
         return None
 
-    branch = git_repo.get_current_branch(repo_root)
     issue_number = extract_issue_from_branch(branch)
     if not issue_number:
         return None
