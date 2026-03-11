@@ -43,6 +43,8 @@ _theme = Theme(
         "badge.stale_merged": "#9b59b6",
         "badge.stale_remote_gone": "#e74c3c",
         "badge.draft": "#95a5a6 italic",
+        "badge.planned": "#3498db",
+        "badge.unplanned": "#7f8c8d",
         # Task
         "task.number": "#3498db bold",
         "task.title": "default",
