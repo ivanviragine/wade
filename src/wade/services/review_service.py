@@ -178,29 +178,18 @@ def count_unresolved_threads(
     config = load_config(project_root)
     provider = get_provider(config)
 
-    cwd = project_root or Path.cwd()
     try:
+        cwd = project_root or Path.cwd()
         repo_root = git_repo.get_repo_root(cwd)
         branch = git_repo.get_current_branch(repo_root)
-    except GitError:
+    except (FileNotFoundError, GitError):
         return None
 
     issue_number = extract_issue_from_branch(branch)
     if not issue_number:
         return None
 
-    try:
-        task = provider.read_task(issue_number)
-    except Exception:
-        return None
-
-    branch_name = git_branch.make_branch_name(
-        config.project.branch_prefix,
-        int(task.id),
-        task.title,
-    )
-
-    pr_info = git_pr.get_pr_for_branch(repo_root, branch_name)
+    pr_info = git_pr.get_pr_for_branch(repo_root, branch)
     if not pr_info:
         return None
 

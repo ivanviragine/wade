@@ -101,8 +101,13 @@ def done(
         from wade.ui.console import console
 
         unresolved = count_unresolved_threads()
-        if unresolved is None or unresolved == 0:
+        if unresolved == 0:
             console.info("SESSION COMPLETE — all review threads resolved.")
+        elif unresolved is None:
+            console.warn(
+                "SESSION COMPLETE — push succeeded, but unresolved review threads "
+                "could not be verified."
+            )
         else:
             console.warn(
                 f"{unresolved} unresolved review thread(s) remain. "

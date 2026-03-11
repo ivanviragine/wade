@@ -105,7 +105,7 @@ def review_implementation_cmd(
 
         console.info(
             "REVIEW COMPLETE — address any actionable feedback above, "
-            "then proceed to closing the session."
+            "then proceed to wade implementation-session done."
         )
     raise typer.Exit(0 if result.success else 1)
 
