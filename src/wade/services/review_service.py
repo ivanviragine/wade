@@ -20,6 +20,7 @@ from wade.git import repo as git_repo
 from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
 from wade.models.ai import AIToolID
+from wade.models.config import ProjectConfig
 from wade.models.review import (
     ReviewBotStatus,
     detect_coderabbit_review_status,
@@ -41,6 +42,7 @@ from wade.services.implementation_service import (
     _resolve_worktrees_dir,
     append_review_usage_entry,
     bootstrap_worktree,
+    extract_issue_from_branch,
 )
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import add_review_addressed_by_labels
@@ -60,6 +62,26 @@ logger = structlog.get_logger()
 # ---------------------------------------------------------------------------
 # Simple subcommands — used by AI agents during review sessions
 # ---------------------------------------------------------------------------
+
+
+def _resolve_task_branch(config: ProjectConfig, task: Task, repo_root: Path) -> str:
+    """Resolve the branch name for a task.
+
+    Prefers the currently checked-out branch when its issue number matches the
+    task; falls back to make_branch_name for out-of-worktree or detached-HEAD
+    callers.
+    """
+    try:
+        current_branch = git_repo.get_current_branch(repo_root)
+        if extract_issue_from_branch(current_branch) == str(int(task.id)):
+            return current_branch
+    except GitError:
+        pass
+    return git_branch.make_branch_name(
+        config.project.branch_prefix,
+        int(task.id),
+        task.title,
+    )
 
 
 def fetch_reviews(
@@ -92,12 +114,9 @@ def fetch_reviews(
         console.error(f"Could not read issue #{issue_number}: {e}")
         return False
 
-    # Find branch and PR
-    branch_name = git_branch.make_branch_name(
-        config.project.branch_prefix,
-        int(task.id),
-        task.title,
-    )
+    # Find branch and PR — prefer actual checked-out branch (authoritative);
+    # fall back to reconstructed name for out-of-worktree or detached-HEAD callers.
+    branch_name = _resolve_task_branch(config, task, repo_root)
 
     pr_info = git_pr.get_pr_for_branch(repo_root, branch_name)
     if not pr_info:
@@ -173,8 +192,6 @@ def count_unresolved_threads(
         Number of unresolved threads, or None if the check could not be performed
         (no git repo, no branch, no PR, provider error).
     """
-    from wade.services.implementation_service import extract_issue_from_branch
-
     config = load_config(project_root)
     provider = get_provider(config)
 
@@ -256,11 +273,7 @@ def start(
     console.kv("Issue", console.issue_ref(task.id, task.title))
 
     # 2. Find existing worktree for the issue (or recover from remote branch)
-    branch_name = git_branch.make_branch_name(
-        config.project.branch_prefix,
-        int(task.id),
-        task.title,
-    )
+    branch_name = _resolve_task_branch(config, task, repo_root)
 
     existing_wt = next(
         (
