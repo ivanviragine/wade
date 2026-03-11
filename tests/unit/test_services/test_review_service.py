@@ -633,6 +633,10 @@ class TestFetchReviews:
     @patch("wade.services.review_service.filter_actionable_threads")
     @patch("wade.services.review_service.git_pr.get_pr_for_branch")
     @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch(
+        "wade.services.review_service.git_repo.get_current_branch",
+        side_effect=GitError("detached"),
+    )
     @patch("wade.services.review_service.git_repo.get_repo_root")
     @patch("wade.services.review_service.get_provider")
     @patch("wade.services.review_service.load_config")
@@ -641,6 +645,7 @@ class TestFetchReviews:
         mock_config: MagicMock,
         mock_get_provider: MagicMock,
         mock_repo_root: MagicMock,
+        mock_get_current_branch: MagicMock,
         mock_branch: MagicMock,
         mock_pr: MagicMock,
         mock_filter: MagicMock,
@@ -670,6 +675,10 @@ class TestFetchReviews:
     @patch("wade.services.review_service.filter_actionable_threads")
     @patch("wade.services.review_service.git_pr.get_pr_for_branch")
     @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch(
+        "wade.services.review_service.git_repo.get_current_branch",
+        side_effect=GitError("detached"),
+    )
     @patch("wade.services.review_service.git_repo.get_repo_root")
     @patch("wade.services.review_service.get_provider")
     @patch("wade.services.review_service.load_config")
@@ -678,6 +687,7 @@ class TestFetchReviews:
         mock_config: MagicMock,
         mock_get_provider: MagicMock,
         mock_repo_root: MagicMock,
+        mock_get_current_branch: MagicMock,
         mock_branch: MagicMock,
         mock_pr: MagicMock,
         mock_filter: MagicMock,
@@ -699,6 +709,10 @@ class TestFetchReviews:
 
     @patch("wade.services.review_service.git_pr.get_pr_for_branch", return_value=None)
     @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch(
+        "wade.services.review_service.git_repo.get_current_branch",
+        side_effect=GitError("detached"),
+    )
     @patch("wade.services.review_service.git_repo.get_repo_root")
     @patch("wade.services.review_service.get_provider")
     @patch("wade.services.review_service.load_config")
@@ -707,6 +721,7 @@ class TestFetchReviews:
         mock_config: MagicMock,
         mock_get_provider: MagicMock,
         mock_repo_root: MagicMock,
+        mock_get_current_branch: MagicMock,
         mock_branch: MagicMock,
         mock_pr: MagicMock,
         tmp_path: Path,
@@ -718,6 +733,114 @@ class TestFetchReviews:
         result = fetch_reviews("42", project_root=tmp_path)
 
         assert result is False
+
+    @patch("wade.services.review_service.filter_actionable_threads")
+    @patch("wade.services.review_service.git_pr.get_pr_for_branch")
+    @patch(
+        "wade.services.review_service.git_branch.make_branch_name",
+        return_value="feat/42-reconstructed",
+    )
+    @patch(
+        "wade.services.review_service.git_repo.get_current_branch",
+        return_value="feat/42-fix-widget",
+    )
+    @patch("wade.services.review_service.git_repo.get_repo_root")
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_uses_current_branch_when_it_matches_issue(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_get_current_branch: MagicMock,
+        mock_make_branch: MagicMock,
+        mock_pr: MagicMock,
+        mock_filter: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """When current branch matches the issue number, use it directly."""
+        mock_repo_root.return_value = tmp_path
+        provider = mock_get_provider.return_value
+        provider.read_task.return_value = self._make_task()
+        provider.get_pr_issue_comments.return_value = []
+        mock_pr.return_value = {"number": 99, "state": "OPEN"}
+        mock_filter.return_value = []
+        provider.get_pr_review_threads.return_value = []
+
+        fetch_reviews("42", project_root=tmp_path)
+
+        mock_pr.assert_called_once_with(tmp_path, "feat/42-fix-widget")
+        mock_make_branch.assert_not_called()
+
+    @patch("wade.services.review_service.filter_actionable_threads")
+    @patch("wade.services.review_service.git_pr.get_pr_for_branch")
+    @patch(
+        "wade.services.review_service.git_branch.make_branch_name",
+        return_value="feat/42-reconstructed",
+    )
+    @patch(
+        "wade.services.review_service.git_repo.get_current_branch",
+        return_value="feat/99-other",
+    )
+    @patch("wade.services.review_service.git_repo.get_repo_root")
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_falls_back_when_current_branch_is_different_issue(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_get_current_branch: MagicMock,
+        mock_make_branch: MagicMock,
+        mock_pr: MagicMock,
+        mock_filter: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """When current branch belongs to a different issue, fall back to make_branch_name."""
+        mock_repo_root.return_value = tmp_path
+        provider = mock_get_provider.return_value
+        provider.read_task.return_value = self._make_task()
+        provider.get_pr_issue_comments.return_value = []
+        mock_pr.return_value = {"number": 99, "state": "OPEN"}
+        mock_filter.return_value = []
+        provider.get_pr_review_threads.return_value = []
+
+        fetch_reviews("42", project_root=tmp_path)
+
+        mock_make_branch.assert_called_once()
+        mock_pr.assert_called_once_with(tmp_path, "feat/42-reconstructed")
+
+    @patch("wade.services.review_service.git_pr.get_pr_for_branch", return_value=None)
+    @patch(
+        "wade.services.review_service.git_branch.make_branch_name",
+        return_value="feat/42-reconstructed",
+    )
+    @patch(
+        "wade.services.review_service.git_repo.get_current_branch",
+        side_effect=GitError("detached HEAD"),
+    )
+    @patch("wade.services.review_service.git_repo.get_repo_root")
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_falls_back_on_get_current_branch_git_error(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_get_current_branch: MagicMock,
+        mock_make_branch: MagicMock,
+        mock_pr: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """When get_current_branch raises GitError, fall back to make_branch_name."""
+        mock_repo_root.return_value = tmp_path
+        provider = mock_get_provider.return_value
+        provider.read_task.return_value = self._make_task()
+
+        fetch_reviews("42", project_root=tmp_path)
+
+        mock_make_branch.assert_called_once()
+        mock_pr.assert_called_once_with(tmp_path, "feat/42-reconstructed")
 
     @patch("wade.services.review_service.git_repo.get_repo_root", side_effect=GitError("nope"))
     @patch("wade.services.review_service.get_provider")

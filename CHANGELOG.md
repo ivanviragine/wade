@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.4.2] — 2026-03-11
+
+### Bug Fixes
+
+- fetch_reviews() uses fragile branch-name reconstruction — prefer current branch (#140) (29598e9)
+
+### Other Changes
+
+- Align internal naming with CLI commands (#138) (0d057c6)
+- Investigate adding AI-facing directives to work session boundary commands (#136) (65ca021)
+
 ## [v0.4.1] — 2026-03-10
 
 ### Bug Fixes
