@@ -27,6 +27,12 @@ htmlcov/
 
 # wade runtime (per-project, gitignored)
 
+# AI tooling — local agent settings and installed skill copies
+.agents/
+.claude/
+.gemini/
+.github/skills
+
 # OS
 .DS_Store
 Thumbs.db
