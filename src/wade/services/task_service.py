@@ -422,6 +422,11 @@ def _plan_badge_label(task: Task, has_plan: bool | None = None) -> str:
     return "PLANNED" if has_plan else "NO PLAN"
 
 
+def _plain_badge(label: str) -> str:
+    """Return a plain-text badge string for non-Rich contexts."""
+    return f"[{label}]"
+
+
 # ---------------------------------------------------------------------------
 # CRUD operations
 # ---------------------------------------------------------------------------
@@ -624,8 +629,9 @@ def prompt_task_selection(
     items = []
     for t in tasks:
         state_badge = "OPEN" if t.state == TaskState.OPEN else "CLOSED"
-        plan_suffix = f"[{_plan_badge_label(t)}]"
-        items.append(f"#{t.id}  {t.title}  [{state_badge}]  {plan_suffix}")
+        items.append(
+            f"#{t.id}  {t.title}  {_plain_badge(state_badge)}  {_plain_badge(_plan_badge_label(t))}"
+        )
 
     fallback = "(Enter manually...)"
     if allow_manual:
