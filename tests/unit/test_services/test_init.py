@@ -526,6 +526,24 @@ class TestPromptCommandOverrides:
         assert result["review_plan"] == {"enabled": "true", "mode": "prompt"}
         assert result["review_implementation"] == {"enabled": "true", "mode": "prompt"}
 
+    @patch("wade.ui.prompts.select")
+    def test_interactive_reviews_disabled(self, mock_select: MagicMock) -> None:
+        # plan: Skip tool; deps: Skip tool, mode=prompt
+        # review_plan: Enable=No (halts — no tool/mode prompts)
+        # review_implementation: Enable=No (halts — no tool/mode prompts)
+        mock_select.side_effect = [
+            1,  # plan: Skip tool
+            1,
+            0,  # deps: Skip tool, mode=prompt
+            1,  # review_plan: Enable=No
+            1,  # review_implementation: Enable=No
+        ]
+        result = _prompt_command_overrides(["claude"], non_interactive=False)
+        assert result["plan"] == {}
+        assert result["deps"] == {"mode": "prompt"}
+        assert result["review_plan"] == {"enabled": "false"}
+        assert result["review_implementation"] == {"enabled": "false"}
+
     @patch("wade.services.init_service._suggest_model_for_tool")
     @patch("wade.ui.prompts.select")
     def test_interactive_with_tool_override(
