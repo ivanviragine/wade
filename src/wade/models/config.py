@@ -90,6 +90,7 @@ class AIConfig(BaseModel):
     implement: AICommandConfig = AICommandConfig()
     review_plan: AICommandConfig = AICommandConfig()
     review_implementation: AICommandConfig = AICommandConfig()
+    review_batch: AICommandConfig = AICommandConfig()
 
 
 class PermissionsConfig(BaseModel):
