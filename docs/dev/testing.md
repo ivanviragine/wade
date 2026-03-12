@@ -48,8 +48,13 @@ tests/
 ## Running Tests
 
 ```bash
-# All tests (excluding live)
+# Host non-live suite (unit + integration + top-level CLI smoke)
 ./scripts/test.sh
+
+# Full non-live validation = host non-live suite + deterministic E2E contract lane
+# Run both when you want CI-equivalent non-live coverage.
+# ./scripts/test.sh
+# ./scripts/test-e2e-docker.sh
 
 # Unit tests only (fast, no git/subprocess)
 ./scripts/test.sh tests/unit/
@@ -113,6 +118,7 @@ Current live GH lane exercises WADE behavior (not raw `gh` checks), including:
 
 ## CI Execution Model
 
+- Full non-live validation requires both `./scripts/test.sh` and `./scripts/test-e2e-docker.sh`.
 - Unit + integration + top-level CLI smoke (`tests/test_cli_basics.py`) run directly on the CI host.
 - Deterministic E2E contract tests run via `./scripts/test-e2e-docker.sh` and `docker-compose.e2e.yml`.
 - Live lanes remain manual and env-gated (`test-live-gh.sh`, `test-live-ai.sh`).
