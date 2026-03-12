@@ -470,7 +470,8 @@ def _handle_label(args: list[str], state: dict[str, object]) -> int:
         _save_state(state)
         return 0
 
-    return 0
+    print(f"unsupported gh label action: {action}", file=sys.stderr)
+    return 1
 
 
 def _handle_repo(args: list[str]) -> int:

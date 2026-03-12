@@ -12,16 +12,14 @@ from typing import Any
 import structlog
 
 from wade.config.loader import load_config
+from wade.models.ai import ModelBreakdown
 from wade.models.config import ProjectConfig
 from wade.models.task import Complexity, Label, LabelType, PlanFile, Task, TaskState
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.ui.console import console
 from wade.utils.markdown import remove_marker_block
-from wade.utils.token_usage_markdown import (
-    TokenUsageBreakdownRow,
-    build_token_usage_block,
-)
+from wade.utils.token_usage_markdown import build_token_usage_block
 
 logger = structlog.get_logger()
 
@@ -262,15 +260,15 @@ def build_plan_summary_block(
 
         extra_rows = [f"| This issue (est.) | **{format_count(per_issue_estimate)}** |"]
 
-    breakdown_rows: list[TokenUsageBreakdownRow] | None = None
+    breakdown_rows: list[ModelBreakdown] | None = None
     if model_breakdown:
         breakdown_rows = [
-            {
-                "model": str(row.get("model", "unknown")),
-                "input_tokens": int(row.get("input", 0) or 0),
-                "output_tokens": int(row.get("output", 0) or 0),
-                "cached_tokens": int(row.get("cached", 0) or 0),
-            }
+            ModelBreakdown(
+                model=str(row.get("model", "unknown")),
+                input_tokens=int(row.get("input", 0) or 0),
+                output_tokens=int(row.get("output", 0) or 0),
+                cached_tokens=int(row.get("cached", 0) or 0),
+            )
             for row in model_breakdown
         ]
 

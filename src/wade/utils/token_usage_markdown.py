@@ -2,16 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TypedDict
-
-
-class TokenUsageBreakdownRow(TypedDict):
-    """Normalized per-model token usage row."""
-
-    model: str
-    input_tokens: int
-    output_tokens: int
-    cached_tokens: int
+from wade.models.ai import ModelBreakdown
 
 
 def _format_count(n: int | None) -> str:
@@ -20,22 +11,22 @@ def _format_count(n: int | None) -> str:
     return f"{n:,}"
 
 
-def _resolve_totals_from_breakdown(
+def resolve_token_usage_totals(
     *,
     total_tokens: int | None,
     input_tokens: int | None,
     output_tokens: int | None,
     cached_tokens: int | None,
-    model_breakdown: list[TokenUsageBreakdownRow] | None,
+    model_breakdown: list[ModelBreakdown] | None,
 ) -> tuple[int | None, int | None, int | None, int | None]:
     """Fill missing aggregate counts from per-model rows when available."""
     if model_breakdown:
         if input_tokens is None:
-            input_tokens = sum(row["input_tokens"] for row in model_breakdown)
+            input_tokens = sum(row.input_tokens for row in model_breakdown)
         if output_tokens is None:
-            output_tokens = sum(row["output_tokens"] for row in model_breakdown)
+            output_tokens = sum(row.output_tokens for row in model_breakdown)
         if cached_tokens is None:
-            cached_tokens = sum(row["cached_tokens"] for row in model_breakdown)
+            cached_tokens = sum(row.cached_tokens for row in model_breakdown)
 
     if total_tokens is None and any(
         metric is not None for metric in (input_tokens, output_tokens, cached_tokens)
@@ -58,10 +49,10 @@ def build_token_usage_block(
     cached_tokens: int | None = None,
     extra_metric_rows: list[str] | None = None,
     premium_requests: int | None = None,
-    model_breakdown: list[TokenUsageBreakdownRow] | None = None,
+    model_breakdown: list[ModelBreakdown] | None = None,
 ) -> str:
     """Render a token-usage markdown block with optional per-model rows."""
-    total_tokens, input_tokens, output_tokens, cached_tokens = _resolve_totals_from_breakdown(
+    total_tokens, input_tokens, output_tokens, cached_tokens = resolve_token_usage_totals(
         total_tokens=total_tokens,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
@@ -102,11 +93,11 @@ def build_token_usage_block(
 
     if model_breakdown:
         for row in model_breakdown:
-            inp = _format_count(row["input_tokens"])
-            out = _format_count(row["output_tokens"])
+            inp = _format_count(row.input_tokens)
+            out = _format_count(row.output_tokens)
             parts = [f"**{inp}** in", f"**{out}** out"]
-            parts.append(f"**{_format_count(row['cached_tokens'])}** cached")
-            lines.append(f"| `{row['model']}` | {' · '.join(parts)} |")
+            parts.append(f"**{_format_count(row.cached_tokens)}** cached")
+            lines.append(f"| `{row.model}` | {' · '.join(parts)} |")
 
     lines.append("")
     lines.append(marker_end)

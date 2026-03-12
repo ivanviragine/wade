@@ -64,6 +64,7 @@ from wade.utils.terminal import (
     start_title_keeper,
     stop_title_keeper,
 )
+from wade.utils.token_usage_markdown import resolve_token_usage_totals
 
 logger = structlog.get_logger()
 
@@ -368,6 +369,7 @@ def _usage_has_token_metrics(usage: TokenUsage | None) -> bool:
             or usage.input_tokens is not None
             or usage.output_tokens is not None
             or usage.cached_tokens is not None
+            or (usage.premium_requests or 0) > 0
             or usage.model_breakdown
         )
     )
@@ -380,26 +382,13 @@ def _resolve_usage_totals(
     if token_usage is None:
         return None, None, None, None
 
-    breakdown = token_usage.model_breakdown
-    input_tokens = token_usage.input_tokens
-    output_tokens = token_usage.output_tokens
-    cached_tokens = token_usage.cached_tokens
-
-    if breakdown:
-        if input_tokens is None:
-            input_tokens = sum(row.input_tokens for row in breakdown)
-        if output_tokens is None:
-            output_tokens = sum(row.output_tokens for row in breakdown)
-        if cached_tokens is None:
-            cached_tokens = sum(row.cached_tokens for row in breakdown)
-
-    total_tokens = token_usage.total_tokens
-    if total_tokens is None and any(
-        metric is not None for metric in (input_tokens, output_tokens, cached_tokens)
-    ):
-        total_tokens = (input_tokens or 0) + (output_tokens or 0) + (cached_tokens or 0)
-
-    return total_tokens, input_tokens, output_tokens, cached_tokens
+    return resolve_token_usage_totals(
+        total_tokens=token_usage.total_tokens,
+        input_tokens=token_usage.input_tokens,
+        output_tokens=token_usage.output_tokens,
+        cached_tokens=token_usage.cached_tokens,
+        model_breakdown=token_usage.model_breakdown,
+    )
 
 
 def _capture_post_session_usage(
