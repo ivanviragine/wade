@@ -10,16 +10,16 @@ services:
       # mutate/break the host workspace .venv.
       UV_PROJECT_ENVIRONMENT: /tmp/wade-e2e-venv
       PYTHONDONTWRITEBYTECODE: "1"
-      PYTEST_ARGS: ""
+      PYTEST_ARGS_SHELL: ""
     command:
       - bash
       - -lc
       - |
         set -euo pipefail
         uv sync --all-extras
-        if [ -n "$${PYTEST_ARGS}" ]; then
-          # shellcheck disable=SC2086
-          ./scripts/test-e2e.sh $${PYTEST_ARGS}
+        if [ -n "$${PYTEST_ARGS_SHELL}" ]; then
+          eval "set -- $${PYTEST_ARGS_SHELL}"
+          ./scripts/test-e2e.sh "$$@"
         else
           ./scripts/test-e2e.sh
         fi

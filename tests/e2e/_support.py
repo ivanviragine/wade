@@ -12,6 +12,21 @@ import pytest
 
 WADE = "wade"
 MAIN_BRANCH = "main"
+_RUN_ENV_ALLOWLIST = (
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LOGNAME",
+    "PATH",
+    "PATHEXT",
+    "SHELL",
+    "SYSTEMROOT",
+    "TEMP",
+    "TERM",
+    "TMP",
+    "TMPDIR",
+    "USER",
+)
 
 
 class MockGhCli(TypedDict):
@@ -29,7 +44,16 @@ def _run(
     timeout: int = 30,
 ) -> subprocess.CompletedProcess[str]:
     """Run a wade CLI command as a subprocess."""
-    run_env = os.environ.copy()
+    run_env = {key: os.environ[key] for key in _RUN_ENV_ALLOWLIST if key in os.environ}
+    run_env.update(
+        {key: value for key, value in os.environ.items() if key.startswith("WADE_MOCK_")}
+    )
+    run_env.setdefault("LANG", "C.UTF-8")
+    run_env.setdefault("LC_ALL", run_env["LANG"])
+    run_env.setdefault("NO_COLOR", "1")
+    run_env.setdefault("PYTHONIOENCODING", "utf-8")
+    run_env.setdefault("PYTHONUTF8", "1")
+    run_env.setdefault("TERM", "dumb")
     if env:
         run_env.update(env)
     return subprocess.run(

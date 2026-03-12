@@ -11,5 +11,19 @@ if ! docker compose version >/dev/null 2>&1; then
   exit 1
 fi
 
-PYTEST_ARGS="${*:-}"
-exec docker compose -f docker-compose.e2e.yml run --rm -e PYTEST_ARGS="${PYTEST_ARGS}" e2e
+serialize_args() {
+  local serialized=()
+  local quoted
+  for arg in "$@"; do
+    printf -v quoted '%q' "$arg"
+    serialized+=("$quoted")
+  done
+  printf '%s ' "${serialized[@]}"
+}
+
+PYTEST_ARGS_SHELL=""
+if (($# > 0)); then
+  PYTEST_ARGS_SHELL="$(serialize_args "$@")"
+fi
+
+exec docker compose -f docker-compose.e2e.yml run --rm -e PYTEST_ARGS_SHELL="${PYTEST_ARGS_SHELL}" e2e

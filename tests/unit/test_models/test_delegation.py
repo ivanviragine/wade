@@ -74,6 +74,7 @@ class TestDelegationResult:
         )
         assert result.success is False
         assert result.exit_code == 1
+        assert result.skipped is False
 
     def test_skipped_result(self) -> None:
         result = DelegationResult(

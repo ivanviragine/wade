@@ -88,6 +88,10 @@ class TestSelfUpgrade:
         """When UV_TOOL, runs `uv tool upgrade wade-cli`."""
         ok_result = MagicMock(returncode=0)
         with (
+            patch(
+                "wade.utils.install._package_name_for_self_upgrade",
+                return_value="wade-cli",
+            ),
             patch("wade.utils.install.detect_install_method", return_value=InstallMethod.UV_TOOL),
             patch("wade.utils.install.subprocess.run", return_value=ok_result) as mock_run,
         ):
@@ -101,6 +105,10 @@ class TestSelfUpgrade:
         """When PIPX, runs `pipx upgrade wade-cli`."""
         ok_result = MagicMock(returncode=0)
         with (
+            patch(
+                "wade.utils.install._package_name_for_self_upgrade",
+                return_value="wade-cli",
+            ),
             patch("wade.utils.install.detect_install_method", return_value=InstallMethod.PIPX),
             patch("wade.utils.install.subprocess.run", return_value=ok_result) as mock_run,
         ):
@@ -141,6 +149,10 @@ class TestSelfUpgrade:
         """When the upgrade command exits non-zero, return False."""
         fail_result = MagicMock(returncode=1, stderr="error")
         with (
+            patch(
+                "wade.utils.install._package_name_for_self_upgrade",
+                return_value="wade-cli",
+            ),
             patch("wade.utils.install.detect_install_method", return_value=InstallMethod.UV_TOOL),
             patch("wade.utils.install.subprocess.run", return_value=fail_result),
         ):
@@ -151,6 +163,10 @@ class TestSelfUpgrade:
     def test_timeout_returns_false(self) -> None:
         """When the upgrade command times out, return False."""
         with (
+            patch(
+                "wade.utils.install._package_name_for_self_upgrade",
+                return_value="wade-cli",
+            ),
             patch("wade.utils.install.detect_install_method", return_value=InstallMethod.UV_TOOL),
             patch(
                 "wade.utils.install.subprocess.run",
@@ -164,12 +180,46 @@ class TestSelfUpgrade:
     def test_os_error_returns_false(self) -> None:
         """When the upgrade command raises OSError, return False."""
         with (
+            patch(
+                "wade.utils.install._package_name_for_self_upgrade",
+                return_value="wade-cli",
+            ),
             patch("wade.utils.install.detect_install_method", return_value=InstallMethod.UV_TOOL),
             patch("wade.utils.install.subprocess.run", side_effect=OSError("not found")),
         ):
             result = self_upgrade()
 
         assert result is False
+
+    def test_uv_tool_legacy_install_upgrades_legacy_package(self) -> None:
+        ok_result = MagicMock(returncode=0)
+        with (
+            patch("wade.utils.install.detect_install_method", return_value=InstallMethod.UV_TOOL),
+            patch(
+                "wade.utils.install.sys",
+                executable="/Users/user/.local/share/uv/tools/wade/bin/python",
+            ),
+            patch("wade.utils.install.subprocess.run", return_value=ok_result) as mock_run,
+        ):
+            result = self_upgrade()
+
+        assert result is True
+        assert mock_run.call_args[0][0] == ["uv", "tool", "upgrade", "wade"]
+
+    def test_pipx_legacy_install_upgrades_legacy_package(self) -> None:
+        ok_result = MagicMock(returncode=0)
+        with (
+            patch("wade.utils.install.detect_install_method", return_value=InstallMethod.PIPX),
+            patch(
+                "wade.utils.install.sys",
+                executable="/Users/user/.local/pipx/venvs/wade/bin/python",
+            ),
+            patch("wade.utils.install.subprocess.run", return_value=ok_result) as mock_run,
+        ):
+            result = self_upgrade()
+
+        assert result is True
+        assert mock_run.call_args[0][0] == ["pipx", "upgrade", "wade"]
 
 
 # ---------------------------------------------------------------------------

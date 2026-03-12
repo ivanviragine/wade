@@ -30,4 +30,9 @@ if ! gh auth status >/dev/null 2>&1; then
   exit 1
 fi
 
-exec uv run python -m pytest tests/live/test_wade_live_gh.py -v --tb=short -m "live_gh" "$@"
+exec env WADE_INCLUDE_LIVE=1 ./scripts/test.sh \
+  tests/live/test_wade_live_gh.py \
+  -v \
+  --tb=short \
+  -m "live_gh" \
+  "$@"

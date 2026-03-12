@@ -171,7 +171,19 @@ class TestPlanSummary:
         assert "| `claude-opus-4-6`" in block
         assert "| `claude-haiku-4-5`" in block
         assert "**3,000** in · **1,000** out · **500** cached" in block
-        assert "**400** in · **100** out" in block
+        assert "**400** in · **100** out · **0** cached" in block
+
+    def test_build_block_derives_totals_from_breakdown(self) -> None:
+        block = build_plan_summary_block(
+            model_breakdown=[
+                {"model": "claude-opus-4-6", "input": 3000, "output": 1000, "cached": 500},
+                {"model": "claude-haiku-4-5", "input": 400, "output": 100, "cached": 0},
+            ],
+        )
+        assert "| Total tokens | **5,000** |" in block
+        assert "| Input tokens | **3,400** |" in block
+        assert "| Output tokens | **1,100** |" in block
+        assert "| Cached tokens | **500** |" in block
 
     def test_build_block_with_premium(self) -> None:
         block = build_plan_summary_block(

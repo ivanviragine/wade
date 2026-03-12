@@ -30,4 +30,9 @@ if ! [[ "${WADE_LIVE_AI_TIMEOUT}" =~ ^[1-9][0-9]*$ ]]; then
   exit 1
 fi
 
-exec uv run python -m pytest tests/live/test_wade_live_ai.py -v --tb=short -m "live_ai" "$@"
+exec env WADE_INCLUDE_LIVE=1 ./scripts/test.sh \
+  tests/live/test_wade_live_ai.py \
+  -v \
+  --tb=short \
+  -m "live_ai" \
+  "$@"

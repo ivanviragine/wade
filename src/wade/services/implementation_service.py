@@ -359,6 +359,49 @@ def bootstrap_draft_pr(
         return None
 
 
+def _usage_has_token_metrics(usage: TokenUsage | None) -> bool:
+    """Return True when usage contains aggregate or per-model token metrics."""
+    return bool(
+        usage
+        and (
+            usage.total_tokens is not None
+            or usage.input_tokens is not None
+            or usage.output_tokens is not None
+            or usage.cached_tokens is not None
+            or usage.model_breakdown
+        )
+    )
+
+
+def _resolve_usage_totals(
+    token_usage: TokenUsage | None,
+) -> tuple[int | None, int | None, int | None, int | None]:
+    """Resolve aggregate token counts, deriving them from breakdown rows when needed."""
+    if token_usage is None:
+        return None, None, None, None
+
+    breakdown = token_usage.model_breakdown
+    input_tokens = token_usage.input_tokens
+    output_tokens = token_usage.output_tokens
+    cached_tokens = token_usage.cached_tokens
+
+    if breakdown:
+        if input_tokens is None:
+            input_tokens = sum(row.input_tokens for row in breakdown)
+        if output_tokens is None:
+            output_tokens = sum(row.output_tokens for row in breakdown)
+        if cached_tokens is None:
+            cached_tokens = sum(row.cached_tokens for row in breakdown)
+
+    total_tokens = token_usage.total_tokens
+    if total_tokens is None and any(
+        metric is not None for metric in (input_tokens, output_tokens, cached_tokens)
+    ):
+        total_tokens = (input_tokens or 0) + (output_tokens or 0) + (cached_tokens or 0)
+
+    return total_tokens, input_tokens, output_tokens, cached_tokens
+
+
 def _capture_post_session_usage(
     transcript_path: Path | None,
     adapter: AbstractAITool,
@@ -384,7 +427,7 @@ def _capture_post_session_usage(
         logger.warning("implementation.transcript_parse_failed", error=str(e))
         return None
 
-    has_tokens = usage and (usage.total_tokens or usage.input_tokens)
+    has_tokens = _usage_has_token_metrics(usage)
     has_session = usage and usage.session_id
     if not has_tokens and not has_session:
         logger.warning("implementation.no_token_usage", transcript=str(transcript_path))
@@ -1485,6 +1528,8 @@ def _build_session_usage_table(
 
     breakdown = token_usage.model_breakdown if token_usage else []
     multi = len(breakdown) > 1
+    total_tokens, input_tokens, output_tokens, cached_tokens = _resolve_usage_totals(token_usage)
+    has_tokens = _usage_has_token_metrics(token_usage)
 
     lines: list[str] = []
 
@@ -1500,9 +1545,7 @@ def _build_session_usage_table(
         if ai_tool:
             lines.append(f"| Tool | `{ai_tool}` |{empty}")
 
-        has_tokens = token_usage and token_usage.total_tokens and token_usage.total_tokens > 0
         if has_tokens:
-            assert token_usage is not None  # for type narrowing
 
             def per(attr: str) -> str:
                 return " | ".join(f"**{format_count(getattr(r, attr))}**" for r in breakdown)
@@ -1511,17 +1554,16 @@ def _build_session_usage_table(
                 f"**{format_count((r.input_tokens or 0) + (r.output_tokens or 0) + (r.cached_tokens or 0))}**"  # noqa: E501
                 for r in breakdown
             )
-            lines.append(
-                f"| Total tokens | **{format_count(token_usage.total_tokens)}** | {per_total} |"
-            )
-            if token_usage.input_tokens:
-                inp_total = format_count(token_usage.input_tokens)
+            if total_tokens is not None:
+                lines.append(f"| Total tokens | **{format_count(total_tokens)}** | {per_total} |")
+            if input_tokens is not None:
+                inp_total = format_count(input_tokens)
                 lines.append(f"| Input tokens | **{inp_total}** | {per('input_tokens')} |")
-            if token_usage.output_tokens:
-                out_total = format_count(token_usage.output_tokens)
+            if output_tokens is not None:
+                out_total = format_count(output_tokens)
                 lines.append(f"| Output tokens | **{out_total}** | {per('output_tokens')} |")
-            if token_usage.cached_tokens:
-                cac_total = format_count(token_usage.cached_tokens)
+            if cached_tokens is not None:
+                cac_total = format_count(cached_tokens)
                 lines.append(f"| Cached tokens | **{cac_total}** | {per('cached_tokens')} |")
         else:
             lines.append(f"| Total tokens | *unavailable* |{empty}")
@@ -1542,16 +1584,15 @@ def _build_session_usage_table(
         if model:
             lines.append(f"| Model | `{model}` |")
 
-        has_tokens = token_usage and token_usage.total_tokens and token_usage.total_tokens > 0
         if has_tokens:
-            assert token_usage is not None  # for type narrowing
-            lines.append(f"| Total tokens | **{format_count(token_usage.total_tokens)}** |")
-            if token_usage.input_tokens:
-                lines.append(f"| Input tokens | **{format_count(token_usage.input_tokens)}** |")
-            if token_usage.output_tokens:
-                lines.append(f"| Output tokens | **{format_count(token_usage.output_tokens)}** |")
-            if token_usage.cached_tokens:
-                lines.append(f"| Cached tokens | **{format_count(token_usage.cached_tokens)}** |")
+            if total_tokens is not None:
+                lines.append(f"| Total tokens | **{format_count(total_tokens)}** |")
+            if input_tokens is not None:
+                lines.append(f"| Input tokens | **{format_count(input_tokens)}** |")
+            if output_tokens is not None:
+                lines.append(f"| Output tokens | **{format_count(output_tokens)}** |")
+            if cached_tokens is not None:
+                lines.append(f"| Cached tokens | **{format_count(cached_tokens)}** |")
         else:
             lines.append("| Total tokens | *unavailable* |")
 

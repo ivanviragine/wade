@@ -39,7 +39,7 @@ class TestImplementTaskCommand:
             mock_gh_cli["state_file"],
             issue_number=issue_number,
             title=issue_title,
-            body="## Tasks\\n- Add E2E contract tests\\n",
+            body="## Tasks\n- Add E2E contract tests\n",
         )
         origin_repo = _init_origin_remote(e2e_repo)
 
@@ -103,7 +103,7 @@ class TestImplementTaskCommand:
             mock_gh_cli["state_file"],
             issue_number=issue_number,
             title=issue_title,
-            body="## Tasks\\n- Validate setup-worktree hook\\n",
+            body="## Tasks\n- Validate setup-worktree hook\n",
         )
 
         config_path = e2e_repo / ".wade.yml"
@@ -157,7 +157,7 @@ class TestWorkDoneCommand:
             mock_gh_cli["state_file"],
             issue_number=issue_number,
             title=issue_title,
-            body="## Tasks\\n- Finish implementation\\n",
+            body="## Tasks\n- Finish implementation\n",
         )
         origin_repo = _init_origin_remote(e2e_repo)
 

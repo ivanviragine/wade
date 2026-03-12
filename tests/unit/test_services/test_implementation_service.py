@@ -13,7 +13,7 @@ from wade.ai_tools.codex import CodexAdapter
 from wade.ai_tools.copilot import CopilotAdapter
 from wade.ai_tools.gemini import GeminiAdapter
 from wade.git.repo import GitError
-from wade.models.ai import TokenUsage
+from wade.models.ai import ModelBreakdown, TokenUsage
 from wade.models.config import (
     HooksConfig,
     ProjectConfig,
@@ -1051,3 +1051,62 @@ class TestCapturePostSessionUsage:
         assert "wade:sessions:start" in updated_issue_body
         assert "session-abc-123" in updated_issue_body
         assert "wade:impl-usage:start" not in updated_issue_body
+
+    def test_breakdown_only_usage_still_updates_impl_usage_blocks(self, tmp_path: Path) -> None:
+        """Per-model-only usage data should still be persisted to PR and issue bodies."""
+        transcript = tmp_path / ".transcript"
+        transcript.write_text("resume me\n")
+
+        adapter = MagicMock()
+        adapter.parse_transcript.return_value = TokenUsage(
+            model_breakdown=[
+                ModelBreakdown(
+                    model="claude-sonnet-4-6",
+                    input_tokens=120,
+                    output_tokens=30,
+                    cached_tokens=0,
+                )
+            ]
+        )
+
+        provider = MagicMock()
+        provider.read_task.return_value = Task(id="42", title="Test issue", body="Issue body\n")
+
+        with (
+            patch(
+                "wade.services.implementation_service.git_pr.get_pr_for_branch",
+                return_value={"number": 7},
+            ),
+            patch(
+                "wade.services.implementation_service.git_pr.get_pr_body",
+                return_value="PR body\n",
+            ),
+            patch(
+                "wade.services.implementation_service.git_pr.update_pr_body",
+                return_value=True,
+            ) as mock_update_pr,
+            patch("wade.services.implementation_service.console") as mock_console,
+        ):
+            model = _capture_post_session_usage(
+                transcript_path=transcript,
+                adapter=adapter,
+                repo_root=tmp_path,
+                branch="feat/42-test",
+                ai_tool="claude",
+                model=None,
+                issue_number="42",
+                provider=provider,
+            )
+
+        assert model == "claude-sonnet-4-6"
+        mock_console.warn.assert_not_called()
+
+        updated_pr_body = mock_update_pr.call_args.args[2]
+        assert "wade:impl-usage:start" in updated_pr_body
+        assert "**150**" in updated_pr_body
+        assert "**0**" in updated_pr_body
+
+        provider.update_task.assert_called_once()
+        updated_issue_body = provider.update_task.call_args.kwargs["body"]
+        assert "wade:impl-usage:start" in updated_issue_body
+        assert "**150**" in updated_issue_body

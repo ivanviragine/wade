@@ -308,6 +308,15 @@ class TestValidateConfig:
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("ai.review_batch.unexpected" in e for e in result.errors)
 
+    def test_rejects_duplicate_canonical_and_legacy_ai_sections(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text(
+            "version: 2\nai:\n  implement:\n    tool: claude\n  work:\n    tool: codex\n"
+        )
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("duplicates ai.implement" in e for e in result.errors)
+
     def test_output_format_invalid(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"
         config.write_text("version: 99\n")

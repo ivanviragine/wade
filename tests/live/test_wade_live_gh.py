@@ -306,6 +306,8 @@ class TestLiveWadeGH:
             branch_name = branch_result.stdout.strip()
             assert branch_name
 
+            # `implement --cd` skips AI launch only; deterministic bootstrap work
+            # still runs before it returns, including creating the draft PR.
             pr_view = _gh(
                 "pr",
                 "view",
@@ -332,24 +334,24 @@ class TestLiveWadeGH:
             if not pr_number and branch_name:
                 pr_number = _recover_pr_number_by_branch(branch_name)
 
-            if pr_number:
-                close_pr = _gh("pr", "close", pr_number, "--delete-branch", timeout=120)
+            if issue_num:
+                remove_wt = _wade("worktree", "remove", issue_num, "--force")
                 _record_cleanup_failure(
                     cleanup_failures,
-                    close_pr,
-                    f"cleanup: gh pr close {pr_number} --delete-branch",
+                    remove_wt,
+                    f"cleanup: wade worktree remove {issue_num} --force",
                 )
-            if issue_num:
                 close_issue = _wade("task", "close", issue_num)
                 _record_cleanup_failure(
                     cleanup_failures,
                     close_issue,
                     f"cleanup: wade task close {issue_num}",
                 )
-                remove_wt = _wade("worktree", "remove", issue_num, "--force")
+            if pr_number:
+                close_pr = _gh("pr", "close", pr_number, "--delete-branch", timeout=120)
                 _record_cleanup_failure(
                     cleanup_failures,
-                    remove_wt,
-                    f"cleanup: wade worktree remove {issue_num} --force",
+                    close_pr,
+                    f"cleanup: gh pr close {pr_number} --delete-branch",
                 )
             _finalize_cleanup_failures(cleanup_failures)

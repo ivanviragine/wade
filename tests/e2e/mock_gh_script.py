@@ -36,7 +36,7 @@ def _default_state() -> dict[str, object]:
 def _load_state() -> dict[str, object]:
     try:
         return json.loads(STATE.read_text(encoding="utf-8"))
-    except Exception:
+    except FileNotFoundError:
         return _default_state()
 
 
@@ -290,6 +290,37 @@ def _find_pr(
     return None, None
 
 
+def _pr_matches_filters(args: list[str], pr_num: str, pr: dict[str, object]) -> bool:
+    state_filter = (_find_flag(args, "--state") or "open").lower()
+    pr_state = str(pr.get("state", "OPEN")).lower()
+    if state_filter != "all" and pr_state != state_filter:
+        return False
+
+    head_filter = _find_flag(args, "--head")
+    if head_filter and str(pr.get("head", "")) != head_filter:
+        return False
+
+    base_filter = _find_flag(args, "--base")
+    if base_filter and str(pr.get("base", "")) != base_filter:
+        return False
+
+    search = (_find_flag(args, "--search") or "").strip().lower()
+    if search:
+        haystack = " ".join(
+            [
+                pr_num,
+                str(pr.get("title", "")),
+                str(pr.get("body", "")),
+                str(pr.get("head", "")),
+                str(pr.get("base", "")),
+            ]
+        ).lower()
+        if search not in haystack:
+            return False
+
+    return True
+
+
 def _handle_pr(args: list[str], state: dict[str, object]) -> int:
     if not args:
         return 1
@@ -377,7 +408,35 @@ def _handle_pr(args: list[str], state: dict[str, object]) -> int:
         return 0
 
     if action == "list":
-        print("[]")
+        limit_raw = _find_flag(args, "--limit")
+        try:
+            limit = int(limit_raw) if limit_raw else None
+        except ValueError:
+            limit = None
+
+        items: list[dict[str, object]] = []
+        for pr_num, raw in prs.items():
+            if not isinstance(raw, dict):
+                continue
+            if not _pr_matches_filters(args, pr_num, raw):
+                continue
+            items.append(
+                {
+                    "number": int(pr_num),
+                    "url": raw.get("url", f"{REPO_URL}/pull/{pr_num}"),
+                    "title": raw.get("title", ""),
+                    "state": raw.get("state", "OPEN"),
+                    "isDraft": bool(raw.get("isDraft", False)),
+                    "body": raw.get("body", ""),
+                    "headRefName": raw.get("head", ""),
+                    "baseRefName": raw.get("base", "main"),
+                }
+            )
+
+        if limit is not None:
+            items = items[:limit]
+
+        print(json.dumps(items))
         return 0
 
     return 1

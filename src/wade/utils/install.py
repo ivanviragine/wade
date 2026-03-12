@@ -28,6 +28,15 @@ class InstallMethod(StrEnum):
 
 
 PACKAGE_NAME = "wade-cli"
+LEGACY_PACKAGE_NAME = "wade"
+
+
+def _package_name_for_self_upgrade() -> str:
+    """Return the package name that matches the current install root."""
+    exe = sys.executable.replace("\\", "/")
+    if "/.local/share/uv/tools/wade/" in exe or "/.local/pipx/venvs/wade/" in exe:
+        return LEGACY_PACKAGE_NAME
+    return PACKAGE_NAME
 
 
 def detect_install_method() -> InstallMethod:
@@ -60,11 +69,12 @@ def self_upgrade() -> bool:
     Returns True if the upgrade succeeded, False otherwise.
     """
     method = detect_install_method()
+    package_name = _package_name_for_self_upgrade()
 
     if method == InstallMethod.UV_TOOL:
-        return _run_upgrade(["uv", "tool", "upgrade", PACKAGE_NAME], method="uv-tool")
+        return _run_upgrade(["uv", "tool", "upgrade", package_name], method="uv-tool")
     if method == InstallMethod.PIPX:
-        return _run_upgrade(["pipx", "upgrade", PACKAGE_NAME], method="pipx")
+        return _run_upgrade(["pipx", "upgrade", package_name], method="pipx")
     if method == InstallMethod.BREW:
         return _run_upgrade(["brew", "upgrade", "wade"], method="brew")
 

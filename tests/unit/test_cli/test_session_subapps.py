@@ -22,6 +22,11 @@ from wade.cli.main import app
 runner = CliRunner()
 
 
+def _assert_missing_required_argument(output: str, parameter_name: str) -> None:
+    assert "Usage:" in output
+    assert parameter_name in output
+
+
 # ---------------------------------------------------------------------------
 # Implementation session sub-app
 # ---------------------------------------------------------------------------
@@ -83,12 +88,12 @@ class TestReviewPrCommentsSessionSubApp:
     def test_fetch_requires_target(self) -> None:
         result = runner.invoke(app, ["review-pr-comments-session", "fetch"])
         assert result.exit_code != 0
-        assert "Missing argument" in result.output
+        _assert_missing_required_argument(result.output, "TARGET")
 
     def test_resolve_requires_thread_id(self) -> None:
         result = runner.invoke(app, ["review-pr-comments-session", "resolve"])
         assert result.exit_code != 0
-        assert "Missing argument" in result.output
+        _assert_missing_required_argument(result.output, "THREAD_ID")
 
     def test_help_shows_all_commands(self) -> None:
         result = runner.invoke(app, ["review-pr-comments-session", "--help"])
@@ -108,7 +113,7 @@ class TestPlanSessionSubApp:
     def test_done_requires_plan_dir(self) -> None:
         result = runner.invoke(app, ["plan-session", "done"])
         assert result.exit_code != 0
-        assert "Missing argument" in result.output
+        _assert_missing_required_argument(result.output, "PLAN_DIR")
 
     def test_done_nonexistent_dir(self, tmp_path: Path) -> None:
         missing = tmp_path / "nonexistent"
@@ -138,7 +143,7 @@ class TestWorktreeSubApp:
     def test_cd_requires_target(self) -> None:
         result = runner.invoke(app, ["worktree", "cd"])
         assert result.exit_code != 0
-        assert "Missing argument" in result.output
+        _assert_missing_required_argument(result.output, "TARGET")
 
     def test_help_shows_all_commands(self) -> None:
         result = runner.invoke(app, ["worktree", "--help"])
@@ -158,7 +163,7 @@ class TestTopLevelCd:
     def test_cd_requires_target(self) -> None:
         result = runner.invoke(app, ["cd"])
         assert result.exit_code != 0
-        assert "Missing argument" in result.output
+        _assert_missing_required_argument(result.output, "TARGET")
 
     @patch("wade.services.implementation_service.find_worktree_path", return_value=Path("/tmp/wt"))
     def test_cd_prints_path_when_worktree_exists(self, _mock: MagicMock) -> None:

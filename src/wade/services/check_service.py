@@ -365,9 +365,19 @@ def _validate_ai_section(ai: dict[str, Any], errors: list[str]) -> None:
         errors.append("ai.yolo: must be true or false")
 
     # Validate per-command sections
+    seen_sections: dict[str, str] = {}
     for cmd in (*AI_COMMAND_NAMES, *LEGACY_AI_COMMAND_ALIASES):
         cmd_section = ai.get(cmd)
         if cmd_section is not None:
+            canonical_cmd = LEGACY_AI_COMMAND_ALIASES.get(cmd, cmd)
+            previous_key = seen_sections.get(canonical_cmd)
+            if previous_key is not None and previous_key != cmd:
+                errors.append(
+                    f"ai.{cmd}: duplicates ai.{previous_key}. "
+                    f"Use only one section for '{canonical_cmd}'"
+                )
+                continue
+            seen_sections[canonical_cmd] = cmd
             if not isinstance(cmd_section, dict):
                 errors.append(f"ai.{cmd}: must be a mapping")
             else:
@@ -378,8 +388,8 @@ def _validate_ai_section(ai: dict[str, Any], errors: list[str]) -> None:
         "default_model",
         "effort",
         "yolo",
-        "work",
         *AI_COMMAND_NAMES,
+        *LEGACY_AI_COMMAND_ALIASES,
     }
     for key in ai:
         if key not in valid_keys:

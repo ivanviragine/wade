@@ -261,7 +261,7 @@ When wade installs skills into a target project (`wade init`), the skills refere
 
 **`wade implement`:**
 - `--detach` — Launch AI in a new terminal tab/window (non-blocking). Uses `build_launch_command()` + `launch_in_new_terminal()`.
-- `--cd` — Create worktree, print its path to stdout, and exit (no AI launch). Used internally by `wade cd`.
+- `--cd` — Create worktree, print its path to stdout, and exit without launching AI. Deterministic setup still runs first (for example worktree bootstrap and draft-PR bootstrap when needed). Used internally by `wade cd`.
 
 **`wade implementation-session done`:**
 - `target` (positional) — Optional issue number, worktree name, or plan file path. When a file path is given, creates the issue first; when a number/name, finds the worktree; when omitted, detects from current branch.

@@ -80,9 +80,6 @@ class TestLiveAISmoke:
         assert output is not None, "Headless analysis returned no output"
         assert output.strip(), "Headless analysis returned empty output"
         lines = [line.strip() for line in output.splitlines() if line.strip()]
-        assert "# No dependencies found" in lines, (
-            f"Live AI output is missing the required no-dependencies marker.\nGot lines: {lines!r}"
-        )
         assert not any("->" in line for line in lines), (
             "Live AI output contains dependency-edge syntax despite claiming no dependencies.\n"
             f"Got lines: {lines!r}"

@@ -20,6 +20,31 @@ def _format_count(n: int | None) -> str:
     return f"{n:,}"
 
 
+def _resolve_totals_from_breakdown(
+    *,
+    total_tokens: int | None,
+    input_tokens: int | None,
+    output_tokens: int | None,
+    cached_tokens: int | None,
+    model_breakdown: list[TokenUsageBreakdownRow] | None,
+) -> tuple[int | None, int | None, int | None, int | None]:
+    """Fill missing aggregate counts from per-model rows when available."""
+    if model_breakdown:
+        if input_tokens is None:
+            input_tokens = sum(row["input_tokens"] for row in model_breakdown)
+        if output_tokens is None:
+            output_tokens = sum(row["output_tokens"] for row in model_breakdown)
+        if cached_tokens is None:
+            cached_tokens = sum(row["cached_tokens"] for row in model_breakdown)
+
+    if total_tokens is None and any(
+        metric is not None for metric in (input_tokens, output_tokens, cached_tokens)
+    ):
+        total_tokens = (input_tokens or 0) + (output_tokens or 0) + (cached_tokens or 0)
+
+    return total_tokens, input_tokens, output_tokens, cached_tokens
+
+
 def build_token_usage_block(
     *,
     marker_start: str,
@@ -36,6 +61,14 @@ def build_token_usage_block(
     model_breakdown: list[TokenUsageBreakdownRow] | None = None,
 ) -> str:
     """Render a token-usage markdown block with optional per-model rows."""
+    total_tokens, input_tokens, output_tokens, cached_tokens = _resolve_totals_from_breakdown(
+        total_tokens=total_tokens,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cached_tokens=cached_tokens,
+        model_breakdown=model_breakdown,
+    )
+
     lines = [
         marker_start,
         "",
@@ -50,7 +83,7 @@ def build_token_usage_block(
     if model:
         lines.append(f"| Model | `{model}` |")
 
-    if total_tokens is not None and total_tokens > 0:
+    if total_tokens is not None:
         lines.append(f"| Total tokens | **{_format_count(total_tokens)}** |")
         if input_tokens is not None:
             lines.append(f"| Input tokens | **{_format_count(input_tokens)}** |")
@@ -72,8 +105,7 @@ def build_token_usage_block(
             inp = _format_count(row["input_tokens"])
             out = _format_count(row["output_tokens"])
             parts = [f"**{inp}** in", f"**{out}** out"]
-            if row["cached_tokens"]:
-                parts.append(f"**{_format_count(row['cached_tokens'])}** cached")
+            parts.append(f"**{_format_count(row['cached_tokens'])}** cached")
             lines.append(f"| `{row['model']}` | {' · '.join(parts)} |")
 
     lines.append("")

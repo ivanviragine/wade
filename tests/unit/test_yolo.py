@@ -228,7 +228,10 @@ class TestBuildLaunchCommandYolo:
         still be used."""
         from wade.ai_tools.opencode import OpenCodeAdapter
 
-        with pytest.warns(UserWarning, match="does not support YOLO mode"):
+        with pytest.warns(
+            UserWarning,
+            match=r"does not support YOLO mode; falling back to plan mode",
+        ):
             cmd = OpenCodeAdapter().build_launch_command(plan_mode=True, yolo=True)
         # OpenCode doesn't support yolo → should fall back to plan mode
         # OpenCode has no plan_mode_args, so plan_mode flag has no effect,
