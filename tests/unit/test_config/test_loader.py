@@ -142,8 +142,8 @@ class TestParseConfigFile:
         assert config.project_root == str(tmp_path)
 
 
-class TestParseCommandConfigModeEffort:
-    """Tests that mode and effort fields are parsed from per-command AI config."""
+class TestParseCommandConfig:
+    """Tests that per-command AI config fields are parsed correctly."""
 
     def test_mode_parsed_from_deps(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
