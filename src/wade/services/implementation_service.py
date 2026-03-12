@@ -1263,7 +1263,38 @@ def batch(
             console.info(f"After completing #{chain[0]}, work on these in order: {remaining}")
 
     console.panel(f"  Launched {launched} implementation session(s)", title="Batch started")
-    return launched > 0
+
+    if launched == 0:
+        return False
+
+    # Post-batch coherence review prompt
+    tracking_id = None
+    try:
+        provider = get_provider(config)
+        tracking_id = provider.find_parent_issue(issue_numbers[0], label=config.project.issue_label)
+    except Exception:
+        logger.debug("batch.find_parent_failed", exc_info=True)
+
+    if prompts.is_tty() and tracking_id:
+        choice = prompts.select(
+            "Coherence review (run after all sessions complete)",
+            ["Run now", "Run later", "Skip"],
+        )
+        if choice == 0:  # Run now
+            from wade.services.batch_review_service import review_batch
+
+            review_batch(
+                tracking_id,
+                ai_tool=resolved_tool,
+                model=resolved_model,
+                project_root=project_root,
+            )
+        elif choice == 1:  # Run later
+            console.hint(f"Run when ready: wade review batch {tracking_id}")
+    elif tracking_id:
+        console.hint(f"After all sessions complete: wade review batch {tracking_id}")
+
+    return True
 
 
 def _build_graph_from_issues(

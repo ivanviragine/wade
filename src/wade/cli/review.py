@@ -143,3 +143,42 @@ def review_pr_comments_cmd(
         yolo=yolo or None,
     )
     raise typer.Exit(0 if success else 1)
+
+
+@review_app.command("batch")
+def review_batch_cmd(
+    tracking_issue: int = typer.Argument(..., help="Tracking issue number."),
+    ai: str | None = typer.Option(
+        None, "--ai", help="AI tool to use.", autocompletion=complete_ai_tools
+    ),
+    model: str | None = typer.Option(
+        None, "--model", help="AI model to use.", autocompletion=complete_models
+    ),
+    mode: DelegationMode | None = typer.Option(  # noqa: B008
+        None,
+        "--mode",
+        help="Delegation mode: prompt, interactive, headless.",
+        autocompletion=complete_delegation_modes,
+    ),
+    effort: str | None = typer.Option(
+        None, "--effort", help="Effort level for AI.", autocompletion=complete_effort_levels
+    ),
+) -> None:
+    """Run coherence review on a batch of parallel implementation branches."""
+    from wade.services.batch_review_service import review_batch
+
+    result = review_batch(
+        str(tracking_issue),
+        ai_tool=ai,
+        model=model,
+        mode=mode.value if mode else None,
+        effort=effort,
+        ai_explicit=ai is not None,
+        model_explicit=model is not None,
+        effort_explicit=effort is not None,
+    )
+    if result.success and not result.skipped:
+        from wade.ui.console import console
+
+        console.info("BATCH REVIEW COMPLETE — check the draft PR for combined diff and findings.")
+    raise typer.Exit(0 if result.success else 1)
