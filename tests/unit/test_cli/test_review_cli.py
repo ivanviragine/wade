@@ -20,6 +20,8 @@ def _review_cli_config(
     review_plan_enabled: bool | None = True,
     review_implementation_mode: str = "prompt",
     review_implementation_enabled: bool | None = True,
+    review_batch_mode: str = "prompt",
+    review_batch_enabled: bool | None = True,
 ) -> ProjectConfig:
     """Build a CLI config fixture without depending on the repo's real .wade.yml."""
     return ProjectConfig(
@@ -32,6 +34,10 @@ def _review_cli_config(
             review_implementation=AICommandConfig(
                 mode=review_implementation_mode,
                 enabled=review_implementation_enabled,
+            ),
+            review_batch=AICommandConfig(
+                mode=review_batch_mode,
+                enabled=review_batch_enabled,
             ),
         )
     )
@@ -162,6 +168,61 @@ class TestReviewImplementationCli:
         result = runner.invoke(app, ["review", "implementation"])
         assert result.exit_code == 0
         assert "REVIEW COMPLETE" not in result.output
+
+
+class TestReviewBatchCli:
+    @patch("wade.services.batch_review_service.review_batch")
+    def test_review_batch_success(self, mock_review_batch: MagicMock) -> None:
+        mock_review_batch.return_value = DelegationResult(
+            success=True,
+            feedback="Batch looks coherent.",
+            mode=DelegationMode.HEADLESS,
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "review",
+                "batch",
+                "123",
+                "--ai",
+                "claude",
+                "--model",
+                "claude-haiku-4.5",
+                "--mode",
+                "headless",
+                "--effort",
+                "low",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert "BATCH REVIEW COMPLETE" in result.output
+        mock_review_batch.assert_called_once_with(
+            "123",
+            ai_tool="claude",
+            model="claude-haiku-4.5",
+            mode="headless",
+            effort="low",
+            ai_explicit=True,
+            model_explicit=True,
+            effort_explicit=True,
+        )
+
+    @patch("wade.services.batch_review_service.review_batch")
+    def test_review_batch_skipped_omits_completion_banner(
+        self, mock_review_batch: MagicMock
+    ) -> None:
+        mock_review_batch.return_value = DelegationResult(
+            success=True,
+            feedback="Review skipped — not enabled in .wade.yml (ai.review_batch.enabled).",
+            mode=DelegationMode.PROMPT,
+            skipped=True,
+        )
+
+        result = runner.invoke(app, ["review", "batch", "123"])
+        assert result.exit_code == 0
+        assert "BATCH REVIEW COMPLETE" not in result.output
 
 
 class TestReviewCliEffortFlag:

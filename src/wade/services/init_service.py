@@ -21,6 +21,7 @@ from wade.git import repo
 from wade.git.repo import GitError
 from wade.models.ai import AIToolID
 from wade.models.config import (
+    AI_COMMAND_NAMES,
     ComplexityModelMapping,
 )
 from wade.skills import installer, pointer
@@ -51,6 +52,7 @@ _GITIGNORE_LEGACY_ENTRIES: Final = [
 ]
 
 MANIFEST_FILENAME = ".wade-managed"
+_COMMAND_OVERRIDE_NAMES = tuple(cmd for cmd in AI_COMMAND_NAMES if cmd != "implement")
 
 
 def get_wade_root() -> Path:
@@ -314,7 +316,7 @@ def update(
 
     # Compute which tools are actually configured for this project
     tools_in_use: set[str] = set()
-    for cmd in [None, "plan", "deps", "implement", "review_plan", "review_implementation"]:
+    for cmd in [None, *AI_COMMAND_NAMES]:
         t = config.get_ai_tool(cmd)
         if t:
             tools_in_use.add(t)
@@ -1443,7 +1445,8 @@ def _prompt_command_overrides(
     Returns a dict like:
         {"plan": {"tool": "claude", "model": "..."}, "deps": {},
          "review_plan": {"enabled": "true", "mode": "prompt"},
-         "review_implementation": {"enabled": "false"}}
+         "review_implementation": {"enabled": "false"},
+         "review_batch": {"enabled": "true", "mode": "headless"}}
 
     Empty dicts for commands with no overrides.
     Review commands include an "enabled" key ("true"/"false" as strings).
@@ -1451,7 +1454,7 @@ def _prompt_command_overrides(
     from wade.ui import prompts
 
     if non_interactive:
-        return {"plan": {}, "deps": {}, "review_plan": {}, "review_implementation": {}}
+        return {cmd_name: {} for cmd_name in _COMMAND_OVERRIDE_NAMES}
 
     # Build selectable list: installed tools + "Skip (use default)"
     skip_label = "Skip (use default)"
@@ -1464,13 +1467,9 @@ def _prompt_command_overrides(
         ("deps", "AI tool", "Dependency analysis"),
         ("review_plan", "AI tool", "Plan review"),
         ("review_implementation", "AI tool", "Implementation review"),
+        ("review_batch", "AI tool", "Batch review"),
     ]
-    result: dict[str, dict[str, str]] = {
-        "plan": {},
-        "deps": {},
-        "review_plan": {},
-        "review_implementation": {},
-    }
+    result: dict[str, dict[str, str]] = {cmd_name: {} for cmd_name in _COMMAND_OVERRIDE_NAMES}
     tool_for_cmd: list[str | None] = [None] * len(cmd_triples)
     for cmd_idx, (cmd_name, prompt_label, section) in enumerate(cmd_triples):
         console.rule(section)
@@ -1617,9 +1616,9 @@ def _write_config(
     if implement_tool and implement_tool != ai_tool:
         ai_section["implement"] = {"tool": implement_tool}
 
-    # Write per-command overrides (plan, deps, review_plan, review_implementation)
+    # Write per-command overrides.
     if command_overrides:
-        for cmd_name in ("plan", "deps", "review_plan", "review_implementation"):
+        for cmd_name in _COMMAND_OVERRIDE_NAMES:
             overrides = command_overrides.get(cmd_name, {})
             if overrides:
                 cmd_section: dict[str, Any] = {}
@@ -1769,9 +1768,9 @@ def _patch_config(
         raw["ai"] = ai
         changed = True
 
-    # Patch command overrides (plan, deps, review_plan, review_implementation)
+    # Patch command overrides.
     if command_overrides is not None:
-        for cmd_name in ("plan", "deps", "review_plan", "review_implementation"):
+        for cmd_name in _COMMAND_OVERRIDE_NAMES:
             overrides = command_overrides.get(cmd_name, {})
             if force:
                 if overrides:

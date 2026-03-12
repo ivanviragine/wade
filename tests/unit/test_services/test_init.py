@@ -502,13 +502,19 @@ class TestPromptModelMapping:
 class TestPromptCommandOverrides:
     def test_non_interactive_returns_empty(self) -> None:
         result = _prompt_command_overrides(["claude"], non_interactive=True)
-        assert result == {"plan": {}, "deps": {}, "review_plan": {}, "review_implementation": {}}
+        assert result == {
+            "plan": {},
+            "deps": {},
+            "review_plan": {},
+            "review_implementation": {},
+            "review_batch": {},
+        }
 
     @patch("wade.ui.prompts.select")
     def test_interactive_no_overrides(self, mock_select: MagicMock) -> None:
-        # Select "Skip (use default)" for plan, deps; enable + skip for reviews
+        # Select "Skip (use default)" for plan, deps; enable + skip for reviews.
         # With installed_tools=["claude"], options are: ["claude", "Skip (use default)"]
-        # deps + review commands get a mode prompt (no tool → only "prompt" option → idx 0)
+        # deps + review commands get a mode prompt (no tool → only "prompt" option → idx 0).
         mock_select.side_effect = [
             1,  # plan: Skip tool
             1,
@@ -519,30 +525,37 @@ class TestPromptCommandOverrides:
             0,
             1,
             0,  # review_implementation: Enable=Yes, Skip tool, mode=prompt
+            0,
+            1,
+            0,  # review_batch: Enable=Yes, Skip tool, mode=prompt
         ]
         result = _prompt_command_overrides(["claude"], non_interactive=False)
         assert result["plan"] == {}
         assert result["deps"] == {"mode": "prompt"}
         assert result["review_plan"] == {"enabled": "true", "mode": "prompt"}
         assert result["review_implementation"] == {"enabled": "true", "mode": "prompt"}
+        assert result["review_batch"] == {"enabled": "true", "mode": "prompt"}
 
     @patch("wade.ui.prompts.select")
     def test_interactive_reviews_disabled(self, mock_select: MagicMock) -> None:
         # plan: Skip tool; deps: Skip tool, mode=prompt
         # review_plan: Enable=No (halts — no tool/mode prompts)
         # review_implementation: Enable=No (halts — no tool/mode prompts)
+        # review_batch: Enable=No (halts — no tool/mode prompts)
         mock_select.side_effect = [
             1,  # plan: Skip tool
             1,
             0,  # deps: Skip tool, mode=prompt
             1,  # review_plan: Enable=No
             1,  # review_implementation: Enable=No
+            1,  # review_batch: Enable=No
         ]
         result = _prompt_command_overrides(["claude"], non_interactive=False)
         assert result["plan"] == {}
         assert result["deps"] == {"mode": "prompt"}
         assert result["review_plan"] == {"enabled": "false"}
         assert result["review_implementation"] == {"enabled": "false"}
+        assert result["review_batch"] == {"enabled": "false"}
 
     @patch("wade.services.init_service._suggest_model_for_tool")
     @patch("wade.ui.prompts.select")
@@ -553,15 +566,16 @@ class TestPromptCommandOverrides:
         # installed_tools=["claude", "gemini"], tool_options=["claude", "gemini", "Skip"]
         # plan: idx 1 = gemini; model for plan: idx 1 = "gemini-2.5-pro" (2nd in gemini list);
         # deps: idx 2 = "Skip (use default)", mode: idx 0 = prompt (no tool → only option)
-        # review_plan: Enable=Yes, idx 2 = Skip, mode: idx 0 = prompt
-        # review_implementation: Enable=Yes, idx 2 = Skip, mode: idx 0 = prompt
-        mock_select.side_effect = [1, 1, 2, 0, 0, 2, 0, 0, 2, 0]
+        # review_plan/review_implementation/review_batch:
+        # Enable=Yes, idx 2 = Skip, mode: idx 0 = prompt
+        mock_select.side_effect = [1, 1, 2, 0, 0, 2, 0, 0, 2, 0, 0, 2, 0]
         result = _prompt_command_overrides(["claude", "gemini"], non_interactive=False)
         assert result["plan"]["tool"] == "gemini"
         assert result["plan"]["model"] == "gemini-2.5-pro"
         assert result["deps"] == {"mode": "prompt"}
         assert result["review_plan"] == {"enabled": "true", "mode": "prompt"}
         assert result["review_implementation"] == {"enabled": "true", "mode": "prompt"}
+        assert result["review_batch"] == {"enabled": "true", "mode": "prompt"}
 
 
 # ---------------------------------------------------------------------------
@@ -620,6 +634,7 @@ class TestWriteConfig:
         overrides = {
             "review_plan": {"enabled": "false"},
             "review_implementation": {"enabled": "true", "tool": "claude", "mode": "prompt"},
+            "review_batch": {"enabled": "true", "tool": "copilot", "mode": "headless"},
         }
         _write_config(
             config_path,
@@ -633,6 +648,9 @@ class TestWriteConfig:
         assert config["ai"]["review_implementation"]["enabled"] is True
         assert config["ai"]["review_implementation"]["tool"] == "claude"
         assert config["ai"]["review_implementation"]["mode"] == "prompt"
+        assert config["ai"]["review_batch"]["enabled"] is True
+        assert config["ai"]["review_batch"]["tool"] == "copilot"
+        assert config["ai"]["review_batch"]["mode"] == "headless"
 
     def test_with_model_mapping(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
@@ -879,6 +897,7 @@ class TestPatchConfig:
         overrides = {
             "review_plan": {"enabled": "false"},
             "review_implementation": {"enabled": "true", "tool": "claude", "mode": "prompt"},
+            "review_batch": {"enabled": "true", "tool": "copilot", "mode": "headless"},
         }
         _patch_config(
             config_path, "claude", ComplexityModelMapping(), command_overrides=overrides, force=True
@@ -887,6 +906,9 @@ class TestPatchConfig:
         assert config["ai"]["review_plan"]["enabled"] is False
         assert config["ai"]["review_implementation"]["enabled"] is True
         assert config["ai"]["review_implementation"]["tool"] == "claude"
+        assert config["ai"]["review_batch"]["enabled"] is True
+        assert config["ai"]["review_batch"]["tool"] == "copilot"
+        assert config["ai"]["review_batch"]["mode"] == "headless"
 
     def test_no_force_sets_enabled_when_section_missing(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
@@ -1139,6 +1161,29 @@ class TestUpdateExtended:
         with patch("wade.config.claude_allowlist.configure_allowlist") as mock_allow:
             update(project_root=tmp_git_repo, skip_self_upgrade=True)
             mock_allow.assert_called_once()
+
+    def test_update_configures_allowlist_for_review_batch_tool(self, tmp_git_repo: Path) -> None:
+        """review_batch-only config should still count as Claude usage for allowlists."""
+        init(project_root=tmp_git_repo, non_interactive=True)
+        (tmp_git_repo / ".wade.yml").write_text(
+            "version: 2\n"
+            "ai:\n"
+            "  review_batch:\n"
+            "    tool: claude\n"
+            "    mode: headless\n"
+            "permissions:\n"
+            "  allowed_commands:\n"
+            "    - wade *\n"
+            "    - ./scripts/check.sh *\n",
+            encoding="utf-8",
+        )
+
+        with patch("wade.config.claude_allowlist.configure_allowlist") as mock_allow:
+            update(project_root=tmp_git_repo, skip_self_upgrade=True)
+            mock_allow.assert_called_once_with(
+                tmp_git_repo,
+                extra_patterns=["wade *", "./scripts/check.sh *"],
+            )
 
     def test_skip_self_upgrade_flag(self, tmp_git_repo: Path) -> None:
         """skip_self_upgrade=True should not call _maybe_self_upgrade."""
