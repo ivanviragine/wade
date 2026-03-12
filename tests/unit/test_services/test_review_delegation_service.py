@@ -44,7 +44,7 @@ class TestReviewPlan:
 
         # Config
         mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="prompt"))
+            ai=AIConfig(review_plan=AICommandConfig(mode="prompt", enabled=True))
         )
 
         # Delegation returns success
@@ -76,7 +76,7 @@ class TestReviewPlan:
         plan_file.write_text("# Plan")
         mock_template.return_value = "{plan_content}"
         mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="prompt"))
+            ai=AIConfig(review_plan=AICommandConfig(mode="prompt", enabled=True))
         )
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="ok", mode=DelegationMode.HEADLESS
@@ -99,13 +99,53 @@ class TestReviewPlan:
         plan_file.write_text("# Plan")
         mock_template.return_value = "{plan_content}"
         mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="prompt"))
+            ai=AIConfig(review_plan=AICommandConfig(mode="prompt", enabled=True))
         )
 
         result = review_plan(str(plan_file), mode="bad_value")
         assert result.success is False
         assert "Invalid delegation mode" in result.feedback
         assert result.exit_code == 1
+
+    @patch("wade.services.review_delegation_service.load_config")
+    def test_enabled_false_skips_review(
+        self,
+        mock_config: MagicMock,
+    ) -> None:
+        """Disabled review skips before preflight — even if plan file is missing."""
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(review_plan=AICommandConfig(mode="prompt", enabled=False))
+        )
+
+        result = review_plan("/nonexistent/PLAN.md")
+        assert result.success is True
+        assert result.skipped is True
+        assert "skipped" in result.feedback.lower()
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    def test_enabled_none_does_not_skip(
+        self,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Legacy configs without 'enabled' key should NOT skip reviews."""
+        plan_file = tmp_path / "PLAN.md"
+        plan_file.write_text("# Plan")
+        mock_template.return_value = "{plan_content}"
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(review_plan=AICommandConfig(mode="prompt", enabled=None))
+        )
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.PROMPT
+        )
+
+        result = review_plan(str(plan_file))
+        assert result.success is True
+        mock_delegate.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +187,7 @@ class TestReviewCode:
         )
         mock_template.return_value = "Review:\n{diff_content}"
         mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_implementation=AICommandConfig(mode="prompt"))
+            ai=AIConfig(review_implementation=AICommandConfig(mode="prompt", enabled=True))
         )
         mock_delegate.return_value = DelegationResult(
             success=True,
@@ -170,6 +210,21 @@ class TestReviewCode:
         assert "--staged" in cmd
 
     @patch("wade.services.review_delegation_service.load_config")
+    def test_enabled_false_skips_before_git_diff(
+        self,
+        mock_config: MagicMock,
+    ) -> None:
+        """Disabled review skips before git diff — no subprocess needed."""
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(review_implementation=AICommandConfig(mode="prompt", enabled=False))
+        )
+
+        result = review_implementation()
+        assert result.success is True
+        assert result.skipped is True
+        assert "skipped" in result.feedback.lower()
+
+    @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.load_prompt_template")
     @patch("wade.services.review_delegation_service.run")
     def test_invalid_mode_returns_error(
@@ -181,7 +236,7 @@ class TestReviewCode:
         mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
         mock_template.return_value = "{diff_content}"
         mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_implementation=AICommandConfig(mode="prompt"))
+            ai=AIConfig(review_implementation=AICommandConfig(mode="prompt", enabled=True))
         )
 
         result = review_implementation(mode="bad_value")
@@ -213,7 +268,7 @@ class TestRunReviewDelegationEffort:
     ) -> None:
         """Effort from resolve_effort should be passed through to delegation request."""
         mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="headless"))
+            ai=AIConfig(review_plan=AICommandConfig(mode="headless", enabled=True))
         )
         mock_tool.return_value = "claude"
         mock_model.return_value = None
@@ -245,7 +300,7 @@ class TestRunReviewDelegationEffort:
     ) -> None:
         """In prompt mode, confirm_ai_selection should be skipped."""
         mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="prompt"))
+            ai=AIConfig(review_plan=AICommandConfig(mode="prompt", enabled=True))
         )
         mock_tool.return_value = "claude"
         mock_model.return_value = None
@@ -275,7 +330,7 @@ class TestRunReviewDelegationEffort:
     ) -> None:
         """When resolve_effort returns None, effort in request should be None."""
         mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="headless"))
+            ai=AIConfig(review_plan=AICommandConfig(mode="headless", enabled=True))
         )
         mock_tool.return_value = "claude"
         mock_model.return_value = None

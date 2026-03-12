@@ -75,6 +75,7 @@ class AICommandConfig(BaseModel):
     effort: str | None = None
     mode: str | None = None
     yolo: bool | None = None
+    enabled: bool | None = None
 
 
 class AIConfig(BaseModel):

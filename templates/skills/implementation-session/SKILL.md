@@ -17,6 +17,12 @@ Run `wade` and `gh` commands with the required permissions/capabilities (not
 in sandboxed mode). Do not "try sandbox first" — run them unsandboxed from the
 start.
 
+## Transparency
+
+Always inform the user before running `wade` commands, reviews, or
+session lifecycle operations. Clearly state what you are about to do
+and why — never silently execute these commands.
+
 ## Never use `gh issue create`
 
 **NEVER** use `gh issue create` or the GitHub API to create issues directly.
@@ -91,7 +97,9 @@ the PR body. If the file is missing, the PR will have no description.
 
 ## Syncing with main
 
-Before finalizing, sync your branch with main.
+> **Reference section** — this describes how syncing works and how to handle
+> conflicts. The actual sync is performed as part of the closing workflow below
+> (Step 3). Do not run sync separately.
 
 ### Step 1: Commit uncommitted work
 
@@ -99,11 +107,7 @@ Before finalizing, sync your branch with main.
 git status --porcelain
 ```
 
-If there is output, stage and commit:
-```bash
-git add -A
-git commit -m "<type>: <summary>"
-```
+If there is output, stage and commit your changes before syncing.
 
 ### Step 2: Run the sync command
 
@@ -113,35 +117,20 @@ wade implementation-session sync --json
 
 ### Step 3: Handle the result
 
-**Exit code 0 — Success**: Branch is up to date with main. Proceed to
-`wade implementation-session done`.
+**Exit code 0 — Success**: Branch is up to date with main. Proceed to closing.
 
 **Exit code 2 — Conflict**: The merge is paused due to conflicts:
-1. Read each conflicted file to see the conflict markers
-2. Explain what changed on main vs the feature branch
-3. Suggest a resolution and ask for confirmation
-4. Apply fixes: `git add -A && git commit --no-edit`
-5. Re-run `wade implementation-session sync --json` to verify clean
+1. Run `git diff --name-only --diff-filter=U` to list conflicted files
+2. Read each conflicted file — understand both sides of the conflict
+3. Resolve the conflict markers in each file
+4. Stage only the resolved files: `git add <file1> <file2> ...`
+5. Complete the merge: `git commit --no-edit`
+6. Re-run `wade implementation-session sync --json` to verify clean
 
 **Exit code 4 — Pre-flight failure**: Report the issue (dirty worktree, not
 in repo, already on main) and suggest how to fix it.
 
 **Never re-implement git operations yourself.** Always use `wade implementation-session sync`.
-
-## Self-review before closing
-
-Before closing the session, run the code review command to catch issues early:
-
-```bash
-wade review implementation
-```
-
-If the review surfaces actionable feedback, address it and commit before
-proceeding. For staged-only review:
-
-```bash
-wade review implementation --staged
-```
 
 ## Closing the session
 
@@ -150,18 +139,25 @@ directly.
 
 To finalize your work, follow these steps in order:
 
-**Step 1 — Write PR summary:**
+**Step 1 — Self-review:**
+
+Run `wade review implementation` to catch issues early. The command checks your
+project config and skips if reviews are not enabled. If the review surfaces
+actionable feedback, address it and commit before proceeding.
+For staged-only review: `wade review implementation --staged`.
+
+**Step 2 — Write PR summary:**
 
 Write `PR-SUMMARY.md` in the worktree root with a real description of your
 changes (see the format above). If the file already exists, update it.
 
-**Step 2 — Sync with main:**
+**Step 3 — Sync with main:**
 
 ```bash
 wade implementation-session sync --json
 ```
 
-**Step 3 — Done:**
+**Step 4 — Done:**
 
 ```bash
 wade implementation-session done
@@ -174,6 +170,12 @@ it is cleaned up automatically by `implement` after the human merges the PR.
 This is a **mandatory** final step. If `wade implementation-session done` fails, debug and
 fix the error — do NOT bypass it.
 
+**Step 5 — Review with the user:**
+
+Present the PR link and a brief recap of what was implemented. Ask if they'd
+like any further changes — apply them and repeat Steps 1–5 if so, or confirm
+the session is complete if not.
+
 ### Working on a child issue (sub-issue of a tracking/epic)
 
 If your issue appears in a parent "Tracking:" issue checklist:
@@ -185,6 +187,14 @@ If your issue appears in a parent "Tracking:" issue checklist:
   change `- [ ] #<your-issue>` to `- [x] #<your-issue>` using
   `gh issue edit <parent-number> --body "<updated-body>"`.
 - If all children are complete, close the parent: `wade task close <parent-number>`.
+
+### Working on the parent/epic tracking issue directly
+
+If you are working on the tracking issue itself (not a specific child):
+- The PR body should reference all child issues and their status.
+- Use `Closes #<tracking-issue>` in the PR body.
+- List child issue statuses using GitHub's tasklist syntax so GitHub renders
+  progress automatically.
 
 ## After creating a new plan
 
