@@ -38,3 +38,4 @@ class DelegationResult(BaseModel):
     feedback: str
     mode: DelegationMode
     exit_code: int = 0
+    skipped: bool = False

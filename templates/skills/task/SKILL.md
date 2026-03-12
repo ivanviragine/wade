@@ -165,53 +165,11 @@ then run it on their behalf. Simply inform them and end the session.
 additional actions. The human will start the work session when ready.
 
 
-## Working on a sub-issue (child of a tracking/epic)
+## Working on sub-issues
 
-When you are working on an issue that is part of a multi-issue plan (i.e., it
-appears in a "Tracking:" parent issue checklist), follow these steps:
-
-### PR association (automatic)
-
-`wade implementation-session done` scans open "Tracking:" issues for a checklist entry
-containing your issue number and automatically adds `Part of #<parent>` to
-the PR body alongside `Closes #<child>`. You do not need to add this manually.
-
-Example PR body generated:
-```
-Closes #42
-Part of #10
-
-<content of PR-SUMMARY.md>
-```
-
-### After your PR merges
-
-Update the parent tracking issue's checklist to reflect completion:
-
-1. Fetch the parent issue body:
-   ```bash
-   gh issue view <parent-number> --json body --jq '.body'
-   ```
-2. Change `- [ ] #<your-issue>` to `- [x] #<your-issue>` in the body.
-3. Update the issue:
-   ```bash
-   gh issue edit <parent-number> --body "<updated-body>"
-   ```
-
-### When all children are complete
-
-Close the parent tracking issue:
-```bash
-wade task close <parent-number>
-```
-
-### Working on the parent/epic tracking issue directly
-
-If you are working on the tracking issue itself (not a specific child):
-- The PR body should reference all child issues and their status.
-- Use `Closes #<tracking-issue>` in the PR body.
-- List child issue statuses using GitHub's tasklist syntax so GitHub renders
-  progress automatically.
+For implementation details when working on child issues of a tracking/epic
+(PR association, post-merge checklist updates, closing parent issues),
+see @.claude/skills/implementation-session/SKILL.md.
 
 ## Rules
 

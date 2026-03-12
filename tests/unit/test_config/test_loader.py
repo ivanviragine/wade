@@ -142,8 +142,8 @@ class TestParseConfigFile:
         assert config.project_root == str(tmp_path)
 
 
-class TestParseCommandConfigModeEffort:
-    """Tests that mode and effort fields are parsed from per-command AI config."""
+class TestParseCommandConfig:
+    """Tests that per-command AI config fields are parsed correctly."""
 
     def test_mode_parsed_from_deps(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
@@ -189,6 +189,28 @@ class TestParseCommandConfigModeEffort:
         config_path.write_text("version: 2\nai:\n  effort: medium\n")
         config = parse_config_file(config_path)
         assert config.ai.effort == "medium"
+
+    def test_enabled_false_parsed(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nai:\n  review_plan:\n    tool: claude\n    enabled: false\n"
+        )
+        config = parse_config_file(config_path)
+        assert config.ai.review_plan.enabled is False
+
+    def test_enabled_true_parsed(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nai:\n  review_plan:\n    tool: claude\n    enabled: true\n"
+        )
+        config = parse_config_file(config_path)
+        assert config.ai.review_plan.enabled is True
+
+    def test_enabled_missing_defaults_to_none(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  review_plan:\n    tool: claude\n")
+        config = parse_config_file(config_path)
+        assert config.ai.review_plan.enabled is None
 
 
 class TestProviderSettings:
