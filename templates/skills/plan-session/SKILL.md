@@ -44,10 +44,6 @@ dependency analysis hooks.
    each plan file you created. If the command reports that reviews are disabled
    in project config, proceed directly to validation; otherwise address any
    actionable feedback before proceeding.
-   Note: if your project is configured to use `interactive` or `headless`
-   delegation mode, the review command will launch a separate AI session and
-   block until it completes. This may take several minutes — wait for it to
-   finish before proceeding.
 6. **Validate** — run `wade plan-session done <plan_dir>` (the temp dir from your prompt).
    If it exits with errors, fix each reported issue and re-run until it passes.
    Warnings are informational and do not block proceeding.
