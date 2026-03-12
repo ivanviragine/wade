@@ -79,6 +79,8 @@ tests/
 RUN_LIVE_GH_TESTS=1 WADE_LIVE_REPO=/path/to/repo ./scripts/test-live-gh.sh
 
 # Manual live AI lane (canonical: claude + haiku)
+# This validates API-key-backed Claude headless execution, not Claude Code's
+# interactive `/login` session auth path.
 RUN_LIVE_AI_TESTS=1 ANTHROPIC_API_KEY=... ./scripts/test-live-ai.sh
 ```
 
@@ -100,6 +102,8 @@ credentials, or binaries are missing.
 - `WADE_LIVE_AI_MODEL=claude-haiku-4.5` (default)
 - `WADE_LIVE_AI_TIMEOUT=45` (optional timeout in seconds for live AI smoke)
 - `ANTHROPIC_API_KEY` is required for the canonical live AI smoke test.
+- This lane validates API-key-backed Claude execution and does not verify
+  Claude Code's interactive `/login` session auth path.
 
 Live tests are manual by design. Default CI lanes must not require provider secrets.
 
@@ -170,6 +174,7 @@ def test_issue_creation(tmp_wade_project: Path, mock_gh: Path) -> None:
 - Prefer exact assertions over loose substring checks: verify outputs, side effects, and absence of wrong output.
 - For `--json` modes, parse stdout as JSON and fail if any non-JSON line appears.
 - Pure functions (parsing, formatting, model validation) can and should be tested without mocks.
+- In behavior/contract tests, do not compute expected values with the same production helper the code under test uses. Hard-code the contract value or derive it independently so the test can catch helper regressions.
 
 ## Recent Cleanup
 

@@ -6,12 +6,30 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from wade.models.batch import BatchIssueContext, BatchReviewContext
-from wade.models.config import ProjectConfig
+from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationResult
 from wade.services.batch_review_service import (
     _format_batch_context,
     extract_child_issues,
 )
+
+
+def _batch_review_config(
+    *,
+    review_batch_mode: str = "prompt",
+    review_batch_enabled: bool | None = True,
+) -> ProjectConfig:
+    """Build a review-batch config without depending on repo-local .wade.yml."""
+    return ProjectConfig(
+        ai=AIConfig(
+            default_tool="claude",
+            review_batch=AICommandConfig(
+                mode=review_batch_mode,
+                enabled=review_batch_enabled,
+            ),
+        )
+    )
+
 
 # ---------------------------------------------------------------------------
 # extract_child_issues
@@ -368,19 +386,12 @@ class TestFormatBatchContext:
 
 
 class TestRunCoherenceReview:
-    @patch("wade.services.batch_review_service._check_review_enabled")
-    def test_skipped_when_disabled(
-        self,
-        mock_check: MagicMock,
-    ) -> None:
+    @patch("wade.services.batch_review_service._load_review_config")
+    def test_skipped_when_disabled(self, mock_load_review_config: MagicMock) -> None:
         from wade.services.batch_review_service import run_coherence_review
 
-        mock_check.return_value = DelegationResult(
-            success=True,
-            feedback="Review skipped.",
-            mode=DelegationMode.PROMPT,
-            skipped=True,
-        )
+        config = _batch_review_config(review_batch_enabled=False)
+        mock_load_review_config.return_value = (config, config.ai.review_batch)
 
         ctx = BatchReviewContext(tracking_issue="99")
         result = run_coherence_review(ctx)
@@ -391,19 +402,20 @@ class TestRunCoherenceReview:
     @patch("wade.services.batch_review_service.git_pr")
     @patch("wade.services.batch_review_service.git_repo")
     @patch("wade.services.batch_review_service._run_review_delegation")
-    @patch("wade.services.batch_review_service._check_review_enabled")
+    @patch("wade.services.batch_review_service._load_review_config")
     @patch("wade.services.batch_review_service.load_prompt_template")
     def test_posts_to_pr(
         self,
         mock_template: MagicMock,
-        mock_check: MagicMock,
+        mock_load_review_config: MagicMock,
         mock_delegation: MagicMock,
         mock_repo: MagicMock,
         mock_pr: MagicMock,
     ) -> None:
         from wade.services.batch_review_service import run_coherence_review
 
-        mock_check.return_value = None
+        config = _batch_review_config(review_batch_enabled=True)
+        mock_load_review_config.return_value = (config, config.ai.review_batch)
         mock_template.return_value = "Review:\n{batch_context}"
         mock_delegation.return_value = DelegationResult(
             success=True,

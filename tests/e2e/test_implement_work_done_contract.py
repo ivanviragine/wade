@@ -33,8 +33,6 @@ class TestImplementTaskCommand:
         mock_gh_cli: MockGhCli,
     ) -> None:
         """implement --cd should create worktree, PLAN.md, and bootstrap draft PR."""
-        from wade.git.branch import make_branch_name
-
         issue_number = 42
         issue_title = "Add deterministic contract coverage"
         _seed_mock_issue(
@@ -45,7 +43,7 @@ class TestImplementTaskCommand:
         )
         origin_repo = _init_origin_remote(e2e_repo)
 
-        branch_name = make_branch_name("feat", issue_number, issue_title)
+        branch_name = "feat/42-add-deterministic-contract-coverage"
         expected_worktree = (
             e2e_repo.parent / ".worktrees" / e2e_repo.name / branch_name.replace("/", "-")
         )
@@ -99,8 +97,6 @@ class TestImplementTaskCommand:
         mock_gh_cli: MockGhCli,
     ) -> None:
         """implement --cd should execute configured post-worktree hook."""
-        from wade.git.branch import make_branch_name
-
         issue_number = 44
         issue_title = "Run setup hook from implement"
         _seed_mock_issue(
@@ -133,7 +129,7 @@ class TestImplementTaskCommand:
         _git(["commit", "-m", "test: add setup-worktree hook"], cwd=e2e_repo)
 
         _init_origin_remote(e2e_repo)
-        branch_name = make_branch_name("feat", issue_number, issue_title)
+        branch_name = "feat/44-run-setup-hook-from-implement"
         expected_worktree = (
             e2e_repo.parent / ".worktrees" / e2e_repo.name / branch_name.replace("/", "-")
         )
@@ -155,8 +151,6 @@ class TestWorkDoneCommand:
         mock_gh_cli: MockGhCli,
     ) -> None:
         """implementation-session done should push branch and update draft PR path."""
-        from wade.git.branch import make_branch_name
-
         issue_number = 43
         issue_title = "Finalize work done command contract"
         _seed_mock_issue(
@@ -167,7 +161,7 @@ class TestWorkDoneCommand:
         )
         origin_repo = _init_origin_remote(e2e_repo)
 
-        branch_name = make_branch_name("feat", issue_number, issue_title)
+        branch_name = "feat/43-finalize-work-done-command-contract"
 
         start_result = _run(["implement", str(issue_number), "--cd"], cwd=e2e_repo)
         assert start_result.returncode == 0

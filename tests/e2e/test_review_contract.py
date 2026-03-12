@@ -107,6 +107,7 @@ def _bootstrap_review_target(
     mock_gh_cli: MockGhCli,
     issue_number: int,
     issue_title: str,
+    branch_name: str,
 ) -> tuple[Path, str]:
     """Create issue + draft PR + worktree and return (worktree_path, pr_number)."""
     _seed_mock_issue(
@@ -122,9 +123,6 @@ def _bootstrap_review_target(
     worktree_path = Path(start_result.stdout.strip())
     assert worktree_path.is_dir()
 
-    from wade.git.branch import make_branch_name
-
-    branch_name = make_branch_name("feat", issue_number, issue_title)
     pr_number = _find_mock_pr_number_by_head(mock_gh_cli["state_file"], branch_name)
     return worktree_path, pr_number
 
@@ -339,11 +337,13 @@ class TestReviewPrCommentsCommand:
         """review pr-comments should avoid nested AI launch when CODEX_CLI is detected."""
         issue_number = 51
         issue_title = "Address actionable review comments"
+        branch_name = "feat/51-address-actionable-review-comments"
         worktree_path, pr_number = _bootstrap_review_target(
             e2e_repo=e2e_repo,
             mock_gh_cli=mock_gh_cli,
             issue_number=issue_number,
             issue_title=issue_title,
+            branch_name=branch_name,
         )
 
         _seed_mock_review_threads(
@@ -403,11 +403,13 @@ class TestReviewPrCommentsCommand:
         """review pr-comments should return success when all threads are already resolved."""
         issue_number = 52
         issue_title = "Address review comments workflow"
+        branch_name = "feat/52-address-review-comments-workflow"
         _worktree_path, pr_number = _bootstrap_review_target(
             e2e_repo=e2e_repo,
             mock_gh_cli=mock_gh_cli,
             issue_number=issue_number,
             issue_title=issue_title,
+            branch_name=branch_name,
         )
 
         _seed_mock_review_threads(
@@ -451,11 +453,13 @@ class TestReviewPrCommentsSessionCommands:
         """fetch should print actionable comments grouped by file with thread IDs."""
         issue_number = 53
         issue_title = "Fetch review comment context"
+        branch_name = "feat/53-fetch-review-comment-context"
         _worktree_path, pr_number = _bootstrap_review_target(
             e2e_repo=e2e_repo,
             mock_gh_cli=mock_gh_cli,
             issue_number=issue_number,
             issue_title=issue_title,
+            branch_name=branch_name,
         )
 
         thread_id = "PRRT_fetch_1"
@@ -509,11 +513,13 @@ class TestReviewPrCommentsSessionCommands:
         """resolve should call GraphQL mutation and persist resolved state in mock gh."""
         issue_number = 54
         issue_title = "Resolve review thread from session"
+        branch_name = "feat/54-resolve-review-thread-from-session"
         _worktree_path, pr_number = _bootstrap_review_target(
             e2e_repo=e2e_repo,
             mock_gh_cli=mock_gh_cli,
             issue_number=issue_number,
             issue_title=issue_title,
+            branch_name=branch_name,
         )
 
         thread_id = "PRRT_resolve_1"
@@ -565,17 +571,16 @@ class TestReviewPrCommentsSessionCommands:
         mock_gh_cli: MockGhCli,
     ) -> None:
         """review-pr-comments-session done should push and update the draft PR path."""
-        from wade.git.branch import make_branch_name
-
         issue_number = 55
         issue_title = "Finalize review comments session"
+        branch_name = "feat/55-finalize-review-comments-session"
         worktree_path, pr_number = _bootstrap_review_target(
             e2e_repo=e2e_repo,
             mock_gh_cli=mock_gh_cli,
             issue_number=issue_number,
             issue_title=issue_title,
+            branch_name=branch_name,
         )
-        branch_name = make_branch_name("feat", issue_number, issue_title)
 
         (worktree_path / "PR-SUMMARY.md").write_text(
             "Addressed review feedback and validated behavior.\n",

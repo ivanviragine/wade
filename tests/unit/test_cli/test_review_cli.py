@@ -8,9 +8,33 @@ from unittest.mock import MagicMock, patch
 from typer.testing import CliRunner
 
 from wade.cli.main import app
+from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationResult
 
 runner = CliRunner()
+
+
+def _review_cli_config(
+    *,
+    review_plan_mode: str = "prompt",
+    review_plan_enabled: bool | None = True,
+    review_implementation_mode: str = "prompt",
+    review_implementation_enabled: bool | None = True,
+) -> ProjectConfig:
+    """Build a CLI config fixture without depending on the repo's real .wade.yml."""
+    return ProjectConfig(
+        ai=AIConfig(
+            default_tool="claude",
+            review_plan=AICommandConfig(
+                mode=review_plan_mode,
+                enabled=review_plan_enabled,
+            ),
+            review_implementation=AICommandConfig(
+                mode=review_implementation_mode,
+                enabled=review_implementation_enabled,
+            ),
+        )
+    )
 
 
 class TestReviewPlanCli:
@@ -28,11 +52,7 @@ class TestReviewPlanCli:
         plan_file.write_text("# Test Plan\n\nContent.")
         mock_template.return_value = "{plan_content}"
 
-        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
-
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(default_tool="claude", review_plan=AICommandConfig(mode="prompt"))
-        )
+        mock_config.return_value = _review_cli_config(review_plan_enabled=True)
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="LGTM", mode=DelegationMode.PROMPT
         )
@@ -45,15 +65,42 @@ class TestReviewPlanCli:
         assert "# Test Plan" in request.prompt
         assert request.mode == DelegationMode.PROMPT
 
-    def test_review_plan_missing_file(self) -> None:
+    @patch("wade.services.review_delegation_service.load_config")
+    def test_review_plan_missing_file(self, mock_config: MagicMock) -> None:
+        mock_config.return_value = _review_cli_config(review_plan_enabled=True)
         result = runner.invoke(app, ["review", "plan", "/nonexistent/PLAN.md"])
         assert result.exit_code == 1
         assert "Plan file not found" in result.output
 
+    @patch("wade.services.review_delegation_service.review_plan")
+    def test_review_plan_skipped_omits_completion_banner(
+        self,
+        mock_review_plan: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        plan_file = tmp_path / "PLAN.md"
+        plan_file.write_text("# Plan\n", encoding="utf-8")
+        mock_review_plan.return_value = DelegationResult(
+            success=True,
+            feedback="Review skipped — not enabled in .wade.yml (ai.review_plan.enabled).",
+            mode=DelegationMode.PROMPT,
+            skipped=True,
+        )
+
+        result = runner.invoke(app, ["review", "plan", str(plan_file)])
+        assert result.exit_code == 0
+        assert "REVIEW COMPLETE" not in result.output
+
 
 class TestReviewImplementationCli:
+    @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.run")
-    def test_review_implementation_no_diff(self, mock_run: MagicMock) -> None:
+    def test_review_implementation_no_diff(
+        self,
+        mock_run: MagicMock,
+        mock_config: MagicMock,
+    ) -> None:
+        mock_config.return_value = _review_cli_config(review_implementation_enabled=True)
         mock_run.return_value = MagicMock(returncode=0, stdout="")
         result = runner.invoke(app, ["review", "implementation"])
         assert result.exit_code == 0
@@ -73,14 +120,7 @@ class TestReviewImplementationCli:
         mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
         mock_template.return_value = "{diff_content}"
 
-        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
-
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(
-                default_tool="claude",
-                review_implementation=AICommandConfig(mode="prompt"),
-            )
-        )
+        mock_config.return_value = _review_cli_config(review_implementation_enabled=True)
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="Clean code!", mode=DelegationMode.PROMPT
         )
@@ -92,12 +132,36 @@ class TestReviewImplementationCli:
         assert "diff --git a/f.py" in request.prompt
         assert request.mode == DelegationMode.PROMPT
 
+    @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.run")
-    def test_review_implementation_staged_flag(self, mock_run: MagicMock) -> None:
+    def test_review_implementation_staged_flag(
+        self,
+        mock_run: MagicMock,
+        mock_config: MagicMock,
+    ) -> None:
+        mock_config.return_value = _review_cli_config(review_implementation_enabled=True)
         mock_run.return_value = MagicMock(returncode=0, stdout="")
         runner.invoke(app, ["review", "implementation", "--staged"])
         cmd = mock_run.call_args[0][0]
         assert "--staged" in cmd
+
+    @patch("wade.services.review_delegation_service.review_implementation")
+    def test_review_implementation_skipped_omits_completion_banner(
+        self,
+        mock_review_implementation: MagicMock,
+    ) -> None:
+        mock_review_implementation.return_value = DelegationResult(
+            success=True,
+            feedback=(
+                "Review skipped — not enabled in .wade.yml (ai.review_implementation.enabled)."
+            ),
+            mode=DelegationMode.PROMPT,
+            skipped=True,
+        )
+
+        result = runner.invoke(app, ["review", "implementation"])
+        assert result.exit_code == 0
+        assert "REVIEW COMPLETE" not in result.output
 
 
 class TestReviewCliEffortFlag:
@@ -115,11 +179,7 @@ class TestReviewCliEffortFlag:
         plan_file.write_text("# Plan")
         mock_template.return_value = "{plan_content}"
 
-        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
-
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(default_tool="claude", review_plan=AICommandConfig(mode="prompt"))
-        )
+        mock_config.return_value = _review_cli_config(review_plan_enabled=True)
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="ok", mode=DelegationMode.PROMPT
         )
@@ -144,14 +204,7 @@ class TestReviewCliEffortFlag:
         mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
         mock_template.return_value = "{diff_content}"
 
-        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
-
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(
-                default_tool="claude",
-                review_implementation=AICommandConfig(mode="prompt"),
-            )
-        )
+        mock_config.return_value = _review_cli_config(review_implementation_enabled=True)
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="ok", mode=DelegationMode.PROMPT
         )

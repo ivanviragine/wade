@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Run manual live AI smoke tests (canonical: claude + haiku).
+# This lane validates API-key-backed Claude headless execution.
+# It does not validate Claude Code's interactive `/login` session auth path.
 set -euo pipefail
 
 if [[ "${RUN_LIVE_AI_TESTS:-}" != "1" ]]; then
@@ -16,7 +18,7 @@ if [[ "${WADE_LIVE_AI_TOOL}" != "claude" ]]; then
   exit 1
 fi
 if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
-  echo "ANTHROPIC_API_KEY is required for live AI smoke tests."
+  echo "ANTHROPIC_API_KEY is required for this API-key-backed live AI smoke test."
   exit 1
 fi
 if ! command -v claude >/dev/null 2>&1; then

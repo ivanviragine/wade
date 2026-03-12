@@ -3,6 +3,8 @@
 Wave 1 policy:
   - Canonical tool: claude
   - Canonical model: claude-haiku-4.5
+  - Validates API-key-backed Claude headless execution
+  - Does not validate Claude Code's interactive `/login` session auth path
 
 Required env:
   - RUN_LIVE_AI_TESTS=1

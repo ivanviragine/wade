@@ -32,8 +32,6 @@ class TestSmartStartCommand:
         mock_gh_cli: MockGhCli,
     ) -> None:
         """smart-start --cd should route to implement flow when no PR exists."""
-        from wade.git.branch import make_branch_name
-
         issue_number = 61
         issue_title = "Smart start should route to implement"
         _seed_mock_issue(
@@ -44,7 +42,7 @@ class TestSmartStartCommand:
         )
         _init_origin_remote(e2e_repo)
 
-        branch_name = make_branch_name("feat", issue_number, issue_title)
+        branch_name = "feat/61-smart-start-should-route-to-implement"
         expected_worktree = (
             e2e_repo.parent / ".worktrees" / e2e_repo.name / branch_name.replace("/", "-")
         )
@@ -66,8 +64,6 @@ class TestSmartStartCommand:
         mock_gh_cli: MockGhCli,
     ) -> None:
         """`wade <issue> --cd` should rewrite through smart-start and create worktree."""
-        from wade.git.branch import make_branch_name
-
         issue_number = 62
         issue_title = "Numeric entrypoint should route to smart start"
         _seed_mock_issue(
@@ -78,7 +74,7 @@ class TestSmartStartCommand:
         )
         _init_origin_remote(e2e_repo)
 
-        branch_name = make_branch_name("feat", issue_number, issue_title)
+        branch_name = "feat/62-numeric-entrypoint-should-route-to-smart-start"
         expected_worktree = (
             e2e_repo.parent / ".worktrees" / e2e_repo.name / branch_name.replace("/", "-")
         )
@@ -118,8 +114,6 @@ class TestSmartStartCommand:
         mock_gh_cli: MockGhCli,
     ) -> None:
         """smart-start should not run implement flow when the issue PR is already merged."""
-        from wade.git.branch import make_branch_name
-
         issue_number = 63
         issue_title = "Merged PR should short-circuit smart start"
         _seed_mock_issue(
@@ -129,7 +123,7 @@ class TestSmartStartCommand:
             body="## Tasks\n- Verify merged PR path\n",
         )
 
-        branch_name = make_branch_name("feat", issue_number, issue_title)
+        branch_name = "feat/63-merged-pr-should-short-circuit-smart-start"
         expected_worktree = (
             e2e_repo.parent / ".worktrees" / e2e_repo.name / branch_name.replace("/", "-")
         )
@@ -162,8 +156,6 @@ class TestSmartStartCommand:
         """smart-start --cd with an existing draft PR should not create another PR."""
         import json
 
-        from wade.git.branch import make_branch_name
-
         issue_number = 64
         issue_title = "Existing draft PR should be reused"
         _seed_mock_issue(
@@ -174,7 +166,7 @@ class TestSmartStartCommand:
         )
         _init_origin_remote(e2e_repo)
 
-        branch_name = make_branch_name("feat", issue_number, issue_title)
+        branch_name = "feat/64-existing-draft-pr-should-be-reused"
         expected_worktree = (
             e2e_repo.parent / ".worktrees" / e2e_repo.name / branch_name.replace("/", "-")
         )

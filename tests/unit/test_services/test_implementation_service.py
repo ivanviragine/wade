@@ -545,10 +545,8 @@ class TestImplementationStart:
 
     def test_reuses_existing_worktree(self, tmp_path: Path) -> None:
         """Idempotency: list_worktrees returns matching branch → create_worktree NOT called."""
-        from wade.git.branch import make_branch_name
-
         task = self._make_task()
-        branch_name = make_branch_name("feat", int(task.id), task.title)
+        branch_name = "feat/42-test-task"
         existing_wt = tmp_path / "existing-wt"
         existing_wt.mkdir()
 

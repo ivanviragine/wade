@@ -24,6 +24,7 @@ from wade.models.delegation import DelegationMode, DelegationResult
 from wade.providers.registry import get_provider
 from wade.services.review_delegation_service import (
     _check_review_enabled,
+    _load_review_config,
     _run_review_delegation,
 )
 from wade.skills.installer import load_prompt_template
@@ -260,7 +261,8 @@ def run_coherence_review(
 
     Posts findings as a comment on the review PR if one exists.
     """
-    skip = _check_review_enabled("review_batch")
+    config, cmd_config = _load_review_config("review_batch")
+    skip = _check_review_enabled("review_batch", cmd_config)
     if skip is not None:
         return skip
 
@@ -271,6 +273,8 @@ def run_coherence_review(
     result = _run_review_delegation(
         prompt,
         "review_batch",
+        config=config,
+        cmd_config=cmd_config,
         ai_tool=ai_tool,
         model=model,
         mode=mode,
