@@ -38,4 +38,16 @@ def done(
         "Suggest the user to exit the session now. "
         "wade will read the plan files and create GitHub issues automatically."
     )
+
+    # Remind agent to review if reviews are enabled. Advisory only —
+    # must never turn a successful validation into a failure.
+    try:
+        from wade.config.loader import load_config
+
+        config = load_config()
+        if config.ai.review_plan.enabled is not False:
+            console.hint("P.s.: run `wade review plan <plan_file>` if you haven't already.")
+    except Exception:
+        pass
+
     raise typer.Exit(0)
