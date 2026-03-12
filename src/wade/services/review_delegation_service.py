@@ -24,6 +24,22 @@ from wade.utils.process import run
 logger = structlog.get_logger()
 
 
+def _check_review_enabled(command: str) -> DelegationResult | None:
+    """Return a skip result if the review command is disabled, else None."""
+    config = load_config()
+    cmd_config: AICommandConfig = getattr(config.ai, command)
+    if cmd_config.enabled is False:
+        config_key = f"ai.{command}.enabled"
+        console.info(f"Review skipped — not enabled in .wade.yml ({config_key}).")
+        return DelegationResult(
+            success=True,
+            feedback=f"Review skipped — not enabled in .wade.yml ({config_key}).",
+            mode=DelegationMode.PROMPT,
+            skipped=True,
+        )
+    return None
+
+
 def _run_review_delegation(
     prompt: str,
     command: str,
@@ -39,17 +55,6 @@ def _run_review_delegation(
     """Shared pipeline: config load → mode resolve → AI resolve → confirm → delegate → display."""
     config = load_config()
     cmd_config: AICommandConfig = getattr(config.ai, command)
-
-    # Check if this review type is enabled in config
-    if cmd_config.enabled is False:
-        config_key = f"ai.{command}.enabled"
-        console.info(f"Review skipped — not enabled in .wade.yml ({config_key}).")
-        return DelegationResult(
-            success=True,
-            feedback=f"Review skipped — not enabled in .wade.yml ({config_key}).",
-            mode=DelegationMode.PROMPT,
-            skipped=True,
-        )
 
     try:
         delegation_mode = DelegationMode(mode) if mode else resolve_mode(cmd_config)
@@ -107,6 +112,10 @@ def review_plan(
     effort_explicit: bool = False,
 ) -> DelegationResult:
     """Review a plan file via the delegation infrastructure."""
+    skip = _check_review_enabled("review_plan")
+    if skip is not None:
+        return skip
+
     plan_path = Path(plan_file)
     if not plan_path.is_file():
         console.error(f"Plan file not found: {plan_file}")
@@ -146,6 +155,10 @@ def review_implementation(
     effort_explicit: bool = False,
 ) -> DelegationResult:
     """Review implementation changes via the delegation infrastructure."""
+    skip = _check_review_enabled("review_implementation")
+    if skip is not None:
+        return skip
+
     diff_cmd = ["git", "diff"]
     if staged:
         diff_cmd.append("--staged")

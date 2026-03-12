@@ -107,28 +107,20 @@ class TestReviewPlan:
         assert "Invalid delegation mode" in result.feedback
         assert result.exit_code == 1
 
-    @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
-    @patch("wade.services.review_delegation_service.load_prompt_template")
     def test_enabled_false_skips_review(
         self,
-        mock_template: MagicMock,
         mock_config: MagicMock,
-        mock_delegate: MagicMock,
-        tmp_path: Path,
     ) -> None:
-        plan_file = tmp_path / "PLAN.md"
-        plan_file.write_text("# Plan")
-        mock_template.return_value = "{plan_content}"
+        """Disabled review skips before preflight — even if plan file is missing."""
         mock_config.return_value = ProjectConfig(
             ai=AIConfig(review_plan=AICommandConfig(mode="prompt", enabled=False))
         )
 
-        result = review_plan(str(plan_file))
+        result = review_plan("/nonexistent/PLAN.md")
         assert result.success is True
         assert result.skipped is True
         assert "skipped" in result.feedback.lower()
-        mock_delegate.assert_not_called()
 
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
@@ -217,19 +209,12 @@ class TestReviewCode:
         cmd = mock_run.call_args[0][0]
         assert "--staged" in cmd
 
-    @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
-    @patch("wade.services.review_delegation_service.load_prompt_template")
-    @patch("wade.services.review_delegation_service.run")
-    def test_enabled_false_skips_review(
+    def test_enabled_false_skips_before_git_diff(
         self,
-        mock_run: MagicMock,
-        mock_template: MagicMock,
         mock_config: MagicMock,
-        mock_delegate: MagicMock,
     ) -> None:
-        mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
-        mock_template.return_value = "{diff_content}"
+        """Disabled review skips before git diff — no subprocess needed."""
         mock_config.return_value = ProjectConfig(
             ai=AIConfig(review_implementation=AICommandConfig(mode="prompt", enabled=False))
         )
@@ -238,7 +223,6 @@ class TestReviewCode:
         assert result.success is True
         assert result.skipped is True
         assert "skipped" in result.feedback.lower()
-        mock_delegate.assert_not_called()
 
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.load_prompt_template")
