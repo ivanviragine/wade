@@ -126,6 +126,7 @@ class TestReviewPlan:
 
         result = review_plan(str(plan_file))
         assert result.success is True
+        assert result.skipped is True
         assert "skipped" in result.feedback.lower()
         mock_delegate.assert_not_called()
 
@@ -215,6 +216,29 @@ class TestReviewCode:
         review_implementation(staged=True)
         cmd = mock_run.call_args[0][0]
         assert "--staged" in cmd
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    @patch("wade.services.review_delegation_service.run")
+    def test_enabled_false_skips_review(
+        self,
+        mock_run: MagicMock,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+    ) -> None:
+        mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
+        mock_template.return_value = "{diff_content}"
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(review_implementation=AICommandConfig(mode="prompt", enabled=False))
+        )
+
+        result = review_implementation()
+        assert result.success is True
+        assert result.skipped is True
+        assert "skipped" in result.feedback.lower()
+        mock_delegate.assert_not_called()
 
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.load_prompt_template")

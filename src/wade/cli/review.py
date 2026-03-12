@@ -58,7 +58,7 @@ def review_plan_cmd(
         model_explicit=model is not None,
         effort_explicit=effort is not None,
     )
-    if result.success and "skipped" not in result.feedback.lower():
+    if result.success and not result.skipped:
         from wade.ui.console import console
 
         console.info(
@@ -100,7 +100,7 @@ def review_implementation_cmd(
         model_explicit=model is not None,
         effort_explicit=effort is not None,
     )
-    if result.success and "skipped" not in result.feedback.lower():
+    if result.success and not result.skipped:
         from wade.ui.console import console
 
         console.info(

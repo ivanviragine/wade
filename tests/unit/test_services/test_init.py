@@ -597,6 +597,25 @@ class TestWriteConfig:
         assert config["ai"]["implement"]["tool"] == "copilot"
         assert "model" not in config["ai"]["implement"]
 
+    def test_with_enabled_overrides(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        overrides = {
+            "review_plan": {"enabled": "false"},
+            "review_implementation": {"enabled": "true", "tool": "claude", "mode": "prompt"},
+        }
+        _write_config(
+            config_path,
+            "claude",
+            ComplexityModelMapping(),
+            command_overrides=overrides,
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["review_plan"]["enabled"] is False
+        assert "tool" not in config["ai"]["review_plan"]
+        assert config["ai"]["review_implementation"]["enabled"] is True
+        assert config["ai"]["review_implementation"]["tool"] == "claude"
+        assert config["ai"]["review_implementation"]["mode"] == "prompt"
+
     def test_with_model_mapping(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         mapping = ComplexityModelMapping(
@@ -835,6 +854,37 @@ class TestPatchConfig:
         assert config["ai"]["deps"]["mode"] == "headless"
         assert config["ai"]["review_plan"]["effort"] == "low"
         assert config["ai"]["review_plan"]["mode"] == "prompt"
+
+    def test_force_sets_enabled_in_command_overrides(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
+        overrides = {
+            "review_plan": {"enabled": "false"},
+            "review_implementation": {"enabled": "true", "tool": "claude", "mode": "prompt"},
+        }
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), command_overrides=overrides, force=True
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["review_plan"]["enabled"] is False
+        assert config["ai"]["review_implementation"]["enabled"] is True
+        assert config["ai"]["review_implementation"]["tool"] == "claude"
+
+    def test_no_force_sets_enabled_when_section_missing(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
+        overrides = {
+            "review_plan": {"enabled": "false"},
+        }
+        _patch_config(
+            config_path,
+            "claude",
+            ComplexityModelMapping(),
+            command_overrides=overrides,
+            force=False,
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["review_plan"]["enabled"] is False
 
     def test_force_sets_review_implementation_overrides(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"

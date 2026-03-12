@@ -48,6 +48,7 @@ def _run_review_delegation(
             success=True,
             feedback=f"Review skipped — not enabled in .wade.yml ({config_key}).",
             mode=DelegationMode.PROMPT,
+            skipped=True,
         )
 
     try:
