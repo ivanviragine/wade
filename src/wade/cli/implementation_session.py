@@ -104,4 +104,11 @@ def done(
             "SESSION COMPLETE — do not make further changes. "
             "Present the PR link to the user and suggest they exit the session."
         )
+
+        # Remind agent to review if reviews are enabled
+        from wade.config.loader import load_config
+
+        config = load_config()
+        if config.ai.review_implementation.enabled is not False:
+            console.hint("P.s.: run `wade review implementation` if you haven't already.")
     raise typer.Exit(0 if success else 1)

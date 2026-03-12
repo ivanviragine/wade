@@ -145,6 +145,10 @@ Run `wade review implementation` to catch issues early. The command checks your
 project config and skips if reviews are not enabled. If the review surfaces
 actionable feedback, address it and commit before proceeding.
 For staged-only review: `wade review implementation --staged`.
+Note: if your project is configured to use `interactive` or `headless`
+delegation mode, the review command will launch a separate AI session and
+block until it completes. This may take several minutes — wait for it to
+finish before proceeding.
 
 **Step 2 — Write PR summary:**
 
