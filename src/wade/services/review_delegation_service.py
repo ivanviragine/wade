@@ -92,6 +92,12 @@ def _run_review_delegation(
         effort=effort_str,
     )
 
+    if delegation_mode in (DelegationMode.INTERACTIVE, DelegationMode.HEADLESS):
+        console.info(
+            "Launching external AI review session — "
+            "please wait, do not move this to the background."
+        )
+
     result = delegate(request)
     if result.success:
         console.out.print(result.feedback)
