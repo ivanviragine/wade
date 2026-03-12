@@ -9,6 +9,7 @@ fi
 
 export WADE_LIVE_AI_TOOL="${WADE_LIVE_AI_TOOL:-claude}"
 export WADE_LIVE_AI_MODEL="${WADE_LIVE_AI_MODEL:-claude-haiku-4.5}"
+export WADE_LIVE_AI_TIMEOUT="${WADE_LIVE_AI_TIMEOUT:-45}"
 
 if [[ "${WADE_LIVE_AI_TOOL}" != "claude" ]]; then
   echo "Wave 1 supports only WADE_LIVE_AI_TOOL=claude (got '${WADE_LIVE_AI_TOOL}')."
@@ -20,6 +21,10 @@ if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
 fi
 if ! command -v claude >/dev/null 2>&1; then
   echo "claude CLI is required but not found in PATH."
+  exit 1
+fi
+if ! [[ "${WADE_LIVE_AI_TIMEOUT}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "WADE_LIVE_AI_TIMEOUT must be a positive integer (got '${WADE_LIVE_AI_TIMEOUT}')."
   exit 1
 fi
 

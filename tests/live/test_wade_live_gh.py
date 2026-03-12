@@ -92,6 +92,25 @@ def _recover_issue_number_by_title(title: str) -> str:
     return str(recovered.get("number", ""))
 
 
+def _recover_pr_number_by_branch(branch_name: str) -> str:
+    """Best-effort PR lookup by branch name for cleanup fallback."""
+    if not branch_name:
+        return ""
+    view = _gh("pr", "view", branch_name, "--json", "number")
+    if view.returncode != 0:
+        return ""
+    try:
+        payload = json.loads(view.stdout)
+    except json.JSONDecodeError:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    number = payload.get("number")
+    if number is None:
+        return ""
+    return str(number)
+
+
 def _record_cleanup_failure(
     failures: list[str],
     result: subprocess.CompletedProcess[str],
@@ -239,6 +258,7 @@ class TestLiveWadeGH:
         title = f"WADE live GH workflow smoke {unique}"
         issue_num = ""
         pr_number = ""
+        branch_name = ""
         cleanup_failures: list[str] = []
 
         created = _wade(
@@ -309,6 +329,8 @@ class TestLiveWadeGH:
         finally:
             if not issue_num:
                 issue_num = _recover_issue_number_by_title(title)
+            if not pr_number and branch_name:
+                pr_number = _recover_pr_number_by_branch(branch_name)
 
             if pr_number:
                 close_pr = _gh("pr", "close", pr_number, "--delete-branch", timeout=120)

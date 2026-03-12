@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tests.e2e._support import (
     MockGhCli,
@@ -86,6 +87,19 @@ def _assert_claude_headless_config(argv: list[str], expected_effort: str) -> Non
     parsed_settings = json.loads(settings_value)
     assert isinstance(parsed_settings, dict)
     assert parsed_settings.get("effortLevel") == expected_effort
+
+
+def _set_review_enabled(e2e_repo: Path, config_key: str, enabled: bool) -> None:
+    """Set ai.<config_key>.enabled in .wade.yml using structured YAML mutation."""
+    config_path = e2e_repo / ".wade.yml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert isinstance(config, dict)
+    ai_config = config.setdefault("ai", {})
+    assert isinstance(ai_config, dict)
+    cmd_config = ai_config.setdefault(config_key, {})
+    assert isinstance(cmd_config, dict)
+    cmd_config["enabled"] = enabled
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
 
 
 def _bootstrap_review_target(
@@ -169,6 +183,40 @@ class TestReviewPlanCommand:
         _assert_claude_headless_config(argv, expected_effort="high")
         assert any("Review contract plan" in token for token in argv)
 
+    def test_review_plan_disabled_skips_ai(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """review plan should short-circuit when ai.review_plan.enabled is false."""
+        _install_fake_claude(mock_gh_cli["mock_bin"])
+        log_file = e2e_repo / ".fake-claude-log.jsonl"
+
+        _set_review_enabled(e2e_repo, "review_plan", False)
+
+        plan_file = e2e_repo / "PLAN-disabled.md"
+        plan_file.write_text("# Disabled review plan\n", encoding="utf-8")
+
+        result = _run(
+            [
+                "review",
+                "plan",
+                str(plan_file),
+                "--mode",
+                "headless",
+                "--ai",
+                "claude",
+            ],
+            cwd=e2e_repo,
+            env={"WADE_FAKE_CLAUDE_LOG": str(log_file)},
+        )
+
+        assert result.returncode == 0
+        output = result.stdout + result.stderr
+        assert "Review skipped" in output
+        assert "ai.review_plan.enabled" in output
+        assert _read_fake_claude_log(log_file) == []
+
 
 class TestReviewImplementationCommand:
     """Test `wade review implementation` deterministic headless contracts."""
@@ -242,6 +290,41 @@ class TestReviewImplementationCommand:
 
         assert result.returncode == 0
         assert "No changes to review" in (result.stdout + result.stderr)
+        assert _read_fake_claude_log(log_file) == []
+
+    def test_review_implementation_disabled_skips_ai(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """review implementation should short-circuit when disabled in config."""
+        _install_fake_claude(mock_gh_cli["mock_bin"])
+        log_file = e2e_repo / ".fake-claude-log.jsonl"
+
+        _set_review_enabled(e2e_repo, "review_implementation", False)
+
+        app_file = e2e_repo / "src" / "app.py"
+        app_file.write_text('print("should not be reviewed")\n', encoding="utf-8")
+        _git(["add", str(app_file.relative_to(e2e_repo))], cwd=e2e_repo)
+
+        result = _run(
+            [
+                "review",
+                "implementation",
+                "--staged",
+                "--mode",
+                "headless",
+                "--ai",
+                "claude",
+            ],
+            cwd=e2e_repo,
+            env={"WADE_FAKE_CLAUDE_LOG": str(log_file)},
+        )
+
+        assert result.returncode == 0
+        output = result.stdout + result.stderr
+        assert "Review skipped" in output
+        assert "ai.review_implementation.enabled" in output
         assert _read_fake_claude_log(log_file) == []
 
 

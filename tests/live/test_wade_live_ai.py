@@ -10,6 +10,7 @@ Required env:
 Optional env:
   - WADE_LIVE_AI_TOOL (default: claude)
   - WADE_LIVE_AI_MODEL (default: claude-haiku-4.5)
+  - WADE_LIVE_AI_TIMEOUT (default: 45 seconds)
 """
 
 from __future__ import annotations
@@ -19,10 +20,26 @@ import shutil
 
 import pytest
 
-from wade.services.deps_service import output_is_parseable, run_headless_analysis
+from wade.models.delegation import DelegationMode, DelegationRequest
+from wade.services.delegation_service import delegate
+from wade.services.deps_service import parse_deps_output
 
 AI_TOOL = os.environ.get("WADE_LIVE_AI_TOOL", "claude")
 AI_MODEL = os.environ.get("WADE_LIVE_AI_MODEL", "claude-haiku-4.5")
+
+
+def _parse_live_timeout(raw: str | None) -> int:
+    """Parse timeout env safely and fall back to a sane default."""
+    if raw is None:
+        return 45
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return 45
+    return parsed if parsed > 0 else 45
+
+
+AI_TIMEOUT = _parse_live_timeout(os.environ.get("WADE_LIVE_AI_TIMEOUT"))
 
 pytestmark = [
     pytest.mark.live_ai,
@@ -47,7 +64,17 @@ class TestLiveAISmoke:
     def test_claude_headless_dependency_prompt(self) -> None:
         """Run a tiny deterministic headless prompt and verify parseable output."""
         prompt = "You are running a test. Return exactly one line:\n# No dependencies found"
-        output = run_headless_analysis(AI_TOOL, prompt, AI_MODEL)
+        result = delegate(
+            DelegationRequest(
+                mode=DelegationMode.HEADLESS,
+                prompt=prompt,
+                ai_tool=AI_TOOL,
+                model=AI_MODEL,
+                timeout=AI_TIMEOUT,
+            )
+        )
+        assert result.success, f"Live AI headless delegation failed: {result.feedback!r}"
+        output = result.feedback
         assert output is not None, "Headless analysis returned no output"
         assert output.strip(), "Headless analysis returned empty output"
         lines = [line.strip() for line in output.splitlines() if line.strip()]
@@ -58,6 +85,5 @@ class TestLiveAISmoke:
             "Live AI output contains dependency-edge syntax despite claiming no dependencies.\n"
             f"Got lines: {lines!r}"
         )
-        assert output_is_parseable(output), (
-            f"Live AI output is not parseable as dependency analysis output:\n{output}"
-        )
+        parsed = parse_deps_output(output, valid_numbers={"1", "2"})
+        assert parsed == [], f"Expected no parsed dependency edges, got: {parsed!r}"

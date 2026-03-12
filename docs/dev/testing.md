@@ -23,7 +23,7 @@ tests/
 │   ├── test_check.py
 │   ├── test_init.py
 │   ├── test_git.py
-│   ├── test_work_lifecycle.py
+│   ├── test_implementation_lifecycle.py
 │   └── test_skill_install.py
 ├── e2e/                     # End-to-end contract tests (mocked gh, deterministic)
 │   ├── conftest.py
@@ -98,6 +98,7 @@ credentials, or binaries are missing.
 - `RUN_LIVE_AI_TESTS=1` enables live AI tests.
 - `WADE_LIVE_AI_TOOL=claude` (default)
 - `WADE_LIVE_AI_MODEL=claude-haiku-4.5` (default)
+- `WADE_LIVE_AI_TIMEOUT=45` (optional timeout in seconds for live AI smoke)
 - `ANTHROPIC_API_KEY` is required for the canonical live AI smoke test.
 
 Live tests are manual by design. Default CI lanes must not require provider secrets.
