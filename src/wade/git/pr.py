@@ -271,3 +271,25 @@ def mark_pr_ready(repo_root: Path, pr_number: int) -> bool:
         check=False,
     )
     return result.returncode == 0
+
+
+def comment_on_pr(repo_root: Path, pr_number: int, body: str) -> None:
+    """Post a comment on a pull request via ``gh pr comment``.
+
+    Args:
+        repo_root: Repository root directory.
+        pr_number: PR number to comment on.
+        body: Comment body (Markdown).
+
+    Raises:
+        GhCliError: If the comment fails.
+    """
+    log.info("pr.comment", pr_number=pr_number)
+    _run_gh(
+        "pr",
+        "comment",
+        str(pr_number),
+        "--body",
+        body,
+        cwd=repo_root,
+    )
