@@ -17,7 +17,9 @@ from wade.config.loader import (
 )
 from wade.git import repo
 from wade.git.repo import GitError
-from wade.models.ai import AIToolID
+from wade.models.ai import AIToolID, EffortLevel
+from wade.models.config import AI_COMMAND_NAMES, LEGACY_AI_COMMAND_ALIASES
+from wade.models.delegation import DelegationMode
 from wade.models.session import MergeStrategy
 from wade.providers import registered_provider_names
 
@@ -176,6 +178,12 @@ def check_worktree(cwd: Path | None = None) -> CheckResult:
 
 # Valid AI tool names for config validation
 _VALID_AI_TOOLS = {t.value for t in AIToolID}
+
+# Valid effort levels
+_VALID_EFFORT_LEVELS = {e.value for e in EffortLevel}
+
+# Valid delegation modes
+_VALID_DELEGATION_MODES = {m.value for m in DelegationMode}
 
 # Valid merge strategies
 _VALID_MERGE_STRATEGIES = {s.value for s in MergeStrategy}
@@ -345,34 +353,84 @@ def _validate_ai_section(ai: dict[str, Any], errors: list[str]) -> None:
             f"Use one of: {', '.join(sorted(_VALID_AI_TOOLS))}"
         )
 
+    effort = ai.get("effort")
+    if effort is not None and str(effort) not in _VALID_EFFORT_LEVELS:
+        errors.append(
+            f"ai.effort: '{effort}' is invalid. "
+            f"Use one of: {', '.join(sorted(_VALID_EFFORT_LEVELS))}"
+        )
+
+    yolo = ai.get("yolo")
+    if yolo is not None and not isinstance(yolo, bool):
+        errors.append("ai.yolo: must be true or false")
+
     # Validate per-command sections
-    for cmd in ("plan", "deps", "implement", "work", "review_plan", "review_implementation"):
+    seen_sections: dict[str, str] = {}
+    for cmd in (*AI_COMMAND_NAMES, *LEGACY_AI_COMMAND_ALIASES):
         cmd_section = ai.get(cmd)
         if cmd_section is not None:
+            canonical_cmd = LEGACY_AI_COMMAND_ALIASES.get(cmd, cmd)
+            previous_key = seen_sections.get(canonical_cmd)
+            if previous_key is not None and previous_key != cmd:
+                errors.append(
+                    f"ai.{cmd}: duplicates ai.{previous_key}. "
+                    f"Use only one section for '{canonical_cmd}'"
+                )
+                continue
+            seen_sections[canonical_cmd] = cmd
             if not isinstance(cmd_section, dict):
                 errors.append(f"ai.{cmd}: must be a mapping")
             else:
-                tool = cmd_section.get("tool")
-                if tool is not None and str(tool) and str(tool) not in _VALID_AI_TOOLS:
-                    errors.append(
-                        f"ai.{cmd}.tool: '{tool}' is invalid. "
-                        f"Use one of: {', '.join(sorted(_VALID_AI_TOOLS))}"
-                    )
+                _validate_ai_command_section(cmd, cmd_section, errors)
 
     valid_keys = {
         "default_tool",
         "default_model",
         "effort",
-        "plan",
-        "deps",
-        "implement",
-        "work",
-        "review_plan",
-        "review_implementation",
+        "yolo",
+        *AI_COMMAND_NAMES,
+        *LEGACY_AI_COMMAND_ALIASES,
     }
     for key in ai:
         if key not in valid_keys:
             errors.append(f"ai.{key}: unsupported key")
+
+
+def _validate_ai_command_section(cmd: str, cmd_section: dict[str, Any], errors: list[str]) -> None:
+    """Validate one per-command AI config subsection."""
+    valid_keys = {"tool", "model", "mode", "effort", "enabled", "yolo"}
+
+    tool = cmd_section.get("tool")
+    if tool is not None and str(tool) and str(tool) not in _VALID_AI_TOOLS:
+        errors.append(
+            f"ai.{cmd}.tool: '{tool}' is invalid. Use one of: {', '.join(sorted(_VALID_AI_TOOLS))}"
+        )
+
+    mode = cmd_section.get("mode")
+    if mode is not None and str(mode) not in _VALID_DELEGATION_MODES:
+        errors.append(
+            f"ai.{cmd}.mode: '{mode}' is invalid. "
+            f"Use one of: {', '.join(sorted(_VALID_DELEGATION_MODES))}"
+        )
+
+    effort = cmd_section.get("effort")
+    if effort is not None and str(effort) not in _VALID_EFFORT_LEVELS:
+        errors.append(
+            f"ai.{cmd}.effort: '{effort}' is invalid. "
+            f"Use one of: {', '.join(sorted(_VALID_EFFORT_LEVELS))}"
+        )
+
+    enabled = cmd_section.get("enabled")
+    if enabled is not None and not isinstance(enabled, bool):
+        errors.append(f"ai.{cmd}.enabled: must be true or false")
+
+    yolo = cmd_section.get("yolo")
+    if yolo is not None and not isinstance(yolo, bool):
+        errors.append(f"ai.{cmd}.yolo: must be true or false")
+
+    for key in cmd_section:
+        if key not in valid_keys:
+            errors.append(f"ai.{cmd}.{key}: unsupported key")
 
 
 def _validate_models_section(models: dict[str, Any], errors: list[str]) -> None:

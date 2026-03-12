@@ -167,7 +167,7 @@ wade implementation-session done
 (appending a summary and marking it ready). The worktree is **not** deleted —
 it is cleaned up automatically by `implement` after the human merges the PR.
 
-This is a **mandatory** completion step. If `wade implementation-session done` fails, debug and
+This is a **mandatory** final step. If `wade implementation-session done` fails, debug and
 fix the error — do NOT bypass it.
 
 **Step 5 — Review with the user:**

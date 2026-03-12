@@ -231,7 +231,7 @@ if obj is not None:
 <summary>🤖 Prompt for AI Agents</summary>
 
 ```
-In src/wade/services/work_service.py around line 350, add a None check
+In src/wade/services/implementation_service.py around line 350, add a None check
 before accessing `usage.total_tokens`. The current code will raise an
 AttributeError when `usage` is None.
 ```
@@ -239,7 +239,7 @@ AttributeError when `usage` is None.
 </details>"""
         result = extract_coderabbit_ai_prompt(body)
         assert result is not None
-        assert "src/wade/services/work_service.py" in result
+        assert "src/wade/services/implementation_service.py" in result
         assert "None check" in result
 
 

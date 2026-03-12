@@ -41,6 +41,11 @@ models:
 provider:
   name: github
 
+permissions:
+  allowed_commands:
+    - wade *
+    - ./scripts/check.sh *
+
 hooks:
   post_worktree_create: scripts/setup-worktree.sh
   copy_to_worktree:
@@ -79,6 +84,7 @@ class TestParseConfigFile:
         assert config.ai.default_model == "claude-haiku-4.5"
         assert config.ai.plan.tool == "claude"
         assert config.provider.name == "github"
+        assert config.permissions.allowed_commands == ["wade *", "./scripts/check.sh *"]
         assert config.hooks.post_worktree_create == "scripts/setup-worktree.sh"
         assert config.hooks.copy_to_worktree == [".env"]
 
@@ -184,6 +190,25 @@ class TestParseCommandConfig:
         assert config.ai.review_implementation.tool == "copilot"
         assert config.ai.review_implementation.mode == "headless"
 
+    def test_review_batch_and_yolo_parsed(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\n"
+            "ai:\n"
+            "  yolo: true\n"
+            "  review_batch:\n"
+            "    tool: claude\n"
+            "    mode: headless\n"
+            "    enabled: false\n"
+            "    yolo: true\n"
+        )
+        config = parse_config_file(config_path)
+        assert config.ai.yolo is True
+        assert config.ai.review_batch.tool == "claude"
+        assert config.ai.review_batch.mode == "headless"
+        assert config.ai.review_batch.enabled is False
+        assert config.ai.review_batch.yolo is True
+
     def test_global_effort_parsed(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text("version: 2\nai:\n  effort: medium\n")
@@ -243,6 +268,20 @@ class TestProviderSettings:
         config_path.write_text("version: 2\nprovider:\n  name: github\n  settings:\n")
         config = parse_config_file(config_path)
         assert config.provider.settings == {}
+
+
+class TestPermissionsParsing:
+    def test_permissions_parsed(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\n"
+            "permissions:\n"
+            "  allowed_commands:\n"
+            "    - wade *\n"
+            "    - ./scripts/test.sh *\n"
+        )
+        config = parse_config_file(config_path)
+        assert config.permissions.allowed_commands == ["wade *", "./scripts/test.sh *"]
 
 
 class TestParseConfigFileErrors:

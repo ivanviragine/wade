@@ -63,6 +63,7 @@ class TestDelegationResult:
         assert result.success is True
         assert result.feedback == "Looks good!"
         assert result.exit_code == 0
+        assert result.skipped is False
 
     def test_failure_result(self) -> None:
         result = DelegationResult(
@@ -73,3 +74,14 @@ class TestDelegationResult:
         )
         assert result.success is False
         assert result.exit_code == 1
+        assert result.skipped is False
+
+    def test_skipped_result(self) -> None:
+        result = DelegationResult(
+            success=True,
+            feedback="Review skipped",
+            mode=DelegationMode.PROMPT,
+            skipped=True,
+        )
+        assert result.success is True
+        assert result.skipped is True

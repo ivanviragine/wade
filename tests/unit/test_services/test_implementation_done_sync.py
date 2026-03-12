@@ -185,10 +185,36 @@ class TestBuildImplUsageBlock:
         # Multi-model: names appear as column headers, not row starters
         assert "| Metric | Total | `claude-opus-4-6` | `claude-haiku-4-5` |" in block
         assert "| Input tokens | **3,400** | **3,000** | **400** |" in block
+        assert "| Cached tokens | **500** | **500** | **0** |" in block
         assert "**400**" in block
         # No standalone model-name rows (rows that start with the model name)
         assert "\n| `claude-opus-4-6`" not in block
         assert "\n| `claude-haiku-4-5`" not in block
+
+    def test_breakdown_only_derives_aggregate_rows(self) -> None:
+        from wade.models.ai import ModelBreakdown
+
+        usage = TokenUsage(
+            model_breakdown=[
+                ModelBreakdown(
+                    model="claude-opus-4-6",
+                    input_tokens=3000,
+                    output_tokens=1000,
+                    cached_tokens=500,
+                ),
+                ModelBreakdown(
+                    model="claude-haiku-4-5",
+                    input_tokens=400,
+                    output_tokens=100,
+                    cached_tokens=0,
+                ),
+            ],
+        )
+        block = build_impl_usage_block(ai_tool="claude", token_usage=usage)
+        assert "| Total tokens | **5,000** | **4,500** | **500** |" in block
+        assert "| Input tokens | **3,400** | **3,000** | **400** |" in block
+        assert "| Output tokens | **1,100** | **1,000** | **100** |" in block
+        assert "| Cached tokens | **500** | **500** | **0** |" in block
 
     def test_single_model_no_extra_row(self) -> None:
         from wade.models.ai import ModelBreakdown

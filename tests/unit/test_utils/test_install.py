@@ -22,19 +22,19 @@ class TestDetectInstallMethod:
     def test_detects_uv_tool_linux(self) -> None:
         """sys.executable in ~/.local/share/uv/tools/ → UV_TOOL."""
         with patch("wade.utils.install.sys") as mock_sys:
-            mock_sys.executable = "/home/user/.local/share/uv/tools/wade/bin/python"
+            mock_sys.executable = "/home/user/.local/share/uv/tools/wade-cli/bin/python"
             assert detect_install_method() == InstallMethod.UV_TOOL
 
     def test_detects_uv_tool_macos(self) -> None:
         """macOS uv tool path also contains /.local/share/uv/tools/."""
         with patch("wade.utils.install.sys") as mock_sys:
-            mock_sys.executable = "/Users/user/.local/share/uv/tools/wade/bin/python3.11"
+            mock_sys.executable = "/Users/user/.local/share/uv/tools/wade-cli/bin/python3.11"
             assert detect_install_method() == InstallMethod.UV_TOOL
 
     def test_detects_pipx(self) -> None:
         """sys.executable in /.local/pipx/venvs/ → PIPX."""
         with patch("wade.utils.install.sys") as mock_sys:
-            mock_sys.executable = "/home/user/.local/pipx/venvs/wade/bin/python"
+            mock_sys.executable = "/home/user/.local/pipx/venvs/wade-cli/bin/python"
             assert detect_install_method() == InstallMethod.PIPX
 
     def test_detects_brew(self) -> None:
@@ -85,9 +85,13 @@ class TestGetInstalledVersion:
 
 class TestSelfUpgrade:
     def test_uv_tool_calls_uv_tool_upgrade(self) -> None:
-        """When UV_TOOL, runs `uv tool upgrade wade`."""
+        """When UV_TOOL, runs `uv tool upgrade wade-cli`."""
         ok_result = MagicMock(returncode=0)
         with (
+            patch(
+                "wade.utils.install._package_name_for_self_upgrade",
+                return_value="wade-cli",
+            ),
             patch("wade.utils.install.detect_install_method", return_value=InstallMethod.UV_TOOL),
             patch("wade.utils.install.subprocess.run", return_value=ok_result) as mock_run,
         ):
@@ -95,12 +99,16 @@ class TestSelfUpgrade:
 
         assert result is True
         cmd = mock_run.call_args[0][0]
-        assert cmd == ["uv", "tool", "upgrade", "wade"]
+        assert cmd == ["uv", "tool", "upgrade", "wade-cli"]
 
     def test_pipx_calls_pipx_upgrade(self) -> None:
-        """When PIPX, runs `pipx upgrade wade`."""
+        """When PIPX, runs `pipx upgrade wade-cli`."""
         ok_result = MagicMock(returncode=0)
         with (
+            patch(
+                "wade.utils.install._package_name_for_self_upgrade",
+                return_value="wade-cli",
+            ),
             patch("wade.utils.install.detect_install_method", return_value=InstallMethod.PIPX),
             patch("wade.utils.install.subprocess.run", return_value=ok_result) as mock_run,
         ):
@@ -108,7 +116,7 @@ class TestSelfUpgrade:
 
         assert result is True
         cmd = mock_run.call_args[0][0]
-        assert cmd == ["pipx", "upgrade", "wade"]
+        assert cmd == ["pipx", "upgrade", "wade-cli"]
 
     def test_brew_calls_brew_upgrade(self) -> None:
         """When BREW, runs `brew upgrade wade`."""
@@ -141,6 +149,10 @@ class TestSelfUpgrade:
         """When the upgrade command exits non-zero, return False."""
         fail_result = MagicMock(returncode=1, stderr="error")
         with (
+            patch(
+                "wade.utils.install._package_name_for_self_upgrade",
+                return_value="wade-cli",
+            ),
             patch("wade.utils.install.detect_install_method", return_value=InstallMethod.UV_TOOL),
             patch("wade.utils.install.subprocess.run", return_value=fail_result),
         ):
@@ -151,6 +163,10 @@ class TestSelfUpgrade:
     def test_timeout_returns_false(self) -> None:
         """When the upgrade command times out, return False."""
         with (
+            patch(
+                "wade.utils.install._package_name_for_self_upgrade",
+                return_value="wade-cli",
+            ),
             patch("wade.utils.install.detect_install_method", return_value=InstallMethod.UV_TOOL),
             patch(
                 "wade.utils.install.subprocess.run",
@@ -164,12 +180,46 @@ class TestSelfUpgrade:
     def test_os_error_returns_false(self) -> None:
         """When the upgrade command raises OSError, return False."""
         with (
+            patch(
+                "wade.utils.install._package_name_for_self_upgrade",
+                return_value="wade-cli",
+            ),
             patch("wade.utils.install.detect_install_method", return_value=InstallMethod.UV_TOOL),
             patch("wade.utils.install.subprocess.run", side_effect=OSError("not found")),
         ):
             result = self_upgrade()
 
         assert result is False
+
+    def test_uv_tool_legacy_install_upgrades_legacy_package(self) -> None:
+        ok_result = MagicMock(returncode=0)
+        with (
+            patch("wade.utils.install.detect_install_method", return_value=InstallMethod.UV_TOOL),
+            patch(
+                "wade.utils.install.sys",
+                executable="/Users/user/.local/share/uv/tools/wade/bin/python",
+            ),
+            patch("wade.utils.install.subprocess.run", return_value=ok_result) as mock_run,
+        ):
+            result = self_upgrade()
+
+        assert result is True
+        assert mock_run.call_args[0][0] == ["uv", "tool", "upgrade", "wade"]
+
+    def test_pipx_legacy_install_upgrades_legacy_package(self) -> None:
+        ok_result = MagicMock(returncode=0)
+        with (
+            patch("wade.utils.install.detect_install_method", return_value=InstallMethod.PIPX),
+            patch(
+                "wade.utils.install.sys",
+                executable="/Users/user/.local/pipx/venvs/wade/bin/python",
+            ),
+            patch("wade.utils.install.subprocess.run", return_value=ok_result) as mock_run,
+        ):
+            result = self_upgrade()
+
+        assert result is True
+        assert mock_run.call_args[0][0] == ["pipx", "upgrade", "wade"]
 
 
 # ---------------------------------------------------------------------------
@@ -185,13 +235,13 @@ class TestReExec:
             patch("wade.utils.install.os.execv") as mock_execv,
             patch("wade.utils.install.os.path.isabs", return_value=True),
         ):
-            mock_sys.argv = ["/usr/local/bin/wade", "work", "start", "42"]
+            mock_sys.argv = ["/usr/local/bin/wade", "implement", "42"]
 
             re_exec()
 
         mock_execv.assert_called_once_with(
             "/usr/local/bin/wade",
-            ["/usr/local/bin/wade", "work", "start", "42"],
+            ["/usr/local/bin/wade", "implement", "42"],
         )
 
     def test_resolves_relative_path_via_which(self) -> None:

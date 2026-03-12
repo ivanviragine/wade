@@ -4,4 +4,9 @@
 #   ./scripts/test.sh              # all tests (excludes live)
 #   ./scripts/test.sh tests/unit/  # unit tests only
 set -euo pipefail
+
+if [[ "${WADE_INCLUDE_LIVE:-}" == "1" ]]; then
+  exec uv run python -m pytest "${@:-tests/}"
+fi
+
 exec uv run python -m pytest "${@:-tests/}" --ignore=tests/live

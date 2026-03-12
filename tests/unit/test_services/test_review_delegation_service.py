@@ -14,13 +14,39 @@ from wade.services.review_delegation_service import (
     review_plan,
 )
 
+
+def _review_config(
+    *,
+    review_plan_mode: str = "prompt",
+    review_plan_enabled: bool | None = True,
+    review_implementation_mode: str = "prompt",
+    review_implementation_enabled: bool | None = True,
+) -> ProjectConfig:
+    """Build a review-capable project config without relying on repo-local config."""
+    return ProjectConfig(
+        ai=AIConfig(
+            default_tool="claude",
+            review_plan=AICommandConfig(
+                mode=review_plan_mode,
+                enabled=review_plan_enabled,
+            ),
+            review_implementation=AICommandConfig(
+                mode=review_implementation_mode,
+                enabled=review_implementation_enabled,
+            ),
+        )
+    )
+
+
 # ---------------------------------------------------------------------------
 # review_plan
 # ---------------------------------------------------------------------------
 
 
 class TestReviewPlan:
-    def test_missing_plan_file(self) -> None:
+    @patch("wade.services.review_delegation_service.load_config")
+    def test_missing_plan_file(self, mock_config: MagicMock) -> None:
+        mock_config.return_value = _review_config(review_plan_enabled=True)
         result = review_plan("/nonexistent/PLAN.md")
         assert result.success is False
         assert "not found" in result.feedback
@@ -43,9 +69,7 @@ class TestReviewPlan:
         mock_template.return_value = "Review:\n{plan_content}"
 
         # Config
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="prompt", enabled=True))
-        )
+        mock_config.return_value = _review_config(review_plan_enabled=True)
 
         # Delegation returns success
         mock_delegate.return_value = DelegationResult(
@@ -75,9 +99,7 @@ class TestReviewPlan:
         plan_file = tmp_path / "PLAN.md"
         plan_file.write_text("# Plan")
         mock_template.return_value = "{plan_content}"
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="prompt", enabled=True))
-        )
+        mock_config.return_value = _review_config(review_plan_enabled=True)
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="ok", mode=DelegationMode.HEADLESS
         )
@@ -98,9 +120,7 @@ class TestReviewPlan:
         plan_file = tmp_path / "PLAN.md"
         plan_file.write_text("# Plan")
         mock_template.return_value = "{plan_content}"
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="prompt", enabled=True))
-        )
+        mock_config.return_value = _review_config(review_plan_enabled=True)
 
         result = review_plan(str(plan_file), mode="bad_value")
         assert result.success is False
@@ -113,9 +133,7 @@ class TestReviewPlan:
         mock_config: MagicMock,
     ) -> None:
         """Disabled review skips before preflight — even if plan file is missing."""
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="prompt", enabled=False))
-        )
+        mock_config.return_value = _review_config(review_plan_enabled=False)
 
         result = review_plan("/nonexistent/PLAN.md")
         assert result.success is True
@@ -136,9 +154,7 @@ class TestReviewPlan:
         plan_file = tmp_path / "PLAN.md"
         plan_file.write_text("# Plan")
         mock_template.return_value = "{plan_content}"
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="prompt", enabled=None))
-        )
+        mock_config.return_value = _review_config(review_plan_enabled=None)
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="ok", mode=DelegationMode.PROMPT
         )
@@ -154,15 +170,21 @@ class TestReviewPlan:
 
 
 class TestReviewCode:
+    @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.run")
-    def test_no_diff_warns(self, mock_run: MagicMock) -> None:
+    def test_no_diff_warns(self, mock_run: MagicMock, mock_config: MagicMock) -> None:
+        mock_config.return_value = _review_config(review_implementation_enabled=True)
         mock_run.return_value = MagicMock(returncode=0, stdout="")
         result = review_implementation()
         assert result.success is True
         assert "No changes" in result.feedback
 
+    @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.run")
-    def test_git_diff_failure_returns_error(self, mock_run: MagicMock) -> None:
+    def test_git_diff_failure_returns_error(
+        self, mock_run: MagicMock, mock_config: MagicMock
+    ) -> None:
+        mock_config.return_value = _review_config(review_implementation_enabled=True)
         mock_run.return_value = MagicMock(
             returncode=128, stdout="", stderr="fatal: not a git repository"
         )
@@ -186,9 +208,7 @@ class TestReviewCode:
             returncode=0, stdout="diff --git a/foo.py b/foo.py\n+new line\n"
         )
         mock_template.return_value = "Review:\n{diff_content}"
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_implementation=AICommandConfig(mode="prompt", enabled=True))
-        )
+        mock_config.return_value = _review_config(review_implementation_enabled=True)
         mock_delegate.return_value = DelegationResult(
             success=True,
             feedback="LGTM",
@@ -202,8 +222,10 @@ class TestReviewCode:
         assert "diff --git" in call_args.prompt
         assert call_args.mode == DelegationMode.PROMPT
 
+    @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.run")
-    def test_staged_flag_passed_to_git(self, mock_run: MagicMock) -> None:
+    def test_staged_flag_passed_to_git(self, mock_run: MagicMock, mock_config: MagicMock) -> None:
+        mock_config.return_value = _review_config(review_implementation_enabled=True)
         mock_run.return_value = MagicMock(returncode=0, stdout="")
         review_implementation(staged=True)
         cmd = mock_run.call_args[0][0]
@@ -215,9 +237,7 @@ class TestReviewCode:
         mock_config: MagicMock,
     ) -> None:
         """Disabled review skips before git diff — no subprocess needed."""
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_implementation=AICommandConfig(mode="prompt", enabled=False))
-        )
+        mock_config.return_value = _review_config(review_implementation_enabled=False)
 
         result = review_implementation()
         assert result.success is True
@@ -235,9 +255,7 @@ class TestReviewCode:
     ) -> None:
         mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
         mock_template.return_value = "{diff_content}"
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_implementation=AICommandConfig(mode="prompt", enabled=True))
-        )
+        mock_config.return_value = _review_config(review_implementation_enabled=True)
 
         result = review_implementation(mode="bad_value")
         assert result.success is False
@@ -267,9 +285,7 @@ class TestRunReviewDelegationEffort:
         mock_delegate: MagicMock,
     ) -> None:
         """Effort from resolve_effort should be passed through to delegation request."""
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="headless", enabled=True))
-        )
+        mock_config.return_value = _review_config(review_plan_mode="headless")
         mock_tool.return_value = "claude"
         mock_model.return_value = None
         mock_effort.return_value = EffortLevel.LOW
@@ -299,9 +315,7 @@ class TestRunReviewDelegationEffort:
         mock_delegate: MagicMock,
     ) -> None:
         """In prompt mode, confirm_ai_selection should be skipped."""
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="prompt", enabled=True))
-        )
+        mock_config.return_value = _review_config(review_plan_mode="prompt")
         mock_tool.return_value = "claude"
         mock_model.return_value = None
         mock_effort.return_value = None
@@ -329,9 +343,7 @@ class TestRunReviewDelegationEffort:
         mock_delegate: MagicMock,
     ) -> None:
         """When resolve_effort returns None, effort in request should be None."""
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="headless", enabled=True))
-        )
+        mock_config.return_value = _review_config(review_plan_mode="headless")
         mock_tool.return_value = "claude"
         mock_model.return_value = None
         mock_effort.return_value = None

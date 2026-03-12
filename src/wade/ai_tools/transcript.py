@@ -582,7 +582,7 @@ def extract_token_usage_from_text(text: str) -> TokenUsage:
     if usage is None:
         usage = TokenUsage()
 
-    # Always extract session ID regardless of token strategy used
+    # Always extract session ID regardless of token strategy used.
     usage.session_id = _extract_session_id(text)
     return usage
 

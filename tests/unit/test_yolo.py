@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 # ---------------------------------------------------------------------------
 # Config model — yolo fields and get_yolo()
 # ---------------------------------------------------------------------------
@@ -226,7 +228,11 @@ class TestBuildLaunchCommandYolo:
         still be used."""
         from wade.ai_tools.opencode import OpenCodeAdapter
 
-        cmd = OpenCodeAdapter().build_launch_command(plan_mode=True, yolo=True)
+        with pytest.warns(
+            UserWarning,
+            match=r"does not support YOLO mode; falling back to plan mode",
+        ):
+            cmd = OpenCodeAdapter().build_launch_command(plan_mode=True, yolo=True)
         # OpenCode doesn't support yolo → should fall back to plan mode
         # OpenCode has no plan_mode_args, so plan_mode flag has no effect,
         # but the key assertion is that yolo_args are NOT in the command

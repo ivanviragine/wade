@@ -93,6 +93,7 @@ class TestCommandBehaviorWithoutContext:
         ):
             result = runner.invoke(app, ["plan"])
         assert result.exit_code == 1
+        assert "No AI tool specified and none detected" in result.output
 
     def test_task_create_requires_title(self) -> None:
         result = runner.invoke(app, ["task", "create"])
@@ -154,12 +155,14 @@ class TestCommandBehaviorWithoutContext:
             app, ["task", "create", "--title", "Fix", "--body-file", "/nonexistent/file.md"]
         )
         assert result.exit_code == 1
+        assert "File not found: /nonexistent/file.md" in result.output
 
     @patch("wade.services.task_service.list_tasks", return_value=[])
     def test_task_list_exits(self, mock_list: patch) -> None:
         # task list exits 0 when no tasks are found
         result = runner.invoke(app, ["task", "list"])
         assert result.exit_code == 0
+        mock_list.assert_called_once_with(state="open", show_deps=False, json_mode=False)
 
     def test_implementation_session_done_exits_with_error(self) -> None:
         # implementation-session done exits 1 when the branch has no issue number.
@@ -172,8 +175,11 @@ class TestCommandBehaviorWithoutContext:
         assert "Cannot extract issue number" in result.output
 
     def test_implementation_session_sync_exits_with_error(self) -> None:
-        # implementation-session sync outside a worktree exits 4 (preflight failure)
-        result = runner.invoke(app, ["implementation-session", "sync"])
+        # implementation-session sync on main exits 4 (preflight failure).
+        # Mock branch name so this assertion is deterministic regardless of the
+        # caller's checkout (main checkout vs feature worktree).
+        with patch("wade.git.repo.get_current_branch", return_value="main"):
+            result = runner.invoke(app, ["implementation-session", "sync"])
         assert result.exit_code == 4
 
     @patch("wade.git.worktree.list_worktrees", return_value=[])
@@ -198,3 +204,4 @@ class TestInteractiveMenu:
         with patch("wade.ui.prompts.menu", return_value=5):
             result = runner.invoke(app, [])
             assert result.exit_code == 0
+            assert "AI-agent-driven git workflow management CLI." in result.output
