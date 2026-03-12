@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.5.0] — 2026-03-12
+
+### Features
+
+- show review reminder in done commands (#145) (5b0f0ca)
+
+### Other Changes
+
+- Add post-batch coherence review session (#144) (96a5abc)
+- Audit and fix skills, prompts, and session commands (#143) (cd18999)
+- Show plan status badge in issue listing (#142) (a074615)
+
 ## [v0.4.2] — 2026-03-11
 
 ### Bug Fixes
