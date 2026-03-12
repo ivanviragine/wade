@@ -1278,18 +1278,9 @@ def batch(
     if prompts.is_tty() and tracking_id:
         choice = prompts.select(
             "Coherence review (run after all sessions complete)",
-            ["Run now", "Run later", "Skip"],
+            ["Run later", "Skip"],
         )
-        if choice == 0:  # Run now
-            from wade.services.batch_review_service import review_batch
-
-            review_batch(
-                tracking_id,
-                ai_tool=resolved_tool,
-                model=resolved_model,
-                project_root=project_root,
-            )
-        elif choice == 1:  # Run later
+        if choice == 0:  # Run later
             console.hint(f"Run when ready: wade review batch {tracking_id}")
     elif tracking_id:
         console.hint(f"After all sessions complete: wade review batch {tracking_id}")

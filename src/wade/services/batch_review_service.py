@@ -31,7 +31,7 @@ from wade.ui.console import console
 
 logger = structlog.get_logger()
 
-_CHECKLIST_RE = re.compile(r"- \[[ x]\] #(\d+)")
+_CHECKLIST_RE = re.compile(r"- \[[ xX]\] #(\d+)")
 """Matches ``- [ ] #42`` or ``- [x] #42`` in a tracking issue body."""
 
 
@@ -94,19 +94,20 @@ def gather_batch_context(
                 logger.debug("batch_review.fetch_failed", branch=branch_name, exc_info=True)
 
         pr_info = git_pr.get_pr_for_branch(repo, branch_name)
-        pr_number = int(pr_info["number"]) if pr_info else None
-        pr_url = str(pr_info["url"]) if pr_info else None
+        pr_number = int(pr_info["number"]) if pr_info and "number" in pr_info else None
+        pr_url = str(pr_info["url"]) if pr_info and "url" in pr_info else None
         status = str(pr_info.get("state", "")) if pr_info else ""
 
+        branch_available = git_branch.branch_exists(repo, branch_name)
         diff_stat = ""
-        if git_branch.branch_exists(repo, branch_name):
+        if branch_available:
             diff_stat = git_repo.diff_stat_between(repo, main_branch, branch_name)
 
         issues.append(
             BatchIssueContext(
                 issue_number=num,
                 issue_title=task.title,
-                branch_name=branch_name if git_branch.branch_exists(repo, branch_name) else None,
+                branch_name=branch_name if branch_available else None,
                 pr_number=pr_number,
                 pr_url=pr_url,
                 diff_stat=diff_stat,

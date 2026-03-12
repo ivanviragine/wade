@@ -1,3 +1,5 @@
+# Batch coherence review
+
 You are a senior software engineer reviewing a batch of parallel implementation changes for coherence and integration readiness.
 
 Multiple issues were implemented in parallel branches. Review the combined context below and identify:
