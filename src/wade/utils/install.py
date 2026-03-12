@@ -20,11 +20,14 @@ logger = structlog.get_logger()
 class InstallMethod(StrEnum):
     """How wade was installed on this machine."""
 
-    UV_TOOL = "uv-tool"  # uv tool install wade
-    PIPX = "pipx"  # pipx install wade
+    UV_TOOL = "uv-tool"  # uv tool install wade-cli
+    PIPX = "pipx"  # pipx install wade-cli
     BREW = "brew"  # brew install wade
     EDITABLE = "editable"  # uv pip install -e (dev)
     UNKNOWN = "unknown"
+
+
+PACKAGE_NAME = "wade-cli"
 
 
 def detect_install_method() -> InstallMethod:
@@ -59,9 +62,9 @@ def self_upgrade() -> bool:
     method = detect_install_method()
 
     if method == InstallMethod.UV_TOOL:
-        return _run_upgrade(["uv", "tool", "upgrade", "wade"], method="uv-tool")
+        return _run_upgrade(["uv", "tool", "upgrade", PACKAGE_NAME], method="uv-tool")
     if method == InstallMethod.PIPX:
-        return _run_upgrade(["pipx", "upgrade", "wade"], method="pipx")
+        return _run_upgrade(["pipx", "upgrade", PACKAGE_NAME], method="pipx")
     if method == InstallMethod.BREW:
         return _run_upgrade(["brew", "upgrade", "wade"], method="brew")
 

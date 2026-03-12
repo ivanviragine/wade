@@ -22,19 +22,19 @@ class TestDetectInstallMethod:
     def test_detects_uv_tool_linux(self) -> None:
         """sys.executable in ~/.local/share/uv/tools/ → UV_TOOL."""
         with patch("wade.utils.install.sys") as mock_sys:
-            mock_sys.executable = "/home/user/.local/share/uv/tools/wade/bin/python"
+            mock_sys.executable = "/home/user/.local/share/uv/tools/wade-cli/bin/python"
             assert detect_install_method() == InstallMethod.UV_TOOL
 
     def test_detects_uv_tool_macos(self) -> None:
         """macOS uv tool path also contains /.local/share/uv/tools/."""
         with patch("wade.utils.install.sys") as mock_sys:
-            mock_sys.executable = "/Users/user/.local/share/uv/tools/wade/bin/python3.11"
+            mock_sys.executable = "/Users/user/.local/share/uv/tools/wade-cli/bin/python3.11"
             assert detect_install_method() == InstallMethod.UV_TOOL
 
     def test_detects_pipx(self) -> None:
         """sys.executable in /.local/pipx/venvs/ → PIPX."""
         with patch("wade.utils.install.sys") as mock_sys:
-            mock_sys.executable = "/home/user/.local/pipx/venvs/wade/bin/python"
+            mock_sys.executable = "/home/user/.local/pipx/venvs/wade-cli/bin/python"
             assert detect_install_method() == InstallMethod.PIPX
 
     def test_detects_brew(self) -> None:
@@ -85,7 +85,7 @@ class TestGetInstalledVersion:
 
 class TestSelfUpgrade:
     def test_uv_tool_calls_uv_tool_upgrade(self) -> None:
-        """When UV_TOOL, runs `uv tool upgrade wade`."""
+        """When UV_TOOL, runs `uv tool upgrade wade-cli`."""
         ok_result = MagicMock(returncode=0)
         with (
             patch("wade.utils.install.detect_install_method", return_value=InstallMethod.UV_TOOL),
@@ -95,10 +95,10 @@ class TestSelfUpgrade:
 
         assert result is True
         cmd = mock_run.call_args[0][0]
-        assert cmd == ["uv", "tool", "upgrade", "wade"]
+        assert cmd == ["uv", "tool", "upgrade", "wade-cli"]
 
     def test_pipx_calls_pipx_upgrade(self) -> None:
-        """When PIPX, runs `pipx upgrade wade`."""
+        """When PIPX, runs `pipx upgrade wade-cli`."""
         ok_result = MagicMock(returncode=0)
         with (
             patch("wade.utils.install.detect_install_method", return_value=InstallMethod.PIPX),
@@ -108,7 +108,7 @@ class TestSelfUpgrade:
 
         assert result is True
         cmd = mock_run.call_args[0][0]
-        assert cmd == ["pipx", "upgrade", "wade"]
+        assert cmd == ["pipx", "upgrade", "wade-cli"]
 
     def test_brew_calls_brew_upgrade(self) -> None:
         """When BREW, runs `brew upgrade wade`."""

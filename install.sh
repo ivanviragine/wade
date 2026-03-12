@@ -29,7 +29,7 @@ info "uv $(uv --version) found"
 # ─── Install ──────────────────────────────────────────────────────────────────
 
 info "Installing WADE..."
-uv tool install wade
+uv tool install wade-cli
 
 # ─── Verify ───────────────────────────────────────────────────────────────────
 
