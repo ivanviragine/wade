@@ -30,7 +30,7 @@ def classify_tier_universal(model_id: str) -> ModelTier:
     Used when processing raw model IDs from scraping/probing.
 
     Tier mapping (matches Bash _init_probe_models_for_tool):
-        easy/medium  — haiku, flash, spark, mini
+        easy         — haiku, flash, spark, mini
         complex      — sonnet, or unrecognized mid-tier models
         very_complex — opus, pro, ultra, max
 
