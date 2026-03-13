@@ -513,10 +513,6 @@ def analyze_deps(
     # Prompt mode: the output is the raw template text, not AI output.
     # The user must run the prompt manually and re-run with a different mode.
     if delegation_mode == DelegationMode.PROMPT:
-        console.info(
-            "Prompt mode: copy the prompt above and run it manually. "
-            "Then re-run with --mode headless or --mode interactive to parse results."
-        )
         return DependencyGraph()
 
     # Parse edges

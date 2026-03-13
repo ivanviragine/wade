@@ -447,7 +447,7 @@ class TestAnalyzeDepsMode:
         mock_confirm.return_value = ("claude", None, None, False)
         mock_delegate.return_value = DelegationResult(
             success=True,
-            feedback="Copy the prompt below...",
+            feedback="raw prompt text",
             mode=DelegationMode.PROMPT,
         )
 
