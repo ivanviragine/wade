@@ -22,7 +22,6 @@ Matches the v2 .wade.yml format:
     permissions:
       allowed_commands:
         - "wade *"
-        - "./scripts/check.sh *"
     hooks:
       post_worktree_create: scripts/setup-worktree.sh
       copy_to_worktree:
@@ -96,8 +95,8 @@ class AIConfig(BaseModel):
 class PermissionsConfig(BaseModel):
     """Permission pre-authorization for AI tool sessions.
 
-    Canonical command patterns (e.g. ``"wade *"``, ``"./scripts/check.sh *"``)
-    are translated to tool-specific allowlist flags at launch time.
+    Canonical command patterns (e.g. ``"wade *"``) are translated to
+    tool-specific allowlist flags at launch time.
     """
 
     allowed_commands: list[str] = ["wade *"]
