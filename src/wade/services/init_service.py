@@ -596,8 +596,7 @@ def _prompt_configure_allowlist(root: Path, non_interactive: bool) -> None:
         " (skips Bash approval in implementation sessions)",
         default=True,
     ):
-        extra = _build_permissions_commands(root)
-        configure_allowlist(root, extra_patterns=extra)
+        configure_allowlist(root, extra_patterns=["wade *"])
         console.success("Added Bash([step]wade[/] *) to .claude/settings.json allowlist")
 
 
@@ -618,8 +617,7 @@ def _prompt_cursor_settings(root: Path, non_interactive: bool) -> None:
         " (skips Shell approval in implementation sessions)",
         default=True,
     ):
-        extra = _build_permissions_commands(root)
-        configure_allowlist(root, extra_patterns=extra)
+        configure_allowlist(root, extra_patterns=["wade *"])
         console.success("Added Shell([step]wade[/] *) to .cursor/cli.json allowlist")
 
 
@@ -1552,27 +1550,6 @@ def _prompt_command_overrides(
     return result
 
 
-def _detect_scripts(project_root: Path) -> list[str]:
-    """Auto-detect executable scripts in the project's scripts/ directory.
-
-    Returns canonical command patterns (e.g. ``"./scripts/check.sh *"``).
-    """
-    scripts_dir = project_root / "scripts"
-    if not scripts_dir.is_dir():
-        return []
-    patterns: list[str] = []
-    for sh_file in sorted(scripts_dir.glob("*.sh")):
-        patterns.append(f"./{sh_file.relative_to(project_root)} *")
-    return patterns
-
-
-def _build_permissions_commands(project_root: Path) -> list[str]:
-    """Build the full allowed_commands list: default + detected scripts."""
-    commands = ["wade *"]
-    commands.extend(_detect_scripts(project_root))
-    return commands
-
-
 def _write_config(
     config_path: Path,
     ai_tool: str | None,
@@ -1659,12 +1636,6 @@ def _write_config(
         if provider_setup.get("settings"):
             provider_dict["settings"] = provider_setup["settings"]
     config_dict["provider"] = provider_dict
-
-    # Build permissions section with auto-detected scripts
-    allowed_commands = _build_permissions_commands(config_path.parent)
-    if len(allowed_commands) > 1:
-        # Only write section when there are extra patterns beyond default
-        config_dict["permissions"] = {"allowed_commands": allowed_commands}
 
     # Build hooks section — always include .wade.yml in copy_to_worktree
     hooks_dict: dict[str, Any] = {}
