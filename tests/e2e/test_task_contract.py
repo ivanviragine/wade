@@ -10,6 +10,7 @@ import pytest
 from tests.e2e._support import (
     MockGhCli,
     _assert_gh_called_with,
+    _count_gh_calls,
     _parse_json_output,
     _run,
     _seed_mock_issue,
@@ -40,6 +41,61 @@ class TestTaskCommands:
             mock_gh_cli["log_file"],
             ["issue", "list", "--state", "open", "--label", "feature-plan"],
         )
+
+    def test_task_deps_prompt_mode_without_configured_ai_prints_prompt_only(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """Prompt-mode deps should not require AI config or create workflow side effects."""
+        (e2e_repo / ".wade.yml").write_text(
+            "\n".join(
+                [
+                    "version: 2",
+                    "project:",
+                    "  main_branch: main",
+                    "  issue_label: feature-plan",
+                    "  worktrees_dir: ../.worktrees",
+                    "  branch_prefix: feat",
+                    "  merge_strategy: PR",
+                    "provider:",
+                    "  name: github",
+                    "hooks:",
+                    "  copy_to_worktree:",
+                    "    - .wade.yml",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        _seed_mock_issue(
+            mock_gh_cli["state_file"],
+            issue_number=11,
+            title="Auth layer",
+            body="Login has to land first.",
+            labels=["feature-plan"],
+        )
+        _seed_mock_issue(
+            mock_gh_cli["state_file"],
+            issue_number=12,
+            title="Dashboard UI",
+            body="Depends on auth state.",
+            labels=["feature-plan"],
+        )
+
+        result = _run(["task", "deps", "11", "12", "--mode", "prompt"], cwd=e2e_repo)
+
+        assert result.returncode == 0
+        assert "## Issue #11: Auth layer" in result.stdout
+        assert "## Issue #12: Dashboard UI" in result.stdout
+        assert "Login has to land first." in result.stdout
+        assert "Depends on auth state." in result.stdout
+        assert "wade task deps" not in result.stdout
+        assert "Analysis complete" not in result.stdout
+        assert _count_gh_calls(mock_gh_cli["log_file"], ["issue", "edit"]) == 0
+        assert _count_gh_calls(mock_gh_cli["log_file"], ["issue", "create"]) == 0
+        deps_worktrees = list((e2e_repo.parent / ".worktrees" / e2e_repo.name).glob("deps-*"))
+        assert deps_worktrees == []
 
     def test_task_list_json(self, e2e_repo: Path, mock_gh_cli: MockGhCli) -> None:
         """wade task list --json outputs strict JSON and calls gh issue list."""

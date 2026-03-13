@@ -217,7 +217,7 @@ All AI-interactive commands follow the same pattern:
 
 Each AI tool adapter implements `capabilities()` (binary name, model flag syntax, headless flag), `initial_message_args()` (how to pass an initial message for interactive sessions), `launch()`, `parse_transcript()`, `is_model_compatible()`, and `build_launch_command()`. The `launch()` method accepts an optional `transcript_path: Path | None` parameter — when provided, the adapter captures session output to that file for post-session token usage extraction. When adding a new AI-interactive command, follow this existing pattern.
 
-**Deps interactive fallback**: When headless analysis fails (tool doesn't support `--print`/`--prompt`), `deps_service.py` falls back to interactive mode: passes the dependency prompt as an initial message to the AI tool, then reads the output from `{plan_dir}/deps-output.txt` after exit.
+**Deps mode behavior**: `wade task deps` does not auto-fallback between delegation modes. Prompt mode prints the raw dependency-analysis prompt with no AI-tool requirement or worktree bootstrap. Headless and interactive modes perform the real AI launch path and are the only modes that create the temporary analysis worktree.
 
 ## Issue Detection (Snapshot/Diff Pattern)
 
