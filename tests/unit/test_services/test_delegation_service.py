@@ -59,10 +59,10 @@ class TestDelegatePrompt:
         assert result.success is True
         assert "Some prompt text" in result.feedback
 
-    def test_prompt_mode_includes_copy_header(self) -> None:
+    def test_prompt_mode_returns_raw_prompt(self) -> None:
         req = DelegationRequest(mode=DelegationMode.PROMPT, prompt="My prompt")
         result = _delegate_prompt(req)
-        assert result.feedback.startswith("Copy the prompt below")
+        assert result.feedback == "My prompt"
 
 
 # ---------------------------------------------------------------------------

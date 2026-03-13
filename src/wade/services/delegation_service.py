@@ -66,11 +66,10 @@ def delegate(request: DelegationRequest) -> DelegationResult:
 
 
 def _delegate_prompt(request: DelegationRequest) -> DelegationResult:
-    """Return the prompt text directly — caller copies into their AI tool."""
-    header = "Copy the prompt below into your AI tool:\n\n---\n"
+    """Return the raw prompt text directly — no user-facing wrapper."""
     return DelegationResult(
         success=True,
-        feedback=header + request.prompt,
+        feedback=request.prompt,
         mode=DelegationMode.PROMPT,
     )
 
