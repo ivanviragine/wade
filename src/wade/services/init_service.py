@@ -1636,7 +1636,10 @@ def _write_config(
 
     # models section keyed by implement_tool (or default tool)
     models_key = implement_tool or ai_tool
-    if models_key and (model_mapping.easy or model_mapping.complex):
+    has_any_model = any(
+        getattr(model_mapping, k, None) for k in ("easy", "medium", "complex", "very_complex")
+    )
+    if models_key and has_any_model:
         config_dict["models"] = {
             str(models_key): {
                 k: v
