@@ -117,7 +117,7 @@ class AbstractAITool(ABC):
 
         return ComplexityModelMapping(
             easy=fast.id if fast else None,
-            medium=fast.id if fast else None,
+            medium=balanced.id if balanced else None,
             complex=balanced.id if balanced else None,
             very_complex=powerful.id if powerful else None,
         )

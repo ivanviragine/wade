@@ -655,12 +655,22 @@ class TestWriteConfig:
     def test_with_model_mapping(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         mapping = ComplexityModelMapping(
-            easy="haiku", medium="haiku", complex="sonnet", very_complex="opus"
+            easy="haiku", medium="sonnet", complex="sonnet", very_complex="opus"
         )
         _write_config(config_path, "claude", mapping)
         config = yaml.safe_load(config_path.read_text())
         assert config["models"]["claude"]["easy"] == "haiku"
+        assert config["models"]["claude"]["medium"] == "sonnet"
         assert config["models"]["claude"]["complex"] == "sonnet"
+        assert config["models"]["claude"]["very_complex"] == "opus"
+
+    def test_write_config_with_only_medium_and_very_complex(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        mapping = ComplexityModelMapping(medium="sonnet", very_complex="opus")
+        _write_config(config_path, "claude", mapping)
+        config = yaml.safe_load(config_path.read_text())
+        assert "models" in config
+        assert config["models"]["claude"]["medium"] == "sonnet"
         assert config["models"]["claude"]["very_complex"] == "opus"
 
     def test_no_tool_omits_ai_and_models(self, tmp_path: Path) -> None:
@@ -805,6 +815,19 @@ class TestPatchConfig:
         config = yaml.safe_load(config_path.read_text())
         assert config["models"]["claude"]["easy"] == "new-haiku"
         assert config["models"]["claude"]["complex"] == "sonnet"
+
+    def test_patch_config_writes_all_four_tiers(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
+        mapping = ComplexityModelMapping(
+            easy="haiku", medium="sonnet", complex="sonnet", very_complex="opus"
+        )
+        _patch_config(config_path, "claude", mapping, force=True)
+        config = yaml.safe_load(config_path.read_text())
+        assert config["models"]["claude"]["easy"] == "haiku"
+        assert config["models"]["claude"]["medium"] == "sonnet"
+        assert config["models"]["claude"]["complex"] == "sonnet"
+        assert config["models"]["claude"]["very_complex"] == "opus"
 
     def test_no_force_preserves_existing_models(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
