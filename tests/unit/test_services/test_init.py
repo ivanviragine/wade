@@ -512,47 +512,42 @@ class TestPromptCommandOverrides:
 
     @patch("wade.ui.prompts.select")
     def test_interactive_no_overrides(self, mock_select: MagicMock) -> None:
-        # Select "Skip (use default)" for plan, deps; enable + skip for reviews.
-        # With installed_tools=["claude"], options are: ["claude", "Skip (use default)"]
-        # deps + review commands get a mode prompt (no tool → only "prompt" option → idx 0).
+        # With installed_tools=["claude"], tool_options=["claude", "Skip (use default)"].
+        # plan: Skip tool (idx=1)
+        # deps: Skip tool (idx=1), no effective tool → mode skipped entirely
+        # review_plan/review_implementation/review_batch:
+        #   Enable=Yes (idx=0), mode=prompt (idx=0) → skip tool/model
         mock_select.side_effect = [
             1,  # plan: Skip tool
-            1,
-            0,  # deps: Skip tool, mode=prompt
-            0,
-            1,
-            0,  # review_plan: Enable=Yes, Skip tool, mode=prompt
-            0,
-            1,
-            0,  # review_implementation: Enable=Yes, Skip tool, mode=prompt
-            0,
-            1,
-            0,  # review_batch: Enable=Yes, Skip tool, mode=prompt
+            1,  # deps: Skip tool (no effective tool → no mode prompt)
+            0,  # review_plan: Enable=Yes
+            0,  # review_plan: mode=prompt (idx 0 in [prompt, headless, interactive])
+            0,  # review_implementation: Enable=Yes
+            0,  # review_implementation: mode=prompt
+            0,  # review_batch: Enable=Yes
+            0,  # review_batch: mode=prompt
         ]
         result = _prompt_command_overrides(["claude"], non_interactive=False)
         assert result["plan"] == {}
-        assert result["deps"] == {"mode": "prompt"}
+        assert result["deps"] == {}
         assert result["review_plan"] == {"enabled": "true", "mode": "prompt"}
         assert result["review_implementation"] == {"enabled": "true", "mode": "prompt"}
         assert result["review_batch"] == {"enabled": "true", "mode": "prompt"}
 
     @patch("wade.ui.prompts.select")
     def test_interactive_reviews_disabled(self, mock_select: MagicMock) -> None:
-        # plan: Skip tool; deps: Skip tool, mode=prompt
-        # review_plan: Enable=No (halts — no tool/mode prompts)
-        # review_implementation: Enable=No (halts — no tool/mode prompts)
-        # review_batch: Enable=No (halts — no tool/mode prompts)
+        # plan: Skip tool; deps: Skip tool (no effective tool → mode skipped)
+        # review_plan/review_implementation/review_batch: Enable=No
         mock_select.side_effect = [
             1,  # plan: Skip tool
-            1,
-            0,  # deps: Skip tool, mode=prompt
+            1,  # deps: Skip tool (no effective tool → no mode prompt)
             1,  # review_plan: Enable=No
             1,  # review_implementation: Enable=No
             1,  # review_batch: Enable=No
         ]
         result = _prompt_command_overrides(["claude"], non_interactive=False)
         assert result["plan"] == {}
-        assert result["deps"] == {"mode": "prompt"}
+        assert result["deps"] == {}
         assert result["review_plan"] == {"enabled": "false"}
         assert result["review_implementation"] == {"enabled": "false"}
         assert result["review_batch"] == {"enabled": "false"}
@@ -564,18 +559,79 @@ class TestPromptCommandOverrides:
     ) -> None:
         mock_suggest.return_value = "gemini-2.5-pro"
         # installed_tools=["claude", "gemini"], tool_options=["claude", "gemini", "Skip"]
-        # plan: idx 1 = gemini; model for plan: idx 1 = "gemini-2.5-pro" (2nd in gemini list);
-        # deps: idx 2 = "Skip (use default)", mode: idx 0 = prompt (no tool → only option)
+        # plan: idx 1 = gemini; model for plan: idx 1 = "gemini-2.5-pro" (2nd in gemini list)
+        # deps: idx 2 = Skip, no effective tool (no default_tool) → mode skipped
         # review_plan/review_implementation/review_batch:
-        # Enable=Yes, idx 2 = Skip, mode: idx 0 = prompt
-        mock_select.side_effect = [1, 1, 2, 0, 0, 2, 0, 0, 2, 0, 0, 2, 0]
+        #   Enable=Yes (idx 0), mode=prompt (idx 0) → skip tool/model
+        mock_select.side_effect = [1, 1, 2, 0, 0, 0, 0, 0, 0]
         result = _prompt_command_overrides(["claude", "gemini"], non_interactive=False)
         assert result["plan"]["tool"] == "gemini"
         assert result["plan"]["model"] == "gemini-2.5-pro"
-        assert result["deps"] == {"mode": "prompt"}
+        assert result["deps"] == {}
         assert result["review_plan"] == {"enabled": "true", "mode": "prompt"}
         assert result["review_implementation"] == {"enabled": "true", "mode": "prompt"}
         assert result["review_batch"] == {"enabled": "true", "mode": "prompt"}
+
+    @patch("wade.services.init_service._collect_model_options")
+    @patch("wade.services.init_service._suggest_model_for_tool")
+    @patch("wade.ui.prompts.select")
+    def test_review_headless_mode_prompts_tool_and_model(
+        self,
+        mock_select: MagicMock,
+        mock_suggest: MagicMock,
+        mock_collect: MagicMock,
+    ) -> None:
+        """Selecting headless/interactive for review should trigger tool and model prompts."""
+        mock_suggest.return_value = "claude-sonnet"
+        mock_collect.return_value = ["claude-haiku", "claude-sonnet"]
+        # tool_options=["claude", "Skip"]
+        # model_options=["claude-haiku", "claude-sonnet", "Custom...", "Skip"]
+        # plan: Skip (idx=1)
+        # deps: Skip (idx=1), no effective tool → no mode
+        # review_plan: Enable=Yes (idx=0), mode=headless (idx=1),
+        #   tool=claude (idx=0), model=claude-sonnet (idx=1)
+        # review_implementation: Enable=No (idx=1)
+        mock_select.side_effect = [
+            1,  # plan: Skip
+            1,  # deps: Skip (no mode)
+            0,  # review_plan: Enable=Yes
+            1,  # review_plan: mode=headless (idx 1 in [prompt, headless, interactive])
+            0,  # review_plan: tool=claude
+            1,  # review_plan: model=claude-sonnet (idx 1)
+            1,  # review_implementation: Enable=No
+            1,  # review_batch: Enable=No
+        ]
+        result = _prompt_command_overrides(["claude"], non_interactive=False)
+        assert result["review_plan"]["mode"] == "headless"
+        assert result["review_plan"]["tool"] == "claude"
+        assert result["review_plan"]["model"] == "claude-sonnet"
+
+    @patch("wade.ui.prompts.select")
+    def test_deps_with_default_tool_shows_mode(self, mock_select: MagicMock) -> None:
+        """When default_tool is set, deps should show headless/interactive mode prompt."""
+        # plan: Skip (idx=1)
+        # deps: Skip tool (idx=1), effective_tool=default_tool → mode prompt appears
+        #   mode=headless (idx=0 in [headless, interactive])
+        # review_plan/review_implementation/review_batch: Enable=No (idx=1)
+        mock_select.side_effect = [1, 1, 0, 1, 1, 1]
+        result = _prompt_command_overrides(["claude"], non_interactive=False, default_tool="claude")
+        assert result["deps"] == {"mode": "headless"}
+
+    @patch("wade.ui.prompts.select")
+    def test_deps_mode_excludes_self_review(self, mock_select: MagicMock) -> None:
+        """Deps mode prompt must not include 'prompt (self-review)' as an option."""
+        # plan: Skip (idx=1)
+        # deps: Skip tool (idx=1), effective_tool=default_tool → mode prompt
+        #   select mode=headless (idx=0)
+        # review_plan/review_implementation/review_batch: Enable=No (idx=1)
+        mock_select.side_effect = [1, 1, 0, 1, 1, 1]
+        _prompt_command_overrides(["claude"], non_interactive=False, default_tool="claude")
+        # The deps mode call is the 3rd select call (index 2)
+        deps_mode_call = mock_select.call_args_list[2]
+        mode_options_arg = deps_mode_call.args[1]
+        assert "prompt (self-review)" not in mode_options_arg
+        assert "headless (AI one-shot)" in mode_options_arg
+        assert "interactive (AI session)" in mode_options_arg
 
 
 # ---------------------------------------------------------------------------

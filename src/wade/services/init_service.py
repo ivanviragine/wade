@@ -1469,25 +1469,22 @@ def _prompt_command_overrides(
     ]
     result: dict[str, dict[str, str]] = {cmd_name: {} for cmd_name in _COMMAND_OVERRIDE_NAMES}
     tool_for_cmd: list[str | None] = [None] * len(cmd_triples)
-    for cmd_idx, (cmd_name, prompt_label, section) in enumerate(cmd_triples):
-        console.rule(section)
 
-        # For review commands, ask if reviews are enabled first
-        if cmd_name.startswith("review_"):
-            enable_idx = prompts.select(
-                f"Enable {section.lower()}?",
-                ["Yes", "No"],
-                default=0,
-            )
-            if enable_idx == 1:
-                result[cmd_name] = {"enabled": "false"}
-                continue
-            result[cmd_name] = {"enabled": "true"}
-        else:
-            result[cmd_name] = {}
-
-        idx = prompts.select(prompt_label, tool_options, default=len(tool_options) - 1)
-        selected_tool = tool_options[idx]
+    def _ask_tool_and_model(
+        cmd_idx: int,
+        cmd_name: str,
+        prompt_label: str,
+        section: str,
+        *,
+        allow_skip: bool = True,
+    ) -> None:
+        """Ask for AI tool and model, updating result and tool_for_cmd in place."""
+        selectable_tools = (
+            tool_options if allow_skip else [t for t in tool_options if t != skip_label]
+        )
+        default_idx = len(selectable_tools) - 1 if allow_skip else 0
+        idx = prompts.select(prompt_label, selectable_tools, default=default_idx)
+        selected_tool = selectable_tools[idx]
         tool_for_cmd[cmd_idx] = None if selected_tool == skip_label else selected_tool
 
         if tool_for_cmd[cmd_idx] is not None:
@@ -1523,28 +1520,74 @@ def _prompt_command_overrides(
             if chosen and chosen != skip_model_label:
                 result[cmd_name]["model"] = chosen
 
-        # For delegation-aware commands, prompt for delegation mode
-        if cmd_name.startswith("review_") or cmd_name == "deps":
-            effective_tool = tool_for_cmd[cmd_idx] or default_tool
-            if effective_tool:
-                mode_options = [
-                    "headless (AI one-shot)",
-                    "interactive (AI session)",
-                    "prompt (self-review)",
-                ]
-                mode_values = ["headless", "interactive", "prompt"]
-                # deps defaults to headless; review defaults to prompt
-                default_mode_idx = 2 if cmd_name.startswith("review_") else 0
-            else:
-                mode_options = ["prompt (self-review)"]
-                mode_values = ["prompt"]
-                default_mode_idx = 0
+    for cmd_idx, (cmd_name, prompt_label, section) in enumerate(cmd_triples):
+        console.rule(section)
+
+        if cmd_name == "plan":
+            result[cmd_name] = {}
+            _ask_tool_and_model(cmd_idx, cmd_name, prompt_label, section)
+
+        elif cmd_name.startswith("review_"):
+            # 1. Enable?
+            enable_idx = prompts.select(
+                f"Enable {section.lower()}?",
+                ["Yes", "No"],
+                default=0,
+            )
+            if enable_idx == 1:
+                result[cmd_name] = {"enabled": "false"}
+                continue
+            result[cmd_name] = {"enabled": "true"}
+
+            # 2. Delegation mode (before tool/model — if "prompt", no AI needed)
+            mode_options = [
+                "prompt (self-review)",
+                "headless (AI one-shot)",
+                "interactive (AI session)",
+            ]
+            mode_values = ["prompt", "headless", "interactive"]
             mode_idx = prompts.select(
                 f"  Delegation mode for {section.lower()}",
                 mode_options,
-                default=default_mode_idx,
+                default=0,
             )
-            result[cmd_name]["mode"] = mode_values[mode_idx]
+            mode = mode_values[mode_idx]
+            result[cmd_name]["mode"] = mode
+
+            # 3. Tool and model only needed for AI-backed modes.
+            # When no default_tool is configured, skip is not a valid choice —
+            # a concrete tool must be selected or the resulting config would have
+            # no resolvable AI tool for headless/interactive execution.
+            if mode != "prompt":
+                _ask_tool_and_model(
+                    cmd_idx,
+                    cmd_name,
+                    prompt_label,
+                    section,
+                    allow_skip=default_tool is not None,
+                )
+
+        elif cmd_name == "deps":
+            result[cmd_name] = {}
+
+            # 1. Tool (unchanged position)
+            _ask_tool_and_model(cmd_idx, cmd_name, prompt_label, section)
+
+            # 2. Mode — headless/interactive only (no self-review for deps)
+            # Skip mode entirely if no effective tool is available
+            effective_tool = tool_for_cmd[cmd_idx] or default_tool
+            if effective_tool:
+                deps_mode_options = [
+                    "headless (AI one-shot)",
+                    "interactive (AI session)",
+                ]
+                deps_mode_values = ["headless", "interactive"]
+                mode_idx = prompts.select(
+                    f"  Delegation mode for {section.lower()}",
+                    deps_mode_options,
+                    default=0,
+                )
+                result[cmd_name]["mode"] = deps_mode_values[mode_idx]
 
     return result
 
