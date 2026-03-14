@@ -705,7 +705,7 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
                 state = ReviewState(state_str)
             except ValueError:
                 state = ReviewState.COMMENTED
-            is_bot = author_login.endswith("[bot]") or author_login.endswith("-bot")
+            is_bot = bool(re.search(r"(^bot[-_]|[-_\[]bot]?$|bot$)", author_login.lower()))
             reviews.append(
                 PRReview(
                     author=author_login,
