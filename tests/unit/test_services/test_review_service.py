@@ -382,6 +382,8 @@ class TestReviewServiceStart:
     @pytest.fixture()
     def mock_setup(self, tmp_path: Path, mock_provider: MagicMock) -> dict[str, MagicMock]:
         """Set up common mocks for start() tests."""
+        from wade.models.review import PRReviewStatus
+
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
         worktree_path = tmp_path / "wt"
@@ -421,6 +423,10 @@ class TestReviewServiceStart:
                     "state": "OPEN",
                     "isDraft": False,
                 },
+            ),
+            "get_comprehensive_review_status": patch(
+                "wade.services.review_service.get_comprehensive_review_status",
+                return_value=PRReviewStatus(),
             ),
             "bootstrap_worktree": patch(
                 "wade.services.review_service.bootstrap_worktree",
@@ -499,9 +505,9 @@ class TestReviewServiceStart:
         self, tmp_path: Path, mock_setup: dict[str, MagicMock], mock_provider: MagicMock
     ) -> None:
         """start() should succeed with a message if all comments are resolved."""
-        mock_provider.get_pr_review_threads.return_value = [
-            ReviewThread(is_resolved=True, comments=[ReviewComment(body="resolved")]),
-        ]
+        from wade.models.review import PRReviewStatus
+
+        mock_setup["get_comprehensive_review_status"].return_value = PRReviewStatus()
         result = start(target="42")
         assert result is True
 
@@ -509,18 +515,22 @@ class TestReviewServiceStart:
         self, tmp_path: Path, mock_setup: dict[str, MagicMock], mock_provider: MagicMock
     ) -> None:
         """start() should proceed to AI launch when actionable comments exist."""
-        mock_provider.get_pr_review_threads.return_value = [
-            ReviewThread(
-                comments=[
-                    ReviewComment(
-                        author="alice",
-                        body="Fix this",
-                        path="main.py",
-                        line=10,
-                    )
-                ]
-            ),
-        ]
+        from wade.models.review import PRReviewStatus
+
+        mock_setup["get_comprehensive_review_status"].return_value = PRReviewStatus(
+            actionable_threads=[
+                ReviewThread(
+                    comments=[
+                        ReviewComment(
+                            author="alice",
+                            body="Fix this",
+                            path="main.py",
+                            line=10,
+                        )
+                    ]
+                ),
+            ]
+        )
 
         result = start(target="42")
         assert result is True
@@ -630,7 +640,7 @@ class TestFetchReviews:
     def _make_task(self) -> Task:
         return Task(id="42", title="Fix the widget", state=TaskState.OPEN, body="")
 
-    @patch("wade.services.review_service.filter_actionable_threads")
+    @patch("wade.services.review_service.get_comprehensive_review_status")
     @patch("wade.services.review_service.git_pr.get_pr_for_branch")
     @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
     @patch(
@@ -648,10 +658,12 @@ class TestFetchReviews:
         mock_get_current_branch: MagicMock,
         mock_branch: MagicMock,
         mock_pr: MagicMock,
-        mock_filter: MagicMock,
+        mock_status: MagicMock,
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
+        from wade.models.review import PRReviewStatus
+
         mock_repo_root.return_value = tmp_path
         provider = mock_get_provider.return_value
         provider.read_task.return_value = self._make_task()
@@ -662,8 +674,7 @@ class TestFetchReviews:
                 comments=[ReviewComment(author="alice", body="Fix this", path="a.py", line=1)],
             )
         ]
-        mock_filter.return_value = threads
-        provider.get_pr_review_threads.return_value = threads
+        mock_status.return_value = PRReviewStatus(actionable_threads=threads)
 
         result = fetch_reviews("42", project_root=tmp_path)
 
@@ -672,7 +683,7 @@ class TestFetchReviews:
         assert "Fix this" in captured.out
         assert "@alice" in captured.out
 
-    @patch("wade.services.review_service.filter_actionable_threads")
+    @patch("wade.services.review_service.get_comprehensive_review_status")
     @patch("wade.services.review_service.git_pr.get_pr_for_branch")
     @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
     @patch(
@@ -690,16 +701,17 @@ class TestFetchReviews:
         mock_get_current_branch: MagicMock,
         mock_branch: MagicMock,
         mock_pr: MagicMock,
-        mock_filter: MagicMock,
+        mock_status: MagicMock,
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
+        from wade.models.review import PRReviewStatus
+
         mock_repo_root.return_value = tmp_path
         provider = mock_get_provider.return_value
         provider.read_task.return_value = self._make_task()
         mock_pr.return_value = {"number": 99, "state": "OPEN"}
-        provider.get_pr_review_threads.return_value = []
-        mock_filter.return_value = []
+        mock_status.return_value = PRReviewStatus()
 
         result = fetch_reviews("42", project_root=tmp_path)
 
@@ -734,7 +746,7 @@ class TestFetchReviews:
 
         assert result is False
 
-    @patch("wade.services.review_service.filter_actionable_threads")
+    @patch("wade.services.review_service.get_comprehensive_review_status")
     @patch("wade.services.review_service.git_pr.get_pr_for_branch")
     @patch(
         "wade.services.review_service.git_branch.make_branch_name",
@@ -755,24 +767,24 @@ class TestFetchReviews:
         mock_get_current_branch: MagicMock,
         mock_make_branch: MagicMock,
         mock_pr: MagicMock,
-        mock_filter: MagicMock,
+        mock_status: MagicMock,
         tmp_path: Path,
     ) -> None:
         """When current branch matches the issue number, use it directly."""
+        from wade.models.review import PRReviewStatus
+
         mock_repo_root.return_value = tmp_path
         provider = mock_get_provider.return_value
         provider.read_task.return_value = self._make_task()
-        provider.get_pr_issue_comments.return_value = []
         mock_pr.return_value = {"number": 99, "state": "OPEN"}
-        mock_filter.return_value = []
-        provider.get_pr_review_threads.return_value = []
+        mock_status.return_value = PRReviewStatus()
 
         fetch_reviews("42", project_root=tmp_path)
 
         mock_pr.assert_called_once_with(tmp_path, "feat/42-fix-widget")
         mock_make_branch.assert_not_called()
 
-    @patch("wade.services.review_service.filter_actionable_threads")
+    @patch("wade.services.review_service.get_comprehensive_review_status")
     @patch("wade.services.review_service.git_pr.get_pr_for_branch")
     @patch(
         "wade.services.review_service.git_branch.make_branch_name",
@@ -793,17 +805,17 @@ class TestFetchReviews:
         mock_get_current_branch: MagicMock,
         mock_make_branch: MagicMock,
         mock_pr: MagicMock,
-        mock_filter: MagicMock,
+        mock_status: MagicMock,
         tmp_path: Path,
     ) -> None:
         """When current branch belongs to a different issue, fall back to make_branch_name."""
+        from wade.models.review import PRReviewStatus
+
         mock_repo_root.return_value = tmp_path
         provider = mock_get_provider.return_value
         provider.read_task.return_value = self._make_task()
-        provider.get_pr_issue_comments.return_value = []
         mock_pr.return_value = {"number": 99, "state": "OPEN"}
-        mock_filter.return_value = []
-        provider.get_pr_review_threads.return_value = []
+        mock_status.return_value = PRReviewStatus()
 
         fetch_reviews("42", project_root=tmp_path)
 
@@ -854,6 +866,84 @@ class TestFetchReviews:
     ) -> None:
         result = fetch_reviews("42", project_root=tmp_path)
         assert result is False
+
+    @patch("wade.services.review_service.get_comprehensive_review_status")
+    @patch("wade.services.review_service.git_pr.get_pr_for_branch")
+    @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch(
+        "wade.services.review_service.git_repo.get_current_branch",
+        side_effect=GitError("detached"),
+    )
+    @patch("wade.services.review_service.git_repo.get_repo_root")
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_changes_requested_shown_when_no_threads(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_get_current_branch: MagicMock,
+        mock_branch: MagicMock,
+        mock_pr: MagicMock,
+        mock_status: MagicMock,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from wade.models.review import PRReview, PRReviewStatus, ReviewState
+
+        mock_repo_root.return_value = tmp_path
+        provider = mock_get_provider.return_value
+        provider.read_task.return_value = self._make_task()
+        mock_pr.return_value = {"number": 99, "state": "OPEN"}
+        mock_status.return_value = PRReviewStatus(
+            reviews=[PRReview(author="bob", state=ReviewState.CHANGES_REQUESTED)]
+        )
+
+        result = fetch_reviews("42", project_root=tmp_path)
+
+        assert result is True
+        captured = capsys.readouterr()
+        assert "@bob" in captured.out
+        assert "Changes requested" in captured.out
+
+    @patch("wade.services.review_service.get_comprehensive_review_status")
+    @patch("wade.services.review_service.git_pr.get_pr_for_branch")
+    @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch(
+        "wade.services.review_service.git_repo.get_current_branch",
+        side_effect=GitError("detached"),
+    )
+    @patch("wade.services.review_service.git_repo.get_repo_root")
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_pending_reviewers_shown_when_no_threads(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_get_current_branch: MagicMock,
+        mock_branch: MagicMock,
+        mock_pr: MagicMock,
+        mock_status: MagicMock,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from wade.models.review import PendingReviewer, PRReviewStatus
+
+        mock_repo_root.return_value = tmp_path
+        provider = mock_get_provider.return_value
+        provider.read_task.return_value = self._make_task()
+        mock_pr.return_value = {"number": 99, "state": "OPEN"}
+        mock_status.return_value = PRReviewStatus(
+            pending_reviewers=[PendingReviewer(name="charlie", is_team=False)]
+        )
+
+        result = fetch_reviews("42", project_root=tmp_path)
+
+        assert result is True
+        captured = capsys.readouterr()
+        assert "@charlie" in captured.out
+        assert "Awaiting review" in captured.out
 
 
 # ---------------------------------------------------------------------------
@@ -909,14 +999,13 @@ class TestResolveThread:
 
 
 # ---------------------------------------------------------------------------
-# count_unresolved_threads()
+# count_unresolved_threads() / get_review_status()
 # ---------------------------------------------------------------------------
 
 
 class TestCountUnresolvedThreads:
     """Tests for the count_unresolved_threads() function."""
 
-    @patch("wade.services.review_service.filter_actionable_threads")
     @patch("wade.services.review_service.git_pr.get_pr_for_branch")
     @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
     @patch("wade.services.review_service.git_repo.get_current_branch", return_value="feat/42-fix")
@@ -931,25 +1020,25 @@ class TestCountUnresolvedThreads:
         mock_branch: MagicMock,
         mock_make_branch: MagicMock,
         mock_pr: MagicMock,
-        mock_filter: MagicMock,
         tmp_path: Path,
     ) -> None:
+        from wade.models.review import PRReviewStatus
+
         mock_repo_root.return_value = tmp_path
         provider = mock_get_provider.return_value
-        provider.read_task.return_value = Task(id="42", title="Fix", state=TaskState.OPEN, body="")
         mock_pr.return_value = {"number": 99, "state": "OPEN"}
         threads = [
             ReviewThread(comments=[ReviewComment(author="a", body="Fix this")]),
             ReviewThread(comments=[ReviewComment(author="b", body="And this")]),
         ]
-        mock_filter.return_value = threads
-        provider.get_pr_review_threads.return_value = threads
+        provider.get_pr_review_status.return_value = PRReviewStatus(
+            actionable_threads=threads,
+        )
 
         result = count_unresolved_threads(project_root=tmp_path)
 
         assert result == 2
 
-    @patch("wade.services.review_service.filter_actionable_threads")
     @patch("wade.services.review_service.git_pr.get_pr_for_branch")
     @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
     @patch("wade.services.review_service.git_repo.get_current_branch", return_value="feat/42-fix")
@@ -964,15 +1053,14 @@ class TestCountUnresolvedThreads:
         mock_branch: MagicMock,
         mock_make_branch: MagicMock,
         mock_pr: MagicMock,
-        mock_filter: MagicMock,
         tmp_path: Path,
     ) -> None:
+        from wade.models.review import PRReviewStatus
+
         mock_repo_root.return_value = tmp_path
         provider = mock_get_provider.return_value
-        provider.read_task.return_value = Task(id="42", title="Fix", state=TaskState.OPEN, body="")
         mock_pr.return_value = {"number": 99, "state": "OPEN"}
-        provider.get_pr_review_threads.return_value = []
-        mock_filter.return_value = []
+        provider.get_pr_review_status.return_value = PRReviewStatus()
 
         result = count_unresolved_threads(project_root=tmp_path)
 
@@ -1047,37 +1135,172 @@ class TestCountUnresolvedThreads:
         tmp_path: Path,
     ) -> None:
         mock_repo_root.return_value = tmp_path
-        provider = mock_get_provider.return_value
-        provider.read_task.return_value = Task(id="42", title="Fix", state=TaskState.OPEN, body="")
 
         result = count_unresolved_threads(project_root=tmp_path)
 
         assert result is None
 
+    @patch("wade.services.review_service.git_pr.get_pr_for_branch")
     @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
     @patch("wade.services.review_service.git_repo.get_current_branch", return_value="feat/42-fix")
     @patch("wade.services.review_service.git_repo.get_repo_root")
     @patch("wade.services.review_service.get_provider")
     @patch("wade.services.review_service.load_config")
-    def test_returns_none_when_provider_thread_fetch_fails(
+    def test_returns_none_when_provider_status_fetch_fails(
         self,
         mock_config: MagicMock,
         mock_get_provider: MagicMock,
         mock_repo_root: MagicMock,
         mock_branch: MagicMock,
         mock_make_branch: MagicMock,
+        mock_pr: MagicMock,
         tmp_path: Path,
     ) -> None:
         mock_repo_root.return_value = tmp_path
         provider = mock_get_provider.return_value
-        provider.read_task.return_value = Task(id="42", title="Fix", state=TaskState.OPEN, body="")
-        provider.get_pr_review_threads.side_effect = RuntimeError("API down")
-        from wade.git import pr as git_pr_mod
+        mock_pr.return_value = {"number": 99}
+        provider.get_pr_review_status.side_effect = RuntimeError("API down")
 
-        with patch.object(git_pr_mod, "get_pr_for_branch", return_value={"number": 99}):
-            result = count_unresolved_threads(project_root=tmp_path)
+        result = count_unresolved_threads(project_root=tmp_path)
 
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# get_review_status() — fallback behavior
+# ---------------------------------------------------------------------------
+
+
+class TestGetReviewStatus:
+    """Tests for the get_review_status() function."""
+
+    @patch("wade.services.review_service.git_pr.get_pr_for_branch")
+    @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.review_service.git_repo.get_current_branch", return_value="feat/42-fix")
+    @patch("wade.services.review_service.git_repo.get_repo_root")
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_uses_comprehensive_status_when_available(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_branch: MagicMock,
+        mock_make_branch: MagicMock,
+        mock_pr: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        from wade.models.review import PRReview, PRReviewStatus, ReviewState
+        from wade.services.review_service import get_review_status
+
+        mock_repo_root.return_value = tmp_path
+        provider = mock_get_provider.return_value
+        mock_pr.return_value = {"number": 99}
+
+        expected_status = PRReviewStatus(
+            reviews=[PRReview(author="alice", state=ReviewState.APPROVED)]
+        )
+        provider.get_pr_review_status.return_value = expected_status
+
+        result = get_review_status(project_root=tmp_path)
+
+        assert result is not None
+        assert result.approvals == ["alice"]
+
+    @patch("wade.services.review_service._check_review_bot_status", return_value=None)
+    @patch("wade.services.review_service.filter_actionable_threads")
+    @patch("wade.services.review_service.git_pr.get_pr_for_branch")
+    @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.review_service.git_repo.get_current_branch", return_value="feat/42-fix")
+    @patch("wade.services.review_service.git_repo.get_repo_root")
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_falls_back_to_legacy_when_not_implemented(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_branch: MagicMock,
+        mock_make_branch: MagicMock,
+        mock_pr: MagicMock,
+        mock_filter: MagicMock,
+        mock_bot_status: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        from wade.services.review_service import get_review_status
+
+        mock_repo_root.return_value = tmp_path
+        provider = mock_get_provider.return_value
+        mock_pr.return_value = {"number": 99}
+        provider.get_pr_review_status.side_effect = NotImplementedError
+
+        threads = [ReviewThread(comments=[ReviewComment(author="a", body="Fix")])]
+        provider.get_pr_review_threads.return_value = threads
+        mock_filter.return_value = threads
+
+        result = get_review_status(project_root=tmp_path)
+
+        assert result is not None
+        assert len(result.actionable_threads) == 1
+        # Fallback doesn't have reviews/pending_reviewers
+        assert result.reviews == []
+        assert result.pending_reviewers == []
+
+
+# ---------------------------------------------------------------------------
+# get_comprehensive_review_status()
+# ---------------------------------------------------------------------------
+
+
+class TestGetComprehensiveReviewStatus:
+    """Tests for the get_comprehensive_review_status() function."""
+
+    def test_uses_provider_when_available(self, tmp_path: Path) -> None:
+        from wade.models.review import PRReview, PRReviewStatus, ReviewState
+        from wade.services.review_service import get_comprehensive_review_status
+
+        provider = MagicMock()
+        expected = PRReviewStatus(
+            reviews=[PRReview(author="bob", state=ReviewState.CHANGES_REQUESTED)]
+        )
+        provider.get_pr_review_status.return_value = expected
+
+        result = get_comprehensive_review_status(provider, tmp_path, 42)
+
+        assert result.has_changes_requested is True
+        assert result.changes_requested_by == ["bob"]
+
+    @patch("wade.services.review_service._check_review_bot_status", return_value=None)
+    @patch("wade.services.review_service.filter_actionable_threads", return_value=[])
+    def test_fallback_on_not_implemented(
+        self,
+        mock_filter: MagicMock,
+        mock_bot: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        from wade.services.review_service import get_comprehensive_review_status
+
+        provider = MagicMock()
+        provider.get_pr_review_status.side_effect = NotImplementedError
+        provider.get_pr_review_threads.return_value = []
+
+        result = get_comprehensive_review_status(provider, tmp_path, 42)
+
+        assert result.actionable_threads == []
+        assert result.reviews == []
+
+    def test_returns_failed_on_exception(self, tmp_path: Path) -> None:
+        from wade.services.review_service import get_comprehensive_review_status
+
+        provider = MagicMock()
+        provider.get_pr_review_status.side_effect = RuntimeError("API down")
+
+        result = get_comprehensive_review_status(provider, tmp_path, 42)
+
+        assert result.actionable_threads == []
+        assert result.reviews == []
+        assert result.fetch_failed is True
+        assert result.is_all_clear is False
 
 
 # ---------------------------------------------------------------------------
