@@ -1471,10 +1471,21 @@ def _prompt_command_overrides(
     }
     tool_for_cmd: list[str | None] = [None] * len(cmd_triples)
 
-    def _ask_tool_and_model(cmd_idx: int, cmd_name: str, prompt_label: str, section: str) -> None:
+    def _ask_tool_and_model(
+        cmd_idx: int,
+        cmd_name: str,
+        prompt_label: str,
+        section: str,
+        *,
+        allow_skip: bool = True,
+    ) -> None:
         """Ask for AI tool and model, updating result and tool_for_cmd in place."""
-        idx = prompts.select(prompt_label, tool_options, default=len(tool_options) - 1)
-        selected_tool = tool_options[idx]
+        selectable_tools = (
+            tool_options if allow_skip else [t for t in tool_options if t != skip_label]
+        )
+        default_idx = len(selectable_tools) - 1 if allow_skip else 0
+        idx = prompts.select(prompt_label, selectable_tools, default=default_idx)
+        selected_tool = selectable_tools[idx]
         tool_for_cmd[cmd_idx] = None if selected_tool == skip_label else selected_tool
 
         if tool_for_cmd[cmd_idx] is not None:
@@ -1544,9 +1555,18 @@ def _prompt_command_overrides(
             mode = mode_values[mode_idx]
             result[cmd_name]["mode"] = mode
 
-            # 3. Tool and model only needed for AI-backed modes
+            # 3. Tool and model only needed for AI-backed modes.
+            # When no default_tool is configured, skip is not a valid choice —
+            # a concrete tool must be selected or the resulting config would have
+            # no resolvable AI tool for headless/interactive execution.
             if mode != "prompt":
-                _ask_tool_and_model(cmd_idx, cmd_name, prompt_label, section)
+                _ask_tool_and_model(
+                    cmd_idx,
+                    cmd_name,
+                    prompt_label,
+                    section,
+                    allow_skip=default_tool is not None,
+                )
 
         elif cmd_name == "deps":
             result[cmd_name] = {}
