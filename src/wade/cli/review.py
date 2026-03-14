@@ -10,12 +10,35 @@ from wade.cli.autocomplete import (
     complete_effort_levels,
     complete_models,
 )
-from wade.models.delegation import DelegationMode
+from wade.models.delegation import DelegationMode, DelegationResult
 
 review_app = typer.Typer(
     help="AI-powered review commands.",
     invoke_without_command=True,
 )
+
+
+def _finalize_review_result(result: DelegationResult, complete_message: str) -> None:
+    """Print status message and exit with the appropriate code.
+
+    Shared by plan, implementation, and batch review commands.
+    """
+    from wade.ui.console import console
+
+    if result.success and not result.skipped:
+        if result.mode == DelegationMode.PROMPT:
+            console.info(
+                "SELF-REVIEW — read the review prompt above, perform the review "
+                "yourself, and address any issues before proceeding."
+            )
+        else:
+            console.info(complete_message)
+
+    if not result.success:
+        raise typer.Exit(1)
+    if not result.skipped and result.mode == DelegationMode.PROMPT:
+        raise typer.Exit(2)
+    raise typer.Exit(0)
 
 
 @review_app.callback()
@@ -58,25 +81,11 @@ def review_plan_cmd(
         model_explicit=model is not None,
         effort_explicit=effort is not None,
     )
-    if result.success and not result.skipped:
-        from wade.ui.console import console
-
-        if result.mode == DelegationMode.PROMPT:
-            console.info(
-                "SELF-REVIEW — read the review prompt above, perform the review "
-                "yourself, and address any issues before proceeding."
-            )
-        else:
-            console.info(
-                "REVIEW COMPLETE — address any actionable feedback above, "
-                "then proceed to wade plan-session done."
-            )
-
-    if not result.success:
-        raise typer.Exit(1)
-    if not result.skipped and result.mode == DelegationMode.PROMPT:
-        raise typer.Exit(2)
-    raise typer.Exit(0)
+    _finalize_review_result(
+        result,
+        "REVIEW COMPLETE — address any actionable feedback above, "
+        "then proceed to wade plan-session done.",
+    )
 
 
 @review_app.command("implementation")
@@ -111,25 +120,11 @@ def review_implementation_cmd(
         model_explicit=model is not None,
         effort_explicit=effort is not None,
     )
-    if result.success and not result.skipped:
-        from wade.ui.console import console
-
-        if result.mode == DelegationMode.PROMPT:
-            console.info(
-                "SELF-REVIEW — read the review prompt above, perform the review "
-                "yourself, and address any issues before proceeding."
-            )
-        else:
-            console.info(
-                "REVIEW COMPLETE — address any actionable feedback above, "
-                "then proceed to wade implementation-session done."
-            )
-
-    if not result.success:
-        raise typer.Exit(1)
-    if not result.skipped and result.mode == DelegationMode.PROMPT:
-        raise typer.Exit(2)
-    raise typer.Exit(0)
+    _finalize_review_result(
+        result,
+        "REVIEW COMPLETE — address any actionable feedback above, "
+        "then proceed to wade implementation-session done.",
+    )
 
 
 @review_app.command("pr-comments")
@@ -199,21 +194,7 @@ def review_batch_cmd(
         model_explicit=model is not None,
         effort_explicit=effort is not None,
     )
-    if result.success and not result.skipped:
-        from wade.ui.console import console
-
-        if result.mode == DelegationMode.PROMPT:
-            console.info(
-                "SELF-REVIEW — read the review prompt above, perform the review "
-                "yourself, and address any issues before proceeding."
-            )
-        else:
-            console.info(
-                "BATCH REVIEW COMPLETE — check the draft PR for combined diff and findings."
-            )
-
-    if not result.success:
-        raise typer.Exit(1)
-    if not result.skipped and result.mode == DelegationMode.PROMPT:
-        raise typer.Exit(2)
-    raise typer.Exit(0)
+    _finalize_review_result(
+        result,
+        "BATCH REVIEW COMPLETE — check the draft PR for combined diff and findings.",
+    )

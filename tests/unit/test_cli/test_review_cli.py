@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 from typer.testing import CliRunner
 
 from wade.cli.main import app
+from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationResult
 
 runner = CliRunner()
@@ -18,22 +19,14 @@ runner = CliRunner()
 # ---------------------------------------------------------------------------
 
 
-def _plan_config(mode: str = "prompt") -> MagicMock:
-    """Return a mock ProjectConfig with review_plan set to *mode*."""
-    from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
-
-    cfg = ProjectConfig(ai=AIConfig(review_plan=AICommandConfig(mode=mode)))
-    m = MagicMock(return_value=cfg)
-    return m
+def _plan_config(mode: str = "prompt") -> ProjectConfig:
+    """Return a ProjectConfig with review_plan set to *mode*."""
+    return ProjectConfig(ai=AIConfig(review_plan=AICommandConfig(mode=mode)))
 
 
-def _impl_config(mode: str = "prompt") -> MagicMock:
-    """Return a mock ProjectConfig with review_implementation set to *mode*."""
-    from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
-
-    cfg = ProjectConfig(ai=AIConfig(review_implementation=AICommandConfig(mode=mode)))
-    m = MagicMock(return_value=cfg)
-    return m
+def _impl_config(mode: str = "prompt") -> ProjectConfig:
+    """Return a ProjectConfig with review_implementation set to *mode*."""
+    return ProjectConfig(ai=AIConfig(review_implementation=AICommandConfig(mode=mode)))
 
 
 # ---------------------------------------------------------------------------
@@ -56,12 +49,7 @@ class TestReviewPlanCli:
         plan_file = tmp_path / "PLAN.md"
         plan_file.write_text("# Test Plan\n\nContent.")
         mock_template.return_value = "{plan_content}"
-
-        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
-
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="prompt"))
-        )
+        mock_config.return_value = _plan_config("prompt")
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="LGTM", mode=DelegationMode.PROMPT
         )
@@ -84,12 +72,7 @@ class TestReviewPlanCli:
         plan_file = tmp_path / "PLAN.md"
         plan_file.write_text("# Test Plan\n\nContent.")
         mock_template.return_value = "{plan_content}"
-
-        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
-
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="interactive"))
-        )
+        mock_config.return_value = _plan_config("interactive")
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="Nice plan!", mode=DelegationMode.INTERACTIVE
         )
@@ -112,12 +95,7 @@ class TestReviewPlanCli:
         plan_file = tmp_path / "PLAN.md"
         plan_file.write_text("# Test Plan\n\nContent.")
         mock_template.return_value = "{plan_content}"
-
-        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
-
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="headless"))
-        )
+        mock_config.return_value = _plan_config("headless")
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="All good.", mode=DelegationMode.HEADLESS
         )
@@ -140,12 +118,7 @@ class TestReviewPlanCli:
         plan_file = tmp_path / "PLAN.md"
         plan_file.write_text("# Test Plan\n\nContent.")
         mock_template.return_value = "{plan_content}"
-
-        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
-
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="prompt"))
-        )
+        mock_config.return_value = _plan_config("prompt")
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="", mode=DelegationMode.PROMPT, skipped=True
         )
@@ -169,12 +142,7 @@ class TestReviewPlanCli:
         plan_file = tmp_path / "PLAN.md"
         plan_file.write_text("# Test Plan\n\nContent.")
         mock_template.return_value = "{plan_content}"
-
-        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
-
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="interactive"))
-        )
+        mock_config.return_value = _plan_config("interactive")
         mock_delegate.return_value = DelegationResult(
             success=False, feedback="Error", mode=DelegationMode.INTERACTIVE
         )
@@ -213,12 +181,7 @@ class TestReviewImplementationCli:
         """PROMPT mode should exit 2 with a SELF-REVIEW message."""
         mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
         mock_template.return_value = "{diff_content}"
-
-        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
-
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_implementation=AICommandConfig(mode="prompt"))
-        )
+        mock_config.return_value = _impl_config("prompt")
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="Clean code!", mode=DelegationMode.PROMPT
         )
@@ -241,12 +204,7 @@ class TestReviewImplementationCli:
         """INTERACTIVE mode should exit 0 with REVIEW COMPLETE message."""
         mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
         mock_template.return_value = "{diff_content}"
-
-        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
-
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_implementation=AICommandConfig(mode="interactive"))
-        )
+        mock_config.return_value = _impl_config("interactive")
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="Looks good!", mode=DelegationMode.INTERACTIVE
         )
@@ -269,12 +227,7 @@ class TestReviewImplementationCli:
         """HEADLESS mode should exit 0 with REVIEW COMPLETE message."""
         mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
         mock_template.return_value = "{diff_content}"
-
-        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
-
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_implementation=AICommandConfig(mode="headless"))
-        )
+        mock_config.return_value = _impl_config("headless")
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="OK", mode=DelegationMode.HEADLESS
         )
@@ -297,12 +250,7 @@ class TestReviewImplementationCli:
         """Skipped review should exit 0 with no status message."""
         mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
         mock_template.return_value = "{diff_content}"
-
-        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
-
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_implementation=AICommandConfig(mode="prompt"))
-        )
+        mock_config.return_value = _impl_config("prompt")
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="", mode=DelegationMode.PROMPT, skipped=True
         )
@@ -326,12 +274,7 @@ class TestReviewImplementationCli:
         """Failed review should exit 1."""
         mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
         mock_template.return_value = "{diff_content}"
-
-        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
-
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_implementation=AICommandConfig(mode="interactive"))
-        )
+        mock_config.return_value = _impl_config("interactive")
         mock_delegate.return_value = DelegationResult(
             success=False, feedback="Error", mode=DelegationMode.INTERACTIVE
         )
@@ -366,12 +309,7 @@ class TestReviewCliEffortFlag:
         plan_file = tmp_path / "PLAN.md"
         plan_file.write_text("# Plan")
         mock_template.return_value = "{plan_content}"
-
-        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
-
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_plan=AICommandConfig(mode="prompt"))
-        )
+        mock_config.return_value = _plan_config("prompt")
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="ok", mode=DelegationMode.PROMPT
         )
@@ -392,12 +330,7 @@ class TestReviewCliEffortFlag:
     ) -> None:
         mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
         mock_template.return_value = "{diff_content}"
-
-        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
-
-        mock_config.return_value = ProjectConfig(
-            ai=AIConfig(review_implementation=AICommandConfig(mode="prompt"))
-        )
+        mock_config.return_value = _impl_config("prompt")
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="ok", mode=DelegationMode.PROMPT
         )
