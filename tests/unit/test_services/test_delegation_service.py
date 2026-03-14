@@ -148,6 +148,24 @@ class TestDelegateHeadless:
         assert result.success is False
         assert "timed out" in result.feedback
 
+    @patch("wade.services.delegation_service.run")
+    def test_codex_headless_delegation(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(returncode=0, stdout="LGTM\n")
+        req = DelegationRequest(
+            mode=DelegationMode.HEADLESS,
+            prompt="Review code",
+            ai_tool="codex",
+            model="codex-mini-latest",
+        )
+        result = _delegate_headless(req)
+        assert result.success is True
+        assert result.feedback == "LGTM"
+
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0] == "codex"
+        assert "exec" in cmd
+        assert "Review code" in cmd
+
 
 # ---------------------------------------------------------------------------
 # Interactive mode
