@@ -66,6 +66,12 @@ class TestCapabilities:
         assert caps.supports_initial_message is False
         assert caps.blocks_until_exit is False
 
+    def test_codex_capabilities(self) -> None:
+        caps = AbstractAITool.get("codex").capabilities()
+        assert caps.binary == "codex"
+        assert caps.headless_flag == "exec"
+        assert caps.supports_headless is True
+
     def test_opencode_capabilities(self) -> None:
         caps = AbstractAITool.get("opencode").capabilities()
         assert caps.binary == "opencode"
@@ -174,6 +180,18 @@ class TestBuildLaunchCommand:
             "anthropic/claude-haiku-4-5",
             "run",
             "Fix the bug",
+        ]
+
+    def test_codex_headless_with_prompt(self) -> None:
+        """codex headless uses exec subcommand."""
+        adapter = AbstractAITool.get("codex")
+        cmd = adapter.build_launch_command(model="codex-mini-latest", prompt="Review code")
+        assert cmd == [
+            "codex",
+            "--model",
+            "codex-mini-latest",
+            "exec",
+            "Review code",
         ]
 
     def test_cursor_basic_launch(self) -> None:
