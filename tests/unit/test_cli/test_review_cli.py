@@ -13,17 +13,46 @@ from wade.models.delegation import DelegationMode, DelegationResult
 runner = CliRunner()
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _plan_config(mode: str = "prompt") -> MagicMock:
+    """Return a mock ProjectConfig with review_plan set to *mode*."""
+    from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
+
+    cfg = ProjectConfig(ai=AIConfig(review_plan=AICommandConfig(mode=mode)))
+    m = MagicMock(return_value=cfg)
+    return m
+
+
+def _impl_config(mode: str = "prompt") -> MagicMock:
+    """Return a mock ProjectConfig with review_implementation set to *mode*."""
+    from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
+
+    cfg = ProjectConfig(ai=AIConfig(review_implementation=AICommandConfig(mode=mode)))
+    m = MagicMock(return_value=cfg)
+    return m
+
+
+# ---------------------------------------------------------------------------
+# Plan review
+# ---------------------------------------------------------------------------
+
+
 class TestReviewPlanCli:
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.load_prompt_template")
-    def test_review_plan_success(
+    def test_review_plan_prompt_mode_exits_2(
         self,
         mock_template: MagicMock,
         mock_config: MagicMock,
         mock_delegate: MagicMock,
         tmp_path: Path,
     ) -> None:
+        """PROMPT mode should exit 2 with a SELF-REVIEW message."""
         plan_file = tmp_path / "PLAN.md"
         plan_file.write_text("# Test Plan\n\nContent.")
         mock_template.return_value = "{plan_content}"
@@ -38,11 +67,129 @@ class TestReviewPlanCli:
         )
 
         result = runner.invoke(app, ["review", "plan", str(plan_file)])
+        assert result.exit_code == 2
+        assert "SELF-REVIEW" in result.output
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    def test_review_plan_interactive_mode_exits_0(
+        self,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """INTERACTIVE mode should exit 0 with a REVIEW COMPLETE message."""
+        plan_file = tmp_path / "PLAN.md"
+        plan_file.write_text("# Test Plan\n\nContent.")
+        mock_template.return_value = "{plan_content}"
+
+        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
+
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(review_plan=AICommandConfig(mode="interactive"))
+        )
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="Nice plan!", mode=DelegationMode.INTERACTIVE
+        )
+
+        result = runner.invoke(app, ["review", "plan", str(plan_file)])
         assert result.exit_code == 0
+        assert "REVIEW COMPLETE" in result.output
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    def test_review_plan_headless_mode_exits_0(
+        self,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """HEADLESS mode should exit 0 with a REVIEW COMPLETE message."""
+        plan_file = tmp_path / "PLAN.md"
+        plan_file.write_text("# Test Plan\n\nContent.")
+        mock_template.return_value = "{plan_content}"
+
+        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
+
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(review_plan=AICommandConfig(mode="headless"))
+        )
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="All good.", mode=DelegationMode.HEADLESS
+        )
+
+        result = runner.invoke(app, ["review", "plan", str(plan_file)])
+        assert result.exit_code == 0
+        assert "REVIEW COMPLETE" in result.output
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    def test_review_plan_skipped_exits_0(
+        self,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Skipped review (e.g. reviews disabled) should exit 0 with no status message."""
+        plan_file = tmp_path / "PLAN.md"
+        plan_file.write_text("# Test Plan\n\nContent.")
+        mock_template.return_value = "{plan_content}"
+
+        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
+
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(review_plan=AICommandConfig(mode="prompt"))
+        )
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="", mode=DelegationMode.PROMPT, skipped=True
+        )
+
+        result = runner.invoke(app, ["review", "plan", str(plan_file)])
+        assert result.exit_code == 0
+        assert "SELF-REVIEW" not in result.output
+        assert "REVIEW COMPLETE" not in result.output
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    def test_review_plan_failure_exits_1(
+        self,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Failed review should exit 1."""
+        plan_file = tmp_path / "PLAN.md"
+        plan_file.write_text("# Test Plan\n\nContent.")
+        mock_template.return_value = "{plan_content}"
+
+        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
+
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(review_plan=AICommandConfig(mode="interactive"))
+        )
+        mock_delegate.return_value = DelegationResult(
+            success=False, feedback="Error", mode=DelegationMode.INTERACTIVE
+        )
+
+        result = runner.invoke(app, ["review", "plan", str(plan_file)])
+        assert result.exit_code == 1
 
     def test_review_plan_missing_file(self) -> None:
         result = runner.invoke(app, ["review", "plan", "/nonexistent/PLAN.md"])
         assert result.exit_code == 1
+
+
+# ---------------------------------------------------------------------------
+# Implementation review
+# ---------------------------------------------------------------------------
 
 
 class TestReviewImplementationCli:
@@ -56,13 +203,14 @@ class TestReviewImplementationCli:
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.load_prompt_template")
     @patch("wade.services.review_delegation_service.run")
-    def test_review_implementation_with_diff(
+    def test_review_implementation_prompt_mode_exits_2(
         self,
         mock_run: MagicMock,
         mock_template: MagicMock,
         mock_config: MagicMock,
         mock_delegate: MagicMock,
     ) -> None:
+        """PROMPT mode should exit 2 with a SELF-REVIEW message."""
         mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
         mock_template.return_value = "{diff_content}"
 
@@ -76,7 +224,120 @@ class TestReviewImplementationCli:
         )
 
         result = runner.invoke(app, ["review", "implementation"])
+        assert result.exit_code == 2
+        assert "SELF-REVIEW" in result.output
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    @patch("wade.services.review_delegation_service.run")
+    def test_review_implementation_interactive_mode_exits_0(
+        self,
+        mock_run: MagicMock,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+    ) -> None:
+        """INTERACTIVE mode should exit 0 with REVIEW COMPLETE message."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
+        mock_template.return_value = "{diff_content}"
+
+        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
+
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(review_implementation=AICommandConfig(mode="interactive"))
+        )
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="Looks good!", mode=DelegationMode.INTERACTIVE
+        )
+
+        result = runner.invoke(app, ["review", "implementation"])
         assert result.exit_code == 0
+        assert "REVIEW COMPLETE" in result.output
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    @patch("wade.services.review_delegation_service.run")
+    def test_review_implementation_headless_mode_exits_0(
+        self,
+        mock_run: MagicMock,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+    ) -> None:
+        """HEADLESS mode should exit 0 with REVIEW COMPLETE message."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
+        mock_template.return_value = "{diff_content}"
+
+        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
+
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(review_implementation=AICommandConfig(mode="headless"))
+        )
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="OK", mode=DelegationMode.HEADLESS
+        )
+
+        result = runner.invoke(app, ["review", "implementation"])
+        assert result.exit_code == 0
+        assert "REVIEW COMPLETE" in result.output
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    @patch("wade.services.review_delegation_service.run")
+    def test_review_implementation_skipped_exits_0(
+        self,
+        mock_run: MagicMock,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+    ) -> None:
+        """Skipped review should exit 0 with no status message."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
+        mock_template.return_value = "{diff_content}"
+
+        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
+
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(review_implementation=AICommandConfig(mode="prompt"))
+        )
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="", mode=DelegationMode.PROMPT, skipped=True
+        )
+
+        result = runner.invoke(app, ["review", "implementation"])
+        assert result.exit_code == 0
+        assert "SELF-REVIEW" not in result.output
+        assert "REVIEW COMPLETE" not in result.output
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    @patch("wade.services.review_delegation_service.run")
+    def test_review_implementation_failure_exits_1(
+        self,
+        mock_run: MagicMock,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+    ) -> None:
+        """Failed review should exit 1."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
+        mock_template.return_value = "{diff_content}"
+
+        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
+
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(review_implementation=AICommandConfig(mode="interactive"))
+        )
+        mock_delegate.return_value = DelegationResult(
+            success=False, feedback="Error", mode=DelegationMode.INTERACTIVE
+        )
+
+        result = runner.invoke(app, ["review", "implementation"])
+        assert result.exit_code == 1
 
     @patch("wade.services.review_delegation_service.run")
     def test_review_implementation_staged_flag(self, mock_run: MagicMock) -> None:
@@ -84,6 +345,11 @@ class TestReviewImplementationCli:
         runner.invoke(app, ["review", "implementation", "--staged"])
         cmd = mock_run.call_args[0][0]
         assert "--staged" in cmd
+
+
+# ---------------------------------------------------------------------------
+# Effort flag
+# ---------------------------------------------------------------------------
 
 
 class TestReviewCliEffortFlag:
@@ -111,7 +377,7 @@ class TestReviewCliEffortFlag:
         )
 
         result = runner.invoke(app, ["review", "plan", str(plan_file), "--effort", "low"])
-        assert result.exit_code == 0
+        assert result.exit_code == 2
 
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
@@ -137,4 +403,4 @@ class TestReviewCliEffortFlag:
         )
 
         result = runner.invoke(app, ["review", "implementation", "--effort", "high"])
-        assert result.exit_code == 0
+        assert result.exit_code == 2

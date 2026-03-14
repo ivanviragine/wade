@@ -61,11 +61,22 @@ def review_plan_cmd(
     if result.success and not result.skipped:
         from wade.ui.console import console
 
-        console.info(
-            "REVIEW COMPLETE — address any actionable feedback above, "
-            "then proceed to wade plan-session done."
-        )
-    raise typer.Exit(0 if result.success else 1)
+        if result.mode == DelegationMode.PROMPT:
+            console.info(
+                "SELF-REVIEW — read the review prompt above, perform the review "
+                "yourself, and address any issues before proceeding."
+            )
+        else:
+            console.info(
+                "REVIEW COMPLETE — address any actionable feedback above, "
+                "then proceed to wade plan-session done."
+            )
+
+    if not result.success:
+        raise typer.Exit(1)
+    if not result.skipped and result.mode == DelegationMode.PROMPT:
+        raise typer.Exit(2)
+    raise typer.Exit(0)
 
 
 @review_app.command("implementation")
@@ -103,11 +114,22 @@ def review_implementation_cmd(
     if result.success and not result.skipped:
         from wade.ui.console import console
 
-        console.info(
-            "REVIEW COMPLETE — address any actionable feedback above, "
-            "then proceed to wade implementation-session done."
-        )
-    raise typer.Exit(0 if result.success else 1)
+        if result.mode == DelegationMode.PROMPT:
+            console.info(
+                "SELF-REVIEW — read the review prompt above, perform the review "
+                "yourself, and address any issues before proceeding."
+            )
+        else:
+            console.info(
+                "REVIEW COMPLETE — address any actionable feedback above, "
+                "then proceed to wade implementation-session done."
+            )
+
+    if not result.success:
+        raise typer.Exit(1)
+    if not result.skipped and result.mode == DelegationMode.PROMPT:
+        raise typer.Exit(2)
+    raise typer.Exit(0)
 
 
 @review_app.command("pr-comments")
@@ -180,5 +202,18 @@ def review_batch_cmd(
     if result.success and not result.skipped:
         from wade.ui.console import console
 
-        console.info("BATCH REVIEW COMPLETE — check the draft PR for combined diff and findings.")
-    raise typer.Exit(0 if result.success else 1)
+        if result.mode == DelegationMode.PROMPT:
+            console.info(
+                "SELF-REVIEW — read the review prompt above, perform the review "
+                "yourself, and address any issues before proceeding."
+            )
+        else:
+            console.info(
+                "BATCH REVIEW COMPLETE — check the draft PR for combined diff and findings."
+            )
+
+    if not result.success:
+        raise typer.Exit(1)
+    if not result.skipped and result.mode == DelegationMode.PROMPT:
+        raise typer.Exit(2)
+    raise typer.Exit(0)
