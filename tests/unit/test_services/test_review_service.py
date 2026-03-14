@@ -1289,7 +1289,7 @@ class TestGetComprehensiveReviewStatus:
         assert result.actionable_threads == []
         assert result.reviews == []
 
-    def test_returns_empty_on_exception(self, tmp_path: Path) -> None:
+    def test_returns_failed_on_exception(self, tmp_path: Path) -> None:
         from wade.services.review_service import get_comprehensive_review_status
 
         provider = MagicMock()
@@ -1299,6 +1299,8 @@ class TestGetComprehensiveReviewStatus:
 
         assert result.actionable_threads == []
         assert result.reviews == []
+        assert result.fetch_failed is True
+        assert result.is_all_clear is False
 
 
 # ---------------------------------------------------------------------------

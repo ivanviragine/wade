@@ -540,15 +540,19 @@ mutation($threadId: ID!) {
     ) -> PRReviewStatus:
         """Fetch comprehensive PR review status via a combined GraphQL query.
 
-        Fetches review threads (paginated), PR-level reviews (last 50), and
-        pending review requests (first 20) in a single initial call. Subsequent
+        Fetches review threads (paginated), PR-level reviews (last 100), and
+        pending review requests (first 50) in a single initial call. Subsequent
         pages only fetch additional review threads.
+
+        Reviews and review requests use fixed limits (not paginated) because
+        we deduplicate by author (keeping the latest review), so only truly
+        extreme edge cases (100+ review submissions) could miss data.
         """
         try:
             nwo = self.get_repo_nwo()
         except CommandError:
             logger.warning("github.get_review_status_nwo_failed")
-            return PRReviewStatus()
+            return PRReviewStatus(fetch_failed=True)
 
         owner, repo = nwo.split("/", 1)
 
@@ -556,20 +560,25 @@ mutation($threadId: ID!) {
         threads: list[ReviewThread] = []
         reviews: list[PRReview] = []
         pending_reviewers: list[PendingReviewer] = []
+        fetch_failed = False
 
-        page_threads, has_next, cursor, page_reviews, page_pending = self._fetch_review_status_page(
-            owner, repo, pr_number, cursor=None
-        )
-        threads.extend(page_threads)
-        reviews.extend(page_reviews)
-        pending_reviewers.extend(page_pending)
-
-        # Subsequent pages: only threads (reviews/requests don't paginate here)
-        while has_next and cursor:
-            page_threads, has_next, cursor = self._fetch_review_threads_page(
-                owner, repo, pr_number, cursor
+        try:
+            page_threads, has_next, cursor, page_reviews, page_pending = (
+                self._fetch_review_status_page(owner, repo, pr_number, cursor=None)
             )
             threads.extend(page_threads)
+            reviews.extend(page_reviews)
+            pending_reviewers.extend(page_pending)
+
+            # Subsequent pages: only threads (reviews/requests don't paginate here)
+            while has_next and cursor:
+                page_threads, has_next, cursor = self._fetch_review_threads_page(
+                    owner, repo, pr_number, cursor
+                )
+                threads.extend(page_threads)
+        except (CommandError, json.JSONDecodeError) as e:
+            logger.warning("github.review_status_fetch_failed", error=str(e))
+            fetch_failed = True
 
         # Detect bot status from issue comments
         bot_status: ReviewBotStatus | None = None
@@ -584,6 +593,7 @@ mutation($threadId: ID!) {
             reviews=reviews,
             pending_reviewers=pending_reviewers,
             bot_status=bot_status,
+            fetch_failed=fetch_failed,
         )
 
     def _fetch_review_status_page(
@@ -622,7 +632,7 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
           }
         }
       }
-      reviews(last: 50) {
+      reviews(last: 100) {
         nodes {
           author { login }
           state
@@ -630,7 +640,7 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
           submittedAt
         }
       }
-      reviewRequests(first: 20) {
+      reviewRequests(first: 50) {
         nodes {
           requestedReviewer {
             ... on User { login }
@@ -659,12 +669,8 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
         if cursor:
             cmd.extend(["-f", f"after={cursor}"])
 
-        try:
-            result = run(cmd, check=True)
-            data = json.loads(result.stdout)
-        except (CommandError, json.JSONDecodeError) as e:
-            logger.warning("github.review_status_fetch_failed", error=str(e))
-            return [], False, None, [], []
+        result = run(cmd, check=True)
+        data = json.loads(result.stdout)
 
         pr_data = data.get("data", {}).get("repository", {}).get("pullRequest") or {}
 
@@ -685,7 +691,12 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
                 state = ReviewState(state_str)
             except ValueError:
                 state = ReviewState.COMMENTED
-            is_bot = bool(re.search(r"(^bot[-_]|[-_\[]bot]?$|bot$)", author_login.lower()))
+            normalized = author_login.lower()
+            is_bot = (
+                normalized == "bot"
+                or normalized.startswith(("bot-", "bot_"))
+                or normalized.endswith(("[bot]", "-bot", "_bot"))
+            )
             reviews.append(
                 PRReview(
                     author=author_login,

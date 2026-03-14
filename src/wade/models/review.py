@@ -289,6 +289,7 @@ class PRReviewStatus(BaseModel):
     reviews: list[PRReview] = []
     pending_reviewers: list[PendingReviewer] = []
     bot_status: ReviewBotStatus | None = None
+    fetch_failed: bool = False
 
     @property
     def latest_reviews_by_author(self) -> dict[str, PRReview]:
@@ -336,12 +337,15 @@ class PRReviewStatus(BaseModel):
         """True when there's nothing blocking the PR.
 
         All clear requires:
+        - Status was fetched successfully (no transient failures)
         - No unresolved actionable threads
         - No CHANGES_REQUESTED from any reviewer
         - No bot currently processing (IN_PROGRESS)
 
         Note: pending reviewers do NOT block all-clear (informational only).
         """
+        if self.fetch_failed:
+            return False
         if self.actionable_threads:
             return False
         if self.has_changes_requested:
@@ -375,6 +379,15 @@ def format_review_status_summary(
     - All-clear (success)
     """
     messages: list[tuple[str, str]] = []
+
+    # Fetch failure — indeterminate status
+    if status.fetch_failed:
+        messages.append(
+            (
+                LEVEL_WARN,
+                "Review status fetch failed — status may be incomplete.",
+            )
+        )
 
     # Unresolved threads
     thread_count = len(status.actionable_threads)

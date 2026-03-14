@@ -255,7 +255,7 @@ def get_comprehensive_review_status(
         return _fallback_review_status(provider, repo_root, pr_number)
     except Exception:
         logger.debug("review.comprehensive_status_failed", exc_info=True)
-        return PRReviewStatus()
+        return PRReviewStatus(fetch_failed=True)
 
 
 def _fallback_review_status(
@@ -270,7 +270,7 @@ def _fallback_review_status(
     try:
         all_threads = provider.get_pr_review_threads(repo_root, pr_number)
     except Exception:
-        return PRReviewStatus()
+        return PRReviewStatus(fetch_failed=True)
 
     actionable = filter_actionable_threads(all_threads)
     bot_status = _check_review_bot_status(provider, pr_number)

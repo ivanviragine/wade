@@ -577,6 +577,12 @@ class TestPRReviewStatus:
         assert status.is_all_clear is True
         assert status.changes_requested_by == []
 
+    def test_fetch_failed_blocks_all_clear(self) -> None:
+        from wade.models.review import PRReviewStatus
+
+        status = PRReviewStatus(fetch_failed=True)
+        assert status.is_all_clear is False
+
 
 # ---------------------------------------------------------------------------
 # format_review_status_summary
@@ -671,6 +677,17 @@ class TestFormatReviewStatusSummary:
         status = PRReviewStatus(pending_reviewers=[PendingReviewer(name="core-team", is_team=True)])
         messages = format_review_status_summary(status)
         assert any("(team)" in m[1] for m in messages)
+
+    def test_fetch_failed_shows_warning(self) -> None:
+        from wade.models.review import PRReviewStatus, format_review_status_summary
+
+        status = PRReviewStatus(fetch_failed=True)
+        messages = format_review_status_summary(status)
+        assert any("fetch failed" in m[1].lower() and m[0] == "warn" for m in messages)
+        # Should NOT show all-clear
+        assert not any(
+            "all clear" in m[1].lower() or "nothing to address" in m[1].lower() for m in messages
+        )
 
     def test_approved_with_no_threads_shows_complete(self) -> None:
         from wade.models.review import (
