@@ -858,9 +858,7 @@ def _finalize_issues(
     # Hint for next steps
     console.empty()
     if len(issue_numbers) == 1:
-        result = _offer_to_implement(
-            issue_numbers[0], ai_tool=ai_tool, model=model, effort=effort, yolo=yolo
-        )
+        result = _offer_to_implement(issue_numbers[0])
         if result is not None:
             return result
     elif len(issue_numbers) >= 2:
@@ -876,13 +874,7 @@ def _print_implement_hint(issue_number: str) -> None:
     console.detail(f"wade implement {issue_number}")
 
 
-def _offer_to_implement(
-    issue_number: str,
-    ai_tool: str | None = None,
-    model: str | None = None,
-    effort: EffortLevel | None = None,
-    yolo: bool = False,
-) -> bool | None:
+def _offer_to_implement(issue_number: str) -> bool | None:
     """Prompt the user to start an implementation session on the newly planned issue.
 
     Returns True/False if the user accepted/implementation session succeeded or failed,
@@ -901,16 +893,7 @@ def _offer_to_implement(
         return None
 
     try:
-        return start_implementation_session(
-            target=issue_number,
-            ai_tool=ai_tool,
-            model=model,
-            effort=effort.value if effort is not None else None,
-            ai_explicit=ai_tool is not None,
-            model_explicit=model is not None,
-            effort_explicit=effort is not None,
-            yolo=yolo or None,
-        )
+        return start_implementation_session(target=issue_number)
     except Exception:
         logger.exception("plan.work_session_start_failed", issue=issue_number)
         return False

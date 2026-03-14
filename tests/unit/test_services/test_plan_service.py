@@ -638,48 +638,7 @@ class TestOfferToImplement:
             result = _offer_to_implement("42")
 
             assert result is True
-            mock_start.assert_called_once_with(
-                target="42",
-                ai_tool=None,
-                model=None,
-                effort=None,
-                ai_explicit=False,
-                model_explicit=False,
-                effort_explicit=False,
-                yolo=None,
-            )
-
-    def test_ai_params_passed_to_implementation_session(self) -> None:
-        """AI params from plan session are threaded through to start_implementation_session."""
-        from wade.models.ai import EffortLevel
-
-        with (
-            patch("wade.services.plan_service.prompts") as mock_prompts,
-            patch("wade.services.plan_service.start_implementation_session") as mock_start,
-            patch("wade.services.plan_service.console"),
-        ):
-            mock_prompts.is_tty.return_value = True
-            mock_prompts.confirm.return_value = True
-            mock_start.return_value = True
-
-            result = _offer_to_implement(
-                "42",
-                ai_tool="claude",
-                model="claude-opus-4-5",
-                effort=EffortLevel.HIGH,
-            )
-
-            assert result is True
-            mock_start.assert_called_once_with(
-                target="42",
-                ai_tool="claude",
-                model="claude-opus-4-5",
-                effort="high",
-                ai_explicit=True,
-                model_explicit=True,
-                effort_explicit=True,
-                yolo=None,
-            )
+            mock_start.assert_called_once_with(target="42")
 
     def test_user_declines_returns_none(self) -> None:
         """Declining the prompt returns None without calling start."""
@@ -780,9 +739,7 @@ class TestFinalizeIssuesHints:
                 issue_numbers=["1"],
             )
 
-            mock_offer.assert_called_once_with(
-                "1", ai_tool=None, model=None, effort=None, yolo=False
-            )
+            mock_offer.assert_called_once_with("1")
             assert result is True
 
     def test_multiple_issues_shows_batch_hint(self) -> None:
