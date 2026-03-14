@@ -409,3 +409,277 @@ Fix the null check in main.py.
         ]
         result = format_review_threads_markdown(threads)
         assert "**Thread ID:**" not in result
+
+
+# ---------------------------------------------------------------------------
+# PR-level review state models
+# ---------------------------------------------------------------------------
+
+
+class TestReviewState:
+    def test_all_states_exist(self) -> None:
+        from wade.models.review import ReviewState
+
+        assert ReviewState.APPROVED == "APPROVED"
+        assert ReviewState.CHANGES_REQUESTED == "CHANGES_REQUESTED"
+        assert ReviewState.COMMENTED == "COMMENTED"
+        assert ReviewState.PENDING == "PENDING"
+        assert ReviewState.DISMISSED == "DISMISSED"
+
+
+class TestPRReview:
+    def test_create_minimal(self) -> None:
+        from wade.models.review import PRReview
+
+        review = PRReview()
+        assert review.author == ""
+        assert review.state.value == "COMMENTED"
+        assert review.body == ""
+        assert review.is_bot is False
+
+    def test_create_full(self) -> None:
+        from wade.models.review import PRReview, ReviewState
+
+        review = PRReview(
+            author="octocat",
+            state=ReviewState.APPROVED,
+            body="LGTM!",
+            is_bot=False,
+        )
+        assert review.author == "octocat"
+        assert review.state == ReviewState.APPROVED
+
+
+class TestPendingReviewer:
+    def test_create_user(self) -> None:
+        from wade.models.review import PendingReviewer
+
+        reviewer = PendingReviewer(name="alice", is_team=False)
+        assert reviewer.name == "alice"
+        assert reviewer.is_team is False
+
+    def test_create_team(self) -> None:
+        from wade.models.review import PendingReviewer
+
+        reviewer = PendingReviewer(name="core-team", is_team=True)
+        assert reviewer.name == "core-team"
+        assert reviewer.is_team is True
+
+
+class TestPRReviewStatus:
+    def test_empty_status_is_all_clear(self) -> None:
+        from wade.models.review import PRReviewStatus
+
+        status = PRReviewStatus()
+        assert status.is_all_clear is True
+        assert status.has_changes_requested is False
+        assert status.approvals == []
+        assert status.changes_requested_by == []
+
+    def test_unresolved_threads_block_all_clear(self) -> None:
+        from wade.models.review import PRReviewStatus
+
+        status = PRReviewStatus(
+            actionable_threads=[
+                ReviewThread(
+                    id="t1",
+                    comments=[ReviewComment(author="alice", body="Fix")],
+                )
+            ]
+        )
+        assert status.is_all_clear is False
+
+    def test_changes_requested_blocks_all_clear(self) -> None:
+        from wade.models.review import PRReview, PRReviewStatus, ReviewState
+
+        status = PRReviewStatus(
+            reviews=[
+                PRReview(author="bob", state=ReviewState.CHANGES_REQUESTED),
+            ]
+        )
+        assert status.is_all_clear is False
+        assert status.has_changes_requested is True
+        assert status.changes_requested_by == ["bob"]
+
+    def test_bot_in_progress_blocks_all_clear(self) -> None:
+        from wade.models.review import PRReviewStatus
+
+        status = PRReviewStatus(bot_status=ReviewBotStatus.IN_PROGRESS)
+        assert status.is_all_clear is False
+
+    def test_bot_paused_does_not_block_all_clear(self) -> None:
+        from wade.models.review import PRReviewStatus
+
+        status = PRReviewStatus(bot_status=ReviewBotStatus.PAUSED)
+        assert status.is_all_clear is True
+
+    def test_pending_reviewers_do_not_block_all_clear(self) -> None:
+        from wade.models.review import PendingReviewer, PRReviewStatus
+
+        status = PRReviewStatus(pending_reviewers=[PendingReviewer(name="charlie", is_team=False)])
+        assert status.is_all_clear is True
+
+    def test_latest_reviews_by_author_deduplication(self) -> None:
+        from wade.models.review import PRReview, PRReviewStatus, ReviewState
+
+        status = PRReviewStatus(
+            reviews=[
+                PRReview(author="alice", state=ReviewState.CHANGES_REQUESTED),
+                PRReview(author="bob", state=ReviewState.APPROVED),
+                PRReview(author="alice", state=ReviewState.APPROVED),
+            ]
+        )
+        latest = status.latest_reviews_by_author
+        assert latest["alice"].state == ReviewState.APPROVED
+        assert latest["bob"].state == ReviewState.APPROVED
+        assert status.is_all_clear is True
+        assert status.approvals == ["alice", "bob"]
+        assert status.changes_requested_by == []
+
+    def test_latest_reviews_excludes_bots(self) -> None:
+        from wade.models.review import PRReview, PRReviewStatus, ReviewState
+
+        status = PRReviewStatus(
+            reviews=[
+                PRReview(
+                    author="coderabbitai[bot]",
+                    state=ReviewState.CHANGES_REQUESTED,
+                    is_bot=True,
+                ),
+                PRReview(author="alice", state=ReviewState.APPROVED),
+            ]
+        )
+        assert "coderabbitai[bot]" not in status.latest_reviews_by_author
+        assert status.has_changes_requested is False
+        assert status.approvals == ["alice"]
+
+    def test_mixed_approved_and_changes_requested(self) -> None:
+        from wade.models.review import PRReview, PRReviewStatus, ReviewState
+
+        status = PRReviewStatus(
+            reviews=[
+                PRReview(author="alice", state=ReviewState.APPROVED),
+                PRReview(author="bob", state=ReviewState.CHANGES_REQUESTED),
+            ]
+        )
+        assert status.is_all_clear is False
+        assert status.approvals == ["alice"]
+        assert status.changes_requested_by == ["bob"]
+
+    def test_dismissed_review_not_blocking(self) -> None:
+        from wade.models.review import PRReview, PRReviewStatus, ReviewState
+
+        status = PRReviewStatus(
+            reviews=[
+                PRReview(author="alice", state=ReviewState.DISMISSED),
+            ]
+        )
+        assert status.is_all_clear is True
+        assert status.changes_requested_by == []
+
+
+# ---------------------------------------------------------------------------
+# format_review_status_summary
+# ---------------------------------------------------------------------------
+
+
+class TestFormatReviewStatusSummary:
+    def test_empty_status_all_clear(self) -> None:
+        from wade.models.review import PRReviewStatus, format_review_status_summary
+
+        status = PRReviewStatus()
+        messages = format_review_status_summary(status)
+        assert len(messages) == 1
+        level, msg = messages[0]
+        assert level == "success"
+        assert "resolved" in msg.lower() or "nothing to address" in msg.lower()
+
+    def test_unresolved_threads(self) -> None:
+        from wade.models.review import PRReviewStatus, format_review_status_summary
+
+        status = PRReviewStatus(
+            actionable_threads=[
+                ReviewThread(
+                    id="t1",
+                    comments=[ReviewComment(author="alice", body="Fix")],
+                )
+            ]
+        )
+        messages = format_review_status_summary(status)
+        levels = [m[0] for m in messages]
+        assert "warn" in levels
+        assert any("1 unresolved" in m[1] for m in messages)
+
+    def test_changes_requested(self) -> None:
+        from wade.models.review import (
+            PRReview,
+            PRReviewStatus,
+            ReviewState,
+            format_review_status_summary,
+        )
+
+        status = PRReviewStatus(
+            reviews=[PRReview(author="bob", state=ReviewState.CHANGES_REQUESTED)]
+        )
+        messages = format_review_status_summary(status)
+        assert any("@bob" in m[1] and m[0] == "warn" for m in messages)
+
+    def test_approvals_shown(self) -> None:
+        from wade.models.review import (
+            PRReview,
+            PRReviewStatus,
+            ReviewState,
+            format_review_status_summary,
+        )
+
+        status = PRReviewStatus(reviews=[PRReview(author="alice", state=ReviewState.APPROVED)])
+        messages = format_review_status_summary(status)
+        assert any("@alice" in m[1] and m[0] == "success" for m in messages)
+
+    def test_pending_reviewers_info_level(self) -> None:
+        from wade.models.review import (
+            PendingReviewer,
+            PRReviewStatus,
+            format_review_status_summary,
+        )
+
+        status = PRReviewStatus(pending_reviewers=[PendingReviewer(name="charlie", is_team=False)])
+        messages = format_review_status_summary(status)
+        assert any("@charlie" in m[1] and m[0] == "info" for m in messages)
+
+    def test_bot_in_progress_warning(self) -> None:
+        from wade.models.review import PRReviewStatus, format_review_status_summary
+
+        status = PRReviewStatus(bot_status=ReviewBotStatus.IN_PROGRESS)
+        messages = format_review_status_summary(status)
+        assert any("bot" in m[1].lower() and m[0] == "warn" for m in messages)
+
+    def test_bot_paused_warning(self) -> None:
+        from wade.models.review import PRReviewStatus, format_review_status_summary
+
+        status = PRReviewStatus(bot_status=ReviewBotStatus.PAUSED)
+        messages = format_review_status_summary(status)
+        assert any("paused" in m[1].lower() and m[0] == "warn" for m in messages)
+
+    def test_team_pending_reviewer_shown(self) -> None:
+        from wade.models.review import (
+            PendingReviewer,
+            PRReviewStatus,
+            format_review_status_summary,
+        )
+
+        status = PRReviewStatus(pending_reviewers=[PendingReviewer(name="core-team", is_team=True)])
+        messages = format_review_status_summary(status)
+        assert any("(team)" in m[1] for m in messages)
+
+    def test_approved_with_no_threads_shows_complete(self) -> None:
+        from wade.models.review import (
+            PRReview,
+            PRReviewStatus,
+            ReviewState,
+            format_review_status_summary,
+        )
+
+        status = PRReviewStatus(reviews=[PRReview(author="alice", state=ReviewState.APPROVED)])
+        messages = format_review_status_summary(status)
+        assert any("SESSION COMPLETE" in m[1] for m in messages)

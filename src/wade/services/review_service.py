@@ -22,6 +22,7 @@ from wade.git.repo import GitError
 from wade.models.ai import AIToolID
 from wade.models.config import ProjectConfig
 from wade.models.review import (
+    PRReviewStatus,
     ReviewBotStatus,
     detect_coderabbit_review_status,
     filter_actionable_threads,
@@ -125,29 +126,29 @@ def fetch_reviews(
 
     pr_number = int(pr_info["number"])
 
-    # Fetch review threads
-    try:
-        all_threads = provider.get_pr_review_threads(repo_root, pr_number)
-    except NotImplementedError:
-        console.error("Review thread fetching is not supported by this provider.")
-        return False
-    except Exception as e:
-        console.error(f"Failed to fetch review threads: {e}")
-        return False
-
-    # Filter to actionable threads
-    actionable = filter_actionable_threads(all_threads)
+    # Fetch comprehensive review status
+    status = get_comprehensive_review_status(provider, repo_root, pr_number)
+    actionable = status.actionable_threads
 
     if not actionable:
-        bot_status = _check_review_bot_status(provider, pr_number)
-        if bot_status == ReviewBotStatus.PAUSED:
+        if status.bot_status == ReviewBotStatus.PAUSED:
             print("No unresolved review comments found, but CodeRabbit review is paused.")
             print("Comments may arrive when the review is resumed.")
-        elif bot_status == ReviewBotStatus.IN_PROGRESS:
+        elif status.bot_status == ReviewBotStatus.IN_PROGRESS:
             print("No unresolved review comments found, but CodeRabbit is still reviewing.")
             print("Try fetching again shortly.")
         else:
             print("No unresolved review comments found.")
+
+        # Show PR-level review info even when no threads
+        if status.changes_requested_by:
+            names = ", ".join(f"@{a}" for a in status.changes_requested_by)
+            print(f"\nNote: Changes requested by {names} (PR-level review).")
+        if status.pending_reviewers:
+            names = ", ".join(
+                f"@{r.name}" + (" (team)" if r.is_team else "") for r in status.pending_reviewers
+            )
+            print(f"\nAwaiting review from {names}.")
         return True
 
     # Output formatted markdown to stdout (for AI consumption)
@@ -192,6 +193,22 @@ def count_unresolved_threads(
         Number of unresolved threads, or None if the check could not be performed
         (no git repo, no branch, no PR, provider error).
     """
+    status = get_review_status(project_root)
+    if status is None:
+        return None
+    return len(status.actionable_threads)
+
+
+def get_review_status(
+    project_root: Path | None = None,
+) -> PRReviewStatus | None:
+    """Fetch comprehensive PR review status for the current branch's PR.
+
+    Returns:
+        A :class:`PRReviewStatus` with all review data, or ``None`` if the
+        check could not be performed (no git repo, no branch, no PR, provider
+        error, or provider doesn't support comprehensive status).
+    """
     config = load_config(project_root)
     provider = get_provider(config)
 
@@ -213,12 +230,55 @@ def count_unresolved_threads(
     pr_number = int(pr_info["number"])
 
     try:
-        all_threads = provider.get_pr_review_threads(repo_root, pr_number)
+        return provider.get_pr_review_status(repo_root, pr_number)
+    except NotImplementedError:
+        # Fallback: use legacy thread-only approach
+        return _fallback_review_status(provider, repo_root, pr_number)
     except Exception:
         return None
 
+
+def get_comprehensive_review_status(
+    provider: AbstractTaskProvider,
+    repo_root: Path,
+    pr_number: int,
+) -> PRReviewStatus:
+    """Fetch comprehensive PR review status using provider with fallback.
+
+    Unlike :func:`get_review_status`, this accepts explicit parameters instead
+    of resolving from the current branch. Used by ``start()`` and
+    ``fetch_reviews()`` where the PR is already known.
+    """
+    try:
+        return provider.get_pr_review_status(repo_root, pr_number)
+    except NotImplementedError:
+        return _fallback_review_status(provider, repo_root, pr_number)
+    except Exception:
+        logger.debug("review.comprehensive_status_failed", exc_info=True)
+        return PRReviewStatus()
+
+
+def _fallback_review_status(
+    provider: AbstractTaskProvider,
+    repo_root: Path,
+    pr_number: int,
+) -> PRReviewStatus:
+    """Build a PRReviewStatus from legacy thread-only + bot-status APIs.
+
+    Used when the provider doesn't support ``get_pr_review_status()``.
+    """
+    try:
+        all_threads = provider.get_pr_review_threads(repo_root, pr_number)
+    except Exception:
+        return PRReviewStatus()
+
     actionable = filter_actionable_threads(all_threads)
-    return len(actionable)
+    bot_status = _check_review_bot_status(provider, pr_number)
+
+    return PRReviewStatus(
+        actionable_threads=actionable,
+        bot_status=bot_status,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -317,36 +377,44 @@ def start(
 
     console.kv("PR", f"#{pr_number}")
 
-    # 4. Quick-check for unresolved review threads
+    # 4. Quick-check for unresolved review threads via comprehensive status
     console.step("Checking for review comments...")
-    comment_count = 0
-    file_count = 0
-    try:
-        all_threads = provider.get_pr_review_threads(repo_root, pr_number)
-        actionable = filter_actionable_threads(all_threads)
-        comment_count = len(actionable)
-        file_paths = {
-            t.first_comment.path for t in actionable if t.first_comment and t.first_comment.path
-        }
-        file_count = len(file_paths) + (
-            1 if any(t.first_comment and not t.first_comment.path for t in actionable) else 0
-        )
-    except Exception:
-        logger.debug("review.quick_check_failed", exc_info=True)
+    status = get_comprehensive_review_status(provider, repo_root, pr_number)
+    comment_count = len(status.actionable_threads)
+    file_paths = {
+        t.first_comment.path
+        for t in status.actionable_threads
+        if t.first_comment and t.first_comment.path
+    }
+    file_count = len(file_paths) + (
+        1
+        if any(t.first_comment and not t.first_comment.path for t in status.actionable_threads)
+        else 0
+    )
 
     if comment_count == 0:
-        # Before declaring victory, check if a review bot is still working
-        bot_status = _check_review_bot_status(provider, pr_number)
-        if bot_status == ReviewBotStatus.PAUSED:
+        if status.bot_status == ReviewBotStatus.PAUSED:
             console.warn(
                 "CodeRabbit review is paused — comments may arrive when resumed.\n"
                 "    Run '@coderabbitai resume' on the PR to trigger a new review."
             )
             return True
-        if bot_status == ReviewBotStatus.IN_PROGRESS:
+        if status.bot_status == ReviewBotStatus.IN_PROGRESS:
             console.warn("CodeRabbit is still reviewing — try again shortly.")
             return True
+        if status.has_changes_requested:
+            names = ", ".join(f"@{a}" for a in status.changes_requested_by)
+            console.warn(
+                f"No inline comments, but changes requested by {names} "
+                "(PR-level review). Check the PR for details."
+            )
+            return True
         console.success("All review comments resolved — nothing to address! 🎉")
+        if status.pending_reviewers:
+            names = ", ".join(
+                f"@{r.name}" + (" (team)" if r.is_team else "") for r in status.pending_reviewers
+            )
+            console.info(f"Awaiting review from {names}.")
         return True
 
     console.info(f"Found {comment_count} unresolved comment(s) across {file_count} location(s)")

@@ -15,7 +15,14 @@ from typing import Any
 import structlog
 
 from wade.models.config import ProviderConfig
-from wade.models.review import ReviewComment, ReviewThread
+from wade.models.review import (
+    PendingReviewer,
+    PRReview,
+    PRReviewStatus,
+    ReviewComment,
+    ReviewState,
+    ReviewThread,
+)
 from wade.models.task import (
     Label,
     Task,
@@ -517,6 +524,214 @@ mutation($threadId: ID!) {
                 error=str(e),
             )
             return []
+
+    def get_pr_review_status(
+        self,
+        repo_root: Any,
+        pr_number: int,
+    ) -> PRReviewStatus:
+        """Fetch comprehensive PR review status via a combined GraphQL query.
+
+        Fetches review threads (paginated), PR-level reviews (last 50), and
+        pending review requests (first 20) in a single initial call. Subsequent
+        pages only fetch additional review threads.
+        """
+        from wade.models.review import ReviewBotStatus, detect_coderabbit_review_status
+
+        try:
+            nwo = self.get_repo_nwo()
+        except CommandError:
+            logger.warning("github.get_review_status_nwo_failed")
+            return PRReviewStatus()
+
+        owner, repo = nwo.split("/", 1)
+
+        # First page: combined query with reviews + reviewRequests
+        threads: list[ReviewThread] = []
+        reviews: list[PRReview] = []
+        pending_reviewers: list[PendingReviewer] = []
+
+        page_threads, has_next, cursor, page_reviews, page_pending = self._fetch_review_status_page(
+            owner, repo, pr_number, cursor=None
+        )
+        threads.extend(page_threads)
+        reviews.extend(page_reviews)
+        pending_reviewers.extend(page_pending)
+
+        # Subsequent pages: only threads (reviews/requests don't paginate here)
+        while has_next and cursor:
+            page_threads, has_next, cursor = self._fetch_review_threads_page(
+                owner, repo, pr_number, cursor
+            )
+            threads.extend(page_threads)
+
+        # Detect bot status from issue comments
+        bot_status: ReviewBotStatus | None = None
+        try:
+            comments = self.get_pr_issue_comments(pr_number)
+            bot_status = detect_coderabbit_review_status(comments)
+        except Exception:
+            logger.debug("github.review_status_bot_check_failed", exc_info=True)
+
+        from wade.models.review import filter_actionable_threads
+
+        return PRReviewStatus(
+            actionable_threads=filter_actionable_threads(threads),
+            reviews=reviews,
+            pending_reviewers=pending_reviewers,
+            bot_status=bot_status,
+        )
+
+    def _fetch_review_status_page(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        cursor: str | None = None,
+    ) -> tuple[list[ReviewThread], bool, str | None, list[PRReview], list[PendingReviewer]]:
+        """Fetch first page with threads, reviews, and review requests.
+
+        Returns (threads, has_next, end_cursor, reviews, pending_reviewers).
+        """
+        query = """
+query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $pr) {
+      reviewThreads(first: 100, after: $after) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          id
+          isResolved
+          isOutdated
+          comments(first: 50) {
+            nodes {
+              body
+              path
+              line
+              author { login }
+              createdAt
+              url
+            }
+          }
+        }
+      }
+      reviews(last: 50) {
+        nodes {
+          author { login }
+          state
+          body
+          submittedAt
+        }
+      }
+      reviewRequests(first: 20) {
+        nodes {
+          requestedReviewer {
+            ... on User { login }
+            ... on Team { name }
+            ... on Bot { login }
+          }
+        }
+      }
+    }
+  }
+}"""
+
+        cmd = [
+            "gh",
+            "api",
+            "graphql",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"repo={repo}",
+            "-F",
+            f"pr={pr_number}",
+            "-f",
+            f"query={query}",
+        ]
+        if cursor:
+            cmd.extend(["-f", f"after={cursor}"])
+
+        try:
+            result = run(cmd, check=True)
+            data = json.loads(result.stdout)
+        except (CommandError, json.JSONDecodeError) as e:
+            logger.warning("github.review_status_fetch_failed", error=str(e))
+            return [], False, None, [], []
+
+        pr_data = data.get("data", {}).get("repository", {}).get("pullRequest") or {}
+
+        # Parse review threads (same as _fetch_review_threads_page)
+        threads_data = pr_data.get("reviewThreads", {})
+        page_info = threads_data.get("pageInfo", {})
+        nodes = threads_data.get("nodes", [])
+
+        threads: list[ReviewThread] = []
+        for node in nodes:
+            comments: list[ReviewComment] = []
+            for cnode in node.get("comments", {}).get("nodes", []):
+                comments.append(
+                    ReviewComment(
+                        author=cnode.get("author", {}).get("login", "")
+                        if cnode.get("author")
+                        else "",
+                        body=cnode.get("body", ""),
+                        path=cnode.get("path"),
+                        line=cnode.get("line"),
+                        created_at=cnode.get("createdAt"),
+                        url=cnode.get("url"),
+                    )
+                )
+            threads.append(
+                ReviewThread(
+                    id=node.get("id", ""),
+                    is_resolved=node.get("isResolved", False),
+                    is_outdated=node.get("isOutdated", False),
+                    comments=comments,
+                )
+            )
+
+        # Parse PR-level reviews
+        reviews: list[PRReview] = []
+        for rnode in pr_data.get("reviews", {}).get("nodes", []):
+            author_login = ""
+            if rnode.get("author"):
+                author_login = rnode["author"].get("login", "")
+            state_str = rnode.get("state", "COMMENTED")
+            try:
+                state = ReviewState(state_str)
+            except ValueError:
+                state = ReviewState.COMMENTED
+            is_bot = author_login.endswith("[bot]") or author_login.endswith("-bot")
+            reviews.append(
+                PRReview(
+                    author=author_login,
+                    state=state,
+                    body=rnode.get("body", ""),
+                    submitted_at=rnode.get("submittedAt"),
+                    is_bot=is_bot,
+                )
+            )
+
+        # Parse pending review requests
+        pending: list[PendingReviewer] = []
+        for req_node in pr_data.get("reviewRequests", {}).get("nodes", []):
+            reviewer = req_node.get("requestedReviewer", {}) or {}
+            name = reviewer.get("login") or reviewer.get("name") or ""
+            is_team = "name" in reviewer and "login" not in reviewer
+            if name:
+                pending.append(PendingReviewer(name=name, is_team=is_team))
+
+        return (
+            threads,
+            page_info.get("hasNextPage", False),
+            page_info.get("endCursor"),
+            reviews,
+            pending,
+        )
 
     # --- Repository info ---
 
