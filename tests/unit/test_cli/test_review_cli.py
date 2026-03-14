@@ -14,6 +14,11 @@ from wade.models.delegation import DelegationMode, DelegationResult
 runner = CliRunner()
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
 def _review_cli_config(
     *,
     review_plan_mode: str = "prompt",
@@ -23,7 +28,7 @@ def _review_cli_config(
     review_batch_mode: str = "prompt",
     review_batch_enabled: bool | None = True,
 ) -> ProjectConfig:
-    """Build a CLI config fixture without depending on the repo's real .wade.yml."""
+    """Build a review CLI config fixture independent from the repo's real config."""
     return ProjectConfig(
         ai=AIConfig(
             default_tool="claude",
@@ -43,24 +48,56 @@ def _review_cli_config(
     )
 
 
+# ---------------------------------------------------------------------------
+# Plan review
+# ---------------------------------------------------------------------------
+
+
 class TestReviewPlanCli:
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.load_prompt_template")
-    def test_review_plan_success(
+    def test_review_plan_prompt_mode_exits_2(
         self,
         mock_template: MagicMock,
         mock_config: MagicMock,
         mock_delegate: MagicMock,
         tmp_path: Path,
     ) -> None:
+        """PROMPT mode should exit 2 with a SELF-REVIEW message."""
         plan_file = tmp_path / "PLAN.md"
         plan_file.write_text("# Test Plan\n\nContent.")
         mock_template.return_value = "{plan_content}"
-
-        mock_config.return_value = _review_cli_config(review_plan_enabled=True)
+        mock_config.return_value = _review_cli_config(review_plan_mode="prompt")
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="LGTM", mode=DelegationMode.PROMPT
+        )
+
+        result = runner.invoke(app, ["review", "plan", str(plan_file)])
+        assert result.exit_code == 2
+        assert "SELF-REVIEW" in result.output
+        mock_delegate.assert_called_once()
+        request = mock_delegate.call_args[0][0]
+        assert "# Test Plan" in request.prompt
+        assert request.mode == DelegationMode.PROMPT
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    def test_review_plan_interactive_mode_exits_0(
+        self,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """INTERACTIVE mode should exit 0 with a REVIEW COMPLETE message."""
+        plan_file = tmp_path / "PLAN.md"
+        plan_file.write_text("# Test Plan\n\nContent.")
+        mock_template.return_value = "{plan_content}"
+        mock_config.return_value = _review_cli_config(review_plan_mode="interactive")
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="Nice plan!", mode=DelegationMode.INTERACTIVE
         )
 
         result = runner.invoke(app, ["review", "plan", str(plan_file)])
@@ -69,7 +106,56 @@ class TestReviewPlanCli:
         mock_delegate.assert_called_once()
         request = mock_delegate.call_args[0][0]
         assert "# Test Plan" in request.prompt
-        assert request.mode == DelegationMode.PROMPT
+        assert request.mode == DelegationMode.INTERACTIVE
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    def test_review_plan_headless_mode_exits_0(
+        self,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """HEADLESS mode should exit 0 with a REVIEW COMPLETE message."""
+        plan_file = tmp_path / "PLAN.md"
+        plan_file.write_text("# Test Plan\n\nContent.")
+        mock_template.return_value = "{plan_content}"
+        mock_config.return_value = _review_cli_config(review_plan_mode="headless")
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="All good.", mode=DelegationMode.HEADLESS
+        )
+
+        result = runner.invoke(app, ["review", "plan", str(plan_file)])
+        assert result.exit_code == 0
+        assert "REVIEW COMPLETE" in result.output
+        mock_delegate.assert_called_once()
+        request = mock_delegate.call_args[0][0]
+        assert "# Test Plan" in request.prompt
+        assert request.mode == DelegationMode.HEADLESS
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    def test_review_plan_failure_exits_1(
+        self,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Failed review should exit 1."""
+        plan_file = tmp_path / "PLAN.md"
+        plan_file.write_text("# Test Plan\n\nContent.")
+        mock_template.return_value = "{plan_content}"
+        mock_config.return_value = _review_cli_config(review_plan_mode="interactive")
+        mock_delegate.return_value = DelegationResult(
+            success=False, feedback="Error", mode=DelegationMode.INTERACTIVE
+        )
+
+        result = runner.invoke(app, ["review", "plan", str(plan_file)])
+        assert result.exit_code == 1
 
     @patch("wade.services.review_delegation_service.load_config")
     def test_review_plan_missing_file(self, mock_config: MagicMock) -> None:
@@ -98,6 +184,11 @@ class TestReviewPlanCli:
         assert "REVIEW COMPLETE" not in result.output
 
 
+# ---------------------------------------------------------------------------
+# Implementation review
+# ---------------------------------------------------------------------------
+
+
 class TestReviewImplementationCli:
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.run")
@@ -116,27 +207,104 @@ class TestReviewImplementationCli:
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.load_prompt_template")
     @patch("wade.services.review_delegation_service.run")
-    def test_review_implementation_with_diff(
+    def test_review_implementation_prompt_mode_exits_2(
         self,
         mock_run: MagicMock,
         mock_template: MagicMock,
         mock_config: MagicMock,
         mock_delegate: MagicMock,
     ) -> None:
+        """PROMPT mode should exit 2 with a SELF-REVIEW message."""
         mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
         mock_template.return_value = "{diff_content}"
-
-        mock_config.return_value = _review_cli_config(review_implementation_enabled=True)
+        mock_config.return_value = _review_cli_config(review_implementation_mode="prompt")
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="Clean code!", mode=DelegationMode.PROMPT
         )
 
         result = runner.invoke(app, ["review", "implementation"])
-        assert result.exit_code == 0
+        assert result.exit_code == 2
+        assert "SELF-REVIEW" in result.output
         mock_delegate.assert_called_once()
         request = mock_delegate.call_args[0][0]
         assert "diff --git a/f.py" in request.prompt
         assert request.mode == DelegationMode.PROMPT
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    @patch("wade.services.review_delegation_service.run")
+    def test_review_implementation_interactive_mode_exits_0(
+        self,
+        mock_run: MagicMock,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+    ) -> None:
+        """INTERACTIVE mode should exit 0 with REVIEW COMPLETE message."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
+        mock_template.return_value = "{diff_content}"
+        mock_config.return_value = _review_cli_config(review_implementation_mode="interactive")
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="Looks good!", mode=DelegationMode.INTERACTIVE
+        )
+
+        result = runner.invoke(app, ["review", "implementation"])
+        assert result.exit_code == 0
+        assert "REVIEW COMPLETE" in result.output
+        mock_delegate.assert_called_once()
+        request = mock_delegate.call_args[0][0]
+        assert "diff --git a/f.py" in request.prompt
+        assert request.mode == DelegationMode.INTERACTIVE
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    @patch("wade.services.review_delegation_service.run")
+    def test_review_implementation_headless_mode_exits_0(
+        self,
+        mock_run: MagicMock,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+    ) -> None:
+        """HEADLESS mode should exit 0 with REVIEW COMPLETE message."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
+        mock_template.return_value = "{diff_content}"
+        mock_config.return_value = _review_cli_config(review_implementation_mode="headless")
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="OK", mode=DelegationMode.HEADLESS
+        )
+
+        result = runner.invoke(app, ["review", "implementation"])
+        assert result.exit_code == 0
+        assert "REVIEW COMPLETE" in result.output
+        mock_delegate.assert_called_once()
+        request = mock_delegate.call_args[0][0]
+        assert "diff --git a/f.py" in request.prompt
+        assert request.mode == DelegationMode.HEADLESS
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    @patch("wade.services.review_delegation_service.run")
+    def test_review_implementation_failure_exits_1(
+        self,
+        mock_run: MagicMock,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+    ) -> None:
+        """Failed review should exit 1."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
+        mock_template.return_value = "{diff_content}"
+        mock_config.return_value = _review_cli_config(review_implementation_mode="interactive")
+        mock_delegate.return_value = DelegationResult(
+            success=False, feedback="Error", mode=DelegationMode.INTERACTIVE
+        )
+
+        result = runner.invoke(app, ["review", "implementation"])
+        assert result.exit_code == 1
 
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.run")
@@ -225,6 +393,11 @@ class TestReviewBatchCli:
         assert "BATCH REVIEW COMPLETE" not in result.output
 
 
+# ---------------------------------------------------------------------------
+# Effort flag
+# ---------------------------------------------------------------------------
+
+
 class TestReviewCliEffortFlag:
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
@@ -239,14 +412,13 @@ class TestReviewCliEffortFlag:
         plan_file = tmp_path / "PLAN.md"
         plan_file.write_text("# Plan")
         mock_template.return_value = "{plan_content}"
-
-        mock_config.return_value = _review_cli_config(review_plan_enabled=True)
+        mock_config.return_value = _review_cli_config(review_plan_mode="prompt")
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="ok", mode=DelegationMode.PROMPT
         )
 
         result = runner.invoke(app, ["review", "plan", str(plan_file), "--effort", "low"])
-        assert result.exit_code == 0
+        assert result.exit_code == 2
         mock_delegate.assert_called_once()
         request = mock_delegate.call_args[0][0]
         assert request.effort == "low"
@@ -264,14 +436,13 @@ class TestReviewCliEffortFlag:
     ) -> None:
         mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
         mock_template.return_value = "{diff_content}"
-
-        mock_config.return_value = _review_cli_config(review_implementation_enabled=True)
+        mock_config.return_value = _review_cli_config(review_implementation_mode="prompt")
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="ok", mode=DelegationMode.PROMPT
         )
 
         result = runner.invoke(app, ["review", "implementation", "--effort", "high"])
-        assert result.exit_code == 0
+        assert result.exit_code == 2
         mock_delegate.assert_called_once()
         request = mock_delegate.call_args[0][0]
         assert request.effort == "high"

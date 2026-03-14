@@ -200,6 +200,7 @@ def review_implementation(
             success=True,
             feedback=f"No {label} to review.",
             mode=DelegationMode.PROMPT,
+            skipped=True,
         )
 
     template = load_prompt_template("review-code.md")

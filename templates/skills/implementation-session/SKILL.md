@@ -141,9 +141,15 @@ To finalize your work, follow these steps in order:
 
 **Step 1 — Self-review:**
 
-Run `wade review implementation` to catch issues early. The command checks your
-project config and skips if reviews are not enabled. If the review surfaces
-actionable feedback, address it and commit before proceeding.
+Run `wade review implementation` to catch issues early and check the exit code:
+- **Exit 0**: Review completed externally or skipped. If there is output, it is
+  review feedback — read it and address any actionable findings, then commit
+  before proceeding.
+- **Exit 2**: Self-review mode. The output is a review prompt — you must act as
+  the reviewer: read the instructions, analyze the diff, identify issues, and
+  fix them. Commit fixes before proceeding.
+- **Exit 1**: Error — debug and retry.
+
 For staged-only review: `wade review implementation --staged`.
 
 **Step 2 — Write PR summary:**
