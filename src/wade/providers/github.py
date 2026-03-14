@@ -19,9 +19,12 @@ from wade.models.review import (
     PendingReviewer,
     PRReview,
     PRReviewStatus,
+    ReviewBotStatus,
     ReviewComment,
     ReviewState,
     ReviewThread,
+    detect_coderabbit_review_status,
+    filter_actionable_threads,
 )
 from wade.models.task import (
     Label,
@@ -361,6 +364,34 @@ class GitHubProvider(AbstractTaskProvider):
 
         return threads
 
+    def _parse_thread_nodes(self, nodes: list[dict[str, Any]]) -> list[ReviewThread]:
+        """Parse GraphQL reviewThread nodes into ReviewThread models."""
+        threads: list[ReviewThread] = []
+        for node in nodes:
+            comments: list[ReviewComment] = []
+            for cnode in node.get("comments", {}).get("nodes", []):
+                comments.append(
+                    ReviewComment(
+                        author=cnode.get("author", {}).get("login", "")
+                        if cnode.get("author")
+                        else "",
+                        body=cnode.get("body", ""),
+                        path=cnode.get("path"),
+                        line=cnode.get("line"),
+                        created_at=cnode.get("createdAt"),
+                        url=cnode.get("url"),
+                    )
+                )
+            threads.append(
+                ReviewThread(
+                    id=node.get("id", ""),
+                    is_resolved=node.get("isResolved", False),
+                    is_outdated=node.get("isOutdated", False),
+                    comments=comments,
+                )
+            )
+        return threads
+
     def _fetch_review_threads_page(
         self,
         owner: str,
@@ -426,30 +457,7 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
         page_info = threads_data.get("pageInfo", {})
         nodes = threads_data.get("nodes", [])
 
-        threads: list[ReviewThread] = []
-        for node in nodes:
-            comments: list[ReviewComment] = []
-            for cnode in node.get("comments", {}).get("nodes", []):
-                comments.append(
-                    ReviewComment(
-                        author=cnode.get("author", {}).get("login", "")
-                        if cnode.get("author")
-                        else "",
-                        body=cnode.get("body", ""),
-                        path=cnode.get("path"),
-                        line=cnode.get("line"),
-                        created_at=cnode.get("createdAt"),
-                        url=cnode.get("url"),
-                    )
-                )
-            threads.append(
-                ReviewThread(
-                    id=node.get("id", ""),
-                    is_resolved=node.get("isResolved", False),
-                    is_outdated=node.get("isOutdated", False),
-                    comments=comments,
-                )
-            )
+        threads = self._parse_thread_nodes(nodes)
 
         return (
             threads,
@@ -536,8 +544,6 @@ mutation($threadId: ID!) {
         pending review requests (first 20) in a single initial call. Subsequent
         pages only fetch additional review threads.
         """
-        from wade.models.review import ReviewBotStatus, detect_coderabbit_review_status
-
         try:
             nwo = self.get_repo_nwo()
         except CommandError:
@@ -572,8 +578,6 @@ mutation($threadId: ID!) {
             bot_status = detect_coderabbit_review_status(comments)
         except Exception:
             logger.debug("github.review_status_bot_check_failed", exc_info=True)
-
-        from wade.models.review import filter_actionable_threads
 
         return PRReviewStatus(
             actionable_threads=filter_actionable_threads(threads),
@@ -664,35 +668,11 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
 
         pr_data = data.get("data", {}).get("repository", {}).get("pullRequest") or {}
 
-        # Parse review threads (same as _fetch_review_threads_page)
+        # Parse review threads (reuse shared helper)
         threads_data = pr_data.get("reviewThreads", {})
         page_info = threads_data.get("pageInfo", {})
         nodes = threads_data.get("nodes", [])
-
-        threads: list[ReviewThread] = []
-        for node in nodes:
-            comments: list[ReviewComment] = []
-            for cnode in node.get("comments", {}).get("nodes", []):
-                comments.append(
-                    ReviewComment(
-                        author=cnode.get("author", {}).get("login", "")
-                        if cnode.get("author")
-                        else "",
-                        body=cnode.get("body", ""),
-                        path=cnode.get("path"),
-                        line=cnode.get("line"),
-                        created_at=cnode.get("createdAt"),
-                        url=cnode.get("url"),
-                    )
-                )
-            threads.append(
-                ReviewThread(
-                    id=node.get("id", ""),
-                    is_resolved=node.get("isResolved", False),
-                    is_outdated=node.get("isOutdated", False),
-                    comments=comments,
-                )
-            )
+        threads = self._parse_thread_nodes(nodes)
 
         # Parse PR-level reviews
         reviews: list[PRReview] = []
