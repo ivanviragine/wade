@@ -284,8 +284,14 @@ def run_coherence_review(
         effort_explicit=effort_explicit,
     )
 
-    # Post findings to PR as a comment
-    if result.success and not result.skipped and ctx.pr_number:
+    # Post findings only when the AI produced actual review output.
+    if (
+        result.success
+        and not result.skipped
+        and result.mode != DelegationMode.PROMPT
+        and bool(result.feedback.strip())
+        and ctx.pr_number
+    ):
         try:
             repo_root = git_repo.get_repo_root(Path.cwd())
             git_pr.comment_on_pr(repo_root, ctx.pr_number, result.feedback)

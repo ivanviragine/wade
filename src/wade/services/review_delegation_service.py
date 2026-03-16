@@ -74,12 +74,15 @@ def _run_review_delegation(
             exit_code=1,
         )
 
-    resolved_tool = resolve_ai_tool(ai_tool, config, command=command)
-    resolved_model = resolve_model(model, config, command=command, tool=resolved_tool)
-    resolved_effort = resolve_effort(effort, config, command=command, tool=resolved_tool)
+    resolved_tool: str | None = None
+    resolved_model: str | None = None
+    resolved_effort: EffortLevel | None = None
 
-    # Confirmation prompt (skipped in prompt mode — no AI tool needed)
-    if delegation_mode != DelegationMode.PROMPT and resolved_tool:
+    if delegation_mode != DelegationMode.PROMPT:
+        resolved_tool = resolve_ai_tool(ai_tool, config, command=command)
+        resolved_model = resolve_model(model, config, command=command, tool=resolved_tool)
+        resolved_effort = resolve_effort(effort, config, command=command, tool=resolved_tool)
+
         resolved_tool, resolved_model, resolved_effort, _yolo = confirm_ai_selection(
             resolved_tool,
             resolved_model,

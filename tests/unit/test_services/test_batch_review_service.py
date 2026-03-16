@@ -18,11 +18,12 @@ def _batch_review_config(
     *,
     review_batch_mode: str = "prompt",
     review_batch_enabled: bool | None = True,
+    default_tool: str | None = "claude",
 ) -> ProjectConfig:
     """Build a review-batch config without depending on repo-local .wade.yml."""
     return ProjectConfig(
         ai=AIConfig(
-            default_tool="claude",
+            default_tool=default_tool,
             review_batch=AICommandConfig(
                 mode=review_batch_mode,
                 enabled=review_batch_enabled,
@@ -404,7 +405,7 @@ class TestRunCoherenceReview:
     @patch("wade.services.batch_review_service._run_review_delegation")
     @patch("wade.services.batch_review_service._load_review_config")
     @patch("wade.services.batch_review_service.load_prompt_template")
-    def test_posts_to_pr(
+    def test_posts_headless_feedback_to_pr(
         self,
         mock_template: MagicMock,
         mock_load_review_config: MagicMock,
@@ -414,13 +415,13 @@ class TestRunCoherenceReview:
     ) -> None:
         from wade.services.batch_review_service import run_coherence_review
 
-        config = _batch_review_config(review_batch_enabled=True)
+        config = _batch_review_config(review_batch_mode="headless", review_batch_enabled=True)
         mock_load_review_config.return_value = (config, config.ai.review_batch)
         mock_template.return_value = "Review:\n{batch_context}"
         mock_delegation.return_value = DelegationResult(
             success=True,
             feedback="All looks good!",
-            mode=DelegationMode.PROMPT,
+            mode=DelegationMode.HEADLESS,
         )
         mock_repo.get_repo_root.return_value = Path("/repo")
 
@@ -436,6 +437,82 @@ class TestRunCoherenceReview:
 
         assert result.success is True
         mock_pr.comment_on_pr.assert_called_once_with(Path("/repo"), 42, "All looks good!")
+
+    @patch("wade.services.batch_review_service.git_pr")
+    @patch("wade.services.batch_review_service.git_repo")
+    @patch("wade.services.batch_review_service._run_review_delegation")
+    @patch("wade.services.batch_review_service._load_review_config")
+    @patch("wade.services.batch_review_service.load_prompt_template")
+    def test_prompt_mode_does_not_post_self_review_prompt_to_pr(
+        self,
+        mock_template: MagicMock,
+        mock_load_review_config: MagicMock,
+        mock_delegation: MagicMock,
+        mock_repo: MagicMock,
+        mock_pr: MagicMock,
+    ) -> None:
+        from wade.services.batch_review_service import run_coherence_review
+
+        config = _batch_review_config(review_batch_mode="prompt", review_batch_enabled=True)
+        mock_load_review_config.return_value = (config, config.ai.review_batch)
+        mock_template.return_value = "Review:\n{batch_context}"
+        mock_delegation.return_value = DelegationResult(
+            success=True,
+            feedback="Review:\nDo this review yourself.",
+            mode=DelegationMode.PROMPT,
+        )
+        mock_repo.get_repo_root.return_value = Path("/repo")
+
+        ctx = BatchReviewContext(
+            issues=[
+                BatchIssueContext(issue_number="10", issue_title="Feature A", merged=True),
+            ],
+            tracking_issue="99",
+            pr_number=42,
+        )
+
+        result = run_coherence_review(ctx)
+
+        assert result.success is True
+        mock_pr.comment_on_pr.assert_not_called()
+
+    @patch("wade.services.batch_review_service.git_pr")
+    @patch("wade.services.batch_review_service.git_repo")
+    @patch("wade.services.batch_review_service._run_review_delegation")
+    @patch("wade.services.batch_review_service._load_review_config")
+    @patch("wade.services.batch_review_service.load_prompt_template")
+    def test_empty_headless_feedback_does_not_post_blank_comment(
+        self,
+        mock_template: MagicMock,
+        mock_load_review_config: MagicMock,
+        mock_delegation: MagicMock,
+        mock_repo: MagicMock,
+        mock_pr: MagicMock,
+    ) -> None:
+        from wade.services.batch_review_service import run_coherence_review
+
+        config = _batch_review_config(review_batch_mode="headless", review_batch_enabled=True)
+        mock_load_review_config.return_value = (config, config.ai.review_batch)
+        mock_template.return_value = "Review:\n{batch_context}"
+        mock_delegation.return_value = DelegationResult(
+            success=True,
+            feedback="   ",
+            mode=DelegationMode.HEADLESS,
+        )
+        mock_repo.get_repo_root.return_value = Path("/repo")
+
+        ctx = BatchReviewContext(
+            issues=[
+                BatchIssueContext(issue_number="10", issue_title="Feature A", merged=True),
+            ],
+            tracking_issue="99",
+            pr_number=42,
+        )
+
+        result = run_coherence_review(ctx)
+
+        assert result.success is True
+        mock_pr.comment_on_pr.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

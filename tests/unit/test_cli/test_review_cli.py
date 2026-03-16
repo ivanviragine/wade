@@ -340,6 +340,18 @@ class TestReviewImplementationCli:
 
 class TestReviewBatchCli:
     @patch("wade.services.batch_review_service.review_batch")
+    def test_review_batch_prompt_mode_exits_2(self, mock_review_batch: MagicMock) -> None:
+        mock_review_batch.return_value = DelegationResult(
+            success=True,
+            feedback="Review this batch yourself.",
+            mode=DelegationMode.PROMPT,
+        )
+
+        result = runner.invoke(app, ["review", "batch", "123"])
+        assert result.exit_code == 2
+        assert "SELF-REVIEW" in result.output
+
+    @patch("wade.services.batch_review_service.review_batch")
     def test_review_batch_success(self, mock_review_batch: MagicMock) -> None:
         mock_review_batch.return_value = DelegationResult(
             success=True,
@@ -378,6 +390,17 @@ class TestReviewBatchCli:
         )
 
     @patch("wade.services.batch_review_service.review_batch")
+    def test_review_batch_failure_exits_1(self, mock_review_batch: MagicMock) -> None:
+        mock_review_batch.return_value = DelegationResult(
+            success=False,
+            feedback="Review failed.",
+            mode=DelegationMode.INTERACTIVE,
+        )
+
+        result = runner.invoke(app, ["review", "batch", "123", "--mode", "interactive"])
+        assert result.exit_code == 1
+
+    @patch("wade.services.batch_review_service.review_batch")
     def test_review_batch_skipped_omits_completion_banner(
         self, mock_review_batch: MagicMock
     ) -> None:
@@ -391,6 +414,30 @@ class TestReviewBatchCli:
         result = runner.invoke(app, ["review", "batch", "123"])
         assert result.exit_code == 0
         assert "BATCH REVIEW COMPLETE" not in result.output
+
+    @patch("wade.services.batch_review_service.review_batch")
+    def test_review_batch_effort_flag(
+        self,
+        mock_review_batch: MagicMock,
+    ) -> None:
+        mock_review_batch.return_value = DelegationResult(
+            success=True,
+            feedback="Review this batch yourself.",
+            mode=DelegationMode.PROMPT,
+        )
+
+        result = runner.invoke(app, ["review", "batch", "123", "--effort", "high"])
+        assert result.exit_code == 2
+        mock_review_batch.assert_called_once_with(
+            "123",
+            ai_tool=None,
+            model=None,
+            mode=None,
+            effort="high",
+            ai_explicit=False,
+            model_explicit=False,
+            effort_explicit=True,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -412,13 +459,26 @@ class TestReviewCliEffortFlag:
         plan_file = tmp_path / "PLAN.md"
         plan_file.write_text("# Plan")
         mock_template.return_value = "{plan_content}"
-        mock_config.return_value = _review_cli_config(review_plan_mode="prompt")
+        mock_config.return_value = _review_cli_config(review_plan_mode="headless")
         mock_delegate.return_value = DelegationResult(
-            success=True, feedback="ok", mode=DelegationMode.PROMPT
+            success=True, feedback="ok", mode=DelegationMode.HEADLESS
         )
 
-        result = runner.invoke(app, ["review", "plan", str(plan_file), "--effort", "low"])
-        assert result.exit_code == 2
+        result = runner.invoke(
+            app,
+            [
+                "review",
+                "plan",
+                str(plan_file),
+                "--mode",
+                "headless",
+                "--ai",
+                "claude",
+                "--effort",
+                "low",
+            ],
+        )
+        assert result.exit_code == 0
         mock_delegate.assert_called_once()
         request = mock_delegate.call_args[0][0]
         assert request.effort == "low"
@@ -436,13 +496,25 @@ class TestReviewCliEffortFlag:
     ) -> None:
         mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
         mock_template.return_value = "{diff_content}"
-        mock_config.return_value = _review_cli_config(review_implementation_mode="prompt")
+        mock_config.return_value = _review_cli_config(review_implementation_mode="headless")
         mock_delegate.return_value = DelegationResult(
-            success=True, feedback="ok", mode=DelegationMode.PROMPT
+            success=True, feedback="ok", mode=DelegationMode.HEADLESS
         )
 
-        result = runner.invoke(app, ["review", "implementation", "--effort", "high"])
-        assert result.exit_code == 2
+        result = runner.invoke(
+            app,
+            [
+                "review",
+                "implementation",
+                "--mode",
+                "headless",
+                "--ai",
+                "claude",
+                "--effort",
+                "high",
+            ],
+        )
+        assert result.exit_code == 0
         mock_delegate.assert_called_once()
         request = mock_delegate.call_args[0][0]
         assert request.effort == "high"

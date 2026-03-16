@@ -127,6 +127,40 @@ def _bootstrap_review_target(
     return worktree_path, pr_number
 
 
+def _bootstrap_batch_review_targets(
+    e2e_repo: Path,
+    mock_gh_cli: MockGhCli,
+    *,
+    tracking_issue_number: int,
+    child_specs: list[tuple[int, str, str]],
+) -> str:
+    """Create tracking and child issues for deterministic batch review tests.
+
+    child_specs items are ``(issue_number, issue_title, branch_name)``.
+    """
+    checklist_lines = ["## Tasks"]
+    _init_origin_remote(e2e_repo)
+    for issue_number, issue_title, branch_name in child_specs:
+        checklist_lines.append(f"- [ ] #{issue_number}")
+        _seed_mock_issue(
+            mock_gh_cli["state_file"],
+            issue_number=issue_number,
+            title=issue_title,
+            body="## Tasks\n- Implement batch child\n",
+        )
+        start_result = _run(["implement", str(issue_number), "--cd"], cwd=e2e_repo)
+        assert start_result.returncode == 0
+        _find_mock_pr_number_by_head(mock_gh_cli["state_file"], branch_name)
+
+    _seed_mock_issue(
+        mock_gh_cli["state_file"],
+        issue_number=tracking_issue_number,
+        title=f"Batch tracking #{tracking_issue_number}",
+        body="\n".join(checklist_lines) + "\n",
+    )
+    return str(tracking_issue_number)
+
+
 class TestReviewPlanCommand:
     """Test `wade review plan` deterministic headless delegation contracts."""
 
@@ -442,6 +476,89 @@ class TestReviewPrCommentsCommand:
             mock_gh_cli["log_file"],
             ["api", "graphql", "-F", f"pr={pr_number}"],
         )
+
+
+class TestReviewBatchCommand:
+    """Test `wade review batch` deterministic contracts."""
+
+    def test_review_batch_prompt_does_not_post_self_review_prompt_to_pr(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        tracking_issue = 70
+        tracking_id = _bootstrap_batch_review_targets(
+            e2e_repo,
+            mock_gh_cli,
+            tracking_issue_number=tracking_issue,
+            child_specs=[
+                (71, "Batch child one", "feat/71-batch-child-one"),
+                (72, "Batch child two", "feat/72-batch-child-two"),
+            ],
+        )
+
+        result = _run(["review", "batch", tracking_id, "--mode", "prompt"], cwd=e2e_repo)
+
+        assert result.returncode == 2
+        output = result.stdout + result.stderr
+        assert "SELF-REVIEW" in output
+        integration_pr_number = _find_mock_pr_number_by_head(
+            mock_gh_cli["state_file"], "batch-review/70"
+        )
+        assert integration_pr_number
+        assert _count_gh_calls(mock_gh_cli["log_file"], ["pr", "comment"]) == 0
+
+    def test_review_batch_headless_posts_ai_feedback_to_pr(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        _install_fake_claude(mock_gh_cli["mock_bin"])
+        log_file = e2e_repo / ".fake-claude-log.jsonl"
+        tracking_id = _bootstrap_batch_review_targets(
+            e2e_repo,
+            mock_gh_cli,
+            tracking_issue_number=80,
+            child_specs=[
+                (81, "Headless batch child one", "feat/81-headless-batch-child-one"),
+                (82, "Headless batch child two", "feat/82-headless-batch-child-two"),
+            ],
+        )
+
+        result = _run(
+            [
+                "review",
+                "batch",
+                tracking_id,
+                "--mode",
+                "headless",
+                "--ai",
+                "claude",
+                "--model",
+                "claude-haiku-4.5",
+                "--effort",
+                "low",
+            ],
+            cwd=e2e_repo,
+            env={"WADE_FAKE_CLAUDE_LOG": str(log_file)},
+        )
+
+        assert result.returncode == 0
+        output = result.stdout + result.stderr
+        assert "BATCH REVIEW COMPLETE" in output
+        integration_pr_number = _find_mock_pr_number_by_head(
+            mock_gh_cli["state_file"], "batch-review/80"
+        )
+        _assert_gh_called_with(
+            mock_gh_cli["log_file"],
+            ["pr", "comment", integration_pr_number],
+        )
+        invocations = _read_fake_claude_log(log_file)
+        assert len(invocations) == 1
+        argv = invocations[0]
+        assert "--print" in argv
+        _assert_claude_headless_config(argv, expected_effort="low")
+        assert any("Tracking issue: #80" in token for token in argv)
 
 
 class TestReviewPrCommentsSessionCommands:
