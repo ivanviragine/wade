@@ -443,6 +443,45 @@ class TestRunCoherenceReview:
     @patch("wade.services.batch_review_service._run_review_delegation")
     @patch("wade.services.batch_review_service._load_review_config")
     @patch("wade.services.batch_review_service.load_prompt_template")
+    def test_uses_explicit_repo_root_for_config_and_commenting(
+        self,
+        mock_template: MagicMock,
+        mock_load_review_config: MagicMock,
+        mock_delegation: MagicMock,
+        mock_repo: MagicMock,
+        mock_pr: MagicMock,
+    ) -> None:
+        from wade.services.batch_review_service import run_coherence_review
+
+        config = _batch_review_config(review_batch_mode="headless", review_batch_enabled=True)
+        mock_load_review_config.return_value = (config, config.ai.review_batch)
+        mock_template.return_value = "Review:\n{batch_context}"
+        mock_delegation.return_value = DelegationResult(
+            success=True,
+            feedback="All looks good!",
+            mode=DelegationMode.HEADLESS,
+        )
+
+        ctx = BatchReviewContext(
+            issues=[
+                BatchIssueContext(issue_number="10", issue_title="Feature A", merged=True),
+            ],
+            tracking_issue="99",
+            pr_number=42,
+        )
+
+        result = run_coherence_review(ctx, repo_root=Path("/repo"))
+
+        assert result.success is True
+        mock_load_review_config.assert_called_once_with("review_batch", Path("/repo"))
+        mock_pr.comment_on_pr.assert_called_once_with(Path("/repo"), 42, "All looks good!")
+        mock_repo.get_repo_root.assert_not_called()
+
+    @patch("wade.services.batch_review_service.git_pr")
+    @patch("wade.services.batch_review_service.git_repo")
+    @patch("wade.services.batch_review_service._run_review_delegation")
+    @patch("wade.services.batch_review_service._load_review_config")
+    @patch("wade.services.batch_review_service.load_prompt_template")
     def test_prompt_mode_does_not_post_self_review_prompt_to_pr(
         self,
         mock_template: MagicMock,
@@ -559,3 +598,40 @@ class TestReviewBatch:
         assert result.success is True
         assert result.skipped is True
         mock_integration.assert_not_called()
+
+    @patch("wade.services.batch_review_service.run_coherence_review")
+    @patch("wade.services.batch_review_service.create_review_pr")
+    @patch("wade.services.batch_review_service.create_integration_branch")
+    @patch("wade.services.batch_review_service.gather_batch_context")
+    @patch("wade.services.batch_review_service.git_repo")
+    def test_passes_repo_root_to_coherence_review(
+        self,
+        mock_repo: MagicMock,
+        mock_gather: MagicMock,
+        mock_integration: MagicMock,
+        mock_pr_create: MagicMock,
+        mock_review: MagicMock,
+    ) -> None:
+        from wade.services.batch_review_service import review_batch
+
+        repo_root = Path("/repo")
+        mock_repo.get_repo_root.return_value = repo_root
+        mock_repo.get_current_branch.return_value = "main"
+        ctx = BatchReviewContext(
+            issues=[BatchIssueContext(issue_number="10", issue_title="Feature A", branch_name="x")],
+            tracking_issue="99",
+        )
+        mock_gather.return_value = ctx
+        mock_integration.return_value = ctx
+        mock_pr_create.return_value = ctx
+        mock_review.return_value = DelegationResult(
+            success=True,
+            feedback="Looks good!",
+            mode=DelegationMode.HEADLESS,
+        )
+
+        result = review_batch("99", project_root=Path("/repo/subdir"))
+
+        assert result.success is True
+        mock_review.assert_called_once()
+        assert mock_review.call_args.kwargs["repo_root"] == repo_root

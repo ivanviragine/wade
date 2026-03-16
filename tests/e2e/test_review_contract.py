@@ -102,6 +102,21 @@ def _set_review_enabled(e2e_repo: Path, config_key: str, enabled: bool) -> None:
     config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
 
 
+def _remove_default_ai_tool(e2e_repo: Path) -> None:
+    """Remove global/default review AI tool config from .wade.yml."""
+    config_path = e2e_repo / ".wade.yml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert isinstance(config, dict)
+    ai_config = config.setdefault("ai", {})
+    assert isinstance(ai_config, dict)
+    ai_config.pop("default_tool", None)
+    for command_name in ("review_plan", "review_implementation", "review_batch"):
+        cmd_config = ai_config.get(command_name)
+        if isinstance(cmd_config, dict):
+            cmd_config.pop("tool", None)
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+
+
 def _bootstrap_review_target(
     e2e_repo: Path,
     mock_gh_cli: MockGhCli,
@@ -249,6 +264,31 @@ class TestReviewPlanCommand:
         assert "ai.review_plan.enabled" in output
         assert _read_fake_claude_log(log_file) == []
 
+    def test_review_plan_prompt_without_ai_config_prints_prompt_only(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """Prompt-mode plan review should not require AI config or invoke AI binaries."""
+        _install_fake_claude(mock_gh_cli["mock_bin"])
+        log_file = e2e_repo / ".fake-claude-log.jsonl"
+        _remove_default_ai_tool(e2e_repo)
+
+        plan_file = e2e_repo / "PLAN-prompt.md"
+        plan_file.write_text("# Prompt review plan\n\nCheck self-review.\n", encoding="utf-8")
+
+        result = _run(
+            ["review", "plan", str(plan_file), "--mode", "prompt"],
+            cwd=e2e_repo,
+            env={"WADE_FAKE_CLAUDE_LOG": str(log_file)},
+        )
+
+        assert result.returncode == 2
+        output = result.stdout + result.stderr
+        assert "Prompt review plan" in output
+        assert "SELF-REVIEW" in output
+        assert _read_fake_claude_log(log_file) == []
+
 
 class TestReviewImplementationCommand:
     """Test `wade review implementation` deterministic headless contracts."""
@@ -357,6 +397,32 @@ class TestReviewImplementationCommand:
         output = result.stdout + result.stderr
         assert "Review skipped" in output
         assert "ai.review_implementation.enabled" in output
+        assert _read_fake_claude_log(log_file) == []
+
+    def test_review_implementation_prompt_without_ai_config_prints_prompt_only(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """Prompt-mode implementation review should not require AI config or invoke AI."""
+        _install_fake_claude(mock_gh_cli["mock_bin"])
+        log_file = e2e_repo / ".fake-claude-log.jsonl"
+        _remove_default_ai_tool(e2e_repo)
+
+        app_file = e2e_repo / "src" / "app.py"
+        app_file.write_text('print("prompt-mode implementation review")\n', encoding="utf-8")
+        _git(["add", str(app_file.relative_to(e2e_repo))], cwd=e2e_repo)
+
+        result = _run(
+            ["review", "implementation", "--staged", "--mode", "prompt"],
+            cwd=e2e_repo,
+            env={"WADE_FAKE_CLAUDE_LOG": str(log_file)},
+        )
+
+        assert result.returncode == 2
+        output = result.stdout + result.stderr
+        assert "diff --git" in output
+        assert "SELF-REVIEW" in output
         assert _read_fake_claude_log(log_file) == []
 
 

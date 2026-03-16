@@ -24,9 +24,12 @@ from wade.utils.process import run
 logger = structlog.get_logger()
 
 
-def _load_review_config(command: str) -> tuple[ProjectConfig, AICommandConfig]:
+def _load_review_config(
+    command: str,
+    project_root: Path | None = None,
+) -> tuple[ProjectConfig, AICommandConfig]:
     """Load project config and extract the per-command review configuration."""
-    config = load_config()
+    config = load_config(project_root)
     cmd_config: AICommandConfig = getattr(config.ai, command)
     return config, cmd_config
 

@@ -256,12 +256,13 @@ def run_coherence_review(
     ai_explicit: bool = False,
     model_explicit: bool = False,
     effort_explicit: bool = False,
+    repo_root: Path | None = None,
 ) -> DelegationResult:
     """Run AI coherence review on the batch context.
 
     Posts findings as a comment on the review PR if one exists.
     """
-    config, cmd_config = _load_review_config("review_batch")
+    config, cmd_config = _load_review_config("review_batch", repo_root)
     skip = _check_review_enabled("review_batch", cmd_config)
     if skip is not None:
         return skip
@@ -293,8 +294,8 @@ def run_coherence_review(
         and ctx.pr_number
     ):
         try:
-            repo_root = git_repo.get_repo_root(Path.cwd())
-            git_pr.comment_on_pr(repo_root, ctx.pr_number, result.feedback)
+            comment_repo_root = repo_root or git_repo.get_repo_root(Path.cwd())
+            git_pr.comment_on_pr(comment_repo_root, ctx.pr_number, result.feedback)
             console.info(f"Review posted as comment on PR #{ctx.pr_number}")
         except Exception:
             logger.debug("batch_review.comment_failed", exc_info=True)
@@ -386,6 +387,7 @@ def review_batch(
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
             effort_explicit=effort_explicit,
+            repo_root=repo_root,
         )
 
         return result
