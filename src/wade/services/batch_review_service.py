@@ -180,7 +180,7 @@ def create_review_pr(
         console.error("No integration branch to push.")
         return ctx
 
-    git_repo.push_branch(repo_root, ctx.integration_branch, set_upstream=True)
+    git_repo.push_branch(repo_root, ctx.integration_branch, set_upstream=True, force=True)
 
     merged_list = [f"- #{i.issue_number} {i.issue_title}" for i in ctx.issues if i.merged]
     conflict_list = [f"- #{i.issue_number} {i.issue_title}" for i in ctx.issues if i.conflict]
@@ -202,17 +202,23 @@ def create_review_pr(
 
     body = "\n".join(body_parts)
 
-    pr_info = git_pr.create_pr(
-        repo_root,
-        title=f"Batch review: tracking #{ctx.tracking_issue}",
-        body=body,
-        base=ctx.main_branch,
-        head=ctx.integration_branch,
-        draft=True,
-    )
-
-    ctx.pr_number = int(pr_info["number"])
-    ctx.pr_url = str(pr_info["url"])
+    existing = git_pr.get_pr_for_branch(repo_root, ctx.integration_branch)
+    if existing:
+        pr_number = int(existing["number"])
+        git_pr.update_pr_body(repo_root, pr_number, body)
+        ctx.pr_number = pr_number
+        ctx.pr_url = str(existing["url"])
+    else:
+        pr_info = git_pr.create_pr(
+            repo_root,
+            title=f"Batch review: tracking #{ctx.tracking_issue}",
+            body=body,
+            base=ctx.main_branch,
+            head=ctx.integration_branch,
+            draft=True,
+        )
+        ctx.pr_number = int(pr_info["number"])
+        ctx.pr_url = str(pr_info["url"])
     return ctx
 
 
