@@ -59,8 +59,9 @@ def infer_label_type(name: str) -> LabelType:
     Returns the matching LabelType if the name starts with a known prefix,
     otherwise returns LabelType.ISSUE_LABEL.
     """
+    normalized = name.strip().lower()
     for prefix, label_type in _LABEL_PREFIX_MAP.items():
-        if name.startswith(prefix):
+        if normalized.startswith(prefix):
             return label_type
     return LabelType.ISSUE_LABEL
 
