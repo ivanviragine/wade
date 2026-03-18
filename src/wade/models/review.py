@@ -243,3 +243,205 @@ def _format_thread(thread: ReviewThread) -> list[str]:
     lines.append("---")
     lines.append("")
     return lines
+
+
+# ---------------------------------------------------------------------------
+# PR-level review state models
+# ---------------------------------------------------------------------------
+
+
+class ReviewState(StrEnum):
+    """State of a PR-level review submission."""
+
+    APPROVED = "APPROVED"
+    CHANGES_REQUESTED = "CHANGES_REQUESTED"
+    COMMENTED = "COMMENTED"
+    PENDING = "PENDING"
+    DISMISSED = "DISMISSED"
+
+
+class PRReview(BaseModel):
+    """A PR-level review submission (APPROVED, CHANGES_REQUESTED, etc.)."""
+
+    author: str = ""
+    state: ReviewState = ReviewState.COMMENTED
+    body: str = ""
+    submitted_at: datetime | None = None
+    is_bot: bool = False
+
+
+class PendingReviewer(BaseModel):
+    """A reviewer who has been requested but hasn't submitted a review yet."""
+
+    name: str = ""
+    is_team: bool = False
+
+
+class PRReviewStatus(BaseModel):
+    """Unified container for all PR review status information.
+
+    Combines inline review threads, PR-level review submissions, pending
+    reviewer assignments, and bot status into a single model that consumers
+    can query for actionable status.
+    """
+
+    actionable_threads: list[ReviewThread] = []
+    reviews: list[PRReview] = []
+    pending_reviewers: list[PendingReviewer] = []
+    bot_status: ReviewBotStatus | None = None
+    fetch_failed: bool = False
+
+    @property
+    def latest_reviews_by_author(self) -> dict[str, PRReview]:
+        """Deduplicate reviews — keep only the latest per author.
+
+        Reviews are assumed to be ordered chronologically (oldest first).
+        Later reviews from the same author supersede earlier ones.
+        Bot reviews are excluded from deduplication.
+        """
+        by_author: dict[str, PRReview] = {}
+        for review in self.reviews:
+            if review.is_bot:
+                continue
+            if review.author:
+                by_author[review.author] = review
+        return by_author
+
+    @property
+    def has_changes_requested(self) -> bool:
+        """True if any non-bot reviewer's latest review is CHANGES_REQUESTED."""
+        return any(
+            r.state == ReviewState.CHANGES_REQUESTED for r in self.latest_reviews_by_author.values()
+        )
+
+    @property
+    def approvals(self) -> list[str]:
+        """Authors whose latest review is APPROVED."""
+        return [
+            author
+            for author, review in self.latest_reviews_by_author.items()
+            if review.state == ReviewState.APPROVED
+        ]
+
+    @property
+    def changes_requested_by(self) -> list[str]:
+        """Authors whose latest review is CHANGES_REQUESTED."""
+        return [
+            author
+            for author, review in self.latest_reviews_by_author.items()
+            if review.state == ReviewState.CHANGES_REQUESTED
+        ]
+
+    @property
+    def is_all_clear(self) -> bool:
+        """True when there's nothing blocking the PR.
+
+        All clear requires:
+        - Status was fetched successfully (no transient failures)
+        - No unresolved actionable threads
+        - No CHANGES_REQUESTED from any reviewer
+        - No bot currently processing (IN_PROGRESS)
+
+        Note: pending reviewers do NOT block all-clear (informational only).
+        """
+        if self.fetch_failed:
+            return False
+        if self.actionable_threads:
+            return False
+        if self.has_changes_requested:
+            return False
+        return self.bot_status != ReviewBotStatus.IN_PROGRESS
+
+
+# ---------------------------------------------------------------------------
+# Review status summary formatting
+# ---------------------------------------------------------------------------
+
+# Level constants for format_review_status_summary tuples
+LEVEL_SUCCESS = "success"
+LEVEL_INFO = "info"
+LEVEL_WARN = "warn"
+
+
+def format_review_status_summary(
+    status: PRReviewStatus,
+) -> list[tuple[str, str]]:
+    """Format a PRReviewStatus into (level, message) tuples for console display.
+
+    Levels: "success", "info", "warn".
+
+    Returns a list of messages covering:
+    - Unresolved threads (warn)
+    - Changes requested (warn)
+    - Bot in-progress / paused (warn)
+    - Approvals (success)
+    - Pending reviewers (info)
+    - All-clear (success)
+    """
+    messages: list[tuple[str, str]] = []
+
+    # Fetch failure — indeterminate status
+    if status.fetch_failed:
+        messages.append(
+            (
+                LEVEL_WARN,
+                "Review status fetch failed — status may be incomplete.",
+            )
+        )
+
+    # Unresolved threads
+    thread_count = len(status.actionable_threads)
+    if thread_count > 0:
+        messages.append(
+            (
+                LEVEL_WARN,
+                f"{thread_count} unresolved review thread(s) remain. "
+                "Consider running wade review-pr-comments-session resolve for each.",
+            )
+        )
+
+    # Changes requested (without inline threads)
+    for author in status.changes_requested_by:
+        messages.append(
+            (
+                LEVEL_WARN,
+                f"Changes requested by @{author} (PR-level review).",
+            )
+        )
+
+    # Bot status
+    if status.bot_status == ReviewBotStatus.IN_PROGRESS:
+        messages.append(
+            (
+                LEVEL_WARN,
+                "A review bot is still processing — additional comments may arrive.",
+            )
+        )
+    elif status.bot_status == ReviewBotStatus.PAUSED:
+        messages.append(
+            (
+                LEVEL_WARN,
+                "CodeRabbit review is paused — comments may arrive when resumed.",
+            )
+        )
+
+    # Approvals
+    if status.approvals:
+        names = ", ".join(f"@{a}" for a in status.approvals)
+        messages.append((LEVEL_SUCCESS, f"Approved by {names}."))
+
+    # Pending reviewers (informational)
+    if status.pending_reviewers:
+        names = ", ".join(
+            f"@{r.name}" + (" (team)" if r.is_team else "") for r in status.pending_reviewers
+        )
+        messages.append((LEVEL_INFO, f"Awaiting review from {names}."))
+
+    # All-clear
+    if status.is_all_clear:
+        if not status.approvals and thread_count == 0:
+            messages.append((LEVEL_SUCCESS, "All review threads resolved — nothing to address."))
+        elif status.approvals and thread_count == 0:
+            messages.append((LEVEL_SUCCESS, "SESSION COMPLETE — all review threads resolved."))
+
+    return messages

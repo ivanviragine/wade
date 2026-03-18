@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from wade.models.config import ProjectConfig, ProviderConfig, ProviderID
-from wade.models.task import Complexity, Label, TaskState
+from wade.models.task import Complexity, Label, LabelType, TaskState
 from wade.providers.github import GitHubProvider, _extract_number_from_url, _parse_gh_task
 from wade.providers.registry import get_provider
 from wade.utils.process import CommandError
@@ -100,6 +100,18 @@ class TestParseGhTask:
         raw = {"number": 10, "title": "Simple", "body": "No sections here."}
         task = _parse_gh_task(raw)
         assert task.complexity is None
+
+    def test_planned_by_label_infers_label_type(self) -> None:
+        raw = {
+            "number": 42,
+            "title": "Planned issue",
+            "body": "",
+            "state": "OPEN",
+            "labels": [{"name": "planned-by:claude", "color": "BFD4F2", "description": ""}],
+        }
+        task = _parse_gh_task(raw)
+        assert len(task.labels) == 1
+        assert task.labels[0].label_type == LabelType.PLANNED_BY
 
 
 # ---------------------------------------------------------------------------
