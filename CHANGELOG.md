@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.5.7] — 2026-03-18
+
+### Bug Fixes
+
+- use full checklist-fallback pattern in implementation_service.start() (810e56f)
+
 ## [v0.5.6] — 2026-03-18
 
 ### Bug Fixes
