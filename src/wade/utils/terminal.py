@@ -320,6 +320,11 @@ def launch_batch_in_terminals(
     return _batch_fallback(items)
 
 
+def _escape_applescript_string(s: str) -> str:
+    """Escape a string for embedding in AppleScript double-quoted string literals."""
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
 def _batch_ghostty_macos(
     items: Sequence[tuple[list[str], str | None, str | None]],
 ) -> bool:
@@ -350,7 +355,8 @@ def _batch_ghostty_macos(
                 "      end tell",
                 "    end tell",
                 f"    delay {_BATCH_TAB_DELAY}",
-                f'    keystroke "{script_path}"',
+                f'    set the clipboard to "{_escape_applescript_string(script_path)}"',
+                '    keystroke "v" using command down',
                 "    key code 36",
                 "  end tell",
                 "end tell",
@@ -480,13 +486,14 @@ def _batch_terminal_app(
         scripts.append(_create_temp_script(cmd, cwd))
 
     # First command creates a window; additional run in the same window (new tab)
+    escaped_scripts = [_escape_applescript_string(sp) for sp in scripts]
     osa_lines = [
         'tell application "Terminal"',
-        f'  do script "{scripts[0]}"',
+        f'  do script "{escaped_scripts[0]}"',
         "  set theWindow to front window",
     ]
-    for sp in scripts[1:]:
-        osa_lines.append(f'  do script "{sp}" in theWindow')
+    for esp in escaped_scripts[1:]:
+        osa_lines.append(f'  do script "{esp}" in theWindow')
     osa_lines.append("end tell")
     osa = "\n".join(osa_lines)
     try:
@@ -506,34 +513,31 @@ def _batch_terminal_app(
 def _batch_gnome_terminal(
     items: Sequence[tuple[list[str], str | None, str | None]],
 ) -> bool:
-    """GNOME Terminal: launch each tab as a separate gnome-terminal call.
+    """GNOME Terminal: single invocation with --window and --tab flags."""
+    scripts: list[str] = []
+    gnome_cmd: list[str] = ["gnome-terminal", "--window"]
 
-    gnome-terminal's ``--`` stops option parsing, so multi-tab with inline
-    commands is unreliable.  Staggered individual launches are safer.
-    """
-    launched = False
     for i, (cmd, cwd, title) in enumerate(items):
-        gnome_cmd: list[str] = ["gnome-terminal"]
-        if i == 0:
-            gnome_cmd.append("--window")
-        else:
+        tmp_path = _create_temp_script(cmd, cwd)
+        scripts.append(tmp_path)
+        if i > 0:
             gnome_cmd.append("--tab")
         if title:
             gnome_cmd.extend(["--title", title])
-        tmp_path = _create_temp_script(cmd, cwd)
         gnome_cmd.extend(["--", tmp_path])
-        try:
-            subprocess.Popen(gnome_cmd, start_new_session=True)
-            t = threading.Timer(15, lambda p=tmp_path: _safe_unlink(p))
+
+    try:
+        subprocess.Popen(gnome_cmd, start_new_session=True)
+        for sp in scripts:
+            t = threading.Timer(15, lambda p=sp: _safe_unlink(p))
             t.daemon = True
             t.start()
-            launched = True
-        except OSError:
-            _safe_unlink(tmp_path)
-        time.sleep(_BATCH_TAB_DELAY)
-    if not launched:
+        return True
+    except OSError:
+        for sp in scripts:
+            _safe_unlink(sp)
         logger.warning("terminal.batch_gnome_failed")
-    return launched
+        return False
 
 
 def _batch_fallback(

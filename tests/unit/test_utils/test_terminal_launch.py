@@ -422,6 +422,32 @@ def test_batch_tmux(monkeypatch: pytest.MonkeyPatch) -> None:
         assert args[1] == "new-window"
 
 
+def test_batch_wezterm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """WezTerm batch uses wezterm cli spawn with --new-window for first tab."""
+    monkeypatch.setenv("TERM_PROGRAM", "WezTerm")
+    monkeypatch.delenv("TMUX", raising=False)
+    monkeypatch.setattr("wade.utils.terminal.shutil.which", lambda _: "/usr/bin/wezterm")
+
+    run_mock = Mock(return_value=Mock())
+    monkeypatch.setattr("wade.utils.terminal.subprocess.run", run_mock)
+
+    items = [
+        (["wade", "implement", "1"], "/repo", "wade #1"),
+        (["wade", "implement", "2"], "/repo", "wade #2"),
+    ]
+    result = launch_batch_in_terminals(items)
+
+    assert result is True
+    assert run_mock.call_count == 2
+    # First call uses --new-window; second does not
+    first_args = run_mock.call_args_list[0].args[0]
+    assert first_args[:3] == ["wezterm", "cli", "spawn"]
+    assert "--new-window" in first_args
+    second_args = run_mock.call_args_list[1].args[0]
+    assert second_args[:3] == ["wezterm", "cli", "spawn"]
+    assert "--new-window" not in second_args
+
+
 def test_batch_fallback_loops_individual(monkeypatch: pytest.MonkeyPatch) -> None:
     """When no terminal detected, falls back to individual launches."""
     monkeypatch.delenv("TERM_PROGRAM", raising=False)
