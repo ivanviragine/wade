@@ -97,23 +97,26 @@ def done(
         no_cleanup=no_cleanup,
     )
     if success:
-        from wade.services.review_service import count_unresolved_threads
+        from wade.models.review import format_review_status_summary
+        from wade.services.review_service import get_review_status
         from wade.ui.console import console
 
-        unresolved = count_unresolved_threads()
-        if unresolved == 0:
-            console.info("SESSION COMPLETE — all review threads resolved.")
-        elif unresolved is None:
-            console.warn(
-                "SESSION COMPLETE — push succeeded, but unresolved review threads "
-                "could not be verified."
-            )
+        status = get_review_status()
+        if status is not None:
+            messages = format_review_status_summary(status)
+            for level, message in messages:
+                if level == "success":
+                    console.success(message)
+                elif level == "warn":
+                    console.warn(message)
+                elif level == "info":
+                    console.info(message)
+            if not messages:
+                console.info("SESSION COMPLETE — push succeeded.")
         else:
             console.warn(
-                f"{unresolved} unresolved review thread(s) remain. "
-                "Consider running wade review-pr-comments-session resolve for each."
+                "SESSION COMPLETE — push succeeded, but review status could not be verified."
             )
-            console.info("SESSION COMPLETE — push succeeded but unresolved threads remain.")
     raise typer.Exit(0 if success else 1)
 
 
