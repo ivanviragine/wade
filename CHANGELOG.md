@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.5.5] — 2026-03-18
+
+### Bug Fixes
+
+- reuse existing PR on batch review re-run (54dbf6e)
+
 ## [v0.5.4] — 2026-03-18
 
 ### Bug Fixes
