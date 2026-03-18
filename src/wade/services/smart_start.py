@@ -265,7 +265,7 @@ def _run_implement_task(
     """Delegate to the implement service."""
     from wade.services.implementation_service import start as do_start
 
-    return do_start(
+    result = do_start(
         target=target,
         ai_tool=ai_tool,
         model=model,
@@ -278,6 +278,7 @@ def _run_implement_task(
         resume_ai_tool=resume_ai_tool,
         yolo=yolo,
     )
+    return result.success
 
 
 def _run_review_pr_comments(

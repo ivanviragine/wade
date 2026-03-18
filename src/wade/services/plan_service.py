@@ -893,7 +893,8 @@ def _offer_to_implement(issue_number: str) -> bool | None:
         return None
 
     try:
-        return start_implementation_session(target=issue_number)
+        result = start_implementation_session(target=issue_number)
+        return result.success
     except Exception:
         logger.exception("plan.work_session_start_failed", issue=issue_number)
         return False

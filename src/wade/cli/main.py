@@ -121,8 +121,8 @@ def _interactive_main_menu() -> None:
         if target:
             from wade.services.implementation_service import start as do_start
 
-            success = do_start(target=target)
-            raise typer.Exit(0 if success else 1)
+            result = do_start(target=target)
+            raise typer.Exit(0 if result.success else 1)
     elif idx == 1:  # Address reviews
         from wade.services.task_service import prompt_task_selection
 
@@ -222,7 +222,7 @@ def implement_cmd(
     elif ai and len(ai) == 1:
         selected_ai = ai[0]
 
-    success = do_start(
+    result = do_start(
         target=target,
         ai_tool=selected_ai,
         model=model,
@@ -234,7 +234,7 @@ def implement_cmd(
         effort_explicit=effort is not None,
         yolo=yolo or None,
     )
-    raise typer.Exit(0 if success else 1)
+    raise typer.Exit(0 if result.success else 1)
 
 
 _BATCH_NUMBERS = typer.Argument(None, help="Issue numbers to work on.")
@@ -325,8 +325,8 @@ def cd_cmd(
         raise typer.Exit(0)
 
     # Worktree doesn't exist — create it (cd_only mode, no AI launch)
-    success = do_start(target=target, cd_only=True)
-    raise typer.Exit(0 if success else 1)
+    result = do_start(target=target, cd_only=True)
+    raise typer.Exit(0 if result.success else 1)
 
 
 @app.command("smart-start", hidden=True)
