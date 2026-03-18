@@ -173,8 +173,8 @@ def list_tasks(
         if idx < len(tasks):
             from wade.services.implementation_service import start as do_start
 
-            success = do_start(target=tasks[idx].id)
-            raise typer.Exit(0 if success else 1)
+            result = do_start(target=tasks[idx].id)
+            raise typer.Exit(0 if result.success else 1)
 
     raise typer.Exit(0)
 

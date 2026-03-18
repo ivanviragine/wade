@@ -126,5 +126,5 @@ def cd(
         raise typer.Exit(0)
 
     # Worktree doesn't exist — create it (cd_only mode, no AI launch)
-    success = do_start(target=target, cd_only=True)
-    raise typer.Exit(0 if success else 1)
+    result = do_start(target=target, cd_only=True)
+    raise typer.Exit(0 if result.success else 1)

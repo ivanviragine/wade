@@ -178,7 +178,12 @@ class TestShortAliases:
         assert result.exit_code == 1  # no AI tool → exits 1
 
     def test_i_alias_invokes_implement(self) -> None:
-        with patch("wade.services.implementation_service.start", return_value=True) as mock_start:
+        from wade.services.implementation_service import ImplementResult
+
+        with patch(
+            "wade.services.implementation_service.start",
+            return_value=ImplementResult(success=True),
+        ) as mock_start:
             result = runner.invoke(app, ["i", "42"])
         assert result.exit_code == 0
         mock_start.assert_called_once()
