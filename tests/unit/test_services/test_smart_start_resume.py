@@ -62,12 +62,12 @@ class TestGetLatestResumableSession:
     def test_returns_latest_resumable_skipping_unsupported(
         self, mock_body: MagicMock, tmp_path: Path
     ) -> None:
-        """When latest session is gemini (no resume) and previous is claude, returns claude."""
-        # Body has gemini (unsupported) as last, claude as second-to-last
+        """When latest session is cursor (no resume) and previous is claude, returns claude."""
+        # Body has cursor (unsupported) as last, claude as second-to-last
         body = build_sessions_block(
             [
                 {"phase": "implementation", "ai_tool": "claude", "session_id": "claude-sess"},
-                {"phase": "implementation", "ai_tool": "gemini", "session_id": "gem-sess"},
+                {"phase": "implementation", "ai_tool": "cursor", "session_id": "cursor-sess"},
             ]
         )
         mock_body.return_value = body
@@ -83,7 +83,7 @@ class TestGetLatestResumableSession:
     ) -> None:
         body = build_sessions_block(
             [
-                {"phase": "implementation", "ai_tool": "gemini", "session_id": "gem-sess"},
+                {"phase": "implementation", "ai_tool": "cursor", "session_id": "cursor-sess"},
             ]
         )
         mock_body.return_value = body

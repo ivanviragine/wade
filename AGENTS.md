@@ -41,7 +41,7 @@ Two distinct worlds interact in this codebase. Always be clear which one you are
 
 ```bash
 uv pip install -e ".[dev]"           # Install for development
-python scripts/auto_version.py patch # Version bump (patch/minor/major)
+uv run python scripts/auto_version.py patch # Version bump (patch/minor/major)
 
 # Version bumps MUST be done with the script above. NEVER bump pyproject.toml
 # manually, as the script generates CHANGELOG.md and git tags automatically.

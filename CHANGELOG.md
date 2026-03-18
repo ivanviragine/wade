@@ -4,6 +4,40 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.5.3] — 2026-03-18
+
+### Bug Fixes
+
+- always propagate wade allowlist to worktrees unconditionally (6c9ebab)
+
+### Other Changes
+
+- Update model registries and default tier mappings for new OpenAI/Google models (#168) (64664c9)
+
+## [v0.5.2] — 2026-03-18
+
+### Documentation
+
+- replace `python` with `uv run python` in version bump commands (8a3b52a)
+
+## [v0.5.1] — 2026-03-18
+
+### Other Changes
+
+- Add CLI argument probing to probe script and improve Codex model discovery (#172) (5f29c56)
+- Fall back to branch diff when `wade review implementation` finds no working-tree changes (#175) (72d5d79)
+- Update Codex and Gemini adapters for new CLI capabilities (#170) (7ea9173)
+- Comprehensive PR review status reporting (#162) (58d94c9)
+- Fix `[NO PLAN]` badge showing for planned issues (#166) (a37e9f2)
+- Rename "Self-review" to "Review" in implementation-session skill template (#164) (d67e70f)
+- Make self-review output actionable for AI agents (#160) (9a3a45a)
+- Fix init review/deps prompt ordering and self-review UX (#156) (a80e855)
+- Fix plan-phase AI config leaking into implementation handoff (#158) (415ca7a)
+- Enable Codex headless (non-interactive) execution via `exec` subcommand (#154) (c772d48)
+- Fix medium complexity tier defaulting to fast-tier model in init (#152) (46ad404)
+- Remove project scripts auto-detection from allowed commands (#148) (1289296)
+- Fix prompt mode to return raw prompt without user-facing header (#150) (cd1d858)
+
 ## [v0.5.0] — 2026-03-12
 
 ### Features

@@ -24,12 +24,85 @@ JSON_PATH = Path(__file__).parent.parent / "src" / "wade" / "data" / "models.jso
 _DOCS_URLS: dict[str, str] = {
     "claude": "https://docs.anthropic.com/en/docs/about-claude/models/overview",
     "gemini": "https://geminicli.com/docs/cli/model/",
+    "codex": "https://developers.openai.com/codex/models",
 }
 
 _SCRAPE_PATTERNS: dict[str, str] = {
     "claude": r"claude-[a-z]+-[0-9]+[-\.][0-9]+[a-zA-Z0-9._-]*",
     "gemini": r"gemini-[0-9][.0-9]*-(flash|pro|ultra)[a-z0-9._-]*",
+    "codex": r"gpt-[0-9][.0-9]*[a-zA-Z0-9._-]*",
 }
+
+# Per-tool expected CLI flag patterns, keyed by capability name.
+# Values are substrings to search for in `--help` / `-h` output.
+_EXPECTED_FLAGS: dict[str, dict[str, str]] = {
+    "codex": {
+        "yolo": "--approval-mode",
+        "ask_for_approval": "--ask-for-approval",
+        "headless": "exec",
+        "model_reasoning_effort": "model_reasoning_effort",
+        "profile": "--profile",
+        "image": "--image",
+    },
+    "gemini": {
+        "headless": "-p",  # matches both -p and --prompt
+        "resume": "--resume",
+        "output_format": "--output-format",
+        "sandbox": "--sandbox",
+        "allowed_tools": "--allowed-tools",
+        "yolo": "--yolo",
+    },
+    "claude": {
+        "headless": "--print",
+        "resume": "--resume",
+        "yolo": "--dangerously-skip-permissions",
+        "permission_mode": "--permission-mode",
+    },
+    "copilot": {
+        "headless": "--prompt",
+        "resume": "--resume",
+        "yolo": "--yolo",
+        "allow_tool": "--allow-tool",
+    },
+    "cursor": {
+        "list_models": "--list-models",
+        "headless": "--print",
+        "model": "--model",
+        "force": "--force",
+    },
+    "opencode": {
+        "headless": "run",
+        "model": "--model",
+        "resume": "-s",
+        "effort": "--variant",
+    },
+}
+
+# Maps capability names in _EXPECTED_FLAGS to AIToolCapabilities boolean fields.
+_CAP_FIELD_MAP: dict[str, str] = {
+    "headless": "supports_headless",
+    "resume": "supports_resume",
+    "yolo": "supports_yolo",
+    "effort": "supports_effort",
+    "model_reasoning_effort": "supports_effort",
+}
+
+
+def _token_match(pattern: str, text: str) -> bool:
+    """Check if a CLI flag or subcommand appears as a standalone token in help text.
+
+    Long flags (``--foo``) are specific enough for direct substring matching.
+    Short flags (``-f``) require surrounding whitespace/punctuation so they are
+    not confused with options like ``-foo``.  Plain words (subcommands such as
+    ``run`` or ``exec``) use word-boundary matching to avoid partial hits like
+    ``truncate`` matching ``run``.
+    """
+    escaped = re.escape(pattern)
+    if pattern.startswith("--"):
+        return pattern in text
+    if pattern.startswith("-"):
+        return bool(re.search(r"(?:^|\s)" + escaped + r"(?:\s|,|\[|$)", text, re.MULTILINE))
+    return bool(re.search(r"\b" + escaped + r"\b", text))
 
 
 def _scrape_models(tool: str) -> set[str]:
@@ -140,16 +213,21 @@ def probe_gemini() -> set[str]:
 
 
 def probe_codex() -> set[str]:
-    """Read available models from codex's local cache file (~/.codex/models_cache.json)."""
+    """Read available models from codex's local cache file (~/.codex/models_cache.json).
+
+    Falls back to web scraping if the cache doesn't exist or yields no models.
+    """
     cache = Path.home() / ".codex" / "models_cache.json"
-    if not cache.exists():
-        return set()
-    try:
-        with open(cache, encoding="utf-8") as f:
-            data = json.load(f)
-        return {m["slug"] for m in data.get("models", []) if m.get("visibility") == "list"}
-    except Exception:
-        return set()
+    if cache.exists():
+        try:
+            with open(cache, encoding="utf-8") as f:
+                data = json.load(f)
+            models = {m["slug"] for m in data.get("models", []) if m.get("visibility") == "list"}
+            if models:
+                return models
+        except Exception:
+            pass
+    return _scrape_models("codex")
 
 
 def probe_opencode() -> set[str]:
@@ -167,6 +245,110 @@ def probe_opencode() -> set[str]:
     except Exception:
         pass
     return set()
+
+
+def probe_cli_args(tool: str) -> dict[str, bool]:
+    """Run ``<tool> --help`` and check for expected flag patterns.
+
+    Returns a dict mapping capability_name -> found (bool) for each entry in
+    ``_EXPECTED_FLAGS[tool]``.  Returns an empty dict when the tool is not in
+    ``_EXPECTED_FLAGS``, its binary is not installed, or the help output is empty.
+    """
+    expected = _EXPECTED_FLAGS.get(tool)
+    if not expected:
+        return {}
+
+    try:
+        adapter = AbstractAITool.get(tool)
+    except ValueError:
+        return {}
+
+    binary = adapter.capabilities().binary
+    if not shutil.which(binary):
+        return {}
+
+    combined = ""
+    for help_flag in ["--help", "-h"]:
+        try:
+            result = subprocess.run(
+                [binary, help_flag],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            combined += result.stdout + result.stderr
+        except Exception:
+            pass
+
+    if not combined.strip():
+        return {}
+
+    return {cap_name: _token_match(pattern, combined) for cap_name, pattern in expected.items()}
+
+
+def report_cli_args() -> bool:
+    """Compare probed CLI flags against adapter capabilities and print a report.
+
+    For each tool in ``_EXPECTED_FLAGS``:
+    - MISSING: expected flags not found in ``--help`` (possible deprecation/rename)
+    - CAPABILITY MISMATCH: flag found but the adapter declares no support for it
+    - Reports a clean status if all flags match expectations
+
+    Returns ``True`` if any issues (missing flags or capability mismatches) were
+    detected, ``False`` when everything looks correct.
+    """
+    from wade.ui.console import console
+
+    console.header("CLI Arguments")
+
+    has_cli_diff = False
+
+    for tool in _EXPECTED_FLAGS:
+        try:
+            adapter = AbstractAITool.get(tool)
+        except ValueError:
+            continue
+
+        caps = adapter.capabilities()
+        if not shutil.which(caps.binary):
+            console.warn(f"[{tool}] CLI not installed, skipping argument probe.")
+            continue
+
+        found_flags = probe_cli_args(tool)
+        if not found_flags:
+            console.warn(f"[{tool}] Could not probe CLI arguments (--help returned no output).")
+            continue
+
+        console.header(f"Tool: {tool}")
+
+        missing = [cap for cap, found in found_flags.items() if not found]
+        present = [cap for cap, found in found_flags.items() if found]
+
+        if missing:
+            has_cli_diff = True
+            console.warn("MISSING (expected flags not found in --help):")
+            for cap in sorted(missing):
+                flag = _EXPECTED_FLAGS[tool][cap]
+                console.detail(f"  - {cap} ({flag})")
+
+        mismatches = []
+        for cap in present:
+            field = _CAP_FIELD_MAP.get(cap)
+            if field and not getattr(caps, field, True):
+                mismatches.append((cap, _EXPECTED_FLAGS[tool][cap], field))
+
+        if mismatches:
+            has_cli_diff = True
+            console.warn("CAPABILITY MISMATCH (flag found but adapter declares no support):")
+            for cap, flag, field in sorted(mismatches):
+                console.detail(f"  ! {cap}: {flag} found but {field}=False")
+
+        if not missing and not mismatches:
+            console.detail("✓ CLI args match expectations.")
+
+        console.empty()
+
+    return has_cli_diff
 
 
 def main() -> int:
@@ -231,8 +413,10 @@ def main() -> int:
                 )
         console.empty()
 
+    has_diff = report_cli_args() or has_diff
+
     if not has_diff:
-        console.success("All models strictly match the JSON registry!")
+        console.success("All models and CLI args match expectations!")
         return 0
 
     from wade.ui import prompts

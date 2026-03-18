@@ -173,11 +173,10 @@ def bootstrap_worktree(
         install_skills(worktree_path, is_self_init=False, force=True, skills=skills)
     logger.debug("implementation.bootstrap_skills", path=str(worktree_path))
 
-    # Propagate allowlist from project root to worktree if already configured
-    from wade.config.claude_allowlist import configure_allowlist, is_allowlist_configured
+    # Always propagate allowlist to worktree — configure_allowlist is idempotent
+    from wade.config.claude_allowlist import configure_allowlist
 
-    if is_allowlist_configured(repo_root):
-        configure_allowlist(worktree_path, extra_patterns=config.permissions.allowed_commands)
+    configure_allowlist(worktree_path, extra_patterns=config.permissions.allowed_commands)
 
     # Propagate Cursor allowlist to worktree's per-project .cursor/cli.json
     from wade.config.cursor_allowlist import configure_allowlist as configure_cursor_allowlist

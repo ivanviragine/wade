@@ -70,7 +70,7 @@ This creates the GitHub `pypi` environment, does the first PyPI upload, and walk
 ### Every release after that
 
 ```bash
-python scripts/auto_version.py patch --push   # or minor / major
+uv run python scripts/auto_version.py patch --push   # or minor / major
 ```
 
 This bumps the version, generates `CHANGELOG.md`, commits, tags, and pushes. CI then:
@@ -82,9 +82,9 @@ This bumps the version, generates `CHANGELOG.md`, commits, tags, and pushes. CI 
 ### Version bump types
 
 ```bash
-python scripts/auto_version.py patch   # bug fixes     0.1.0 → 0.1.1
-python scripts/auto_version.py minor   # new features  0.1.0 → 0.2.0
-python scripts/auto_version.py major   # breaking      0.1.0 → 1.0.0
+uv run python scripts/auto_version.py patch   # bug fixes     0.1.0 → 0.1.1
+uv run python scripts/auto_version.py minor   # new features  0.1.0 → 0.2.0
+uv run python scripts/auto_version.py major   # breaking      0.1.0 → 1.0.0
 ```
 
 Add `--dry-run` to preview without making changes.

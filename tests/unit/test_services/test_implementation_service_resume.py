@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from wade.ai_tools.claude import ClaudeAdapter
-from wade.ai_tools.gemini import GeminiAdapter
+from wade.ai_tools.cursor import CursorAdapter
 
 
 class TestImplementationServiceResumeLaunch:
@@ -17,7 +17,7 @@ class TestImplementationServiceResumeLaunch:
 
     def test_resume_fallback_when_unsupported(self) -> None:
         """When the tool doesn't support resume, build_resume_command returns None."""
-        adapter = GeminiAdapter()
+        adapter = CursorAdapter()
         cmd = adapter.build_resume_command("my-session-id")
         assert cmd is None
 

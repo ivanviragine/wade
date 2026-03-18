@@ -191,17 +191,21 @@ class TestReviewPlanCli:
 
 class TestReviewImplementationCli:
     @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service._committed_diff_fallback")
     @patch("wade.services.review_delegation_service.run")
     def test_review_implementation_no_diff(
         self,
         mock_run: MagicMock,
+        mock_fallback: MagicMock,
         mock_config: MagicMock,
     ) -> None:
         mock_config.return_value = _review_cli_config(review_implementation_enabled=True)
         mock_run.return_value = MagicMock(returncode=0, stdout="")
+        mock_fallback.return_value = ""
         result = runner.invoke(app, ["review", "implementation"])
         assert result.exit_code == 0
         assert "No changes to review." in result.output
+        mock_fallback.assert_called_once_with()
 
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")

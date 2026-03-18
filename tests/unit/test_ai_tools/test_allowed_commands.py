@@ -68,15 +68,15 @@ class TestGeminiAllowedCommands:
     def test_single_pattern(self) -> None:
         adapter = GeminiAdapter()
         result = adapter.allowed_commands_args(["wade *"])
-        assert result == ["--allowedTools", "shell(wade:*)"]
+        assert result == ["--allowed-tools", "shell(wade:*)"]
 
     def test_multiple_patterns(self) -> None:
         adapter = GeminiAdapter()
         result = adapter.allowed_commands_args(["wade *", "./scripts/check.sh *"])
         assert result == [
-            "--allowedTools",
+            "--allowed-tools",
             "shell(wade:*)",
-            "--allowedTools",
+            "--allowed-tools",
             "shell(./scripts/check.sh:*)",
         ]
 
