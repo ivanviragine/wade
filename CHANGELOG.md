@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.5.2] — 2026-03-18
+
+### Documentation
+
+- replace `python` with `uv run python` in version bump commands (8a3b52a)
+
 ## [v0.5.1] — 2026-03-18
 
 ### Other Changes
