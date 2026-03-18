@@ -13,6 +13,7 @@ from wade.models.task import (
     PlanFile,
     Task,
     TaskState,
+    infer_label_type,
     parse_complexity_from_body,
 )
 
@@ -27,6 +28,55 @@ class TestComplexity:
     def test_from_string(self) -> None:
         assert Complexity("easy") == Complexity.EASY
         assert Complexity("very_complex") == Complexity.VERY_COMPLEX
+
+
+class TestLabelTypeInference:
+    def test_planned_by_prefix(self) -> None:
+        assert infer_label_type("planned-by:claude") == LabelType.PLANNED_BY
+
+    def test_planned_model_prefix(self) -> None:
+        assert infer_label_type("planned-model:claude-opus-4-6") == LabelType.PLANNED_MODEL
+
+    def test_implemented_by_prefix(self) -> None:
+        assert infer_label_type("implemented-by:claude") == LabelType.IMPLEMENTED_BY
+
+    def test_implemented_model_prefix(self) -> None:
+        assert (
+            infer_label_type("implemented-model:claude-sonnet-4-6") == LabelType.IMPLEMENTED_MODEL
+        )
+
+    def test_review_addressed_by_prefix(self) -> None:
+        assert infer_label_type("review-addressed-by:claude") == LabelType.REVIEW_ADDRESSED_BY
+
+    def test_review_addressed_model_prefix(self) -> None:
+        assert (
+            infer_label_type("review-addressed-model:claude-haiku-4-5")
+            == LabelType.REVIEW_ADDRESSED_MODEL
+        )
+
+    def test_complexity_prefix(self) -> None:
+        assert infer_label_type("complexity:easy") == LabelType.COMPLEXITY
+
+    def test_generic_label_defaults_to_issue_label(self) -> None:
+        assert infer_label_type("bug") == LabelType.ISSUE_LABEL
+        assert infer_label_type("feature-plan") == LabelType.ISSUE_LABEL
+
+    def test_label_model_validator_infers_type(self) -> None:
+        label = Label(name="planned-by:claude")
+        assert label.label_type == LabelType.PLANNED_BY
+
+    def test_label_model_validator_preserves_explicit_type(self) -> None:
+        label = Label(name="planned-by:claude", label_type=LabelType.PLANNED_BY)
+        assert label.label_type == LabelType.PLANNED_BY
+
+    def test_label_model_validator_does_not_override_non_default(self) -> None:
+        # Explicit non-ISSUE_LABEL type must not be overridden
+        label = Label(name="some-label", label_type=LabelType.IN_PROGRESS)
+        assert label.label_type == LabelType.IN_PROGRESS
+
+    def test_label_model_validator_generic_label_stays_issue_label(self) -> None:
+        label = Label(name="bug")
+        assert label.label_type == LabelType.ISSUE_LABEL
 
 
 class TestTask:

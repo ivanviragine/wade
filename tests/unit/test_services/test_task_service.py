@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from wade.models.config import ProjectConfig, ProjectSettings
-from wade.models.task import Task, TaskState
+from wade.models.task import Label, LabelType, Task, TaskState
 from wade.services.task_service import (
     LABEL_COLOR_IMPLEMENTED,
     LABEL_COLOR_IN_PROGRESS,
@@ -17,6 +17,7 @@ from wade.services.task_service import (
     PLAN_SUMMARY_MARKER_END,
     PLAN_SUMMARY_MARKER_START,
     _strip_plan_summary,
+    _task_has_plan,
     add_implemented_by_labels,
     add_in_progress_label,
     add_planned_by_labels,
@@ -393,6 +394,36 @@ class TestUpdateTask:
     def test_update_no_args(self, mock_provider: MagicMock, config: ProjectConfig) -> None:
         result = update_task("42", config=config, provider=mock_provider)
         assert result is False
+
+
+class TestTaskHasPlan:
+    def test_returns_true_for_planned_by_label(self) -> None:
+        task = Task(
+            id="1",
+            title="t",
+            labels=[Label(name="planned-by:claude")],
+        )
+        assert _task_has_plan(task) is True
+
+    def test_returns_true_for_explicitly_typed_label(self) -> None:
+        task = Task(
+            id="1",
+            title="t",
+            labels=[Label(name="planned-by:claude", label_type=LabelType.PLANNED_BY)],
+        )
+        assert _task_has_plan(task) is True
+
+    def test_returns_false_for_no_labels(self) -> None:
+        task = Task(id="1", title="t")
+        assert _task_has_plan(task) is False
+
+    def test_returns_false_for_generic_labels_only(self) -> None:
+        task = Task(
+            id="1",
+            title="t",
+            labels=[Label(name="bug"), Label(name="feature-plan")],
+        )
+        assert _task_has_plan(task) is False
 
 
 class TestCloseTask:
