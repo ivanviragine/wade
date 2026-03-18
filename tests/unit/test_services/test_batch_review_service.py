@@ -281,6 +281,7 @@ class TestCreateReviewPr:
     ) -> None:
         from wade.services.batch_review_service import create_review_pr
 
+        mock_pr.get_pr_for_branch.return_value = None
         mock_pr.create_pr.return_value = {
             "number": 42,
             "url": "https://github.com/org/repo/pull/42",

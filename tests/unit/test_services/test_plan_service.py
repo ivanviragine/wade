@@ -633,7 +633,9 @@ class TestOfferToImplement:
         ):
             mock_prompts.is_tty.return_value = True
             mock_prompts.confirm.return_value = True
-            mock_start.return_value = True
+            from wade.services.implementation_service import ImplementResult
+
+            mock_start.return_value = ImplementResult(success=True)
 
             result = _offer_to_implement("42")
 
@@ -680,7 +682,9 @@ class TestOfferToImplement:
         ):
             mock_prompts.is_tty.return_value = True
             mock_prompts.confirm.return_value = True
-            mock_start.return_value = False
+            from wade.services.implementation_service import ImplementResult
+
+            mock_start.return_value = ImplementResult(success=False)
 
             result = _offer_to_implement("42")
 

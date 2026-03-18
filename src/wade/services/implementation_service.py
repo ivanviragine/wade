@@ -31,6 +31,8 @@ from wade.models.ai import AIToolID, TokenUsage
 from wade.models.config import ProjectConfig
 from wade.models.deps import DependencyGraph
 from wade.models.session import (
+    ImplementResult,
+    MergeStatus,
     MergeStrategy,
     SyncEvent,
     SyncEventType,
@@ -493,13 +495,15 @@ def _post_implementation_lifecycle(
     worktree_path: Path | None,
     config: ProjectConfig,
     provider: AbstractTaskProvider,
-) -> None:
+) -> MergeStatus:
+    """Run post-implementation lifecycle and return the merge status."""
     if config.project.merge_strategy == MergeStrategy.PR:
-        _post_implementation_lifecycle_pr(repo_root, branch, issue_number, worktree_path, provider)
-    else:
-        _post_implementation_lifecycle_direct(
-            repo_root, branch, issue_number, worktree_path, config, provider
+        return _post_implementation_lifecycle_pr(
+            repo_root, branch, issue_number, worktree_path, provider
         )
+    return _post_implementation_lifecycle_direct(
+        repo_root, branch, issue_number, worktree_path, config, provider
+    )
 
 
 def _parse_overwrite_paths(stderr: str) -> list[str]:
@@ -568,16 +572,17 @@ def _post_implementation_lifecycle_pr(
     issue_number: str | int | None,
     worktree_path: Path | None,
     provider: AbstractTaskProvider,
-) -> None:
+) -> MergeStatus:
+    """Run the PR-based post-implementation lifecycle."""
     pr_info = git_pr.get_pr_for_branch(repo_root, branch)
     if not pr_info:
         console.warn(f"No open PR found for branch '{branch}'. Skipping lifecycle.")
-        return
+        return MergeStatus.NOT_MERGED
 
     pr_number = pr_info.get("number") or pr_info.get("pr_number")
     if not pr_number:
         console.warn(f"Could not determine PR number for branch '{branch}'.")
-        return
+        return MergeStatus.NOT_MERGED
 
     pr_url = str(pr_info.get("url", ""))
     if pr_url and prompts.confirm("Open PR in browser?", default=True):
@@ -591,10 +596,10 @@ def _post_implementation_lifecycle_pr(
     if choice == 1:  # Wait for reviews
         issue_hint = f" {issue_number}" if issue_number else ""
         console.hint(f"Run `wade review pr-comments{issue_hint}` when reviews come in.")
-        return
+        return MergeStatus.NOT_MERGED
 
     # Merge flow
-    _merge_pr(repo_root, branch, int(pr_number), issue_number, worktree_path, provider)
+    return _merge_pr(repo_root, branch, int(pr_number), issue_number, worktree_path, provider)
 
 
 def _merge_pr(
@@ -604,13 +609,13 @@ def _merge_pr(
     issue_number: str | int | None,
     worktree_path: Path | None,
     provider: AbstractTaskProvider,
-) -> None:
+) -> MergeStatus:
     """Merge a PR via squash, clean up worktree, pull main, close issue."""
     # Warn if the worktree has uncommitted changes before proceeding.
     if worktree_path and worktree_path.is_dir() and not git_repo.is_clean(worktree_path):
         console.warn("Worktree has uncommitted changes.")
         if not prompts.confirm("Proceed anyway? Uncommitted work will be lost.", default=False):
-            return
+            return MergeStatus.NOT_MERGED
 
     # Detach HEAD in the worktree so git no longer considers the branch
     # "checked out", which unblocks `gh pr merge --delete-branch`.
@@ -627,7 +632,7 @@ def _merge_pr(
         logger.error("pr_merge.failed", pr_number=pr_number, error=str(e))
         console.error(f"PR merge failed: {e}")
         console.hint(f"Branch '{branch}' preserved — retry or clean up manually.")
-        return
+        return MergeStatus.MERGE_FAILED
 
     # Remove the worktree only after a successful merge.
     if worktree_path:
@@ -645,6 +650,8 @@ def _merge_pr(
         with contextlib.suppress(Exception):
             provider.close_task(str(issue_number))
 
+    return MergeStatus.MERGED
+
 
 def _post_implementation_lifecycle_direct(
     repo_root: Path,
@@ -653,26 +660,27 @@ def _post_implementation_lifecycle_direct(
     worktree_path: Path | None,
     config: ProjectConfig,
     provider: AbstractTaskProvider,
-) -> None:
+) -> MergeStatus:
+    """Run the direct-merge post-implementation lifecycle."""
     main_branch = config.project.main_branch or "main"
     try:
         ahead = git_branch.commits_ahead(repo_root, branch, main_branch)
     except GitError:
         console.warn("Could not determine commit count; skipping post-implementation lifecycle.")
-        return
+        return MergeStatus.MERGE_FAILED
 
     if ahead == 0:
         if not prompts.confirm("Branch has no new commits. Delete empty worktree?", default=False):
-            return
+            return MergeStatus.NOT_MERGED
         if worktree_path:
             _cleanup_worktree(repo_root, worktree_path, main_branch)
-        return
+        return MergeStatus.NOT_MERGED
 
     choices = ["Merge into main", "Merge + close task", "Skip"]
     idx = prompts.select(f"Branch '{branch}' has {ahead} commit(s). What next?", choices)
     choice = choices[idx]
     if choice == "Skip":
-        return
+        return MergeStatus.NOT_MERGED
 
     try:
         git_repo.merge_squash(repo_root, branch)
@@ -680,7 +688,7 @@ def _post_implementation_lifecycle_direct(
         git_repo.push(repo_root)
     except (GitError, Exception) as e:
         logger.error("direct_merge.failed", branch=branch, error=str(e))
-        return
+        return MergeStatus.MERGE_FAILED
 
     if worktree_path:
         _cleanup_worktree(repo_root, worktree_path, main_branch)
@@ -688,6 +696,8 @@ def _post_implementation_lifecycle_direct(
     if choice == "Merge + close task" and issue_number:
         with contextlib.suppress(Exception):
             provider.close_task(str(issue_number))
+
+    return MergeStatus.MERGED
 
 
 # ---------------------------------------------------------------------------
@@ -710,7 +720,7 @@ def start(
     resume_session_id: str | None = None,
     resume_ai_tool: str | None = None,
     yolo: bool | None = None,
-) -> bool:
+) -> ImplementResult:
     """Start an implementation session on an issue.
 
     Steps:
@@ -731,7 +741,7 @@ def start(
         cd_only: If True, create worktree and print path only (no AI launch).
 
     Returns:
-        True on success, False on failure.
+        ImplementResult with success/merged status.
     """
     config = load_config(project_root)
     provider = get_provider(config)
@@ -742,7 +752,7 @@ def start(
         repo_root = git_repo.get_repo_root(cwd)
     except GitError:
         console.error_with_fix("Not inside a git repository", "Navigate to your project directory")
-        return False
+        return ImplementResult(success=False)
 
     # When cd_only, redirect all status output to stderr so stdout stays
     # clean for the machine-readable worktree path.
@@ -753,7 +763,7 @@ def start(
         # Read the issue
         task = _resolve_task_target(target, provider, config)
         if not task:
-            return False
+            return ImplementResult(success=False)
 
         # Tracking issue detection — redirect to batch implementation
         if is_tracking_issue(task.title):
@@ -762,7 +772,7 @@ def start(
                 refs = ", ".join(f"#{cid}" for cid in child_ids)
                 console.info(f"#{task.id} is a tracking issue for: {refs}")
                 if prompts.confirm("Start batch implementation?", default=True):
-                    return batch(
+                    batch_ok = batch(
                         issue_numbers=child_ids,
                         ai_tool=ai_tool,
                         model=model,
@@ -773,7 +783,8 @@ def start(
                         effort_explicit=effort_explicit,
                         yolo=yolo,
                     )
-                return False
+                    return ImplementResult(success=batch_ok)
+                return ImplementResult(success=False)
 
         console.rule(f"implement #{task.id}")
         console.kv("Issue", console.issue_ref(task.id, task.title))
@@ -813,7 +824,8 @@ def start(
                     if idx == 0:
                         from wade.services.plan_service import plan as do_plan
 
-                        return do_plan(issue_id=task.id, project_root=project_root)
+                        plan_ok = do_plan(issue_id=task.id, project_root=project_root)
+                        return ImplementResult(success=plan_ok)
             # Only bootstrap when there is no PR yet.
             proceed_needs_bootstrap = existing_pr is None
 
@@ -906,7 +918,7 @@ def start(
                 console.kv("Path", str(worktree_path))
             except GitError as e:
                 console.error(f"Failed to create worktree: {e}")
-                return False
+                return ImplementResult(success=False)
         else:
             try:
                 with console.status("Creating worktree..."):
@@ -928,7 +940,7 @@ def start(
                 console.kv("Path", str(worktree_path))
             except GitError as e:
                 console.error(f"Failed to create worktree: {e}")
-                return False
+                return ImplementResult(success=False)
 
         console.empty()
 
@@ -956,7 +968,7 @@ def start(
         # cd_only mode: just print the worktree path and return (no title, no AI)
         if cd_only:
             print(str(worktree_path))
-            return True
+            return ImplementResult(success=True)
 
         # AI-initiated start guard: if we're inside an AI CLI session,
         # don't launch another AI tool — just print the worktree path.
@@ -972,7 +984,7 @@ def start(
             )
             console.detail(f"Worktree ready at: {worktree_path}")
             print(str(worktree_path))
-            return True
+            return ImplementResult(success=True)
 
         # Set terminal title
         work_title = compose_implement_title(task.id, task.title)
@@ -1019,11 +1031,13 @@ def start(
             if launch_in_new_terminal(cmd, cwd=str(worktree_path), title=work_title):
                 console.success(f"Detached AI session for #{task.id}")
                 stop_title_keeper()
-                return True
+                return ImplementResult(success=True)
             console.warn("Could not launch in new terminal — falling back to inline")
+            detach = False
             # Fall through to inline launch below
 
         # Launch AI tool (inline)
+        merge_status = MergeStatus.NOT_MERGED
         if not detach and resolved_tool:
             resume_label = " (resuming)" if resume_session_id else ""
             console.step(f"Launching {resolved_tool}{resume_label}...")
@@ -1087,8 +1101,10 @@ def start(
                         launch_completed = False
             except (ValueError, KeyError):
                 console.warn(f"Unknown AI tool: {resolved_tool}")
+                merge_status = MergeStatus.MERGE_FAILED
             except Exception as e:
                 console.warn(f"AI tool launch failed: {e}")
+                merge_status = MergeStatus.MERGE_FAILED
             finally:
                 stop_title_keeper()
 
@@ -1113,7 +1129,7 @@ def start(
 
                 if launch_completed:
                     try:
-                        _post_implementation_lifecycle(
+                        merge_status = _post_implementation_lifecycle(
                             repo_root=repo_root,
                             branch=branch_name,
                             issue_number=task.id,
@@ -1123,6 +1139,7 @@ def start(
                         )
                     except Exception:
                         logger.exception("post_implementation_lifecycle.failed")
+                        merge_status = MergeStatus.MERGE_FAILED
 
             # Use CLI-resolved model, falling back to transcript-detected model.
             effective_model = resolved_model or detected_model
@@ -1141,7 +1158,10 @@ def start(
         lines.append(f"  Issue      {console.issue_ref(task.id, task.title)}")
         console.panel("\n".join(lines), title="Implementation session complete")
 
-        return True
+        return ImplementResult(
+            success=merge_status != MergeStatus.MERGE_FAILED,
+            merged=merge_status == MergeStatus.MERGED,
+        )
     finally:
         console.out = _original_out
 
@@ -1238,8 +1258,13 @@ def batch(
         independent = issue_numbers
         chains = []
 
-    def _build_cmd(issue_id: str) -> list[str]:
-        """Build the wade implement command for a single issue."""
+    def _build_cmd(issue_id: str, chain_ids: list[str] | None = None) -> list[str]:
+        """Build the wade implement command for a single issue.
+
+        Args:
+            issue_id: The issue number to implement.
+            chain_ids: Optional remaining issue IDs for --chain continuation.
+        """
         cmd = ["wade", "implement", issue_id]
         if resolved_tool:
             cmd.extend(["--ai", resolved_tool])
@@ -1249,6 +1274,8 @@ def batch(
             cmd.extend(["--effort", resolved_effort.value])
         if resolved_yolo:
             cmd.append("--yolo")
+        if chain_ids:
+            cmd.extend(["--chain", ",".join(chain_ids)])
         return cmd
 
     # Collect all items to launch in one batch
@@ -1258,14 +1285,13 @@ def batch(
         console.step(f"Preparing #{issue_id} (independent)")
         batch_items.append((_build_cmd(issue_id), str(repo_root), f"wade #{issue_id}"))
 
-    # Chains: start only the first item, list the rest in order
+    # Chains: launch only the first item with --chain for auto-continuation
     for chain in chains:
         console.info(f"Dependency chain: {' → '.join(f'#{n}' for n in chain)}")
-        batch_items.append((_build_cmd(chain[0]), str(repo_root), f"wade #{chain[0]}"))
-
-        if len(chain) > 1:
-            remaining = ", ".join(f"#{n}" for n in chain[1:])
-            console.info(f"After completing #{chain[0]}, work on these in order: {remaining}")
+        chain_rest = chain[1:] if len(chain) > 1 else None
+        batch_items.append(
+            (_build_cmd(chain[0], chain_ids=chain_rest), str(repo_root), f"wade #{chain[0]}")
+        )
 
     if not batch_items:
         console.panel("  No issues to launch", title="Batch started")
