@@ -14,7 +14,6 @@ import shutil
 import subprocess
 import tempfile
 import webbrowser
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +31,8 @@ from wade.models.ai import AIToolID, TokenUsage
 from wade.models.config import ProjectConfig
 from wade.models.deps import DependencyGraph
 from wade.models.session import (
+    ImplementResult,
+    MergeStatus,
     MergeStrategy,
     SyncEvent,
     SyncEventType,
@@ -487,21 +488,6 @@ def build_implementation_prompt(
     return prompt
 
 
-@dataclass
-class ImplementResult:
-    """Outcome of an implementation session.
-
-    Attributes:
-        success: Whether the session completed without errors.
-        merged: Whether the code was merged into main (PR squash-merge or
-            direct merge). ``False`` when the user chose "Wait for reviews",
-            "Skip", or the merge outcome is unknown.
-    """
-
-    success: bool
-    merged: bool = False
-
-
 def _post_implementation_lifecycle(
     repo_root: Path,
     branch: str,
@@ -509,8 +495,8 @@ def _post_implementation_lifecycle(
     worktree_path: Path | None,
     config: ProjectConfig,
     provider: AbstractTaskProvider,
-) -> bool:
-    """Run post-implementation lifecycle and return whether the code was merged."""
+) -> MergeStatus:
+    """Run post-implementation lifecycle and return the merge status."""
     if config.project.merge_strategy == MergeStrategy.PR:
         return _post_implementation_lifecycle_pr(
             repo_root, branch, issue_number, worktree_path, provider
@@ -586,20 +572,17 @@ def _post_implementation_lifecycle_pr(
     issue_number: str | int | None,
     worktree_path: Path | None,
     provider: AbstractTaskProvider,
-) -> bool:
-    """Run the PR-based post-implementation lifecycle.
-
-    Returns True if the PR was merged, False otherwise.
-    """
+) -> MergeStatus:
+    """Run the PR-based post-implementation lifecycle."""
     pr_info = git_pr.get_pr_for_branch(repo_root, branch)
     if not pr_info:
         console.warn(f"No open PR found for branch '{branch}'. Skipping lifecycle.")
-        return False
+        return MergeStatus.NOT_MERGED
 
     pr_number = pr_info.get("number") or pr_info.get("pr_number")
     if not pr_number:
         console.warn(f"Could not determine PR number for branch '{branch}'.")
-        return False
+        return MergeStatus.NOT_MERGED
 
     pr_url = str(pr_info.get("url", ""))
     if pr_url and prompts.confirm("Open PR in browser?", default=True):
@@ -613,7 +596,7 @@ def _post_implementation_lifecycle_pr(
     if choice == 1:  # Wait for reviews
         issue_hint = f" {issue_number}" if issue_number else ""
         console.hint(f"Run `wade review pr-comments{issue_hint}` when reviews come in.")
-        return False
+        return MergeStatus.NOT_MERGED
 
     # Merge flow
     return _merge_pr(repo_root, branch, int(pr_number), issue_number, worktree_path, provider)
@@ -626,16 +609,13 @@ def _merge_pr(
     issue_number: str | int | None,
     worktree_path: Path | None,
     provider: AbstractTaskProvider,
-) -> bool:
-    """Merge a PR via squash, clean up worktree, pull main, close issue.
-
-    Returns True if the PR was successfully merged, False otherwise.
-    """
+) -> MergeStatus:
+    """Merge a PR via squash, clean up worktree, pull main, close issue."""
     # Warn if the worktree has uncommitted changes before proceeding.
     if worktree_path and worktree_path.is_dir() and not git_repo.is_clean(worktree_path):
         console.warn("Worktree has uncommitted changes.")
         if not prompts.confirm("Proceed anyway? Uncommitted work will be lost.", default=False):
-            return False
+            return MergeStatus.NOT_MERGED
 
     # Detach HEAD in the worktree so git no longer considers the branch
     # "checked out", which unblocks `gh pr merge --delete-branch`.
@@ -652,7 +632,7 @@ def _merge_pr(
         logger.error("pr_merge.failed", pr_number=pr_number, error=str(e))
         console.error(f"PR merge failed: {e}")
         console.hint(f"Branch '{branch}' preserved — retry or clean up manually.")
-        return False
+        return MergeStatus.MERGE_FAILED
 
     # Remove the worktree only after a successful merge.
     if worktree_path:
@@ -670,7 +650,7 @@ def _merge_pr(
         with contextlib.suppress(Exception):
             provider.close_task(str(issue_number))
 
-    return True
+    return MergeStatus.MERGED
 
 
 def _post_implementation_lifecycle_direct(
@@ -680,30 +660,27 @@ def _post_implementation_lifecycle_direct(
     worktree_path: Path | None,
     config: ProjectConfig,
     provider: AbstractTaskProvider,
-) -> bool:
-    """Run the direct-merge post-implementation lifecycle.
-
-    Returns True if the code was merged into main, False otherwise.
-    """
+) -> MergeStatus:
+    """Run the direct-merge post-implementation lifecycle."""
     main_branch = config.project.main_branch or "main"
     try:
         ahead = git_branch.commits_ahead(repo_root, branch, main_branch)
     except GitError:
         console.warn("Could not determine commit count; skipping post-implementation lifecycle.")
-        return False
+        return MergeStatus.MERGE_FAILED
 
     if ahead == 0:
         if not prompts.confirm("Branch has no new commits. Delete empty worktree?", default=False):
-            return False
+            return MergeStatus.NOT_MERGED
         if worktree_path:
             _cleanup_worktree(repo_root, worktree_path, main_branch)
-        return False
+        return MergeStatus.NOT_MERGED
 
     choices = ["Merge into main", "Merge + close task", "Skip"]
     idx = prompts.select(f"Branch '{branch}' has {ahead} commit(s). What next?", choices)
     choice = choices[idx]
     if choice == "Skip":
-        return False
+        return MergeStatus.NOT_MERGED
 
     try:
         git_repo.merge_squash(repo_root, branch)
@@ -711,7 +688,7 @@ def _post_implementation_lifecycle_direct(
         git_repo.push(repo_root)
     except (GitError, Exception) as e:
         logger.error("direct_merge.failed", branch=branch, error=str(e))
-        return False
+        return MergeStatus.MERGE_FAILED
 
     if worktree_path:
         _cleanup_worktree(repo_root, worktree_path, main_branch)
@@ -720,7 +697,7 @@ def _post_implementation_lifecycle_direct(
         with contextlib.suppress(Exception):
             provider.close_task(str(issue_number))
 
-    return True
+    return MergeStatus.MERGED
 
 
 # ---------------------------------------------------------------------------
@@ -1059,7 +1036,7 @@ def start(
             # Fall through to inline launch below
 
         # Launch AI tool (inline)
-        merged = False
+        merge_status = MergeStatus.NOT_MERGED
         if not detach and resolved_tool:
             resume_label = " (resuming)" if resume_session_id else ""
             console.step(f"Launching {resolved_tool}{resume_label}...")
@@ -1149,7 +1126,7 @@ def start(
 
                 if launch_completed:
                     try:
-                        merged = _post_implementation_lifecycle(
+                        merge_status = _post_implementation_lifecycle(
                             repo_root=repo_root,
                             branch=branch_name,
                             issue_number=task.id,
@@ -1177,7 +1154,10 @@ def start(
         lines.append(f"  Issue      {console.issue_ref(task.id, task.title)}")
         console.panel("\n".join(lines), title="Implementation session complete")
 
-        return ImplementResult(success=True, merged=merged)
+        return ImplementResult(
+            success=merge_status != MergeStatus.MERGE_FAILED,
+            merged=merge_status == MergeStatus.MERGED,
+        )
     finally:
         console.out = _original_out
 

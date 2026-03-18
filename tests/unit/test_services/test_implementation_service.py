@@ -19,6 +19,7 @@ from wade.models.config import (
     ProjectConfig,
     ProjectSettings,
 )
+from wade.models.session import MergeStatus
 from wade.models.task import Task
 from wade.services.implementation_service import (
     ImplementResult,
@@ -1150,7 +1151,7 @@ class TestStartTrackingDetection:
 
 
 class TestImplementResult:
-    """Tests for the ImplementResult dataclass."""
+    """Tests for the ImplementResult Pydantic model."""
 
     def test_defaults(self) -> None:
         result = ImplementResult(success=True)
@@ -1182,8 +1183,8 @@ class TestImplementResult:
 class TestPostImplementationLifecyclePr:
     """Tests for _post_implementation_lifecycle_pr — merged status propagation."""
 
-    def test_merge_pr_returns_true(self, tmp_path: Path) -> None:
-        """User chooses 'Merge PR' → returns True (merged)."""
+    def test_merge_pr_returns_merged(self, tmp_path: Path) -> None:
+        """User chooses 'Merge PR' → returns MERGED."""
         mock_provider = MagicMock()
         with (
             patch(
@@ -1191,17 +1192,20 @@ class TestPostImplementationLifecyclePr:
                 return_value={"number": 10, "url": "http://test"},
             ),
             patch("wade.services.implementation_service.prompts") as mock_prompts,
-            patch("wade.services.implementation_service._merge_pr", return_value=True),
+            patch(
+                "wade.services.implementation_service._merge_pr",
+                return_value=MergeStatus.MERGED,
+            ),
         ):
             mock_prompts.confirm.return_value = False  # Don't open in browser
             mock_prompts.select.return_value = 0  # "Merge PR"
             result = _post_implementation_lifecycle_pr(
                 tmp_path, "feat/42", "42", tmp_path / "wt", mock_provider
             )
-        assert result is True
+        assert result == MergeStatus.MERGED
 
-    def test_wait_for_reviews_returns_false(self, tmp_path: Path) -> None:
-        """User chooses 'Wait for reviews' → returns False (not merged)."""
+    def test_wait_for_reviews_returns_not_merged(self, tmp_path: Path) -> None:
+        """User chooses 'Wait for reviews' → returns NOT_MERGED."""
         mock_provider = MagicMock()
         with (
             patch(
@@ -1215,16 +1219,16 @@ class TestPostImplementationLifecyclePr:
             result = _post_implementation_lifecycle_pr(
                 tmp_path, "feat/42", "42", tmp_path / "wt", mock_provider
             )
-        assert result is False
+        assert result == MergeStatus.NOT_MERGED
 
-    def test_no_pr_found_returns_false(self, tmp_path: Path) -> None:
-        """No open PR → returns False."""
+    def test_no_pr_found_returns_not_merged(self, tmp_path: Path) -> None:
+        """No open PR → returns NOT_MERGED."""
         mock_provider = MagicMock()
         with patch("wade.git.pr.get_pr_for_branch", return_value=None):
             result = _post_implementation_lifecycle_pr(
                 tmp_path, "feat/42", "42", tmp_path / "wt", mock_provider
             )
-        assert result is False
+        assert result == MergeStatus.NOT_MERGED
 
 
 class TestPostImplementationLifecycleDirect:
@@ -1233,8 +1237,8 @@ class TestPostImplementationLifecycleDirect:
     def _make_config(self) -> ProjectConfig:
         return ProjectConfig(project=ProjectSettings(main_branch="main"))
 
-    def test_merge_returns_true(self, tmp_path: Path) -> None:
-        """User chooses 'Merge into main' → returns True (merged)."""
+    def test_merge_returns_merged(self, tmp_path: Path) -> None:
+        """User chooses 'Merge into main' → returns MERGED."""
         mock_provider = MagicMock()
         with (
             patch("wade.git.branch.commits_ahead", return_value=3),
@@ -1248,10 +1252,10 @@ class TestPostImplementationLifecycleDirect:
             result = _post_implementation_lifecycle_direct(
                 tmp_path, "feat/42", "42", tmp_path / "wt", self._make_config(), mock_provider
             )
-        assert result is True
+        assert result == MergeStatus.MERGED
 
-    def test_skip_returns_false(self, tmp_path: Path) -> None:
-        """User chooses 'Skip' → returns False (not merged)."""
+    def test_skip_returns_not_merged(self, tmp_path: Path) -> None:
+        """User chooses 'Skip' → returns NOT_MERGED."""
         mock_provider = MagicMock()
         with (
             patch("wade.git.branch.commits_ahead", return_value=3),
@@ -1261,10 +1265,10 @@ class TestPostImplementationLifecycleDirect:
             result = _post_implementation_lifecycle_direct(
                 tmp_path, "feat/42", "42", tmp_path / "wt", self._make_config(), mock_provider
             )
-        assert result is False
+        assert result == MergeStatus.NOT_MERGED
 
-    def test_no_commits_returns_false(self, tmp_path: Path) -> None:
-        """Zero commits ahead → returns False (nothing merged)."""
+    def test_no_commits_returns_not_merged(self, tmp_path: Path) -> None:
+        """Zero commits ahead → returns NOT_MERGED (nothing merged)."""
         mock_provider = MagicMock()
         with (
             patch("wade.git.branch.commits_ahead", return_value=0),
@@ -1274,7 +1278,7 @@ class TestPostImplementationLifecycleDirect:
             result = _post_implementation_lifecycle_direct(
                 tmp_path, "feat/42", "42", tmp_path / "wt", self._make_config(), mock_provider
             )
-        assert result is False
+        assert result == MergeStatus.NOT_MERGED
 
 
 # ---------------------------------------------------------------------------

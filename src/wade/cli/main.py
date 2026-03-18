@@ -259,7 +259,7 @@ def implement_cmd(
             console.hint(f"Resume chain: wade implement {next_issue}{chain_flag}")
             break
 
-        chain_remaining = chain_remaining[1:]
+        chain_remaining = rest
 
         result = do_start(
             target=next_issue,
