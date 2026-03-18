@@ -180,7 +180,7 @@ def create_review_pr(
         console.error("No integration branch to push.")
         return ctx
 
-    git_repo.push_branch(repo_root, ctx.integration_branch, set_upstream=True)
+    git_repo.push_branch(repo_root, ctx.integration_branch, set_upstream=True, force=True)
 
     merged_list = [f"- #{i.issue_number} {i.issue_title}" for i in ctx.issues if i.merged]
     conflict_list = [f"- #{i.issue_number} {i.issue_title}" for i in ctx.issues if i.conflict]
