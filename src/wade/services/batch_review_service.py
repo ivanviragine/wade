@@ -202,17 +202,23 @@ def create_review_pr(
 
     body = "\n".join(body_parts)
 
-    pr_info = git_pr.create_pr(
-        repo_root,
-        title=f"Batch review: tracking #{ctx.tracking_issue}",
-        body=body,
-        base=ctx.main_branch,
-        head=ctx.integration_branch,
-        draft=True,
-    )
-
-    ctx.pr_number = int(pr_info["number"])
-    ctx.pr_url = str(pr_info["url"])
+    existing = git_pr.get_pr_for_branch(repo_root, ctx.integration_branch)
+    if existing:
+        pr_number = int(existing["number"])
+        git_pr.update_pr_body(repo_root, pr_number, body)
+        ctx.pr_number = pr_number
+        ctx.pr_url = str(existing["url"])
+    else:
+        pr_info = git_pr.create_pr(
+            repo_root,
+            title=f"Batch review: tracking #{ctx.tracking_issue}",
+            body=body,
+            base=ctx.main_branch,
+            head=ctx.integration_branch,
+            draft=True,
+        )
+        ctx.pr_number = int(pr_info["number"])
+        ctx.pr_url = str(pr_info["url"])
     return ctx
 
 
