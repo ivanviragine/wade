@@ -74,9 +74,11 @@ def detect_coderabbit_review_status(
     if latest_body is None:
         return None
 
-    if "review paused by coderabbit.ai" in latest_body:
+    normalized = latest_body.casefold()
+
+    if "review paused by coderabbit.ai" in normalized:
         return ReviewBotStatus.PAUSED
-    if "review in progress by coderabbit.ai" in latest_body:
+    if "review in progress by coderabbit.ai" in normalized:
         return ReviewBotStatus.IN_PROGRESS
 
     return None

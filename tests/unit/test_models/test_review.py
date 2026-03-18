@@ -157,6 +157,18 @@ class TestDetectCoderabbitReviewStatus:
         ]
         assert detect_coderabbit_review_status(comments) == ReviewBotStatus.PAUSED
 
+    def test_detection_is_case_insensitive(self) -> None:
+        comments = [
+            {
+                "login": "coderabbitai[bot]",
+                "body": (
+                    "<!-- This is an auto-generated comment:"
+                    " Review In Progress by CodeRabbit.ai -->"
+                ),
+            }
+        ]
+        assert detect_coderabbit_review_status(comments) == ReviewBotStatus.IN_PROGRESS
+
 
 # ---------------------------------------------------------------------------
 # CodeRabbit AI-agent prompt extraction

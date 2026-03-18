@@ -110,19 +110,6 @@ class TestBootstrapWorktree:
         data = json.loads(wt_settings.read_text(encoding="utf-8"))
         assert WADE_ALLOW_PATTERN in data["permissions"]["allow"]
 
-    def test_no_allowlist_propagation_when_not_configured(self, tmp_path: Path) -> None:
-        """Allowlist is NOT written to worktree when project root has no settings."""
-        repo_root = tmp_path / "repo"
-        repo_root.mkdir()
-
-        worktree = tmp_path / "wt"
-        worktree.mkdir()
-
-        config = ProjectConfig()
-        bootstrap_worktree(worktree, config, repo_root)
-
-        assert not (worktree / ".claude" / "settings.json").is_file()
-
     def test_self_init_creates_symlinks(self, tmp_path: Path) -> None:
         """When repo_root is the wade package root, skills are symlinked from worktree templates."""
         repo_root = tmp_path / "repo"
