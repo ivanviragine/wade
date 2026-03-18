@@ -39,7 +39,13 @@ from wade.models.session import (
     SyncResult,
     WorktreeState,
 )
-from wade.models.task import Task, is_tracking_issue, parse_tracking_child_ids
+from wade.models.task import (
+    Task,
+    has_checklist_items,
+    is_tracking_issue,
+    parse_all_issue_refs,
+    parse_tracking_child_ids,
+)
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.ai_resolution import (
@@ -767,7 +773,11 @@ def start(
 
         # Tracking issue detection — redirect to batch implementation
         if is_tracking_issue(task.title):
-            child_ids = parse_tracking_child_ids(task.body)
+            child_ids = (
+                parse_tracking_child_ids(task.body)
+                if has_checklist_items(task.body)
+                else parse_all_issue_refs(task.body)
+            )
             if child_ids:
                 refs = ", ".join(f"#{cid}" for cid in child_ids)
                 console.info(f"#{task.id} is a tracking issue for: {refs}")

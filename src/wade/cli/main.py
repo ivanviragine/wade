@@ -390,7 +390,11 @@ def smart_start_cmd(
     ),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
 ) -> None:
-    """Internal dispatch for `wade <N>` — routes to implement or review pr-comments."""
+    """Internal dispatch for `wade <N>` — routes to implement or review pr-comments.
+
+    Note: does not support --chain. Chain continuation is a CLI-layer concern
+    available only on `wade implement` / `wade i`.
+    """
     from wade.services.smart_start import smart_start
 
     selected_ai: str | None = None
