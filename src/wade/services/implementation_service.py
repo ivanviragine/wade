@@ -1159,9 +1159,6 @@ def _resolve_task_target(
 # ---------------------------------------------------------------------------
 
 
-"""Delay between terminal spawns to avoid git index.lock contention."""
-
-
 def batch(
     issue_numbers: list[str],
     ai_tool: str | None = None,
