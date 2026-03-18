@@ -139,9 +139,9 @@ directly.
 
 To finalize your work, follow these steps in order:
 
-**Step 1 — Self-review:**
+**Step 1 — Review:**
 
-Run `wade review implementation` to catch issues early and check the exit code:
+Run `wade review implementation` to review your changes and check the exit code:
 - **Exit 0**: Review completed externally or skipped. If there is output, it is
   review feedback — read it and address any actionable findings, then commit
   before proceeding.
