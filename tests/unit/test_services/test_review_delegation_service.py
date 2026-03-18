@@ -155,9 +155,11 @@ class TestReviewPlan:
 
 
 class TestReviewCode:
+    @patch("wade.services.review_delegation_service._committed_diff_fallback")
     @patch("wade.services.review_delegation_service.run")
-    def test_no_diff_warns(self, mock_run: MagicMock) -> None:
+    def test_no_diff_warns(self, mock_run: MagicMock, mock_fallback: MagicMock) -> None:
         mock_run.return_value = MagicMock(returncode=0, stdout="")
+        mock_fallback.return_value = ""
         result = review_implementation()
         assert result.success is True
         assert "No changes" in result.feedback
