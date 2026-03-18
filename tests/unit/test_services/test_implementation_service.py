@@ -767,7 +767,7 @@ class TestImplementationBatch:
     """Tests for implementation_service.batch() — exercises topology and launch dispatch."""
 
     def test_launches_independent_issues(self, tmp_path: Path) -> None:
-        """No deps graph → all issues launched in separate terminals."""
+        """No deps graph → all issues passed to batch launcher."""
         with (
             patch("wade.services.implementation_service.load_config", return_value=ProjectConfig()),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
@@ -775,16 +775,18 @@ class TestImplementationBatch:
                 "wade.services.implementation_service._build_graph_from_issues", return_value=None
             ),
             patch(
-                "wade.services.implementation_service.launch_in_new_terminal", return_value=True
-            ) as mock_launch,
+                "wade.services.implementation_service.launch_batch_in_terminals", return_value=True
+            ) as mock_batch,
         ):
             result = batch(["1", "2", "3"], project_root=tmp_path)
 
         assert result is True
-        assert mock_launch.call_count == 3
+        mock_batch.assert_called_once()
+        items = mock_batch.call_args[0][0]
+        assert len(items) == 3
 
     def test_launches_only_first_in_chain(self, tmp_path: Path) -> None:
-        """Dependency chain → only the first issue launched, rest printed."""
+        """Dependency chain → only the first issue in batch, rest printed."""
         mock_graph = MagicMock()
         mock_graph.edges = [MagicMock()]  # non-empty → triggers partition
         mock_graph.partition.return_value = ([], [["1", "2", "3"]])
@@ -797,18 +799,19 @@ class TestImplementationBatch:
                 return_value=mock_graph,
             ),
             patch(
-                "wade.services.implementation_service.launch_in_new_terminal", return_value=True
-            ) as mock_launch,
+                "wade.services.implementation_service.launch_batch_in_terminals", return_value=True
+            ) as mock_batch,
         ):
             result = batch(["1", "2", "3"], project_root=tmp_path)
 
         assert result is True
-        assert mock_launch.call_count == 1  # Only the first in the chain
-        launched_cmd = mock_launch.call_args[0][0]
-        assert launched_cmd[:3] == ["wade", "implement", "1"]
+        mock_batch.assert_called_once()
+        items = mock_batch.call_args[0][0]
+        assert len(items) == 1  # Only the first in the chain
+        assert items[0][0][:3] == ["wade", "implement", "1"]
 
     def test_warns_on_terminal_failure(self, tmp_path: Path) -> None:
-        """One terminal fails → warns but continues and counts successful launches."""
+        """Batch launcher fails → returns False."""
         with (
             patch("wade.services.implementation_service.load_config", return_value=ProjectConfig()),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
@@ -816,17 +819,16 @@ class TestImplementationBatch:
                 "wade.services.implementation_service._build_graph_from_issues", return_value=None
             ),
             patch(
-                "wade.services.implementation_service.launch_in_new_terminal",
-                side_effect=[False, True],
-            ) as mock_launch,
+                "wade.services.implementation_service.launch_batch_in_terminals",
+                return_value=False,
+            ),
         ):
             result = batch(["1", "2"], project_root=tmp_path)
 
-        assert result is True  # One succeeded
-        assert mock_launch.call_count == 2  # Both attempted (no abort on failure)
+        assert result is False
 
     def test_returns_false_when_none_launched(self, tmp_path: Path) -> None:
-        """All launch_in_new_terminal calls fail → batch() returns False."""
+        """launch_batch_in_terminals returns False → batch() returns False."""
         with (
             patch("wade.services.implementation_service.load_config", return_value=ProjectConfig()),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
@@ -834,7 +836,8 @@ class TestImplementationBatch:
                 "wade.services.implementation_service._build_graph_from_issues", return_value=None
             ),
             patch(
-                "wade.services.implementation_service.launch_in_new_terminal", return_value=False
+                "wade.services.implementation_service.launch_batch_in_terminals",
+                return_value=False,
             ),
         ):
             result = batch(["1", "2"], project_root=tmp_path)
@@ -850,29 +853,37 @@ class TestImplementationBatch:
                 "wade.services.implementation_service._build_graph_from_issues", return_value=None
             ),
             patch(
-                "wade.services.implementation_service.launch_in_new_terminal", return_value=True
-            ) as mock_launch,
+                "wade.services.implementation_service.launch_batch_in_terminals", return_value=True
+            ) as mock_batch,
         ):
             result = batch(["1", "2", "1", "3", "2"], project_root=tmp_path)
 
         assert result is True
-        assert mock_launch.call_count == 3  # 1, 2, 3 — not 5
+        items = mock_batch.call_args[0][0]
+        assert len(items) == 3  # 1, 2, 3 — not 5
 
-    def test_staggers_launches(self, tmp_path: Path) -> None:
-        """Launches are staggered with a delay between each terminal spawn."""
+    def test_batch_items_contain_correct_commands(self, tmp_path: Path) -> None:
+        """Batch items contain correct wade implement commands with flags."""
         with (
             patch("wade.services.implementation_service.load_config", return_value=ProjectConfig()),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
             patch(
                 "wade.services.implementation_service._build_graph_from_issues", return_value=None
             ),
-            patch("wade.services.implementation_service.launch_in_new_terminal", return_value=True),
-            patch("wade.services.implementation_service.time.sleep") as mock_sleep,
+            patch(
+                "wade.services.implementation_service.launch_batch_in_terminals", return_value=True
+            ) as mock_batch,
         ):
-            batch(["1", "2", "3"], project_root=tmp_path)
+            result = batch(["1", "2"], project_root=tmp_path)
 
-        # First launch has no delay; 2nd and 3rd each get a stagger delay
-        assert mock_sleep.call_count == 2
+        assert result is True
+        items = mock_batch.call_args[0][0]
+        # Each item is (command, cwd, title)
+        for item in items:
+            cmd, cwd, title = item
+            assert cmd[:2] == ["wade", "implement"]
+            assert cwd == str(tmp_path)
+            assert title.startswith("wade #")
 
 
 # ---------------------------------------------------------------------------
