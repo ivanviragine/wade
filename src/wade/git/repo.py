@@ -358,6 +358,15 @@ def diff_stat_between(repo_root: Path, base: str, head: str) -> str:
     return result.stdout if result.returncode == 0 else ""
 
 
+def diff_between(repo_root: Path, base: str, head: str) -> str:
+    """Return ``git diff base...head`` output (full diff, not stat).
+
+    Returns empty string if diff fails or there are no changes.
+    """
+    result = _run_git("diff", f"{base}...{head}", cwd=repo_root, check=False)
+    return result.stdout if result.returncode == 0 else ""
+
+
 def pull_ff_only(repo_root: Path) -> subprocess.CompletedProcess[str]:
     """Pull with fast-forward only.
 

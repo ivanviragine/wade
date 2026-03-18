@@ -7,7 +7,24 @@ from unittest.mock import patch
 
 import pytest
 
-from wade.git.repo import GitError, _run_git_with_retry, stash, stash_pop
+from wade.git.repo import GitError, _run_git_with_retry, diff_between, stash, stash_pop
+
+
+class TestDiffBetween:
+    def test_calls_git_diff_three_dot(self, tmp_path: Path) -> None:
+        with patch("wade.git.repo._run_git") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "diff --git a/f.py b/f.py\n+line\n"
+            result = diff_between(tmp_path, "main", "HEAD")
+            mock_run.assert_called_once_with("diff", "main...HEAD", cwd=tmp_path, check=False)
+            assert "diff --git" in result
+
+    def test_returns_empty_on_failure(self, tmp_path: Path) -> None:
+        with patch("wade.git.repo._run_git") as mock_run:
+            mock_run.return_value.returncode = 128
+            mock_run.return_value.stdout = ""
+            result = diff_between(tmp_path, "main", "HEAD")
+            assert result == ""
 
 
 class TestStash:
