@@ -22,6 +22,7 @@ from wade.git import repo as git_repo
 from wade.git.repo import GitError
 from wade.models.ai import AIToolID
 from wade.models.session import SessionRecord
+from wade.models.task import is_tracking_issue, parse_tracking_child_ids
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.implementation_service import _merge_pr
@@ -89,6 +90,28 @@ def smart_start(
             model_explicit=model_explicit,
             yolo=yolo,
         )
+
+    # Tracking issue detection — redirect to batch implementation
+    if is_tracking_issue(task.title):
+        from wade.ui import prompts
+
+        child_ids = parse_tracking_child_ids(task.body)
+        if child_ids:
+            refs = ", ".join(f"#{cid}" for cid in child_ids)
+            console.info(f"#{task.id} is a tracking issue for: {refs}")
+            if prompts.confirm("Start batch implementation?", default=True):
+                from wade.services.implementation_service import batch
+
+                return batch(
+                    issue_numbers=child_ids,
+                    ai_tool=ai_tool,
+                    model=model,
+                    project_root=project_root,
+                    ai_explicit=ai_explicit,
+                    model_explicit=model_explicit,
+                    yolo=yolo,
+                )
+            return False
 
     # Build the expected branch name
     branch_name = git_branch.make_branch_name(

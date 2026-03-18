@@ -285,6 +285,164 @@ class TestSmartStartDraftPR:
         assert "Merge PR" not in menu_options
 
 
+class TestSmartStartTrackingDetection:
+    """When a tracking issue is detected, smart_start redirects to batch."""
+
+    @patch("wade.services.implementation_service.batch", return_value=True)
+    @patch("wade.ui.prompts.confirm", return_value=True)
+    @patch("wade.services.smart_start.git_repo.get_repo_root")
+    @patch("wade.services.smart_start.get_provider")
+    @patch("wade.services.smart_start.load_config")
+    def test_tracking_issue_calls_batch(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_confirm: MagicMock,
+        mock_batch: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Tracking issue with confirmed batch → calls batch() with child IDs."""
+        mock_repo_root.return_value = tmp_path
+        tracking_task = Task(
+            id="173",
+            title="Tracking: #167, #169, #171",
+            body="- [ ] #167\n- [ ] #169\n- [x] #171\n",
+        )
+        mock_get_provider.return_value.read_task.return_value = tracking_task
+
+        result = smart_start("173", project_root=tmp_path)
+
+        assert result is True
+        mock_batch.assert_called_once()
+        assert mock_batch.call_args.kwargs["issue_numbers"] == ["167", "169"]
+
+    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.ui.prompts.confirm", return_value=False)
+    @patch("wade.services.smart_start.git_repo.get_repo_root")
+    @patch("wade.services.smart_start.get_provider")
+    @patch("wade.services.smart_start.load_config")
+    def test_tracking_issue_declined_returns_false(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_confirm: MagicMock,
+        mock_implement: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Tracking issue with declined batch → returns False, no batch call."""
+        mock_repo_root.return_value = tmp_path
+        tracking_task = Task(
+            id="173",
+            title="Tracking: #167, #169",
+            body="- [ ] #167\n- [ ] #169\n",
+        )
+        mock_get_provider.return_value.read_task.return_value = tracking_task
+
+        result = smart_start("173", project_root=tmp_path)
+
+        assert result is False
+        mock_implement.assert_not_called()
+
+    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.smart_start.git_pr.get_pr_for_branch", return_value=None)
+    @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.smart_start.git_repo.get_repo_root")
+    @patch("wade.services.smart_start.get_provider")
+    @patch("wade.services.smart_start.load_config")
+    def test_regular_issue_not_affected(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_branch: MagicMock,
+        mock_pr: MagicMock,
+        mock_implement: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Regular issue proceeds to implement, no batch redirect."""
+        mock_repo_root.return_value = tmp_path
+        mock_get_provider.return_value.read_task.return_value = _make_task()
+
+        result = smart_start("42", project_root=tmp_path)
+
+        assert result is True
+        mock_implement.assert_called_once()
+
+    @patch("wade.services.implementation_service.batch", return_value=True)
+    @patch("wade.ui.prompts.confirm", return_value=True)
+    @patch("wade.services.smart_start.git_repo.get_repo_root")
+    @patch("wade.services.smart_start.get_provider")
+    @patch("wade.services.smart_start.load_config")
+    def test_tracking_forwards_ai_params(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_confirm: MagicMock,
+        mock_batch: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """AI tool/model/yolo parameters are forwarded to batch()."""
+        mock_repo_root.return_value = tmp_path
+        tracking_task = Task(
+            id="173",
+            title="Tracking: #167",
+            body="- [ ] #167\n",
+        )
+        mock_get_provider.return_value.read_task.return_value = tracking_task
+
+        smart_start(
+            "173",
+            ai_tool="claude",
+            model="opus",
+            project_root=tmp_path,
+            ai_explicit=True,
+            model_explicit=True,
+            yolo=True,
+        )
+
+        call_kwargs = mock_batch.call_args.kwargs
+        assert call_kwargs["ai_tool"] == "claude"
+        assert call_kwargs["model"] == "opus"
+        assert call_kwargs["ai_explicit"] is True
+        assert call_kwargs["model_explicit"] is True
+        assert call_kwargs["yolo"] is True
+
+    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.smart_start.git_pr.get_pr_for_branch", return_value=None)
+    @patch(
+        "wade.services.smart_start.git_branch.make_branch_name", return_value="feat/173-tracking"
+    )
+    @patch("wade.services.smart_start.git_repo.get_repo_root")
+    @patch("wade.services.smart_start.get_provider")
+    @patch("wade.services.smart_start.load_config")
+    def test_tracking_issue_no_unchecked_items_falls_through(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_branch: MagicMock,
+        mock_pr: MagicMock,
+        mock_implement: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Tracking issue with all items checked → falls through to implement."""
+        mock_repo_root.return_value = tmp_path
+        tracking_task = Task(
+            id="173",
+            title="Tracking: #167, #169",
+            body="- [x] #167\n- [x] #169\n",
+        )
+        mock_get_provider.return_value.read_task.return_value = tracking_task
+
+        result = smart_start("173", project_root=tmp_path)
+
+        assert result is True
+        mock_implement.assert_called_once()
+
+
 class TestSmartStartGitError:
     """When not in a git repo, falls through to implement."""
 

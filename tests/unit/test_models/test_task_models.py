@@ -14,7 +14,9 @@ from wade.models.task import (
     Task,
     TaskState,
     infer_label_type,
+    is_tracking_issue,
     parse_complexity_from_body,
+    parse_tracking_child_ids,
 )
 
 
@@ -131,6 +133,48 @@ class TestParseComplexityFromBody:
 
     def test_case_insensitive_heading(self) -> None:
         assert parse_complexity_from_body("## COMPLEXITY\neasy\n") == Complexity.EASY
+
+
+class TestIsTrackingIssue:
+    def test_tracking_prefix(self) -> None:
+        assert is_tracking_issue("Tracking: #167, #169, #171") is True
+
+    def test_tracking_prefix_no_space(self) -> None:
+        assert is_tracking_issue("Tracking:#167") is True
+
+    def test_regular_issue_not_detected(self) -> None:
+        assert is_tracking_issue("Add user authentication") is False
+
+    def test_title_containing_tracking_elsewhere(self) -> None:
+        assert is_tracking_issue("Fix Tracking pixel bug") is False
+
+    def test_empty_title(self) -> None:
+        assert is_tracking_issue("") is False
+
+
+class TestParseTrackingChildIds:
+    def test_unchecked_items(self) -> None:
+        body = "- [ ] #167\n- [ ] #169\n- [ ] #171\n"
+        assert parse_tracking_child_ids(body) == ["167", "169", "171"]
+
+    def test_skips_checked_items(self) -> None:
+        body = "- [x] #167\n- [ ] #169\n- [x] #171\n"
+        assert parse_tracking_child_ids(body) == ["169"]
+
+    def test_mixed_content(self) -> None:
+        body = "## Children\n- [ ] #42\n- [x] #43\nSome text mentioning #99\n- [ ] #44\n"
+        assert parse_tracking_child_ids(body) == ["42", "44"]
+
+    def test_no_checklist_items(self) -> None:
+        body = "Just a regular issue body with #42 reference."
+        assert parse_tracking_child_ids(body) == []
+
+    def test_empty_body(self) -> None:
+        assert parse_tracking_child_ids("") == []
+
+    def test_only_checked_items(self) -> None:
+        body = "- [x] #167\n- [x] #169\n"
+        assert parse_tracking_child_ids(body) == []
 
 
 class TestPlanFile:
