@@ -5,6 +5,7 @@ from __future__ import annotations
 from wade.ai_tools.claude import ClaudeAdapter
 from wade.ai_tools.codex import CodexAdapter
 from wade.ai_tools.copilot import CopilotAdapter
+from wade.ai_tools.gemini import GeminiAdapter
 from wade.ai_tools.opencode import OpenCodeAdapter
 
 
@@ -47,6 +48,15 @@ class TestResumeCommandSupported:
         adapter = OpenCodeAdapter()
         assert adapter.capabilities().supports_resume is True
 
+    def test_gemini_resume_command(self) -> None:
+        adapter = GeminiAdapter()
+        cmd = adapter.build_resume_command("sess-1")
+        assert cmd == ["gemini", "--resume", "sess-1"]
+
+    def test_gemini_supports_resume_capability(self) -> None:
+        adapter = GeminiAdapter()
+        assert adapter.capabilities().supports_resume is True
+
 
 class TestResumeCommandUnsupported:
     """Adapters without resume support should return None."""
@@ -56,16 +66,9 @@ class TestResumeCommandUnsupported:
         from wade.ai_tools.base import AbstractAITool
         from wade.models.ai import AIToolID
 
-        # Gemini doesn't override build_resume_command
-        adapter = AbstractAITool.get(AIToolID.GEMINI)
+        # VSCode doesn't override build_resume_command
+        adapter = AbstractAITool.get(AIToolID.VSCODE)
         assert adapter.build_resume_command("any-id") is None
-
-    def test_gemini_does_not_support_resume(self) -> None:
-        from wade.ai_tools.base import AbstractAITool
-        from wade.models.ai import AIToolID
-
-        adapter = AbstractAITool.get(AIToolID.GEMINI)
-        assert adapter.capabilities().supports_resume is False
 
     def test_vscode_does_not_support_resume(self) -> None:
         from wade.ai_tools.base import AbstractAITool

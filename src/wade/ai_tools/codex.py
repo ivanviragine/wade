@@ -74,5 +74,5 @@ class CodexAdapter(AbstractAITool):
         return ["-c", f'model_reasoning_effort="{mapped}"']
 
     def yolo_args(self) -> list[str]:
-        """Codex uses ``--approval-mode full-auto``."""
-        return ["--approval-mode", "full-auto"]
+        """Codex uses ``--yolo``."""
+        return ["--yolo"]
