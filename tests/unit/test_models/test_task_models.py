@@ -13,8 +13,10 @@ from wade.models.task import (
     PlanFile,
     Task,
     TaskState,
+    has_checklist_items,
     infer_label_type,
     is_tracking_issue,
+    parse_all_issue_refs,
     parse_complexity_from_body,
     parse_tracking_child_ids,
 )
@@ -175,6 +177,37 @@ class TestParseTrackingChildIds:
     def test_only_checked_items(self) -> None:
         body = "- [x] #167\n- [x] #169\n"
         assert parse_tracking_child_ids(body) == []
+
+
+class TestHasChecklistItems:
+    def test_detects_unchecked_with_ref(self) -> None:
+        assert has_checklist_items("- [ ] #42\n") is True
+
+    def test_detects_checked_with_ref(self) -> None:
+        assert has_checklist_items("- [x] #42\n") is True
+
+    def test_detects_unchecked_without_ref(self) -> None:
+        # Checklist line has no inline #N — the ref is on a separate line.
+        # has_checklist_items() must still return True so the checklist
+        # branch is taken in smart_start, not parse_all_issue_refs().
+        body = "- [ ] docs\nSee `#123`"
+        assert has_checklist_items(body) is True
+
+    def test_no_checklist(self) -> None:
+        assert has_checklist_items("Just a body with #42 ref.") is False
+
+    def test_empty_body(self) -> None:
+        assert has_checklist_items("") is False
+
+    def test_mixed_format_regression(self) -> None:
+        """Regression: checklist with separate ref must not fall through to parse_all_issue_refs."""
+        body = "- [x] Completed task\n- [ ] Pending task\nSee also `#99`\n"
+        # has_checklist_items detects the checklist markers
+        assert has_checklist_items(body) is True
+        # parse_tracking_child_ids only returns unchecked items with inline #N
+        assert parse_tracking_child_ids(body) == []
+        # parse_all_issue_refs sees every #N in the body
+        assert parse_all_issue_refs(body) == ["99"]
 
 
 class TestPlanFile:
