@@ -1033,6 +1033,7 @@ def start(
                 stop_title_keeper()
                 return ImplementResult(success=True)
             console.warn("Could not launch in new terminal — falling back to inline")
+            detach = False
             # Fall through to inline launch below
 
         # Launch AI tool (inline)
