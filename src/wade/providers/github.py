@@ -355,9 +355,13 @@ class GitHubProvider(AbstractTaskProvider):
         cursor: str | None = None
 
         while True:
-            page_threads, has_next, cursor = self._fetch_review_threads_page(
-                owner, repo, pr_number, cursor
-            )
+            try:
+                page_threads, has_next, cursor = self._fetch_review_threads_page(
+                    owner, repo, pr_number, cursor
+                )
+            except (CommandError, json.JSONDecodeError) as e:
+                logger.warning("github.review_threads_fetch_failed", error=str(e))
+                break
             threads.extend(page_threads)
             if not has_next or not cursor:
                 break
@@ -445,12 +449,8 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
         if cursor:
             cmd.extend(["-f", f"after={cursor}"])
 
-        try:
-            result = run(cmd, check=True)
-            data = json.loads(result.stdout)
-        except (CommandError, json.JSONDecodeError) as e:
-            logger.warning("github.review_threads_fetch_failed", error=str(e))
-            return [], False, None
+        result = run(cmd, check=True)
+        data = json.loads(result.stdout)
 
         pr_data = data.get("data", {}).get("repository", {}).get("pullRequest") or {}
         threads_data = pr_data.get("reviewThreads", {})
@@ -719,6 +719,28 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
             is_team = "name" in reviewer and "login" not in reviewer
             if name:
                 pending.append(PendingReviewer(name=name, is_team=is_team))
+
+        # Warn if hard query limits may have been hit (potential truncation)
+        if len(reviews) == 100:
+            logger.warning(
+                "github.reviews_limit_reached",
+                pr_number=pr_number,
+                limit=100,
+                message=(
+                    "reviews(last: 100) limit reached — older reviews may be missing;"
+                    " manual inspection recommended"
+                ),
+            )
+        if len(pending) == 50:
+            logger.warning(
+                "github.review_requests_limit_reached",
+                pr_number=pr_number,
+                limit=50,
+                message=(
+                    "reviewRequests(first: 50) limit reached — some pending reviewers"
+                    " may be missing; manual inspection recommended"
+                ),
+            )
 
         return (
             threads,
