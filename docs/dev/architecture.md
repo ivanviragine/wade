@@ -29,15 +29,15 @@ RUN_LIVE_GH_TESTS=1 uv run python -m pytest tests/live/ -v               # live 
 ./scripts/fmt.sh
 
 # Version bump
-python scripts/auto_version.py patch           # bug fixes, docs (0.1.0 -> 0.1.1)
-python scripts/auto_version.py minor           # new features, flags (0.1.0 -> 0.2.0)
-python scripts/auto_version.py major           # breaking changes (0.1.0 -> 1.0.0)
-python scripts/auto_version.py minor --dry-run # preview only
+uv run python scripts/auto_version.py patch           # bug fixes, docs (0.1.0 -> 0.1.1)
+uv run python scripts/auto_version.py minor           # new features, flags (0.1.0 -> 0.2.0)
+uv run python scripts/auto_version.py major           # breaking changes (0.1.0 -> 1.0.0)
+uv run python scripts/auto_version.py minor --dry-run # preview only
 
 # Generate changelog
-python scripts/changelog.py                   # write CHANGELOG.md
-python scripts/changelog.py --stdout          # print to stdout
-python scripts/changelog.py --tag v1.0.0      # label unreleased as v1.0.0
+uv run python scripts/changelog.py                   # write CHANGELOG.md
+uv run python scripts/changelog.py --stdout          # print to stdout
+uv run python scripts/changelog.py --tag v1.0.0      # label unreleased as v1.0.0
 
 # Probe AI CLIs for new/removed models and diff against models.json
 ./scripts/probe_models.sh
