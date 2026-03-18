@@ -1274,8 +1274,13 @@ def batch(
         independent = issue_numbers
         chains = []
 
-    def _build_cmd(issue_id: str) -> list[str]:
-        """Build the wade implement command for a single issue."""
+    def _build_cmd(issue_id: str, chain_ids: list[str] | None = None) -> list[str]:
+        """Build the wade implement command for a single issue.
+
+        Args:
+            issue_id: The issue number to implement.
+            chain_ids: Optional remaining issue IDs for --chain continuation.
+        """
         cmd = ["wade", "implement", issue_id]
         if resolved_tool:
             cmd.extend(["--ai", resolved_tool])
@@ -1285,6 +1290,8 @@ def batch(
             cmd.extend(["--effort", resolved_effort.value])
         if resolved_yolo:
             cmd.append("--yolo")
+        if chain_ids:
+            cmd.extend(["--chain", ",".join(chain_ids)])
         return cmd
 
     # Collect all items to launch in one batch
@@ -1294,14 +1301,13 @@ def batch(
         console.step(f"Preparing #{issue_id} (independent)")
         batch_items.append((_build_cmd(issue_id), str(repo_root), f"wade #{issue_id}"))
 
-    # Chains: start only the first item, list the rest in order
+    # Chains: launch only the first item with --chain for auto-continuation
     for chain in chains:
         console.info(f"Dependency chain: {' → '.join(f'#{n}' for n in chain)}")
-        batch_items.append((_build_cmd(chain[0]), str(repo_root), f"wade #{chain[0]}"))
-
-        if len(chain) > 1:
-            remaining = ", ".join(f"#{n}" for n in chain[1:])
-            console.info(f"After completing #{chain[0]}, work on these in order: {remaining}")
+        chain_rest = chain[1:] if len(chain) > 1 else None
+        batch_items.append(
+            (_build_cmd(chain[0], chain_ids=chain_rest), str(repo_root), f"wade #{chain[0]}")
+        )
 
     if not batch_items:
         console.panel("  No issues to launch", title="Batch started")
