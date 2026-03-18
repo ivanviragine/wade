@@ -448,6 +448,51 @@ def test_batch_wezterm(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "--new-window" not in second_args
 
 
+def test_batch_gnome_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GNOME Terminal batch uses a single Popen call with --window/--tab flags."""
+    monkeypatch.setattr("wade.utils.terminal.sys.platform", "linux")
+    monkeypatch.delenv("TERM_PROGRAM", raising=False)
+    monkeypatch.delenv("TMUX", raising=False)
+
+    def _which(name: str) -> str | None:
+        return "/usr/bin/gnome-terminal" if name == "gnome-terminal" else None
+
+    monkeypatch.setattr("wade.utils.terminal.shutil.which", _which)
+
+    script_counter = [0]
+
+    def _fake_create(cmd: list[str], cwd: str | None = None) -> str:
+        script_counter[0] += 1
+        return f"/tmp/wade-batch-{script_counter[0]}.sh"
+
+    monkeypatch.setattr("wade.utils.terminal._create_temp_script", _fake_create)
+
+    popen_mock = Mock(return_value=Mock())
+    timer_mock = Mock()
+    timer_mock.return_value.start = Mock()
+    monkeypatch.setattr("wade.utils.terminal.subprocess.Popen", popen_mock)
+    monkeypatch.setattr("wade.utils.terminal.threading.Timer", timer_mock)
+
+    items = [
+        (["wade", "implement", "1"], "/repo", "wade #1"),
+        (["wade", "implement", "2"], "/repo", "wade #2"),
+    ]
+    result = launch_batch_in_terminals(items)
+
+    assert result is True
+    # Single gnome-terminal invocation
+    popen_mock.assert_called_once()
+    args = popen_mock.call_args.args[0]
+    assert args[0] == "gnome-terminal"
+    assert "--window" in args
+    assert "--tab" in args
+    # Both temp script paths are included in the command
+    assert "/tmp/wade-batch-1.sh" in args
+    assert "/tmp/wade-batch-2.sh" in args
+    # Cleanup timer scheduled once per item
+    assert timer_mock.call_count == 2
+
+
 def test_batch_fallback_loops_individual(monkeypatch: pytest.MonkeyPatch) -> None:
     """When no terminal detected, falls back to individual launches."""
     monkeypatch.delenv("TERM_PROGRAM", raising=False)

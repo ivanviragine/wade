@@ -175,7 +175,7 @@ def launch_in_new_terminal(
                 t.daemon = True
                 t.start()
                 return True
-            except subprocess.CalledProcessError:
+            except (subprocess.CalledProcessError, OSError):
                 _safe_unlink(tmp_path)
         else:
             ghostty_bin = os.environ.get("GHOSTTY_BIN_DIR", "")
@@ -232,7 +232,8 @@ def launch_in_new_terminal(
 
     if sys.platform == "darwin":
         tmp_script = _create_temp_script(command, cwd)
-        osa_script = f'tell application "Terminal" to do script "{tmp_script}"'
+        escaped = _escape_applescript_string(tmp_script)
+        osa_script = f'tell application "Terminal" to do script "{escaped}"'
         try:
             subprocess.run(
                 ["osascript", "-e", osa_script],
@@ -244,7 +245,7 @@ def launch_in_new_terminal(
             t.daemon = True
             t.start()
             return True
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, OSError):
             _safe_unlink(tmp_script)
 
     if terminal == "gnome-terminal" and sys.platform != "darwin" and shutil.which("gnome-terminal"):
@@ -334,9 +335,10 @@ def _batch_ghostty_macos(
         scripts.append(_create_temp_script(cmd, cwd))
 
     # Build AppleScript: first command opens a new window, subsequent add tabs
+    _open_cmd = _escape_applescript_string(f"open -na Ghostty --args -e {shlex.quote(scripts[0])}")
     osa_lines = [
         # Launch first window via open -na (reliable new-window)
-        f'do shell script "open -na Ghostty --args -e {shlex.quote(scripts[0])}"',
+        f'do shell script "{_open_cmd}"',
         f"delay {_BATCH_TAB_DELAY + 0.5}",
         'tell application "Ghostty" to activate',
         f"delay {_BATCH_TAB_DELAY}",
@@ -373,7 +375,7 @@ def _batch_ghostty_macos(
             t.daemon = True
             t.start()
         return True
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, OSError):
         logger.warning("terminal.batch_ghostty_macos_failed")
         for sp in scripts:
             _safe_unlink(sp)
@@ -413,12 +415,13 @@ def _batch_iterm2(
         scripts.append(_create_temp_script(cmd, cwd))
 
     # First item creates a new window; subsequent items create tabs in it
+    escaped_scripts = [_escape_applescript_string(sp) for sp in scripts]
     osa_lines = [
         'tell application "iTerm2"',
-        f'  set newWindow to (create window with default profile command "{scripts[0]}")',
+        f'  set newWindow to (create window with default profile command "{escaped_scripts[0]}")',
     ]
-    for sp in scripts[1:]:
-        osa_lines.append(f'  tell newWindow to create tab with default profile command "{sp}"')
+    for esp in escaped_scripts[1:]:
+        osa_lines.append(f'  tell newWindow to create tab with default profile command "{esp}"')
     osa_lines.append("end tell")
     osa = "\n".join(osa_lines)
     try:
@@ -428,7 +431,7 @@ def _batch_iterm2(
             t.daemon = True
             t.start()
         return True
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, OSError):
         logger.warning("terminal.batch_iterm2_failed")
         for sp in scripts:
             _safe_unlink(sp)
@@ -503,7 +506,7 @@ def _batch_terminal_app(
             t.daemon = True
             t.start()
         return True
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, OSError):
         logger.warning("terminal.batch_terminal_app_failed")
         for sp in scripts:
             _safe_unlink(sp)
