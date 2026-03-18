@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.5.6] — 2026-03-18
+
+### Bug Fixes
+
+- skip re-merge of already-MERGED branches in batch review integration branch (30be5cb)
+
+### Other Changes
+
+- Implement chain auto-continuation with merge-gated dependencies (#181) (9e30d6d)
+
 ## [v0.5.5] — 2026-03-18
 
 ### Bug Fixes
