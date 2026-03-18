@@ -9,6 +9,7 @@ from wade.models.ai import EffortLevel
 from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationResult
 from wade.services.review_delegation_service import (
+    _committed_diff_fallback,
     _run_review_delegation,
     review_implementation,
     review_plan,
@@ -344,3 +345,192 @@ class TestRunReviewDelegationEffort:
 
         call_args = mock_delegate.call_args[0][0]
         assert call_args.effort is None
+
+
+# ---------------------------------------------------------------------------
+# _committed_diff_fallback
+# ---------------------------------------------------------------------------
+
+
+class TestCommittedDiffFallback:
+    @patch("wade.services.review_delegation_service.git_repo.diff_between")
+    @patch("wade.services.review_delegation_service.git_repo.detect_main_branch")
+    @patch("wade.services.review_delegation_service.git_repo.get_current_branch")
+    @patch("wade.services.review_delegation_service.git_repo.get_repo_root")
+    @patch("wade.services.review_delegation_service.load_config")
+    def test_returns_branch_diff_when_not_on_main(
+        self,
+        mock_config: MagicMock,
+        mock_root: MagicMock,
+        mock_branch: MagicMock,
+        mock_detect: MagicMock,
+        mock_diff: MagicMock,
+    ) -> None:
+        mock_config.return_value = ProjectConfig()
+        mock_root.return_value = Path("/repo")
+        mock_branch.return_value = "feat/42-my-feature"
+        mock_detect.return_value = "main"
+        mock_diff.return_value = "diff --git a/f.py b/f.py\n+new line\n"
+
+        result = _committed_diff_fallback()
+
+        assert "diff --git" in result
+        mock_diff.assert_called_once_with(Path("/repo"), "main", "HEAD")
+
+    @patch("wade.services.review_delegation_service.git_repo.get_current_branch")
+    @patch("wade.services.review_delegation_service.git_repo.get_repo_root")
+    @patch("wade.services.review_delegation_service.load_config")
+    def test_returns_empty_when_on_main_branch(
+        self,
+        mock_config: MagicMock,
+        mock_root: MagicMock,
+        mock_branch: MagicMock,
+    ) -> None:
+        from wade.models.config import ProjectSettings
+
+        mock_config.return_value = ProjectConfig(project=ProjectSettings(main_branch="main"))
+        mock_root.return_value = Path("/repo")
+        mock_branch.return_value = "main"
+
+        result = _committed_diff_fallback()
+
+        assert result == ""
+
+    @patch("wade.services.review_delegation_service.git_repo.get_repo_root")
+    @patch("wade.services.review_delegation_service.load_config")
+    def test_returns_empty_on_git_error(
+        self,
+        mock_config: MagicMock,
+        mock_root: MagicMock,
+    ) -> None:
+        from wade.git.repo import GitError
+
+        mock_config.return_value = ProjectConfig()
+        mock_root.side_effect = GitError("not a git repo")
+
+        result = _committed_diff_fallback()
+
+        assert result == ""
+
+    @patch("wade.services.review_delegation_service.git_repo.diff_between")
+    @patch("wade.services.review_delegation_service.git_repo.get_current_branch")
+    @patch("wade.services.review_delegation_service.git_repo.get_repo_root")
+    @patch("wade.services.review_delegation_service.load_config")
+    def test_uses_config_main_branch_when_set(
+        self,
+        mock_config: MagicMock,
+        mock_root: MagicMock,
+        mock_branch: MagicMock,
+        mock_diff: MagicMock,
+    ) -> None:
+        from wade.models.config import ProjectSettings
+
+        mock_config.return_value = ProjectConfig(project=ProjectSettings(main_branch="develop"))
+        mock_root.return_value = Path("/repo")
+        mock_branch.return_value = "feat/42-my-feature"
+        mock_diff.return_value = "diff content"
+
+        result = _committed_diff_fallback()
+
+        assert result == "diff content"
+        mock_diff.assert_called_once_with(Path("/repo"), "develop", "HEAD")
+
+
+# ---------------------------------------------------------------------------
+# review_implementation fallback integration
+# ---------------------------------------------------------------------------
+
+
+class TestReviewImplementationFallback:
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    @patch("wade.services.review_delegation_service._committed_diff_fallback")
+    @patch("wade.services.review_delegation_service.run")
+    def test_fallback_used_when_working_tree_empty(
+        self,
+        mock_run: MagicMock,
+        mock_fallback: MagicMock,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+    ) -> None:
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        mock_fallback.return_value = "diff --git a/f.py b/f.py\n+committed line\n"
+        mock_template.return_value = "Review:\n{diff_content}"
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(review_implementation=AICommandConfig(mode="prompt", enabled=True))
+        )
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="LGTM", mode=DelegationMode.PROMPT
+        )
+
+        result = review_implementation()
+
+        assert result.success is True
+        assert result.skipped is not True
+        call_args = mock_delegate.call_args[0][0]
+        assert "committed line" in call_args.prompt
+
+    @patch("wade.services.review_delegation_service._committed_diff_fallback")
+    @patch("wade.services.review_delegation_service.run")
+    def test_fallback_not_called_in_staged_mode(
+        self,
+        mock_run: MagicMock,
+        mock_fallback: MagicMock,
+    ) -> None:
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        mock_fallback.return_value = "should not be used"
+
+        result = review_implementation(staged=True)
+
+        mock_fallback.assert_not_called()
+        assert result.skipped is True
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    @patch("wade.services.review_delegation_service._committed_diff_fallback")
+    @patch("wade.services.review_delegation_service.run")
+    def test_working_tree_diff_takes_priority(
+        self,
+        mock_run: MagicMock,
+        mock_fallback: MagicMock,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+    ) -> None:
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="diff --git a/f.py b/f.py\n+working tree line\n"
+        )
+        mock_fallback.return_value = "should not be used"
+        mock_template.return_value = "Review:\n{diff_content}"
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(review_implementation=AICommandConfig(mode="prompt", enabled=True))
+        )
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.PROMPT
+        )
+
+        result = review_implementation()
+
+        mock_fallback.assert_not_called()
+        assert result.success is True
+        call_args = mock_delegate.call_args[0][0]
+        assert "working tree line" in call_args.prompt
+
+    @patch("wade.services.review_delegation_service._committed_diff_fallback")
+    @patch("wade.services.review_delegation_service.run")
+    def test_fallback_returns_empty_skips_review(
+        self,
+        mock_run: MagicMock,
+        mock_fallback: MagicMock,
+    ) -> None:
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        mock_fallback.return_value = ""
+
+        result = review_implementation()
+
+        assert result.success is True
+        assert result.skipped is True
+        assert "No changes" in result.feedback

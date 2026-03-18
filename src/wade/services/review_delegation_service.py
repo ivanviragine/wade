@@ -7,6 +7,8 @@ from pathlib import Path
 import structlog
 
 from wade.config.loader import load_config
+from wade.git import repo as git_repo
+from wade.git.repo import GitError
 from wade.models.ai import EffortLevel
 from wade.models.config import AICommandConfig
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
@@ -149,6 +151,27 @@ def review_plan(
     )
 
 
+def _committed_diff_fallback() -> str:
+    """Return branch diff against main when working tree is clean.
+
+    Uses ``git diff main...HEAD`` (three-dot syntax) to show changes
+    committed on the current branch since it diverged from the base branch.
+
+    Returns empty string if on the main branch, if the repo root cannot be
+    resolved, or on any GitError (graceful degradation).
+    """
+    try:
+        repo_root = git_repo.get_repo_root(Path.cwd())
+        current_branch = git_repo.get_current_branch(repo_root)
+        config = load_config()
+        base_branch = config.project.main_branch or git_repo.detect_main_branch(repo_root)
+        if current_branch == base_branch:
+            return ""
+        return git_repo.diff_between(repo_root, base_branch, "HEAD")
+    except GitError:
+        return ""
+
+
 def review_implementation(
     *,
     staged: bool = False,
@@ -181,6 +204,9 @@ def review_implementation(
         )
 
     diff_content = result.stdout.strip() if result.stdout else ""
+
+    if not diff_content and not staged:
+        diff_content = _committed_diff_fallback()
 
     if not diff_content:
         label = "staged changes" if staged else "changes"
