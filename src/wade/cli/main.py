@@ -121,8 +121,8 @@ def _interactive_main_menu() -> None:
         if target:
             from wade.services.implementation_service import start as do_start
 
-            success = do_start(target=target)
-            raise typer.Exit(0 if success else 1)
+            result = do_start(target=target)
+            raise typer.Exit(0 if result.success else 1)
     elif idx == 1:  # Address reviews
         from wade.services.task_service import prompt_task_selection
 
@@ -209,10 +209,14 @@ def implement_cmd(
         False, "--cd", help="Create worktree and print path (no AI launch)."
     ),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
+    chain: str | None = typer.Option(
+        None, "--chain", hidden=True, help="Comma-separated issue IDs for sequential continuation."
+    ),
 ) -> None:
     """Start an implementation session on an issue."""
     from wade.services.implementation_service import start as do_start
     from wade.ui import prompts
+    from wade.ui.console import console
 
     # Resolve multiple --ai flags to a single value
     selected_ai: str | None = None
@@ -222,7 +226,10 @@ def implement_cmd(
     elif ai and len(ai) == 1:
         selected_ai = ai[0]
 
-    success = do_start(
+    # Parse chain into a list of remaining issue IDs
+    chain_remaining = [s.strip() for s in chain.split(",") if s.strip()] if chain else []
+
+    result = do_start(
         target=target,
         ai_tool=selected_ai,
         model=model,
@@ -234,7 +241,40 @@ def implement_cmd(
         effort_explicit=effort is not None,
         yolo=yolo or None,
     )
-    raise typer.Exit(0 if success else 1)
+
+    # Iterative chain continuation loop (merge-gated)
+    while result.success and chain_remaining:
+        next_issue = chain_remaining[0]
+        rest = chain_remaining[1:]
+        chain_flag = f" --chain {','.join(rest)}" if rest else ""
+
+        if not result.merged:
+            console.empty()
+            console.info("Chain paused — PR is pending review.")
+            console.hint(f"After merge, run: wade implement {next_issue}{chain_flag}")
+            break
+
+        console.empty()
+        if not prompts.confirm(f"Start implementation of #{next_issue}?", default=True):
+            console.hint(f"Resume chain: wade implement {next_issue}{chain_flag}")
+            break
+
+        chain_remaining = rest
+
+        result = do_start(
+            target=next_issue,
+            ai_tool=selected_ai,
+            model=model,
+            detach=detach,
+            cd_only=cd_only,
+            ai_explicit=selected_ai is not None,
+            model_explicit=model is not None,
+            effort=effort,
+            effort_explicit=effort is not None,
+            yolo=yolo or None,
+        )
+
+    raise typer.Exit(0 if result.success else 1)
 
 
 _BATCH_NUMBERS = typer.Argument(None, help="Issue numbers to work on.")
@@ -325,8 +365,8 @@ def cd_cmd(
         raise typer.Exit(0)
 
     # Worktree doesn't exist — create it (cd_only mode, no AI launch)
-    success = do_start(target=target, cd_only=True)
-    raise typer.Exit(0 if success else 1)
+    result = do_start(target=target, cd_only=True)
+    raise typer.Exit(0 if result.success else 1)
 
 
 @app.command("smart-start", hidden=True)
@@ -338,13 +378,23 @@ def smart_start_cmd(
     model: str | None = typer.Option(
         None, "--model", help="AI model to use.", autocompletion=complete_models
     ),
+    effort: str | None = typer.Option(
+        None,
+        "--effort",
+        help="Reasoning effort level: low, medium, high, max.",
+        autocompletion=complete_effort_levels,
+    ),
     detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
     cd_only: bool = typer.Option(
         False, "--cd", help="Create worktree and print path (no AI launch)."
     ),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
 ) -> None:
-    """Internal dispatch for `wade <N>` — routes to implement or review pr-comments."""
+    """Internal dispatch for `wade <N>` — routes to implement or review pr-comments.
+
+    Note: does not support --chain. Chain continuation is a CLI-layer concern
+    available only on `wade implement` / `wade i`.
+    """
     from wade.services.smart_start import smart_start
 
     selected_ai: str | None = None
@@ -364,6 +414,8 @@ def smart_start_cmd(
         cd_only=cd_only,
         ai_explicit=selected_ai is not None,
         model_explicit=model is not None,
+        effort=effort,
+        effort_explicit=effort is not None,
         yolo=yolo or None,
     )
     raise typer.Exit(0 if success else 1)
@@ -413,10 +465,20 @@ def implement_alias(
         False, "--cd", help="Create worktree and print path (no AI launch)."
     ),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
+    chain: str | None = typer.Option(
+        None, "--chain", hidden=True, help="Comma-separated issue IDs for sequential continuation."
+    ),
 ) -> None:
     """Alias for implement."""
     implement_cmd(
-        target=target, ai=ai, model=model, effort=effort, detach=detach, cd_only=cd_only, yolo=yolo
+        target=target,
+        ai=ai,
+        model=model,
+        effort=effort,
+        detach=detach,
+        cd_only=cd_only,
+        yolo=yolo,
+        chain=chain,
     )
 
 

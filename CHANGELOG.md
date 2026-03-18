@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.5.6] — 2026-03-18
+
+### Bug Fixes
+
+- skip re-merge of already-MERGED branches in batch review integration branch (30be5cb)
+
+### Other Changes
+
+- Implement chain auto-continuation with merge-gated dependencies (#181) (9e30d6d)
+
+## [v0.5.5] — 2026-03-18
+
+### Bug Fixes
+
+- reuse existing PR on batch review re-run (54dbf6e)
+
+## [v0.5.4] — 2026-03-18
+
+### Bug Fixes
+
+- force-push integration branch on batch review re-run (61e4559)
+
+### Other Changes
+
+- Detect tracking issues in wade implement and wade <N> (#183) (31903be)
+- Fix Ghostty terminal launch and add batch terminal launcher (#179) (3214463)
+
 ## [v0.5.3] — 2026-03-18
 
 ### Bug Fixes

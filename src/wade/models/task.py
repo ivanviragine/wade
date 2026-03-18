@@ -137,6 +137,50 @@ def parse_complexity_from_labels(labels: list[Label]) -> Complexity | None:
     return None
 
 
+_TRACKING_PREFIX = "Tracking:"
+"""Title prefix that identifies a tracking (epic) issue."""
+
+_UNCHECKED_ITEM_RE = re.compile(r"^- \[ \] #(\d+)", re.MULTILINE)
+"""Matches unchecked checklist items like ``- [ ] #42``."""
+
+_ANY_CHECKLIST_ITEM_RE = re.compile(r"^- \[[xX ]\] ", re.MULTILINE)
+"""Matches any checklist item (checked or unchecked) by its marker."""
+
+
+def is_tracking_issue(title: str) -> bool:
+    """Return True if the title indicates a tracking (epic) issue."""
+    return title.startswith(_TRACKING_PREFIX)
+
+
+def parse_tracking_child_ids(body: str) -> list[str]:
+    """Extract child issue numbers from unchecked checklist items.
+
+    Only matches ``- [ ] #N`` lines — skips checked items (``- [x] #N``)
+    and other ``#N`` references elsewhere in the body.
+
+    Returns issue numbers as strings without ``#`` prefix.
+    """
+    return _UNCHECKED_ITEM_RE.findall(body)
+
+
+def has_checklist_items(body: str) -> bool:
+    """Return True if the body contains any checklist items (checked or unchecked).
+
+    Use this to distinguish bodies using checklist format from those using
+    plain ``#N`` issue references.
+    """
+    return bool(_ANY_CHECKLIST_ITEM_RE.search(body))
+
+
+def parse_all_issue_refs(body: str) -> list[str]:
+    """Extract all ``#N`` issue references from a body, in order.
+
+    Returns issue numbers as strings without ``#`` prefix.
+    Use this to catch plain references that are not in checklist format.
+    """
+    return re.findall(r"#(\d+)", body)
+
+
 _DEP_LINE_RE = re.compile(r"\*\*Depends on:\*\*\s*(.*?)$", re.MULTILINE)
 _BLOCK_LINE_RE = re.compile(r"\*\*Blocks:\*\*\s*(.*?)$", re.MULTILINE)
 _ISSUE_REF_RE = re.compile(r"#(\d+)")
