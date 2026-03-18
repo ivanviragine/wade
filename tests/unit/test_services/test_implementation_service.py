@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -111,8 +112,12 @@ class TestBootstrapWorktree:
         data = json.loads(wt_settings.read_text(encoding="utf-8"))
         assert WADE_ALLOW_PATTERN in data["permissions"]["allow"]
 
-    def test_no_allowlist_propagation_when_not_configured(self, tmp_path: Path) -> None:
-        """Allowlist is NOT written to worktree when project root has no settings."""
+    def test_allowlist_always_propagated_even_without_repo_root_settings(
+        self, tmp_path: Path
+    ) -> None:
+        """Allowlist is always written to worktree regardless of repo root state."""
+        from wade.config.claude_allowlist import WADE_ALLOW_PATTERN
+
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
 
@@ -122,7 +127,10 @@ class TestBootstrapWorktree:
         config = ProjectConfig()
         bootstrap_worktree(worktree, config, repo_root)
 
-        assert not (worktree / ".claude" / "settings.json").is_file()
+        wt_settings = worktree / ".claude" / "settings.json"
+        assert wt_settings.is_file()
+        data = json.loads(wt_settings.read_text(encoding="utf-8"))
+        assert WADE_ALLOW_PATTERN in data["permissions"]["allow"]
 
     def test_self_init_creates_symlinks(self, tmp_path: Path) -> None:
         """When repo_root is the wade package root, skills are symlinked from worktree templates."""
