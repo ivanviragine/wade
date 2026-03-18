@@ -88,6 +88,23 @@ _CAP_FIELD_MAP: dict[str, str] = {
 }
 
 
+def _token_match(pattern: str, text: str) -> bool:
+    """Check if a CLI flag or subcommand appears as a standalone token in help text.
+
+    Long flags (``--foo``) are specific enough for direct substring matching.
+    Short flags (``-f``) require surrounding whitespace/punctuation so they are
+    not confused with options like ``-foo``.  Plain words (subcommands such as
+    ``run`` or ``exec``) use word-boundary matching to avoid partial hits like
+    ``truncate`` matching ``run``.
+    """
+    escaped = re.escape(pattern)
+    if pattern.startswith("--"):
+        return pattern in text
+    if pattern.startswith("-"):
+        return bool(re.search(r"(?:^|\s)" + escaped + r"(?:\s|,|\[|$)", text, re.MULTILINE))
+    return bool(re.search(r"\b" + escaped + r"\b", text))
+
+
 def _scrape_models(tool: str) -> set[str]:
     """Scrape model IDs from docs."""
     if tool not in _DOCS_URLS or not shutil.which("curl"):
@@ -259,29 +276,32 @@ def probe_cli_args(tool: str) -> dict[str, bool]:
                 text=True,
                 timeout=15,
             )
-            combined = result.stdout + result.stderr
-            if combined.strip():
-                break
+            combined += result.stdout + result.stderr
         except Exception:
             pass
 
-    if not combined:
+    if not combined.strip():
         return {}
 
-    return {cap_name: (pattern in combined) for cap_name, pattern in expected.items()}
+    return {cap_name: _token_match(pattern, combined) for cap_name, pattern in expected.items()}
 
 
-def report_cli_args() -> None:
+def report_cli_args() -> bool:
     """Compare probed CLI flags against adapter capabilities and print a report.
 
     For each tool in ``_EXPECTED_FLAGS``:
     - MISSING: expected flags not found in ``--help`` (possible deprecation/rename)
     - CAPABILITY MISMATCH: flag found but the adapter declares no support for it
     - Reports a clean status if all flags match expectations
+
+    Returns ``True`` if any issues (missing flags or capability mismatches) were
+    detected, ``False`` when everything looks correct.
     """
     from wade.ui.console import console
 
     console.header("CLI Arguments")
+
+    has_cli_diff = False
 
     for tool in _EXPECTED_FLAGS:
         try:
@@ -305,6 +325,7 @@ def report_cli_args() -> None:
         present = [cap for cap, found in found_flags.items() if found]
 
         if missing:
+            has_cli_diff = True
             console.warn("MISSING (expected flags not found in --help):")
             for cap in sorted(missing):
                 flag = _EXPECTED_FLAGS[tool][cap]
@@ -317,6 +338,7 @@ def report_cli_args() -> None:
                 mismatches.append((cap, _EXPECTED_FLAGS[tool][cap], field))
 
         if mismatches:
+            has_cli_diff = True
             console.warn("CAPABILITY MISMATCH (flag found but adapter declares no support):")
             for cap, flag, field in sorted(mismatches):
                 console.detail(f"  ! {cap}: {flag} found but {field}=False")
@@ -325,6 +347,8 @@ def report_cli_args() -> None:
             console.detail("✓ CLI args match expectations.")
 
         console.empty()
+
+    return has_cli_diff
 
 
 def main() -> int:
@@ -389,10 +413,10 @@ def main() -> int:
                 )
         console.empty()
 
-    report_cli_args()
+    has_diff = report_cli_args() or has_diff
 
     if not has_diff:
-        console.success("All models strictly match the JSON registry!")
+        console.success("All models and CLI args match expectations!")
         return 0
 
     from wade.ui import prompts
