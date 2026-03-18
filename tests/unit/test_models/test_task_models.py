@@ -186,6 +186,9 @@ class TestHasChecklistItems:
     def test_detects_checked_with_ref(self) -> None:
         assert has_checklist_items("- [x] #42\n") is True
 
+    def test_detects_uppercase_checked(self) -> None:
+        assert has_checklist_items("- [X] `#42`\n") is True
+
     def test_detects_unchecked_without_ref(self) -> None:
         # Checklist line has no inline #N — the ref is on a separate line.
         # has_checklist_items() must still return True so the checklist
