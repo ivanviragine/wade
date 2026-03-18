@@ -282,7 +282,7 @@ def launch_batch_in_terminals(
     """Launch multiple commands in a single new window with one tab per command.
 
     *items* is a list of ``(command, cwd, title)`` tuples.
-    Returns True if at least the first command was launched successfully.
+    Returns True if at least one command was launched successfully.
     """
     if not items:
         return False
