@@ -588,6 +588,10 @@ mutation($threadId: ID!) {
         except Exception:
             logger.debug("github.review_status_bot_check_failed", exc_info=True)
 
+        # Generic PR-level bot reviews: treat any pending bot review as in-progress
+        if bot_status is None and any(r.is_bot and r.state == ReviewState.PENDING for r in reviews):
+            bot_status = ReviewBotStatus.IN_PROGRESS
+
         return PRReviewStatus(
             actionable_threads=filter_actionable_threads(threads),
             reviews=reviews,

@@ -128,6 +128,9 @@ def fetch_reviews(
 
     # Fetch comprehensive review status
     status = get_comprehensive_review_status(provider, repo_root, pr_number)
+    if status.fetch_failed:
+        print("Review status fetch failed — status may be incomplete. Try again shortly.")
+        return False
     actionable = status.actionable_threads
 
     if not actionable:
@@ -194,7 +197,7 @@ def count_unresolved_threads(
         (no git repo, no branch, no PR, provider error).
     """
     status = get_review_status(project_root)
-    if status is None:
+    if status is None or status.fetch_failed:
         return None
     return len(status.actionable_threads)
 
@@ -380,6 +383,9 @@ def start(
     # 4. Quick-check for unresolved review threads via comprehensive status
     console.step("Checking for review comments...")
     status = get_comprehensive_review_status(provider, repo_root, pr_number)
+    if status.fetch_failed:
+        console.warn("Review status fetch failed — status may be incomplete. Try again shortly.")
+        return False
     comment_count = len(status.actionable_threads)
     file_paths = {
         t.first_comment.path
