@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.5.3] — 2026-03-18
+
+### Bug Fixes
+
+- always propagate wade allowlist to worktrees unconditionally (6c9ebab)
+
+### Other Changes
+
+- Update model registries and default tier mappings for new OpenAI/Google models (#168) (64664c9)
+
 ## [v0.5.2] — 2026-03-18
 
 ### Documentation

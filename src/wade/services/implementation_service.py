@@ -13,7 +13,6 @@ import re
 import shutil
 import subprocess
 import tempfile
-import time
 import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,7 +38,7 @@ from wade.models.session import (
     SyncResult,
     WorktreeState,
 )
-from wade.models.task import Task
+from wade.models.task import Task, is_tracking_issue, parse_tracking_child_ids
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.ai_resolution import (
@@ -60,6 +59,7 @@ from wade.ui.console import console
 from wade.utils.markdown import append_session_to_body, remove_marker_block
 from wade.utils.terminal import (
     compose_implement_title,
+    launch_batch_in_terminals,
     launch_in_new_terminal,
     set_terminal_title,
     start_title_keeper,
@@ -173,11 +173,10 @@ def bootstrap_worktree(
         install_skills(worktree_path, is_self_init=False, force=True, skills=skills)
     logger.debug("implementation.bootstrap_skills", path=str(worktree_path))
 
-    # Propagate allowlist from project root to worktree if already configured
-    from wade.config.claude_allowlist import configure_allowlist, is_allowlist_configured
+    # Always propagate allowlist to worktree — configure_allowlist is idempotent
+    from wade.config.claude_allowlist import configure_allowlist
 
-    if is_allowlist_configured(repo_root):
-        configure_allowlist(worktree_path, extra_patterns=config.permissions.allowed_commands)
+    configure_allowlist(worktree_path, extra_patterns=config.permissions.allowed_commands)
 
     # Propagate Cursor allowlist to worktree's per-project .cursor/cli.json
     from wade.config.cursor_allowlist import configure_allowlist as configure_cursor_allowlist
@@ -789,6 +788,26 @@ def start(
         if not task:
             return ImplementResult(success=False)
 
+        # Tracking issue detection — redirect to batch implementation
+        if is_tracking_issue(task.title):
+            child_ids = parse_tracking_child_ids(task.body)
+            if child_ids:
+                refs = ", ".join(f"#{cid}" for cid in child_ids)
+                console.info(f"#{task.id} is a tracking issue for: {refs}")
+                if prompts.confirm("Start batch implementation?", default=True):
+                    return batch(
+                        issue_numbers=child_ids,
+                        ai_tool=ai_tool,
+                        model=model,
+                        project_root=project_root,
+                        ai_explicit=ai_explicit,
+                        model_explicit=model_explicit,
+                        effort=effort,
+                        effort_explicit=effort_explicit,
+                        yolo=yolo,
+                    )
+                return False
+
         console.rule(f"implement #{task.id}")
         console.kv("Issue", console.issue_ref(task.id, task.title))
 
@@ -1194,10 +1213,6 @@ def _resolve_task_target(
 # ---------------------------------------------------------------------------
 
 
-_BATCH_STAGGER_SECS = 1.0
-"""Delay between terminal spawns to avoid git index.lock contention."""
-
-
 def batch(
     issue_numbers: list[str],
     ai_tool: str | None = None,
@@ -1258,11 +1273,8 @@ def batch(
         independent = issue_numbers
         chains = []
 
-    launched = 0
-
-    def _launch(issue_id: str, label: str) -> bool:
-        """Build command and launch a single issue in a new terminal."""
-        nonlocal launched
+    def _build_cmd(issue_id: str) -> list[str]:
+        """Build the wade implement command for a single issue."""
         cmd = ["wade", "implement", issue_id]
         if resolved_tool:
             cmd.extend(["--ai", resolved_tool])
@@ -1272,35 +1284,36 @@ def batch(
             cmd.extend(["--effort", resolved_effort.value])
         if resolved_yolo:
             cmd.append("--yolo")
+        return cmd
 
-        console.step(f"Launching #{issue_id} ({label}) in new terminal")
-        if launch_in_new_terminal(cmd, cwd=str(repo_root), title=f"wade #{issue_id}"):
-            launched += 1
-            return True
-        console.warn(f"Could not launch terminal for #{issue_id}")
-        return False
+    # Collect all items to launch in one batch
+    batch_items: list[tuple[list[str], str | None, str | None]] = []
 
-    # Launch independent issues in staggered terminals
-    for i, issue_id in enumerate(independent):
-        if i > 0:
-            time.sleep(_BATCH_STAGGER_SECS)
-        _launch(issue_id, "independent")
+    for issue_id in independent:
+        console.step(f"Preparing #{issue_id} (independent)")
+        batch_items.append((_build_cmd(issue_id), str(repo_root), f"wade #{issue_id}"))
 
-    # Launch chains: start only the first item, list the rest in order
+    # Chains: start only the first item, list the rest in order
     for chain in chains:
         console.info(f"Dependency chain: {' → '.join(f'#{n}' for n in chain)}")
-        if launched > 0:
-            time.sleep(_BATCH_STAGGER_SECS)
-        _launch(chain[0], "first in chain")
+        batch_items.append((_build_cmd(chain[0]), str(repo_root), f"wade #{chain[0]}"))
 
         if len(chain) > 1:
             remaining = ", ".join(f"#{n}" for n in chain[1:])
             console.info(f"After completing #{chain[0]}, work on these in order: {remaining}")
 
-    console.panel(f"  Launched {launched} implementation session(s)", title="Batch started")
-
-    if launched == 0:
+    if not batch_items:
+        console.panel("  No issues to launch", title="Batch started")
         return False
+
+    console.step(f"Launching {len(batch_items)} session(s) in new terminal window")
+    launched = launch_batch_in_terminals(batch_items)
+
+    if not launched:
+        console.warn("Could not launch terminals for batch")
+        return False
+
+    console.panel(f"  Launched {len(batch_items)} implementation session(s)", title="Batch started")
 
     # Post-batch coherence review prompt
     tracking_id = None
