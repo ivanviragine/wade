@@ -121,8 +121,8 @@ def _create_temp_script(command: list[str], cwd: str | None = None) -> str:
     cmd_str = " ".join(shlex.quote(str(c)) for c in command)
     with tempfile.NamedTemporaryFile(prefix="wade-", suffix=".sh", delete=False, mode="w") as f:
         tmp_path = f.name
-        f.write(f"#!/usr/bin/env bash\ncd {shlex.quote(cwd or '.')}\nexec {cmd_str}\n")
-    os.chmod(tmp_path, 0o755)
+        f.write(f"#!/usr/bin/env bash\ncd {shlex.quote(cwd or '.')} || exit $?\nexec {cmd_str}\n")
+    os.chmod(tmp_path, 0o700)
     return tmp_path
 
 

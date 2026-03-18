@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import subprocess
-import sys
 from unittest.mock import Mock
 
 import pytest
@@ -41,8 +40,8 @@ def test_gnome_terminal_detected(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="macOS-specific AppleScript behavior")
 def test_iterm2_launch_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("wade.utils.terminal.sys.platform", "darwin")
     monkeypatch.setenv("TERM_PROGRAM", "iTerm.app")
     monkeypatch.delenv("TMUX", raising=False)
     monkeypatch.setattr("wade.utils.terminal.shutil.which", lambda _: None)
@@ -60,8 +59,8 @@ def test_iterm2_launch_command(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "create window with default profile command" in args[2]
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="macOS-specific AppleScript behavior")
 def test_iterm2_launch_before_terminal_app(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("wade.utils.terminal.sys.platform", "darwin")
     monkeypatch.setenv("TERM_PROGRAM", "iTerm.app")
     monkeypatch.delenv("TMUX", raising=False)
     monkeypatch.setattr("wade.utils.terminal.shutil.which", lambda _: None)
@@ -131,9 +130,9 @@ def test_gnome_terminal_not_on_macos(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="macOS-specific Ghostty behavior")
 def test_ghostty_macos_uses_open_command(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ghostty macOS launches via `open -na Ghostty --args -e <tmp_script>`."""
+    monkeypatch.setattr("wade.utils.terminal.sys.platform", "darwin")
     monkeypatch.setenv("TERM_PROGRAM", "ghostty")
     monkeypatch.delenv("TMUX", raising=False)
     monkeypatch.setattr("wade.utils.terminal.shutil.which", lambda _: "/opt/homebrew/bin/ghostty")
@@ -156,7 +155,6 @@ def test_ghostty_macos_uses_open_command(monkeypatch: pytest.MonkeyPatch) -> Non
     assert run_args == ["open", "-na", "Ghostty", "--args", "-e", "/tmp/wade-test.sh"]
 
 
-@pytest.mark.skipif(sys.platform == "darwin", reason="Linux-specific Ghostty subprocess behavior")
 def test_ghostty_linux_uses_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TERM_PROGRAM", "ghostty")
     monkeypatch.delenv("TMUX", raising=False)
@@ -180,9 +178,9 @@ def test_ghostty_linux_uses_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "/tmp/wade-test.sh" in args
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="macOS-specific Ghostty behavior")
 def test_ghostty_macos_temp_script_created(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verifies _create_temp_script is called and its output used."""
+    monkeypatch.setattr("wade.utils.terminal.sys.platform", "darwin")
     monkeypatch.setenv("TERM_PROGRAM", "ghostty")
     monkeypatch.delenv("TMUX", raising=False)
     monkeypatch.setattr("wade.utils.terminal.shutil.which", lambda _: "/opt/homebrew/bin/ghostty")
@@ -204,9 +202,9 @@ def test_ghostty_macos_temp_script_created(monkeypatch: pytest.MonkeyPatch) -> N
     timer_mock.assert_called_once()
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="macOS-specific Ghostty behavior")
 def test_ghostty_macos_failure_cleans_temp_script(monkeypatch: pytest.MonkeyPatch) -> None:
     """When open -na fails, tmp_path is cleaned up."""
+    monkeypatch.setattr("wade.utils.terminal.sys.platform", "darwin")
     monkeypatch.setenv("TERM_PROGRAM", "ghostty")
     monkeypatch.delenv("TMUX", raising=False)
     monkeypatch.setattr("wade.utils.terminal.shutil.which", lambda _: "/opt/homebrew/bin/ghostty")
@@ -265,10 +263,12 @@ def test_create_temp_script_content(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert path == "/tmp/wade-test.sh"
     assert chmod_mock.called
+    assert chmod_mock.call_args.args[1] == 0o700
     assert written
     script = written[0]
     assert script.startswith("#!/usr/bin/env bash")
     assert "cd" in script
+    assert "|| exit $?" in script
     assert "exec" in script
 
 
@@ -293,9 +293,9 @@ def test_batch_single_delegates_to_launch_in_new_terminal(monkeypatch: pytest.Mo
     mock.assert_called_once_with(["python", "-V"], cwd="/tmp", title="test")
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="macOS-specific Ghostty batch behavior")
 def test_batch_ghostty_macos(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ghostty macOS batch uses AppleScript with window + tabs."""
+    monkeypatch.setattr("wade.utils.terminal.sys.platform", "darwin")
     monkeypatch.setenv("TERM_PROGRAM", "ghostty")
     monkeypatch.delenv("TMUX", raising=False)
 
@@ -331,9 +331,9 @@ def test_batch_ghostty_macos(monkeypatch: pytest.MonkeyPatch) -> None:
     assert timer_mock.call_count == 3
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="macOS-specific Ghostty batch behavior")
 def test_batch_ghostty_macos_failure_cleans_scripts(monkeypatch: pytest.MonkeyPatch) -> None:
     """When Ghostty macOS batch fails, all temp scripts are cleaned."""
+    monkeypatch.setattr("wade.utils.terminal.sys.platform", "darwin")
     monkeypatch.setenv("TERM_PROGRAM", "ghostty")
     monkeypatch.delenv("TMUX", raising=False)
 
@@ -363,9 +363,9 @@ def test_batch_ghostty_macos_failure_cleans_scripts(monkeypatch: pytest.MonkeyPa
     assert unlink_mock.call_count == 2
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="macOS-specific iTerm2 batch behavior")
 def test_batch_iterm2(monkeypatch: pytest.MonkeyPatch) -> None:
     """iTerm2 batch creates a window with tabs via AppleScript."""
+    monkeypatch.setattr("wade.utils.terminal.sys.platform", "darwin")
     monkeypatch.setenv("TERM_PROGRAM", "iTerm.app")
     monkeypatch.delenv("TMUX", raising=False)
 
