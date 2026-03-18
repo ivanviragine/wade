@@ -349,12 +349,10 @@ def _batch_ghostty_macos(
                 "        end tell",
                 "      end tell",
                 "    end tell",
+                f"    delay {_BATCH_TAB_DELAY}",
+                f'    keystroke "{script_path}"',
+                "    key code 36",
                 "  end tell",
-                "end tell",
-                f"delay {_BATCH_TAB_DELAY}",
-                'tell application "System Events"',
-                f'  keystroke "{script_path}"',
-                "  key code 36",
                 "end tell",
                 f"delay {_BATCH_TAB_DELAY}",
             ]
@@ -412,22 +410,10 @@ def _batch_iterm2(
     osa_lines = [
         'tell application "iTerm2"',
         f'  set newWindow to (create window with default profile command "{scripts[0]}")',
-        "  tell current session of current tab of newWindow",
     ]
     for sp in scripts[1:]:
-        osa_lines.extend(
-            [
-                "  end tell",
-                f'  tell newWindow to create tab with default profile command "{sp}"',
-                "  tell current session of current tab of newWindow",
-            ]
-        )
-    osa_lines.extend(
-        [
-            "  end tell",
-            "end tell",
-        ]
-    )
+        osa_lines.append(f'  tell newWindow to create tab with default profile command "{sp}"')
+    osa_lines.append("end tell")
     osa = "\n".join(osa_lines)
     try:
         subprocess.run(["osascript", "-e", osa], check=True, capture_output=True)
@@ -520,23 +506,34 @@ def _batch_terminal_app(
 def _batch_gnome_terminal(
     items: Sequence[tuple[list[str], str | None, str | None]],
 ) -> bool:
-    """GNOME Terminal: --window with --tab flags for each command."""
-    gnome_cmd: list[str] = ["gnome-terminal", "--window"]
+    """GNOME Terminal: launch each tab as a separate gnome-terminal call.
+
+    gnome-terminal's ``--`` stops option parsing, so multi-tab with inline
+    commands is unreliable.  Staggered individual launches are safer.
+    """
+    launched = False
     for i, (cmd, cwd, title) in enumerate(items):
-        if i > 0:
+        gnome_cmd: list[str] = ["gnome-terminal"]
+        if i == 0:
+            gnome_cmd.append("--window")
+        else:
             gnome_cmd.append("--tab")
         if title:
             gnome_cmd.extend(["--title", title])
-        cmd_str = " ".join(shlex.quote(str(c)) for c in cmd)
-        gnome_cmd.extend(
-            ["--", "bash", "-c", f"cd {shlex.quote(cwd or '.')} && {cmd_str}; exec bash"]
-        )
-    try:
-        subprocess.Popen(gnome_cmd, start_new_session=True)
-        return True
-    except OSError:
+        tmp_path = _create_temp_script(cmd, cwd)
+        gnome_cmd.extend(["--", tmp_path])
+        try:
+            subprocess.Popen(gnome_cmd, start_new_session=True)
+            t = threading.Timer(15, lambda p=tmp_path: _safe_unlink(p))
+            t.daemon = True
+            t.start()
+            launched = True
+        except OSError:
+            _safe_unlink(tmp_path)
+        time.sleep(_BATCH_TAB_DELAY)
+    if not launched:
         logger.warning("terminal.batch_gnome_failed")
-        return False
+    return launched
 
 
 def _batch_fallback(

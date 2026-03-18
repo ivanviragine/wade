@@ -810,24 +810,7 @@ class TestImplementationBatch:
         assert len(items) == 1  # Only the first in the chain
         assert items[0][0][:3] == ["wade", "implement", "1"]
 
-    def test_warns_on_terminal_failure(self, tmp_path: Path) -> None:
-        """Batch launcher fails → returns False."""
-        with (
-            patch("wade.services.implementation_service.load_config", return_value=ProjectConfig()),
-            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
-            patch(
-                "wade.services.implementation_service._build_graph_from_issues", return_value=None
-            ),
-            patch(
-                "wade.services.implementation_service.launch_batch_in_terminals",
-                return_value=False,
-            ),
-        ):
-            result = batch(["1", "2"], project_root=tmp_path)
-
-        assert result is False
-
-    def test_returns_false_when_none_launched(self, tmp_path: Path) -> None:
+    def test_returns_false_when_batch_launch_fails(self, tmp_path: Path) -> None:
         """launch_batch_in_terminals returns False → batch() returns False."""
         with (
             patch("wade.services.implementation_service.load_config", return_value=ProjectConfig()),
