@@ -359,7 +359,7 @@ def test_lifecycle_skipped_in_detach_mode(
 
     result = start("42", ai_tool="claude", project_root=tmp_path, detach=True)
 
-    assert result is True
+    assert result.success is True
     mock_lifecycle.assert_not_called()
 
 
@@ -422,5 +422,5 @@ def test_lifecycle_skipped_after_ai_crash(
 
     result = start("42", ai_tool="claude", project_root=tmp_path, detach=False)
 
-    assert result is True
+    assert result.success is True
     mock_lifecycle.assert_not_called()
