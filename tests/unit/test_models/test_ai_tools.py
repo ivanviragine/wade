@@ -52,7 +52,9 @@ class TestCapabilities:
 
     def test_gemini_capabilities(self) -> None:
         caps = AbstractAITool.get("gemini").capabilities()
-        assert caps.supports_headless is False
+        assert caps.supports_headless is True
+        assert caps.headless_flag == "-p"
+        assert caps.supports_resume is True
 
     def test_antigravity_capabilities(self) -> None:
         caps = AbstractAITool.get("antigravity").capabilities()
