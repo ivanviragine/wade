@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.5.4] — 2026-03-18
+
+### Bug Fixes
+
+- force-push integration branch on batch review re-run (61e4559)
+
+### Other Changes
+
+- Detect tracking issues in wade implement and wade <N> (#183) (31903be)
+- Fix Ghostty terminal launch and add batch terminal launcher (#179) (3214463)
+
 ## [v0.5.3] — 2026-03-18
 
 ### Bug Fixes
