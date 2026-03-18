@@ -42,6 +42,8 @@ def smart_start(
     *,
     ai_explicit: bool = False,
     model_explicit: bool = False,
+    effort: str | None = None,
+    effort_explicit: bool = False,
     yolo: bool | None = None,
 ) -> bool:
     """Detect PR state for an issue and route to the right command.
@@ -109,6 +111,8 @@ def smart_start(
                     project_root=project_root,
                     ai_explicit=ai_explicit,
                     model_explicit=model_explicit,
+                    effort=effort,
+                    effort_explicit=effort_explicit,
                     yolo=yolo,
                 )
             return False
