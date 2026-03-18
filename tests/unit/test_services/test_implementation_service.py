@@ -764,7 +764,7 @@ class TestImplementationStart:
 
             result = start("42", project_root=tmp_path)
 
-        assert result.success is True
+        assert result.success is False  # AI launch fails in test environment → failure
         mock_confirm.assert_called_once()
         mock_bootstrap.assert_called_once()
         assert call_order == ["confirm", "bootstrap"]
@@ -1452,3 +1452,26 @@ class TestChainContinuation:
 
         assert result.exit_code == 0
         assert call_count == 1
+
+    def test_chain_stops_on_failure(self) -> None:
+        """When start returns success=False, chain exits immediately with code 1."""
+        from typer.testing import CliRunner
+
+        from wade.cli.main import app
+
+        runner = CliRunner()
+        call_count = 0
+
+        def fake_start(**kwargs: object) -> ImplementResult:
+            nonlocal call_count
+            call_count += 1
+            return ImplementResult(success=False, merged=False)
+
+        with (
+            patch("wade.services.implementation_service.start", side_effect=fake_start),
+            patch("wade.ui.prompts.select", return_value=0),
+        ):
+            result = runner.invoke(app, ["implement", "1", "--chain", "2,3"])
+
+        assert result.exit_code == 1
+        assert call_count == 1  # No continuation after failure

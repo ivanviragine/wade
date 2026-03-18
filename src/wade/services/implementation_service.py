@@ -1100,8 +1100,10 @@ def start(
                         launch_completed = False
             except (ValueError, KeyError):
                 console.warn(f"Unknown AI tool: {resolved_tool}")
+                merge_status = MergeStatus.MERGE_FAILED
             except Exception as e:
                 console.warn(f"AI tool launch failed: {e}")
+                merge_status = MergeStatus.MERGE_FAILED
             finally:
                 stop_title_keeper()
 
@@ -1136,6 +1138,7 @@ def start(
                         )
                     except Exception:
                         logger.exception("post_implementation_lifecycle.failed")
+                        merge_status = MergeStatus.MERGE_FAILED
 
             # Use CLI-resolved model, falling back to transcript-detected model.
             effective_model = resolved_model or detected_model
