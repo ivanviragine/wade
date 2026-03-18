@@ -442,6 +442,38 @@ class TestSmartStartTrackingDetection:
         assert result is True
         mock_implement.assert_called_once()
 
+    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.smart_start.git_pr.get_pr_for_branch", return_value=None)
+    @patch(
+        "wade.services.smart_start.git_branch.make_branch_name", return_value="feat/173-tracking"
+    )
+    @patch("wade.services.smart_start.git_repo.get_repo_root")
+    @patch("wade.services.smart_start.get_provider")
+    @patch("wade.services.smart_start.load_config")
+    def test_tracking_issue_uppercase_checked_items_falls_through(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_branch: MagicMock,
+        mock_pr: MagicMock,
+        mock_implement: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Tracking issue with all items checked (uppercase X) → falls through to implement."""
+        mock_repo_root.return_value = tmp_path
+        tracking_task = Task(
+            id="173",
+            title="Tracking: #167, #169",
+            body="- [X] #167\n- [X] #169\n",
+        )
+        mock_get_provider.return_value.read_task.return_value = tracking_task
+
+        result = smart_start("173", project_root=tmp_path)
+
+        assert result is True
+        mock_implement.assert_called_once()
+
     @patch("wade.services.implementation_service.batch", return_value=True)
     @patch("wade.ui.prompts.confirm", return_value=True)
     @patch("wade.services.smart_start.git_repo.get_repo_root")

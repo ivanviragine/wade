@@ -142,8 +142,8 @@ _TRACKING_PREFIX = "Tracking:"
 _UNCHECKED_ITEM_RE = re.compile(r"^- \[ \] #(\d+)", re.MULTILINE)
 """Matches unchecked checklist items like ``- [ ] #42``."""
 
-_ANY_CHECKLIST_ITEM_RE = re.compile(r"^- \[[x ]\] #\d+", re.MULTILINE)
-"""Matches any checklist item (checked or unchecked) like ``- [x] #42``."""
+_ANY_CHECKLIST_ITEM_RE = re.compile(r"^- \[[xX ]\] #\d+", re.MULTILINE)
+"""Matches any checklist item (checked or unchecked) like ``- [x] #42`` or ``- [X] #42``."""
 
 
 def is_tracking_issue(title: str) -> bool:
