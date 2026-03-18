@@ -148,6 +148,13 @@ def create_integration_branch(
         if not issue.branch_name:
             continue
 
+        if issue.status == "MERGED":
+            # Already in main → already in the integration branch (squash-merged
+            # PRs would conflict if we tried to re-merge the feature branch).
+            issue.merged = True
+            logger.info("batch_review.already_merged", issue=issue.issue_number)
+            continue
+
         try:
             git_repo.merge_no_edit(repo_root, issue.branch_name)
             issue.merged = True
