@@ -442,6 +442,61 @@ class TestSmartStartTrackingDetection:
         assert result is True
         mock_implement.assert_called_once()
 
+    @patch("wade.services.implementation_service.batch", return_value=True)
+    @patch("wade.ui.prompts.confirm", return_value=True)
+    @patch("wade.services.smart_start.git_repo.get_repo_root")
+    @patch("wade.services.smart_start.get_provider")
+    @patch("wade.services.smart_start.load_config")
+    def test_tracking_plain_refs_triggers_batch(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_confirm: MagicMock,
+        mock_batch: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Tracking issue with plain #N refs (no checklist) → batch with all refs."""
+        mock_repo_root.return_value = tmp_path
+        tracking_task = Task(
+            id="173",
+            title="Tracking: #167, #169",
+            body="Children: #167, #169\n",
+        )
+        mock_get_provider.return_value.read_task.return_value = tracking_task
+
+        result = smart_start("173", project_root=tmp_path)
+
+        assert result is True
+        mock_batch.assert_called_once()
+        assert mock_batch.call_args.kwargs["issue_numbers"] == ["167", "169"]
+
+    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.smart_start.git_pr.get_pr_for_branch", return_value=None)
+    @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.smart_start.git_repo.get_repo_root")
+    @patch("wade.services.smart_start.get_provider")
+    @patch("wade.services.smart_start.load_config")
+    def test_effort_forwarded_to_implement_task(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_branch: MagicMock,
+        mock_pr: MagicMock,
+        mock_implement: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """effort/effort_explicit are forwarded on the normal implement path."""
+        mock_repo_root.return_value = tmp_path
+        mock_get_provider.return_value.read_task.return_value = _make_task()
+
+        smart_start("42", project_root=tmp_path, effort="high", effort_explicit=True)
+
+        call_kwargs = mock_implement.call_args.kwargs
+        assert call_kwargs["effort"] == "high"
+        assert call_kwargs["effort_explicit"] is True
+
 
 class TestSmartStartGitError:
     """When not in a git repo, falls through to implement."""

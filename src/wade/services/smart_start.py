@@ -22,7 +22,12 @@ from wade.git import repo as git_repo
 from wade.git.repo import GitError
 from wade.models.ai import AIToolID
 from wade.models.session import SessionRecord
-from wade.models.task import is_tracking_issue, parse_tracking_child_ids
+from wade.models.task import (
+    has_checklist_items,
+    is_tracking_issue,
+    parse_all_issue_refs,
+    parse_tracking_child_ids,
+)
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.implementation_service import _merge_pr
@@ -72,6 +77,8 @@ def smart_start(
             cd_only,
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
+            effort=effort,
+            effort_explicit=effort_explicit,
             yolo=yolo,
         )
 
@@ -90,6 +97,8 @@ def smart_start(
             cd_only,
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
+            effort=effort,
+            effort_explicit=effort_explicit,
             yolo=yolo,
         )
 
@@ -97,7 +106,14 @@ def smart_start(
     if is_tracking_issue(task.title):
         from wade.ui import prompts
 
-        child_ids = parse_tracking_child_ids(task.body)
+        # If the body uses checklist format, honour checked/unchecked semantics
+        # (only unchecked = still to-do). Otherwise fall back to all plain #N refs
+        # so tracking issues authored without a checklist still trigger batch mode.
+        child_ids = (
+            parse_tracking_child_ids(task.body)
+            if has_checklist_items(task.body)
+            else parse_all_issue_refs(task.body)
+        )
         if child_ids:
             refs = ", ".join(f"#{cid}" for cid in child_ids)
             console.info(f"#{task.id} is a tracking issue for: {refs}")
@@ -137,6 +153,8 @@ def smart_start(
             cd_only,
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
+            effort=effort,
+            effort_explicit=effort_explicit,
             yolo=yolo,
         )
 
@@ -152,6 +170,8 @@ def smart_start(
             cd_only,
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
+            effort=effort,
+            effort_explicit=effort_explicit,
             yolo=yolo,
         )
     pr_number_int = int(pr_number)
@@ -172,6 +192,8 @@ def smart_start(
             cd_only,
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
+            effort=effort,
+            effort_explicit=effort_explicit,
             yolo=yolo,
         )
 
@@ -207,7 +229,9 @@ def smart_start(
                         model_explicit,
                         repo_root,
                         pr_number_int,
-                        yolo,
+                        effort=effort,
+                        effort_explicit=effort_explicit,
+                        yolo=yolo,
                     ),
                 )
             )
@@ -224,7 +248,9 @@ def smart_start(
                         cd_only,
                         ai_explicit,
                         model_explicit,
-                        yolo,
+                        effort=effort,
+                        effort_explicit=effort_explicit,
+                        yolo=yolo,
                     ),
                 )
             )
@@ -244,7 +270,9 @@ def smart_start(
                     model_explicit,
                     repo_root,
                     pr_number_int,
-                    yolo,
+                    effort=effort,
+                    effort_explicit=effort_explicit,
+                    yolo=yolo,
                 ),
             )
         )
@@ -285,6 +313,8 @@ def _run_implement_task(
     *,
     ai_explicit: bool = False,
     model_explicit: bool = False,
+    effort: str | None = None,
+    effort_explicit: bool = False,
     resume_session_id: str | None = None,
     resume_ai_tool: str | None = None,
     yolo: bool | None = None,
@@ -301,6 +331,8 @@ def _run_implement_task(
         cd_only=cd_only,
         ai_explicit=ai_explicit,
         model_explicit=model_explicit,
+        effort=effort,
+        effort_explicit=effort_explicit,
         resume_session_id=resume_session_id,
         resume_ai_tool=resume_ai_tool,
         yolo=yolo,
@@ -342,6 +374,8 @@ def _run_implement_task_wrapper(
     cd_only: bool,
     ai_explicit: bool,
     model_explicit: bool,
+    effort: str | None = None,
+    effort_explicit: bool = False,
     yolo: bool | None = None,
 ) -> Callable[[], bool]:
     """Return a callable that runs _run_implement_task with captured arguments."""
@@ -356,6 +390,8 @@ def _run_implement_task_wrapper(
             cd_only=cd_only,
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
+            effort=effort,
+            effort_explicit=effort_explicit,
             yolo=yolo,
         )
 
@@ -464,6 +500,8 @@ def _run_continue_working(
     model_explicit: bool,
     repo_root: Path,
     pr_number: int,
+    effort: str | None = None,
+    effort_explicit: bool = False,
     yolo: bool | None = None,
 ) -> bool:
     """Show a resume sub-menu if a resumable session exists, else start new."""
@@ -480,6 +518,8 @@ def _run_continue_working(
             cd_only=cd_only,
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
+            effort=effort,
+            effort_explicit=effort_explicit,
             yolo=yolo,
         )
 
@@ -504,6 +544,8 @@ def _run_continue_working(
             cd_only=cd_only,
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
+            effort=effort,
+            effort_explicit=effort_explicit,
             resume_session_id=session_id,
             resume_ai_tool=tool_name,
             yolo=yolo,
@@ -519,6 +561,8 @@ def _run_continue_working(
             cd_only=cd_only,
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
+            effort=effort,
+            effort_explicit=effort_explicit,
             yolo=yolo,
         )
 
@@ -534,6 +578,8 @@ def _run_continue_working_wrapper(
     model_explicit: bool,
     repo_root: Path,
     pr_number: int,
+    effort: str | None = None,
+    effort_explicit: bool = False,
     yolo: bool | None = None,
 ) -> Callable[[], bool]:
     """Return a callable that runs _run_continue_working with captured arguments."""
@@ -550,6 +596,8 @@ def _run_continue_working_wrapper(
             model_explicit=model_explicit,
             repo_root=repo_root,
             pr_number=pr_number,
+            effort=effort,
+            effort_explicit=effort_explicit,
             yolo=yolo,
         )
 

@@ -142,6 +142,9 @@ _TRACKING_PREFIX = "Tracking:"
 _UNCHECKED_ITEM_RE = re.compile(r"^- \[ \] #(\d+)", re.MULTILINE)
 """Matches unchecked checklist items like ``- [ ] #42``."""
 
+_ANY_CHECKLIST_ITEM_RE = re.compile(r"^- \[[x ]\] #\d+", re.MULTILINE)
+"""Matches any checklist item (checked or unchecked) like ``- [x] #42``."""
+
 
 def is_tracking_issue(title: str) -> bool:
     """Return True if the title indicates a tracking (epic) issue."""
@@ -157,6 +160,24 @@ def parse_tracking_child_ids(body: str) -> list[str]:
     Returns issue numbers as strings without ``#`` prefix.
     """
     return _UNCHECKED_ITEM_RE.findall(body)
+
+
+def has_checklist_items(body: str) -> bool:
+    """Return True if the body contains any checklist items (checked or unchecked).
+
+    Use this to distinguish bodies using checklist format from those using
+    plain ``#N`` issue references.
+    """
+    return bool(_ANY_CHECKLIST_ITEM_RE.search(body))
+
+
+def parse_all_issue_refs(body: str) -> list[str]:
+    """Extract all ``#N`` issue references from a body, in order.
+
+    Returns issue numbers as strings without ``#`` prefix.
+    Use this to catch plain references that are not in checklist format.
+    """
+    return re.findall(r"#(\d+)", body)
 
 
 _DEP_LINE_RE = re.compile(r"\*\*Depends on:\*\*\s*(.*?)$", re.MULTILINE)
