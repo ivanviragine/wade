@@ -7,7 +7,7 @@ from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class Complexity(StrEnum):
@@ -42,6 +42,30 @@ class LabelType(StrEnum):
     AI_LABEL = "ai_label"
 
 
+_LABEL_PREFIX_MAP: dict[str, LabelType] = {
+    "planned-by:": LabelType.PLANNED_BY,
+    "planned-model:": LabelType.PLANNED_MODEL,
+    "implemented-by:": LabelType.IMPLEMENTED_BY,
+    "implemented-model:": LabelType.IMPLEMENTED_MODEL,
+    "review-addressed-by:": LabelType.REVIEW_ADDRESSED_BY,
+    "review-addressed-model:": LabelType.REVIEW_ADDRESSED_MODEL,
+    "complexity:": LabelType.COMPLEXITY,
+}
+
+
+def infer_label_type(name: str) -> LabelType:
+    """Infer LabelType from a label name prefix.
+
+    Returns the matching LabelType if the name starts with a known prefix,
+    otherwise returns LabelType.ISSUE_LABEL.
+    """
+    normalized = name.strip().lower()
+    for prefix, label_type in _LABEL_PREFIX_MAP.items():
+        if normalized.startswith(prefix):
+            return label_type
+    return LabelType.ISSUE_LABEL
+
+
 class Label(BaseModel):
     """A GitHub label with metadata."""
 
@@ -49,6 +73,12 @@ class Label(BaseModel):
     color: str = "ededed"
     description: str = ""
     label_type: LabelType = LabelType.ISSUE_LABEL
+
+    @model_validator(mode="after")
+    def _infer_label_type(self) -> Label:
+        if self.label_type == LabelType.ISSUE_LABEL:
+            self.label_type = infer_label_type(self.name)
+        return self
 
 
 class Task(BaseModel):
