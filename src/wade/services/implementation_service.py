@@ -795,7 +795,7 @@ def start(
                 refs = ", ".join(f"#{cid}" for cid in child_ids)
                 console.info(f"#{task.id} is a tracking issue for: {refs}")
                 if prompts.confirm("Start batch implementation?", default=True):
-                    return batch(
+                    batch_ok = batch(
                         issue_numbers=child_ids,
                         ai_tool=ai_tool,
                         model=model,
@@ -806,7 +806,8 @@ def start(
                         effort_explicit=effort_explicit,
                         yolo=yolo,
                     )
-                return False
+                    return ImplementResult(success=batch_ok)
+                return ImplementResult(success=False)
 
         console.rule(f"implement #{task.id}")
         console.kv("Issue", console.issue_ref(task.id, task.title))
