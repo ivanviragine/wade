@@ -152,12 +152,14 @@ def review_plan(
 
 
 def _committed_diff_fallback() -> str:
-    """Return branch diff against main when working tree is clean.
+    """Return branch diff against the base branch when working tree is clean.
 
-    Uses ``git diff main...HEAD`` (three-dot syntax) to show changes
+    Uses ``git diff <base>...HEAD`` (three-dot syntax) to show changes
     committed on the current branch since it diverged from the base branch.
+    The base branch is the configured ``main_branch`` or auto-detected
+    ``main``/``master``.
 
-    Returns empty string if on the main branch, if the repo root cannot be
+    Returns empty string if on the base branch, if the repo root cannot be
     resolved, or on any GitError (graceful degradation).
     """
     try:
