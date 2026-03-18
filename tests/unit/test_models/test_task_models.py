@@ -15,6 +15,7 @@ from wade.models.task import (
     TaskState,
     infer_label_type,
     parse_complexity_from_body,
+    parse_complexity_from_labels,
 )
 
 
@@ -131,6 +132,20 @@ class TestParseComplexityFromBody:
 
     def test_case_insensitive_heading(self) -> None:
         assert parse_complexity_from_body("## COMPLEXITY\neasy\n") == Complexity.EASY
+
+
+class TestParseComplexityFromLabels:
+    def test_parses_lowercase_label(self) -> None:
+        labels = [Label(name="complexity:complex")]
+        assert parse_complexity_from_labels(labels) == Complexity.COMPLEX
+
+    def test_parses_case_insensitive_label(self) -> None:
+        labels = [Label(name=" Complexity:VERY_COMPLEX ")]
+        assert parse_complexity_from_labels(labels) == Complexity.VERY_COMPLEX
+
+    def test_invalid_complexity_label_returns_none(self) -> None:
+        labels = [Label(name="complexity:unknown")]
+        assert parse_complexity_from_labels(labels) is None
 
 
 class TestPlanFile:

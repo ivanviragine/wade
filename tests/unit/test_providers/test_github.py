@@ -113,6 +113,17 @@ class TestParseGhTask:
         assert len(task.labels) == 1
         assert task.labels[0].label_type == LabelType.PLANNED_BY
 
+    def test_complexity_label_is_case_insensitive(self) -> None:
+        raw = {
+            "number": 42,
+            "title": "Complex issue",
+            "body": "",
+            "state": "OPEN",
+            "labels": [{"name": " Complexity:VERY_COMPLEX ", "color": "C5DEF5", "description": ""}],
+        }
+        task = _parse_gh_task(raw)
+        assert task.complexity == Complexity.VERY_COMPLEX
+
 
 # ---------------------------------------------------------------------------
 # Issue CRUD tests

@@ -127,8 +127,9 @@ def parse_complexity_from_labels(labels: list[Label]) -> Complexity | None:
     known :class:`Complexity` member.  Returns the first match or ``None``.
     """
     for label in labels:
-        if label.name.startswith("complexity:"):
-            value = label.name.removeprefix("complexity:")
+        normalized = label.name.strip().lower()
+        if normalized.startswith("complexity:"):
+            value = normalized.removeprefix("complexity:")
             try:
                 return Complexity(value)
             except ValueError:

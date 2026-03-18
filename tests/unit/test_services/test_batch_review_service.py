@@ -560,6 +560,28 @@ class TestRunCoherenceReview:
 
 
 class TestReviewBatch:
+    @patch("wade.services.batch_review_service.gather_batch_context")
+    @patch("wade.services.batch_review_service._load_review_config")
+    @patch("wade.services.batch_review_service.git_repo")
+    def test_disabled_skips_before_side_effects(
+        self,
+        mock_repo: MagicMock,
+        mock_load_review_config: MagicMock,
+        mock_gather: MagicMock,
+    ) -> None:
+        from wade.services.batch_review_service import review_batch
+
+        config = _batch_review_config(review_batch_enabled=False)
+        mock_repo.get_repo_root.return_value = Path("/repo")
+        mock_load_review_config.return_value = (config, config.ai.review_batch)
+
+        result = review_batch("99")
+
+        assert result.success is True
+        assert result.skipped is True
+        mock_load_review_config.assert_called_once_with("review_batch", Path("/repo"))
+        mock_gather.assert_not_called()
+
     @patch("wade.services.batch_review_service.git_repo")
     def test_not_in_repo_fails(
         self,
@@ -579,10 +601,12 @@ class TestReviewBatch:
     @patch("wade.services.batch_review_service.create_review_pr")
     @patch("wade.services.batch_review_service.create_integration_branch")
     @patch("wade.services.batch_review_service.gather_batch_context")
+    @patch("wade.services.batch_review_service._load_review_config")
     @patch("wade.services.batch_review_service.git_repo")
     def test_no_issues_skips(
         self,
         mock_repo: MagicMock,
+        mock_load_review_config: MagicMock,
         mock_gather: MagicMock,
         mock_integration: MagicMock,
         mock_pr: MagicMock,
@@ -590,7 +614,9 @@ class TestReviewBatch:
     ) -> None:
         from wade.services.batch_review_service import review_batch
 
+        config = _batch_review_config(review_batch_enabled=True)
         mock_repo.get_repo_root.return_value = Path("/repo")
+        mock_load_review_config.return_value = (config, config.ai.review_batch)
         mock_gather.return_value = BatchReviewContext(tracking_issue="99")
 
         result = review_batch("99")
@@ -603,10 +629,12 @@ class TestReviewBatch:
     @patch("wade.services.batch_review_service.create_review_pr")
     @patch("wade.services.batch_review_service.create_integration_branch")
     @patch("wade.services.batch_review_service.gather_batch_context")
+    @patch("wade.services.batch_review_service._load_review_config")
     @patch("wade.services.batch_review_service.git_repo")
     def test_passes_repo_root_to_coherence_review(
         self,
         mock_repo: MagicMock,
+        mock_load_review_config: MagicMock,
         mock_gather: MagicMock,
         mock_integration: MagicMock,
         mock_pr_create: MagicMock,
@@ -615,8 +643,10 @@ class TestReviewBatch:
         from wade.services.batch_review_service import review_batch
 
         repo_root = Path("/repo")
+        config = _batch_review_config(review_batch_enabled=True)
         mock_repo.get_repo_root.return_value = repo_root
         mock_repo.get_current_branch.return_value = "main"
+        mock_load_review_config.return_value = (config, config.ai.review_batch)
         ctx = BatchReviewContext(
             issues=[BatchIssueContext(issue_number="10", issue_title="Feature A", branch_name="x")],
             tracking_issue="99",
@@ -635,3 +665,5 @@ class TestReviewBatch:
         assert result.success is True
         mock_review.assert_called_once()
         assert mock_review.call_args.kwargs["repo_root"] == repo_root
+        assert mock_review.call_args.kwargs["config"] == config
+        assert mock_review.call_args.kwargs["cmd_config"] == config.ai.review_batch

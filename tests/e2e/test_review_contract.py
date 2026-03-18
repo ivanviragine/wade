@@ -67,6 +67,14 @@ def _read_fake_claude_log(log_file: Path) -> list[list[str]]:
     return invocations
 
 
+def _count_mock_prs(state_file: Path) -> int:
+    """Return the number of PRs currently stored in mock gh state."""
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    prs = state.get("prs", {})
+    assert isinstance(prs, dict)
+    return len(prs)
+
+
 def _flag_value(argv: list[str], flag: str) -> str | None:
     try:
         index = argv.index(flag)
@@ -547,11 +555,42 @@ class TestReviewPrCommentsCommand:
 class TestReviewBatchCommand:
     """Test `wade review batch` deterministic contracts."""
 
-    def test_review_batch_prompt_does_not_post_self_review_prompt_to_pr(
+    def test_review_batch_disabled_skips_before_creating_integration_state(
         self,
         e2e_repo: Path,
         mock_gh_cli: MockGhCli,
     ) -> None:
+        tracking_issue = 69
+        tracking_id = _bootstrap_batch_review_targets(
+            e2e_repo,
+            mock_gh_cli,
+            tracking_issue_number=tracking_issue,
+            child_specs=[
+                (67, "Disabled batch child one", "feat/67-disabled-batch-child-one"),
+                (68, "Disabled batch child two", "feat/68-disabled-batch-child-two"),
+            ],
+        )
+        _set_review_enabled(e2e_repo, "review_batch", False)
+        pr_count_before = _count_mock_prs(mock_gh_cli["state_file"])
+
+        result = _run(["review", "batch", tracking_id], cwd=e2e_repo)
+
+        assert result.returncode == 0
+        output = result.stdout + result.stderr
+        assert "Review skipped" in output
+        assert "ai.review_batch.enabled" in output
+        assert _count_mock_prs(mock_gh_cli["state_file"]) == pr_count_before
+        assert not _remote_has_branch(e2e_repo.parent / "origin.git", "batch-review/69")
+        branch_listing = _git(["branch", "--list", "batch-review/69"], cwd=e2e_repo)
+        assert branch_listing.stdout.strip() == ""
+
+    def test_review_batch_prompt_without_ai_config_does_not_post_self_review_prompt_to_pr(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        _install_fake_claude(mock_gh_cli["mock_bin"])
+        log_file = e2e_repo / ".fake-claude-log.jsonl"
         tracking_issue = 70
         tracking_id = _bootstrap_batch_review_targets(
             e2e_repo,
@@ -562,8 +601,13 @@ class TestReviewBatchCommand:
                 (72, "Batch child two", "feat/72-batch-child-two"),
             ],
         )
+        _remove_default_ai_tool(e2e_repo)
 
-        result = _run(["review", "batch", tracking_id, "--mode", "prompt"], cwd=e2e_repo)
+        result = _run(
+            ["review", "batch", tracking_id, "--mode", "prompt"],
+            cwd=e2e_repo,
+            env={"WADE_FAKE_CLAUDE_LOG": str(log_file)},
+        )
 
         assert result.returncode == 2
         output = result.stdout + result.stderr
@@ -573,6 +617,7 @@ class TestReviewBatchCommand:
         )
         assert integration_pr_number
         assert _count_gh_calls(mock_gh_cli["log_file"], ["pr", "comment"]) == 0
+        assert _read_fake_claude_log(log_file) == []
 
     def test_review_batch_headless_posts_ai_feedback_to_pr(
         self,

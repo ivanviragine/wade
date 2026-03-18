@@ -42,6 +42,35 @@ class TestTaskCommands:
             ["issue", "list", "--state", "open", "--label", "feature-plan"],
         )
 
+    def test_task_list_shows_planned_status_from_provider_labels(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """task list should surface planned/unplanned badges from provider label metadata."""
+        _seed_mock_issue(
+            mock_gh_cli["state_file"],
+            issue_number=9,
+            title="Planned issue",
+            body="Seeded planned issue",
+            labels=["feature-plan", "planned-by:claude"],
+        )
+        _seed_mock_issue(
+            mock_gh_cli["state_file"],
+            issue_number=10,
+            title="Unplanned issue",
+            body="Seeded unplanned issue",
+            labels=["feature-plan"],
+        )
+
+        result = _run(["task", "list"], cwd=e2e_repo)
+
+        assert result.returncode == 0
+        assert "Planned issue" in result.stdout
+        assert "Unplanned issue" in result.stdout
+        assert result.stdout.count("PLANNED") == 1
+        assert result.stdout.count("NO PLAN") == 1
+
     def test_task_deps_prompt_mode_without_configured_ai_prints_prompt_only(
         self,
         e2e_repo: Path,

@@ -20,6 +20,7 @@ from wade.git import repo as git_repo
 from wade.git import sync as git_sync
 from wade.git.repo import GitError
 from wade.models.batch import BatchIssueContext, BatchReviewContext
+from wade.models.config import AICommandConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationResult
 from wade.providers.registry import get_provider
 from wade.services.review_delegation_service import (
@@ -249,6 +250,8 @@ def _format_batch_context(ctx: BatchReviewContext) -> str:
 def run_coherence_review(
     ctx: BatchReviewContext,
     *,
+    config: ProjectConfig | None = None,
+    cmd_config: AICommandConfig | None = None,
     ai_tool: str | None = None,
     model: str | None = None,
     mode: str | None = None,
@@ -262,7 +265,8 @@ def run_coherence_review(
 
     Posts findings as a comment on the review PR if one exists.
     """
-    config, cmd_config = _load_review_config("review_batch", repo_root)
+    if config is None or cmd_config is None:
+        config, cmd_config = _load_review_config("review_batch", repo_root)
     skip = _check_review_enabled("review_batch", cmd_config)
     if skip is not None:
         return skip
@@ -335,6 +339,11 @@ def review_batch(
             mode=DelegationMode.PROMPT,
         )
 
+    config, cmd_config = _load_review_config("review_batch", repo_root)
+    skip = _check_review_enabled("review_batch", cmd_config)
+    if skip is not None:
+        return skip
+
     console.rule(f"Batch coherence review — tracking #{tracking_issue_id}")
 
     # Step 1: Gather context
@@ -380,6 +389,8 @@ def review_batch(
         console.step("Running AI coherence review...")
         result = run_coherence_review(
             ctx,
+            config=config,
+            cmd_config=cmd_config,
             ai_tool=ai_tool,
             model=model,
             mode=mode,
