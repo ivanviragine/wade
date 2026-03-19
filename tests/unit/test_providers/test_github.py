@@ -203,6 +203,73 @@ class TestReadTask:
         assert len(task.labels) == 1
 
 
+class TestReadTaskOrNone:
+    @patch("wade.providers.github.run")
+    def test_read_existing_issue(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
+        """read_task_or_none returns Task when issue exists."""
+        raw = {
+            "number": 42,
+            "title": "Read me",
+            "body": "content",
+            "state": "OPEN",
+            "labels": [],
+            "url": "https://github.com/o/r/issues/42",
+        }
+        mock_run.return_value = _make_completed(json.dumps(raw))
+
+        task = provider.read_task_or_none("42")
+        assert task is not None
+        assert task.id == "42"
+        assert task.title == "Read me"
+
+    @patch("wade.providers.github.run")
+    def test_returns_none_on_deleted_issue(
+        self, mock_run: MagicMock, provider: GitHubProvider
+    ) -> None:
+        """read_task_or_none returns None when issue is deleted (check=False)."""
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["gh", "issue", "view", "404"],
+            returncode=1,
+            stdout="",
+            stderr="not found",
+        )
+
+        task = provider.read_task_or_none("404")
+        assert task is None
+
+    @patch("wade.providers.github.run")
+    def test_returns_none_on_parse_error(
+        self, mock_run: MagicMock, provider: GitHubProvider
+    ) -> None:
+        """read_task_or_none returns None when JSON is invalid."""
+        mock_run.return_value = _make_completed("invalid json")
+
+        task = provider.read_task_or_none("42")
+        assert task is None
+
+    @patch("wade.providers.github.run")
+    def test_uses_check_false(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
+        """read_task_or_none calls run with check=False."""
+        mock_run.return_value = _make_completed(
+            json.dumps(
+                {
+                    "number": 42,
+                    "title": "test",
+                    "body": "",
+                    "state": "OPEN",
+                    "labels": [],
+                    "url": "https://github.com/o/r/issues/42",
+                }
+            )
+        )
+
+        provider.read_task_or_none("42")
+
+        # Verify that run was called with check=False
+        call_kwargs = mock_run.call_args[1]
+        assert call_kwargs.get("check") is False
+
+
 class TestUpdateTask:
     @patch("wade.providers.github.run")
     def test_update_body(self, mock_run: MagicMock, provider: GitHubProvider) -> None:

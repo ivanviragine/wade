@@ -247,6 +247,10 @@ print(json.dumps(issues))
 import json, sys
 d = json.load(sys.stdin)
 info = d.get('issues', {{}}).get('$num', {{}})
+if not info:
+    # Issue not found — return non-zero exit and error message
+    print('Could not resolve to an issue or pull request URL', file=sys.stderr)
+    sys.exit(1)
 print(json.dumps({{
     'number': int('$num'),
     'title': info.get('title', 'Test issue'),
@@ -539,7 +543,7 @@ class TestWorktreeListCommand:
         result = _run(["worktree", "list"], cwd=e2e_repo)
         assert result.returncode == 0
 
-    def test_list_with_worktrees(self, e2e_repo: Path) -> None:
+    def test_list_with_worktrees(self, e2e_repo: Path, mock_gh_cli: dict[str, Any]) -> None:
         """wade worktree list with worktrees → shows branch names in output."""
         for num, slug in [("10", "auth"), ("11", "db")]:
             wt_dir = e2e_repo.parent / ".worktrees" / f"{num}-{slug}"
@@ -557,7 +561,7 @@ class TestWorktreeListCommand:
             f"Expected worktree '11-db' in output, got: {result.stdout!r}"
         )
 
-    def test_list_json(self, e2e_repo: Path) -> None:
+    def test_list_json(self, e2e_repo: Path, mock_gh_cli: dict[str, Any]) -> None:
         """wade worktree list --json outputs valid JSON array."""
         wt_dir = e2e_repo.parent / ".worktrees" / "20-test"
         _git(
@@ -570,3 +574,26 @@ class TestWorktreeListCommand:
         parsed = _parse_json_output(result.stdout)
         assert isinstance(parsed, list)
         assert len(parsed) >= 1
+
+    def test_list_with_deleted_issue(self, e2e_repo: Path, mock_gh_cli: dict[str, Any]) -> None:
+        """wade worktree list handles deleted issues gracefully (no error logs)."""
+        # Create a worktree linked to a non-existent issue number
+        wt_dir = e2e_repo.parent / ".worktrees" / "999-deleted"
+        _git(
+            ["worktree", "add", "-b", "feat/999-deleted-issue", str(wt_dir)],
+            cwd=e2e_repo,
+        )
+
+        # Run list — should succeed without [error] logs
+        result = _run(["worktree", "list"], cwd=e2e_repo)
+        assert result.returncode == 0
+        # Verify no [error] in the output
+        assert "[error]" not in result.stdout.lower(), (
+            f"Expected no [error] logs, but got: {result.stdout!r}"
+        )
+        # The worktree should still be listed
+        assert "999" in result.stdout or "deleted" in result.stdout.lower(), (
+            f"Expected worktree info in output, got: {result.stdout!r}"
+        )
+        # Verify the mock was called to check the missing issue
+        _assert_gh_called_with(mock_gh_cli["log_file"], ["issue", "view", "999"])
