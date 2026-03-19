@@ -1504,6 +1504,7 @@ def classify_staleness(
     main_branch: str,
     issue_number: str | None = None,
     provider: AbstractTaskProvider | None = None,
+    task: Task | None = None,
 ) -> WorktreeState:
     """Classify a worktree's staleness.
 
@@ -1512,18 +1513,26 @@ def classify_staleness(
     - STALE_EMPTY — no commits ahead of main
     - STALE_MERGED — branch merged into main
     - STALE_REMOTE_GONE — remote tracking branch deleted
+
+    If task is provided, it is used directly (avoiding a redundant fetch).
+    If task is None but issue_number and provider are provided, the task is fetched.
     """
+    from wade.models.task import TaskState
+
     # 1. If issue number, check issue state
     if issue_number and provider:
-        try:
-            task = provider.read_task(issue_number)
-            from wade.models.task import TaskState
-
-            if task.state == TaskState.OPEN:
+        # Use provided task if available, otherwise fetch it
+        if task is not None:
+            issue_task = task
+        else:
+            try:
+                issue_task = provider.read_task(issue_number)
+            except Exception:
+                logger.debug("staleness.issue_read_failed", issue=issue_number, exc_info=True)
+                # Can't read issue — treat as active (fail-safe)
                 return WorktreeState.ACTIVE
-        except Exception:
-            logger.debug("staleness.issue_read_failed", issue=issue_number, exc_info=True)
-            # Can't read issue — treat as active (fail-safe)
+
+        if issue_task.state == TaskState.OPEN:
             return WorktreeState.ACTIVE
 
     # 2. Count commits ahead of main
@@ -2551,24 +2560,24 @@ def list_sessions(
         if not issue_number and not show_all:
             continue
 
+        # Fetch issue info once (for both staleness classification and display)
+        task_info: Task | None = None
+        issue_state: str | None = None
+        issue_title: str | None = None
+        if issue_number:
+            task_info = provider_inst.read_task_or_none(issue_number)
+            if task_info:
+                issue_state = task_info.state.value
+                issue_title = task_info.title
+
         staleness = classify_staleness(
             repo_root=repo_root,
             branch=wt_branch,
             main_branch=main_branch,
             issue_number=issue_number,
             provider=provider_inst,
+            task=task_info,
         )
-
-        # Fetch issue state for display
-        issue_state: str | None = None
-        issue_title: str | None = None
-        if issue_number:
-            try:
-                task_info = provider_inst.read_task(issue_number)
-                issue_state = task_info.state.value
-                issue_title = task_info.title
-            except Exception:
-                logger.debug("implementation.issue_read_failed", issue=issue_number, exc_info=True)
 
         # Count commits ahead
         try:

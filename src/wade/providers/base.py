@@ -50,6 +50,21 @@ class AbstractTaskProvider(ABC):
     def read_task(self, task_id: str) -> Task:
         """Read a single task by its ID (e.g., issue number)."""
 
+    def read_task_or_none(self, task_id: str) -> Task | None:
+        """Read a single task by its ID, returning None on failure.
+
+        Unlike read_task(), this method does not raise an exception or log at
+        ERROR level if the task cannot be read (e.g., deleted issue). Useful for
+        gracefully handling tasks that may no longer exist.
+
+        Default implementation wraps read_task() in try/except. Subclasses may
+        override for more efficient error handling (e.g., using check=False).
+        """
+        try:
+            return self.read_task(task_id)
+        except Exception:
+            return None
+
     @abstractmethod
     def update_task(
         self,

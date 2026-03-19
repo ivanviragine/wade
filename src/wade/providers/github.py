@@ -176,6 +176,43 @@ class GitHubProvider(AbstractTaskProvider):
         raw = json.loads(result.stdout)
         return _parse_gh_task(raw)
 
+    def read_task_or_none(self, task_id: str) -> Task | None:
+        """Read a single issue by number, returning None if not found.
+
+        Uses check=False to avoid ERROR-level logs when the issue is deleted
+        or not found. Logs at DEBUG level on failure.
+        """
+        result = run(
+            [
+                "gh",
+                "issue",
+                "view",
+                task_id,
+                "--json",
+                "number,title,body,state,labels,url,createdAt,updatedAt",
+            ],
+            check=False,
+        )
+
+        if result.returncode != 0:
+            logger.debug(
+                "github.read_task_or_none_failed",
+                task_id=task_id,
+                returncode=result.returncode,
+            )
+            return None
+
+        try:
+            raw = json.loads(result.stdout)
+            return _parse_gh_task(raw)
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.debug(
+                "github.read_task_or_none_parse_failed",
+                task_id=task_id,
+                error=str(e),
+            )
+            return None
+
     def update_task(
         self,
         task_id: str,

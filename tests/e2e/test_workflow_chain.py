@@ -570,3 +570,24 @@ class TestWorktreeListCommand:
         parsed = _parse_json_output(result.stdout)
         assert isinstance(parsed, list)
         assert len(parsed) >= 1
+
+    def test_list_with_deleted_issue(self, e2e_repo: Path) -> None:
+        """wade worktree list handles deleted issues gracefully (no error logs)."""
+        # Create a worktree linked to a non-existent issue number
+        wt_dir = e2e_repo.parent / ".worktrees" / "999-deleted"
+        _git(
+            ["worktree", "add", "-b", "feat/999-deleted-issue", str(wt_dir)],
+            cwd=e2e_repo,
+        )
+
+        # Run list — should succeed without [error] logs
+        result = _run(["worktree", "list"], cwd=e2e_repo)
+        assert result.returncode == 0
+        # Verify no [error] in the output
+        assert "[error]" not in result.stdout.lower(), (
+            f"Expected no [error] logs, but got: {result.stdout!r}"
+        )
+        # The worktree should still be listed
+        assert "999" in result.stdout or "deleted" in result.stdout.lower(), (
+            f"Expected worktree info in output, got: {result.stdout!r}"
+        )
