@@ -171,7 +171,7 @@ class TestResolveModel:
 class TestDiscoverPlanFiles:
     def test_discover_sorts_by_name(self, tmp_path: Path) -> None:
         (tmp_path / "PLAN-2-feature-b.md").write_text("# Feature B\n")
-        (tmp_path / "PLAN-1-feature-a.md").write_text("# Feature A\n")
+        (tmp_path / "PLAN-1-feature-a.md").write_text("# feat: feature A\n")
         (tmp_path / "PLAN-3-feature-c.md").write_text("# Feature C\n")
 
         files = discover_plan_files(tmp_path)
@@ -200,25 +200,25 @@ class TestDiscoverPlanFiles:
 
 class TestValidatePlanFiles:
     def test_validate_all_valid(self, tmp_path: Path) -> None:
-        (tmp_path / "PLAN-1.md").write_text("# Feature A\n\n## Tasks\n- Do A\n")
-        (tmp_path / "PLAN-2.md").write_text("# Feature B\n\n## Tasks\n- Do B\n")
+        (tmp_path / "PLAN-1.md").write_text("# feat: feature A\n\n## Tasks\n- Do A\n")
+        (tmp_path / "PLAN-2.md").write_text("# feat: feature B\n\n## Tasks\n- Do B\n")
 
         valid = validate_plan_files(tmp_path)
         assert len(valid) == 2
-        assert valid[0].title == "Feature A"
-        assert valid[1].title == "Feature B"
+        assert valid[0].title == "feat: feature A"
+        assert valid[1].title == "feat: feature B"
 
     def test_validate_skips_invalid(self, tmp_path: Path) -> None:
-        (tmp_path / "PLAN-good.md").write_text("# Valid Plan\n\nContent\n")
+        (tmp_path / "PLAN-good.md").write_text("# fix: valid plan\n\nContent\n")
         (tmp_path / "PLAN-bad.md").write_text("No title heading\n")
 
         valid = validate_plan_files(tmp_path)
         assert len(valid) == 1
-        assert valid[0].title == "Valid Plan"
+        assert valid[0].title == "fix: valid plan"
 
     def test_validate_extracts_complexity(self, tmp_path: Path) -> None:
         (tmp_path / "PLAN.md").write_text(
-            "# Complex Feature\n\n## Complexity\nvery_complex\n\n## Tasks\n- Many things\n"
+            "# feat: complex feature\n\n## Complexity\nvery_complex\n\n## Tasks\n- Many things\n"
         )
 
         valid = validate_plan_files(tmp_path)
@@ -520,7 +520,7 @@ class TestValidatePlanDir:
 
     def test_valid_plan_passes(self, tmp_path: Path) -> None:
         content = (
-            "# My Feature\n\n## Complexity\nmedium\n\n"
+            "# feat: my feature\n\n## Complexity\nmedium\n\n"
             "## Tasks\n- [ ] Do it\n\n## Acceptance Criteria\n- [ ] It works\n"
         )
         (tmp_path / "PLAN.md").write_text(content)
@@ -535,14 +535,14 @@ class TestValidatePlanDir:
         assert any("# Title" in d.message for d in result.errors)
 
     def test_missing_complexity_produces_error(self, tmp_path: Path) -> None:
-        (tmp_path / "PLAN.md").write_text("# My Feature\n\n## Tasks\n- [ ] Do it\n")
+        (tmp_path / "PLAN.md").write_text("# feat: my feature\n\n## Tasks\n- [ ] Do it\n")
         result = validate_plan_dir(tmp_path)
         assert result.has_errors
         assert any("Complexity" in d.message for d in result.errors)
 
     def test_invalid_complexity_produces_error(self, tmp_path: Path) -> None:
         (tmp_path / "PLAN.md").write_text(
-            "# My Feature\n\n## Complexity\nbogus_value\n\n## Tasks\n- [ ] Do it\n"
+            "# feat: my feature\n\n## Complexity\nbogus_value\n\n## Tasks\n- [ ] Do it\n"
         )
         result = validate_plan_dir(tmp_path)
         assert result.has_errors
@@ -550,7 +550,8 @@ class TestValidatePlanDir:
 
     def test_missing_tasks_section_produces_warning(self, tmp_path: Path) -> None:
         (tmp_path / "PLAN.md").write_text(
-            "# My Feature\n\n## Complexity\nmedium\n\n## Acceptance Criteria\n- [ ] It works\n"
+            "# feat: my feature\n\n## Complexity\nmedium\n\n"
+            "## Acceptance Criteria\n- [ ] It works\n"
         )
         result = validate_plan_dir(tmp_path)
         assert not result.has_errors
@@ -558,7 +559,7 @@ class TestValidatePlanDir:
 
     def test_missing_acceptance_criteria_produces_warning(self, tmp_path: Path) -> None:
         (tmp_path / "PLAN.md").write_text(
-            "# My Feature\n\n## Complexity\nmedium\n\n## Tasks\n- [ ] Do it\n"
+            "# feat: my feature\n\n## Complexity\nmedium\n\n## Tasks\n- [ ] Do it\n"
         )
         result = validate_plan_dir(tmp_path)
         assert not result.has_errors
@@ -566,7 +567,7 @@ class TestValidatePlanDir:
 
     def test_multiple_files_all_validated(self, tmp_path: Path) -> None:
         content_a = (
-            "# Feature A\n\n## Complexity\nmedium\n\n"
+            "# feat: feature A\n\n## Complexity\nmedium\n\n"
             "## Tasks\n- [ ] A\n\n## Acceptance Criteria\n- [ ] AC\n"
         )
         (tmp_path / "PLAN-1-a.md").write_text(content_a)
@@ -596,7 +597,7 @@ class TestValidatePlanDir:
 class TestPlanDone:
     def test_returns_no_errors_for_valid_plans(self, tmp_path: Path) -> None:
         content = (
-            "# Feature\n\n## Complexity\nmedium\n\n"
+            "# feat: add retry logic\n\n## Complexity\nmedium\n\n"
             "## Tasks\n- [ ] Do it\n\n## Acceptance Criteria\n- [ ] Works\n"
         )
         (tmp_path / "PLAN.md").write_text(content)
@@ -609,11 +610,22 @@ class TestPlanDone:
     def test_no_errors_with_warnings_only(self, tmp_path: Path) -> None:
         """Warnings (missing recommended sections) must not produce errors."""
         (tmp_path / "PLAN.md").write_text(
-            "# Feature\n\n## Complexity\nmedium\n\nNo tasks or criteria sections.\n"
+            "# fix: correct timeout handling\n\n## Complexity\nmedium\n\n"
+            "No tasks or criteria sections.\n"
         )
         result = plan_done(tmp_path)
         assert not result.has_errors
         assert result.warnings
+
+    def test_error_when_title_missing_conventional_prefix(self, tmp_path: Path) -> None:
+        """Title without a conventional commit prefix must produce an error."""
+        (tmp_path / "PLAN.md").write_text(
+            "# Add retry logic\n\n## Complexity\nmedium\n\n"
+            "## Tasks\n- [ ] Do it\n\n## Acceptance Criteria\n- [ ] Works\n"
+        )
+        result = plan_done(tmp_path)
+        assert result.has_errors
+        assert any("conventional commit" in d.message for d in result.errors)
 
 
 # ---------------------------------------------------------------------------
