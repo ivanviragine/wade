@@ -265,6 +265,38 @@ class TestCreateIntegrationBranch:
         mock_repo.merge_no_edit.assert_not_called()
         assert result.issues[0].merged is False
 
+    @patch("wade.services.batch_review_service.git_sync")
+    @patch("wade.services.batch_review_service.git_repo")
+    @patch("wade.services.batch_review_service.git_branch")
+    def test_skips_merge_for_already_merged_prs(
+        self,
+        mock_branch: MagicMock,
+        mock_repo: MagicMock,
+        mock_sync: MagicMock,
+    ) -> None:
+        from wade.services.batch_review_service import create_integration_branch
+
+        mock_branch.branch_exists.return_value = False
+
+        ctx = BatchReviewContext(
+            issues=[
+                BatchIssueContext(
+                    issue_number="10",
+                    issue_title="Already merged",
+                    branch_name="feat/10-already-merged",
+                    status="MERGED",
+                ),
+            ],
+            main_branch="main",
+            tracking_issue="99",
+        )
+
+        result = create_integration_branch(Path("/repo"), ctx)
+
+        mock_repo.merge_no_edit.assert_not_called()
+        assert result.issues[0].merged is True
+        assert result.issues[0].conflict is False
+
 
 # ---------------------------------------------------------------------------
 # create_review_pr
@@ -281,6 +313,7 @@ class TestCreateReviewPr:
     ) -> None:
         from wade.services.batch_review_service import create_review_pr
 
+        mock_pr.get_pr_for_branch.return_value = None
         mock_pr.create_pr.return_value = {
             "number": 42,
             "url": "https://github.com/org/repo/pull/42",

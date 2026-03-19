@@ -28,14 +28,17 @@ from wade.utils.process import CommandError, run
 logger = structlog.get_logger()
 
 
-def resolve_mode(cmd_config: AICommandConfig) -> DelegationMode:
-    """Resolve the delegation mode from config, defaulting to prompt."""
+def resolve_mode(
+    cmd_config: AICommandConfig,
+    default: DelegationMode = DelegationMode.PROMPT,
+) -> DelegationMode:
+    """Resolve the delegation mode from config, falling back to ``default``."""
     if cmd_config.mode:
         try:
             return DelegationMode(cmd_config.mode)
         except ValueError:
-            logger.warning("delegation.invalid_mode", mode=cmd_config.mode, fallback="prompt")
-    return DelegationMode.PROMPT
+            logger.warning("delegation.invalid_mode", mode=cmd_config.mode, fallback=default.value)
+    return default
 
 
 def _parse_effort(raw: str | None) -> EffortLevel | None:

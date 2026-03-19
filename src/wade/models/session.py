@@ -82,3 +82,25 @@ class SyncResult(BaseModel):
     conflicts: list[str] = []
     commits_merged: int = 0
     events: list[SyncEvent] = []
+
+
+class MergeStatus(StrEnum):
+    """Result of a post-implementation merge attempt."""
+
+    MERGED = "merged"
+    NOT_MERGED = "not_merged"
+    MERGE_FAILED = "merge_failed"
+
+
+class ImplementResult(BaseModel):
+    """Outcome of an implementation session.
+
+    Attributes:
+        success: Whether the session completed without errors.
+        merged: Whether the code was merged into main (PR squash-merge or
+            direct merge). ``False`` when the user chose "Wait for reviews",
+            "Skip", or the merge outcome is unknown.
+    """
+
+    success: bool
+    merged: bool = False

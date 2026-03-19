@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from wade.models.config import ProviderConfig
-from wade.models.review import ReviewThread
+from wade.models.review import PRReviewStatus, ReviewThread
 from wade.models.task import Label, Task, TaskState
 
 
@@ -136,6 +136,20 @@ class AbstractTaskProvider(ABC):
     ) -> list[dict[str, str]]:
         """Fetch PR issue comments. Returns list of dicts with login/body keys."""
         return []
+
+    def get_pr_review_status(
+        self,
+        repo_root: Any,
+        pr_number: int,
+    ) -> PRReviewStatus:
+        """Fetch comprehensive PR review status in a single call.
+
+        Returns a :class:`PRReviewStatus` combining inline threads, PR-level
+        review submissions, pending reviewer assignments, and bot status.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support comprehensive review status"
+        )
 
     # --- Repository info ---
 

@@ -39,6 +39,18 @@ class TestResolveMode:
         cfg = AICommandConfig(mode="bad_value")
         assert resolve_mode(cfg) == DelegationMode.PROMPT
 
+    def test_custom_default_no_config(self) -> None:
+        cfg = AICommandConfig()
+        assert resolve_mode(cfg, default=DelegationMode.INTERACTIVE) == DelegationMode.INTERACTIVE
+
+    def test_config_mode_overrides_custom_default(self) -> None:
+        cfg = AICommandConfig(mode="headless")
+        assert resolve_mode(cfg, default=DelegationMode.INTERACTIVE) == DelegationMode.HEADLESS
+
+    def test_invalid_mode_falls_back_to_custom_default(self) -> None:
+        cfg = AICommandConfig(mode="bad_value")
+        assert resolve_mode(cfg, default=DelegationMode.INTERACTIVE) == DelegationMode.INTERACTIVE
+
 
 # ---------------------------------------------------------------------------
 # Prompt mode

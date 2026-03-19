@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -18,11 +19,15 @@ from wade.models.config import (
     ProjectConfig,
     ProjectSettings,
 )
+from wade.models.session import MergeStatus
 from wade.models.task import Task
 from wade.services.implementation_service import (
+    ImplementResult,
     _build_graph_from_issues,
     _build_implementation_issue_context_header,
     _parse_overwrite_paths,
+    _post_implementation_lifecycle_direct,
+    _post_implementation_lifecycle_pr,
     _pull_main_after_merge,
     _resolve_task_target,
     _resolve_worktrees_dir,
@@ -108,8 +113,12 @@ class TestBootstrapWorktree:
         data = json.loads(wt_settings.read_text(encoding="utf-8"))
         assert WADE_ALLOW_PATTERN in data["permissions"]["allow"]
 
-    def test_no_allowlist_propagation_when_not_configured(self, tmp_path: Path) -> None:
-        """Allowlist is NOT written to worktree when project root has no settings."""
+    def test_allowlist_always_propagated_even_without_repo_root_settings(
+        self, tmp_path: Path
+    ) -> None:
+        """Allowlist is always written to worktree regardless of repo root state."""
+        from wade.config.claude_allowlist import WADE_ALLOW_PATTERN
+
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
 
@@ -119,7 +128,10 @@ class TestBootstrapWorktree:
         config = ProjectConfig()
         bootstrap_worktree(worktree, config, repo_root)
 
-        assert not (worktree / ".claude" / "settings.json").is_file()
+        wt_settings = worktree / ".claude" / "settings.json"
+        assert wt_settings.is_file()
+        data = json.loads(wt_settings.read_text(encoding="utf-8"))
+        assert WADE_ALLOW_PATTERN in data["permissions"]["allow"]
 
     def test_self_init_creates_symlinks(self, tmp_path: Path) -> None:
         """When repo_root is the wade package root, skills are symlinked from worktree templates."""
@@ -538,7 +550,7 @@ class TestImplementationStart:
         ):
             mock_prompts.is_tty.return_value = False
             result = start("42", project_root=tmp_path)
-            assert result is True
+            assert result.success is True
             mock_create.assert_called_once()
 
     def test_reuses_existing_worktree(self, tmp_path: Path) -> None:
@@ -577,7 +589,7 @@ class TestImplementationStart:
         ):
             mock_prompts.is_tty.return_value = False
             result = start("42", project_root=tmp_path)
-            assert result is True
+            assert result.success is True
             mock_create.assert_not_called()
 
     def test_returns_false_on_creation_failure(self, tmp_path: Path) -> None:
@@ -607,7 +619,7 @@ class TestImplementationStart:
             mock_prompts.is_tty.return_value = False
             result = start("42", project_root=tmp_path)
 
-        assert result is False
+        assert result.success is False
 
     def test_cd_only_prints_path(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         """cd_only=True → worktree path printed to stdout, no AI launched, returns True."""
@@ -636,7 +648,7 @@ class TestImplementationStart:
         ):
             mock_prompts.is_tty.return_value = False
             result = start("42", project_root=tmp_path, cd_only=True)
-            assert result is True
+            assert result.success is True
             mock_get.assert_not_called()
 
         captured = capsys.readouterr()
@@ -674,7 +686,7 @@ class TestImplementationStart:
         ):
             mock_prompts.is_tty.return_value = False
             result = start("42", project_root=tmp_path)
-            assert result is True
+            assert result.success is True
             mock_get.assert_not_called()
 
         captured = capsys.readouterr()
@@ -702,7 +714,7 @@ class TestImplementationStart:
 
             result = start("42", project_root=tmp_path)
 
-        assert result is True
+        assert result.success is True
         mock_plan.assert_called_once_with(issue_id="42", project_root=tmp_path)
         mock_confirm.assert_not_called()
 
@@ -752,7 +764,7 @@ class TestImplementationStart:
 
             result = start("42", project_root=tmp_path)
 
-        assert result is True
+        assert result.success is False  # AI launch fails in test environment → failure
         mock_confirm.assert_called_once()
         mock_bootstrap.assert_called_once()
         assert call_order == ["confirm", "bootstrap"]
@@ -767,7 +779,7 @@ class TestImplementationBatch:
     """Tests for implementation_service.batch() — exercises topology and launch dispatch."""
 
     def test_launches_independent_issues(self, tmp_path: Path) -> None:
-        """No deps graph → all issues launched in separate terminals."""
+        """No deps graph → all issues passed to batch launcher."""
         with (
             patch("wade.services.implementation_service.load_config", return_value=ProjectConfig()),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
@@ -775,16 +787,18 @@ class TestImplementationBatch:
                 "wade.services.implementation_service._build_graph_from_issues", return_value=None
             ),
             patch(
-                "wade.services.implementation_service.launch_in_new_terminal", return_value=True
-            ) as mock_launch,
+                "wade.services.implementation_service.launch_batch_in_terminals", return_value=True
+            ) as mock_batch,
         ):
             result = batch(["1", "2", "3"], project_root=tmp_path)
 
         assert result is True
-        assert mock_launch.call_count == 3
+        mock_batch.assert_called_once()
+        items = mock_batch.call_args[0][0]
+        assert len(items) == 3
 
     def test_launches_only_first_in_chain(self, tmp_path: Path) -> None:
-        """Dependency chain → only the first issue launched, rest printed."""
+        """Dependency chain → only the first issue in batch, rest printed."""
         mock_graph = MagicMock()
         mock_graph.edges = [MagicMock()]  # non-empty → triggers partition
         mock_graph.partition.return_value = ([], [["1", "2", "3"]])
@@ -797,18 +811,19 @@ class TestImplementationBatch:
                 return_value=mock_graph,
             ),
             patch(
-                "wade.services.implementation_service.launch_in_new_terminal", return_value=True
-            ) as mock_launch,
+                "wade.services.implementation_service.launch_batch_in_terminals", return_value=True
+            ) as mock_batch,
         ):
             result = batch(["1", "2", "3"], project_root=tmp_path)
 
         assert result is True
-        assert mock_launch.call_count == 1  # Only the first in the chain
-        launched_cmd = mock_launch.call_args[0][0]
-        assert launched_cmd[:3] == ["wade", "implement", "1"]
+        mock_batch.assert_called_once()
+        items = mock_batch.call_args[0][0]
+        assert len(items) == 1  # Only the first in the chain
+        assert items[0][0][:3] == ["wade", "implement", "1"]
 
-    def test_warns_on_terminal_failure(self, tmp_path: Path) -> None:
-        """One terminal fails → warns but continues and counts successful launches."""
+    def test_returns_false_when_batch_launch_fails(self, tmp_path: Path) -> None:
+        """launch_batch_in_terminals returns False → batch() returns False."""
         with (
             patch("wade.services.implementation_service.load_config", return_value=ProjectConfig()),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
@@ -816,25 +831,8 @@ class TestImplementationBatch:
                 "wade.services.implementation_service._build_graph_from_issues", return_value=None
             ),
             patch(
-                "wade.services.implementation_service.launch_in_new_terminal",
-                side_effect=[False, True],
-            ) as mock_launch,
-        ):
-            result = batch(["1", "2"], project_root=tmp_path)
-
-        assert result is True  # One succeeded
-        assert mock_launch.call_count == 2  # Both attempted (no abort on failure)
-
-    def test_returns_false_when_none_launched(self, tmp_path: Path) -> None:
-        """All launch_in_new_terminal calls fail → batch() returns False."""
-        with (
-            patch("wade.services.implementation_service.load_config", return_value=ProjectConfig()),
-            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
-            patch(
-                "wade.services.implementation_service._build_graph_from_issues", return_value=None
-            ),
-            patch(
-                "wade.services.implementation_service.launch_in_new_terminal", return_value=False
+                "wade.services.implementation_service.launch_batch_in_terminals",
+                return_value=False,
             ),
         ):
             result = batch(["1", "2"], project_root=tmp_path)
@@ -850,29 +848,37 @@ class TestImplementationBatch:
                 "wade.services.implementation_service._build_graph_from_issues", return_value=None
             ),
             patch(
-                "wade.services.implementation_service.launch_in_new_terminal", return_value=True
-            ) as mock_launch,
+                "wade.services.implementation_service.launch_batch_in_terminals", return_value=True
+            ) as mock_batch,
         ):
             result = batch(["1", "2", "1", "3", "2"], project_root=tmp_path)
 
         assert result is True
-        assert mock_launch.call_count == 3  # 1, 2, 3 — not 5
+        items = mock_batch.call_args[0][0]
+        assert len(items) == 3  # 1, 2, 3 — not 5
 
-    def test_staggers_launches(self, tmp_path: Path) -> None:
-        """Launches are staggered with a delay between each terminal spawn."""
+    def test_batch_items_contain_correct_commands(self, tmp_path: Path) -> None:
+        """Batch items contain correct wade implement commands with flags."""
         with (
             patch("wade.services.implementation_service.load_config", return_value=ProjectConfig()),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
             patch(
                 "wade.services.implementation_service._build_graph_from_issues", return_value=None
             ),
-            patch("wade.services.implementation_service.launch_in_new_terminal", return_value=True),
-            patch("wade.services.implementation_service.time.sleep") as mock_sleep,
+            patch(
+                "wade.services.implementation_service.launch_batch_in_terminals", return_value=True
+            ) as mock_batch,
         ):
-            batch(["1", "2", "3"], project_root=tmp_path)
+            result = batch(["1", "2"], project_root=tmp_path)
 
-        # First launch has no delay; 2nd and 3rd each get a stagger delay
-        assert mock_sleep.call_count == 2
+        assert result is True
+        items = mock_batch.call_args[0][0]
+        # Each item is (command, cwd, title)
+        for item in items:
+            cmd, cwd, title = item
+            assert cmd[:2] == ["wade", "implement"]
+            assert cwd == str(tmp_path)
+            assert title.startswith("wade #")
 
 
 # ---------------------------------------------------------------------------
@@ -998,3 +1004,474 @@ class TestPullMainAfterMerge:
         mock_pop.assert_called_once_with(tmp_path)
         mock_console.warn.assert_called_once()
         mock_console.hint.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Tracking issue detection in start()
+# ---------------------------------------------------------------------------
+
+
+class TestStartTrackingDetection:
+    """Tests for tracking issue detection in start()."""
+
+    def _tracking_task(self) -> Task:
+        return Task(
+            id="173",
+            title="Tracking: #167, #169, #171",
+            body="- [ ] #167\n- [ ] #169\n- [x] #171\n",
+        )
+
+    def _make_config(self) -> ProjectConfig:
+        return ProjectConfig(project=ProjectSettings(main_branch="main"))
+
+    def test_tracking_issue_redirects_to_batch(self, tmp_path: Path) -> None:
+        """start() on a tracking issue with confirmed batch → calls batch()."""
+        task = self._tracking_task()
+        mock_provider = MagicMock()
+        mock_provider.read_task.return_value = task
+
+        with (
+            patch(
+                "wade.services.implementation_service.load_config",
+                return_value=self._make_config(),
+            ),
+            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.batch") as mock_batch,
+        ):
+            mock_prompts.confirm.return_value = True
+            mock_batch.return_value = True
+            result = start("173", project_root=tmp_path)
+
+        assert result.success is True
+        mock_batch.assert_called_once()
+        call_kwargs = mock_batch.call_args
+        assert call_kwargs.kwargs["issue_numbers"] == ["167", "169"]
+
+    def test_tracking_issue_declined_returns_false(self, tmp_path: Path) -> None:
+        """start() on a tracking issue with declined batch → returns False."""
+        task = self._tracking_task()
+        mock_provider = MagicMock()
+        mock_provider.read_task.return_value = task
+
+        with (
+            patch(
+                "wade.services.implementation_service.load_config",
+                return_value=self._make_config(),
+            ),
+            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.batch") as mock_batch,
+        ):
+            mock_prompts.confirm.return_value = False
+            result = start("173", project_root=tmp_path)
+
+        assert result.success is False
+        mock_batch.assert_not_called()
+
+    def test_regular_issue_not_affected(self, tmp_path: Path) -> None:
+        """start() on a non-tracking issue proceeds normally (no batch redirect)."""
+        task = Task(id="42", title="Add user auth")
+        mock_provider = MagicMock()
+        mock_provider.read_task.return_value = task
+
+        with (
+            patch(
+                "wade.services.implementation_service.load_config",
+                return_value=self._make_config(),
+            ),
+            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch("wade.git.worktree.list_worktrees", return_value=[]),
+            patch("wade.git.worktree.create_worktree") as mock_create,
+            patch("wade.services.implementation_service.write_plan_md"),
+            patch("wade.services.implementation_service.bootstrap_worktree"),
+            patch("wade.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
+            patch("wade.services.implementation_service._detect_ai_cli_env", return_value=None),
+            patch("wade.git.pr.get_pr_for_branch", return_value=None),
+            patch(
+                "wade.services.implementation_service.bootstrap_draft_pr",
+                return_value={"number": 1, "url": "http://test"},
+            ),
+            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.batch") as mock_batch,
+        ):
+            mock_prompts.is_tty.return_value = False
+            result = start("42", project_root=tmp_path)
+
+        assert result.success is True
+        mock_batch.assert_not_called()
+        mock_create.assert_called_once()
+
+    def test_tracking_issue_forwards_ai_params(self, tmp_path: Path) -> None:
+        """AI tool/model/effort/yolo parameters are forwarded to batch()."""
+        task = self._tracking_task()
+        mock_provider = MagicMock()
+        mock_provider.read_task.return_value = task
+
+        with (
+            patch(
+                "wade.services.implementation_service.load_config",
+                return_value=self._make_config(),
+            ),
+            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.batch") as mock_batch,
+        ):
+            mock_prompts.confirm.return_value = True
+            mock_batch.return_value = True
+            start(
+                "173",
+                ai_tool="claude",
+                model="opus",
+                effort="high",
+                project_root=tmp_path,
+                ai_explicit=True,
+                model_explicit=True,
+                effort_explicit=True,
+                yolo=True,
+            )
+
+        call_kwargs = mock_batch.call_args.kwargs
+        assert call_kwargs["ai_tool"] == "claude"
+        assert call_kwargs["model"] == "opus"
+        assert call_kwargs["effort"] == "high"
+        assert call_kwargs["ai_explicit"] is True
+        assert call_kwargs["model_explicit"] is True
+        assert call_kwargs["effort_explicit"] is True
+        assert call_kwargs["yolo"] is True
+
+
+# ---------------------------------------------------------------------------
+# ImplementResult tests
+# ---------------------------------------------------------------------------
+
+
+class TestImplementResult:
+    """Tests for the ImplementResult Pydantic model."""
+
+    def test_defaults(self) -> None:
+        result = ImplementResult(success=True)
+        assert result.success is True
+        assert result.merged is False
+
+    def test_success_and_merged(self) -> None:
+        result = ImplementResult(success=True, merged=True)
+        assert result.success is True
+        assert result.merged is True
+
+    def test_failure(self) -> None:
+        result = ImplementResult(success=False)
+        assert result.success is False
+        assert result.merged is False
+
+    def test_failure_merged_ignored(self) -> None:
+        """Even with merged=True, a failed result is still failed."""
+        result = ImplementResult(success=False, merged=True)
+        assert result.success is False
+        assert result.merged is True
+
+
+# ---------------------------------------------------------------------------
+# Post-implementation lifecycle tests
+# ---------------------------------------------------------------------------
+
+
+class TestPostImplementationLifecyclePr:
+    """Tests for _post_implementation_lifecycle_pr — merged status propagation."""
+
+    def test_merge_pr_returns_merged(self, tmp_path: Path) -> None:
+        """User chooses 'Merge PR' → returns MERGED."""
+        mock_provider = MagicMock()
+        with (
+            patch(
+                "wade.git.pr.get_pr_for_branch",
+                return_value={"number": 10, "url": "http://test"},
+            ),
+            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch(
+                "wade.services.implementation_service._merge_pr",
+                return_value=MergeStatus.MERGED,
+            ),
+        ):
+            mock_prompts.confirm.return_value = False  # Don't open in browser
+            mock_prompts.select.return_value = 0  # "Merge PR"
+            result = _post_implementation_lifecycle_pr(
+                tmp_path, "feat/42", "42", tmp_path / "wt", mock_provider
+            )
+        assert result == MergeStatus.MERGED
+
+    def test_wait_for_reviews_returns_not_merged(self, tmp_path: Path) -> None:
+        """User chooses 'Wait for reviews' → returns NOT_MERGED."""
+        mock_provider = MagicMock()
+        with (
+            patch(
+                "wade.git.pr.get_pr_for_branch",
+                return_value={"number": 10, "url": "http://test"},
+            ),
+            patch("wade.services.implementation_service.prompts") as mock_prompts,
+        ):
+            mock_prompts.confirm.return_value = False
+            mock_prompts.select.return_value = 1  # "Wait for reviews"
+            result = _post_implementation_lifecycle_pr(
+                tmp_path, "feat/42", "42", tmp_path / "wt", mock_provider
+            )
+        assert result == MergeStatus.NOT_MERGED
+
+    def test_no_pr_found_returns_not_merged(self, tmp_path: Path) -> None:
+        """No open PR → returns NOT_MERGED."""
+        mock_provider = MagicMock()
+        with patch("wade.git.pr.get_pr_for_branch", return_value=None):
+            result = _post_implementation_lifecycle_pr(
+                tmp_path, "feat/42", "42", tmp_path / "wt", mock_provider
+            )
+        assert result == MergeStatus.NOT_MERGED
+
+
+class TestPostImplementationLifecycleDirect:
+    """Tests for _post_implementation_lifecycle_direct — merged status propagation."""
+
+    def _make_config(self) -> ProjectConfig:
+        return ProjectConfig(project=ProjectSettings(main_branch="main"))
+
+    def test_merge_returns_merged(self, tmp_path: Path) -> None:
+        """User chooses 'Merge into main' → returns MERGED."""
+        mock_provider = MagicMock()
+        with (
+            patch("wade.git.branch.commits_ahead", return_value=3),
+            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch("wade.git.repo.merge_squash"),
+            patch("wade.git.repo.commit_no_edit"),
+            patch("wade.git.repo.push"),
+            patch("wade.services.implementation_service._cleanup_worktree"),
+        ):
+            mock_prompts.select.return_value = 0  # "Merge into main"
+            result = _post_implementation_lifecycle_direct(
+                tmp_path, "feat/42", "42", tmp_path / "wt", self._make_config(), mock_provider
+            )
+        assert result == MergeStatus.MERGED
+
+    def test_skip_returns_not_merged(self, tmp_path: Path) -> None:
+        """User chooses 'Skip' → returns NOT_MERGED."""
+        mock_provider = MagicMock()
+        with (
+            patch("wade.git.branch.commits_ahead", return_value=3),
+            patch("wade.services.implementation_service.prompts") as mock_prompts,
+        ):
+            mock_prompts.select.return_value = 2  # "Skip"
+            result = _post_implementation_lifecycle_direct(
+                tmp_path, "feat/42", "42", tmp_path / "wt", self._make_config(), mock_provider
+            )
+        assert result == MergeStatus.NOT_MERGED
+
+    def test_no_commits_returns_not_merged(self, tmp_path: Path) -> None:
+        """Zero commits ahead → returns NOT_MERGED (nothing merged)."""
+        mock_provider = MagicMock()
+        with (
+            patch("wade.git.branch.commits_ahead", return_value=0),
+            patch("wade.services.implementation_service.prompts") as mock_prompts,
+        ):
+            mock_prompts.confirm.return_value = False  # Don't delete worktree
+            result = _post_implementation_lifecycle_direct(
+                tmp_path, "feat/42", "42", tmp_path / "wt", self._make_config(), mock_provider
+            )
+        assert result == MergeStatus.NOT_MERGED
+
+
+# ---------------------------------------------------------------------------
+# Batch --chain flag tests
+# ---------------------------------------------------------------------------
+
+
+class TestBatchChainFlag:
+    """Tests for batch() --chain flag propagation."""
+
+    def test_chain_flag_appended_to_first_in_chain(self, tmp_path: Path) -> None:
+        """First issue in a dependency chain gets --chain with remaining IDs."""
+        mock_graph = MagicMock()
+        mock_graph.edges = [MagicMock()]
+        mock_graph.partition.return_value = ([], [["1", "2", "3"]])
+
+        with (
+            patch("wade.services.implementation_service.load_config", return_value=ProjectConfig()),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch(
+                "wade.services.implementation_service._build_graph_from_issues",
+                return_value=mock_graph,
+            ),
+            patch(
+                "wade.services.implementation_service.launch_batch_in_terminals", return_value=True
+            ) as mock_batch,
+        ):
+            batch(["1", "2", "3"], project_root=tmp_path)
+
+        items = mock_batch.call_args[0][0]
+        assert len(items) == 1
+        cmd = items[0][0]
+        assert "--chain" in cmd
+        chain_idx = cmd.index("--chain")
+        assert cmd[chain_idx + 1] == "2,3"
+
+    def test_single_item_chain_has_no_chain_flag(self, tmp_path: Path) -> None:
+        """A chain with only one item does not get --chain."""
+        mock_graph = MagicMock()
+        mock_graph.edges = [MagicMock()]
+        mock_graph.partition.return_value = ([], [["1"]])
+
+        with (
+            patch("wade.services.implementation_service.load_config", return_value=ProjectConfig()),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch(
+                "wade.services.implementation_service._build_graph_from_issues",
+                return_value=mock_graph,
+            ),
+            patch(
+                "wade.services.implementation_service.launch_batch_in_terminals", return_value=True
+            ) as mock_batch,
+        ):
+            batch(["1"], project_root=tmp_path)
+
+        items = mock_batch.call_args[0][0]
+        cmd = items[0][0]
+        assert "--chain" not in cmd
+
+    def test_independent_issues_no_chain_flag(self, tmp_path: Path) -> None:
+        """Independent issues (no deps) do not get --chain."""
+        with (
+            patch("wade.services.implementation_service.load_config", return_value=ProjectConfig()),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch(
+                "wade.services.implementation_service._build_graph_from_issues", return_value=None
+            ),
+            patch(
+                "wade.services.implementation_service.launch_batch_in_terminals", return_value=True
+            ) as mock_batch,
+        ):
+            batch(["1", "2"], project_root=tmp_path)
+
+        items = mock_batch.call_args[0][0]
+        for item in items:
+            assert "--chain" not in item[0]
+
+
+# ---------------------------------------------------------------------------
+# CLI --chain continuation tests
+# ---------------------------------------------------------------------------
+
+
+class TestChainContinuation:
+    """Tests for the --chain continuation loop in implement_cmd."""
+
+    def test_chain_continues_on_merge(self) -> None:
+        """When merged=True and user confirms, next issue in chain starts."""
+        from typer.testing import CliRunner
+
+        from wade.cli.main import app
+
+        runner = CliRunner()
+        call_count = 0
+
+        def fake_start(**kwargs: object) -> ImplementResult:
+            nonlocal call_count
+            call_count += 1
+            return ImplementResult(success=True, merged=True)
+
+        with (
+            patch("wade.services.implementation_service.start", side_effect=fake_start),
+            patch("wade.ui.prompts.confirm", return_value=True),
+            patch("wade.ui.prompts.select", return_value=0),
+        ):
+            result = runner.invoke(app, ["implement", "1", "--chain", "2,3"])
+
+        assert result.exit_code == 0
+        assert call_count == 3  # Issues 1, 2, 3
+
+    def test_chain_pauses_on_pending_review(self) -> None:
+        """When merged=False, chain pauses with a helpful hint."""
+        from typer.testing import CliRunner
+
+        from wade.cli.main import app
+
+        runner = CliRunner()
+
+        with (
+            patch(
+                "wade.services.implementation_service.start",
+                return_value=ImplementResult(success=True, merged=False),
+            ),
+            patch("wade.ui.prompts.select", return_value=0),
+        ):
+            result = runner.invoke(app, ["implement", "1", "--chain", "2,3"])
+
+        assert result.exit_code == 0
+        assert "paused" in result.output.lower() or "pending" in result.output.lower()
+
+    def test_chain_stops_on_decline(self) -> None:
+        """When merged=True but user declines, chain stops with resume hint."""
+        from typer.testing import CliRunner
+
+        from wade.cli.main import app
+
+        runner = CliRunner()
+
+        with (
+            patch(
+                "wade.services.implementation_service.start",
+                return_value=ImplementResult(success=True, merged=True),
+            ),
+            patch("wade.ui.prompts.confirm", return_value=False),
+            patch("wade.ui.prompts.select", return_value=0),
+        ):
+            result = runner.invoke(app, ["implement", "1", "--chain", "2,3"])
+
+        assert result.exit_code == 0
+        assert "resume" in result.output.lower() or "wade implement" in result.output.lower()
+
+    def test_empty_chain_runs_single_issue(self) -> None:
+        """No --chain flag → runs single issue, no continuation."""
+        from typer.testing import CliRunner
+
+        from wade.cli.main import app
+
+        runner = CliRunner()
+        call_count = 0
+
+        def fake_start(**kwargs: object) -> ImplementResult:
+            nonlocal call_count
+            call_count += 1
+            return ImplementResult(success=True, merged=True)
+
+        with (
+            patch("wade.services.implementation_service.start", side_effect=fake_start),
+            patch("wade.ui.prompts.select", return_value=0),
+        ):
+            result = runner.invoke(app, ["implement", "1"])
+
+        assert result.exit_code == 0
+        assert call_count == 1
+
+    def test_chain_stops_on_failure(self) -> None:
+        """When start returns success=False, chain exits immediately with code 1."""
+        from typer.testing import CliRunner
+
+        from wade.cli.main import app
+
+        runner = CliRunner()
+        call_count = 0
+
+        def fake_start(**kwargs: object) -> ImplementResult:
+            nonlocal call_count
+            call_count += 1
+            return ImplementResult(success=False, merged=False)
+
+        with (
+            patch("wade.services.implementation_service.start", side_effect=fake_start),
+            patch("wade.ui.prompts.select", return_value=0),
+        ):
+            result = runner.invoke(app, ["implement", "1", "--chain", "2,3"])
+
+        assert result.exit_code == 1
+        assert call_count == 1  # No continuation after failure

@@ -259,18 +259,23 @@ def get_dirty_status(path: Path) -> dict[str, int]:
     return {"staged": staged, "unstaged": unstaged, "untracked": untracked}
 
 
-def push_branch(repo_root: Path, branch: str, set_upstream: bool = False) -> None:
+def push_branch(
+    repo_root: Path, branch: str, set_upstream: bool = False, force: bool = False
+) -> None:
     """Push a branch to origin.
 
     Args:
         repo_root: Repository root directory.
         branch: Branch name to push.
         set_upstream: If True, add ``-u`` to track the remote branch.
+        force: If True, use ``--force-with-lease`` to allow non-fast-forward pushes.
 
     Raises:
         GitError: If the push fails.
     """
     args = ["push"]
+    if force:
+        args.append("--force-with-lease")
     if set_upstream:
         args.extend(["-u", "origin", branch])
     else:
@@ -355,6 +360,15 @@ def diff_stat_between(repo_root: Path, base: str, head: str) -> str:
     Returns empty string if diff fails or there are no changes.
     """
     result = _run_git("diff", "--stat", f"{base}...{head}", cwd=repo_root, check=False)
+    return result.stdout if result.returncode == 0 else ""
+
+
+def diff_between(repo_root: Path, base: str, head: str) -> str:
+    """Return ``git diff base...head`` output (full diff, not stat).
+
+    Returns empty string if diff fails or there are no changes.
+    """
+    result = _run_git("diff", f"{base}...{head}", cwd=repo_root, check=False)
     return result.stdout if result.returncode == 0 else ""
 
 

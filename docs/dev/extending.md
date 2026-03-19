@@ -39,10 +39,10 @@ The provider system uses `AbstractTaskProvider` ABC (`src/wade/providers/base.py
 Version lives in `src/wade/__init__.py` (`__version__`) and `pyproject.toml` (`version`). Use `scripts/auto_version.py` to bump it:
 
 ```bash
-python scripts/auto_version.py patch           # bug fixes, docs (0.1.0 -> 0.1.1)
-python scripts/auto_version.py minor           # new features, flags (0.1.0 -> 0.2.0)
-python scripts/auto_version.py major           # breaking changes (0.1.0 -> 1.0.0)
-python scripts/auto_version.py minor --dry-run # preview only
+uv run python scripts/auto_version.py patch           # bug fixes, docs (0.1.0 -> 0.1.1)
+uv run python scripts/auto_version.py minor           # new features, flags (0.1.0 -> 0.2.0)
+uv run python scripts/auto_version.py major           # breaking changes (0.1.0 -> 1.0.0)
+uv run python scripts/auto_version.py minor --dry-run # preview only
 ```
 
 The script updates both files, generates `CHANGELOG.md`, commits, and creates an annotated git tag.
@@ -52,9 +52,9 @@ The script updates both files, generates `CHANGELOG.md`, commits, and creates an
 `scripts/changelog.py` generates `CHANGELOG.md` from the full git history. It groups commits by conventional-commit type (Features, Bug Fixes, etc.) under version-tagged sections. It runs automatically as part of `auto_version.py`, or standalone:
 
 ```bash
-python scripts/changelog.py               # write CHANGELOG.md
-python scripts/changelog.py --stdout      # print to stdout
-python scripts/changelog.py --tag v1.0.0  # label unreleased as v1.0.0
+uv run python scripts/changelog.py               # write CHANGELOG.md
+uv run python scripts/changelog.py --stdout      # print to stdout
+uv run python scripts/changelog.py --tag v1.0.0  # label unreleased as v1.0.0
 ```
 
 ### Semver Rules

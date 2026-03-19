@@ -139,7 +139,7 @@ directly.
 
 To finalize your work, follow these steps in order:
 
-**Step 1 — Review:**
+**Step 1 — Review (if you haven't already):**
 
 Run `wade review implementation` to review your changes and check the exit code:
 - **Exit 0**: Review completed externally or skipped. If there is output, it is
@@ -151,6 +151,9 @@ Run `wade review implementation` to review your changes and check the exit code:
 - **Exit 1**: Error — debug and retry.
 
 For staged-only review: `wade review implementation --staged`.
+
+**Do not proceed to Step 2 until this step is complete and any actionable
+findings are addressed and committed.**
 
 **Step 2 — Write PR summary:**
 

@@ -50,8 +50,8 @@ class TestBootstrapAllowlistPropagation:
         assert "Bash(./scripts/check.sh *)" in allow
         assert "Bash(./scripts/fmt.sh *)" in allow
 
-    def test_skips_when_repo_root_not_configured(self, tmp_path: Path) -> None:
-        """bootstrap_worktree skips allowlist if repo root has no allowlist."""
+    def test_always_propagates_even_without_repo_root_settings(self, tmp_path: Path) -> None:
+        """bootstrap_worktree always writes allowlist regardless of repo root state."""
         worktree_path = tmp_path / "worktree"
         worktree_path.mkdir()
         repo_root = tmp_path / "repo"
@@ -66,9 +66,11 @@ class TestBootstrapAllowlistPropagation:
         with patch("subprocess.run"):
             bootstrap_worktree(worktree_path, config, repo_root)
 
-        # No settings.json should be created (allowlist wasn't configured at root)
+        # settings.json should always be created, even without repo root config
         wt_settings = worktree_path / ".claude" / "settings.json"
-        assert not wt_settings.is_file()
+        assert wt_settings.is_file()
+        data = json.loads(wt_settings.read_text(encoding="utf-8"))
+        assert WADE_ALLOW_PATTERN in data["permissions"]["allow"]
 
 
 class TestBootstrapCursorAllowlistPropagation:

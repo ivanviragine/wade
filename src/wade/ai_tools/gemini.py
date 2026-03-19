@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from wade.ai_tools.base import AbstractAITool
 from wade.models.ai import (
@@ -24,9 +24,13 @@ class GeminiAdapter(AbstractAITool):
             binary="gemini",
             tool_type=AIToolType.TERMINAL,
             supports_model_flag=True,
-            headless_flag=None,
-            supports_headless=False,
+            # -p/--prompt triggers non-interactive (headless) mode.
+            # Note: -p is marked deprecated in favour of positional prompts,
+            # but it is specifically what prevents launching interactive mode.
+            headless_flag="-p",
+            supports_headless=True,
             supports_yolo=True,
+            supports_resume=True,
         )
 
     def initial_message_args(self, prompt: str) -> list[str]:
@@ -49,8 +53,16 @@ class GeminiAdapter(AbstractAITool):
         """Gemini uses ``--yolo``."""
         return ["--yolo"]
 
+    def build_resume_command(self, session_id: str) -> list[str] | None:
+        """Resume a Gemini session: ``gemini --resume <session_id>``."""
+        return ["gemini", "--resume", session_id]
+
+    def structured_output_args(self, json_schema: dict[str, Any]) -> list[str]:
+        """Gemini uses ``--output-format json`` for structured output."""
+        return ["--output-format", "json"]
+
     def allowed_commands_args(self, commands: list[str]) -> list[str]:
-        """Translate canonical patterns to Gemini --allowedTools flags.
+        """Translate canonical patterns to Gemini --allowed-tools flags.
 
         Canonical ``"cmd args"`` becomes ``"shell(cmd:args)"``.
         """
@@ -60,5 +72,5 @@ class GeminiAdapter(AbstractAITool):
             binary = parts[0]
             args = parts[1] if len(parts) > 1 else ""
             pattern = f"shell({binary}:{args})" if args else f"shell({binary})"
-            result.extend(["--allowedTools", pattern])
+            result.extend(["--allowed-tools", pattern])
         return result
