@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.5.9] — 2026-03-19
+
+### CI/CD
+
+- add PR title linter to enforce conventional commit format (4d75edb)
+
 ## [v0.5.8] — 2026-03-19
 
 ### Bug Fixes
