@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC
+
 from wade.models.review import (
     ReviewBotStatus,
     ReviewComment,
@@ -582,6 +584,56 @@ class TestPRReviewStatus:
 
         status = PRReviewStatus(fetch_failed=True)
         assert status.is_all_clear is False
+
+    def test_is_commit_fresh_when_recent(self) -> None:
+        from datetime import datetime, timedelta
+
+        from wade.models.review import PRReviewStatus
+
+        recent = datetime.now(UTC) - timedelta(seconds=60)
+        status = PRReviewStatus(latest_commit_pushed_at=recent)
+        assert status.is_commit_fresh(grace_seconds=120) is True
+
+    def test_is_commit_fresh_when_old(self) -> None:
+        from datetime import datetime, timedelta
+
+        from wade.models.review import PRReviewStatus
+
+        old = datetime.now(UTC) - timedelta(minutes=30)
+        status = PRReviewStatus(latest_commit_pushed_at=old)
+        assert status.is_commit_fresh(grace_seconds=120) is False
+
+    def test_is_commit_fresh_returns_false_when_no_timestamp(self) -> None:
+        from wade.models.review import PRReviewStatus
+
+        status = PRReviewStatus()
+        assert status.is_commit_fresh() is False
+
+    def test_is_commit_fresh_naive_datetime_treated_as_utc(self) -> None:
+        """Naive datetimes (no tzinfo) are assumed UTC when computing age."""
+        from datetime import datetime, timedelta
+
+        from wade.models.review import PRReviewStatus
+
+        # Remove tzinfo to simulate a naive datetime
+        naive_recent = (datetime.now(UTC) - timedelta(seconds=30)).replace(tzinfo=None)
+        status = PRReviewStatus(latest_commit_pushed_at=naive_recent)
+        assert status.is_commit_fresh(grace_seconds=120) is True
+
+
+# ---------------------------------------------------------------------------
+# PollOutcome
+# ---------------------------------------------------------------------------
+
+
+class TestPollOutcome:
+    def test_all_values_exist(self) -> None:
+        from wade.models.review import PollOutcome
+
+        assert PollOutcome.COMMENTS_FOUND == "comments_found"
+        assert PollOutcome.QUIET_TIMEOUT == "quiet_timeout"
+        assert PollOutcome.PR_CLOSED == "pr_closed"
+        assert PollOutcome.INTERRUPTED == "interrupted"
 
 
 # ---------------------------------------------------------------------------
