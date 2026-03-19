@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.5.9] — 2026-03-19
+
+### CI/CD
+
+- add PR title linter to enforce conventional commit format (4d75edb)
+
+## [v0.5.8] — 2026-03-19
+
+### Bug Fixes
+
+- read PR title instead of push commit message for version bump detection (ada6a26)
+
+### Other Changes
+
+- Add file-write guard hooks to plan session worktrees (#177) (fd01fdc)
+- Effort configuration overhaul: Claude --effort flag + WADE_EFFORT env var (#190) (350c1bd)
+- Fix review_batch default delegation mode from prompt to interactive (#188) (609ab36)
+
 ## [v0.5.7] — 2026-03-18
 
 ### Bug Fixes
