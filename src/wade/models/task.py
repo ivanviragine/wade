@@ -140,11 +140,14 @@ def parse_complexity_from_labels(labels: list[Label]) -> Complexity | None:
 _TRACKING_PREFIX = "Tracking:"
 """Title prefix that identifies a tracking (epic) issue."""
 
-_UNCHECKED_ITEM_RE = re.compile(r"^- \[ \] #(\d+)", re.MULTILINE)
-"""Matches unchecked checklist items like ``- [ ] #42``."""
+_CHECKLIST_ISSUE_RE = re.compile(
+    r"^[ \t]*-\s*\[(?P<mark>[ xX])\]\s+`?#(?P<id>\d+)`?",
+    re.MULTILINE,
+)
+"""Matches checklist issue refs like ``- [ ] #42`` or ``- [X] `#42```."""
 
-_ANY_CHECKLIST_ITEM_RE = re.compile(r"^- \[[xX ]\] ", re.MULTILINE)
-"""Matches any checklist item (checked or unchecked) by its marker."""
+_ANY_CHECKLIST_ITEM_RE = re.compile(r"^[ \t]*-\s*\[[xX ]\]\s+", re.MULTILINE)
+"""Matches any checklist item (checked or unchecked), including indented lines."""
 
 
 def is_tracking_issue(title: str) -> bool:
@@ -152,15 +155,22 @@ def is_tracking_issue(title: str) -> bool:
     return title.startswith(_TRACKING_PREFIX)
 
 
-def parse_tracking_child_ids(body: str) -> list[str]:
+def parse_tracking_child_ids(body: str, *, include_checked: bool = False) -> list[str]:
     """Extract child issue numbers from unchecked checklist items.
 
-    Only matches ``- [ ] #N`` lines — skips checked items (``- [x] #N``)
-    and other ``#N`` references elsewhere in the body.
+    By default, only matches unchecked ``- [ ] #N`` lines and skips checked
+    items. Set ``include_checked=True`` to include checked checklist refs too.
+
+    Supports indented checklist items and optional backticks around ``#N``.
+    Other ``#N`` references elsewhere in the body are ignored.
 
     Returns issue numbers as strings without ``#`` prefix.
     """
-    return _UNCHECKED_ITEM_RE.findall(body)
+    child_ids: list[str] = []
+    for match in _CHECKLIST_ISSUE_RE.finditer(body):
+        if include_checked or match.group("mark") == " ":
+            child_ids.append(match.group("id"))
+    return child_ids
 
 
 def has_checklist_items(body: str) -> bool:

@@ -410,6 +410,35 @@ class TestSmartStartTrackingDetection:
         assert call_kwargs["model_explicit"] is True
         assert call_kwargs["yolo"] is True
 
+    @patch("wade.services.implementation_service.batch", return_value=True)
+    @patch("wade.ui.prompts.confirm", return_value=True)
+    @patch("wade.services.smart_start.git_repo.get_repo_root")
+    @patch("wade.services.smart_start.get_provider")
+    @patch("wade.services.smart_start.load_config")
+    def test_tracking_issue_backticked_refs_calls_batch(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_confirm: MagicMock,
+        mock_batch: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Backticked checklist refs still redirect to batch with unchecked items only."""
+        mock_repo_root.return_value = tmp_path
+        tracking_task = Task(
+            id="173",
+            title="Tracking: #167, #169, #171",
+            body="- [ ] `#167`\n  - [ ] #169\n- [x] `#171`\n",
+        )
+        mock_get_provider.return_value.read_task.return_value = tracking_task
+
+        result = smart_start("173", project_root=tmp_path)
+
+        assert result is True
+        mock_batch.assert_called_once()
+        assert mock_batch.call_args.kwargs["issue_numbers"] == ["167", "169"]
+
     @patch("wade.services.smart_start._run_implement_task", return_value=True)
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch", return_value=None)
     @patch(

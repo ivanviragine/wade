@@ -193,6 +193,18 @@ class TestParseTrackingChildIds:
         body = "- [x] #167\n- [x] #169\n"
         assert parse_tracking_child_ids(body) == []
 
+    def test_supports_backticked_refs(self) -> None:
+        body = "- [ ] `#167`\n- [x] `#169`\n- [ ] `#171`\n"
+        assert parse_tracking_child_ids(body) == ["167", "171"]
+
+    def test_supports_indented_items(self) -> None:
+        body = "  - [ ] #42\n\t- [ ] `#44`\n"
+        assert parse_tracking_child_ids(body) == ["42", "44"]
+
+    def test_include_checked_returns_all_checklist_issue_refs(self) -> None:
+        body = "- [x] #167\n- [ ] `#169`\n- [X] #171\n"
+        assert parse_tracking_child_ids(body, include_checked=True) == ["167", "169", "171"]
+
 
 class TestHasChecklistItems:
     def test_detects_unchecked_with_ref(self) -> None:
@@ -203,6 +215,9 @@ class TestHasChecklistItems:
 
     def test_detects_uppercase_checked(self) -> None:
         assert has_checklist_items("- [X] `#42`\n") is True
+
+    def test_detects_indented_items(self) -> None:
+        assert has_checklist_items("  - [ ] #42\n\t- [x] `#43`\n") is True
 
     def test_detects_unchecked_without_ref(self) -> None:
         # Checklist line has no inline #N — the ref is on a separate line.

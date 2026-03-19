@@ -1233,6 +1233,34 @@ class TestStartTrackingDetection:
         assert result.success is False
         mock_batch.assert_not_called()
 
+    def test_tracking_issue_backticked_refs_redirects_to_batch(self, tmp_path: Path) -> None:
+        """Checklist refs wrapped in backticks still trigger batch mode."""
+        task = Task(
+            id="173",
+            title="Tracking: #167, #169, #171",
+            body="- [ ] `#167`\n  - [ ] #169\n- [x] `#171`\n",
+        )
+        mock_provider = MagicMock()
+        mock_provider.read_task.return_value = task
+
+        with (
+            patch(
+                "wade.services.implementation_service.load_config",
+                return_value=self._make_config(),
+            ),
+            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.batch") as mock_batch,
+        ):
+            mock_prompts.confirm.return_value = True
+            mock_batch.return_value = True
+            result = start("173", project_root=tmp_path)
+
+        assert result.success is True
+        mock_batch.assert_called_once()
+        assert mock_batch.call_args.kwargs["issue_numbers"] == ["167", "169"]
+
     def test_regular_issue_not_affected(self, tmp_path: Path) -> None:
         """start() on a non-tracking issue proceeds normally (no batch redirect)."""
         task = Task(id="42", title="Add user auth")

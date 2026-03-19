@@ -68,6 +68,11 @@ class TestExtractChildIssues:
         result = extract_child_issues(body)
         assert result == ["100", "101", "102"]
 
+    def test_supports_backticked_and_indented_items(self) -> None:
+        body = "## Checklist\n  - [ ] `#100`\n- [x] #101\n\t- [X] `#102`\n"
+        result = extract_child_issues(body)
+        assert result == ["100", "101", "102"]
+
 
 # ---------------------------------------------------------------------------
 # gather_batch_context

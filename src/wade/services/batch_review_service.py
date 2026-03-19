@@ -8,7 +8,6 @@ findings as PR comment.
 from __future__ import annotations
 
 import contextlib
-import re
 from pathlib import Path
 
 import structlog
@@ -22,6 +21,7 @@ from wade.git.repo import GitError
 from wade.models.batch import BatchIssueContext, BatchReviewContext
 from wade.models.config import AICommandConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationResult
+from wade.models.task import parse_tracking_child_ids
 from wade.providers.registry import get_provider
 from wade.services.review_delegation_service import (
     _check_review_enabled,
@@ -33,9 +33,6 @@ from wade.ui.console import console
 
 logger = structlog.get_logger()
 
-_CHECKLIST_RE = re.compile(r"- \[[ xX]\] #(\d+)")
-"""Matches ``- [ ] #42`` or ``- [x] #42`` in a tracking issue body."""
-
 
 def extract_child_issues(tracking_body: str) -> list[str]:
     """Parse child issue numbers from a tracking issue checklist.
@@ -45,7 +42,7 @@ def extract_child_issues(tracking_body: str) -> list[str]:
     Returns:
         List of issue number strings (without ``#`` prefix).
     """
-    return _CHECKLIST_RE.findall(tracking_body)
+    return parse_tracking_child_ids(tracking_body, include_checked=True)
 
 
 def gather_batch_context(
