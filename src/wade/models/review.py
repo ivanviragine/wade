@@ -7,7 +7,7 @@ threads and render them as structured markdown for AI consumption.
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 
 from pydantic import BaseModel
@@ -48,6 +48,19 @@ class ReviewBotStatus(StrEnum):
 
     PAUSED = "paused"
     IN_PROGRESS = "in_progress"
+
+
+class PollOutcome(StrEnum):
+    """Outcome of a ``poll_for_reviews()`` call."""
+
+    COMMENTS_FOUND = "comments_found"
+    QUIET_TIMEOUT = "quiet_timeout"
+    PR_CLOSED = "pr_closed"
+    INTERRUPTED = "interrupted"
+
+
+# Grace period: if the latest commit is younger than this, suppress "all clear".
+RECENT_COMMIT_GRACE_SECONDS = 120
 
 
 def detect_coderabbit_review_status(
@@ -292,6 +305,21 @@ class PRReviewStatus(BaseModel):
     pending_reviewers: list[PendingReviewer] = []
     bot_status: ReviewBotStatus | None = None
     fetch_failed: bool = False
+    latest_commit_pushed_at: datetime | None = None
+
+    def is_commit_fresh(self, grace_seconds: int = RECENT_COMMIT_GRACE_SECONDS) -> bool:
+        """True if the latest commit is within the recent-commit grace period.
+
+        Returns False when the timestamp is unavailable — we never assume
+        freshness when we don't know the commit age.
+        """
+        if self.latest_commit_pushed_at is None:
+            return False
+        now_ts = datetime.now(UTC)
+        pushed = self.latest_commit_pushed_at
+        if pushed.tzinfo is None:
+            pushed = pushed.replace(tzinfo=UTC)
+        return (now_ts - pushed).total_seconds() < grace_seconds
 
     @property
     def latest_reviews_by_author(self) -> dict[str, PRReview]:

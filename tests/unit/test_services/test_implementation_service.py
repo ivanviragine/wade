@@ -1396,6 +1396,8 @@ class TestPostImplementationLifecyclePr:
 
     def test_wait_for_reviews_returns_not_merged(self, tmp_path: Path) -> None:
         """User chooses 'Wait for reviews' → returns NOT_MERGED."""
+        from wade.models.review import PollOutcome
+
         mock_provider = MagicMock()
         with (
             patch(
@@ -1403,6 +1405,10 @@ class TestPostImplementationLifecyclePr:
                 return_value={"number": 10, "url": "http://test"},
             ),
             patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch(
+                "wade.services.review_service.poll_for_reviews",
+                return_value=PollOutcome.INTERRUPTED,
+            ),
         ):
             mock_prompts.confirm.return_value = False
             mock_prompts.select.return_value = 1  # "Wait for reviews"

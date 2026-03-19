@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -556,14 +557,15 @@ mutation($threadId: ID!) {
 
         owner, repo = nwo.split("/", 1)
 
-        # First page: combined query with reviews + reviewRequests
+        # First page: combined query with reviews + reviewRequests + latest commit
         threads: list[ReviewThread] = []
         reviews: list[PRReview] = []
         pending_reviewers: list[PendingReviewer] = []
+        latest_commit_pushed_at: datetime | None = None
         fetch_failed = False
 
         try:
-            page_threads, has_next, cursor, page_reviews, page_pending = (
+            page_threads, has_next, cursor, page_reviews, page_pending, latest_commit_pushed_at = (
                 self._fetch_review_status_page(owner, repo, pr_number, cursor=None)
             )
             threads.extend(page_threads)
@@ -598,6 +600,7 @@ mutation($threadId: ID!) {
             pending_reviewers=pending_reviewers,
             bot_status=bot_status,
             fetch_failed=fetch_failed,
+            latest_commit_pushed_at=latest_commit_pushed_at,
         )
 
     def _fetch_review_status_page(
@@ -606,10 +609,13 @@ mutation($threadId: ID!) {
         repo: str,
         pr_number: int,
         cursor: str | None = None,
-    ) -> tuple[list[ReviewThread], bool, str | None, list[PRReview], list[PendingReviewer]]:
-        """Fetch first page with threads, reviews, and review requests.
+    ) -> tuple[
+        list[ReviewThread], bool, str | None, list[PRReview], list[PendingReviewer], datetime | None
+    ]:
+        """Fetch first page with threads, reviews, review requests, and latest commit.
 
-        Returns (threads, has_next, end_cursor, reviews, pending_reviewers).
+        Returns (threads, has_next, end_cursor, reviews, pending_reviewers,
+        latest_commit_pushed_at).
         """
         query = """
 query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
@@ -650,6 +656,13 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
             ... on User { login }
             ... on Team { name }
             ... on Bot { login }
+          }
+        }
+      }
+      commits(last: 1) {
+        nodes {
+          commit {
+            committedDate
           }
         }
       }
@@ -720,6 +733,19 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
             if name:
                 pending.append(PendingReviewer(name=name, is_team=is_team))
 
+        # Parse latest commit timestamp
+        latest_commit_pushed_at: datetime | None = None
+        commits_nodes = pr_data.get("commits", {}).get("nodes", [])
+        if commits_nodes:
+            committed_date_str = commits_nodes[0].get("commit", {}).get("committedDate")
+            if committed_date_str:
+                try:
+                    latest_commit_pushed_at = datetime.fromisoformat(
+                        str(committed_date_str).replace("Z", "+00:00")
+                    )
+                except (ValueError, AttributeError):
+                    logger.debug("github.latest_commit_date_parse_failed", raw=committed_date_str)
+
         # Warn if hard query limits may have been hit (potential truncation)
         if len(reviews) == 100:
             logger.warning(
@@ -748,6 +774,7 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
             page_info.get("endCursor"),
             reviews,
             pending,
+            latest_commit_pushed_at,
         )
 
     # --- Repository info ---

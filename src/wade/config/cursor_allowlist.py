@@ -22,8 +22,11 @@ import structlog
 
 logger = structlog.get_logger()
 
-# Allowlist entry pattern for wade commands
-WADE_ALLOW_PATTERN = "Shell(wade *)"
+# Allowlist entry pattern for wade commands.
+# Uses the cmd:args colon format supported by Cursor CLI's permission system.
+WADE_ALLOW_PATTERN = "Shell(wade:*)"
+# Legacy pattern written by older wade versions — migrated out on next write.
+_WADE_ALLOW_PATTERN_LEGACY = "Shell(wade *)"
 
 _GLOBAL_CONFIG_PATH = Path.home() / ".cursor" / "cli-config.json"
 
@@ -42,20 +45,20 @@ def _config_path(project_root: Path | None) -> Path:
 def canonical_to_cursor(pattern: str) -> str:
     """Convert a canonical command pattern to Cursor CLI allowlist syntax.
 
-    Canonical patterns use shell-style ``"cmd args"`` notation.
-    Cursor expects ``"Shell(cmd args)"`` — the command string wrapped in
+    Canonical patterns use ``"cmd:args"`` notation (colon-separated).
+    Cursor expects ``"Shell(cmd:args)"`` — the command string wrapped in
     ``Shell(…)``.
 
     Examples::
 
-        "wade *"                → "Shell(wade *)"
-        "./scripts/check.sh *"  → "Shell(./scripts/check.sh *)"
+        "wade:*"                  → "Shell(wade:*)"
+        "./scripts/check.sh:*"    → "Shell(./scripts/check.sh:*)"
     """
     return f"Shell({pattern})"
 
 
 def is_allowlist_configured(project_root: Path | None = None) -> bool:
-    """Return True if Shell(wade *) is present in the Cursor allowlist.
+    """Return True if a wade allowlist pattern is present in the Cursor allowlist.
 
     When ``project_root`` is given, checks the per-project config.
     Otherwise checks the global config.
@@ -67,7 +70,9 @@ def is_allowlist_configured(project_root: Path | None = None) -> bool:
         raw = json.loads(config_file.read_text(encoding="utf-8"))
         if isinstance(raw, dict):
             allow = raw.get("permissions", {}).get("allow", [])
-            return isinstance(allow, list) and WADE_ALLOW_PATTERN in allow
+            return isinstance(allow, list) and (
+                WADE_ALLOW_PATTERN in allow or _WADE_ALLOW_PATTERN_LEGACY in allow
+            )
     return False
 
 
@@ -107,6 +112,13 @@ def configure_allowlist(
         allow_list = []
         permissions["allow"] = allow_list
 
+    changed = False
+
+    # Migrate: remove legacy space-format pattern if present
+    if _WADE_ALLOW_PATTERN_LEGACY in allow_list:
+        allow_list.remove(_WADE_ALLOW_PATTERN_LEGACY)
+        changed = True
+
     # Build the full set of patterns to ensure
     all_patterns = [WADE_ALLOW_PATTERN]
     for pat in extra_patterns or []:
@@ -114,7 +126,6 @@ def configure_allowlist(
         if cursor_pat not in all_patterns:
             all_patterns.append(cursor_pat)
 
-    changed = False
     for pat in all_patterns:
         if pat not in allow_list:
             allow_list.append(pat)
