@@ -14,27 +14,30 @@ import structlog
 
 logger = structlog.get_logger()
 
-# Allowlist entry pattern for wade commands
-WADE_ALLOW_PATTERN = "Bash(wade *)"
+# Allowlist entry pattern for wade commands.
+# Uses the cmd:args colon format that Claude Code's permission system recognises.
+WADE_ALLOW_PATTERN = "Bash(wade:*)"
+# Legacy pattern written by older wade versions — migrated out on next write.
+_WADE_ALLOW_PATTERN_LEGACY = "Bash(wade *)"
 
 
 def canonical_to_claude(pattern: str) -> str:
     """Convert a canonical command pattern to Claude Code allowlist syntax.
 
-    Canonical patterns use shell-style ``"cmd args"`` notation.
-    Claude expects ``"Bash(cmd args)"`` — the command string wrapped in ``Bash(…)``.
+    Canonical patterns use ``"cmd:args"`` notation (colon-separated).
+    Claude expects ``"Bash(cmd:args)"`` — the command string wrapped in ``Bash(…)``.
 
     Examples::
 
-        "wade *"                → "Bash(wade *)"
-        "./scripts/check.sh *"  → "Bash(./scripts/check.sh *)"
-        "./scripts/check.sh"    → "Bash(./scripts/check.sh)"
+        "wade:*"                  → "Bash(wade:*)"
+        "./scripts/check.sh:*"    → "Bash(./scripts/check.sh:*)"
+        "./scripts/check.sh"      → "Bash(./scripts/check.sh)"
     """
     return f"Bash({pattern})"
 
 
 def is_allowlist_configured(project_root: Path) -> bool:
-    """Return True if Bash(wade *) is present in the allowlist at project_root."""
+    """Return True if a wade allowlist pattern is present in the allowlist at project_root."""
     settings_path = project_root / ".claude" / "settings.json"
     if not settings_path.is_file():
         return False
@@ -42,7 +45,9 @@ def is_allowlist_configured(project_root: Path) -> bool:
         raw = json.loads(settings_path.read_text(encoding="utf-8"))
         if isinstance(raw, dict):
             allow = raw.get("permissions", {}).get("allow", [])
-            return isinstance(allow, list) and WADE_ALLOW_PATTERN in allow
+            return isinstance(allow, list) and (
+                WADE_ALLOW_PATTERN in allow or _WADE_ALLOW_PATTERN_LEGACY in allow
+            )
     return False
 
 
@@ -80,6 +85,13 @@ def configure_allowlist(
         allow_list = []
         permissions["allow"] = allow_list
 
+    changed = False
+
+    # Migrate: remove legacy space-format pattern if present
+    if _WADE_ALLOW_PATTERN_LEGACY in allow_list:
+        allow_list.remove(_WADE_ALLOW_PATTERN_LEGACY)
+        changed = True
+
     # Build the full set of patterns to ensure
     all_patterns = [WADE_ALLOW_PATTERN]
     for pat in extra_patterns or []:
@@ -87,7 +99,6 @@ def configure_allowlist(
         if claude_pat not in all_patterns:
             all_patterns.append(claude_pat)
 
-    changed = False
     for pat in all_patterns:
         if pat not in allow_list:
             allow_list.append(pat)

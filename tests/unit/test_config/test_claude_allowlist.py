@@ -178,21 +178,52 @@ class TestConfigureAllowlist:
         assert WADE_ALLOW_PATTERN in data["permissions"]["allow"]
 
     def test_pattern_value(self) -> None:
-        """Verify the constant pattern has the expected value."""
-        assert WADE_ALLOW_PATTERN == "Bash(wade *)"
+        """Verify the constant pattern uses the colon format recognised by Claude Code."""
+        assert WADE_ALLOW_PATTERN == "Bash(wade:*)"
+
+    def test_migrates_legacy_pattern(self, tmp_path: Path) -> None:
+        """Legacy Bash(wade *) entry is replaced by Bash(wade:*) on next write."""
+        project_root = tmp_path / "project"
+        claude_dir = project_root / ".claude"
+        claude_dir.mkdir(parents=True)
+        settings_path = claude_dir / "settings.json"
+        settings_path.write_text(
+            '{"permissions": {"allow": ["Bash(wade *)"]}}\n',
+            encoding="utf-8",
+        )
+
+        configure_allowlist(project_root)
+
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        allow = data["permissions"]["allow"]
+        assert "Bash(wade *)" not in allow
+        assert WADE_ALLOW_PATTERN in allow
 
 
 class TestIsAllowlistConfigured:
     """Tests for is_allowlist_configured()."""
 
     def test_returns_true_when_pattern_present(self, tmp_path: Path) -> None:
-        """Returns True when Bash(wade *) is in the allowlist."""
+        """Returns True when Bash(wade:*) is in the allowlist."""
         project_root = tmp_path / "project"
         claude_dir = project_root / ".claude"
         claude_dir.mkdir(parents=True)
         settings_path = claude_dir / "settings.json"
         settings_path.write_text(
-            '{"permissions": {"allow": ["Bash(wade *)", "Read(**)"]}}\n',
+            '{"permissions": {"allow": ["Bash(wade:*)", "Read(**)"]}}\n',
+            encoding="utf-8",
+        )
+
+        assert is_allowlist_configured(project_root) is True
+
+    def test_returns_true_for_legacy_pattern(self, tmp_path: Path) -> None:
+        """Returns True when the legacy Bash(wade *) pattern is present."""
+        project_root = tmp_path / "project"
+        claude_dir = project_root / ".claude"
+        claude_dir.mkdir(parents=True)
+        settings_path = claude_dir / "settings.json"
+        settings_path.write_text(
+            '{"permissions": {"allow": ["Bash(wade *)"]}}\n',
             encoding="utf-8",
         )
 
