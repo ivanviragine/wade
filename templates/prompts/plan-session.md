@@ -14,9 +14,13 @@ You won't create the issues or implement the feature.
 4. Format each plan following the format defined in @.claude/skills/plan-session/SKILL.md.
    Every plan must start with:
 
-       # {Concise issue title}
+       # {type}: {concise issue title}
        ## Complexity
        easy | medium | complex | very_complex
+
+   Where `{type}` is a conventional commit prefix: `feat` (new feature), `fix`
+   (bug fix), `refactor`, `docs`, `chore`, `test`, `perf`, `ci`, or `build`.
+   Example: `feat: add retry logic to task provider`
 
 5. Present the plan(s) to the user and ask for confirmation before writing any files.
 6. Write the plan(s) to {plan_dir}/ as "PLAN.md", if there's

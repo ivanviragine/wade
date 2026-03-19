@@ -1,7 +1,8 @@
 name: Auto Version Bump
 
 on:
-  push:
+  pull_request:
+    types: [closed]
     branches: [main]
 
 permissions:
@@ -9,14 +10,14 @@ permissions:
 
 jobs:
   version-bump:
-    # Skip if the commit is already a version bump (from pre-push hook or this workflow)
-    if: "!startsWith(github.event.head_commit.message, 'chore: bump version')"
+    # Only run when the PR was actually merged
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
       - name: Detect bump type
         id: detect
         env:
-          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          COMMIT_MSG: ${{ github.event.pull_request.title }}
         run: |
           MSG="$COMMIT_MSG"
           FIRST_LINE=$(echo "$MSG" | head -n 1)

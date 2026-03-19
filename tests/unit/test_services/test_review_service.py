@@ -1389,14 +1389,17 @@ class TestPostReviewLifecycle:
         _post_review_lifecycle(tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider)
         mock_merge.assert_called_once_with(tmp_path, "feat/42", 99, "42", tmp_path / "wt", provider)
 
+    @patch("wade.services.review_service.poll_for_reviews", return_value=False)
     @patch("wade.services.review_service._merge_pr")
     @patch("wade.ui.prompts.select", return_value=1)
-    def test_wait_choice_shows_hint(
+    def test_wait_choice_polls_for_reviews(
         self,
         mock_select: MagicMock,
         mock_merge: MagicMock,
+        mock_poll: MagicMock,
         tmp_path: Path,
     ) -> None:
         provider = MagicMock()
         _post_review_lifecycle(tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider)
         mock_merge.assert_not_called()
+        mock_poll.assert_called_once()

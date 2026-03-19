@@ -63,7 +63,7 @@ or make any code changes. Planning only.
 Each plan file must follow this structure:
 
 ```markdown
-# Concise issue title (max 256 chars)
+# type: concise issue title (max 256 chars)
 
 ## Complexity
 medium
@@ -88,7 +88,7 @@ What to build / change.
 
 | Element | Rule |
 |---------|------|
-| **Title** | First `# Heading` — becomes the GitHub issue title. Required. |
+| **Title** | First `# Heading` — becomes the GitHub issue title. Must start with a conventional commit prefix (`feat`, `fix`, `refactor`, `docs`, `chore`, `test`, `perf`, `ci`, `build`) followed by `: `. Example: `feat: add retry logic`. Required. |
 | **Complexity** | `## Complexity` with one of: `easy`, `medium`, `complex`, `very_complex`. Used by `wade implement` to auto-select the AI model. Also applied as a `complexity:X` label on the issue. |
 | **Body** | Everything after the title becomes the draft PR plan content. The issue itself gets a lightweight summary. |
 

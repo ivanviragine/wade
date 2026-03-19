@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -133,6 +134,10 @@ def validate_plan_files(plan_dir: Path) -> list[PlanFile]:
 
 _RECOMMENDED_SECTIONS = ("tasks", "acceptance criteria")
 
+_CONVENTIONAL_COMMIT_RE = re.compile(
+    r"^(feat|fix|docs|refactor|chore|style|perf|test|ci|build|revert|update)(\(.+\))?!?:\s+\S"
+)
+
 
 class PlanDiagnosticLevel(StrEnum):
     ERROR = "error"
@@ -208,6 +213,19 @@ def validate_plan_dir(plan_dir: Path) -> PlanValidationResult:
                     message=(
                         "Missing or invalid '## Complexity' section. "
                         "Must be one of: easy, medium, complex, very_complex."
+                    ),
+                )
+            )
+
+        if not _CONVENTIONAL_COMMIT_RE.match(plan.title):
+            result.diagnostics.append(
+                PlanDiagnostic(
+                    file=md_file.name,
+                    level=PlanDiagnosticLevel.ERROR,
+                    message=(
+                        f"Title '{plan.title}' does not start with a conventional commit prefix. "
+                        "Use: feat, fix, docs, refactor, chore, style, perf, test, ci, build, "
+                        "revert, update. Example: 'feat: add retry logic to task provider'."
                     ),
                 )
             )
@@ -459,7 +477,9 @@ def plan(
                 repo_root=repo_root,
                 worktree_dir=planning_worktree_dir,
             )
-            bootstrap_worktree(planning_worktree, config, repo_root, skills=PLAN_SKILLS)
+            bootstrap_worktree(
+                planning_worktree, config, repo_root, skills=PLAN_SKILLS, plan_mode=True
+            )
             console.kv("Planning worktree", str(planning_worktree))
         except Exception as e:
             console.warn(f"Could not create planning worktree: {e}")

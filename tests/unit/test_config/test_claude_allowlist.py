@@ -8,6 +8,7 @@ from pathlib import Path
 from wade.config.claude_allowlist import (
     WADE_ALLOW_PATTERN,
     configure_allowlist,
+    configure_plan_hooks,
     is_allowlist_configured,
 )
 
@@ -177,21 +178,52 @@ class TestConfigureAllowlist:
         assert WADE_ALLOW_PATTERN in data["permissions"]["allow"]
 
     def test_pattern_value(self) -> None:
-        """Verify the constant pattern has the expected value."""
-        assert WADE_ALLOW_PATTERN == "Bash(wade *)"
+        """Verify the constant pattern uses the colon format recognised by Claude Code."""
+        assert WADE_ALLOW_PATTERN == "Bash(wade:*)"
+
+    def test_migrates_legacy_pattern(self, tmp_path: Path) -> None:
+        """Legacy Bash(wade *) entry is replaced by Bash(wade:*) on next write."""
+        project_root = tmp_path / "project"
+        claude_dir = project_root / ".claude"
+        claude_dir.mkdir(parents=True)
+        settings_path = claude_dir / "settings.json"
+        settings_path.write_text(
+            '{"permissions": {"allow": ["Bash(wade *)"]}}\n',
+            encoding="utf-8",
+        )
+
+        configure_allowlist(project_root)
+
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        allow = data["permissions"]["allow"]
+        assert "Bash(wade *)" not in allow
+        assert WADE_ALLOW_PATTERN in allow
 
 
 class TestIsAllowlistConfigured:
     """Tests for is_allowlist_configured()."""
 
     def test_returns_true_when_pattern_present(self, tmp_path: Path) -> None:
-        """Returns True when Bash(wade *) is in the allowlist."""
+        """Returns True when Bash(wade:*) is in the allowlist."""
         project_root = tmp_path / "project"
         claude_dir = project_root / ".claude"
         claude_dir.mkdir(parents=True)
         settings_path = claude_dir / "settings.json"
         settings_path.write_text(
-            '{"permissions": {"allow": ["Bash(wade *)", "Read(**)"]}}\n',
+            '{"permissions": {"allow": ["Bash(wade:*)", "Read(**)"]}}\n',
+            encoding="utf-8",
+        )
+
+        assert is_allowlist_configured(project_root) is True
+
+    def test_returns_true_for_legacy_pattern(self, tmp_path: Path) -> None:
+        """Returns True when the legacy Bash(wade *) pattern is present."""
+        project_root = tmp_path / "project"
+        claude_dir = project_root / ".claude"
+        claude_dir.mkdir(parents=True)
+        settings_path = claude_dir / "settings.json"
+        settings_path.write_text(
+            '{"permissions": {"allow": ["Bash(wade *)"]}}\n',
             encoding="utf-8",
         )
 
@@ -225,3 +257,41 @@ class TestIsAllowlistConfigured:
         (claude_dir / "settings.json").write_text("{invalid!!", encoding="utf-8")
 
         assert is_allowlist_configured(project_root) is False
+
+
+class TestConfigurePlanHooks:
+    """Tests for configure_plan_hooks()."""
+
+    def test_adds_pretooluse_hook(self, tmp_path: Path) -> None:
+        guard = tmp_path / "guard.py"
+        guard.touch()
+        configure_plan_hooks(tmp_path, guard)
+
+        settings_path = tmp_path / ".claude" / "settings.json"
+        assert settings_path.is_file()
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        hooks = data["hooks"]["PreToolUse"]
+        assert len(hooks) == 1
+        assert hooks[0]["matcher"] == "Edit|Write|NotebookEdit"
+        assert f"python3 {guard}" in hooks[0]["hooks"]
+
+    def test_idempotent(self, tmp_path: Path) -> None:
+        guard = tmp_path / "guard.py"
+        guard.touch()
+        configure_plan_hooks(tmp_path, guard)
+        configure_plan_hooks(tmp_path, guard)
+
+        settings_path = tmp_path / ".claude" / "settings.json"
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        assert len(data["hooks"]["PreToolUse"]) == 1
+
+    def test_merges_with_existing_allowlist(self, tmp_path: Path) -> None:
+        configure_allowlist(tmp_path)
+        guard = tmp_path / "guard.py"
+        guard.touch()
+        configure_plan_hooks(tmp_path, guard)
+
+        settings_path = tmp_path / ".claude" / "settings.json"
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        assert WADE_ALLOW_PATTERN in data["permissions"]["allow"]
+        assert len(data["hooks"]["PreToolUse"]) == 1

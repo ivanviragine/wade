@@ -4,6 +4,47 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.6.1] — 2026-03-19
+
+### Bug Fixes
+
+- validate conventional commit prefix in plan titles at plan-session done (0eceb43)
+
+### Other Changes
+
+- Add "Open PR in browser" option to wade smart-start menu (#194) (00ea1ba)
+- Make "Wait for reviews" actively poll for review comments (#192) (437b8cf)
+
+## [v0.6.0] — 2026-03-19
+
+### Features
+
+- require conventional commit prefix in plan issue titles (0f6e773)
+
+## [v0.5.10] — 2026-03-19
+
+### Bug Fixes
+
+- use colon format Bash(wade:*) for Claude Code permission pattern (3b7bee8)
+
+## [v0.5.9] — 2026-03-19
+
+### CI/CD
+
+- add PR title linter to enforce conventional commit format (4d75edb)
+
+## [v0.5.8] — 2026-03-19
+
+### Bug Fixes
+
+- read PR title instead of push commit message for version bump detection (ada6a26)
+
+### Other Changes
+
+- Add file-write guard hooks to plan session worktrees (#177) (fd01fdc)
+- Effort configuration overhaul: Claude --effort flag + WADE_EFFORT env var (#190) (350c1bd)
+- Fix review_batch default delegation mode from prompt to interactive (#188) (609ab36)
+
 ## [v0.5.7] — 2026-03-18
 
 ### Bug Fixes
