@@ -153,19 +153,24 @@ def _install_plan_guard_hooks(worktree_path: Path) -> None:
         dest = dest_dir / "plan_write_guard.py"
         shutil.copy2(guard_src, dest)
 
-    # Use the .claude/hooks copy as the canonical path for all configs
-    guard_script = worktree_path / ".claude" / "hooks" / "plan_write_guard.py"
-
-    # Configure each tool's hook config
+    # Configure each tool's hook config with its own guard script copy
     from wade.config.claude_allowlist import configure_plan_hooks as configure_claude_hooks
     from wade.config.copilot_hooks import configure_plan_hooks as configure_copilot_hooks
     from wade.config.cursor_hooks import configure_plan_hooks as configure_cursor_hooks
     from wade.config.gemini_hooks import configure_plan_hooks as configure_gemini_hooks
 
-    configure_claude_hooks(worktree_path, guard_script)
-    configure_cursor_hooks(worktree_path, guard_script)
-    configure_copilot_hooks(worktree_path, guard_script)
-    configure_gemini_hooks(worktree_path, guard_script)
+    configure_claude_hooks(
+        worktree_path, worktree_path / ".claude" / "hooks" / "plan_write_guard.py"
+    )
+    configure_cursor_hooks(
+        worktree_path, worktree_path / ".cursor" / "hooks" / "plan_write_guard.py"
+    )
+    configure_copilot_hooks(
+        worktree_path, worktree_path / ".copilot" / "hooks" / "plan_write_guard.py"
+    )
+    configure_gemini_hooks(
+        worktree_path, worktree_path / ".gemini" / "hooks" / "plan_write_guard.py"
+    )
     logger.info("implementation.plan_guard_hooks_installed", path=str(worktree_path))
 
 

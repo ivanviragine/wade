@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
@@ -9,9 +10,16 @@ from pathlib import Path
 
 import pytest
 
-GUARD_SCRIPT = (
-    Path(__file__).resolve().parents[3] / "src" / "wade" / "hooks" / "plan_write_guard.py"
-)
+
+def _get_guard_script_path() -> Path:
+    spec = importlib.util.find_spec("wade.hooks.plan_write_guard")
+    if spec and spec.origin:
+        return Path(spec.origin)
+    # Fallback for development
+    return Path(__file__).resolve().parents[3] / "src" / "wade" / "hooks" / "plan_write_guard.py"
+
+
+GUARD_SCRIPT = _get_guard_script_path()
 
 
 def _run_guard(stdin_data: str) -> subprocess.CompletedProcess[str]:
@@ -43,6 +51,7 @@ class TestAllowedFiles:
             "PR-SUMMARY.md",
             ".claude/plans/some-plan.md",
             "/tmp/worktree/.claude/plans/design.md",
+            ".claude\\plans\\windows-path.md",
         ],
     )
     def test_allowed_basenames(self, file_path: str) -> None:

@@ -17,10 +17,15 @@ logger = structlog.get_logger()
 def configure_plan_hooks(worktree_path: Path, guard_script: Path) -> None:
     """Write .copilot/hooks.json with a preToolUse guard entry.
 
+    Uses the official GitHub Copilot CLI hooks.json schema with
+    ``version``, ``hooks.preToolUse`` array, and hook objects containing
+    ``type``, ``bash``, and ``comment`` fields.
+
     Merges with any existing hooks config.  Idempotent — re-running
     with the same guard_script path is a no-op.
     """
     hooks_file = worktree_path / ".copilot" / "hooks.json"
+    resolved_script = guard_script.resolve()
 
     existing: dict[str, object] = {}
     if hooks_file.is_file():
@@ -31,20 +36,28 @@ def configure_plan_hooks(worktree_path: Path, guard_script: Path) -> None:
         except (json.JSONDecodeError, OSError):
             pass
 
-    hooks_list = existing.setdefault("preToolUse", [])
+    # Ensure top-level schema
+    existing.setdefault("version", 1)
+    hooks_map = existing.setdefault("hooks", {})
+    if not isinstance(hooks_map, dict):
+        hooks_map = {}
+        existing["hooks"] = hooks_map
+
+    hooks_list = hooks_map.setdefault("preToolUse", [])
     if not isinstance(hooks_list, list):
         hooks_list = []
-        existing["preToolUse"] = hooks_list
+        hooks_map["preToolUse"] = hooks_list
 
+    guard_cmd = f"python3 {resolved_script}"
     guard_entry = {
-        "event": "preToolUse",
-        "command": f"python3 {guard_script}",
-        "tools": ["edit", "create"],
+        "type": "command",
+        "bash": guard_cmd,
+        "comment": "Plan write guard for file-write tools (edit, create)",
     }
 
-    # Check if already present (by command)
+    # Check if already present (by bash command)
     for entry in hooks_list:
-        if isinstance(entry, dict) and entry.get("command") == guard_entry["command"]:
+        if isinstance(entry, dict) and entry.get("bash") == guard_cmd:
             return  # Already configured
 
     hooks_list.append(guard_entry)

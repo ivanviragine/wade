@@ -36,9 +36,10 @@ def configure_plan_hooks(worktree_path: Path, guard_script: Path) -> None:
         hooks_list = []
         existing["preToolUse"] = hooks_list
 
+    resolved_script = guard_script.resolve()
     guard_entry = {
         "event": "preToolUse",
-        "command": f"python3 {guard_script}",
+        "command": f"python3 {resolved_script}",
         "tools": ["Write", "Delete"],
     }
 

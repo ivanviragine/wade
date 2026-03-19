@@ -17,8 +17,12 @@ class TestCopilotPlanHooks:
         hooks_file = tmp_path / ".copilot" / "hooks.json"
         assert hooks_file.is_file()
         data = json.loads(hooks_file.read_text(encoding="utf-8"))
-        assert len(data["preToolUse"]) == 1
-        assert data["preToolUse"][0]["tools"] == ["edit", "create"]
+        assert data["version"] == 1
+        assert len(data["hooks"]["preToolUse"]) == 1
+        hook = data["hooks"]["preToolUse"][0]
+        assert hook["type"] == "command"
+        assert f"python3 {guard.resolve()}" in hook["bash"]
+        assert "comment" in hook
 
     def test_idempotent(self, tmp_path: Path) -> None:
         guard = tmp_path / "guard.py"
@@ -28,7 +32,7 @@ class TestCopilotPlanHooks:
 
         hooks_file = tmp_path / ".copilot" / "hooks.json"
         data = json.loads(hooks_file.read_text(encoding="utf-8"))
-        assert len(data["preToolUse"]) == 1
+        assert len(data["hooks"]["preToolUse"]) == 1
 
     def test_preserves_existing(self, tmp_path: Path) -> None:
         hooks_file = tmp_path / ".copilot" / "hooks.json"
@@ -41,4 +45,4 @@ class TestCopilotPlanHooks:
 
         data = json.loads(hooks_file.read_text(encoding="utf-8"))
         assert data["other"] == "setting"
-        assert len(data["preToolUse"]) == 1
+        assert len(data["hooks"]["preToolUse"]) == 1

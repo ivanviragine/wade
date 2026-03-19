@@ -20,6 +20,7 @@ class TestGeminiPlanHooks:
         assert len(data["hooks"]) == 1
         assert data["hooks"][0]["event"] == "BeforeTool"
         assert data["hooks"][0]["tools"] == [".*"]
+        assert f"python3 {guard.resolve()}" in data["hooks"][0]["command"]
 
     def test_idempotent(self, tmp_path: Path) -> None:
         guard = tmp_path / "guard.py"

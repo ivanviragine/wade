@@ -51,7 +51,11 @@ def _is_allowed(file_path: str) -> bool:
     # Check if path is under an allowed directory
     for prefix in ALLOWED_DIR_PREFIXES:
         norm_prefix = prefix.replace("\\", "/")
-        if f"/{norm_prefix}" in normalized or normalized.startswith(norm_prefix):
+        if (
+            f"/{norm_prefix}" in normalized
+            or normalized.startswith(norm_prefix)
+            or normalized.startswith(f"/{norm_prefix}")
+        ):
             return True
 
     # Check basename against allowed patterns
