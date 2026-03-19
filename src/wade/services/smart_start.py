@@ -8,7 +8,9 @@ exists for the issue and presents a contextual menu:
 
 from __future__ import annotations
 
+import webbrowser
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +37,13 @@ from wade.ui.console import console
 from wade.utils.markdown import parse_sessions_from_body
 
 logger = structlog.get_logger()
+
+
+def _open_pr_in_browser(pr_url: str) -> bool:
+    """Open PR URL in the default system browser."""
+    console.info("Opening PR in browser…")
+    webbrowser.open(pr_url)
+    return True
 
 
 def smart_start(
@@ -176,6 +185,8 @@ def smart_start(
         )
     pr_number_int = int(pr_number)
     pr_state = str(pr_info.get("state", "")).upper()
+    pr_url_raw = pr_info.get("url")
+    pr_url = pr_url_raw.strip() if isinstance(pr_url_raw, str) else ""
 
     if pr_state == "MERGED":
         console.info(f"PR #{pr_number_int} is already merged.")
@@ -290,6 +301,15 @@ def smart_start(
                 _run_merge_pr_wrapper(
                     repo_root, branch_name, pr_number_int, task.id, provider, worktrees
                 ),
+            )
+        )
+
+    # Common option at the end of menu
+    if pr_url:
+        menu_options.append(
+            (
+                "Open PR in browser",
+                partial(_open_pr_in_browser, pr_url),
             )
         )
 
