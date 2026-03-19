@@ -196,7 +196,7 @@ class TestBootstrapPlanMode:
         cursor_hooks = worktree_path / ".cursor" / "hooks.json"
         assert cursor_hooks.is_file()
 
-        copilot_hooks = worktree_path / ".copilot" / "hooks.json"
+        copilot_hooks = worktree_path / ".github" / "hooks" / "hooks.json"
         assert copilot_hooks.is_file()
 
         gemini_settings = worktree_path / ".gemini" / "settings.json"
@@ -227,7 +227,7 @@ class TestBootstrapPlanMode:
         assert not cursor_hooks.is_file()
 
         # No copilot hooks.json
-        copilot_hooks = worktree_path / ".copilot" / "hooks.json"
+        copilot_hooks = worktree_path / ".github" / "hooks" / "hooks.json"
         assert not copilot_hooks.is_file()
 
         # No gemini settings.json

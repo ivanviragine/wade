@@ -23,6 +23,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
+import posixpath
 import sys
 
 ALLOWED_BASENAMES = [
@@ -45,16 +46,16 @@ def _is_allowed(file_path: str) -> bool:
     if not file_path:
         return True  # No file path found — fail open
 
-    # Normalize to forward slashes for matching
-    normalized = file_path.replace("\\", "/")
+    # Normalize to forward slashes and resolve traversal (e.g. "../../")
+    normalized = posixpath.normpath(file_path.replace("\\", "/"))
 
     # Check if path is under an allowed directory
     for prefix in ALLOWED_DIR_PREFIXES:
-        norm_prefix = prefix.replace("\\", "/")
+        norm_prefix = posixpath.normpath(prefix.replace("\\", "/")).rstrip("/")
         if (
-            f"/{norm_prefix}" in normalized
-            or normalized.startswith(norm_prefix)
-            or normalized.startswith(f"/{norm_prefix}")
+            normalized == norm_prefix
+            or normalized.startswith(f"{norm_prefix}/")
+            or f"/{norm_prefix}/" in f"{normalized}/"
         ):
             return True
 
@@ -96,6 +97,18 @@ def _extract_file_path(data: dict[str, object]) -> str | None:
     return None
 
 
+WRITE_TOOL_NAMES = {"write", "edit", "multiedit", "create", "delete", "save", "append"}
+
+
+def _extract_tool_name(data: dict[str, object]) -> str | None:
+    """Extract the tool name from the hook payload."""
+    for key in ("tool_name", "toolName"):
+        value = data.get(key)
+        if isinstance(value, str) and value:
+            return value.lower()
+    return None
+
+
 def _deny(file_path: str) -> None:
     """Output denial and exit with code 2."""
     msg = (
@@ -128,6 +141,10 @@ def main() -> None:
 
     if not isinstance(data, dict):
         sys.exit(0)  # Unexpected format — fail open
+
+    tool_name = _extract_tool_name(data)
+    if tool_name is not None and tool_name not in WRITE_TOOL_NAMES:
+        sys.exit(0)  # Non-write tool — allow unconditionally
 
     file_path = _extract_file_path(data)
     if file_path is None:

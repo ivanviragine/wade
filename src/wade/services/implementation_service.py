@@ -231,10 +231,6 @@ def bootstrap_worktree(
             worktree_path, extra_patterns=config.permissions.allowed_commands
         )
 
-    # Install plan-mode file-write guard hooks
-    if plan_mode:
-        _install_plan_guard_hooks(worktree_path)
-
     # Run post-create hook
     if config.hooks.post_worktree_create:
         hook_path = repo_root / config.hooks.post_worktree_create
@@ -259,6 +255,11 @@ def bootstrap_worktree(
                     error=e.stderr.decode("utf-8", errors="replace") if e.stderr else "",
                     msg=f"Hook script failed: {hook_path_str}. Check logs for details.",
                 )
+
+    # Install plan-mode file-write guard hooks last so post-create scripts
+    # cannot overwrite the guarded config files.
+    if plan_mode:
+        _install_plan_guard_hooks(worktree_path)
 
 
 def _detect_ai_cli_env() -> str | None:

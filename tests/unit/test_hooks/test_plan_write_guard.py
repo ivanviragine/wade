@@ -78,6 +78,8 @@ class TestBlockedFiles:
             "tests/test_something.py",
             ".gitignore",
             "pyproject.toml",
+            ".claude/plans/../../src/foo.py",  # path traversal escape
+            ".claude/plans/../../../etc/passwd",  # deeper traversal
         ],
     )
     def test_blocked_codebase_files(self, file_path: str) -> None:
@@ -129,6 +131,41 @@ class TestToolStdinFormats:
     def test_allowed_via_copilot_format(self) -> None:
         args = json.dumps({"file": "PLAN.md"})
         data = json.dumps({"toolArgs": args})
+        result = _run_guard(data)
+        assert result.returncode == 0
+
+
+class TestToolNameFiltering:
+    """Non-write tools should be allowed regardless of file path."""
+
+    def test_read_tool_allowed(self) -> None:
+        data = json.dumps({"toolName": "read", "tool_input": {"file_path": "src/foo.py"}})
+        result = _run_guard(data)
+        assert result.returncode == 0
+
+    def test_view_tool_allowed(self) -> None:
+        data = json.dumps({"toolName": "view", "tool_input": {"file_path": "src/foo.py"}})
+        result = _run_guard(data)
+        assert result.returncode == 0
+
+    def test_write_tool_blocked(self) -> None:
+        data = json.dumps({"toolName": "write", "tool_input": {"file_path": "src/foo.py"}})
+        result = _run_guard(data)
+        assert result.returncode == 2
+
+    def test_edit_tool_blocked(self) -> None:
+        data = json.dumps({"toolName": "edit", "tool_input": {"file_path": "src/foo.py"}})
+        result = _run_guard(data)
+        assert result.returncode == 2
+
+    def test_no_tool_name_still_checks(self) -> None:
+        """When toolName is absent, guard should still check file path."""
+        data = json.dumps({"tool_input": {"file_path": "src/foo.py"}})
+        result = _run_guard(data)
+        assert result.returncode == 2
+
+    def test_write_tool_allowed_for_plan_files(self) -> None:
+        data = json.dumps({"toolName": "write", "tool_input": {"file_path": "PLAN.md"}})
         result = _run_guard(data)
         assert result.returncode == 0
 

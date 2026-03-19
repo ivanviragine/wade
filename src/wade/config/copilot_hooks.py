@@ -1,7 +1,7 @@
 """Copilot pre-tool-use hook configuration for plan-session worktrees.
 
-Writes `.copilot/hooks.json` with a `preToolUse` entry that runs the
-plan write guard script on file-write tools.
+Writes `.github/hooks/hooks.json` with a `preToolUse` entry that runs the
+plan write guard script.  Copilot CLI reads hooks from `.github/hooks/*.json`.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ logger = structlog.get_logger()
 
 
 def configure_plan_hooks(worktree_path: Path, guard_script: Path) -> None:
-    """Write .copilot/hooks.json with a preToolUse guard entry.
+    """Write .github/hooks/hooks.json with a preToolUse guard entry.
 
     Uses the official GitHub Copilot CLI hooks.json schema with
     ``version``, ``hooks.preToolUse`` array, and hook objects containing
@@ -24,7 +24,7 @@ def configure_plan_hooks(worktree_path: Path, guard_script: Path) -> None:
     Merges with any existing hooks config.  Idempotent — re-running
     with the same guard_script path is a no-op.
     """
-    hooks_file = worktree_path / ".copilot" / "hooks.json"
+    hooks_file = worktree_path / ".github" / "hooks" / "hooks.json"
     resolved_script = guard_script.resolve()
 
     existing: dict[str, object] = {}
