@@ -642,8 +642,12 @@ def _post_implementation_lifecycle_pr(
     )
 
     if choice == 1:  # Wait for reviews
-        issue_hint = f" {issue_number}" if issue_number else ""
-        console.hint(f"Run `wade review pr-comments{issue_hint}` when reviews come in.")
+        from wade.services import review_service
+
+        if issue_number and review_service.poll_for_reviews(
+            provider, repo_root, int(pr_number), branch
+        ):
+            _ = review_service.start(str(issue_number))
         return MergeStatus.NOT_MERGED
 
     # Merge flow
