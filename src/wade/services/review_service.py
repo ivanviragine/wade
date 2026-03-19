@@ -513,7 +513,7 @@ def start(
                 "No review comments found yet — the latest commit is less"
                 " than 2 minutes old. Review may still arrive."
             )
-        else:
+        elif not status.pending_reviewers:
             console.success("All review comments resolved — nothing to address! 🎉")
 
         if status.pending_reviewers:
@@ -521,6 +521,7 @@ def start(
                 f"@{r.name}" + (" (team)" if r.is_team else "") for r in status.pending_reviewers
             )
             console.info(f"Awaiting review from {names}.")
+            return True
 
         # Offer the shared quiet-exit menu: keep polling / merge / exit.
         _quiet_next_steps_prompt(

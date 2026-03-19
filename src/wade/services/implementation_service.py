@@ -647,7 +647,7 @@ def _post_implementation_lifecycle_pr(
 
         outcome = review_service.poll_for_reviews(provider, repo_root, int(pr_number), branch)
         if outcome == PollOutcome.COMMENTS_FOUND and issue_number:
-            _ = review_service.start(str(issue_number))
+            _ = review_service.start(str(issue_number), project_root=repo_root)
         elif outcome == PollOutcome.QUIET_TIMEOUT:
             review_service._quiet_next_steps_prompt(
                 repo_root, branch, issue_number, worktree_path, int(pr_number), provider

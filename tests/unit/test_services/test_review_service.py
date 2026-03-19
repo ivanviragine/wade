@@ -529,8 +529,15 @@ class TestReviewServiceStart:
             latest_commit_pushed_at=fresh_commit
         )
 
-        result = start(target="42")
+        with patch("wade.services.review_service.console") as mock_console:
+            result = start(target="42")
+
         assert result is True
+        # grace-period message should be emitted
+        info_calls = [call.args[0] for call in mock_console.info.call_args_list]
+        assert any("2 minutes" in msg for msg in info_calls), (
+            f"Expected grace-period message in console.info calls, got: {info_calls}"
+        )
         # quiet-exit menu should still be offered
         mock_setup["_quiet_next_steps_prompt"].assert_called_once()
 
