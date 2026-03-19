@@ -694,6 +694,31 @@ class TestListSessions:
             sessions = list_sessions(json_output=True, project_root=tmp_git_repo)
             assert len(sessions) == 1
 
+    def test_gracefully_handles_issue_lookup_failures(self, tmp_git_repo: Path) -> None:
+        from wade.git.worktree import create_worktree
+
+        wt_dir = tmp_git_repo.parent / "wt-42"
+        create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
+
+        provider = MagicMock()
+        provider.read_task_or_none.side_effect = RuntimeError("gh unavailable")
+
+        with (
+            patch(
+                "wade.services.implementation_service.load_config",
+                return_value=ProjectConfig(
+                    project=ProjectSettings(main_branch="main"),
+                ),
+            ),
+            patch("wade.services.implementation_service.get_provider", return_value=provider),
+        ):
+            sessions = list_sessions(json_output=True, project_root=tmp_git_repo)
+
+        assert len(sessions) == 1
+        assert sessions[0]["issue"] == "42"
+        assert sessions[0]["issue_state"] is None
+        assert sessions[0]["issue_title"] is None
+
     def test_show_all_includes_main(self, tmp_git_repo: Path) -> None:
         with patch(
             "wade.services.implementation_service.load_config",

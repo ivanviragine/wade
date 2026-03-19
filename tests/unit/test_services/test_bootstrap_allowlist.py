@@ -193,6 +193,21 @@ class TestBootstrapPlanMode:
         assert "hooks" in data
         assert "PreToolUse" in data["hooks"]
 
+        # Verify hook format is correct: array of objects with type and command
+        pre_tool_use_hooks = data["hooks"]["PreToolUse"]
+        assert isinstance(pre_tool_use_hooks, list)
+        assert len(pre_tool_use_hooks) > 0
+        for hook_entry in pre_tool_use_hooks:
+            assert isinstance(hook_entry, dict)
+            assert "hooks" in hook_entry
+            assert isinstance(hook_entry["hooks"], list)
+            for hook in hook_entry["hooks"]:
+                assert isinstance(hook, dict), "Hook must be an object, not a string"
+                assert "type" in hook
+                assert hook["type"] == "command"
+                assert "command" in hook
+                assert "plan_write_guard.py" in hook["command"]
+
         cursor_hooks = worktree_path / ".cursor" / "hooks.json"
         assert cursor_hooks.is_file()
 

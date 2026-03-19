@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.7.2] — 2026-03-19
+
+### Bug Fixes
+
+- gracefully handle deleted GitHub issues in worktree list (#200) (b49d81e)
+
+## [v0.7.1] — 2026-03-19
+
+### Bug Fixes
+
+- configure_plan_hooks emits invalid string hooks instead of required objects (#198) (d78b2c0)
+
+## [v0.7.0] — 2026-03-19
+
+### Features
+
+- make review pr-comments polling commit-aware (#196) (80d6684)
+
 ## [v0.6.2] — 2026-03-19
 
 ### Bug Fixes

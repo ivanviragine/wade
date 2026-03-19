@@ -176,6 +176,64 @@ class GitHubProvider(AbstractTaskProvider):
         raw = json.loads(result.stdout)
         return _parse_gh_task(raw)
 
+    def read_task_or_none(self, task_id: str) -> Task | None:
+        """Read a single issue by number, returning None if not found.
+
+        Returns None only for explicit "not found" conditions (deleted issue).
+        Other failures (auth, network, rate-limit) are logged at WARNING and re-raised
+        to avoid masking real backend failures.
+
+        Uses check=False to avoid ERROR-level logs for subprocess failures.
+        """
+        result = run(
+            [
+                "gh",
+                "issue",
+                "view",
+                task_id,
+                "--json",
+                "number,title,body,state,labels,url,createdAt,updatedAt",
+            ],
+            check=False,
+        )
+
+        if result.returncode != 0:
+            # Check stderr to differentiate "not found" from other failures
+            stderr = (result.stderr or "").lower()
+            is_not_found = "not found" in stderr or "could not resolve to an issue" in stderr
+
+            if is_not_found:
+                logger.debug(
+                    "github.read_task_or_none_not_found",
+                    task_id=task_id,
+                    returncode=result.returncode,
+                )
+                return None
+
+            # Other failures (auth, network, rate-limit) should not be silent
+            logger.warning(
+                "github.read_task_or_none_failed",
+                task_id=task_id,
+                returncode=result.returncode,
+                stderr=result.stderr.strip() if result.stderr else "",
+            )
+            # Re-raise to preserve the error context
+            raise RuntimeError(
+                f"Failed to read issue {task_id}: {result.stderr or 'unknown error'}"
+            )
+
+        try:
+            raw = json.loads(result.stdout)
+            return _parse_gh_task(raw)
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning(
+                "github.read_task_or_none_parse_failed",
+                task_id=task_id,
+                error=str(e),
+            )
+            # Successful exit but unparseable output is unexpected — don't mask it
+            raise RuntimeError(f"Failed to parse issue {task_id} response: {e}") from e
+
     def update_task(
         self,
         task_id: str,

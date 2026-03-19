@@ -273,7 +273,11 @@ class TestConfigurePlanHooks:
         hooks = data["hooks"]["PreToolUse"]
         assert len(hooks) == 1
         assert hooks[0]["matcher"] == "Edit|Write|NotebookEdit"
-        assert f"python3 {guard}" in hooks[0]["hooks"]
+        # Verify hook is an object with type and command keys
+        assert isinstance(hooks[0]["hooks"], list)
+        assert len(hooks[0]["hooks"]) == 1
+        assert hooks[0]["hooks"][0]["type"] == "command"
+        assert hooks[0]["hooks"][0]["command"] == f"python3 {guard}"
 
     def test_idempotent(self, tmp_path: Path) -> None:
         guard = tmp_path / "guard.py"

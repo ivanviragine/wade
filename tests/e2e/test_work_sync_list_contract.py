@@ -192,3 +192,28 @@ class TestWorkListCommand:
         first = parsed[0]
         assert isinstance(first, dict)
         assert {"path", "branch", "issue", "staleness", "commits_ahead"}.issubset(first)
+
+    def test_list_with_deleted_issue(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """worktree list should handle deleted GitHub issues without noisy errors."""
+        wt_dir = e2e_repo.parent / ".worktrees" / "999-deleted"
+        _git(
+            ["worktree", "add", "-b", "feat/999-deleted-issue", str(wt_dir)],
+            cwd=e2e_repo,
+        )
+
+        result = _run(["worktree", "list"], cwd=e2e_repo)
+
+        assert result.returncode == 0
+        output = result.stdout + result.stderr
+        assert "[error]" not in output.lower(), f"Expected no error logs, got: {output!r}"
+        assert "999" in result.stdout or "deleted" in result.stdout.lower(), (
+            f"Expected deleted-issue worktree in output, got: {result.stdout!r}"
+        )
+        _assert_gh_called_with(
+            mock_gh_cli["log_file"],
+            ["issue", "view", "999"],
+        )
