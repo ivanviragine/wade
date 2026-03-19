@@ -135,6 +135,29 @@ class TestClassifyStaleness:
         )
         assert result == WorktreeState.ACTIVE
 
+    def test_deleted_issue_prefetch_none_does_not_refetch(self, tmp_git_repo: Path) -> None:
+        """Prefetched missing tasks should not trigger a second provider read."""
+        from wade.git.worktree import create_worktree
+
+        branch = "feat/42-test"
+        wt_dir = tmp_git_repo.parent / "wt-42"
+        create_worktree(tmp_git_repo, branch, wt_dir, "main")
+
+        provider = MagicMock()
+
+        result = classify_staleness(
+            repo_root=tmp_git_repo,
+            branch=branch,
+            main_branch="main",
+            issue_number="42",
+            provider=provider,
+            task=None,
+            task_lookup_attempted=True,
+        )
+
+        assert result == WorktreeState.STALE_EMPTY
+        provider.read_task.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # Implementation usage block
@@ -718,6 +741,8 @@ class TestListSessions:
         assert sessions[0]["issue"] == "42"
         assert sessions[0]["issue_state"] is None
         assert sessions[0]["issue_title"] is None
+        assert sessions[0]["staleness"] == WorktreeState.ACTIVE.value
+        provider.read_task.assert_not_called()
 
     def test_show_all_includes_main(self, tmp_git_repo: Path) -> None:
         with patch(

@@ -1550,6 +1550,8 @@ def classify_staleness(
     issue_number: str | None = None,
     provider: AbstractTaskProvider | None = None,
     task: Task | None = None,
+    task_lookup_attempted: bool = False,
+    task_lookup_failed: bool = False,
 ) -> WorktreeState:
     """Classify a worktree's staleness.
 
@@ -1559,15 +1561,24 @@ def classify_staleness(
     - STALE_MERGED — branch merged into main
     - STALE_REMOTE_GONE — remote tracking branch deleted
 
-    If task is provided, it is used directly (avoiding a redundant fetch).
-    If task is None but issue_number and provider are provided, the task is fetched.
+    If task_lookup_failed is True, issue state is treated as unknown and the
+    worktree is kept ACTIVE as a fail-safe.
+    If task_lookup_attempted is True, *task* is treated as the final result of
+    that lookup (including None for deleted/missing issues) and no re-fetch
+    occurs.
+    If task_lookup_attempted is False but issue_number and provider are
+    provided, the task is fetched on demand.
     """
     from wade.models.task import TaskState
 
     # 1. If issue number, check issue state
     if issue_number and provider:
-        # Use provided task if available, otherwise fetch it
-        if task is not None:
+        if task_lookup_failed:
+            return WorktreeState.ACTIVE
+
+        # Use provided lookup result (including None for deleted issues),
+        # otherwise fetch it on demand.
+        if task_lookup_attempted:
             issue_task = task
         else:
             try:
@@ -1577,7 +1588,7 @@ def classify_staleness(
                 # Can't read issue — treat as active (fail-safe)
                 return WorktreeState.ACTIVE
 
-        if issue_task.state == TaskState.OPEN:
+        if issue_task is not None and issue_task.state == TaskState.OPEN:
             return WorktreeState.ACTIVE
 
     # 2. Count commits ahead of main
@@ -2607,7 +2618,10 @@ def list_sessions(
         task_info: Task | None = None
         issue_state: str | None = None
         issue_title: str | None = None
+        task_lookup_attempted = False
+        task_lookup_failed = False
         if issue_number:
+            task_lookup_attempted = True
             try:
                 task_info = provider_inst.read_task_or_none(issue_number)
             except Exception:
@@ -2618,6 +2632,7 @@ def list_sessions(
                     exc_info=True,
                 )
                 task_info = None
+                task_lookup_failed = True
 
             if task_info:
                 issue_state = task_info.state.value
@@ -2630,6 +2645,8 @@ def list_sessions(
             issue_number=issue_number,
             provider=provider_inst,
             task=task_info,
+            task_lookup_attempted=task_lookup_attempted,
+            task_lookup_failed=task_lookup_failed,
         )
 
         # Count commits ahead

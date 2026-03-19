@@ -12,6 +12,7 @@ from tests.e2e._support import (
     MAIN_BRANCH,
     MockGhCli,
     _assert_gh_called_with,
+    _count_gh_calls,
     _git,
     _parse_json_output,
     _run,
@@ -217,3 +218,4 @@ class TestWorkListCommand:
             mock_gh_cli["log_file"],
             ["issue", "view", "999"],
         )
+        assert _count_gh_calls(mock_gh_cli["log_file"], ["issue", "view", "999"]) == 1
