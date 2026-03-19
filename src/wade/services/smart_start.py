@@ -8,6 +8,7 @@ exists for the issue and presents a contextual menu:
 
 from __future__ import annotations
 
+import webbrowser
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -176,6 +177,7 @@ def smart_start(
         )
     pr_number_int = int(pr_number)
     pr_state = str(pr_info.get("state", "")).upper()
+    pr_url = str(pr_info.get("url", ""))
 
     if pr_state == "MERGED":
         console.info(f"PR #{pr_number_int} is already merged.")
@@ -200,6 +202,12 @@ def smart_start(
     # Open PR exists — present contextual menu
     from wade.git import worktree as git_worktree
     from wade.ui import prompts
+
+    def _open_pr_in_browser(pr_url: str) -> bool:
+        """Open PR URL in the default system browser."""
+        console.info("Opening PR in browser…")
+        webbrowser.open(pr_url)
+        return True
 
     console.kv("Issue", console.issue_ref(task.id, task.title))
     console.kv("PR", f"#{pr_number_int} ({pr_state.lower()})")
@@ -254,6 +262,13 @@ def smart_start(
                     ),
                 )
             )
+        if pr_url:
+            menu_options.append(
+                (
+                    "Open PR in browser",
+                    lambda: _open_pr_in_browser(pr_url),
+                )
+            )
     else:
         # For ready PRs: show all three options
         menu_options.append(
@@ -292,6 +307,13 @@ def smart_start(
                 ),
             )
         )
+        if pr_url:
+            menu_options.append(
+                (
+                    "Open PR in browser",
+                    lambda: _open_pr_in_browser(pr_url),
+                )
+            )
 
     labels = [label for label, _ in menu_options]
     choice = prompts.select(
