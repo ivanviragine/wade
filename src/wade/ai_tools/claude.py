@@ -161,8 +161,8 @@ class ClaudeAdapter(AbstractAITool):
         return ["--output-format", "json", "--json-schema", json.dumps(json_schema)]
 
     def effort_args(self, effort: EffortLevel) -> list[str]:
-        """Claude uses ``--settings '{"effortLevel": "<level>"}'``."""
-        return ["--settings", json.dumps({"effortLevel": effort.value})]
+        """Claude uses the native ``--effort <level>`` flag."""
+        return ["--effort", effort.value]
 
     def yolo_args(self) -> list[str]:
         """Claude uses ``--dangerously-skip-permissions``."""

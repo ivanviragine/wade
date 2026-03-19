@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import structlog
 
 from wade.ai_tools.base import AbstractAITool
@@ -102,17 +104,21 @@ def resolve_effort(
     *,
     tool: str | None = None,
 ) -> EffortLevel | None:
-    """Resolve effort level from args -> config -> None.
+    """Resolve effort level from args -> env var -> config -> None.
 
     Fallback chain:
       1. Explicit *effort* arg (e.g. ``--effort`` CLI flag)
-      2. Command-specific config (``ai.<command>.effort``)
-      3. Global config (``ai.effort``)
+      2. ``WADE_EFFORT`` environment variable
+      3. Command-specific config (``ai.<command>.effort``)
+      4. Global config (``ai.effort``)
 
     When *tool* is provided and the tool does not support effort, a warning
     is logged and ``None`` is returned.
     """
     resolved: str | None = effort
+
+    if not resolved:
+        resolved = os.environ.get("WADE_EFFORT")
 
     if not resolved:
         resolved = config.get_effort(command)

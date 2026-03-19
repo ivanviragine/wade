@@ -596,8 +596,8 @@ def _prompt_configure_allowlist(root: Path, non_interactive: bool) -> None:
         " (skips Bash approval in implementation sessions)",
         default=True,
     ):
-        configure_allowlist(root, extra_patterns=["wade *"])
-        console.success("Added Bash([step]wade[/] *) to .claude/settings.json allowlist")
+        configure_allowlist(root, extra_patterns=["wade:*"])
+        console.success("Added Bash([step]wade:*[/]) to .claude/settings.json allowlist")
 
 
 def _prompt_cursor_settings(root: Path, non_interactive: bool) -> None:

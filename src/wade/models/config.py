@@ -99,7 +99,7 @@ class PermissionsConfig(BaseModel):
     tool-specific allowlist flags at launch time.
     """
 
-    allowed_commands: list[str] = ["wade *"]
+    allowed_commands: list[str] = ["wade:*"]
 
 
 class HooksConfig(BaseModel):

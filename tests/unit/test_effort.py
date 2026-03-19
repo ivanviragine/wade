@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from unittest.mock import patch
 
 import pytest
@@ -146,11 +145,11 @@ class TestClaudeEffortArgs:
 
     def test_effort_low(self) -> None:
         result = self._get_adapter().effort_args(EffortLevel.LOW)
-        assert result == ["--settings", json.dumps({"effortLevel": "low"})]
+        assert result == ["--effort", "low"]
 
     def test_effort_max(self) -> None:
         result = self._get_adapter().effort_args(EffortLevel.MAX)
-        assert result == ["--settings", json.dumps({"effortLevel": "max"})]
+        assert result == ["--effort", "max"]
 
     def test_resolve_effort_model_unchanged(self) -> None:
         adapter = self._get_adapter()
@@ -270,17 +269,16 @@ class TestBuildLaunchCommandEffort:
 
         adapter = ClaudeAdapter()
         cmd = adapter.build_launch_command(model="claude-sonnet-4-6", effort=EffortLevel.HIGH)
-        settings_str = json.dumps({"effortLevel": "high"})
-        assert "--settings" in cmd
-        idx = cmd.index("--settings")
-        assert cmd[idx + 1] == settings_str
+        assert "--effort" in cmd
+        idx = cmd.index("--effort")
+        assert cmd[idx + 1] == "high"
 
     def test_effort_none_no_extra_args(self) -> None:
         from wade.ai_tools.claude import ClaudeAdapter
 
         adapter = ClaudeAdapter()
         cmd = adapter.build_launch_command(model="claude-sonnet-4-6", effort=None)
-        assert "--settings" not in cmd
+        assert "--effort" not in cmd
 
     def test_cursor_effort_changes_model(self) -> None:
         from wade.ai_tools.cursor import CursorAdapter
@@ -369,6 +367,42 @@ class TestResolveEffort:
         config = ProjectConfig()
         result = resolve_effort("high", config, tool="claude")
         assert result is EffortLevel.HIGH
+
+    def test_env_var_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from wade.models.config import ProjectConfig
+        from wade.services.ai_resolution import resolve_effort
+
+        monkeypatch.setenv("WADE_EFFORT", "high")
+        config = ProjectConfig()
+        result = resolve_effort(None, config)
+        assert result is EffortLevel.HIGH
+
+    def test_explicit_arg_beats_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from wade.models.config import ProjectConfig
+        from wade.services.ai_resolution import resolve_effort
+
+        monkeypatch.setenv("WADE_EFFORT", "low")
+        config = ProjectConfig()
+        result = resolve_effort("max", config)
+        assert result is EffortLevel.MAX
+
+    def test_env_var_beats_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from wade.models.config import AIConfig, ProjectConfig
+        from wade.services.ai_resolution import resolve_effort
+
+        monkeypatch.setenv("WADE_EFFORT", "high")
+        config = ProjectConfig(ai=AIConfig(effort="low"))
+        result = resolve_effort(None, config)
+        assert result is EffortLevel.HIGH
+
+    def test_invalid_env_var_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from wade.models.config import ProjectConfig
+        from wade.services.ai_resolution import resolve_effort
+
+        monkeypatch.setenv("WADE_EFFORT", "turbo")
+        config = ProjectConfig()
+        result = resolve_effort(None, config)
+        assert result is None
 
 
 # ---------------------------------------------------------------------------
