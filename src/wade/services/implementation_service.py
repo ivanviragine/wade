@@ -642,12 +642,16 @@ def _post_implementation_lifecycle_pr(
     )
 
     if choice == 1:  # Wait for reviews
+        from wade.models.review import PollOutcome
         from wade.services import review_service
 
-        if issue_number and review_service.poll_for_reviews(
-            provider, repo_root, int(pr_number), branch
-        ):
+        outcome = review_service.poll_for_reviews(provider, repo_root, int(pr_number), branch)
+        if outcome == PollOutcome.COMMENTS_FOUND and issue_number:
             _ = review_service.start(str(issue_number))
+        elif outcome == PollOutcome.QUIET_TIMEOUT:
+            review_service._quiet_next_steps_prompt(
+                repo_root, branch, issue_number, worktree_path, int(pr_number), provider
+            )
         return MergeStatus.NOT_MERGED
 
     # Merge flow

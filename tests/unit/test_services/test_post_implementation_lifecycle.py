@@ -93,7 +93,7 @@ def test_pr_strategy_no_pr_warns_and_returns(
     mock_merge_pr.assert_not_called()
 
 
-@patch("wade.services.review_service.poll_for_reviews", return_value=False)
+@patch("wade.services.review_service.poll_for_reviews")
 @patch("wade.services.implementation_service.git_pr.merge_pr")
 @patch("wade.services.implementation_service.prompts.select", return_value=1)
 @patch("wade.services.implementation_service.prompts.confirm", return_value=False)
@@ -109,6 +109,9 @@ def test_pr_strategy_user_declines_merge(
     mock_poll: MagicMock,
     tmp_path: Path,
 ) -> None:
+    from wade.models.review import PollOutcome
+
+    mock_poll.return_value = PollOutcome.INTERRUPTED
     provider = MagicMock()
     _post_implementation_lifecycle(
         tmp_path / "repo",

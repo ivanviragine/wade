@@ -23,6 +23,7 @@ from wade.git.repo import GitError
 from wade.models.ai import AIToolID
 from wade.models.config import ProjectConfig
 from wade.models.review import (
+    PollOutcome,
     PRReviewStatus,
     ReviewBotStatus,
     detect_coderabbit_review_status,
@@ -294,38 +295,43 @@ def poll_for_reviews(
     poll_interval: int = 60,
     bot_settle: int = 60,
     human_settle: int = 120,
-) -> bool:
-    """Poll for new PR review comments, blocking until comments are found or interrupted.
+    quiet_timeout: int = 600,
+) -> PollOutcome:
+    """Poll for new PR review comments, blocking until a terminal condition is reached.
 
-    Checks every ``poll_interval`` seconds. When actionable comments are detected,
-    waits a settle period to let reviewers finish (``bot_settle`` seconds for bot
-    reviewers, ``human_settle`` for humans) then returns ``True``.
+    Checks every ``poll_interval`` seconds.  Returns a :class:`PollOutcome`:
 
-    Returns:
-        True when review comments are found and the settle period has elapsed.
-        False if Ctrl+C is pressed or the PR is closed/merged externally.
+    * ``COMMENTS_FOUND`` — actionable threads appeared; a settle period has elapsed.
+    * ``QUIET_TIMEOUT`` — the PR has been quiet for ``quiet_timeout`` seconds after
+      the latest commit aged past the grace period.
+    * ``PR_CLOSED`` — the PR was merged or closed externally.
+    * ``INTERRUPTED`` — the user pressed Ctrl+C.
     """
     console.info("Waiting for review comments... (Ctrl+C to stop)")
+
+    quiet_start: float | None = None
 
     try:
         while True:
             pr_info = git_pr.get_pr_for_branch(repo_root, branch)
             if not pr_info:
                 console.info("PR is no longer open. Stopping poll.")
-                return False
+                return PollOutcome.PR_CLOSED
             pr_state = str(pr_info.get("state", "")).upper()
             if pr_state in ("MERGED", "CLOSED"):
                 console.info(f"PR #{pr_number} was {pr_state.lower()} externally. Stopping poll.")
-                return False
+                return PollOutcome.PR_CLOSED
 
             status = get_comprehensive_review_status(provider, repo_root, pr_number)
 
             if status.fetch_failed:
+                quiet_start = None  # reset on transient failure
                 console.detail("Fetch failed — retrying shortly...")
                 time.sleep(poll_interval)
                 continue
 
             if status.bot_status == ReviewBotStatus.IN_PROGRESS:
+                quiet_start = None  # bot is active; reset quiet timer
                 console.detail("Bot review in progress — checking again shortly...")
                 time.sleep(poll_interval)
                 continue
@@ -340,13 +346,33 @@ def poll_for_reviews(
                     f"Waiting {settle}s for {reviewer_type} to finish..."
                 )
                 time.sleep(settle)
-                return True
+                return PollOutcome.COMMENTS_FOUND
 
-            console.detail(f"No new comments yet — next check in {poll_interval}s...")
+            # No actionable threads, no bot blocking — apply quiet-timeout logic.
+            if status.is_commit_fresh():
+                # Commit too recent; reset quiet timer and keep polling.
+                quiet_start = None
+                console.detail(
+                    f"Commit is too recent for review — next check in {poll_interval}s..."
+                )
+            else:
+                # Commit is old enough; start or advance the quiet timer.
+                now = time.time()
+                if quiet_start is None:
+                    quiet_start = now
+                elapsed = now - quiet_start
+                if elapsed >= quiet_timeout:
+                    console.info(
+                        f"PR has been quiet for {int(elapsed)}s "
+                        "with no new comments. Stopping poll."
+                    )
+                    return PollOutcome.QUIET_TIMEOUT
+                console.detail(f"No new comments yet — next check in {poll_interval}s...")
+
             time.sleep(poll_interval)
     except KeyboardInterrupt:
         console.info("Polling stopped.")
-        return False
+        return PollOutcome.INTERRUPTED
 
 
 # ---------------------------------------------------------------------------
@@ -480,12 +506,26 @@ def start(
                 "(PR-level review). Check the PR for details."
             )
             return True
-        console.success("All review comments resolved — nothing to address! 🎉")
+
+        # No blocking conditions — message depends on commit freshness.
+        if status.is_commit_fresh():
+            console.info(
+                "No review comments found yet — the latest commit is less"
+                " than 2 minutes old. Review may still arrive."
+            )
+        else:
+            console.success("All review comments resolved — nothing to address! 🎉")
+
         if status.pending_reviewers:
             names = ", ".join(
                 f"@{r.name}" + (" (team)" if r.is_team else "") for r in status.pending_reviewers
             )
             console.info(f"Awaiting review from {names}.")
+
+        # Offer the shared quiet-exit menu: keep polling / merge / exit.
+        _quiet_next_steps_prompt(
+            repo_root, branch_name, task.id, worktree_path, pr_number, provider
+        )
         return True
 
     console.info(f"Found {comment_count} unresolved comment(s) across {file_count} location(s)")
@@ -713,6 +753,45 @@ def _recover_worktree(
         return None
 
 
+def _quiet_next_steps_prompt(
+    repo_root: Path,
+    branch: str,
+    issue_number: str | int | None,
+    worktree_path: Path | None,
+    pr_number: int,
+    provider: AbstractTaskProvider,
+) -> None:
+    """Shared next-steps menu for quiet PRs: keep polling, merge, or exit.
+
+    Used both when ``wade review pr-comments <issue>`` finds nothing to address
+    and when the polling loop hits the quiet timeout.
+    """
+    from wade.ui import prompts
+
+    while True:
+        console.empty()
+        choice = prompts.select(
+            f"PR #{pr_number} — what next?",
+            ["Keep polling", "Merge PR", "Exit without merging"],
+        )
+
+        if choice == 0:  # Keep polling
+            outcome = poll_for_reviews(provider, repo_root, pr_number, branch)
+            if outcome == PollOutcome.COMMENTS_FOUND:
+                if issue_number:
+                    _ = start(str(issue_number))
+                return
+            elif outcome == PollOutcome.QUIET_TIMEOUT:
+                continue  # Show menu again
+            else:  # INTERRUPTED or PR_CLOSED
+                return
+        elif choice == 1:  # Merge PR
+            _merge_pr(repo_root, branch, pr_number, issue_number, worktree_path, provider)
+            return
+        else:  # Exit without merging
+            return
+
+
 def _post_review_lifecycle(
     repo_root: Path,
     branch: str,
@@ -731,8 +810,14 @@ def _post_review_lifecycle(
     )
 
     if choice == 1:  # Wait for new reviews
-        if issue_number and poll_for_reviews(provider, repo_root, pr_number, branch):
-            _ = start(str(issue_number))
+        outcome = poll_for_reviews(provider, repo_root, pr_number, branch)
+        if outcome == PollOutcome.COMMENTS_FOUND:
+            if issue_number:
+                _ = start(str(issue_number))
+        elif outcome == PollOutcome.QUIET_TIMEOUT:
+            _quiet_next_steps_prompt(
+                repo_root, branch, issue_number, worktree_path, pr_number, provider
+            )
         return
 
     # Merge flow — reuse the same merge logic as post-implementation lifecycle

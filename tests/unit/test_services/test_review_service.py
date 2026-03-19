@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -450,6 +451,9 @@ class TestReviewServiceStart:
             "_post_review_lifecycle": patch(
                 "wade.services.review_service._post_review_lifecycle",
             ),
+            "_quiet_next_steps_prompt": patch(
+                "wade.services.review_service._quiet_next_steps_prompt",
+            ),
         }
 
         started = {k: p.start() for k, p in patches.items()}
@@ -504,12 +508,31 @@ class TestReviewServiceStart:
     def test_no_actionable_comments_returns_true(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock], mock_provider: MagicMock
     ) -> None:
-        """start() should succeed with a message if all comments are resolved."""
+        """start() should succeed and show the quiet-exit menu if comments are resolved."""
         from wade.models.review import PRReviewStatus
 
         mock_setup["get_comprehensive_review_status"].return_value = PRReviewStatus()
         result = start(target="42")
         assert result is True
+        mock_setup["_quiet_next_steps_prompt"].assert_called_once()
+
+    def test_fresh_commit_no_comments_shows_grace_message(
+        self, tmp_path: Path, mock_setup: dict[str, MagicMock], mock_provider: MagicMock
+    ) -> None:
+        """start() should inform user when commit is fresh and there are no comments."""
+        from datetime import datetime, timedelta
+
+        from wade.models.review import PRReviewStatus
+
+        fresh_commit = datetime.now(UTC) - timedelta(seconds=60)
+        mock_setup["get_comprehensive_review_status"].return_value = PRReviewStatus(
+            latest_commit_pushed_at=fresh_commit
+        )
+
+        result = start(target="42")
+        assert result is True
+        # quiet-exit menu should still be offered
+        mock_setup["_quiet_next_steps_prompt"].assert_called_once()
 
     def test_launches_ai_with_actionable_comments(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock], mock_provider: MagicMock
@@ -1389,7 +1412,7 @@ class TestPostReviewLifecycle:
         _post_review_lifecycle(tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider)
         mock_merge.assert_called_once_with(tmp_path, "feat/42", 99, "42", tmp_path / "wt", provider)
 
-    @patch("wade.services.review_service.poll_for_reviews", return_value=False)
+    @patch("wade.services.review_service.poll_for_reviews")
     @patch("wade.services.review_service._merge_pr")
     @patch("wade.ui.prompts.select", return_value=1)
     def test_wait_choice_polls_for_reviews(
@@ -1399,7 +1422,53 @@ class TestPostReviewLifecycle:
         mock_poll: MagicMock,
         tmp_path: Path,
     ) -> None:
+        from wade.models.review import PollOutcome
+
+        mock_poll.return_value = PollOutcome.INTERRUPTED
         provider = MagicMock()
         _post_review_lifecycle(tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider)
         mock_merge.assert_not_called()
         mock_poll.assert_called_once()
+
+    @patch("wade.services.review_service._quiet_next_steps_prompt")
+    @patch("wade.services.review_service.poll_for_reviews")
+    @patch("wade.services.review_service._merge_pr")
+    @patch("wade.ui.prompts.select", return_value=1)
+    def test_wait_quiet_timeout_routes_to_quiet_prompt(
+        self,
+        mock_select: MagicMock,
+        mock_merge: MagicMock,
+        mock_poll: MagicMock,
+        mock_quiet: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """When poll returns QUIET_TIMEOUT, the quiet next-steps prompt is shown."""
+        from wade.models.review import PollOutcome
+
+        mock_poll.return_value = PollOutcome.QUIET_TIMEOUT
+        provider = MagicMock()
+        _post_review_lifecycle(tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider)
+        mock_merge.assert_not_called()
+        mock_poll.assert_called_once()
+        mock_quiet.assert_called_once()
+
+    @patch("wade.services.review_service.start")
+    @patch("wade.services.review_service.poll_for_reviews")
+    @patch("wade.services.review_service._merge_pr")
+    @patch("wade.ui.prompts.select", return_value=1)
+    def test_wait_comments_found_recurses_to_start(
+        self,
+        mock_select: MagicMock,
+        mock_merge: MagicMock,
+        mock_poll: MagicMock,
+        mock_start: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """When poll returns COMMENTS_FOUND, start() is called to address them."""
+        from wade.models.review import PollOutcome
+
+        mock_poll.return_value = PollOutcome.COMMENTS_FOUND
+        provider = MagicMock()
+        _post_review_lifecycle(tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider)
+        mock_merge.assert_not_called()
+        mock_start.assert_called_once_with("42")
