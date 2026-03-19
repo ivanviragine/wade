@@ -50,20 +50,31 @@ class AbstractTaskProvider(ABC):
     def read_task(self, task_id: str) -> Task:
         """Read a single task by its ID (e.g., issue number)."""
 
+    def _is_not_found_error(self, error: Exception) -> bool:
+        """Override in concrete providers to detect provider-specific not-found errors.
+
+        Returns True if the error indicates the task was not found (e.g., deleted issue).
+        Returns False for other errors (auth, network, etc.) which will be re-raised.
+        """
+        return False
+
     def read_task_or_none(self, task_id: str) -> Task | None:
-        """Read a single task by its ID, returning None on failure.
+        """Read a single task by its ID, returning None if not found.
 
-        Unlike read_task(), this method does not raise an exception or log at
-        ERROR level if the task cannot be read (e.g., deleted issue). Useful for
-        gracefully handling tasks that may no longer exist.
+        Unlike read_task(), this method returns None only for explicit "not found"
+        conditions (e.g., deleted issue). Other exceptions (auth, network, server)
+        are re-raised to avoid masking real failures.
 
-        Default implementation wraps read_task() in try/except. Subclasses may
-        override for more efficient error handling (e.g., using check=False).
+        Subclasses should override _is_not_found_error() to detect provider-specific
+        not-found conditions. Subclasses may also override this method entirely for
+        more efficient error handling (e.g., using check=False in subprocess calls).
         """
         try:
             return self.read_task(task_id)
-        except Exception:
-            return None
+        except Exception as e:
+            if self._is_not_found_error(e):
+                return None
+            raise
 
     @abstractmethod
     def update_task(

@@ -179,8 +179,11 @@ class GitHubProvider(AbstractTaskProvider):
     def read_task_or_none(self, task_id: str) -> Task | None:
         """Read a single issue by number, returning None if not found.
 
-        Uses check=False to avoid ERROR-level logs when the issue is deleted
-        or not found. Logs at DEBUG level on failure.
+        Returns None only for explicit "not found" conditions (deleted issue).
+        Other failures (auth, network, rate-limit) are logged at WARNING and re-raised
+        to avoid masking real backend failures.
+
+        Uses check=False to avoid ERROR-level logs for subprocess failures.
         """
         result = run(
             [
@@ -195,12 +198,29 @@ class GitHubProvider(AbstractTaskProvider):
         )
 
         if result.returncode != 0:
-            logger.debug(
+            # Check stderr to differentiate "not found" from other failures
+            stderr = (result.stderr or "").lower()
+            is_not_found = "not found" in stderr or "could not resolve to an issue" in stderr
+
+            if is_not_found:
+                logger.debug(
+                    "github.read_task_or_none_not_found",
+                    task_id=task_id,
+                    returncode=result.returncode,
+                )
+                return None
+
+            # Other failures (auth, network, rate-limit) should not be silent
+            logger.warning(
                 "github.read_task_or_none_failed",
                 task_id=task_id,
                 returncode=result.returncode,
+                stderr=result.stderr.strip() if result.stderr else "",
             )
-            return None
+            # Re-raise to preserve the error context
+            raise RuntimeError(
+                f"Failed to read issue {task_id}: {result.stderr or 'unknown error'}"
+            )
 
         try:
             raw = json.loads(result.stdout)
