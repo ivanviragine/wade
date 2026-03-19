@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import webbrowser
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,13 @@ from wade.ui.console import console
 from wade.utils.markdown import parse_sessions_from_body
 
 logger = structlog.get_logger()
+
+
+def _open_pr_in_browser(pr_url: str) -> bool:
+    """Open PR URL in the default system browser."""
+    console.info("Opening PR in browser…")
+    webbrowser.open(pr_url)
+    return True
 
 
 def smart_start(
@@ -203,12 +211,6 @@ def smart_start(
     from wade.git import worktree as git_worktree
     from wade.ui import prompts
 
-    def _open_pr_in_browser(pr_url: str) -> bool:
-        """Open PR URL in the default system browser."""
-        console.info("Opening PR in browser…")
-        webbrowser.open(pr_url)
-        return True
-
     console.kv("Issue", console.issue_ref(task.id, task.title))
     console.kv("PR", f"#{pr_number_int} ({pr_state.lower()})")
 
@@ -262,13 +264,6 @@ def smart_start(
                     ),
                 )
             )
-        if pr_url:
-            menu_options.append(
-                (
-                    "Open PR in browser",
-                    lambda: _open_pr_in_browser(pr_url),
-                )
-            )
     else:
         # For ready PRs: show all three options
         menu_options.append(
@@ -307,13 +302,15 @@ def smart_start(
                 ),
             )
         )
-        if pr_url:
-            menu_options.append(
-                (
-                    "Open PR in browser",
-                    lambda: _open_pr_in_browser(pr_url),
-                )
+
+    # Common option at the end of menu
+    if pr_url:
+        menu_options.append(
+            (
+                "Open PR in browser",
+                partial(_open_pr_in_browser, pr_url),
             )
+        )
 
     labels = [label for label, _ in menu_options]
     choice = prompts.select(
