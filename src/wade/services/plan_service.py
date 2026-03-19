@@ -459,7 +459,9 @@ def plan(
                 repo_root=repo_root,
                 worktree_dir=planning_worktree_dir,
             )
-            bootstrap_worktree(planning_worktree, config, repo_root, skills=PLAN_SKILLS)
+            bootstrap_worktree(
+                planning_worktree, config, repo_root, skills=PLAN_SKILLS, plan_mode=True
+            )
             console.kv("Planning worktree", str(planning_worktree))
         except Exception as e:
             console.warn(f"Could not create planning worktree: {e}")

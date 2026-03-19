@@ -139,11 +139,47 @@ def write_plan_md(
     return plan_path
 
 
+def _install_plan_guard_hooks(worktree_path: Path) -> None:
+    """Copy the guard script and configure all AI tool hooks for plan mode."""
+    from wade.hooks import get_guard_script_path
+
+    guard_src = get_guard_script_path()
+
+    # Copy guard script to each tool's hooks directory
+    tool_dirs = [".claude/hooks", ".cursor/hooks", ".copilot/hooks", ".gemini/hooks"]
+    for tool_dir in tool_dirs:
+        dest_dir = worktree_path / tool_dir
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / "plan_write_guard.py"
+        shutil.copy2(guard_src, dest)
+
+    # Configure each tool's hook config with its own guard script copy
+    from wade.config.claude_allowlist import configure_plan_hooks as configure_claude_hooks
+    from wade.config.copilot_hooks import configure_plan_hooks as configure_copilot_hooks
+    from wade.config.cursor_hooks import configure_plan_hooks as configure_cursor_hooks
+    from wade.config.gemini_hooks import configure_plan_hooks as configure_gemini_hooks
+
+    configure_claude_hooks(
+        worktree_path, worktree_path / ".claude" / "hooks" / "plan_write_guard.py"
+    )
+    configure_cursor_hooks(
+        worktree_path, worktree_path / ".cursor" / "hooks" / "plan_write_guard.py"
+    )
+    configure_copilot_hooks(
+        worktree_path, worktree_path / ".copilot" / "hooks" / "plan_write_guard.py"
+    )
+    configure_gemini_hooks(
+        worktree_path, worktree_path / ".gemini" / "hooks" / "plan_write_guard.py"
+    )
+    logger.info("implementation.plan_guard_hooks_installed", path=str(worktree_path))
+
+
 def bootstrap_worktree(
     worktree_path: Path,
     config: ProjectConfig,
     repo_root: Path,
     skills: list[str] | None = None,
+    plan_mode: bool = False,
 ) -> None:
     """Run post-creation bootstrap: copy files, install skills, run hooks.
 
@@ -152,6 +188,7 @@ def bootstrap_worktree(
         config: Project configuration.
         repo_root: Root of the main repository checkout.
         skills: If provided, install only the listed skills instead of all.
+        plan_mode: If True, install file-write guard hooks for plan sessions.
     """
     # Copy configured files
     for filename in config.hooks.copy_to_worktree:
@@ -218,6 +255,11 @@ def bootstrap_worktree(
                     error=e.stderr.decode("utf-8", errors="replace") if e.stderr else "",
                     msg=f"Hook script failed: {hook_path_str}. Check logs for details.",
                 )
+
+    # Install plan-mode file-write guard hooks last so post-create scripts
+    # cannot overwrite the guarded config files.
+    if plan_mode:
+        _install_plan_guard_hooks(worktree_path)
 
 
 def _detect_ai_cli_env() -> str | None:

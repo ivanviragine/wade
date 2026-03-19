@@ -8,6 +8,7 @@ from pathlib import Path
 from wade.config.claude_allowlist import (
     WADE_ALLOW_PATTERN,
     configure_allowlist,
+    configure_plan_hooks,
     is_allowlist_configured,
 )
 
@@ -225,3 +226,41 @@ class TestIsAllowlistConfigured:
         (claude_dir / "settings.json").write_text("{invalid!!", encoding="utf-8")
 
         assert is_allowlist_configured(project_root) is False
+
+
+class TestConfigurePlanHooks:
+    """Tests for configure_plan_hooks()."""
+
+    def test_adds_pretooluse_hook(self, tmp_path: Path) -> None:
+        guard = tmp_path / "guard.py"
+        guard.touch()
+        configure_plan_hooks(tmp_path, guard)
+
+        settings_path = tmp_path / ".claude" / "settings.json"
+        assert settings_path.is_file()
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        hooks = data["hooks"]["PreToolUse"]
+        assert len(hooks) == 1
+        assert hooks[0]["matcher"] == "Edit|Write|NotebookEdit"
+        assert f"python3 {guard}" in hooks[0]["hooks"]
+
+    def test_idempotent(self, tmp_path: Path) -> None:
+        guard = tmp_path / "guard.py"
+        guard.touch()
+        configure_plan_hooks(tmp_path, guard)
+        configure_plan_hooks(tmp_path, guard)
+
+        settings_path = tmp_path / ".claude" / "settings.json"
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        assert len(data["hooks"]["PreToolUse"]) == 1
+
+    def test_merges_with_existing_allowlist(self, tmp_path: Path) -> None:
+        configure_allowlist(tmp_path)
+        guard = tmp_path / "guard.py"
+        guard.touch()
+        configure_plan_hooks(tmp_path, guard)
+
+        settings_path = tmp_path / ".claude" / "settings.json"
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        assert WADE_ALLOW_PATTERN in data["permissions"]["allow"]
+        assert len(data["hooks"]["PreToolUse"]) == 1
