@@ -69,7 +69,12 @@ def _run_review_delegation(
         config, cmd_config = _load_review_config(command)
 
     try:
-        delegation_mode = DelegationMode(mode) if mode else resolve_mode(cmd_config)
+        default_mode = (
+            DelegationMode.INTERACTIVE if command == "review_batch" else DelegationMode.PROMPT
+        )
+        delegation_mode = (
+            DelegationMode(mode) if mode else resolve_mode(cmd_config, default=default_mode)
+        )
     except ValueError:
         console.error(f"Invalid delegation mode: {mode}")
         return DelegationResult(

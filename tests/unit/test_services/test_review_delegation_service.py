@@ -329,6 +329,74 @@ class TestReviewCode:
 
 
 # ---------------------------------------------------------------------------
+# Default mode per command
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultModePerCommand:
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.confirm_ai_selection")
+    @patch("wade.services.review_delegation_service.resolve_effort")
+    @patch("wade.services.review_delegation_service.resolve_model")
+    @patch("wade.services.review_delegation_service.resolve_ai_tool")
+    @patch("wade.services.review_delegation_service.load_config")
+    def test_review_batch_defaults_to_interactive(
+        self,
+        mock_config: MagicMock,
+        mock_tool: MagicMock,
+        mock_model: MagicMock,
+        mock_effort: MagicMock,
+        mock_confirm: MagicMock,
+        mock_delegate: MagicMock,
+    ) -> None:
+        """review_batch with no mode configured resolves to interactive."""
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(review_batch=AICommandConfig(enabled=True))
+        )
+        mock_tool.return_value = "claude"
+        mock_model.return_value = None
+        mock_effort.return_value = None
+        mock_confirm.return_value = ("claude", None, None, False)
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.INTERACTIVE
+        )
+
+        _run_review_delegation("prompt text", "review_batch")
+
+        call_args = mock_delegate.call_args[0][0]
+        assert call_args.mode == DelegationMode.INTERACTIVE
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.resolve_effort")
+    @patch("wade.services.review_delegation_service.resolve_model")
+    @patch("wade.services.review_delegation_service.resolve_ai_tool")
+    @patch("wade.services.review_delegation_service.load_config")
+    def test_review_plan_defaults_to_prompt(
+        self,
+        mock_config: MagicMock,
+        mock_tool: MagicMock,
+        mock_model: MagicMock,
+        mock_effort: MagicMock,
+        mock_delegate: MagicMock,
+    ) -> None:
+        """review_plan with no mode configured still resolves to prompt."""
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(review_plan=AICommandConfig(enabled=True))
+        )
+        mock_tool.return_value = None
+        mock_model.return_value = None
+        mock_effort.return_value = None
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.PROMPT
+        )
+
+        _run_review_delegation("prompt text", "review_plan")
+
+        call_args = mock_delegate.call_args[0][0]
+        assert call_args.mode == DelegationMode.PROMPT
+
+
+# ---------------------------------------------------------------------------
 # _run_review_delegation effort + confirm tests
 # ---------------------------------------------------------------------------
 
