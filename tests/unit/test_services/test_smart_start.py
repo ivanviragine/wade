@@ -74,6 +74,7 @@ class TestSmartStartOpenPR:
     @patch("wade.services.smart_start._run_implement_task", return_value=True)
     @patch("wade.services.smart_start.git_pr.get_pr_body", return_value=None)
     @patch("wade.ui.prompts.select", return_value=0)
+    @patch("wade.ui.prompts.is_tty", return_value=True)
     @patch("wade.git.worktree.list_worktrees", return_value=[])
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
     @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
@@ -88,6 +89,7 @@ class TestSmartStartOpenPR:
         mock_branch: MagicMock,
         mock_pr: MagicMock,
         mock_worktrees: MagicMock,
+        mock_is_tty: MagicMock,
         mock_select: MagicMock,
         mock_pr_body: MagicMock,
         mock_implement: MagicMock,
@@ -102,8 +104,49 @@ class TestSmartStartOpenPR:
         assert result is True
         mock_implement.assert_called_once()
 
+    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.smart_start.git_pr.get_pr_body", return_value=None)
+    @patch("wade.ui.prompts.select")
+    @patch("wade.ui.prompts.is_tty", return_value=False)
+    @patch("wade.git.worktree.list_worktrees", return_value=[])
+    @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
+    @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.smart_start.git_repo.get_repo_root")
+    @patch("wade.services.smart_start.get_provider")
+    @patch("wade.services.smart_start.load_config")
+    def test_non_tty_open_pr_defaults_without_prompting(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_branch: MagicMock,
+        mock_pr: MagicMock,
+        mock_worktrees: MagicMock,
+        mock_is_tty: MagicMock,
+        mock_select: MagicMock,
+        mock_pr_body: MagicMock,
+        mock_implement: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Non-interactive smart-start should take the default action explicitly."""
+        mock_repo_root.return_value = tmp_path
+        mock_get_provider.return_value.read_task.return_value = _make_task()
+        mock_pr.return_value = {
+            "number": 99,
+            "state": "OPEN",
+            "isDraft": False,
+            "url": "https://example/pr/99",
+        }
+
+        result = smart_start("42", project_root=tmp_path)
+
+        assert result is True
+        mock_select.assert_not_called()
+        mock_implement.assert_called_once()
+
     @patch("wade.services.smart_start._run_review_pr_comments", return_value=True)
     @patch("wade.ui.prompts.select", return_value=1)
+    @patch("wade.ui.prompts.is_tty", return_value=True)
     @patch("wade.git.worktree.list_worktrees", return_value=[])
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
     @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
@@ -118,6 +161,7 @@ class TestSmartStartOpenPR:
         mock_branch: MagicMock,
         mock_pr: MagicMock,
         mock_worktrees: MagicMock,
+        mock_is_tty: MagicMock,
         mock_select: MagicMock,
         mock_review: MagicMock,
         tmp_path: Path,
@@ -133,6 +177,7 @@ class TestSmartStartOpenPR:
 
     @patch("wade.services.smart_start._merge_pr")
     @patch("wade.ui.prompts.select", return_value=2)
+    @patch("wade.ui.prompts.is_tty", return_value=True)
     @patch("wade.git.worktree.list_worktrees", return_value=[])
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
     @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
@@ -147,6 +192,7 @@ class TestSmartStartOpenPR:
         mock_branch: MagicMock,
         mock_pr: MagicMock,
         mock_worktrees: MagicMock,
+        mock_is_tty: MagicMock,
         mock_select: MagicMock,
         mock_merge: MagicMock,
         tmp_path: Path,
@@ -167,6 +213,7 @@ class TestSmartStartDraftPR:
 
     @patch("wade.services.smart_start._run_implement_task", return_value=True)
     @patch("wade.ui.prompts.select", return_value=0)
+    @patch("wade.ui.prompts.is_tty", return_value=True)
     @patch("wade.git.worktree.list_worktrees", return_value=[])
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
     @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
@@ -181,6 +228,7 @@ class TestSmartStartDraftPR:
         mock_branch: MagicMock,
         mock_pr: MagicMock,
         mock_worktrees: MagicMock,
+        mock_is_tty: MagicMock,
         mock_select: MagicMock,
         mock_implement: MagicMock,
         tmp_path: Path,
@@ -206,6 +254,7 @@ class TestSmartStartDraftPR:
     @patch("wade.services.smart_start._run_implement_task", return_value=True)
     @patch("wade.services.smart_start.git_pr.get_pr_body", return_value=None)
     @patch("wade.ui.prompts.select", return_value=0)
+    @patch("wade.ui.prompts.is_tty", return_value=True)
     @patch(
         "wade.git.worktree.list_worktrees",
         return_value=[{"branch": "feat/42-fix", "path": "/tmp/wt"}],
@@ -223,6 +272,7 @@ class TestSmartStartDraftPR:
         mock_branch: MagicMock,
         mock_pr: MagicMock,
         mock_worktrees: MagicMock,
+        mock_is_tty: MagicMock,
         mock_select: MagicMock,
         mock_pr_body: MagicMock,
         mock_implement: MagicMock,
@@ -247,6 +297,7 @@ class TestSmartStartDraftPR:
 
     @patch("wade.services.smart_start._run_implement_task", return_value=True)
     @patch("wade.ui.prompts.select", return_value=0)
+    @patch("wade.ui.prompts.is_tty", return_value=True)
     @patch("wade.git.worktree.list_worktrees", return_value=[])
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
     @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
@@ -261,6 +312,7 @@ class TestSmartStartDraftPR:
         mock_branch: MagicMock,
         mock_pr: MagicMock,
         mock_worktrees: MagicMock,
+        mock_is_tty: MagicMock,
         mock_select: MagicMock,
         mock_implement: MagicMock,
         tmp_path: Path,

@@ -313,6 +313,11 @@ def smart_start(
             )
         )
 
+    if not prompts.is_tty():
+        default_label, default_action = menu_options[0]
+        console.info(f"Non-interactive mode — defaulting to '{default_label}'.")
+        return default_action()
+
     labels = [label for label, _ in menu_options]
     choice = prompts.select(
         f"PR #{pr_number_int} exists — what do you want to do?",
@@ -530,6 +535,22 @@ def _run_continue_working(
 
     resumable = _get_latest_resumable_session(repo_root, pr_number)
     if not resumable:
+        return _run_implement_task(
+            target=target,
+            ai_tool=ai_tool,
+            model=model,
+            project_root=project_root,
+            detach=detach,
+            cd_only=cd_only,
+            ai_explicit=ai_explicit,
+            model_explicit=model_explicit,
+            effort=effort,
+            effort_explicit=effort_explicit,
+            yolo=yolo,
+        )
+
+    if not prompts.is_tty():
+        console.info("Non-interactive mode — starting a new session instead of resuming.")
         return _run_implement_task(
             target=target,
             ai_tool=ai_tool,

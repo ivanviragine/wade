@@ -130,11 +130,50 @@ class TestRunContinueWorking:
         assert call_kwargs.get("resume_ai_tool") is None
 
     @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.ui.prompts.select")
+    @patch("wade.ui.prompts.is_tty", return_value=False)
+    @patch("wade.services.smart_start._get_latest_resumable_session")
+    def test_non_tty_with_resumable_session_starts_new_session(
+        self,
+        mock_get_session: MagicMock,
+        mock_is_tty: MagicMock,
+        mock_select: MagicMock,
+        mock_implement: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Non-interactive runs should not implicitly resume an old session."""
+        mock_get_session.return_value = SessionRecord(
+            phase="implementation",
+            ai_tool="claude",
+            session_id="abc-123",
+        )
+
+        result = _run_continue_working(
+            target="42",
+            ai_tool=None,
+            model=None,
+            project_root=tmp_path,
+            detach=False,
+            cd_only=False,
+            ai_explicit=False,
+            model_explicit=False,
+            repo_root=tmp_path,
+            pr_number=99,
+        )
+        assert result is True
+        mock_select.assert_not_called()
+        call_kwargs = mock_implement.call_args[1]
+        assert call_kwargs.get("resume_session_id") is None
+        assert call_kwargs.get("resume_ai_tool") is None
+
+    @patch("wade.services.smart_start._run_implement_task", return_value=True)
     @patch("wade.ui.prompts.select", return_value=0)
+    @patch("wade.ui.prompts.is_tty", return_value=True)
     @patch("wade.services.smart_start._get_latest_resumable_session")
     def test_resume_option_selected_passes_session_id(
         self,
         mock_get_session: MagicMock,
+        mock_is_tty: MagicMock,
         mock_select: MagicMock,
         mock_implement: MagicMock,
         tmp_path: Path,
@@ -165,10 +204,12 @@ class TestRunContinueWorking:
 
     @patch("wade.services.smart_start._run_implement_task", return_value=True)
     @patch("wade.ui.prompts.select", return_value=1)
+    @patch("wade.ui.prompts.is_tty", return_value=True)
     @patch("wade.services.smart_start._get_latest_resumable_session")
     def test_new_session_option_selected_no_resume_params(
         self,
         mock_get_session: MagicMock,
+        mock_is_tty: MagicMock,
         mock_select: MagicMock,
         mock_implement: MagicMock,
         tmp_path: Path,
@@ -199,10 +240,12 @@ class TestRunContinueWorking:
 
     @patch("wade.services.smart_start._run_implement_task", return_value=True)
     @patch("wade.ui.prompts.select", return_value=0)
+    @patch("wade.ui.prompts.is_tty", return_value=True)
     @patch("wade.services.smart_start._get_latest_resumable_session")
     def test_resume_submenu_shows_session_info(
         self,
         mock_get_session: MagicMock,
+        mock_is_tty: MagicMock,
         mock_select: MagicMock,
         mock_implement: MagicMock,
         tmp_path: Path,
@@ -243,6 +286,7 @@ class TestSmartStartResumeIntegration:
     @patch("wade.services.smart_start._run_implement_task", return_value=True)
     @patch("wade.services.smart_start.git_pr.get_pr_body")
     @patch("wade.ui.prompts.select")
+    @patch("wade.ui.prompts.is_tty", return_value=True)
     @patch(
         "wade.git.worktree.list_worktrees",
         return_value=[{"branch": "feat/42-fix", "path": "/tmp/wt"}],
@@ -260,6 +304,7 @@ class TestSmartStartResumeIntegration:
         mock_branch: MagicMock,
         mock_pr_for_branch: MagicMock,
         mock_worktrees: MagicMock,
+        mock_is_tty: MagicMock,
         mock_select: MagicMock,
         mock_pr_body: MagicMock,
         mock_implement: MagicMock,
@@ -285,6 +330,7 @@ class TestSmartStartResumeIntegration:
     @patch("wade.services.smart_start._run_implement_task", return_value=True)
     @patch("wade.services.smart_start.git_pr.get_pr_body")
     @patch("wade.ui.prompts.select")
+    @patch("wade.ui.prompts.is_tty", return_value=True)
     @patch(
         "wade.git.worktree.list_worktrees",
         return_value=[{"branch": "feat/42-fix", "path": "/tmp/wt"}],
@@ -302,6 +348,7 @@ class TestSmartStartResumeIntegration:
         mock_branch: MagicMock,
         mock_pr_for_branch: MagicMock,
         mock_worktrees: MagicMock,
+        mock_is_tty: MagicMock,
         mock_select: MagicMock,
         mock_pr_body: MagicMock,
         mock_implement: MagicMock,
@@ -325,6 +372,7 @@ class TestSmartStartResumeIntegration:
     @patch("wade.services.smart_start._run_implement_task", return_value=True)
     @patch("wade.services.smart_start.git_pr.get_pr_body", return_value=None)
     @patch("wade.ui.prompts.select", return_value=0)
+    @patch("wade.ui.prompts.is_tty", return_value=True)
     @patch(
         "wade.git.worktree.list_worktrees",
         return_value=[{"branch": "feat/42-fix", "path": "/tmp/wt"}],
@@ -342,6 +390,7 @@ class TestSmartStartResumeIntegration:
         mock_branch: MagicMock,
         mock_pr_for_branch: MagicMock,
         mock_worktrees: MagicMock,
+        mock_is_tty: MagicMock,
         mock_select: MagicMock,
         mock_pr_body: MagicMock,
         mock_implement: MagicMock,
@@ -363,6 +412,7 @@ class TestSmartStartResumeIntegration:
     @patch("wade.services.smart_start._run_implement_task", return_value=True)
     @patch("wade.services.smart_start.git_pr.get_pr_body")
     @patch("wade.ui.prompts.select")
+    @patch("wade.ui.prompts.is_tty", return_value=True)
     @patch("wade.git.worktree.list_worktrees", return_value=[])
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
     @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
@@ -377,6 +427,7 @@ class TestSmartStartResumeIntegration:
         mock_branch: MagicMock,
         mock_pr_for_branch: MagicMock,
         mock_worktrees: MagicMock,
+        mock_is_tty: MagicMock,
         mock_select: MagicMock,
         mock_pr_body: MagicMock,
         mock_implement: MagicMock,
