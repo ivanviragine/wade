@@ -142,7 +142,7 @@ def configure_plan_hooks(worktree_path: Path, guard_script: Path) -> None:
 
     guard_entry: dict[str, object] = {
         "matcher": "Edit|Write|NotebookEdit",
-        "hooks": [f"python3 {guard_script}"],
+        "hooks": [{"type": "command", "command": f"python3 {guard_script}"}],
     }
 
     # Check if already present (by hook command)
@@ -150,8 +150,14 @@ def configure_plan_hooks(worktree_path: Path, guard_script: Path) -> None:
     for entry in pre_list:
         if isinstance(entry, dict):
             entry_hooks = entry.get("hooks", [])
-            if isinstance(entry_hooks, list) and guard_cmd in entry_hooks:
-                return  # Already configured
+            if isinstance(entry_hooks, list):
+                for hook in entry_hooks:
+                    # Check for object format: {"type": "command", "command": "..."}
+                    if isinstance(hook, dict) and hook.get("command") == guard_cmd:
+                        return  # Already configured
+                    # Legacy fallback: plain string format
+                    if isinstance(hook, str) and hook == guard_cmd:
+                        return  # Already configured
 
     pre_list.append(guard_entry)
 
