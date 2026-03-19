@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.5.10] — 2026-03-19
+
+### Bug Fixes
+
+- use colon format Bash(wade:*) for Claude Code permission pattern (3b7bee8)
+
 ## [v0.5.9] — 2026-03-19
 
 ### CI/CD
