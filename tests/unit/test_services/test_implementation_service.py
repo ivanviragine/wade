@@ -1373,6 +1373,29 @@ class TestImplementResult:
 class TestPostImplementationLifecyclePr:
     """Tests for _post_implementation_lifecycle_pr — merged status propagation."""
 
+    def test_non_tty_returns_not_merged_without_browser_or_merge(self, tmp_path: Path) -> None:
+        """Non-interactive runs should never auto-open or auto-merge a PR."""
+        mock_provider = MagicMock()
+        with (
+            patch(
+                "wade.git.pr.get_pr_for_branch",
+                return_value={"number": 10, "url": "http://test"},
+            ),
+            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.webbrowser.open") as mock_open,
+            patch("wade.services.implementation_service._merge_pr") as mock_merge,
+            patch("wade.services.review_service.poll_for_reviews") as mock_poll,
+        ):
+            mock_prompts.is_tty.return_value = False
+            result = _post_implementation_lifecycle_pr(
+                tmp_path, "feat/42", "42", tmp_path / "wt", mock_provider
+            )
+
+        assert result == MergeStatus.NOT_MERGED
+        mock_open.assert_not_called()
+        mock_merge.assert_not_called()
+        mock_poll.assert_not_called()
+
     def test_merge_pr_returns_merged(self, tmp_path: Path) -> None:
         """User chooses 'Merge PR' → returns MERGED."""
         mock_provider = MagicMock()
@@ -1387,6 +1410,7 @@ class TestPostImplementationLifecyclePr:
                 return_value=MergeStatus.MERGED,
             ),
         ):
+            mock_prompts.is_tty.return_value = True
             mock_prompts.confirm.return_value = False  # Don't open in browser
             mock_prompts.select.return_value = 0  # "Merge PR"
             result = _post_implementation_lifecycle_pr(
@@ -1410,6 +1434,7 @@ class TestPostImplementationLifecyclePr:
                 return_value=PollOutcome.INTERRUPTED,
             ),
         ):
+            mock_prompts.is_tty.return_value = True
             mock_prompts.confirm.return_value = False
             mock_prompts.select.return_value = 1  # "Wait for reviews"
             result = _post_implementation_lifecycle_pr(

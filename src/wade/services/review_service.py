@@ -769,24 +769,40 @@ def _quiet_next_steps_prompt(
     """
     from wade.ui import prompts
 
+    if not prompts.is_tty():
+        return
+
     while True:
+        allow_merge = True
+        status = get_comprehensive_review_status(provider, repo_root, pr_number)
+        if status.pending_reviewers:
+            names = ", ".join(
+                f"@{r.name}" + (" (team)" if r.is_team else "") for r in status.pending_reviewers
+            )
+            console.info(
+                f"Awaiting review from {names}. Merge is unavailable while review is pending."
+            )
+            allow_merge = False
+
         console.empty()
-        choice = prompts.select(
-            f"PR #{pr_number} — what next?",
-            ["Keep polling", "Merge PR", "Exit without merging"],
+        options = (
+            ["Keep polling", "Merge PR", "Exit without merging"]
+            if allow_merge
+            else ["Keep polling", "Exit without merging"]
         )
+        choice = prompts.select(f"PR #{pr_number} — what next?", options)
 
         if choice == 0:  # Keep polling
             outcome = poll_for_reviews(provider, repo_root, pr_number, branch)
             if outcome == PollOutcome.COMMENTS_FOUND:
                 if issue_number:
-                    _ = start(str(issue_number))
+                    _ = start(str(issue_number), project_root=repo_root)
                 return
             elif outcome == PollOutcome.QUIET_TIMEOUT:
                 continue  # Show menu again
             else:  # INTERRUPTED or PR_CLOSED
                 return
-        elif choice == 1:  # Merge PR
+        elif allow_merge and choice == 1:  # Merge PR
             _merge_pr(repo_root, branch, pr_number, issue_number, worktree_path, provider)
             return
         else:  # Exit without merging
@@ -804,6 +820,9 @@ def _post_review_lifecycle(
     """Post-review lifecycle menu: Merge PR or wait for new reviews."""
     from wade.ui import prompts
 
+    if not prompts.is_tty():
+        return
+
     console.empty()
     choice = prompts.select(
         f"PR #{pr_number} — what next?",
@@ -814,7 +833,7 @@ def _post_review_lifecycle(
         outcome = poll_for_reviews(provider, repo_root, pr_number, branch)
         if outcome == PollOutcome.COMMENTS_FOUND:
             if issue_number:
-                _ = start(str(issue_number))
+                _ = start(str(issue_number), project_root=repo_root)
         elif outcome == PollOutcome.QUIET_TIMEOUT:
             _quiet_next_steps_prompt(
                 repo_root, branch, issue_number, worktree_path, pr_number, provider

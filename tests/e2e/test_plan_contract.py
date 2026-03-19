@@ -171,7 +171,7 @@ class TestPlanSessionDoneCommand:
         (valid_dir / "PLAN-good.md").write_text(
             "\n".join(
                 [
-                    "# Valid plan",
+                    "# feat: valid plan",
                     "",
                     "## Complexity",
                     "easy",

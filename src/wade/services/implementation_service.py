@@ -675,8 +675,11 @@ def _post_implementation_lifecycle_pr(
         return MergeStatus.NOT_MERGED
 
     pr_url = str(pr_info.get("url", ""))
-    if pr_url and prompts.confirm("Open PR in browser?", default=True):
+    if pr_url and prompts.is_tty() and prompts.confirm("Open PR in browser?", default=True):
         webbrowser.open(pr_url)
+
+    if not prompts.is_tty():
+        return MergeStatus.NOT_MERGED
 
     choice = prompts.select(
         f"PR #{pr_number} — what next?",
