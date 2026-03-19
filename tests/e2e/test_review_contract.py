@@ -37,7 +37,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
+from pathlib import Path
 
 
 log_path = os.environ.get("WADE_FAKE_CLAUDE_LOG")
@@ -46,6 +48,20 @@ if log_path:
         f.write(json.dumps(sys.argv[1:]))
         f.write("\\n")
 
+argv = sys.argv[1:]
+if "--print" in argv:
+    print("FAKE REVIEW FEEDBACK")
+    sys.exit(0)
+
+prompt = next((arg for arg in argv if "Write your output to:" in arg), "")
+match = re.search(r"Write your output to:\\s*(.+?)\\nWhen done, exit the session\\.", prompt, re.S)
+if not match:
+    print("Interactive prompt missing output path", file=sys.stderr)
+    sys.exit(1)
+
+output_path = Path(match.group(1).strip())
+output_path.parent.mkdir(parents=True, exist_ok=True)
+output_path.write_text("FAKE REVIEW FEEDBACK\\n", encoding="utf-8")
 print("FAKE REVIEW FEEDBACK")
 sys.exit(0)
 """,
@@ -90,11 +106,17 @@ def _assert_claude_headless_config(argv: list[str], expected_effort: str) -> Non
     assert model_value, f"Expected --model argument in delegated invocation: {argv!r}"
     assert model_value.replace(".", "-") == "claude-haiku-4-5"
 
-    settings_value = _flag_value(argv, "--settings")
-    assert settings_value, f"Expected --settings argument in delegated invocation: {argv!r}"
-    parsed_settings = json.loads(settings_value)
-    assert isinstance(parsed_settings, dict)
-    assert parsed_settings.get("effortLevel") == expected_effort
+    effort_value = _flag_value(argv, "--effort")
+    assert effort_value, f"Expected --effort argument in delegated invocation: {argv!r}"
+    assert effort_value == expected_effort
+
+
+def _assert_claude_interactive_config(argv: list[str]) -> None:
+    assert "--print" not in argv
+    assert argv, "Expected delegated interactive invocation arguments"
+    prompt_arg = next((arg for arg in argv if "Write your output to:" in arg), None)
+    assert prompt_arg is not None
+    assert "When done, exit the session." in prompt_arg
 
 
 def _set_review_enabled(e2e_repo: Path, config_key: str, enabled: bool) -> None:
@@ -554,6 +576,44 @@ class TestReviewPrCommentsCommand:
 
 class TestReviewBatchCommand:
     """Test `wade review batch` deterministic contracts."""
+
+    def test_review_batch_defaults_to_interactive_mode(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """review batch without --mode should launch the interactive AI lane by default."""
+        _install_fake_claude(mock_gh_cli["mock_bin"])
+        log_file = e2e_repo / ".fake-claude-log.jsonl"
+        tracking_id = _bootstrap_batch_review_targets(
+            e2e_repo,
+            mock_gh_cli,
+            tracking_issue_number=66,
+            child_specs=[
+                (64, "Interactive batch child one", "feat/64-interactive-batch-child-one"),
+                (65, "Interactive batch child two", "feat/65-interactive-batch-child-two"),
+            ],
+        )
+
+        result = _run(
+            ["review", "batch", tracking_id],
+            cwd=e2e_repo,
+            env={"WADE_FAKE_CLAUDE_LOG": str(log_file)},
+        )
+
+        assert result.returncode == 0
+        output = result.stdout + result.stderr
+        assert "BATCH REVIEW COMPLETE" in output
+        integration_pr_number = _find_mock_pr_number_by_head(
+            mock_gh_cli["state_file"], "batch-review/66"
+        )
+        _assert_gh_called_with(
+            mock_gh_cli["log_file"],
+            ["pr", "comment", integration_pr_number],
+        )
+        invocations = _read_fake_claude_log(log_file)
+        assert len(invocations) == 1
+        _assert_claude_interactive_config(invocations[0])
 
     def test_review_batch_disabled_skips_before_creating_integration_state(
         self,

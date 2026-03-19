@@ -16,7 +16,7 @@ from wade.services.batch_review_service import (
 
 def _batch_review_config(
     *,
-    review_batch_mode: str = "prompt",
+    review_batch_mode: str | None = None,
     review_batch_enabled: bool | None = True,
     default_tool: str | None = "claude",
 ) -> ProjectConfig:

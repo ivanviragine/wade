@@ -1444,7 +1444,7 @@ def _prompt_command_overrides(
         {"plan": {"tool": "claude", "model": "..."}, "deps": {},
          "review_plan": {"enabled": "true", "mode": "prompt"},
          "review_implementation": {"enabled": "false"},
-         "review_batch": {"enabled": "true", "mode": "headless"}}
+         "review_batch": {"enabled": "true", "mode": "interactive"}}
 
     Empty dicts for commands with no overrides.
     Review commands include an "enabled" key ("true"/"false" as strings).
@@ -1546,10 +1546,11 @@ def _prompt_command_overrides(
                 "interactive (AI session)",
             ]
             mode_values = ["prompt", "headless", "interactive"]
+            default_mode_idx = 2 if cmd_name == "review_batch" else 0
             mode_idx = prompts.select(
                 f"  Delegation mode for {section.lower()}",
                 mode_options,
-                default=0,
+                default=default_mode_idx,
             )
             mode = mode_values[mode_idx]
             result[cmd_name]["mode"] = mode

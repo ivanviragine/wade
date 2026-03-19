@@ -25,7 +25,7 @@ def _review_cli_config(
     review_plan_enabled: bool | None = True,
     review_implementation_mode: str = "prompt",
     review_implementation_enabled: bool | None = True,
-    review_batch_mode: str = "prompt",
+    review_batch_mode: str | None = None,
     review_batch_enabled: bool | None = True,
 ) -> ProjectConfig:
     """Build a review CLI config fixture independent from the repo's real config."""

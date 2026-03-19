@@ -512,27 +512,18 @@ class TestPromptCommandOverrides:
 
     @patch("wade.ui.prompts.select")
     def test_interactive_no_overrides(self, mock_select: MagicMock) -> None:
-        # With installed_tools=["claude"], tool_options=["claude", "Skip (use default)"].
-        # plan: Skip tool (idx=1)
-        # deps: Skip tool (idx=1), no effective tool → mode skipped entirely
-        # review_plan/review_implementation/review_batch:
-        #   Enable=Yes (idx=0), mode=prompt (idx=0) → skip tool/model
-        mock_select.side_effect = [
-            1,  # plan: Skip tool
-            1,  # deps: Skip tool (no effective tool → no mode prompt)
-            0,  # review_plan: Enable=Yes
-            0,  # review_plan: mode=prompt (idx 0 in [prompt, headless, interactive])
-            0,  # review_implementation: Enable=Yes
-            0,  # review_implementation: mode=prompt
-            0,  # review_batch: Enable=Yes
-            0,  # review_batch: mode=prompt
-        ]
-        result = _prompt_command_overrides(["claude"], non_interactive=False)
+        """Accepting defaults should preserve current review/deps default modes."""
+        mock_select.side_effect = lambda _title, _items, default=0, **_kw: default
+        result = _prompt_command_overrides(
+            ["claude"],
+            non_interactive=False,
+            default_tool="claude",
+        )
         assert result["plan"] == {}
-        assert result["deps"] == {}
+        assert result["deps"] == {"mode": "headless"}
         assert result["review_plan"] == {"enabled": "true", "mode": "prompt"}
         assert result["review_implementation"] == {"enabled": "true", "mode": "prompt"}
-        assert result["review_batch"] == {"enabled": "true", "mode": "prompt"}
+        assert result["review_batch"] == {"enabled": "true", "mode": "interactive"}
 
     @patch("wade.ui.prompts.select")
     def test_interactive_reviews_disabled(self, mock_select: MagicMock) -> None:
@@ -551,6 +542,24 @@ class TestPromptCommandOverrides:
         assert result["review_plan"] == {"enabled": "false"}
         assert result["review_implementation"] == {"enabled": "false"}
         assert result["review_batch"] == {"enabled": "false"}
+
+    @patch("wade.ui.prompts.select")
+    def test_review_batch_mode_prompt_defaults_to_interactive(self, mock_select: MagicMock) -> None:
+        """Batch review should default to interactive, not prompt, in the init wizard."""
+        mock_select.side_effect = lambda _title, _items, default=0, **_kw: default
+
+        _prompt_command_overrides(
+            ["claude"],
+            non_interactive=False,
+            default_tool="claude",
+        )
+
+        batch_mode_call = next(
+            call
+            for call in mock_select.call_args_list
+            if call.args[0] == "  Delegation mode for batch review"
+        )
+        assert batch_mode_call.kwargs["default"] == 2
 
     @patch("wade.services.init_service._suggest_model_for_tool")
     @patch("wade.ui.prompts.select")
