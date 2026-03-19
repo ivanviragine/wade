@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.6.2] — 2026-03-19
+
+### Bug Fixes
+
+- use colon format Shell(wade:*) for Cursor CLI permission pattern (a11f0b2)
+
 ## [v0.6.1] — 2026-03-19
 
 ### Bug Fixes

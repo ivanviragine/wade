@@ -68,7 +68,7 @@ class TestConfigureAllowlistGlobal:
         assert WADE_ALLOW_PATTERN in data["permissions"]["allow"]
 
     def test_pattern_value(self) -> None:
-        assert WADE_ALLOW_PATTERN == "Shell(wade *)"
+        assert WADE_ALLOW_PATTERN == "Shell(wade:*)"
 
 
 class TestConfigureAllowlistPerProject:
