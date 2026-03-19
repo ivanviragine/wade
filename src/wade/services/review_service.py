@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import tempfile
+import time
 from pathlib import Path
 
 import structlog
@@ -282,6 +283,70 @@ def _fallback_review_status(
         actionable_threads=actionable,
         bot_status=bot_status,
     )
+
+
+def poll_for_reviews(
+    provider: AbstractTaskProvider,
+    repo_root: Path,
+    pr_number: int,
+    branch: str,
+    *,
+    poll_interval: int = 60,
+    bot_settle: int = 60,
+    human_settle: int = 120,
+) -> bool:
+    """Poll for new PR review comments, blocking until comments are found or interrupted.
+
+    Checks every ``poll_interval`` seconds. When actionable comments are detected,
+    waits a settle period to let reviewers finish (``bot_settle`` seconds for bot
+    reviewers, ``human_settle`` for humans) then returns ``True``.
+
+    Returns:
+        True when review comments are found and the settle period has elapsed.
+        False if Ctrl+C is pressed or the PR is closed/merged externally.
+    """
+    console.info("Waiting for review comments... (Ctrl+C to stop)")
+
+    try:
+        while True:
+            pr_info = git_pr.get_pr_for_branch(repo_root, branch)
+            if not pr_info:
+                console.info("PR is no longer open. Stopping poll.")
+                return False
+            pr_state = str(pr_info.get("state", "")).upper()
+            if pr_state in ("MERGED", "CLOSED"):
+                console.info(f"PR #{pr_number} was {pr_state.lower()} externally. Stopping poll.")
+                return False
+
+            status = get_comprehensive_review_status(provider, repo_root, pr_number)
+
+            if status.fetch_failed:
+                console.detail("Fetch failed — retrying shortly...")
+                time.sleep(poll_interval)
+                continue
+
+            if status.bot_status == ReviewBotStatus.IN_PROGRESS:
+                console.detail("Bot review in progress — checking again shortly...")
+                time.sleep(poll_interval)
+                continue
+
+            if status.actionable_threads:
+                count = len(status.actionable_threads)
+                is_bot = status.bot_status is not None
+                settle = bot_settle if is_bot else human_settle
+                reviewer_type = "bot" if is_bot else "reviewer"
+                console.info(
+                    f"Found {count} new review comment(s). "
+                    f"Waiting {settle}s for {reviewer_type} to finish..."
+                )
+                time.sleep(settle)
+                return True
+
+            console.detail(f"No new comments yet — next check in {poll_interval}s...")
+            time.sleep(poll_interval)
+    except KeyboardInterrupt:
+        console.info("Polling stopped.")
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -666,8 +731,8 @@ def _post_review_lifecycle(
     )
 
     if choice == 1:  # Wait for new reviews
-        issue_hint = f" {issue_number}" if issue_number else ""
-        console.hint(f"Run `wade review pr-comments{issue_hint}` when new reviews come in.")
+        if issue_number and poll_for_reviews(provider, repo_root, pr_number, branch):
+            _ = start(str(issue_number))
         return
 
     # Merge flow — reuse the same merge logic as post-implementation lifecycle
