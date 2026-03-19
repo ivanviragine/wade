@@ -15,7 +15,7 @@ from wade.models.session import MergeStrategy
 class TestPermissionsConfig:
     def test_defaults(self) -> None:
         perms = PermissionsConfig()
-        assert perms.allowed_commands == ["wade *"]
+        assert perms.allowed_commands == ["wade:*"]
 
     def test_custom_commands(self) -> None:
         perms = PermissionsConfig(
@@ -38,7 +38,7 @@ class TestProjectConfig:
         assert config.project.branch_prefix == "feat"
         assert config.ai.default_tool is None
         assert config.models == {}
-        assert config.permissions.allowed_commands == ["wade *"]
+        assert config.permissions.allowed_commands == ["wade:*"]
 
     def test_get_ai_tool_global(self) -> None:
         config = ProjectConfig(ai=AIConfig(default_tool="claude"))
