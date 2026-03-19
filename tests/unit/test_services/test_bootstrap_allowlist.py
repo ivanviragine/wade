@@ -158,3 +158,76 @@ class TestBootstrapCursorAllowlistPropagation:
         # No .cursor/cli.json should be created
         wt_cursor_config = worktree_path / ".cursor" / "cli.json"
         assert not wt_cursor_config.is_file()
+
+
+class TestBootstrapPlanMode:
+    """Tests that bootstrap_worktree(plan_mode=True) installs guard hooks."""
+
+    def test_plan_mode_installs_guard_hooks(self, tmp_path: Path) -> None:
+        """plan_mode=True installs guard script and configs for all tools."""
+        worktree_path = tmp_path / "worktree"
+        worktree_path.mkdir()
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        config = ProjectConfig(
+            project=ProjectSettings(),
+            hooks=HooksConfig(),
+            permissions=PermissionsConfig(),
+        )
+
+        with patch("subprocess.run"):
+            bootstrap_worktree(worktree_path, config, repo_root, plan_mode=True)
+
+        # Guard script should be copied to all tool hook dirs
+        for tool_dir in [".claude/hooks", ".cursor/hooks", ".copilot/hooks", ".gemini/hooks"]:
+            guard = worktree_path / tool_dir / "plan_write_guard.py"
+            assert guard.is_file(), f"Guard script missing in {tool_dir}"
+
+        # Hook configs should exist
+        claude_settings = worktree_path / ".claude" / "settings.json"
+        assert claude_settings.is_file()
+        data = json.loads(claude_settings.read_text(encoding="utf-8"))
+        assert "hooks" in data
+        assert "PreToolUse" in data["hooks"]
+
+        cursor_hooks = worktree_path / ".cursor" / "hooks.json"
+        assert cursor_hooks.is_file()
+
+        copilot_hooks = worktree_path / ".copilot" / "hooks.json"
+        assert copilot_hooks.is_file()
+
+        gemini_settings = worktree_path / ".gemini" / "settings.json"
+        assert gemini_settings.is_file()
+
+    def test_plan_mode_false_no_guard_hooks(self, tmp_path: Path) -> None:
+        """plan_mode=False (default) does NOT install guard hooks."""
+        worktree_path = tmp_path / "worktree"
+        worktree_path.mkdir()
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        config = ProjectConfig(
+            project=ProjectSettings(),
+            hooks=HooksConfig(),
+            permissions=PermissionsConfig(),
+        )
+
+        with patch("subprocess.run"):
+            bootstrap_worktree(worktree_path, config, repo_root)
+
+        # No guard script directories should be created
+        guard = worktree_path / ".claude" / "hooks" / "plan_write_guard.py"
+        assert not guard.exists()
+
+        # No cursor hooks.json should exist
+        cursor_hooks = worktree_path / ".cursor" / "hooks.json"
+        assert not cursor_hooks.is_file()
+
+        # No copilot hooks.json
+        copilot_hooks = worktree_path / ".copilot" / "hooks.json"
+        assert not copilot_hooks.is_file()
+
+        # No gemini settings.json
+        gemini_settings = worktree_path / ".gemini" / "settings.json"
+        assert not gemini_settings.is_file()
