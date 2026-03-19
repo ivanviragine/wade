@@ -185,7 +185,8 @@ def smart_start(
         )
     pr_number_int = int(pr_number)
     pr_state = str(pr_info.get("state", "")).upper()
-    pr_url = str(pr_info.get("url", ""))
+    pr_url_raw = pr_info.get("url")
+    pr_url = pr_url_raw.strip() if isinstance(pr_url_raw, str) else ""
 
     if pr_state == "MERGED":
         console.info(f"PR #{pr_number_int} is already merged.")
