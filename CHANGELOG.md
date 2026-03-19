@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.6.0] — 2026-03-19
+
+### Features
+
+- require conventional commit prefix in plan issue titles (0f6e773)
+
 ## [v0.5.10] — 2026-03-19
 
 ### Bug Fixes
