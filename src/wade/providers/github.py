@@ -226,12 +226,13 @@ class GitHubProvider(AbstractTaskProvider):
             raw = json.loads(result.stdout)
             return _parse_gh_task(raw)
         except (json.JSONDecodeError, ValueError) as e:
-            logger.debug(
+            logger.warning(
                 "github.read_task_or_none_parse_failed",
                 task_id=task_id,
                 error=str(e),
             )
-            return None
+            # Successful exit but unparseable output is unexpected — don't mask it
+            raise RuntimeError(f"Failed to parse issue {task_id} response: {e}") from e
 
     def update_task(
         self,
