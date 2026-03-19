@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.6.1] — 2026-03-19
+
+### Bug Fixes
+
+- validate conventional commit prefix in plan titles at plan-session done (0eceb43)
+
+### Other Changes
+
+- Add "Open PR in browser" option to wade smart-start menu (#194) (00ea1ba)
+- Make "Wait for reviews" actively poll for review comments (#192) (437b8cf)
+
 ## [v0.6.0] — 2026-03-19
 
 ### Features
