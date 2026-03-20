@@ -122,6 +122,7 @@ src/wade/
 │   ├── migrations.py    # Config migration pipeline (ensure version key)
 │   ├── claude_allowlist.py  # .claude/settings.json allowlist management
 │   ├── cursor_allowlist.py  # Cursor settings allowlist management
+│   ├── hooks_util.py       # Shared JSON hook config read/merge/write utility
 │   ├── cursor_hooks.py     # Cursor settings.json hooks
 │   ├── copilot_hooks.py    # Copilot VS Code settings hooks
 │   └── gemini_hooks.py     # Gemini configuration hooks
