@@ -7,7 +7,6 @@ and exposes a uniform interface for task CRUD, label management, and PR ops.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
 
 from wade.models.config import ProviderConfig
 from wade.models.review import PRReviewStatus, ReviewThread
@@ -107,46 +106,10 @@ class AbstractTaskProvider(ABC):
     def remove_label(self, task_id: str, label_name: str) -> None:
         """Remove a label from a task (non-fatal on failure)."""
 
-    # --- PR operations (optional — not all providers have PRs) ---
-    # NOTE: These exist on the provider interface for future provider
-    # implementations.  The main work-service flow uses ``git.pr`` directly
-    # (which accepts an explicit ``repo_root``).  Provider and git layers
-    # cannot share code (architecture constraint), so the implementations
-    # are intentionally parallel.
-
-    def create_pr(
-        self,
-        title: str,
-        body: str,
-        base_branch: str,
-        draft: bool = False,
-        head_branch: str | None = None,
-    ) -> str:
-        """Create a pull request. Returns the PR URL."""
-        raise NotImplementedError(f"{type(self).__name__} does not support pull requests")
-
-    def merge_pr(
-        self,
-        pr_number: str,
-        strategy: str = "squash",
-        delete_branch: bool = True,
-    ) -> None:
-        """Merge a pull request."""
-        raise NotImplementedError(f"{type(self).__name__} does not support pull requests")
-
-    def get_pr_for_branch(self, branch: str) -> dict[str, Any] | None:
-        """Get PR info for a branch. Returns dict with number/body or None."""
-        raise NotImplementedError(f"{type(self).__name__} does not support pull requests")
-
-    def update_pr_body(self, pr_number: str, body: str) -> None:
-        """Update a PR's body text."""
-        raise NotImplementedError(f"{type(self).__name__} does not support pull requests")
-
     # --- PR review operations (optional) ---
 
     def get_pr_review_threads(
         self,
-        repo_root: Any,
         pr_number: int,
     ) -> list[ReviewThread]:
         """Fetch PR review threads. Returns empty list by default."""
@@ -165,7 +128,6 @@ class AbstractTaskProvider(ABC):
 
     def get_pr_review_status(
         self,
-        repo_root: Any,
         pr_number: int,
     ) -> PRReviewStatus:
         """Fetch comprehensive PR review status in a single call.

@@ -241,11 +241,10 @@ class TestReadTaskOrNone:
     def test_returns_none_on_parse_error(
         self, mock_run: MagicMock, provider: GitHubProvider
     ) -> None:
-        """read_task_or_none returns None when JSON is invalid."""
+        """read_task_or_none returns None on unparseable output (exit 0)."""
         mock_run.return_value = _make_completed("invalid json")
 
-        task = provider.read_task_or_none("42")
-        assert task is None
+        assert provider.read_task_or_none("42") is None
 
     @patch("wade.providers.github.run")
     def test_uses_check_false(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
@@ -414,84 +413,6 @@ class TestRemoveLabel:
     def test_remove_failure_nonfatal(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         mock_run.side_effect = CommandError(["gh"], 1, "label not on issue")
         provider.remove_label("42", "nonexistent")
-
-
-# ---------------------------------------------------------------------------
-# PR operation tests
-# ---------------------------------------------------------------------------
-
-
-class TestCreatePR:
-    @patch("wade.git.pr.create_pr")
-    def test_create_pr(self, mock_create: MagicMock, provider: GitHubProvider) -> None:
-        mock_create.return_value = {"url": "https://github.com/owner/repo/pull/5"}
-
-        url = provider.create_pr(
-            title="Add feature",
-            body="Closes #42\n\nDescription",
-            base_branch="main",
-        )
-        assert url == "https://github.com/owner/repo/pull/5"
-
-        mock_create.assert_called_once()
-        call_kwargs = mock_create.call_args[1]
-        assert call_kwargs["title"] == "Add feature"
-        assert call_kwargs["base"] == "main"
-        assert call_kwargs["head"] is None
-
-    @patch("wade.git.pr.create_pr")
-    def test_create_draft_pr(self, mock_create: MagicMock, provider: GitHubProvider) -> None:
-        mock_create.return_value = {"url": "https://github.com/owner/repo/pull/6"}
-
-        provider.create_pr("Draft", "body", "main", draft=True)
-
-        mock_create.assert_called_once()
-        call_kwargs = mock_create.call_args[1]
-        assert call_kwargs["draft"] is True
-
-    @patch("wade.git.pr.create_pr")
-    def test_create_pr_with_head_branch(
-        self, mock_create: MagicMock, provider: GitHubProvider
-    ) -> None:
-        mock_create.return_value = {"url": "https://github.com/owner/repo/pull/7"}
-
-        url = provider.create_pr("Feature", "body", "main", head_branch="feat/42-test")
-        assert url == "https://github.com/owner/repo/pull/7"
-
-        call_kwargs = mock_create.call_args[1]
-        assert call_kwargs["head"] == "feat/42-test"
-
-
-class TestMergePR:
-    @patch("wade.git.pr.merge_pr")
-    def test_merge_squash(self, mock_merge: MagicMock, provider: GitHubProvider) -> None:
-        provider.merge_pr("5", strategy="squash")
-
-        mock_merge.assert_called_once()
-        call_kwargs = mock_merge.call_args[1]
-        assert call_kwargs["pr_number"] == 5
-        assert call_kwargs["strategy"] == "squash"
-        assert call_kwargs["delete_branch"] is True
-
-    @patch("wade.git.pr.merge_pr")
-    def test_merge_delegates_to_git_pr(
-        self, mock_merge: MagicMock, provider: GitHubProvider
-    ) -> None:
-        provider.merge_pr("10", strategy="rebase")
-
-        mock_merge.assert_called_once()
-        call_kwargs = mock_merge.call_args[1]
-        assert call_kwargs["pr_number"] == 10
-        assert call_kwargs["strategy"] == "rebase"
-
-    @patch("wade.git.pr.merge_pr")
-    def test_merge_no_delete_branch(self, mock_merge: MagicMock, provider: GitHubProvider) -> None:
-        provider.merge_pr("7", strategy="squash", delete_branch=False)
-
-        mock_merge.assert_called_once()
-        call_kwargs = mock_merge.call_args[1]
-        assert call_kwargs["pr_number"] == 7
-        assert call_kwargs["delete_branch"] is False
 
 
 # ---------------------------------------------------------------------------

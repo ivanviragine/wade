@@ -84,6 +84,61 @@ REVIEW_USAGE_MARKER_START = "<!-- wade:review-usage:start -->"
 REVIEW_USAGE_MARKER_END = "<!-- wade:review-usage:end -->"
 
 # ---------------------------------------------------------------------------
+# Tracking-issue detection
+# ---------------------------------------------------------------------------
+
+
+def check_tracking_issue_and_batch(
+    task: Task,
+    *,
+    ai_tool: str | None,
+    model: str | None,
+    project_root: Path | None,
+    ai_explicit: bool,
+    model_explicit: bool,
+    effort: str | None,
+    effort_explicit: bool,
+    yolo: bool | None,
+    cd_only: bool = False,
+) -> bool | None:
+    """Detect tracking issues and redirect to batch implementation.
+
+    Returns True/False if the tracking-issue path was taken, or None if
+    the task is not a tracking issue (caller should continue normally).
+    """
+    if not is_tracking_issue(task.title):
+        return None
+
+    child_ids = (
+        parse_tracking_child_ids(task.body)
+        if has_checklist_items(task.body)
+        else parse_all_issue_refs(task.body)
+    )
+    if not child_ids:
+        return None
+
+    if cd_only:
+        console.info("Tracking issue detected — batch redirect skipped for cd-only mode")
+        return None
+
+    refs = ", ".join(f"#{cid}" for cid in child_ids)
+    console.info(f"#{task.id} is a tracking issue for: {refs}")
+    if prompts.confirm("Start batch implementation?", default=True):
+        return batch(
+            issue_numbers=child_ids,
+            ai_tool=ai_tool,
+            model=model,
+            project_root=project_root,
+            ai_explicit=ai_explicit,
+            model_explicit=model_explicit,
+            effort=effort,
+            effort_explicit=effort_explicit,
+            yolo=yolo,
+        )
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Bootstrap helpers
 # ---------------------------------------------------------------------------
 
@@ -822,29 +877,20 @@ def start(
             return ImplementResult(success=False)
 
         # Tracking issue detection — redirect to batch implementation
-        if is_tracking_issue(task.title):
-            child_ids = (
-                parse_tracking_child_ids(task.body)
-                if has_checklist_items(task.body)
-                else parse_all_issue_refs(task.body)
-            )
-            if child_ids:
-                refs = ", ".join(f"#{cid}" for cid in child_ids)
-                console.info(f"#{task.id} is a tracking issue for: {refs}")
-                if prompts.confirm("Start batch implementation?", default=True):
-                    batch_ok = batch(
-                        issue_numbers=child_ids,
-                        ai_tool=ai_tool,
-                        model=model,
-                        project_root=project_root,
-                        ai_explicit=ai_explicit,
-                        model_explicit=model_explicit,
-                        effort=effort,
-                        effort_explicit=effort_explicit,
-                        yolo=yolo,
-                    )
-                    return ImplementResult(success=batch_ok)
-                return ImplementResult(success=False)
+        batch_result = check_tracking_issue_and_batch(
+            task,
+            ai_tool=ai_tool,
+            model=model,
+            project_root=project_root,
+            ai_explicit=ai_explicit,
+            model_explicit=model_explicit,
+            effort=effort,
+            effort_explicit=effort_explicit,
+            yolo=yolo,
+            cd_only=cd_only,
+        )
+        if batch_result is not None:
+            return ImplementResult(success=batch_result)
 
         console.rule(f"implement #{task.id}")
         console.kv("Issue", console.issue_ref(task.id, task.title))
@@ -1244,12 +1290,13 @@ def _resolve_task_target(
         task = create_from_plan_file(target_path, config=config, provider=provider)
         return task
 
-    # Treat as issue number
+    # Treat as issue number — strip leading "#" so "#123" and "123" both work
+    issue_id = target.lstrip("#")
     try:
-        task = provider.read_task(target)
+        task = provider.read_task(issue_id)
         return task
     except Exception as e:
-        console.error(f"Could not read issue #{target}: {e}")
+        console.error(f"Could not read issue #{issue_id}: {e}")
         return None
 
 

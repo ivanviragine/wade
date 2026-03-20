@@ -1295,7 +1295,7 @@ class TestGetComprehensiveReviewStatus:
         )
         provider.get_pr_review_status.return_value = expected
 
-        result = get_comprehensive_review_status(provider, tmp_path, 42)
+        result = get_comprehensive_review_status(provider, 42)
 
         assert result.has_changes_requested is True
         assert result.changes_requested_by == ["bob"]
@@ -1314,7 +1314,7 @@ class TestGetComprehensiveReviewStatus:
         provider.get_pr_review_status.side_effect = NotImplementedError
         provider.get_pr_review_threads.return_value = []
 
-        result = get_comprehensive_review_status(provider, tmp_path, 42)
+        result = get_comprehensive_review_status(provider, 42)
 
         assert result.actionable_threads == []
         assert result.reviews == []
@@ -1325,7 +1325,7 @@ class TestGetComprehensiveReviewStatus:
         provider = MagicMock()
         provider.get_pr_review_status.side_effect = RuntimeError("API down")
 
-        result = get_comprehensive_review_status(provider, tmp_path, 42)
+        result = get_comprehensive_review_status(provider, 42)
 
         assert result.actionable_threads == []
         assert result.reviews == []
