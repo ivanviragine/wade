@@ -70,7 +70,7 @@ CLI modules are thin dispatch — they parse flags via Typer, then call service 
 ### Key Design Patterns
 
 - **AI Tool Self-Registration**: `AbstractAITool.__init_subclass__` auto-registers adapters. Adding a new AI tool = one file, one class.
-- **Provider Abstraction**: `AbstractTaskProvider` ABC with pluggable backends (currently GitHub via `gh` CLI).
+- **Provider Abstraction**: `AbstractTaskProvider` ABC with pluggable backends (GitHub via `gh` CLI, ClickUp via REST API).
 - **Prompts as .md Templates**: All AI prompts live in `templates/prompts/`, not inline strings.
 - **Synchronous Only**: No asyncio. Process-level parallelism via multiple terminals.
 - **Pydantic Everywhere**: All data structures are Pydantic `BaseModel` subclasses, not dicts.

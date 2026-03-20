@@ -129,7 +129,7 @@ def fetch_reviews(
     pr_number = int(pr_info["number"])
 
     # Fetch comprehensive review status
-    status = get_comprehensive_review_status(provider, repo_root, pr_number)
+    status = get_comprehensive_review_status(provider, pr_number)
     if status.fetch_failed:
         print("Review status fetch failed — status may be incomplete. Try again shortly.")
         return False
@@ -235,17 +235,16 @@ def get_review_status(
     pr_number = int(pr_info["number"])
 
     try:
-        return provider.get_pr_review_status(repo_root, pr_number)
+        return provider.get_pr_review_status(pr_number)
     except NotImplementedError:
         # Fallback: use legacy thread-only approach
-        return _fallback_review_status(provider, repo_root, pr_number)
+        return _fallback_review_status(provider, pr_number)
     except Exception:
         return None
 
 
 def get_comprehensive_review_status(
     provider: AbstractTaskProvider,
-    repo_root: Path,
     pr_number: int,
 ) -> PRReviewStatus:
     """Fetch comprehensive PR review status using provider with fallback.
@@ -255,9 +254,9 @@ def get_comprehensive_review_status(
     ``fetch_reviews()`` where the PR is already known.
     """
     try:
-        return provider.get_pr_review_status(repo_root, pr_number)
+        return provider.get_pr_review_status(pr_number)
     except NotImplementedError:
-        return _fallback_review_status(provider, repo_root, pr_number)
+        return _fallback_review_status(provider, pr_number)
     except Exception:
         logger.debug("review.comprehensive_status_failed", exc_info=True)
         return PRReviewStatus(fetch_failed=True)
@@ -265,7 +264,6 @@ def get_comprehensive_review_status(
 
 def _fallback_review_status(
     provider: AbstractTaskProvider,
-    repo_root: Path,
     pr_number: int,
 ) -> PRReviewStatus:
     """Build a PRReviewStatus from legacy thread-only + bot-status APIs.
@@ -273,7 +271,7 @@ def _fallback_review_status(
     Used when the provider doesn't support ``get_pr_review_status()``.
     """
     try:
-        all_threads = provider.get_pr_review_threads(repo_root, pr_number)
+        all_threads = provider.get_pr_review_threads(pr_number)
     except Exception:
         return PRReviewStatus(fetch_failed=True)
 
@@ -322,7 +320,7 @@ def poll_for_reviews(
                 console.info(f"PR #{pr_number} was {pr_state.lower()} externally. Stopping poll.")
                 return PollOutcome.PR_CLOSED
 
-            status = get_comprehensive_review_status(provider, repo_root, pr_number)
+            status = get_comprehensive_review_status(provider, pr_number)
 
             if status.fetch_failed:
                 quiet_start = None  # reset on transient failure
@@ -473,7 +471,7 @@ def start(
 
     # 4. Quick-check for unresolved review threads via comprehensive status
     console.step("Checking for review comments...")
-    status = get_comprehensive_review_status(provider, repo_root, pr_number)
+    status = get_comprehensive_review_status(provider, pr_number)
     if status.fetch_failed:
         console.warn("Review status fetch failed — status may be incomplete. Try again shortly.")
         return False
@@ -816,7 +814,7 @@ def _quiet_next_steps_prompt(
 
     while True:
         allow_merge = True
-        status = get_comprehensive_review_status(provider, repo_root, pr_number)
+        status = get_comprehensive_review_status(provider, pr_number)
         if status.pending_reviewers:
             names = ", ".join(
                 f"@{r.name}" + (" (team)" if r.is_team else "") for r in status.pending_reviewers

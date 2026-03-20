@@ -54,12 +54,12 @@ src/wade/
 ├── __main__.py          # python -m wade
 ├── cli/                 # Typer commands (thin dispatch)
 │   ├── main.py          # Root app + interactive menu, subcommand registration
-│   ├── admin.py         # init, update, deinit, check, check-config, shell-init
+│   ├── admin.py         # init, update, deinit, check-config, shell-init
 │   ├── task.py          # task create/list/read/update/close/deps
 │   ├── worktree.py      # worktree list/remove/cd (interactive menu)
 │   ├── implementation_session.py  # implementation-session check/sync/done
 │   ├── review_pr_comments_session.py # review-pr-comments-session check/sync/done/fetch/resolve
-│   ├── review.py        # review plan/implementation/pr-comments
+│   ├── review.py        # review plan/implementation/pr-comments/batch
 │   ├── plan_session.py  # plan-session done
 │   └── autocomplete.py  # Shell autocompletion helpers
 ├── models/              # Pydantic domain models (pure data, no I/O)
@@ -67,6 +67,9 @@ src/wade/
 │   ├── task.py          # Task, PlanFile, Complexity, Label, TaskState
 │   ├── session.py       # ImplementationSession, WorktreeState, SyncResult, SyncEvent, MergeStrategy
 │   ├── ai.py            # AIToolID, AIModel, ModelTier, TokenUsage, AIToolCapabilities
+│   ├── delegation.py    # DelegationRequest, DelegationResult, DelegationMode
+│   ├── review.py        # PRReviewStatus, ReviewThread, ReviewComment
+│   ├── batch.py         # BatchIssueContext, BatchReviewContext
 │   ├── deps.py          # DependencyEdge, DependencyGraph
 │   └── events.py        # Typed event models
 ├── db/                  # SQLite via SQLModel
@@ -77,16 +80,25 @@ src/wade/
 │   ├── task_service.py  # Task CRUD, plan parsing, labels
 │   ├── implementation_service.py  # Implementation session lifecycle
 │   ├── plan_service.py  # AI planning sessions
+│   ├── review_service.py           # PR review session lifecycle
+│   ├── review_delegation_service.py # AI-powered review delegation
+│   ├── batch_review_service.py      # Batch issue review
 │   ├── deps_service.py  # Dependency analysis
+│   ├── smart_start.py   # Smart routing (wade <N> → implement or review)
 │   ├── init_service.py  # Project initialization
-│   └── check_service.py # Safety checks, config validation
-├── providers/           # Task backend providers (ABC)
+│   ├── check_service.py # Safety checks, config validation
+│   ├── ai_resolution.py # AI tool/model/effort resolution logic
+│   ├── delegation_service.py # Delegation mode resolution
+│   └── prompt_delivery.py   # Initial message delivery for AI tools
+├── providers/           # Task backend providers (ABC + registry)
 │   ├── base.py          # AbstractTaskProvider
 │   ├── github.py        # GitHubProvider (gh CLI subprocess)
-│   └── registry.py      # Provider discovery
+│   ├── clickup.py       # ClickUpProvider (REST API)
+│   └── registry.py      # Provider registry (register_provider / get_provider)
 ├── ai_tools/            # AI tool adapters (ABC, self-registering)
 │   ├── base.py          # AbstractAITool with __init_subclass__ registry
 │   ├── claude.py        # ClaudeAdapter
+│   ├── cursor.py        # CursorAdapter
 │   ├── copilot.py       # CopilotAdapter
 │   ├── gemini.py        # GeminiAdapter
 │   ├── codex.py         # CodexAdapter (OpenAI Codex)
@@ -101,6 +113,8 @@ src/wade/
 │   ├── branch.py        # Branch naming, creation, deletion
 │   ├── sync.py          # Fetch + merge, conflict detection
 │   └── pr.py            # PR creation, merge
+├── hooks/               # Git/pre-commit hooks
+│   └── plan_write_guard.py  # Guard script for plan file write protection
 ├── skills/              # Skill file management
 │   ├── installer.py     # Install/update/remove skill files
 │   └── pointer.py       # AGENTS.md pointer insertion/detection
@@ -109,7 +123,12 @@ src/wade/
 │   ├── schema.py        # Re-exports from models (Pydantic Settings)
 │   ├── defaults.py      # Hardcoded defaults per AI tool
 │   ├── migrations.py    # Config migration pipeline (ensure version key)
-│   └── claude_allowlist.py  # .claude/settings.json allowlist management
+│   ├── claude_allowlist.py  # .claude/settings.json allowlist management
+│   ├── cursor_allowlist.py  # Cursor settings allowlist management
+│   ├── hooks_util.py       # Shared JSON hook config read/merge/write utility
+│   ├── cursor_hooks.py     # Cursor settings.json hooks
+│   ├── copilot_hooks.py    # Copilot VS Code settings hooks
+│   └── gemini_hooks.py     # Gemini configuration hooks
 ├── ui/                  # Terminal UI (Rich)
 │   ├── console.py       # Console class
 │   └── prompts.py       # confirm, input, select, menu
@@ -124,16 +143,18 @@ src/wade/
     ├── slug.py          # Title -> URL-safe slug
     ├── markdown.py      # Plan file parsing
     ├── process.py       # Subprocess helpers
+    ├── http.py          # HTTPClient for REST API providers
+    ├── update_check.py  # Version checking, self-upgrade hints
     └── install.py       # Self-upgrade helpers (venv/source detection, re-exec)
 ```
 
 ## Command Dispatch
 
-`src/wade/cli/main.py` is the root Typer application. It registers subcommand groups (`task`, `worktree`, `plan-session`, `implementation-session`, `review-pr-comments-session`, `review`) and admin commands (`init`, `update`, `deinit`, `check`, `check-config`, `shell-init`). The `tasks` alias is registered as a hidden Typer group pointing to the same `task_app`. The `wade` entry point (defined in `pyproject.toml` as `wade.cli.main:cli_main`) invokes the root app.
+`src/wade/cli/main.py` is the root Typer application. It registers subcommand groups (`task`, `worktree`, `plan-session`, `implementation-session`, `review-pr-comments-session`, `review`) and admin commands (`init`, `update`, `deinit`, `check-config`, `shell-init`). The `tasks` alias is registered as a hidden Typer group pointing to the same `task_app`. The `wade` entry point (defined in `pyproject.toml` as `wade.cli.main:cli_main`) invokes the root app.
 
 CLI modules are **thin dispatch layers** — they parse flags via Typer, then call service methods. Business logic lives in `services/`, not in `cli/`.
 
-**Interactive menus**: `wade task` and `wade worktree` with no subcommand show interactive menus. `wade task create` prompts interactively for title and body. Top-level commands `plan`, `implement`, `implement-batch`, and `cd` are registered directly on the root app. The `review` subcommand group provides `plan`, `implementation`, and `pr-comments` commands. Hidden short aliases `p`, `i`, and `r` map to `plan`, `implement`, and `review pr-comments` respectively. The numeric shorthand `wade <N>` is rewritten to the hidden `smart-start` command in `cli_main()`, which detects PR state and routes to implement or review pr-comments.
+**Interactive menus**: `wade task` and `wade worktree` with no subcommand show interactive menus. `wade task create` prompts interactively for title and body. Top-level commands `plan`, `implement`, `implement-batch`, and `cd` are registered directly on the root app. The `review` subcommand group provides `plan`, `implementation`, `pr-comments`, and `batch` commands. Hidden short aliases `p`, `i`, and `r` map to `plan`, `implement`, and `review pr-comments` respectively. The numeric shorthand `wade <N>` is rewritten to the hidden `smart-start` command in `cli_main()`, which detects PR state and routes to implement or review pr-comments.
 
 **Shell integration**: `wade shell-init` outputs a shell function wrapper for `eval "$(wade shell-init)"` that intercepts `wade cd <n>` and `wade worktree cd <n>` to perform a real `cd` in the caller's shell.
 
@@ -192,19 +213,19 @@ hooks:
 
 `wade update` performs 11 steps:
 
-1. Validate repo + config existence
-2. Self-upgrade if source version differs (see below)
+1. Self-upgrade if source version differs (see below)
+2. Validate repo + config existence
 3. Read old version from manifest
 4. Show version transition message
 5. Run config migration pipeline
 6. Reload config + backfill probed models
 7. Refresh skill files
-8. Configure Claude Code allowlist (`config/claude_allowlist.py`)
-9. Configure Gemini experimental (if applicable)
+8. Configure AI tool allowlists (Claude via `claude_allowlist.py`, Cursor via `cursor_allowlist.py`)
+9. Configure Gemini experimental settings (if applicable)
 10. Refresh .gitignore + AGENTS.md pointer
 11. Rebuild manifest with version
 
-**Self-upgrade mechanism**: When `wade` is installed via `install.sh` (frozen venv at `~/.local/share/wade/venv/`), the installer records the source repo path in `wade-source.txt`. On `wade update`, if the installed version differs from the source version, `utils/install.py:self_upgrade()` reinstalls from source and `re_exec()` restarts the process with the new code. Editable installs (`uv pip install -e .`) skip this naturally. Pass `--skip-self-upgrade` to bypass.
+**Self-upgrade mechanism**: `utils/install.py:detect_install_method()` inspects `sys.executable` to determine how wade was installed (`uv-tool`, `pipx`, `brew`, or `editable`). On `wade update`, `self_upgrade()` runs the appropriate package manager command (e.g. `uv tool upgrade wade`), then `re_exec()` replaces the current process via `os.execv()` so the new code is loaded. Editable installs skip this naturally. Pass `--skip-self-upgrade` to bypass.
 
 ## AI Interaction Pattern
 
@@ -215,9 +236,9 @@ All AI-interactive commands follow the same pattern:
 3. **Launch AI CLI** — Execute the AI tool binary via `AbstractAITool.launch()`. The tool runs interactively in the terminal with the prompt pre-filled.
 4. **Post-AI processing** — After the AI CLI exits, the service picks up where it left off (e.g., detecting new issues, parsing output files, capturing token usage from transcripts).
 
-Each AI tool adapter implements `capabilities()` (binary name, model flag syntax, headless flag), `initial_message_args()` (how to pass an initial message for interactive sessions), `launch()`, `parse_transcript()`, `is_model_compatible()`, and `build_launch_command()`. The `launch()` method accepts an optional `transcript_path: Path | None` parameter — when provided, the adapter captures session output to that file for post-session token usage extraction. When adding a new AI-interactive command, follow this existing pattern.
+Each AI tool adapter must implement the abstract method `capabilities()` (binary name, model flag syntax, headless flag). All other methods — `initial_message_args()`, `launch()`, `parse_transcript()`, `is_model_compatible()`, and `build_launch_command()` — have default implementations and can be overridden as needed. The `launch()` method accepts an optional `transcript_path: Path | None` parameter — when provided, the adapter captures session output to that file for post-session token usage extraction. When adding a new AI-interactive command, follow this existing pattern.
 
-**Deps mode behavior**: `wade task deps` does not auto-fallback between delegation modes. Prompt mode prints the raw dependency-analysis prompt with no AI-tool requirement or worktree bootstrap. Headless and interactive modes perform the real AI launch path and are the only modes that create the temporary analysis worktree.
+**Deps delegation modes**: `deps_service.py` runs analysis via the generic delegation infrastructure (`delegation_service.py`). The default mode is `headless`; it can be overridden to `interactive` or `prompt` via the `ai.deps.mode` config key or the `--mode` CLI flag. There is no automatic fallback between modes — the resolved mode is used directly. Prompt mode prints the raw dependency-analysis prompt with no AI-tool requirement or worktree bootstrap. Headless and interactive modes perform the real AI launch path and are the only modes that create the temporary analysis worktree.
 
 ## Issue Detection (Snapshot/Diff Pattern)
 
@@ -302,6 +323,7 @@ Runtime:
 - `rich>=13.0` — Terminal UI (tables, prompts, panels)
 - `questionary>=2.0` — Interactive prompts (select, confirm, input)
 - `structlog>=24.0` — Structured logging
+- `httpx>=0.27,<1.0` — HTTP client (ClickUp provider)
 
 Dev:
 - `pytest>=8.0` — Test framework

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import structlog
+from pydantic import BaseModel
 
 from wade.ai_tools.base import AbstractAITool
 from wade.config.loader import load_config
@@ -23,20 +24,56 @@ from wade.git import pr as git_pr
 from wade.git import repo as git_repo
 from wade.git.repo import GitError
 from wade.models.ai import AIToolID
-from wade.models.session import SessionRecord
-from wade.models.task import (
-    has_checklist_items,
-    is_tracking_issue,
-    parse_all_issue_refs,
-    parse_tracking_child_ids,
-)
+from wade.models.session import MergeStatus, SessionRecord
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
-from wade.services.implementation_service import _merge_pr
+from wade.services.implementation_service import _merge_pr, check_tracking_issue_and_batch
 from wade.ui.console import console
 from wade.utils.markdown import parse_sessions_from_body
 
 logger = structlog.get_logger()
+
+
+class SmartStartContext(BaseModel):
+    """Bundles the repeated parameters threaded through smart_start call sites."""
+
+    target: str
+    ai_tool: str | None
+    model: str | None
+    project_root: Path | None
+    detach: bool
+    cd_only: bool
+    ai_explicit: bool
+    model_explicit: bool
+    effort: str | None
+    effort_explicit: bool
+    yolo: bool | None
+
+    def run_implement(
+        self,
+        *,
+        resume_session_id: str | None = None,
+        resume_ai_tool: str | None = None,
+    ) -> bool:
+        """Delegate to the implement service."""
+        from wade.services.implementation_service import start as do_start
+
+        result = do_start(
+            target=self.target,
+            ai_tool=self.ai_tool,
+            model=self.model,
+            project_root=self.project_root,
+            detach=self.detach,
+            cd_only=self.cd_only,
+            ai_explicit=self.ai_explicit,
+            model_explicit=self.model_explicit,
+            effort=self.effort,
+            effort_explicit=self.effort_explicit,
+            resume_session_id=resume_session_id,
+            resume_ai_tool=resume_ai_tool,
+            yolo=self.yolo,
+        )
+        return result.success
 
 
 def _open_pr_in_browser(pr_url: str) -> bool:
@@ -68,6 +105,20 @@ def smart_start(
     Returns:
         True on success, False on failure.
     """
+    ctx = SmartStartContext(
+        target=target,
+        ai_tool=ai_tool,
+        model=model,
+        project_root=project_root,
+        detach=detach,
+        cd_only=cd_only,
+        ai_explicit=ai_explicit,
+        model_explicit=model_explicit,
+        effort=effort,
+        effort_explicit=effort_explicit,
+        yolo=yolo,
+    )
+
     config = load_config(project_root)
     provider = get_provider(config)
 
@@ -77,19 +128,7 @@ def smart_start(
     except GitError:
         # Not in a git repo — fall through to implement which will
         # give a proper error.
-        return _run_implement_task(
-            target,
-            ai_tool,
-            model,
-            project_root,
-            detach,
-            cd_only,
-            ai_explicit=ai_explicit,
-            model_explicit=model_explicit,
-            effort=effort,
-            effort_explicit=effort_explicit,
-            yolo=yolo,
-        )
+        return ctx.run_implement()
 
     # Read the issue
     issue_number = target.lstrip("#")
@@ -97,50 +136,23 @@ def smart_start(
         task = provider.read_task(issue_number)
     except Exception:
         # Can't read issue — fall through to implement.
-        return _run_implement_task(
-            target,
-            ai_tool,
-            model,
-            project_root,
-            detach,
-            cd_only,
-            ai_explicit=ai_explicit,
-            model_explicit=model_explicit,
-            effort=effort,
-            effort_explicit=effort_explicit,
-            yolo=yolo,
-        )
+        return ctx.run_implement()
 
     # Tracking issue detection — redirect to batch implementation
-    if is_tracking_issue(task.title):
-        from wade.ui import prompts
-
-        # If the body uses checklist format, honour checked/unchecked semantics
-        # (only unchecked = still to-do). Otherwise fall back to all plain #N refs
-        # so tracking issues authored without a checklist still trigger batch mode.
-        child_ids = (
-            parse_tracking_child_ids(task.body)
-            if has_checklist_items(task.body)
-            else parse_all_issue_refs(task.body)
-        )
-        if child_ids:
-            refs = ", ".join(f"#{cid}" for cid in child_ids)
-            console.info(f"#{task.id} is a tracking issue for: {refs}")
-            if prompts.confirm("Start batch implementation?", default=True):
-                from wade.services.implementation_service import batch
-
-                return batch(
-                    issue_numbers=child_ids,
-                    ai_tool=ai_tool,
-                    model=model,
-                    project_root=project_root,
-                    ai_explicit=ai_explicit,
-                    model_explicit=model_explicit,
-                    effort=effort,
-                    effort_explicit=effort_explicit,
-                    yolo=yolo,
-                )
-            return False
+    batch_result = check_tracking_issue_and_batch(
+        task,
+        ai_tool=ctx.ai_tool,
+        model=ctx.model,
+        project_root=ctx.project_root,
+        ai_explicit=ctx.ai_explicit,
+        model_explicit=ctx.model_explicit,
+        effort=ctx.effort,
+        effort_explicit=ctx.effort_explicit,
+        yolo=ctx.yolo,
+        cd_only=ctx.cd_only,
+    )
+    if batch_result is not None:
+        return batch_result
 
     # Build the expected branch name
     branch_name = git_branch.make_branch_name(
@@ -153,36 +165,12 @@ def smart_start(
     pr_info = git_pr.get_pr_for_branch(repo_root, branch_name)
     if not pr_info:
         # No PR → normal implement flow
-        return _run_implement_task(
-            target,
-            ai_tool,
-            model,
-            project_root,
-            detach,
-            cd_only,
-            ai_explicit=ai_explicit,
-            model_explicit=model_explicit,
-            effort=effort,
-            effort_explicit=effort_explicit,
-            yolo=yolo,
-        )
+        return ctx.run_implement()
 
     pr_number = pr_info.get("number") or pr_info.get("pr_number")
     if not pr_number:
         # Can't determine PR number — fall through to implement.
-        return _run_implement_task(
-            target,
-            ai_tool,
-            model,
-            project_root,
-            detach,
-            cd_only,
-            ai_explicit=ai_explicit,
-            model_explicit=model_explicit,
-            effort=effort,
-            effort_explicit=effort_explicit,
-            yolo=yolo,
-        )
+        return ctx.run_implement()
     pr_number_int = int(pr_number)
     pr_state = str(pr_info.get("state", "")).upper()
     pr_url_raw = pr_info.get("url")
@@ -194,19 +182,7 @@ def smart_start(
 
     # cd_only: skip menu, just set up worktree and print path
     if cd_only:
-        return _run_implement_task(
-            target,
-            ai_tool,
-            model,
-            project_root,
-            detach,
-            cd_only,
-            ai_explicit=ai_explicit,
-            model_explicit=model_explicit,
-            effort=effort,
-            effort_explicit=effort_explicit,
-            yolo=yolo,
-        )
+        return ctx.run_implement()
 
     # Open PR exists — present contextual menu
     from wade.git import worktree as git_worktree
@@ -224,67 +200,25 @@ def smart_start(
     menu_options: list[tuple[str, Callable[[], bool]]] = []
 
     if is_draft:
-        # For draft PRs: show either "Start implementation" or "Continue working"
         if has_worktree:
             menu_options.append(
                 (
                     "Continue working",
-                    _run_continue_working_wrapper(
-                        target,
-                        ai_tool,
-                        model,
-                        project_root,
-                        detach,
-                        cd_only,
-                        ai_explicit,
-                        model_explicit,
-                        repo_root,
-                        pr_number_int,
-                        effort=effort,
-                        effort_explicit=effort_explicit,
-                        yolo=yolo,
-                    ),
+                    partial(_run_continue_working, ctx, repo_root, pr_number_int),
                 )
             )
         else:
             menu_options.append(
                 (
                     "Start implementation",
-                    _run_implement_task_wrapper(
-                        target,
-                        ai_tool,
-                        model,
-                        project_root,
-                        detach,
-                        cd_only,
-                        ai_explicit,
-                        model_explicit,
-                        effort=effort,
-                        effort_explicit=effort_explicit,
-                        yolo=yolo,
-                    ),
+                    ctx.run_implement,
                 )
             )
     else:
-        # For ready PRs: show all three options
         menu_options.append(
             (
                 "Continue working",
-                _run_continue_working_wrapper(
-                    target,
-                    ai_tool,
-                    model,
-                    project_root,
-                    detach,
-                    cd_only,
-                    ai_explicit,
-                    model_explicit,
-                    repo_root,
-                    pr_number_int,
-                    effort=effort,
-                    effort_explicit=effort_explicit,
-                    yolo=yolo,
-                ),
+                partial(_run_continue_working, ctx, repo_root, pr_number_int),
             )
         )
         review_worktree_path = next(
@@ -294,29 +228,29 @@ def smart_start(
         menu_options.append(
             (
                 "Review PR comments",
-                _run_review_pr_comments_wrapper(
-                    target,
-                    ai_tool,
-                    model,
-                    project_root,
-                    detach,
-                    ai_explicit,
-                    model_explicit,
-                    repo_root,
-                    branch_name,
-                    pr_number_int,
-                    str(task.id),
-                    review_worktree_path,
-                    provider,
-                    yolo,
+                partial(
+                    _run_review_pr_comments,
+                    ctx,
+                    repo_root=repo_root,
+                    branch_name=branch_name,
+                    pr_number=pr_number_int,
+                    issue_number=str(task.id),
+                    worktree_path=review_worktree_path,
+                    provider=provider,
                 ),
             )
         )
         menu_options.append(
             (
                 "Merge PR",
-                _run_merge_pr_wrapper(
-                    repo_root, branch_name, pr_number_int, task.id, provider, worktrees
+                partial(
+                    _run_merge_pr,
+                    repo_root,
+                    branch_name,
+                    pr_number_int,
+                    task.id,
+                    provider,
+                    worktrees,
                 ),
             )
         )
@@ -345,49 +279,13 @@ def smart_start(
     return menu_options[choice][1]()
 
 
-def _run_implement_task(
-    target: str,
-    ai_tool: str | None,
-    model: str | None,
-    project_root: Path | None,
-    detach: bool,
-    cd_only: bool,
-    *,
-    ai_explicit: bool = False,
-    model_explicit: bool = False,
-    effort: str | None = None,
-    effort_explicit: bool = False,
-    resume_session_id: str | None = None,
-    resume_ai_tool: str | None = None,
-    yolo: bool | None = None,
-) -> bool:
-    """Delegate to the implement service."""
-    from wade.services.implementation_service import start as do_start
-
-    result = do_start(
-        target=target,
-        ai_tool=ai_tool,
-        model=model,
-        project_root=project_root,
-        detach=detach,
-        cd_only=cd_only,
-        ai_explicit=ai_explicit,
-        model_explicit=model_explicit,
-        effort=effort,
-        effort_explicit=effort_explicit,
-        resume_session_id=resume_session_id,
-        resume_ai_tool=resume_ai_tool,
-        yolo=yolo,
-    )
-    return result.success
+# ---------------------------------------------------------------------------
+# Menu action helpers
+# ---------------------------------------------------------------------------
 
 
 def _run_review_pr_comments(
-    target: str,
-    ai_tool: str | None,
-    model: str | None,
-    project_root: Path | None,
-    detach: bool,
+    ctx: SmartStartContext,
     *,
     repo_root: Path,
     branch_name: str,
@@ -395,9 +293,6 @@ def _run_review_pr_comments(
     issue_number: str,
     worktree_path: Path | None,
     provider: AbstractTaskProvider,
-    ai_explicit: bool = False,
-    model_explicit: bool = False,
-    yolo: bool | None = None,
 ) -> bool:
     """Poll for PR review comments and start a review session when found."""
     from wade.models.review import PollOutcome
@@ -407,14 +302,14 @@ def _run_review_pr_comments(
 
     if outcome == PollOutcome.COMMENTS_FOUND:
         return review_service.start(
-            target=target,
-            ai_tool=ai_tool,
-            model=model,
-            project_root=project_root,
-            detach=detach,
-            ai_explicit=ai_explicit,
-            model_explicit=model_explicit,
-            yolo=yolo,
+            target=ctx.target,
+            ai_tool=ctx.ai_tool,
+            model=ctx.model,
+            project_root=ctx.project_root,
+            detach=ctx.detach,
+            ai_explicit=ctx.ai_explicit,
+            model_explicit=ctx.model_explicit,
+            yolo=ctx.yolo,
         )
     elif outcome == PollOutcome.QUIET_TIMEOUT:
         review_service._quiet_next_steps_prompt(
@@ -424,121 +319,45 @@ def _run_review_pr_comments(
             worktree_path,
             pr_number,
             provider,
-            ai_tool=ai_tool,
-            model=model,
-            detach=detach,
-            ai_explicit=ai_explicit,
-            model_explicit=model_explicit,
-            yolo=yolo,
+            ai_tool=ctx.ai_tool,
+            model=ctx.model,
+            detach=ctx.detach,
+            ai_explicit=ctx.ai_explicit,
+            model_explicit=ctx.model_explicit,
+            yolo=ctx.yolo,
         )
         return True
     else:  # INTERRUPTED or PR_CLOSED
         return True
 
 
-def _run_implement_task_wrapper(
-    target: str,
-    ai_tool: str | None,
-    model: str | None,
-    project_root: Path | None,
-    detach: bool,
-    cd_only: bool,
-    ai_explicit: bool,
-    model_explicit: bool,
-    effort: str | None = None,
-    effort_explicit: bool = False,
-    yolo: bool | None = None,
-) -> Callable[[], bool]:
-    """Return a callable that runs _run_implement_task with captured arguments."""
-
-    def _impl() -> bool:
-        return _run_implement_task(
-            target=target,
-            ai_tool=ai_tool,
-            model=model,
-            project_root=project_root,
-            detach=detach,
-            cd_only=cd_only,
-            ai_explicit=ai_explicit,
-            model_explicit=model_explicit,
-            effort=effort,
-            effort_explicit=effort_explicit,
-            yolo=yolo,
-        )
-
-    return _impl
-
-
-def _run_review_pr_comments_wrapper(
-    target: str,
-    ai_tool: str | None,
-    model: str | None,
-    project_root: Path | None,
-    detach: bool,
-    ai_explicit: bool,
-    model_explicit: bool,
-    repo_root: Path,
-    branch_name: str,
-    pr_number: int,
-    issue_number: str,
-    worktree_path: Path | None,
-    provider: AbstractTaskProvider,
-    yolo: bool | None = None,
-) -> Callable[[], bool]:
-    """Return a callable that runs _run_review_pr_comments with captured arguments."""
-
-    def _impl() -> bool:
-        return _run_review_pr_comments(
-            target=target,
-            ai_tool=ai_tool,
-            model=model,
-            project_root=project_root,
-            detach=detach,
-            ai_explicit=ai_explicit,
-            model_explicit=model_explicit,
-            repo_root=repo_root,
-            branch_name=branch_name,
-            pr_number=pr_number,
-            issue_number=issue_number,
-            worktree_path=worktree_path,
-            provider=provider,
-            yolo=yolo,
-        )
-
-    return _impl
-
-
-def _run_merge_pr_wrapper(
+def _run_merge_pr(
     repo_root: Path,
     branch_name: str,
     pr_number: int,
     task_id: str,
     provider: AbstractTaskProvider,
     worktrees: list[Any],
-) -> Callable[[], bool]:
-    """Return a callable that runs the merge PR logic with captured arguments."""
-
-    def _impl() -> bool:
-        worktree_path = next(
-            (Path(wt["path"]) for wt in worktrees if wt.get("branch") == branch_name),
-            None,
+) -> bool:
+    """Execute the merge PR action from the menu."""
+    worktree_path = next(
+        (Path(wt["path"]) for wt in worktrees if wt.get("branch") == branch_name),
+        None,
+    )
+    if worktree_path is None:
+        console.warn(
+            f"No local worktree found for branch '{branch_name}' — "
+            "local cleanup will be skipped after merge."
         )
-        if worktree_path is None:
-            console.warn(
-                f"No local worktree found for branch '{branch_name}' — "
-                "local cleanup will be skipped after merge."
-            )
-        _merge_pr(
-            repo_root,
-            branch_name,
-            pr_number,
-            task_id,
-            worktree_path,
-            provider,
-        )
-        return True
-
-    return _impl
+    result = _merge_pr(
+        repo_root,
+        branch_name,
+        pr_number,
+        task_id,
+        worktree_path,
+        provider,
+    )
+    return result not in (MergeStatus.MERGE_FAILED, MergeStatus.NOT_MERGED)
 
 
 # ---------------------------------------------------------------------------
@@ -573,54 +392,20 @@ def _get_latest_resumable_session(repo_root: Path, pr_number: int) -> SessionRec
 
 
 def _run_continue_working(
-    target: str,
-    ai_tool: str | None,
-    model: str | None,
-    project_root: Path | None,
-    detach: bool,
-    cd_only: bool,
-    ai_explicit: bool,
-    model_explicit: bool,
+    ctx: SmartStartContext,
     repo_root: Path,
     pr_number: int,
-    effort: str | None = None,
-    effort_explicit: bool = False,
-    yolo: bool | None = None,
 ) -> bool:
     """Show a resume sub-menu if a resumable session exists, else start new."""
     from wade.ui import prompts
 
     resumable = _get_latest_resumable_session(repo_root, pr_number)
     if not resumable:
-        return _run_implement_task(
-            target=target,
-            ai_tool=ai_tool,
-            model=model,
-            project_root=project_root,
-            detach=detach,
-            cd_only=cd_only,
-            ai_explicit=ai_explicit,
-            model_explicit=model_explicit,
-            effort=effort,
-            effort_explicit=effort_explicit,
-            yolo=yolo,
-        )
+        return ctx.run_implement()
 
     if not prompts.is_tty():
         console.info("Non-interactive mode — starting a new session instead of resuming.")
-        return _run_implement_task(
-            target=target,
-            ai_tool=ai_tool,
-            model=model,
-            project_root=project_root,
-            detach=detach,
-            cd_only=cd_only,
-            ai_explicit=ai_explicit,
-            model_explicit=model_explicit,
-            effort=effort,
-            effort_explicit=effort_explicit,
-            yolo=yolo,
-        )
+        return ctx.run_implement()
 
     session_id = resumable.session_id
     tool_name = resumable.ai_tool
@@ -633,71 +418,8 @@ def _run_continue_working(
     choice = prompts.select("How do you want to continue?", labels)
 
     if choice == 0:
-        # Resume
-        return _run_implement_task(
-            target=target,
-            ai_tool=ai_tool,
-            model=model,
-            project_root=project_root,
-            detach=detach,
-            cd_only=cd_only,
-            ai_explicit=ai_explicit,
-            model_explicit=model_explicit,
-            effort=effort,
-            effort_explicit=effort_explicit,
+        return ctx.run_implement(
             resume_session_id=session_id,
             resume_ai_tool=tool_name,
-            yolo=yolo,
         )
-    else:
-        # Start new session
-        return _run_implement_task(
-            target=target,
-            ai_tool=ai_tool,
-            model=model,
-            project_root=project_root,
-            detach=detach,
-            cd_only=cd_only,
-            ai_explicit=ai_explicit,
-            model_explicit=model_explicit,
-            effort=effort,
-            effort_explicit=effort_explicit,
-            yolo=yolo,
-        )
-
-
-def _run_continue_working_wrapper(
-    target: str,
-    ai_tool: str | None,
-    model: str | None,
-    project_root: Path | None,
-    detach: bool,
-    cd_only: bool,
-    ai_explicit: bool,
-    model_explicit: bool,
-    repo_root: Path,
-    pr_number: int,
-    effort: str | None = None,
-    effort_explicit: bool = False,
-    yolo: bool | None = None,
-) -> Callable[[], bool]:
-    """Return a callable that runs _run_continue_working with captured arguments."""
-
-    def _impl() -> bool:
-        return _run_continue_working(
-            target=target,
-            ai_tool=ai_tool,
-            model=model,
-            project_root=project_root,
-            detach=detach,
-            cd_only=cd_only,
-            ai_explicit=ai_explicit,
-            model_explicit=model_explicit,
-            repo_root=repo_root,
-            pr_number=pr_number,
-            effort=effort,
-            effort_explicit=effort_explicit,
-            yolo=yolo,
-        )
-
-    return _impl
+    return ctx.run_implement()

@@ -18,7 +18,8 @@ tests/
 │   ├── test_ai_tools/       # AI tool adapter and registry tests
 │   ├── test_db/             # Database repository tests
 │   ├── test_git/            # Git operation tests (branch, sync, worktree)
-│   └── test_providers/      # Provider tests (GitHub PR, labels)
+│   ├── test_hooks/          # Hook tests (plan write guard)
+│   └── test_providers/      # Provider tests (GitHub PR, ClickUp, labels)
 ├── integration/             # Needs git repos, mock gh
 │   ├── test_check.py
 │   ├── test_init.py
@@ -40,9 +41,7 @@ tests/
 │   ├── test_wade_live_gh.py
 │   └── test_wade_live_ai.py
 └── fixtures/                # Static test data files
-    ├── config_files/
-    ├── plan_files/
-    └── transcripts/
+    └── transcripts/         # Sample AI tool transcripts
 ```
 
 ## Running Tests

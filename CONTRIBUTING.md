@@ -59,15 +59,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/):
 
 ## Releasing
 
-### First release (one-time setup)
-
-```bash
-./scripts/setup-release.sh
-```
-
-This creates the GitHub `pypi` environment, does the first PyPI upload, and walks you through trusted publishing setup.
-
-### Every release after that
+### Every release
 
 ```bash
 uv run python scripts/auto_version.py patch --push   # or minor / major

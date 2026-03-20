@@ -36,11 +36,12 @@ When `wade init` runs on this repo (self-init mode), the installer creates symli
 .github/skills/              ->  (same targets, separate symlinks)
 .agents/skills/              ->  (same targets, separate symlinks)
 .gemini/skills/              ->  (same targets, separate symlinks)
+.cursor/skills/              ->  (same targets, separate symlinks)
 ```
 
 Note: These symlinks are created by `wade init` with `is_self_init=True`. If they don't exist, run `wade init` in this repo to create them.
 
-**Always edit `templates/skills/<name>/SKILL.md`** — never edit files inside `.claude/skills/`, `.github/skills/`, `.agents/skills/`, or `.gemini/skills/` directly. In this repo those are symlinks back to templates; in inited projects they are copies that would be overwritten by `wade update`.
+**Always edit `templates/skills/<name>/SKILL.md`** — never edit files inside `.claude/skills/`, `.github/skills/`, `.agents/skills/`, `.gemini/skills/`, or `.cursor/skills/` directly. In this repo those are symlinks back to templates; in inited projects they are copies that would be overwritten by `wade update`.
 
 In inited projects (normal init), `wade init` copies skill files (not symlinks), so agents in those projects read standalone files that don't change unless `wade update` is run.
 
@@ -59,7 +60,7 @@ The self-init path creates symlinks from `.claude/skills/<name>` -> `../../templ
 
 > **Scope: inited projects.** The skill templates in `templates/skills/` are installed into inited projects by `wade init`. They are *not* guidance for developing wade itself — they teach AI agents in target projects how to use the wade workflow. When you are developing wade, treat these files as **output artifacts** you are authoring, not as rules you follow.
 
-Skill templates are Markdown files installed to an inited project's `.claude/skills/` by `wade init`, with symlinks from `.github/skills/`, `.agents/skills/`, and `.gemini/skills/` for cross-tool discovery. They teach AI agents the wade workflow via phase-specific session skills and on-demand task skills.
+Skill templates are Markdown files installed to an inited project's `.claude/skills/` by `wade init`, with symlinks from `.github/skills/`, `.agents/skills/`, `.gemini/skills/`, and `.cursor/skills/` for cross-tool discovery. They teach AI agents the wade workflow via phase-specific session skills and on-demand task skills.
 
 ### Phase-Specific Skill Architecture (for inited projects)
 
