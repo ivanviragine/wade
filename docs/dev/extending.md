@@ -18,8 +18,8 @@ Thanks to `__init_subclass__` auto-registration, adding a new AI tool requires o
 
 1. Create `src/wade/ai_tools/<tool_name>.py`
 2. Define a class that inherits from `AbstractAITool` and sets `TOOL_ID`
-3. Implement the required abstract methods: `capabilities()`, `get_models()`, `launch()`, `parse_transcript()`
-4. Optionally override `is_model_compatible()`, `plan_mode_args()`, `normalize_model_format()`
+3. Implement the required abstract method: `capabilities()` (returns `AIToolCapabilities`)
+4. Override `get_models()`, `launch()`, or `parse_transcript()` only if the defaults are insufficient
 5. Add the tool ID to `AIToolID` enum in `models/ai.py`
 6. Import the module in `ai_tools/__init__.py` to trigger registration
 
@@ -27,12 +27,12 @@ No modification to `base.py`, services, or CLI is needed.
 
 ## Adding a New Provider
 
-The provider system uses `AbstractTaskProvider` ABC (`src/wade/providers/base.py`) with `GitHubProvider` as the current implementation. Unlike AI tools (which use `__init_subclass__` auto-registration), providers use a simple factory function. To add a new provider (e.g., Linear, Jira):
+The provider system uses `AbstractTaskProvider` ABC (`src/wade/providers/base.py`) with `GitHubProvider` and `ClickUpProvider` as current implementations. Unlike AI tools (which use `__init_subclass__` auto-registration), providers use a registry pattern. To add a new provider (e.g., Linear, Jira):
 
 1. Create `src/wade/providers/<provider_name>.py`
 2. Implement all abstract methods from `AbstractTaskProvider`
 3. Add the provider ID to `ProviderID` enum in `models/config.py`
-4. Add an `elif` branch in `providers/registry.py:get_provider()` to return the new provider
+4. Register the provider in `providers/__init__.py` via `register_provider(ProviderID.YOUR_ID, YourProvider)` (use a lazy loader for optional dependencies)
 
 ## Version Bumping
 

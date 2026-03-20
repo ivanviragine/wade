@@ -12,6 +12,7 @@ from wade.models.config import (
     AIConfig,
     ComplexityModelMapping,
     HooksConfig,
+    PermissionsConfig,
     ProjectConfig,
     ProjectSettings,
     ProviderConfig,
@@ -120,6 +121,7 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
         ),
         review_plan=_parse_command_config(ai_raw.get("review_plan", {})),
         review_implementation=_parse_command_config(ai_raw.get("review_implementation", {})),
+        review_batch=_parse_command_config(ai_raw.get("review_batch", {})),
     )
 
     # Parse models section (nested: tool → complexity → model)
@@ -143,6 +145,12 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
         settings=provider_raw.get("settings") or {},
     )
 
+    # Parse permissions section
+    permissions_raw = raw.get("permissions", {}) or {}
+    permissions = PermissionsConfig(
+        allowed_commands=permissions_raw.get("allowed_commands", ["wade:*"]),
+    )
+
     # Parse hooks section
     hooks_raw = raw.get("hooks", {}) or {}
     hooks = HooksConfig(
@@ -156,6 +164,7 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
         ai=ai,
         models=models,
         provider=provider,
+        permissions=permissions,
         hooks=hooks,
         config_path=str(config_path),
         project_root=str(config_path.parent),

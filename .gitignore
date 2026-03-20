@@ -30,6 +30,7 @@ htmlcov/
 # AI tooling — local agent settings and installed skill copies
 .agents/
 .claude/
+.cursor/skills
 .gemini/
 .github/skills
 

@@ -250,7 +250,7 @@ def update(
     5.  Run config migration pipeline
     6.  Reload config + backfill probed models
     7.  Refresh skill files (force overwrite)
-    8.  Configure Claude Code allowlist
+    8.  Configure AI tool allowlists (Claude, Cursor)
     9.  Configure Gemini experimental (if applicable)
     10. Refresh .gitignore + AGENTS.md pointer
     11. Rebuild manifest with version

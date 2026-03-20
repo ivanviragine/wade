@@ -122,24 +122,29 @@ wade 42
 | `wade review pr-comments <N>` | Address PR review comments |
 | `wade review plan <file>` | AI-powered plan review |
 | `wade review implementation` | AI-powered code review |
+| `wade review batch <N>` | Coherence review across parallel implementation branches |
 | `wade cd <N>` | Navigate to a worktree (requires shell integration) |
 | `wade task create` | Create a GitHub issue interactively |
 | `wade task list` | List open issues |
 | `wade task read <N>` | Show issue details |
+| `wade task deps <N> <M> ...` | Analyze dependencies between issues |
 | `wade worktree list` | List active worktrees |
 | `wade worktree remove <N>` | Remove a worktree |
 | `wade init` | Initialize WADE in the current project |
 | `wade update` | Upgrade WADE and refresh project files |
+| `wade deinit` | Remove WADE from the current project |
+| `wade check-config` | Validate `.wade.yml` configuration |
 
 Short aliases: `wade p` (plan), `wade i <N>` (implement), `wade r <N>` (review pr-comments).
 
-`plan` and `implement` accept `--ai <tool>` and `--model <model>` to override the configured defaults. `implement` also supports `--detach` (new terminal tab) and `--cd` (print worktree path only).
+Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level>`, and `--yolo` to override configured defaults. `implement` also supports `--detach` (new terminal tab) and `--cd` (print worktree path only).
 
 ## Supported AI Tools
 
 | Tool | Binary |
 |------|--------|
 | [Claude Code](https://claude.com/product/claude-code) | `claude` |
+| [Cursor](https://www.cursor.com/) | `cursor` |
 | [GitHub Copilot](https://github.com/features/copilot/cli) | `copilot` |
 | [Google Gemini](https://geminicli.com/) | `gemini` |
 | [OpenAI Codex](https://developers.openai.com/codex/cli/) | `codex` |
