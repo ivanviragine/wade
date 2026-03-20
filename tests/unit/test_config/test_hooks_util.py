@@ -56,6 +56,18 @@ class TestEnsurePathTraversal:
         data = json.loads(hooks_file.read_text(encoding="utf-8"))
         assert data["hooks"]["preToolUse"] == [{"command": "cmd", "description": ""}]
 
+    def test_creates_single_segment_path_and_appends(self, tmp_path: Path) -> None:
+        hooks_file = tmp_path / "hooks.json"
+        upsert_hook_entry(
+            hooks_file,
+            _Entry(command="cmd"),
+            dedup_key="command",
+            ensure_path=["hooks"],
+        )
+        assert hooks_file.is_file()
+        data = json.loads(hooks_file.read_text(encoding="utf-8"))
+        assert data["hooks"] == [{"command": "cmd", "description": ""}]
+
 
 class TestNonListAtFinalKey:
     def test_raises_when_list_key_is_not_a_list(self, tmp_path: Path) -> None:
