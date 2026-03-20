@@ -585,11 +585,28 @@ def _post_implementation_lifecycle(
     worktree_path: Path | None,
     config: ProjectConfig,
     provider: AbstractTaskProvider,
+    *,
+    ai_tool: str | None = None,
+    model: str | None = None,
+    detach: bool = False,
+    ai_explicit: bool = False,
+    model_explicit: bool = False,
+    yolo: bool | None = None,
 ) -> MergeStatus:
     """Run post-implementation lifecycle and return the merge status."""
     if config.project.merge_strategy == MergeStrategy.PR:
         return _post_implementation_lifecycle_pr(
-            repo_root, branch, issue_number, worktree_path, provider
+            repo_root,
+            branch,
+            issue_number,
+            worktree_path,
+            provider,
+            ai_tool=ai_tool,
+            model=model,
+            detach=detach,
+            ai_explicit=ai_explicit,
+            model_explicit=model_explicit,
+            yolo=yolo,
         )
     return _post_implementation_lifecycle_direct(
         repo_root, branch, issue_number, worktree_path, config, provider
@@ -662,6 +679,13 @@ def _post_implementation_lifecycle_pr(
     issue_number: str | int | None,
     worktree_path: Path | None,
     provider: AbstractTaskProvider,
+    *,
+    ai_tool: str | None = None,
+    model: str | None = None,
+    detach: bool = False,
+    ai_explicit: bool = False,
+    model_explicit: bool = False,
+    yolo: bool | None = None,
 ) -> MergeStatus:
     """Run the PR-based post-implementation lifecycle."""
     pr_info = git_pr.get_pr_for_branch(repo_root, branch)
@@ -692,10 +716,30 @@ def _post_implementation_lifecycle_pr(
 
         outcome = review_service.poll_for_reviews(provider, repo_root, int(pr_number), branch)
         if outcome == PollOutcome.COMMENTS_FOUND and issue_number:
-            _ = review_service.start(str(issue_number), project_root=repo_root)
+            _ = review_service.start(
+                str(issue_number),
+                ai_tool=ai_tool,
+                model=model,
+                project_root=repo_root,
+                detach=detach,
+                ai_explicit=ai_explicit,
+                model_explicit=model_explicit,
+                yolo=yolo,
+            )
         elif outcome == PollOutcome.QUIET_TIMEOUT:
             review_service._quiet_next_steps_prompt(
-                repo_root, branch, issue_number, worktree_path, int(pr_number), provider
+                repo_root,
+                branch,
+                issue_number,
+                worktree_path,
+                int(pr_number),
+                provider,
+                ai_tool=ai_tool,
+                model=model,
+                detach=detach,
+                ai_explicit=ai_explicit,
+                model_explicit=model_explicit,
+                yolo=yolo,
             )
         return MergeStatus.NOT_MERGED
 
@@ -1233,6 +1277,7 @@ def start(
                     )
 
                 if launch_completed:
+                    effective_model = resolved_model or detected_model
                     try:
                         merge_status = _post_implementation_lifecycle(
                             repo_root=repo_root,
@@ -1241,6 +1286,12 @@ def start(
                             worktree_path=worktree_path,
                             config=config,
                             provider=provider,
+                            ai_tool=resolved_tool,
+                            model=effective_model,
+                            detach=detach,
+                            ai_explicit=ai_explicit,
+                            model_explicit=model_explicit,
+                            yolo=resolved_yolo,
                         )
                     except Exception:
                         logger.exception("post_implementation_lifecycle.failed")

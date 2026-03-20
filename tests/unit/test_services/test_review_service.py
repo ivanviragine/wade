@@ -1448,7 +1448,63 @@ class TestQuietNextStepsPrompt:
 
         _quiet_next_steps_prompt(tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider)
 
-        mock_start.assert_called_once_with("42", project_root=tmp_path)
+        mock_start.assert_called_once_with(
+            "42",
+            ai_tool=None,
+            model=None,
+            project_root=tmp_path,
+            detach=False,
+            ai_explicit=False,
+            model_explicit=False,
+            yolo=None,
+        )
+
+    @patch("wade.services.review_service.get_comprehensive_review_status")
+    @patch("wade.services.review_service.start")
+    @patch("wade.services.review_service.poll_for_reviews")
+    @patch("wade.ui.prompts.select", return_value=0)
+    @patch("wade.ui.prompts.is_tty", return_value=True)
+    def test_keep_polling_comments_found_preserves_review_context(
+        self,
+        mock_is_tty: MagicMock,
+        mock_select: MagicMock,
+        mock_poll: MagicMock,
+        mock_start: MagicMock,
+        mock_status: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Restart after quiet polling should preserve explicit review options."""
+        from wade.models.review import PollOutcome, PRReviewStatus
+
+        mock_status.return_value = PRReviewStatus()
+        mock_poll.return_value = PollOutcome.COMMENTS_FOUND
+        provider = MagicMock()
+
+        _quiet_next_steps_prompt(
+            tmp_path,
+            "feat/42",
+            "42",
+            tmp_path / "wt",
+            99,
+            provider,
+            ai_tool="claude",
+            model="claude-sonnet-4-5",
+            detach=True,
+            ai_explicit=True,
+            model_explicit=True,
+            yolo=True,
+        )
+
+        mock_start.assert_called_once_with(
+            "42",
+            ai_tool="claude",
+            model="claude-sonnet-4-5",
+            project_root=tmp_path,
+            detach=True,
+            ai_explicit=True,
+            model_explicit=True,
+            yolo=True,
+        )
 
     @patch("wade.services.review_service.get_comprehensive_review_status")
     @patch("wade.services.review_service._merge_pr")
@@ -1591,7 +1647,20 @@ class TestPostReviewLifecycle:
         _post_review_lifecycle(tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider)
         mock_merge.assert_not_called()
         mock_poll.assert_called_once()
-        mock_quiet.assert_called_once_with(tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider)
+        mock_quiet.assert_called_once_with(
+            tmp_path,
+            "feat/42",
+            "42",
+            tmp_path / "wt",
+            99,
+            provider,
+            ai_tool=None,
+            model=None,
+            detach=False,
+            ai_explicit=False,
+            model_explicit=False,
+            yolo=None,
+        )
 
     @patch("wade.services.review_service.start")
     @patch("wade.services.review_service.poll_for_reviews")
@@ -1614,4 +1683,58 @@ class TestPostReviewLifecycle:
         provider = MagicMock()
         _post_review_lifecycle(tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider)
         mock_merge.assert_not_called()
-        mock_start.assert_called_once_with("42", project_root=tmp_path)
+        mock_start.assert_called_once_with(
+            "42",
+            ai_tool=None,
+            model=None,
+            project_root=tmp_path,
+            detach=False,
+            ai_explicit=False,
+            model_explicit=False,
+            yolo=None,
+        )
+
+    @patch("wade.services.review_service.start")
+    @patch("wade.services.review_service.poll_for_reviews")
+    @patch("wade.services.review_service._merge_pr")
+    @patch("wade.ui.prompts.select", return_value=1)
+    @patch("wade.ui.prompts.is_tty", return_value=True)
+    def test_wait_comments_found_preserves_review_context(
+        self,
+        mock_is_tty: MagicMock,
+        mock_select: MagicMock,
+        mock_merge: MagicMock,
+        mock_poll: MagicMock,
+        mock_start: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Restart after post-review polling should preserve explicit review options."""
+        from wade.models.review import PollOutcome
+
+        mock_poll.return_value = PollOutcome.COMMENTS_FOUND
+        provider = MagicMock()
+        _post_review_lifecycle(
+            tmp_path,
+            "feat/42",
+            "42",
+            tmp_path / "wt",
+            99,
+            provider,
+            ai_tool="claude",
+            model="claude-sonnet-4-5",
+            detach=True,
+            ai_explicit=True,
+            model_explicit=True,
+            yolo=True,
+        )
+        mock_merge.assert_not_called()
+        mock_start.assert_called_once_with(
+            "42",
+            ai_tool="claude",
+            model="claude-sonnet-4-5",
+            project_root=tmp_path,
+            detach=True,
+            ai_explicit=True,
+            model_explicit=True,
+            yolo=True,
+        )

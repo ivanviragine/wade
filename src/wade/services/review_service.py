@@ -525,7 +525,18 @@ def start(
 
         # Offer the shared quiet-exit menu: keep polling / merge / exit.
         _quiet_next_steps_prompt(
-            repo_root, branch_name, task.id, worktree_path, pr_number, provider
+            repo_root,
+            branch_name,
+            task.id,
+            worktree_path,
+            pr_number,
+            provider,
+            ai_tool=ai_tool,
+            model=model,
+            detach=detach,
+            ai_explicit=ai_explicit,
+            model_explicit=model_explicit,
+            yolo=yolo,
         )
         return True
 
@@ -684,7 +695,18 @@ def start(
 
             # 10. Post-review lifecycle: "Merge PR" / "Wait for new reviews"
             _post_review_lifecycle(
-                repo_root, branch_name, task.id, worktree_path, pr_number, provider
+                repo_root,
+                branch_name,
+                task.id,
+                worktree_path,
+                pr_number,
+                provider,
+                ai_tool=resolved_tool,
+                model=effective_model,
+                detach=detach,
+                ai_explicit=ai_explicit,
+                model_explicit=model_explicit,
+                yolo=resolved_yolo,
             )
     else:
         console.info(
@@ -694,7 +716,20 @@ def start(
         stop_title_keeper()
 
         # 10. Post-review lifecycle (no AI tool — user addressed manually)
-        _post_review_lifecycle(repo_root, branch_name, task.id, worktree_path, pr_number, provider)
+        _post_review_lifecycle(
+            repo_root,
+            branch_name,
+            task.id,
+            worktree_path,
+            pr_number,
+            provider,
+            ai_tool=ai_tool,
+            model=model,
+            detach=detach,
+            ai_explicit=ai_explicit,
+            model_explicit=model_explicit,
+            yolo=yolo,
+        )
 
     return True
 
@@ -761,6 +796,13 @@ def _quiet_next_steps_prompt(
     worktree_path: Path | None,
     pr_number: int,
     provider: AbstractTaskProvider,
+    *,
+    ai_tool: str | None = None,
+    model: str | None = None,
+    detach: bool = False,
+    ai_explicit: bool = False,
+    model_explicit: bool = False,
+    yolo: bool | None = None,
 ) -> None:
     """Shared next-steps menu for quiet PRs: keep polling, merge, or exit.
 
@@ -796,7 +838,16 @@ def _quiet_next_steps_prompt(
             outcome = poll_for_reviews(provider, repo_root, pr_number, branch)
             if outcome == PollOutcome.COMMENTS_FOUND:
                 if issue_number:
-                    _ = start(str(issue_number), project_root=repo_root)
+                    _ = start(
+                        str(issue_number),
+                        ai_tool=ai_tool,
+                        model=model,
+                        project_root=repo_root,
+                        detach=detach,
+                        ai_explicit=ai_explicit,
+                        model_explicit=model_explicit,
+                        yolo=yolo,
+                    )
                 return
             elif outcome == PollOutcome.QUIET_TIMEOUT:
                 continue  # Show menu again
@@ -816,6 +867,13 @@ def _post_review_lifecycle(
     worktree_path: Path | None,
     pr_number: int,
     provider: AbstractTaskProvider,
+    *,
+    ai_tool: str | None = None,
+    model: str | None = None,
+    detach: bool = False,
+    ai_explicit: bool = False,
+    model_explicit: bool = False,
+    yolo: bool | None = None,
 ) -> None:
     """Post-review lifecycle menu: Merge PR or wait for new reviews."""
     from wade.ui import prompts
@@ -833,10 +891,30 @@ def _post_review_lifecycle(
         outcome = poll_for_reviews(provider, repo_root, pr_number, branch)
         if outcome == PollOutcome.COMMENTS_FOUND:
             if issue_number:
-                _ = start(str(issue_number), project_root=repo_root)
+                _ = start(
+                    str(issue_number),
+                    ai_tool=ai_tool,
+                    model=model,
+                    project_root=repo_root,
+                    detach=detach,
+                    ai_explicit=ai_explicit,
+                    model_explicit=model_explicit,
+                    yolo=yolo,
+                )
         elif outcome == PollOutcome.QUIET_TIMEOUT:
             _quiet_next_steps_prompt(
-                repo_root, branch, issue_number, worktree_path, pr_number, provider
+                repo_root,
+                branch,
+                issue_number,
+                worktree_path,
+                pr_number,
+                provider,
+                ai_tool=ai_tool,
+                model=model,
+                detach=detach,
+                ai_explicit=ai_explicit,
+                model_explicit=model_explicit,
+                yolo=yolo,
             )
         return
 

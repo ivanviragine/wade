@@ -418,7 +418,18 @@ def _run_review_pr_comments(
         )
     elif outcome == PollOutcome.QUIET_TIMEOUT:
         review_service._quiet_next_steps_prompt(
-            repo_root, branch_name, issue_number, worktree_path, pr_number, provider
+            repo_root,
+            branch_name,
+            issue_number,
+            worktree_path,
+            pr_number,
+            provider,
+            ai_tool=ai_tool,
+            model=model,
+            detach=detach,
+            ai_explicit=ai_explicit,
+            model_explicit=model_explicit,
+            yolo=yolo,
         )
         return True
     else:  # INTERRUPTED or PR_CLOSED

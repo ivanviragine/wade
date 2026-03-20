@@ -1442,6 +1442,102 @@ class TestPostImplementationLifecyclePr:
             )
         assert result == MergeStatus.NOT_MERGED
 
+    def test_wait_for_reviews_comments_found_preserves_review_context(self, tmp_path: Path) -> None:
+        """Polling into review mode should preserve the resolved implementation context."""
+        from wade.models.review import PollOutcome
+
+        mock_provider = MagicMock()
+        with (
+            patch(
+                "wade.git.pr.get_pr_for_branch",
+                return_value={"number": 10, "url": "http://test"},
+            ),
+            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch(
+                "wade.services.review_service.poll_for_reviews",
+                return_value=PollOutcome.COMMENTS_FOUND,
+            ),
+            patch("wade.services.review_service.start") as mock_review_start,
+        ):
+            mock_prompts.is_tty.return_value = True
+            mock_prompts.confirm.return_value = False
+            mock_prompts.select.return_value = 1  # "Wait for reviews"
+            result = _post_implementation_lifecycle_pr(
+                tmp_path,
+                "feat/42",
+                "42",
+                tmp_path / "wt",
+                mock_provider,
+                ai_tool="claude",
+                model="claude-sonnet-4-5",
+                detach=True,
+                ai_explicit=True,
+                model_explicit=True,
+                yolo=True,
+            )
+
+        assert result == MergeStatus.NOT_MERGED
+        mock_review_start.assert_called_once_with(
+            "42",
+            ai_tool="claude",
+            model="claude-sonnet-4-5",
+            project_root=tmp_path,
+            detach=True,
+            ai_explicit=True,
+            model_explicit=True,
+            yolo=True,
+        )
+
+    def test_wait_for_reviews_quiet_timeout_preserves_review_context(self, tmp_path: Path) -> None:
+        """Quiet timeout should forward the original implementation context to review UX."""
+        from wade.models.review import PollOutcome
+
+        mock_provider = MagicMock()
+        with (
+            patch(
+                "wade.git.pr.get_pr_for_branch",
+                return_value={"number": 10, "url": "http://test"},
+            ),
+            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch(
+                "wade.services.review_service.poll_for_reviews",
+                return_value=PollOutcome.QUIET_TIMEOUT,
+            ),
+            patch("wade.services.review_service._quiet_next_steps_prompt") as mock_quiet,
+        ):
+            mock_prompts.is_tty.return_value = True
+            mock_prompts.confirm.return_value = False
+            mock_prompts.select.return_value = 1  # "Wait for reviews"
+            result = _post_implementation_lifecycle_pr(
+                tmp_path,
+                "feat/42",
+                "42",
+                tmp_path / "wt",
+                mock_provider,
+                ai_tool="claude",
+                model="claude-sonnet-4-5",
+                detach=True,
+                ai_explicit=True,
+                model_explicit=True,
+                yolo=True,
+            )
+
+        assert result == MergeStatus.NOT_MERGED
+        mock_quiet.assert_called_once_with(
+            tmp_path,
+            "feat/42",
+            "42",
+            tmp_path / "wt",
+            10,
+            mock_provider,
+            ai_tool="claude",
+            model="claude-sonnet-4-5",
+            detach=True,
+            ai_explicit=True,
+            model_explicit=True,
+            yolo=True,
+        )
+
     def test_no_pr_found_returns_not_merged(self, tmp_path: Path) -> None:
         """No open PR → returns NOT_MERGED."""
         mock_provider = MagicMock()

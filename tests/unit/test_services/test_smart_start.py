@@ -650,7 +650,16 @@ class TestRunReviewPrComments:
         )
         assert result is True
         mock_poll.assert_called_once_with(provider, tmp_path, 99, "feat/42-fix")
-        mock_start.assert_called_once()
+        mock_start.assert_called_once_with(
+            target="42",
+            ai_tool=None,
+            model=None,
+            project_root=tmp_path,
+            detach=False,
+            ai_explicit=False,
+            model_explicit=False,
+            yolo=None,
+        )
 
     @patch("wade.services.review_service._quiet_next_steps_prompt")
     @patch(
@@ -679,7 +688,20 @@ class TestRunReviewPrComments:
             provider=provider,
         )
         assert result is True
-        mock_quiet.assert_called_once_with(tmp_path, "feat/42-fix", "42", None, 99, provider)
+        mock_quiet.assert_called_once_with(
+            tmp_path,
+            "feat/42-fix",
+            "42",
+            None,
+            99,
+            provider,
+            ai_tool=None,
+            model=None,
+            detach=False,
+            ai_explicit=False,
+            model_explicit=False,
+            yolo=None,
+        )
 
 
 class TestSmartStartGitError:
