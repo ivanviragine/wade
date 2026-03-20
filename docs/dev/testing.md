@@ -156,8 +156,8 @@ The taskr workflow lane is host-only and destructive by design:
 - unlike the GH live lane, the taskr workflow runner does not require
   `.wade.yml` to exist ahead of time; it recreates the local WADE config itself
 - it currently exercises two tiny real tasks in sequence:
-  - add `taskr greet` so `uv run taskr greet` prints `Hi`
-  - change `taskr greet` so `uv run taskr greet` prints `Howdy`
+  - add a greeting header so `uv run taskr` and `uv run taskr list` both start with `Hi`
+  - change that greeting header so `uv run taskr` and `uv run taskr list` both start with `Howdy`
 
 ## CI Execution Model
 

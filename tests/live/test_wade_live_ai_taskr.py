@@ -102,6 +102,26 @@ def _assert_ok(result: subprocess.CompletedProcess[str], context: str) -> None:
     )
 
 
+def _assert_header_output(
+    result: subprocess.CompletedProcess[str],
+    *,
+    expected_header: str,
+    expected_contains: str,
+    context: str,
+) -> None:
+    _assert_ok(result, context)
+    lines = result.stdout.splitlines()
+    assert lines, f"{context} produced no stdout"
+    assert lines[0].strip() == expected_header, (
+        f"{context} did not start with the expected greeting header.\n"
+        f"expected={expected_header!r}\nstdout={result.stdout!r}"
+    )
+    assert expected_contains in result.stdout, (
+        f"{context} did not include the expected command output.\n"
+        f"expected_fragment={expected_contains!r}\nstdout={result.stdout!r}"
+    )
+
+
 def _assert_baseline_taskr_state(repo_root: Path) -> None:
     branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_root)
     _assert_ok(branch, "git rev-parse --abbrev-ref HEAD")
@@ -142,10 +162,21 @@ def _assert_baseline_taskr_state(repo_root: Path) -> None:
 
     help_result = _taskr_cli(cwd=repo_root)
     _assert_ok(help_result, "uv run taskr")
-    assert "greet" not in help_result.stdout.lower(), (
-        "taskr baseline already includes greet.\n"
+    assert not help_result.stdout.startswith("Hi\n"), (
+        "taskr baseline already includes the Hi header.\n"
         "Run /Users/ivanviragine/Documents/workspace/taskr/scripts/reset.sh --yes first."
     )
+    assert not help_result.stdout.startswith("Howdy\n"), (
+        "taskr baseline already includes the Howdy header.\n"
+        "Run /Users/ivanviragine/Documents/workspace/taskr/scripts/reset.sh --yes first."
+    )
+    assert "Commands:" in help_result.stdout
+
+    list_result = _taskr_cli("list", cwd=repo_root)
+    _assert_ok(list_result, "uv run taskr list")
+    assert not list_result.stdout.startswith("Hi\n")
+    assert not list_result.stdout.startswith("Howdy\n")
+    assert "No tasks." in list_result.stdout
 
 
 def _issue_number_from_create_output(output: str) -> str:
@@ -187,8 +218,10 @@ def _delegate_issue_implementation(
         "- Do not add runtime dependencies.\n"
         "- Add or update tests as needed.\n"
         "- Run ./scripts/test.sh.\n"
-        "- Validate the behavior with: uv run taskr greet "
-        f"(it must print exactly {expected_greeting}).\n"
+        "- The greeting is a header on every command output, not a new subcommand.\n"
+        "- Validate with: uv run taskr and uv run taskr list "
+        f"(both must start with {expected_greeting!r}).\n"
+        "- Preserve the existing command output after the greeting header.\n"
         f'- When tests pass, commit all changes with: git commit -m "{commit_subject}".\n'
         "Return a short summary of changed files and test status.\n"
     )
@@ -251,7 +284,7 @@ def _create_issue_from_fixture(title: str, body_path: Path) -> str:
 
 
 def _implement_issue(
-    issue_number: str, issue_body: str, commit_subject: str, expected_greeting: str
+    issue_number: str, issue_body: str, commit_subject: str, expected_header: str
 ) -> tuple[Path, str]:
     implement = _wade("implement", issue_number, "--cd", timeout=180)
     _assert_ok(implement, f"wade implement {issue_number} --cd")
@@ -266,20 +299,31 @@ def _implement_issue(
         issue_number,
         issue_body,
         commit_subject,
-        expected_greeting,
+        expected_header,
     )
     _run_taskr_tests(worktree_path)
 
-    greeting = _taskr_cli("greet", cwd=worktree_path, timeout=60)
-    _assert_ok(greeting, "uv run taskr greet (worktree)")
-    assert greeting.stdout.strip() == expected_greeting
+    help_result = _taskr_cli(cwd=worktree_path, timeout=60)
+    _assert_header_output(
+        help_result,
+        expected_header=expected_header,
+        expected_contains="Commands:",
+        context="uv run taskr (worktree)",
+    )
+    list_result = _taskr_cli("list", cwd=worktree_path, timeout=60)
+    _assert_header_output(
+        list_result,
+        expected_header=expected_header,
+        expected_contains="No tasks.",
+        context="uv run taskr list (worktree)",
+    )
 
     done = _wade("implementation-session", "done", cwd=worktree_path, timeout=180)
     _assert_ok(done, f"wade implementation-session done ({issue_number})")
     return worktree_path, branch_name
 
 
-def _merge_pr_and_update_main(issue_number: str, branch_name: str, expected_greeting: str) -> str:
+def _merge_pr_and_update_main(issue_number: str, branch_name: str, expected_header: str) -> str:
     pr_view = _gh("pr", "view", branch_name, "--json", "number,state,isDraft,url", timeout=120)
     _assert_ok(pr_view, f"gh pr view {branch_name}")
     pr_payload = json.loads(pr_view.stdout)
@@ -297,9 +341,20 @@ def _merge_pr_and_update_main(issue_number: str, branch_name: str, expected_gree
     _assert_ok(pull, "git pull --ff-only origin main")
 
     _run_taskr_tests(LIVE_REPO)
-    greeting = _taskr_cli("greet", cwd=LIVE_REPO, timeout=60)
-    _assert_ok(greeting, "uv run taskr greet (main checkout)")
-    assert greeting.stdout.strip() == expected_greeting
+    help_result = _taskr_cli(cwd=LIVE_REPO, timeout=60)
+    _assert_header_output(
+        help_result,
+        expected_header=expected_header,
+        expected_contains="Commands:",
+        context="uv run taskr (main checkout)",
+    )
+    list_result = _taskr_cli("list", cwd=LIVE_REPO, timeout=60)
+    _assert_header_output(
+        list_result,
+        expected_header=expected_header,
+        expected_contains="No tasks.",
+        context="uv run taskr list (main checkout)",
+    )
 
     remove_worktree = _wade("worktree", "remove", issue_number, "--force", timeout=120)
     _assert_ok(remove_worktree, f"wade worktree remove {issue_number} --force")
@@ -349,35 +404,35 @@ def require_live_workflow_tools() -> None:
 
 
 class TestLiveAITaskrWorkflow:
-    def test_taskr_greet_hi_then_howdy_workflow(self) -> None:
+    def test_taskr_header_hi_then_howdy_workflow(self) -> None:
         """Exercise a real AI implementation workflow on taskr through two tiny issues."""
         assert LIVE_REPO is not None
         _assert_baseline_taskr_state(LIVE_REPO)
 
         unique = time.time_ns()
-        hi_title = f"Add taskr greet command ({unique})"
-        howdy_title = f"Change taskr greet to Howdy ({unique})"
+        hi_title = f"Add taskr greeting header ({unique})"
+        howdy_title = f"Change taskr greeting header to Howdy ({unique})"
 
         hi_issue = _create_issue_from_fixture(hi_title, GREET_HI_BODY)
         _, hi_branch = _implement_issue(
             hi_issue,
             GREET_HI_BODY.read_text(encoding="utf-8"),
-            commit_subject=f"feat: add greet command (#{hi_issue})",
-            expected_greeting="Hi",
+            commit_subject=f"feat: add taskr greeting header (#{hi_issue})",
+            expected_header="Hi",
         )
-        hi_pr = _merge_pr_and_update_main(hi_issue, hi_branch, expected_greeting="Hi")
+        hi_pr = _merge_pr_and_update_main(hi_issue, hi_branch, expected_header="Hi")
         assert hi_pr
 
         howdy_issue = _create_issue_from_fixture(howdy_title, GREET_HOWDY_BODY)
         _, howdy_branch = _implement_issue(
             howdy_issue,
             GREET_HOWDY_BODY.read_text(encoding="utf-8"),
-            commit_subject=f"fix: update greet command (#{howdy_issue})",
-            expected_greeting="Howdy",
+            commit_subject=f"fix: update taskr greeting header (#{howdy_issue})",
+            expected_header="Howdy",
         )
         howdy_pr = _merge_pr_and_update_main(
             howdy_issue,
             howdy_branch,
-            expected_greeting="Howdy",
+            expected_header="Howdy",
         )
         assert howdy_pr
