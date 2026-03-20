@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.8.2] — 2026-03-20
+
+### Documentation
+
+- fix documentation inconsistencies and outdated references across codebase (bde4258)
+
 ## [v0.8.1] — 2026-03-20
 
 ### Refactoring
