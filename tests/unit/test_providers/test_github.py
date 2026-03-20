@@ -465,6 +465,30 @@ class TestFindParentIssue:
         assert parent == "10"
 
     @patch("wade.providers.github.run")
+    def test_found_with_backticked_hash(
+        self, mock_run: MagicMock, provider: GitHubProvider
+    ) -> None:
+        issues = [
+            {"number": 10, "body": "## Tasks\n- [ ] `#42`\n- [ ] `#43`"},
+        ]
+        mock_run.return_value = _make_completed(json.dumps(issues))
+
+        parent = provider.find_parent_issue("42")
+        assert parent == "10"
+
+    @patch("wade.providers.github.run")
+    def test_found_with_indented_checklist_item(
+        self, mock_run: MagicMock, provider: GitHubProvider
+    ) -> None:
+        issues = [
+            {"number": 10, "body": "Tracking issue\n  - [ ] `#42`\n\t- [ ] #43"},
+        ]
+        mock_run.return_value = _make_completed(json.dumps(issues))
+
+        parent = provider.find_parent_issue("42")
+        assert parent == "10"
+
+    @patch("wade.providers.github.run")
     def test_not_found(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         issues = [
             {"number": 10, "body": "No checklist here"},

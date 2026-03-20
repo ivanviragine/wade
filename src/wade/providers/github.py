@@ -33,6 +33,7 @@ from wade.models.task import (
     TaskState,
     parse_complexity_from_body,
     parse_complexity_from_labels,
+    parse_tracking_child_ids,
 )
 from wade.providers.base import AbstractTaskProvider
 from wade.utils.process import CommandError, run
@@ -810,16 +811,18 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
         except (CommandError, json.JSONDecodeError):
             return None
 
-        # Match checklist patterns: - [ ] #42 or - [ ] 42
-        # re.MULTILINE so $ matches end-of-line, not just end-of-string
-        pattern = re.compile(
-            rf"-\s*\[\s*\]\s*#?{re.escape(task_id)}(?:\.\s| |$)",
+        # Primary path: use the shared checklist parser so parent detection stays
+        # aligned with tracking/batch flows (indented items, backticked refs, etc.).
+        legacy_no_hash_pattern = re.compile(
+            rf"^[ \t]*-\s*\[\s*\]\s*{re.escape(task_id)}(?:\.\s| |$)",
             re.MULTILINE,
         )
 
         for issue in issues:
             body = issue.get("body", "") or ""
-            if pattern.search(body):
+            if task_id in parse_tracking_child_ids(body):
+                return str(issue["number"])
+            if legacy_no_hash_pattern.search(body):
                 return str(issue["number"])
 
         return None

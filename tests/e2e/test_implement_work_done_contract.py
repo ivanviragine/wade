@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -203,4 +204,62 @@ class TestWorkDoneCommand:
                 ["pr", "create", "--head", branch_name],
             )
             == 1
+        )
+
+    def test_work_done_links_parent_tracking_issue_from_backticked_checklist(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """implementation-session done should detect parent issues from modern checklist refs."""
+        tracking_issue = 100
+        issue_number = 45
+        issue_title = "Finalize parent issue detection"
+        _seed_mock_issue(
+            mock_gh_cli["state_file"],
+            issue_number=tracking_issue,
+            title="Tracking: rollout",
+            body="## Tasks\n  - [ ] `#45`\n",
+            labels=["feature-plan"],
+        )
+        _seed_mock_issue(
+            mock_gh_cli["state_file"],
+            issue_number=issue_number,
+            title=issue_title,
+            body="## Tasks\n- Finish implementation\n",
+            labels=["feature-plan"],
+        )
+        _init_origin_remote(e2e_repo)
+
+        branch_name = "feat/45-finalize-parent-issue-detection"
+
+        start_result = _run(["implement", str(issue_number), "--cd"], cwd=e2e_repo)
+        assert start_result.returncode == 0
+        worktree_path = Path(start_result.stdout.strip())
+        assert worktree_path.is_dir()
+
+        (worktree_path / "PR-SUMMARY.md").write_text(
+            "Finished implementation with parent tracking linkage.\n",
+            encoding="utf-8",
+        )
+        (worktree_path / "implementation.txt").write_text(
+            "tracking parent contract\n", encoding="utf-8"
+        )
+        _git(["add", "-A"], cwd=worktree_path)
+        _git(["commit", "-m", f"feat: complete #{issue_number}"], cwd=worktree_path)
+
+        result = _run(["implementation-session", "done"], cwd=worktree_path)
+        assert result.returncode == 0
+
+        pr_number = _find_mock_pr_number_by_head(mock_gh_cli["state_file"], branch_name)
+        state_data = json.loads(mock_gh_cli["state_file"].read_text(encoding="utf-8"))
+        prs = state_data.get("prs", {})
+        assert isinstance(prs, dict)
+        pr_data = prs.get(pr_number)
+        assert isinstance(pr_data, dict)
+        assert "Part of #100" in str(pr_data.get("body", ""))
+
+        _assert_gh_called_with(
+            mock_gh_cli["log_file"],
+            ["issue", "list", "--state", "open", "--label", "feature-plan"],
         )
