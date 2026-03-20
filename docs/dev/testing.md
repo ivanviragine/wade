@@ -148,6 +148,8 @@ The taskr workflow lane is host-only and destructive by design:
 - it expects the dedicated `taskr` sandbox repo
 - it resets that repo to `reset-target` before and after the run via
   [scripts/reset.sh](/Users/ivanviragine/Documents/workspace/taskr/scripts/reset.sh)
+- after each reset, the runner re-initializes WADE locally so the repo stays
+  ready for subsequent live runs without requiring a manual `wade init`
 - it currently exercises two tiny real tasks in sequence:
   - add `taskr greet` that prints `Hi`
   - change `taskr greet` to print `Howdy`

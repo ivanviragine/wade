@@ -69,8 +69,30 @@ if ! [[ "${WADE_LIVE_AI_WORKFLOW_TIMEOUT}" =~ ^[1-9][0-9]*$ ]]; then
   exit 1
 fi
 
+ensure_taskr_wade_ready() {
+  local repo="$1"
+  local exclude_file="${repo}/.git/info/exclude"
+
+  if ! grep -q '^# wade live taskr$' "${exclude_file}" 2>/dev/null; then
+    cat >>"${exclude_file}" <<'EOF'
+# wade live taskr
+.wade.yml
+.wade-managed
+.claude/
+.wade/
+EOF
+  fi
+
+  (cd "${repo}" && wade init --ai claude --yes >/dev/null)
+
+  # Keep the repo on the reset-target tree while leaving WADE's local artifacts available.
+  (cd "${repo}" && git checkout -- AGENTS.md .gitignore 2>/dev/null || true)
+}
+
 echo "Resetting taskr to baseline before live AI workflow..."
 (cd "${LIVE_REPO}" && ./scripts/reset.sh --yes)
+echo "Re-initializing WADE in taskr after reset..."
+ensure_taskr_wade_ready "${LIVE_REPO}"
 
 status=0
 env WADE_INCLUDE_LIVE=1 ./scripts/test.sh \
@@ -82,5 +104,7 @@ env WADE_INCLUDE_LIVE=1 ./scripts/test.sh \
 
 echo "Resetting taskr back to baseline after live AI workflow..."
 (cd "${LIVE_REPO}" && ./scripts/reset.sh --yes)
+echo "Re-initializing WADE in taskr after cleanup..."
+ensure_taskr_wade_ready "${LIVE_REPO}"
 
 exit "${status}"
