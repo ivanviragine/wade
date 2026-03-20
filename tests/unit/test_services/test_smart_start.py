@@ -17,7 +17,7 @@ def _make_task() -> Task:
 class TestSmartStartNoPR:
     """When no PR exists, smart_start falls through to implement."""
 
-    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch", return_value=None)
     @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
     @patch("wade.services.smart_start.git_repo.get_repo_root")
@@ -71,7 +71,7 @@ class TestSmartStartMergedPR:
 class TestSmartStartOpenPR:
     """When an open PR exists, presents a contextual menu."""
 
-    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
     @patch("wade.services.smart_start.git_pr.get_pr_body", return_value=None)
     @patch("wade.ui.prompts.select", return_value=0)
     @patch("wade.git.worktree.list_worktrees", return_value=[])
@@ -102,7 +102,7 @@ class TestSmartStartOpenPR:
         assert result is True
         mock_implement.assert_called_once()
 
-    @patch("wade.services.smart_start._run_review_pr_comments", return_value=True)
+    @patch("wade.services.smart_start.SmartStartContext.run_review_pr_comments", return_value=True)
     @patch("wade.ui.prompts.select", return_value=1)
     @patch("wade.git.worktree.list_worktrees", return_value=[])
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
@@ -165,7 +165,7 @@ class TestSmartStartOpenPR:
 class TestSmartStartDraftPR:
     """When a draft PR exists, shows context-aware menu based on worktree presence."""
 
-    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
     @patch("wade.ui.prompts.select", return_value=0)
     @patch("wade.git.worktree.list_worktrees", return_value=[])
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
@@ -203,7 +203,7 @@ class TestSmartStartDraftPR:
         assert "Merge PR" not in call_args[0][1]
         mock_implement.assert_called_once()
 
-    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
     @patch("wade.services.smart_start.git_pr.get_pr_body", return_value=None)
     @patch("wade.ui.prompts.select", return_value=0)
     @patch(
@@ -245,7 +245,7 @@ class TestSmartStartDraftPR:
         assert "Merge PR" not in call_args[0][1]
         mock_implement.assert_called_once()
 
-    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
     @patch("wade.ui.prompts.select", return_value=0)
     @patch("wade.git.worktree.list_worktrees", return_value=[])
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
@@ -317,7 +317,7 @@ class TestSmartStartTrackingDetection:
         mock_batch.assert_called_once()
         assert mock_batch.call_args.kwargs["issue_numbers"] == ["167", "169"]
 
-    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
     @patch("wade.ui.prompts.confirm", return_value=False)
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")
@@ -345,7 +345,7 @@ class TestSmartStartTrackingDetection:
         assert result is False
         mock_implement.assert_not_called()
 
-    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch", return_value=None)
     @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
     @patch("wade.services.smart_start.git_repo.get_repo_root")
@@ -410,7 +410,7 @@ class TestSmartStartTrackingDetection:
         assert call_kwargs["model_explicit"] is True
         assert call_kwargs["yolo"] is True
 
-    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch", return_value=None)
     @patch(
         "wade.services.smart_start.git_branch.make_branch_name", return_value="feat/173-tracking"
@@ -442,7 +442,7 @@ class TestSmartStartTrackingDetection:
         assert result is True
         mock_implement.assert_called_once()
 
-    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch", return_value=None)
     @patch(
         "wade.services.smart_start.git_branch.make_branch_name", return_value="feat/173-tracking"
@@ -503,7 +503,7 @@ class TestSmartStartTrackingDetection:
         mock_batch.assert_called_once()
         assert mock_batch.call_args.kwargs["issue_numbers"] == ["167", "169"]
 
-    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.implementation_service.start")
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch", return_value=None)
     @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
     @patch("wade.services.smart_start.git_repo.get_repo_root")
@@ -516,16 +516,18 @@ class TestSmartStartTrackingDetection:
         mock_repo_root: MagicMock,
         mock_branch: MagicMock,
         mock_pr: MagicMock,
-        mock_implement: MagicMock,
+        mock_do_start: MagicMock,
         tmp_path: Path,
     ) -> None:
         """effort/effort_explicit are forwarded on the normal implement path."""
         mock_repo_root.return_value = tmp_path
         mock_get_provider.return_value.read_task.return_value = _make_task()
+        mock_do_start.return_value = MagicMock(success=True)
 
         smart_start("42", project_root=tmp_path, effort="high", effort_explicit=True)
 
-        call_kwargs = mock_implement.call_args.kwargs
+        mock_do_start.assert_called_once()
+        call_kwargs = mock_do_start.call_args.kwargs
         assert call_kwargs["effort"] == "high"
         assert call_kwargs["effort_explicit"] is True
 
@@ -533,7 +535,7 @@ class TestSmartStartTrackingDetection:
 class TestSmartStartGitError:
     """When not in a git repo, falls through to implement."""
 
-    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
     @patch("wade.services.smart_start.git_repo.get_repo_root", side_effect=GitError("nope"))
     @patch("wade.services.smart_start.get_provider")
     @patch("wade.services.smart_start.load_config")

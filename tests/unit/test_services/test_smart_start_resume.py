@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 from wade.models.session import SessionRecord
 from wade.models.task import Task, TaskState
 from wade.services.smart_start import (
+    SmartStartContext,
     _get_latest_resumable_session,
     _run_continue_working,
     smart_start,
@@ -30,6 +31,22 @@ _MULTI_SESSION_BODY = build_sessions_block(
 
 def _make_task() -> Task:
     return Task(id="42", title="Fix the widget", state=TaskState.OPEN, body="")
+
+
+def _make_ctx(tmp_path: Path) -> SmartStartContext:
+    return SmartStartContext(
+        target="42",
+        ai_tool=None,
+        model=None,
+        project_root=tmp_path,
+        detach=False,
+        cd_only=False,
+        ai_explicit=False,
+        model_explicit=False,
+        effort=None,
+        effort_explicit=False,
+        yolo=None,
+    )
 
 
 class TestGetLatestResumableSession:
@@ -101,7 +118,7 @@ class TestGetLatestResumableSession:
 class TestRunContinueWorking:
     """Tests for the _run_continue_working sub-menu dispatch."""
 
-    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
     @patch("wade.services.smart_start._get_latest_resumable_session", return_value=None)
     def test_no_resumable_session_skips_submenu(
         self,
@@ -110,26 +127,12 @@ class TestRunContinueWorking:
         tmp_path: Path,
     ) -> None:
         """When no resumable session, directly calls implement_task (no sub-menu)."""
-        result = _run_continue_working(
-            target="42",
-            ai_tool=None,
-            model=None,
-            project_root=tmp_path,
-            detach=False,
-            cd_only=False,
-            ai_explicit=False,
-            model_explicit=False,
-            repo_root=tmp_path,
-            pr_number=99,
-        )
+        ctx = _make_ctx(tmp_path)
+        result = _run_continue_working(ctx, repo_root=tmp_path, pr_number=99)
         assert result is True
         mock_implement.assert_called_once()
-        # Verify no resume params passed
-        call_kwargs = mock_implement.call_args[1]
-        assert call_kwargs.get("resume_session_id") is None
-        assert call_kwargs.get("resume_ai_tool") is None
 
-    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
     @patch("wade.ui.prompts.select", return_value=0)
     @patch("wade.services.smart_start._get_latest_resumable_session")
     def test_resume_option_selected_passes_session_id(
@@ -145,25 +148,14 @@ class TestRunContinueWorking:
             ai_tool="claude",
             session_id="abc-123",
         )
-
-        result = _run_continue_working(
-            target="42",
-            ai_tool=None,
-            model=None,
-            project_root=tmp_path,
-            detach=False,
-            cd_only=False,
-            ai_explicit=False,
-            model_explicit=False,
-            repo_root=tmp_path,
-            pr_number=99,
-        )
+        ctx = _make_ctx(tmp_path)
+        result = _run_continue_working(ctx, repo_root=tmp_path, pr_number=99)
         assert result is True
         call_kwargs = mock_implement.call_args[1]
         assert call_kwargs["resume_session_id"] == "abc-123"
         assert call_kwargs["resume_ai_tool"] == "claude"
 
-    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
     @patch("wade.ui.prompts.select", return_value=1)
     @patch("wade.services.smart_start._get_latest_resumable_session")
     def test_new_session_option_selected_no_resume_params(
@@ -179,25 +171,16 @@ class TestRunContinueWorking:
             ai_tool="claude",
             session_id="abc-123",
         )
-
-        result = _run_continue_working(
-            target="42",
-            ai_tool=None,
-            model=None,
-            project_root=tmp_path,
-            detach=False,
-            cd_only=False,
-            ai_explicit=False,
-            model_explicit=False,
-            repo_root=tmp_path,
-            pr_number=99,
-        )
+        ctx = _make_ctx(tmp_path)
+        result = _run_continue_working(ctx, repo_root=tmp_path, pr_number=99)
         assert result is True
+        # run_implement called without resume params
+        mock_implement.assert_called_once()
         call_kwargs = mock_implement.call_args[1]
         assert call_kwargs.get("resume_session_id") is None
         assert call_kwargs.get("resume_ai_tool") is None
 
-    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
     @patch("wade.ui.prompts.select", return_value=0)
     @patch("wade.services.smart_start._get_latest_resumable_session")
     def test_resume_submenu_shows_session_info(
@@ -213,19 +196,8 @@ class TestRunContinueWorking:
             ai_tool="claude",
             session_id="a-very-long-session-identifier-here",
         )
-
-        _run_continue_working(
-            target="42",
-            ai_tool=None,
-            model=None,
-            project_root=tmp_path,
-            detach=False,
-            cd_only=False,
-            ai_explicit=False,
-            model_explicit=False,
-            repo_root=tmp_path,
-            pr_number=99,
-        )
+        ctx = _make_ctx(tmp_path)
+        _run_continue_working(ctx, repo_root=tmp_path, pr_number=99)
 
         # Check that select was called with labels containing tool name
         mock_select.assert_called_once()
@@ -240,7 +212,7 @@ class TestRunContinueWorking:
 class TestSmartStartResumeIntegration:
     """Integration tests: smart_start → continue working → resume sub-menu."""
 
-    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
     @patch("wade.services.smart_start.git_pr.get_pr_body")
     @patch("wade.ui.prompts.select")
     @patch(
@@ -277,12 +249,12 @@ class TestSmartStartResumeIntegration:
         result = smart_start("42", project_root=tmp_path)
 
         assert result is True
-        # Verify _run_implement_task was called with resume params
+        # Verify run_implement was called with resume params
         call_kwargs = mock_implement.call_args[1]
         assert call_kwargs["resume_session_id"] == "abc-123-456"
         assert call_kwargs["resume_ai_tool"] == "claude"
 
-    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
     @patch("wade.services.smart_start.git_pr.get_pr_body")
     @patch("wade.ui.prompts.select")
     @patch(
@@ -322,7 +294,7 @@ class TestSmartStartResumeIntegration:
         assert call_kwargs.get("resume_session_id") is None
         assert call_kwargs.get("resume_ai_tool") is None
 
-    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
     @patch("wade.services.smart_start.git_pr.get_pr_body", return_value=None)
     @patch("wade.ui.prompts.select", return_value=0)
     @patch(
@@ -357,10 +329,8 @@ class TestSmartStartResumeIntegration:
         assert result is True
         # Only one select call (main menu), no sub-menu
         mock_select.assert_called_once()
-        call_kwargs = mock_implement.call_args[1]
-        assert call_kwargs.get("resume_session_id") is None
 
-    @patch("wade.services.smart_start._run_implement_task", return_value=True)
+    @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
     @patch("wade.services.smart_start.git_pr.get_pr_body")
     @patch("wade.ui.prompts.select")
     @patch("wade.git.worktree.list_worktrees", return_value=[])

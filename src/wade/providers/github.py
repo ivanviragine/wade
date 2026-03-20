@@ -343,63 +343,10 @@ class GitHubProvider(AbstractTaskProvider):
                 label=label_name,
             )
 
-    # --- PR operations (delegate to git/pr.py) ---
-
-    def create_pr(
-        self,
-        title: str,
-        body: str,
-        base_branch: str,
-        draft: bool = False,
-        head_branch: str | None = None,
-    ) -> str:
-        """Create a pull request via gh pr create. Returns the PR URL."""
-        from wade.git import pr as git_pr
-
-        info = git_pr.create_pr(
-            repo_root=Path.cwd(),
-            title=title,
-            body=body,
-            base=base_branch,
-            head=head_branch,
-            draft=draft,
-        )
-        return str(info.get("url", ""))
-
-    def merge_pr(
-        self,
-        pr_number: str,
-        strategy: str = "squash",
-        delete_branch: bool = True,
-    ) -> None:
-        """Merge a PR via gh pr merge."""
-        from wade.git import pr as git_pr
-
-        git_pr.merge_pr(
-            repo_root=Path.cwd(),
-            pr_number=int(pr_number),
-            strategy=strategy,
-            delete_branch=delete_branch,
-        )
-
-    def get_pr_for_branch(self, branch: str) -> dict[str, Any] | None:
-        """Get PR info for a branch. Returns dict with number/body or None."""
-        from wade.git import pr as git_pr
-
-        return git_pr.get_pr_for_branch(Path.cwd(), branch)
-
-    def update_pr_body(self, pr_number: str, body: str) -> None:
-        """Update a PR's body text."""
-        from wade.git import pr as git_pr
-
-        if not git_pr.update_pr_body(Path.cwd(), int(pr_number), body):
-            logger.warning("github.update_pr_body_failed", pr_number=pr_number)
-
     # --- PR review operations ---
 
     def get_pr_review_threads(
         self,
-        repo_root: Any,
         pr_number: int,
     ) -> list[ReviewThread]:
         """Fetch PR review threads via GitHub GraphQL API with pagination."""
@@ -594,7 +541,6 @@ mutation($threadId: ID!) {
 
     def get_pr_review_status(
         self,
-        repo_root: Any,
         pr_number: int,
     ) -> PRReviewStatus:
         """Fetch comprehensive PR review status via a combined GraphQL query.
