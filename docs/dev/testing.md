@@ -143,6 +143,8 @@ Current live AI coverage is split deliberately:
   is the minimal provider smoke (API key + Claude headless + parseable output).
 - [tests/live/test_wade_live_ai_taskr.py](/Users/ivanviragine/.codex/worktrees/c780/wade/tests/live/test_wade_live_ai_taskr.py)
   is the taskr workflow lane (real repo, real edits, real tests, real PR lifecycle).
+  It uses WADE's real issue/worktree/bootstrap flow plus WADE's implementation
+  prompt, then completes via `wade implementation-session done`.
 - Live GH and taskr workflow lanes invoke the current checkout via
   `python -m wade`, not an unrelated host-installed `wade` binary.
 
@@ -153,6 +155,13 @@ The taskr workflow lane is host-only and destructive by design:
   [scripts/reset.sh](/Users/ivanviragine/Documents/workspace/taskr/scripts/reset.sh)
 - after each reset, the runner re-initializes WADE locally so the repo stays
   ready for subsequent live runs without requiring a manual `wade init`
+- the runner also creates an isolated `CLAUDE_CONFIG_DIR` by default so Claude
+  uses the provided API key instead of inheriting an unrelated host login state;
+  that isolated config is pre-seeded to skip Claude's first-run onboarding/theme
+  prompts
+- the actual code-change step runs Claude headlessly against WADE's real
+  implementation prompt because Claude's interactive API-key confirmation is not
+  automatable in this environment
 - unlike the GH live lane, the taskr workflow runner does not require
   `.wade.yml` to exist ahead of time; it recreates the local WADE config itself
 - it currently exercises two tiny real tasks in sequence:

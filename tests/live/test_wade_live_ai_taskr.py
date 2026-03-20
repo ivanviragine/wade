@@ -1,8 +1,12 @@
 """Manual live AI workflow tests against the real taskr repo.
 
-This lane is intentionally destructive and repo-specific. It expects a dedicated
-`taskr` sandbox repo with a working reset script and real GitHub remote state.
-The wrapper script resets the repo before and after the run.
+This lane is intentionally destructive and repo-specific. It exercises WADE's
+real issue/worktree/bootstrap/session flow against a dedicated `taskr` sandbox
+repo with a working reset script and real GitHub remote state. The runner uses
+`wade implement --cd` for deterministic bootstrap, then executes WADE's real
+implementation prompt through Claude's headless path so the workflow remains
+automatable under API-key auth, and finally completes via
+`wade implementation-session done`.
 
 Required env:
   - RUN_LIVE_AI_TESTS=1
@@ -28,13 +32,23 @@ from pathlib import Path
 import pytest
 
 from wade.models.delegation import DelegationMode, DelegationRequest
+from wade.models.task import Task
 from wade.services.delegation_service import delegate
+from wade.services.implementation_service import build_implementation_prompt
 
 _LIVE_REPO_ENV = os.environ.get("WADE_LIVE_REPO") or os.environ.get("E2E_REPO")
 LIVE_REPO = Path(_LIVE_REPO_ENV).expanduser() if _LIVE_REPO_ENV else None
 AI_TOOL = os.environ.get("WADE_LIVE_AI_TOOL", "claude")
 AI_MODEL = os.environ.get("WADE_LIVE_AI_MODEL", "claude-sonnet-4.6")
 WADE_CLI = [sys.executable, "-m", "wade"]
+_NESTED_AI_ENV_VARS = (
+    "CLAUDE_CODE",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "COPILOT_CLI",
+    "GEMINI_CLI",
+    "CODEX_CLI",
+    "CURSOR_CLI",
+)
 
 
 def _parse_timeout(raw: str | None, default: int) -> int:
@@ -49,8 +63,8 @@ def _parse_timeout(raw: str | None, default: int) -> int:
 
 WORKFLOW_TIMEOUT = _parse_timeout(os.environ.get("WADE_LIVE_AI_WORKFLOW_TIMEOUT"), 300)
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "live"
-GREET_HI_BODY = FIXTURES_DIR / "taskr_greet_hi_body.md"
-GREET_HOWDY_BODY = FIXTURES_DIR / "taskr_greet_howdy_body.md"
+HEADER_HI_BODY = FIXTURES_DIR / "taskr_header_hi_body.md"
+HEADER_HOWDY_BODY = FIXTURES_DIR / "taskr_header_howdy_body.md"
 
 pytestmark = [
     pytest.mark.live_ai,
@@ -67,9 +81,13 @@ def _run(
     cwd: Path | None = None,
     timeout: int = 120,
 ) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    for key in _NESTED_AI_ENV_VARS:
+        env.pop(key, None)
     return subprocess.run(
         cmd,
         cwd=cwd or LIVE_REPO,
+        env=env,
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -200,31 +218,48 @@ def _remove_known_agent_artifacts(cwd: Path) -> None:
     shutil.rmtree(cwd / ".cursor", ignore_errors=True)
 
 
-def _delegate_issue_implementation(
+def _assert_expected_implementation_commit(
     worktree_path: Path,
-    issue_number: str,
-    issue_body: str,
     commit_subject: str,
-    expected_greeting: str,
 ) -> None:
-    prompt = (
-        f"You are implementing issue #{issue_number} in the taskr repo.\n"
-        "If PLAN.md exists, use it. Otherwise follow the issue specification below.\n\n"
-        "Issue specification:\n"
-        f"{issue_body}\n\n"
-        "Constraints:\n"
+    _remove_known_agent_artifacts(worktree_path)
+    clean = _run(["git", "status", "--short"], cwd=worktree_path)
+    _assert_ok(clean, "git status --short (post-implementation)")
+    assert clean.stdout.strip() == "", (
+        f"Expected implementation workflow to leave a clean worktree after committing.\n"
+        f"status={clean.stdout!r}"
+    )
+
+    head_subject = _run(["git", "log", "-1", "--format=%s"], cwd=worktree_path)
+    _assert_ok(head_subject, "git log -1 --format=%s (post-implementation)")
+    assert head_subject.stdout.strip() == commit_subject, (
+        "Expected implementation workflow to create the requested implementation commit.\n"
+        f"expected={commit_subject!r}\nactual={head_subject.stdout.strip()!r}"
+    )
+
+
+def _run_issue_implementation(
+    worktree_path: Path,
+    task: Task,
+    expected_header: str,
+    commit_subject: str,
+) -> None:
+    prompt = build_implementation_prompt(task, ai_tool=AI_TOOL, has_plan=False).rstrip()
+    prompt += (
+        "\n\n## Live Workflow Verification\n\n"
         "- Keep the diff small and targeted.\n"
         "- Do not modify scripts/ or AGENTS.md.\n"
         "- Do not add runtime dependencies.\n"
         "- Add or update tests as needed.\n"
         "- Run ./scripts/test.sh.\n"
         "- The greeting is a header on every command output, not a new subcommand.\n"
-        "- Validate with: uv run taskr and uv run taskr list "
-        f"(both must start with {expected_greeting!r}).\n"
+        "- Validate with `uv run taskr` and `uv run taskr list`; both must "
+        f"start with `{expected_header}`.\n"
         "- Preserve the existing command output after the greeting header.\n"
-        f'- When tests pass, commit all changes with: git commit -m "{commit_subject}".\n'
-        "Return a short summary of changed files and test status.\n"
+        f"- When tests pass, commit all changes with exactly: `{commit_subject}`.\n"
+        "- Return a short summary of changed files and test status.\n"
     )
+
     result = delegate(
         DelegationRequest(
             mode=DelegationMode.HEADLESS,
@@ -234,6 +269,7 @@ def _delegate_issue_implementation(
             cwd=worktree_path,
             timeout=WORKFLOW_TIMEOUT,
             allowed_commands=[
+                "wade *",
                 "./scripts/test.sh *",
                 "uv *",
                 "git *",
@@ -254,18 +290,17 @@ def _delegate_issue_implementation(
     )
     assert result.success, f"Live AI workflow delegation failed: {result.feedback!r}"
 
-    _remove_known_agent_artifacts(worktree_path)
-    clean = _run(["git", "status", "--short"], cwd=worktree_path)
-    _assert_ok(clean, "git status --short (post-delegation)")
-    assert clean.stdout.strip() == "", (
-        f"Expected AI workflow to leave a clean worktree after committing.\nstatus={clean.stdout!r}"
-    )
-
-    head_subject = _run(["git", "log", "-1", "--format=%s"], cwd=worktree_path)
-    _assert_ok(head_subject, "git log -1 --format=%s (post-delegation)")
-    assert head_subject.stdout.strip() == commit_subject, (
-        "Expected AI workflow to create the requested implementation commit.\n"
-        f"expected={commit_subject!r}\nactual={head_subject.stdout.strip()!r}"
+    worktree_list = _wade("worktree", "list", "--json", timeout=120)
+    _assert_ok(worktree_list, "wade worktree list --json")
+    payload = json.loads(worktree_list.stdout)
+    assert isinstance(payload, list), f"Expected list payload from worktree list, got: {payload!r}"
+    assert any(
+        str(item.get("issue") or item.get("issue_number")) == task.id
+        for item in payload
+        if isinstance(item, dict)
+    ), (
+        "Expected the implementation workflow to leave a worktree entry for the issue.\n"
+        f"issue_number={task.id!r}\npayload={payload!r}"
     )
 
 
@@ -284,7 +319,11 @@ def _create_issue_from_fixture(title: str, body_path: Path) -> str:
 
 
 def _implement_issue(
-    issue_number: str, issue_body: str, commit_subject: str, expected_header: str
+    issue_number: str,
+    issue_title: str,
+    issue_body: str,
+    commit_subject: str,
+    expected_header: str,
 ) -> tuple[Path, str]:
     implement = _wade("implement", issue_number, "--cd", timeout=180)
     _assert_ok(implement, f"wade implement {issue_number} --cd")
@@ -294,13 +333,14 @@ def _implement_issue(
     branch_name = _current_branch(worktree_path)
     assert branch_name, "Expected non-empty feature branch name"
 
-    _delegate_issue_implementation(
+    task = Task(id=issue_number, title=issue_title, body=issue_body)
+    _run_issue_implementation(
         worktree_path,
-        issue_number,
-        issue_body,
-        commit_subject,
+        task,
         expected_header,
+        commit_subject,
     )
+    _assert_expected_implementation_commit(worktree_path, commit_subject)
     _run_taskr_tests(worktree_path)
 
     help_result = _taskr_cli(cwd=worktree_path, timeout=60)
@@ -413,20 +453,22 @@ class TestLiveAITaskrWorkflow:
         hi_title = f"Add taskr greeting header ({unique})"
         howdy_title = f"Change taskr greeting header to Howdy ({unique})"
 
-        hi_issue = _create_issue_from_fixture(hi_title, GREET_HI_BODY)
+        hi_issue = _create_issue_from_fixture(hi_title, HEADER_HI_BODY)
         _, hi_branch = _implement_issue(
             hi_issue,
-            GREET_HI_BODY.read_text(encoding="utf-8"),
+            hi_title,
+            HEADER_HI_BODY.read_text(encoding="utf-8"),
             commit_subject=f"feat: add taskr greeting header (#{hi_issue})",
             expected_header="Hi",
         )
         hi_pr = _merge_pr_and_update_main(hi_issue, hi_branch, expected_header="Hi")
         assert hi_pr
 
-        howdy_issue = _create_issue_from_fixture(howdy_title, GREET_HOWDY_BODY)
+        howdy_issue = _create_issue_from_fixture(howdy_title, HEADER_HOWDY_BODY)
         _, howdy_branch = _implement_issue(
             howdy_issue,
-            GREET_HOWDY_BODY.read_text(encoding="utf-8"),
+            howdy_title,
+            HEADER_HOWDY_BODY.read_text(encoding="utf-8"),
             commit_subject=f"fix: update taskr greeting header (#{howdy_issue})",
             expected_header="Howdy",
         )

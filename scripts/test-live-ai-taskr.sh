@@ -39,6 +39,7 @@ fi
 export WADE_LIVE_AI_TOOL="${WADE_LIVE_AI_TOOL:-claude}"
 export WADE_LIVE_AI_MODEL="${WADE_LIVE_AI_MODEL:-claude-sonnet-4.6}"
 export WADE_LIVE_AI_WORKFLOW_TIMEOUT="${WADE_LIVE_AI_WORKFLOW_TIMEOUT:-300}"
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:-1}"
 
 if [[ "${WADE_LIVE_AI_TOOL}" != "claude" ]]; then
   echo "Taskr live AI workflow supports only WADE_LIVE_AI_TOOL=claude (got '${WADE_LIVE_AI_TOOL}')."
@@ -71,6 +72,46 @@ fi
 if ! [[ "${WADE_LIVE_AI_WORKFLOW_TIMEOUT}" =~ ^[1-9][0-9]*$ ]]; then
   echo "WADE_LIVE_AI_WORKFLOW_TIMEOUT must be a positive integer (got '${WADE_LIVE_AI_WORKFLOW_TIMEOUT}')."
   exit 1
+fi
+
+cleanup_claude_config_dir() {
+  if [[ -n "${WADE_LIVE_CLAUDE_CONFIG_DIR:-}" && -d "${WADE_LIVE_CLAUDE_CONFIG_DIR}" ]]; then
+    rm -rf "${WADE_LIVE_CLAUDE_CONFIG_DIR}"
+  fi
+}
+
+seed_claude_config_dir() {
+  local config_dir="$1"
+
+  cat > "${config_dir}/.claude.json" <<'EOF'
+{
+  "firstStartTime": "2026-03-20T00:00:00.000Z",
+  "installMethod": "native",
+  "hasCompletedOnboarding": true,
+  "lastOnboardingVersion": "2.1.78",
+  "cachedChromeExtensionInstalled": true,
+  "opusProMigrationComplete": true,
+  "sonnet1m45MigrationComplete": true
+}
+EOF
+
+  cat > "${config_dir}/settings.json" <<'EOF'
+{
+  "theme": "dark",
+  "env": {
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+  },
+  "skipDangerousModePermissionPrompt": true
+}
+EOF
+}
+
+if [[ -z "${CLAUDE_CONFIG_DIR:-}" ]]; then
+  WADE_LIVE_CLAUDE_CONFIG_DIR="$(mktemp -d)"
+  export WADE_LIVE_CLAUDE_CONFIG_DIR
+  export CLAUDE_CONFIG_DIR="${WADE_LIVE_CLAUDE_CONFIG_DIR}"
+  seed_claude_config_dir "${CLAUDE_CONFIG_DIR}"
+  trap cleanup_claude_config_dir EXIT
 fi
 
 ensure_taskr_wade_ready() {
