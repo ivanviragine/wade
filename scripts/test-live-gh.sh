@@ -29,6 +29,10 @@ if ! gh auth status >/dev/null 2>&1; then
   echo "gh CLI is not authenticated."
   exit 1
 fi
+if ! uv run python -m wade --version >/dev/null 2>&1; then
+  echo "Current checkout's wade CLI is not runnable via uv."
+  exit 1
+fi
 
 exec env WADE_INCLUDE_LIVE=1 ./scripts/test.sh \
   tests/live/test_wade_live_gh.py \

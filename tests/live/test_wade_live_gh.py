@@ -20,6 +20,7 @@ import pytest
 
 _LIVE_REPO_ENV = os.environ.get("WADE_LIVE_REPO") or os.environ.get("E2E_REPO")
 LIVE_REPO = Path(_LIVE_REPO_ENV).expanduser() if _LIVE_REPO_ENV else None
+WADE_CLI = [sys.executable, "-m", "wade"]
 
 pytestmark = [
     pytest.mark.live_gh,
@@ -49,7 +50,7 @@ def _wade(
     cwd: Path | None = None,
     timeout: int = 60,
 ) -> subprocess.CompletedProcess[str]:
-    return _run(["wade", *args], cwd=cwd, timeout=timeout)
+    return _run([*WADE_CLI, *args], cwd=cwd, timeout=timeout)
 
 
 def _gh(
@@ -90,6 +91,36 @@ def _recover_issue_number_by_title(title: str) -> str:
     if not isinstance(recovered, dict):
         return ""
     return str(recovered.get("number", ""))
+
+
+def _wait_for_issue_number_by_title(title: str, timeout: int = 15) -> str:
+    deadline = time.time() + timeout
+    last_output = ""
+    while time.time() < deadline:
+        recovery = _wade("task", "list", "--json")
+        _assert_ok(recovery, "wade task list --json")
+        last_output = recovery.stdout
+        try:
+            payload = json.loads(recovery.stdout)
+        except json.JSONDecodeError:
+            payload = None
+        if isinstance(payload, list):
+            recovered = next(
+                (
+                    item
+                    for item in payload
+                    if isinstance(item, dict) and str(item.get("title", "")) == title
+                ),
+                None,
+            )
+            if isinstance(recovered, dict):
+                return str(recovered.get("number", ""))
+        time.sleep(1)
+    raise AssertionError(
+        "Could not find newly created issue in `wade task list --json` output.\n"
+        f"title={title!r}\n"
+        f"last_output={last_output!r}"
+    )
 
 
 def _recover_pr_number_by_branch(branch_name: str) -> str:
@@ -157,7 +188,7 @@ def require_tools() -> None:
         pytest.skip("gh CLI not authenticated")
     wade = _wade("--version", cwd=None)
     if wade.returncode != 0:
-        pytest.skip("wade CLI not available in PATH")
+        pytest.skip("Current checkout's wade CLI is not runnable")
 
 
 @pytest.fixture(autouse=True)
@@ -205,24 +236,7 @@ class TestLiveWadeGH:
         )
         _assert_ok(created, "wade task create")
 
-        list_result = _wade("task", "list", "--json")
-        _assert_ok(list_result, "wade task list --json")
-        listed = json.loads(list_result.stdout)
-        assert isinstance(listed, list)
-        created_issue = next(
-            (
-                item
-                for item in listed
-                if isinstance(item, dict) and str(item.get("title", "")) == title
-            ),
-            None,
-        )
-        assert created_issue is not None, (
-            "Could not find newly created issue in `wade task list --json` output.\n"
-            f"title={title!r}\n"
-            f"output={list_result.stdout!r}"
-        )
-        issue_num = str(created_issue["number"])
+        issue_num = _wait_for_issue_number_by_title(title)
 
         try:
             read_result = _wade("task", "read", issue_num, "--json")
@@ -271,24 +285,7 @@ class TestLiveWadeGH:
         )
         _assert_ok(created, "wade task create (workflow smoke)")
 
-        list_result = _wade("task", "list", "--json")
-        _assert_ok(list_result, "wade task list --json (workflow smoke)")
-        listed = json.loads(list_result.stdout)
-        assert isinstance(listed, list)
-        created_issue = next(
-            (
-                item
-                for item in listed
-                if isinstance(item, dict) and str(item.get("title", "")) == title
-            ),
-            None,
-        )
-        assert created_issue is not None, (
-            "Could not find newly created issue in `wade task list --json` output.\n"
-            f"title={title!r}\n"
-            f"output={list_result.stdout!r}"
-        )
-        issue_num = str(created_issue["number"])
+        issue_num = _wait_for_issue_number_by_title(title)
 
         try:
             implement = _wade("implement", issue_num, "--cd", timeout=180)

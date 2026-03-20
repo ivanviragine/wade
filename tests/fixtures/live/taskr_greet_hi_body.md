@@ -12,6 +12,6 @@ implementation workflow against a real repo.
 
 ## Acceptance Criteria
 
-- `python -m taskr.cli greet` prints exactly `Hi`
+- `uv run taskr greet` prints exactly `Hi`
 - Existing taskr commands still work
 - `./scripts/test.sh` passes

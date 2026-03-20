@@ -10,7 +10,7 @@ Required env:
   - ANTHROPIC_API_KEY
 Optional env:
   - WADE_LIVE_AI_TOOL (default: claude)
-  - WADE_LIVE_AI_MODEL (default: claude-haiku-4.5)
+  - WADE_LIVE_AI_MODEL (default: claude-sonnet-4.6)
   - WADE_LIVE_AI_WORKFLOW_TIMEOUT (default: 300 seconds)
 """
 
@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -32,7 +33,8 @@ from wade.services.delegation_service import delegate
 _LIVE_REPO_ENV = os.environ.get("WADE_LIVE_REPO") or os.environ.get("E2E_REPO")
 LIVE_REPO = Path(_LIVE_REPO_ENV).expanduser() if _LIVE_REPO_ENV else None
 AI_TOOL = os.environ.get("WADE_LIVE_AI_TOOL", "claude")
-AI_MODEL = os.environ.get("WADE_LIVE_AI_MODEL", "claude-haiku-4.5")
+AI_MODEL = os.environ.get("WADE_LIVE_AI_MODEL", "claude-sonnet-4.6")
+WADE_CLI = [sys.executable, "-m", "wade"]
 
 
 def _parse_timeout(raw: str | None, default: int) -> int:
@@ -77,7 +79,7 @@ def _run(
 def _wade(
     *args: str, cwd: Path | None = None, timeout: int = 120
 ) -> subprocess.CompletedProcess[str]:
-    return _run(["wade", *args], cwd=cwd, timeout=timeout)
+    return _run([*WADE_CLI, *args], cwd=cwd, timeout=timeout)
 
 
 def _gh(
@@ -89,7 +91,7 @@ def _gh(
 def _taskr_cli(
     *args: str, cwd: Path | None = None, timeout: int = 60
 ) -> subprocess.CompletedProcess[str]:
-    return _run([sys.executable, "-m", "taskr.cli", *args], cwd=cwd, timeout=timeout)
+    return _run(["uv", "run", "taskr", *args], cwd=cwd, timeout=timeout)
 
 
 def _assert_ok(result: subprocess.CompletedProcess[str], context: str) -> None:
@@ -139,30 +141,17 @@ def _assert_baseline_taskr_state(repo_root: Path) -> None:
     )
 
     help_result = _taskr_cli(cwd=repo_root)
-    _assert_ok(help_result, "python -m taskr.cli")
+    _assert_ok(help_result, "uv run taskr")
     assert "greet" not in help_result.stdout.lower(), (
         "taskr baseline already includes greet.\n"
         "Run /Users/ivanviragine/Documents/workspace/taskr/scripts/reset.sh --yes first."
     )
 
 
-def _issue_number_by_title(title: str) -> str:
-    listed = _wade("task", "list", "--json", timeout=120)
-    _assert_ok(listed, "wade task list --json")
-    payload = json.loads(listed.stdout)
-    assert isinstance(payload, list)
-    match = next(
-        (
-            item
-            for item in payload
-            if isinstance(item, dict) and str(item.get("title", "")) == title
-        ),
-        None,
-    )
-    assert isinstance(match, dict), (
-        f"Could not find live workflow issue by title.\ntitle={title!r}\npayload={payload!r}"
-    )
-    return str(match["number"])
+def _issue_number_from_create_output(output: str) -> str:
+    match = re.search(r"Created #(\d+)", output)
+    assert match is not None, f"Could not parse created issue number from output:\n{output}"
+    return match.group(1)
 
 
 def _current_branch(cwd: Path) -> str:
@@ -176,18 +165,30 @@ def _run_taskr_tests(cwd: Path) -> None:
     _assert_ok(tests, "./scripts/test.sh")
 
 
+def _remove_known_agent_artifacts(cwd: Path) -> None:
+    shutil.rmtree(cwd / ".cursor", ignore_errors=True)
+
+
 def _delegate_issue_implementation(
-    worktree_path: Path, issue_number: str, commit_subject: str
+    worktree_path: Path,
+    issue_number: str,
+    issue_body: str,
+    commit_subject: str,
+    expected_greeting: str,
 ) -> None:
     prompt = (
         f"You are implementing issue #{issue_number} in the taskr repo.\n"
-        "Read PLAN.md in the current directory and implement exactly what it asks.\n"
+        "If PLAN.md exists, use it. Otherwise follow the issue specification below.\n\n"
+        "Issue specification:\n"
+        f"{issue_body}\n\n"
         "Constraints:\n"
         "- Keep the diff small and targeted.\n"
         "- Do not modify scripts/ or AGENTS.md.\n"
         "- Do not add runtime dependencies.\n"
         "- Add or update tests as needed.\n"
         "- Run ./scripts/test.sh.\n"
+        "- Validate the behavior with: uv run taskr greet "
+        f"(it must print exactly {expected_greeting}).\n"
         f'- When tests pass, commit all changes with: git commit -m "{commit_subject}".\n'
         "Return a short summary of changed files and test status.\n"
     )
@@ -201,19 +202,37 @@ def _delegate_issue_implementation(
             timeout=WORKFLOW_TIMEOUT,
             allowed_commands=[
                 "./scripts/test.sh *",
-                "git status *",
-                "git diff *",
-                "git add *",
-                "git commit *",
+                "uv *",
+                "git *",
+                "python *",
+                "cat *",
+                "sed *",
+                "ls *",
+                "find *",
+                "rg *",
+                "grep *",
+                "mkdir *",
+                "rm *",
+                "mv *",
+                "cp *",
+                "touch *",
             ],
         )
     )
     assert result.success, f"Live AI workflow delegation failed: {result.feedback!r}"
 
+    _remove_known_agent_artifacts(worktree_path)
     clean = _run(["git", "status", "--short"], cwd=worktree_path)
     _assert_ok(clean, "git status --short (post-delegation)")
     assert clean.stdout.strip() == "", (
         f"Expected AI workflow to leave a clean worktree after committing.\nstatus={clean.stdout!r}"
+    )
+
+    head_subject = _run(["git", "log", "-1", "--format=%s"], cwd=worktree_path)
+    _assert_ok(head_subject, "git log -1 --format=%s (post-delegation)")
+    assert head_subject.stdout.strip() == commit_subject, (
+        "Expected AI workflow to create the requested implementation commit.\n"
+        f"expected={commit_subject!r}\nactual={head_subject.stdout.strip()!r}"
     )
 
 
@@ -228,11 +247,11 @@ def _create_issue_from_fixture(title: str, body_path: Path) -> str:
         timeout=120,
     )
     _assert_ok(created, f"wade task create --title {title}")
-    return _issue_number_by_title(title)
+    return _issue_number_from_create_output(created.stdout)
 
 
 def _implement_issue(
-    issue_number: str, commit_subject: str, expected_greeting: str
+    issue_number: str, issue_body: str, commit_subject: str, expected_greeting: str
 ) -> tuple[Path, str]:
     implement = _wade("implement", issue_number, "--cd", timeout=180)
     _assert_ok(implement, f"wade implement {issue_number} --cd")
@@ -242,11 +261,17 @@ def _implement_issue(
     branch_name = _current_branch(worktree_path)
     assert branch_name, "Expected non-empty feature branch name"
 
-    _delegate_issue_implementation(worktree_path, issue_number, commit_subject)
+    _delegate_issue_implementation(
+        worktree_path,
+        issue_number,
+        issue_body,
+        commit_subject,
+        expected_greeting,
+    )
     _run_taskr_tests(worktree_path)
 
     greeting = _taskr_cli("greet", cwd=worktree_path, timeout=60)
-    _assert_ok(greeting, "python -m taskr.cli greet (worktree)")
+    _assert_ok(greeting, "uv run taskr greet (worktree)")
     assert greeting.stdout.strip() == expected_greeting
 
     done = _wade("implementation-session", "done", cwd=worktree_path, timeout=180)
@@ -273,7 +298,7 @@ def _merge_pr_and_update_main(issue_number: str, branch_name: str, expected_gree
 
     _run_taskr_tests(LIVE_REPO)
     greeting = _taskr_cli("greet", cwd=LIVE_REPO, timeout=60)
-    _assert_ok(greeting, "python -m taskr.cli greet (main checkout)")
+    _assert_ok(greeting, "uv run taskr greet (main checkout)")
     assert greeting.stdout.strip() == expected_greeting
 
     remove_worktree = _wade("worktree", "remove", issue_number, "--force", timeout=120)
@@ -313,8 +338,11 @@ def require_live_workflow_tools() -> None:
         pytest.skip("claude CLI binary not found in PATH")
     if not shutil.which("gh"):
         pytest.skip("gh CLI binary not found in PATH")
-    if not shutil.which("wade"):
-        pytest.skip("wade CLI binary not found in PATH")
+    if not shutil.which("uv"):
+        pytest.skip("uv CLI binary not found in PATH")
+    wade = _run([*WADE_CLI, "--version"], cwd=None)
+    if wade.returncode != 0:
+        pytest.skip("Current checkout's wade CLI is not runnable")
     gh = _run(["gh", "auth", "status"], cwd=None)
     if gh.returncode != 0:
         pytest.skip("gh CLI not authenticated")
@@ -333,6 +361,7 @@ class TestLiveAITaskrWorkflow:
         hi_issue = _create_issue_from_fixture(hi_title, GREET_HI_BODY)
         _, hi_branch = _implement_issue(
             hi_issue,
+            GREET_HI_BODY.read_text(encoding="utf-8"),
             commit_subject=f"feat: add greet command (#{hi_issue})",
             expected_greeting="Hi",
         )
@@ -342,6 +371,7 @@ class TestLiveAITaskrWorkflow:
         howdy_issue = _create_issue_from_fixture(howdy_title, GREET_HOWDY_BODY)
         _, howdy_branch = _implement_issue(
             howdy_issue,
+            GREET_HOWDY_BODY.read_text(encoding="utf-8"),
             commit_subject=f"fix: update greet command (#{howdy_issue})",
             expected_greeting="Howdy",
         )

@@ -12,5 +12,5 @@ merge.
 
 ## Acceptance Criteria
 
-- `python -m taskr.cli greet` prints exactly `Howdy`
+- `uv run taskr greet` prints exactly `Howdy`
 - `./scripts/test.sh` passes

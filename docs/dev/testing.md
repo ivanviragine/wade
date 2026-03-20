@@ -115,7 +115,8 @@ credentials, or binaries are missing.
 - `RUN_LIVE_GH_TESTS=1` enables live GitHub tests.
 - `RUN_LIVE_AI_TESTS=1` enables live AI tests.
 - `WADE_LIVE_AI_TOOL=claude` (default)
-- `WADE_LIVE_AI_MODEL=claude-haiku-4.5` (default)
+- `WADE_LIVE_AI_MODEL=claude-haiku-4.5` (default for the provider smoke lane)
+- `WADE_LIVE_AI_MODEL=claude-sonnet-4.6` (default for the taskr workflow lane)
 - `WADE_LIVE_AI_TIMEOUT=45` (optional timeout in seconds for live AI smoke)
 - `WADE_LIVE_AI_WORKFLOW_TIMEOUT=300` (optional timeout in seconds for the taskr workflow lane)
 - `ANTHROPIC_API_KEY` is required for the canonical live AI smoke test.
@@ -142,6 +143,8 @@ Current live AI coverage is split deliberately:
   is the minimal provider smoke (API key + Claude headless + parseable output).
 - [tests/live/test_wade_live_ai_taskr.py](/Users/ivanviragine/.codex/worktrees/c780/wade/tests/live/test_wade_live_ai_taskr.py)
   is the taskr workflow lane (real repo, real edits, real tests, real PR lifecycle).
+- Live GH and taskr workflow lanes invoke the current checkout via
+  `python -m wade`, not an unrelated host-installed `wade` binary.
 
 The taskr workflow lane is host-only and destructive by design:
 - it runs outside Docker
@@ -150,9 +153,11 @@ The taskr workflow lane is host-only and destructive by design:
   [scripts/reset.sh](/Users/ivanviragine/Documents/workspace/taskr/scripts/reset.sh)
 - after each reset, the runner re-initializes WADE locally so the repo stays
   ready for subsequent live runs without requiring a manual `wade init`
+- unlike the GH live lane, the taskr workflow runner does not require
+  `.wade.yml` to exist ahead of time; it recreates the local WADE config itself
 - it currently exercises two tiny real tasks in sequence:
-  - add `taskr greet` that prints `Hi`
-  - change `taskr greet` to print `Howdy`
+  - add `taskr greet` so `uv run taskr greet` prints `Hi`
+  - change `taskr greet` so `uv run taskr greet` prints `Howdy`
 
 ## CI Execution Model
 

@@ -3,6 +3,10 @@
 # This lane is destructive by design: it resets taskr before and after the run.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WADE_REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+WADE_PYTHON="${WADE_REPO_ROOT}/.venv/bin/python"
+
 if [[ "${RUN_LIVE_AI_TESTS:-}" != "1" ]]; then
   echo "RUN_LIVE_AI_TESTS must be set to 1."
   exit 1
@@ -15,10 +19,6 @@ if [[ -z "${LIVE_REPO}" ]]; then
 fi
 if ! git -C "${LIVE_REPO}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "Live repo is not a git worktree: ${LIVE_REPO}"
-  exit 1
-fi
-if [[ ! -f "${LIVE_REPO}/.wade.yml" ]]; then
-  echo "Live repo is missing .wade.yml: ${LIVE_REPO}"
   exit 1
 fi
 if [[ ! -f "${LIVE_REPO}/scripts/reset.sh" ]]; then
@@ -37,7 +37,7 @@ if [[ "${WADE_LIVE_ALLOW_RESET:-}" != "1" ]]; then
 fi
 
 export WADE_LIVE_AI_TOOL="${WADE_LIVE_AI_TOOL:-claude}"
-export WADE_LIVE_AI_MODEL="${WADE_LIVE_AI_MODEL:-claude-haiku-4.5}"
+export WADE_LIVE_AI_MODEL="${WADE_LIVE_AI_MODEL:-claude-sonnet-4.6}"
 export WADE_LIVE_AI_WORKFLOW_TIMEOUT="${WADE_LIVE_AI_WORKFLOW_TIMEOUT:-300}"
 
 if [[ "${WADE_LIVE_AI_TOOL}" != "claude" ]]; then
@@ -56,8 +56,12 @@ if ! command -v gh >/dev/null 2>&1; then
   echo "gh CLI is required but not found in PATH."
   exit 1
 fi
-if ! command -v wade >/dev/null 2>&1; then
-  echo "wade CLI is required but not found in PATH."
+if [[ ! -x "${WADE_PYTHON}" ]]; then
+  echo "Current checkout's Python not found at ${WADE_PYTHON}."
+  exit 1
+fi
+if ! "${WADE_PYTHON}" -m wade --version >/dev/null 2>&1; then
+  echo "Current checkout's wade CLI is not runnable."
   exit 1
 fi
 if ! gh auth status >/dev/null 2>&1; then
@@ -79,11 +83,12 @@ ensure_taskr_wade_ready() {
 .wade.yml
 .wade-managed
 .claude/
+.cursor/
 .wade/
 EOF
   fi
 
-  (cd "${repo}" && wade init --ai claude --yes >/dev/null)
+  (cd "${repo}" && "${WADE_PYTHON}" -m wade init --ai claude --yes >/dev/null)
 
   # Keep the repo on the reset-target tree while leaving WADE's local artifacts available.
   (cd "${repo}" && git checkout -- AGENTS.md .gitignore 2>/dev/null || true)
