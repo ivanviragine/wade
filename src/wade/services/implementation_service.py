@@ -2633,7 +2633,6 @@ def list_sessions(
                 )
                 task_info = None
                 task_lookup_failed = True
-
             if task_info:
                 issue_state = task_info.state.value
                 issue_title = task_info.title

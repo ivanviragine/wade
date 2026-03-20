@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.8.0] — 2026-03-20
+
+### Features
+
+- poll for PR comments in smart_start review flow (#202) (4f1d49e)
+
 ## [v0.7.2] — 2026-03-19
 
 ### Bug Fixes

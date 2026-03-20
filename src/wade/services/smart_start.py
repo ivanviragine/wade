@@ -287,11 +287,28 @@ def smart_start(
                 ),
             )
         )
+        review_worktree_path = next(
+            (Path(wt["path"]) for wt in worktrees if wt.get("branch") == branch_name),
+            None,
+        )
         menu_options.append(
             (
                 "Review PR comments",
                 _run_review_pr_comments_wrapper(
-                    target, ai_tool, model, project_root, detach, ai_explicit, model_explicit, yolo
+                    target,
+                    ai_tool,
+                    model,
+                    project_root,
+                    detach,
+                    ai_explicit,
+                    model_explicit,
+                    repo_root,
+                    branch_name,
+                    pr_number_int,
+                    str(task.id),
+                    review_worktree_path,
+                    provider,
+                    yolo,
                 ),
             )
         )
@@ -372,23 +389,40 @@ def _run_review_pr_comments(
     project_root: Path | None,
     detach: bool,
     *,
+    repo_root: Path,
+    branch_name: str,
+    pr_number: int,
+    issue_number: str,
+    worktree_path: Path | None,
+    provider: AbstractTaskProvider,
     ai_explicit: bool = False,
     model_explicit: bool = False,
     yolo: bool | None = None,
 ) -> bool:
-    """Delegate to the review pr-comments service."""
-    from wade.services.review_service import start as do_start
+    """Poll for PR review comments and start a review session when found."""
+    from wade.models.review import PollOutcome
+    from wade.services import review_service
 
-    return do_start(
-        target=target,
-        ai_tool=ai_tool,
-        model=model,
-        project_root=project_root,
-        detach=detach,
-        ai_explicit=ai_explicit,
-        model_explicit=model_explicit,
-        yolo=yolo,
-    )
+    outcome = review_service.poll_for_reviews(provider, repo_root, pr_number, branch_name)
+
+    if outcome == PollOutcome.COMMENTS_FOUND:
+        return review_service.start(
+            target=target,
+            ai_tool=ai_tool,
+            model=model,
+            project_root=project_root,
+            detach=detach,
+            ai_explicit=ai_explicit,
+            model_explicit=model_explicit,
+            yolo=yolo,
+        )
+    elif outcome == PollOutcome.QUIET_TIMEOUT:
+        review_service._quiet_next_steps_prompt(
+            repo_root, branch_name, issue_number, worktree_path, pr_number, provider
+        )
+        return True
+    else:  # INTERRUPTED or PR_CLOSED
+        return True
 
 
 def _run_implement_task_wrapper(
@@ -432,6 +466,12 @@ def _run_review_pr_comments_wrapper(
     detach: bool,
     ai_explicit: bool,
     model_explicit: bool,
+    repo_root: Path,
+    branch_name: str,
+    pr_number: int,
+    issue_number: str,
+    worktree_path: Path | None,
+    provider: AbstractTaskProvider,
     yolo: bool | None = None,
 ) -> Callable[[], bool]:
     """Return a callable that runs _run_review_pr_comments with captured arguments."""
@@ -445,6 +485,12 @@ def _run_review_pr_comments_wrapper(
             detach=detach,
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
+            repo_root=repo_root,
+            branch_name=branch_name,
+            pr_number=pr_number,
+            issue_number=issue_number,
+            worktree_path=worktree_path,
+            provider=provider,
             yolo=yolo,
         )
 
