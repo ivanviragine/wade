@@ -76,21 +76,6 @@ class SmartStartContext:
         )
         return result.success
 
-    def run_review_pr_comments(self) -> bool:
-        """Delegate to the review pr-comments service."""
-        from wade.services.review_service import start as do_start
-
-        return do_start(
-            target=self.target,
-            ai_tool=self.ai_tool,
-            model=self.model,
-            project_root=self.project_root,
-            detach=self.detach,
-            ai_explicit=self.ai_explicit,
-            model_explicit=self.model_explicit,
-            yolo=self.yolo,
-        )
-
 
 def _open_pr_in_browser(pr_url: str) -> bool:
     """Open PR URL in the default system browser."""
@@ -236,10 +221,23 @@ def smart_start(
                 partial(_run_continue_working, ctx, repo_root, pr_number_int),
             )
         )
+        review_worktree_path = next(
+            (Path(wt["path"]) for wt in worktrees if wt.get("branch") == branch_name),
+            None,
+        )
         menu_options.append(
             (
                 "Review PR comments",
-                ctx.run_review_pr_comments,
+                partial(
+                    _run_review_pr_comments,
+                    ctx,
+                    repo_root=repo_root,
+                    branch_name=branch_name,
+                    pr_number=pr_number_int,
+                    issue_number=str(task.id),
+                    worktree_path=review_worktree_path,
+                    provider=provider,
+                ),
             )
         )
         menu_options.append(
@@ -279,6 +277,42 @@ def smart_start(
 # ---------------------------------------------------------------------------
 # Menu action helpers
 # ---------------------------------------------------------------------------
+
+
+def _run_review_pr_comments(
+    ctx: SmartStartContext,
+    *,
+    repo_root: Path,
+    branch_name: str,
+    pr_number: int,
+    issue_number: str,
+    worktree_path: Path | None,
+    provider: AbstractTaskProvider,
+) -> bool:
+    """Poll for PR review comments and start a review session when found."""
+    from wade.models.review import PollOutcome
+    from wade.services import review_service
+
+    outcome = review_service.poll_for_reviews(provider, repo_root, pr_number, branch_name)
+
+    if outcome == PollOutcome.COMMENTS_FOUND:
+        return review_service.start(
+            target=ctx.target,
+            ai_tool=ctx.ai_tool,
+            model=ctx.model,
+            project_root=ctx.project_root,
+            detach=ctx.detach,
+            ai_explicit=ctx.ai_explicit,
+            model_explicit=ctx.model_explicit,
+            yolo=ctx.yolo,
+        )
+    elif outcome == PollOutcome.QUIET_TIMEOUT:
+        review_service._quiet_next_steps_prompt(
+            repo_root, branch_name, issue_number, worktree_path, pr_number, provider
+        )
+        return True
+    else:  # INTERRUPTED or PR_CLOSED
+        return True
 
 
 def _run_merge_pr(

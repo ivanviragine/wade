@@ -231,8 +231,7 @@ class GitHubProvider(AbstractTaskProvider):
                 task_id=task_id,
                 error=str(e),
             )
-            # Successful exit but unparseable output is unexpected — don't mask it
-            raise RuntimeError(f"Failed to parse issue {task_id} response: {e}") from e
+            return None
 
     def update_task(
         self,

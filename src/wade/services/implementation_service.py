@@ -2605,7 +2605,10 @@ def list_sessions(
         issue_state: str | None = None
         issue_title: str | None = None
         if issue_number:
-            task_info = provider_inst.read_task_or_none(issue_number)
+            try:
+                task_info = provider_inst.read_task_or_none(issue_number)
+            except RuntimeError:
+                task_info = None
             if task_info:
                 issue_state = task_info.state.value
                 issue_title = task_info.title
