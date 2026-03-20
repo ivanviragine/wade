@@ -8,7 +8,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic import BaseModel
+
 from wade.config.hooks_util import upsert_hook_entry
+
+
+class CopilotHookEntry(BaseModel):
+    type: str
+    bash: str
+    comment: str
 
 
 def configure_plan_hooks(worktree_path: Path, guard_script: Path) -> None:
@@ -23,11 +31,11 @@ def configure_plan_hooks(worktree_path: Path, guard_script: Path) -> None:
     """
     upsert_hook_entry(
         hooks_file=worktree_path / ".github" / "hooks" / "hooks.json",
-        entry={
-            "type": "command",
-            "bash": f"python3 {guard_script.resolve()}",
-            "comment": "Plan write guard for file-write tools (edit, create)",
-        },
+        entry=CopilotHookEntry(
+            type="command",
+            bash=f"python3 {guard_script.resolve()}",
+            comment="Plan write guard for file-write tools (edit, create)",
+        ),
         dedup_key="bash",
         ensure_path=["hooks", "preToolUse"],
         top_level_defaults={"version": 1},

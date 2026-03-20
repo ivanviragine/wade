@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import webbrowser
 from collections.abc import Callable
-from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import Any
 
 import structlog
+from pydantic import BaseModel
 
 from wade.ai_tools.base import AbstractAITool
 from wade.config.loader import load_config
@@ -24,7 +24,7 @@ from wade.git import pr as git_pr
 from wade.git import repo as git_repo
 from wade.git.repo import GitError
 from wade.models.ai import AIToolID
-from wade.models.session import SessionRecord
+from wade.models.session import MergeStatus, SessionRecord
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.implementation_service import _merge_pr, check_tracking_issue_and_batch
@@ -34,8 +34,7 @@ from wade.utils.markdown import parse_sessions_from_body
 logger = structlog.get_logger()
 
 
-@dataclass(frozen=True)
-class SmartStartContext:
+class SmartStartContext(BaseModel):
     """Bundles the repeated parameters threaded through smart_start call sites."""
 
     target: str
@@ -150,6 +149,7 @@ def smart_start(
         effort=ctx.effort,
         effort_explicit=ctx.effort_explicit,
         yolo=ctx.yolo,
+        cd_only=ctx.cd_only,
     )
     if batch_result is not None:
         return batch_result
@@ -333,7 +333,7 @@ def _run_merge_pr(
             f"No local worktree found for branch '{branch_name}' — "
             "local cleanup will be skipped after merge."
         )
-    _merge_pr(
+    result = _merge_pr(
         repo_root,
         branch_name,
         pr_number,
@@ -341,7 +341,7 @@ def _run_merge_pr(
         worktree_path,
         provider,
     )
-    return True
+    return result not in (MergeStatus.MERGE_FAILED, MergeStatus.NOT_MERGED)
 
 
 # ---------------------------------------------------------------------------

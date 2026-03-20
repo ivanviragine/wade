@@ -99,6 +99,7 @@ def check_tracking_issue_and_batch(
     effort: str | None,
     effort_explicit: bool,
     yolo: bool | None,
+    cd_only: bool = False,
 ) -> bool | None:
     """Detect tracking issues and redirect to batch implementation.
 
@@ -114,6 +115,10 @@ def check_tracking_issue_and_batch(
         else parse_all_issue_refs(task.body)
     )
     if not child_ids:
+        return None
+
+    if cd_only:
+        console.info("Tracking issue detected — batch redirect skipped for cd-only mode")
         return None
 
     refs = ", ".join(f"#{cid}" for cid in child_ids)
@@ -882,6 +887,7 @@ def start(
             effort=effort,
             effort_explicit=effort_explicit,
             yolo=yolo,
+            cd_only=cd_only,
         )
         if batch_result is not None:
             return ImplementResult(success=batch_result)

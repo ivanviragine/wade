@@ -8,7 +8,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic import BaseModel
+
 from wade.config.hooks_util import upsert_hook_entry
+
+
+class CursorHookEntry(BaseModel):
+    event: str
+    command: str
+    tools: list[str]
 
 
 def configure_plan_hooks(worktree_path: Path, guard_script: Path) -> None:
@@ -19,11 +27,11 @@ def configure_plan_hooks(worktree_path: Path, guard_script: Path) -> None:
     """
     upsert_hook_entry(
         hooks_file=worktree_path / ".cursor" / "hooks.json",
-        entry={
-            "event": "preToolUse",
-            "command": f"python3 {guard_script.resolve()}",
-            "tools": ["Write", "Delete"],
-        },
+        entry=CursorHookEntry(
+            event="preToolUse",
+            command=f"python3 {guard_script.resolve()}",
+            tools=["Write", "Delete"],
+        ),
         dedup_key="command",
         ensure_path=["preToolUse"],
         log_event="cursor_hooks.configured",
