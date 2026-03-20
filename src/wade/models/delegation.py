@@ -29,6 +29,7 @@ class DelegationRequest(BaseModel):
     output_file: Path | None = None
     trusted_dirs: list[str] = Field(default_factory=list)
     allowed_commands: list[str] = Field(default_factory=list)
+    yolo: bool = False
 
 
 class DelegationResult(BaseModel):

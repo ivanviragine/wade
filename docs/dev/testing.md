@@ -162,6 +162,9 @@ The taskr workflow lane is host-only and destructive by design:
 - the actual code-change step runs Claude headlessly against WADE's real
   implementation prompt because Claude's interactive API-key confirmation is not
   automatable in this environment
+- because this lane runs only in the disposable `taskr` sandbox, that headless
+  implementation step opts into Claude's dangerous-permissions / YOLO path so
+  file edits can complete without interactive approval prompts
 - unlike the GH live lane, the taskr workflow runner does not require
   `.wade.yml` to exist ahead of time; it recreates the local WADE config itself
 - it currently exercises two tiny real tasks in sequence:

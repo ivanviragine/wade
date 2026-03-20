@@ -29,6 +29,7 @@ class TestDelegationRequest:
         assert req.timeout == 120
         assert req.trusted_dirs == []
         assert req.allowed_commands == []
+        assert req.yolo is False
 
     def test_full_request(self) -> None:
         req = DelegationRequest(
@@ -42,6 +43,7 @@ class TestDelegationRequest:
             output_file=Path("/tmp/out.txt"),
             trusted_dirs=["/tmp"],
             allowed_commands=["wade *"],
+            yolo=True,
         )
         assert req.ai_tool == "claude"
         assert req.model == "claude-sonnet-4-6"
@@ -51,6 +53,7 @@ class TestDelegationRequest:
         assert req.output_file == Path("/tmp/out.txt")
         assert req.trusted_dirs == ["/tmp"]
         assert req.allowed_commands == ["wade *"]
+        assert req.yolo is True
 
 
 class TestDelegationResult:
