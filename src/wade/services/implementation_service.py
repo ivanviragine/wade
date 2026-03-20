@@ -1290,12 +1290,13 @@ def _resolve_task_target(
         task = create_from_plan_file(target_path, config=config, provider=provider)
         return task
 
-    # Treat as issue number
+    # Treat as issue number — strip leading "#" so "#123" and "123" both work
+    issue_id = target.lstrip("#")
     try:
-        task = provider.read_task(target)
+        task = provider.read_task(issue_id)
         return task
     except Exception as e:
-        console.error(f"Could not read issue #{target}: {e}")
+        console.error(f"Could not read issue #{issue_id}: {e}")
         return None
 
 
