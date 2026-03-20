@@ -238,12 +238,13 @@ class TestReadTaskOrNone:
         assert task is None
 
     @patch("wade.providers.github.run")
-    def test_raises_on_parse_error(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
-        """read_task_or_none raises RuntimeError on unparseable output (exit 0)."""
+    def test_returns_none_on_parse_error(
+        self, mock_run: MagicMock, provider: GitHubProvider
+    ) -> None:
+        """read_task_or_none returns None on unparseable output (exit 0)."""
         mock_run.return_value = _make_completed("invalid json")
 
-        with pytest.raises(RuntimeError, match="Failed to parse issue"):
-            provider.read_task_or_none("42")
+        assert provider.read_task_or_none("42") is None
 
     @patch("wade.providers.github.run")
     def test_uses_check_false(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
