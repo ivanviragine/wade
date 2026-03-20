@@ -296,7 +296,10 @@ def require_live_taskr_repo() -> None:
         pytest.skip(f"{LIVE_REPO} is missing scripts/reset.sh")
     if not (LIVE_REPO / "taskr" / "cli.py").is_file():
         pytest.skip(f"{LIVE_REPO} does not look like the taskr repo")
-    if 'name = "taskr"' not in (LIVE_REPO / "pyproject.toml").read_text(encoding="utf-8"):
+    pyproject_path = LIVE_REPO / "pyproject.toml"
+    if not pyproject_path.is_file():
+        pytest.skip(f"{LIVE_REPO} is missing pyproject.toml")
+    if 'name = "taskr"' not in pyproject_path.read_text(encoding="utf-8"):
         pytest.skip(f"{LIVE_REPO} pyproject.toml is not the taskr package")
 
 

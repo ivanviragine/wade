@@ -39,8 +39,10 @@ tests/
 │   └── test_work_sync_list_contract.py
 ├── live/                    # Manual live lanes (env-gated)
 │   ├── test_wade_live_gh.py
-│   └── test_wade_live_ai.py
+│   ├── test_wade_live_ai.py
+│   └── test_wade_live_ai_taskr.py
 └── fixtures/                # Static test data files
+    ├── live/                # Manual live plan/task fixtures
     └── transcripts/         # Sample AI tool transcripts
 ```
 
@@ -81,6 +83,11 @@ tests/
 
 # Manual live GitHub lane (requires real gh auth + repo)
 RUN_LIVE_GH_TESTS=1 WADE_LIVE_REPO=/path/to/repo ./scripts/test-live-gh.sh
+
+# Recommended live GitHub sandbox repo
+RUN_LIVE_GH_TESTS=1 \
+WADE_LIVE_REPO=/Users/ivanviragine/Documents/workspace/taskr \
+./scripts/test-live-gh.sh
 
 # Manual live AI lane (canonical: claude + haiku)
 # This validates API-key-backed Claude headless execution, not Claude Code's
@@ -123,6 +130,13 @@ Current live GH lane exercises WADE behavior (not raw `gh` checks), including:
 - task lifecycle (`task create/read/list/close`)
 - PR-backed workflow smoke (`implement --cd` + `review pr-comments` no-comment path)
 
+The recommended manual sandbox repo for both live GH and live AI workflow runs is:
+- `/Users/ivanviragine/Documents/workspace/taskr`
+- It already contains WADE config plus helper scripts such as
+  [reset.sh](/Users/ivanviragine/Documents/workspace/taskr/scripts/reset.sh),
+  [seed.sh](/Users/ivanviragine/Documents/workspace/taskr/scripts/seed.sh), and
+  [smoke.sh](/Users/ivanviragine/Documents/workspace/taskr/scripts/smoke.sh).
+
 Current live AI coverage is split deliberately:
 - [tests/live/test_wade_live_ai.py](/Users/ivanviragine/.codex/worktrees/c780/wade/tests/live/test_wade_live_ai.py)
   is the minimal provider smoke (API key + Claude headless + parseable output).
@@ -143,7 +157,7 @@ The taskr workflow lane is host-only and destructive by design:
 - Full non-live validation requires both `./scripts/test.sh` and `./scripts/test-e2e-docker.sh`.
 - Unit + integration + top-level CLI smoke (`tests/test_cli_basics.py`) run directly on the CI host.
 - Deterministic E2E contract tests run via `./scripts/test-e2e-docker.sh` and `docker-compose.e2e.yml`.
-- Live lanes remain manual and env-gated (`test-live-gh.sh`, `test-live-ai.sh`).
+- Live lanes remain manual and env-gated (`test-live-gh.sh`, `test-live-ai.sh`, `test-live-ai-taskr.sh`).
 
 ## Test Fixtures
 
