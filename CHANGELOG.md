@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.8.3] — 2026-03-20
+
+### Documentation
+
+- add hooks_util.py to architecture package structure tree (c2c97be)
+
 ## [v0.8.2] — 2026-03-20
 
 ### Documentation
