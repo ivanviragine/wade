@@ -86,6 +86,11 @@ RUN_LIVE_GH_TESTS=1 WADE_LIVE_REPO=/path/to/repo ./scripts/test-live-gh.sh
 # This validates API-key-backed Claude headless execution, not Claude Code's
 # interactive `/login` session auth path.
 RUN_LIVE_AI_TESTS=1 ANTHROPIC_API_KEY=... ./scripts/test-live-ai.sh
+
+# Manual live AI workflow lane against taskr (destructive: resets before/after)
+RUN_LIVE_AI_TESTS=1 WADE_LIVE_ALLOW_RESET=1 \
+WADE_LIVE_REPO=/Users/ivanviragine/Documents/workspace/taskr \
+ANTHROPIC_API_KEY=... ./scripts/test-live-ai-taskr.sh
 ```
 
 Live scripts are strict by design: they fail fast when required env vars,
@@ -105,15 +110,33 @@ credentials, or binaries are missing.
 - `WADE_LIVE_AI_TOOL=claude` (default)
 - `WADE_LIVE_AI_MODEL=claude-haiku-4.5` (default)
 - `WADE_LIVE_AI_TIMEOUT=45` (optional timeout in seconds for live AI smoke)
+- `WADE_LIVE_AI_WORKFLOW_TIMEOUT=300` (optional timeout in seconds for the taskr workflow lane)
 - `ANTHROPIC_API_KEY` is required for the canonical live AI smoke test.
 - This lane validates API-key-backed Claude execution and does not verify
   Claude Code's interactive `/login` session auth path.
+- `WADE_LIVE_ALLOW_RESET=1` is required for the taskr workflow lane because it
+  hard-resets the target repo before and after the run.
 
 Live tests are manual by design. Default CI lanes must not require provider secrets.
 
 Current live GH lane exercises WADE behavior (not raw `gh` checks), including:
 - task lifecycle (`task create/read/list/close`)
 - PR-backed workflow smoke (`implement --cd` + `review pr-comments` no-comment path)
+
+Current live AI coverage is split deliberately:
+- [tests/live/test_wade_live_ai.py](/Users/ivanviragine/.codex/worktrees/c780/wade/tests/live/test_wade_live_ai.py)
+  is the minimal provider smoke (API key + Claude headless + parseable output).
+- [tests/live/test_wade_live_ai_taskr.py](/Users/ivanviragine/.codex/worktrees/c780/wade/tests/live/test_wade_live_ai_taskr.py)
+  is the taskr workflow lane (real repo, real edits, real tests, real PR lifecycle).
+
+The taskr workflow lane is host-only and destructive by design:
+- it runs outside Docker
+- it expects the dedicated `taskr` sandbox repo
+- it resets that repo to `reset-target` before and after the run via
+  [scripts/reset.sh](/Users/ivanviragine/Documents/workspace/taskr/scripts/reset.sh)
+- it currently exercises two tiny real tasks in sequence:
+  - add `taskr greet` that prints `Hi`
+  - change `taskr greet` to print `Howdy`
 
 ## CI Execution Model
 
