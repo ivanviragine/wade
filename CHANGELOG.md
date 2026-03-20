@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.8.1] — 2026-03-20
+
+### Refactoring
+
+- reduce duplication and clean up dead code across services, providers, and config (#204) (bb6ae70)
+
 ## [v0.8.0] — 2026-03-20
 
 ### Features
