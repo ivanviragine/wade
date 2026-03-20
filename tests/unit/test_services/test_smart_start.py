@@ -6,8 +6,9 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from wade.git.repo import GitError
+from wade.models.review import PollOutcome
 from wade.models.task import Task, TaskState
-from wade.services.smart_start import smart_start
+from wade.services.smart_start import _run_review_pr_comments, smart_start
 
 
 def _make_task() -> Task:
@@ -130,6 +131,13 @@ class TestSmartStartOpenPR:
 
         assert result is True
         mock_review.assert_called_once()
+        call_kwargs = mock_review.call_args.kwargs
+        assert call_kwargs["repo_root"] == tmp_path
+        assert call_kwargs["branch_name"] == "feat/42-fix"
+        assert call_kwargs["pr_number"] == 99
+        assert call_kwargs["issue_number"] == "42"
+        assert call_kwargs["worktree_path"] is None
+        assert call_kwargs["provider"] == mock_get_provider.return_value
 
     @patch("wade.services.smart_start._merge_pr")
     @patch("wade.ui.prompts.select", return_value=2)
@@ -528,6 +536,69 @@ class TestSmartStartTrackingDetection:
         call_kwargs = mock_implement.call_args.kwargs
         assert call_kwargs["effort"] == "high"
         assert call_kwargs["effort_explicit"] is True
+
+
+class TestRunReviewPrComments:
+    """Tests for _run_review_pr_comments polling outcomes."""
+
+    @patch("wade.services.review_service.start", return_value=True)
+    @patch(
+        "wade.services.review_service.poll_for_reviews",
+        return_value=PollOutcome.COMMENTS_FOUND,
+    )
+    def test_comments_found_calls_review_start(
+        self,
+        mock_poll: MagicMock,
+        mock_start: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """COMMENTS_FOUND outcome delegates to review_service.start()."""
+        provider = MagicMock()
+        result = _run_review_pr_comments(
+            target="42",
+            ai_tool=None,
+            model=None,
+            project_root=tmp_path,
+            detach=False,
+            repo_root=tmp_path,
+            branch_name="feat/42-fix",
+            pr_number=99,
+            issue_number="42",
+            worktree_path=None,
+            provider=provider,
+        )
+        assert result is True
+        mock_poll.assert_called_once_with(provider, tmp_path, 99, "feat/42-fix")
+        mock_start.assert_called_once()
+
+    @patch("wade.services.review_service._quiet_next_steps_prompt")
+    @patch(
+        "wade.services.review_service.poll_for_reviews",
+        return_value=PollOutcome.QUIET_TIMEOUT,
+    )
+    def test_quiet_timeout_calls_quiet_next_steps(
+        self,
+        mock_poll: MagicMock,
+        mock_quiet: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """QUIET_TIMEOUT outcome calls _quiet_next_steps_prompt()."""
+        provider = MagicMock()
+        result = _run_review_pr_comments(
+            target="42",
+            ai_tool=None,
+            model=None,
+            project_root=tmp_path,
+            detach=False,
+            repo_root=tmp_path,
+            branch_name="feat/42-fix",
+            pr_number=99,
+            issue_number="42",
+            worktree_path=None,
+            provider=provider,
+        )
+        assert result is True
+        mock_quiet.assert_called_once_with(tmp_path, "feat/42-fix", "42", None, 99, provider)
 
 
 class TestSmartStartGitError:
