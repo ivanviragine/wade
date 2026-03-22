@@ -299,3 +299,24 @@ class TestValidateConfig:
         result = validate_config(tmp_path)
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("knowledge.enabled" in e and "boolean" in e for e in result.errors)
+
+    def test_invalid_knowledge_path_not_string(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nknowledge:\n  path: 123\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("knowledge.path" in e and "string" in e for e in result.errors)
+
+    def test_invalid_knowledge_unsupported_key(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nknowledge:\n  enabled: true\n  foo: bar\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("knowledge.foo" in e and "unsupported" in e for e in result.errors)
+
+    def test_invalid_knowledge_not_mapping(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nknowledge: true\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("knowledge" in e and "mapping" in e for e in result.errors)
