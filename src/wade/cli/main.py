@@ -504,6 +504,7 @@ def reviews_alias(
 
 from wade.cli.admin import admin_app  # noqa: E402
 from wade.cli.implementation_session import implementation_session_app  # noqa: E402
+from wade.cli.knowledge import knowledge_app  # noqa: E402
 from wade.cli.plan_session import plan_session_app  # noqa: E402
 from wade.cli.review import review_app  # noqa: E402
 from wade.cli.review_pr_comments_session import review_pr_comments_session_app  # noqa: E402
@@ -552,6 +553,12 @@ app.add_typer(
     name="review",
     help="AI-powered review commands (plan, implementation, pr-comments).",
     rich_help_panel="Review",
+)
+app.add_typer(
+    knowledge_app,
+    name="knowledge",
+    help="Project knowledge management.",
+    rich_help_panel="Knowledge",
 )
 
 # Admin commands are registered directly on the root app

@@ -102,6 +102,13 @@ class PermissionsConfig(BaseModel):
     allowed_commands: list[str] = ["wade:*"]
 
 
+class KnowledgeConfig(BaseModel):
+    """Project knowledge file configuration."""
+
+    enabled: bool = False
+    path: str = "KNOWLEDGE.md"
+
+
 class HooksConfig(BaseModel):
     """Hooks configuration for worktree lifecycle."""
 
@@ -134,6 +141,7 @@ class ProjectConfig(BaseModel):
     provider: ProviderConfig = ProviderConfig()
     permissions: PermissionsConfig = PermissionsConfig()
     hooks: HooksConfig = HooksConfig()
+    knowledge: KnowledgeConfig = KnowledgeConfig()
 
     # Resolved values (set after loading, not in YAML)
     config_path: str | None = Field(default=None, exclude=True)
