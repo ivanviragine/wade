@@ -1,9 +1,8 @@
 name: PR Title Lint
 
+# Disabled: all GitHub Actions are currently disabled for this repository
 on:
-  pull_request:
-    types: [opened, edited, synchronize, reopened]
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   pull-requests: read

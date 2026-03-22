@@ -1,9 +1,8 @@
 name: Auto Version Bump
 
+# Disabled: all GitHub Actions are currently disabled for this repository
 on:
-  pull_request:
-    types: [closed]
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
