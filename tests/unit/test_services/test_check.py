@@ -242,33 +242,6 @@ class TestValidateConfig:
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("permissions.forbidden_commands" in e for e in result.errors)
 
-    def test_valid_knowledge_section(self, tmp_path: Path) -> None:
-        config = tmp_path / ".wade.yml"
-        config.write_text("version: 2\nknowledge:\n  enabled: true\n  path: docs/KNOWLEDGE.md\n")
-        result = validate_config(tmp_path)
-        assert result.is_valid, f"Errors: {result.errors}"
-
-    def test_invalid_knowledge_enabled_type(self, tmp_path: Path) -> None:
-        config = tmp_path / ".wade.yml"
-        config.write_text("version: 2\nknowledge:\n  enabled: 'yes'\n")
-        result = validate_config(tmp_path)
-        assert result.exit_code == ConfigExitCode.INVALID
-        assert any("knowledge.enabled" in e for e in result.errors)
-
-    def test_invalid_knowledge_path_escape(self, tmp_path: Path) -> None:
-        config = tmp_path / ".wade.yml"
-        config.write_text("version: 2\nknowledge:\n  enabled: true\n  path: ../KNOWLEDGE.md\n")
-        result = validate_config(tmp_path)
-        assert result.exit_code == ConfigExitCode.INVALID
-        assert any("knowledge.path" in e and "inside the project root" in e for e in result.errors)
-
-    def test_invalid_knowledge_unsupported_key(self, tmp_path: Path) -> None:
-        config = tmp_path / ".wade.yml"
-        config.write_text("version: 2\nknowledge:\n  enabled: true\n  mode: shared\n")
-        result = validate_config(tmp_path)
-        assert result.exit_code == ConfigExitCode.INVALID
-        assert any("knowledge.mode" in e for e in result.errors)
-
     def test_invalid_yaml(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"
         config.write_text("{{invalid yaml::")
@@ -352,3 +325,50 @@ class TestValidateConfig:
         assert "INVALID_CONFIG" in output
         assert f"path={config}" in output
         assert "error:" in output
+
+    def test_valid_config_with_knowledge_section(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nknowledge:\n  enabled: true\n  path: docs/KNOWLEDGE.md\n")
+        result = validate_config(tmp_path)
+        assert result.is_valid, f"Errors: {result.errors}"
+
+    def test_valid_config_with_knowledge_enabled_only(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nknowledge:\n  enabled: true\n")
+        result = validate_config(tmp_path)
+        assert result.is_valid, f"Errors: {result.errors}"
+
+    def test_invalid_knowledge_enabled_not_bool(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nknowledge:\n  enabled: 'yes'\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("knowledge.enabled" in e and "boolean" in e for e in result.errors)
+
+    def test_invalid_knowledge_path_not_string(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nknowledge:\n  path: 123\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("knowledge.path" in e and "string" in e for e in result.errors)
+
+    def test_invalid_knowledge_path_escape(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nknowledge:\n  enabled: true\n  path: ../KNOWLEDGE.md\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("knowledge.path" in e and "inside the project root" in e for e in result.errors)
+
+    def test_invalid_knowledge_unsupported_key(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nknowledge:\n  enabled: true\n  mode: shared\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("knowledge.mode" in e and "unsupported" in e for e in result.errors)
+
+    def test_invalid_knowledge_not_mapping(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nknowledge: true\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("knowledge" in e and "mapping" in e for e in result.errors)

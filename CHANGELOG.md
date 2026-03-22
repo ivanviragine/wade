@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.9.1] — 2026-03-22
+
+### Bug Fixes
+
+- config validation rejects `knowledge` key in .wade.yml (#209) (2dc7d5d)
+
 ## [v0.9.0] — 2026-03-22
 
 ### Features

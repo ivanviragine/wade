@@ -554,11 +554,13 @@ def _validate_knowledge_section(
     """Validate the project knowledge section."""
     enabled = knowledge.get("enabled")
     if enabled is not None and not isinstance(enabled, bool):
-        errors.append("knowledge.enabled: must be true or false")
+        errors.append("knowledge.enabled: must be a boolean (true or false)")
 
     path_value = knowledge.get("path")
     if path_value is not None:
-        if not isinstance(path_value, str) or not path_value.strip():
+        if not isinstance(path_value, str):
+            errors.append("knowledge.path: must be a string")
+        elif not path_value.strip():
             errors.append("knowledge.path: must be a non-empty relative path")
         else:
             root = config_path.parent.resolve()
