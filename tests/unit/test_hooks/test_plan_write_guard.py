@@ -87,8 +87,14 @@ class TestBlockedFiles:
         result = _run_guard(data)
         assert result.returncode == 2
         assert "BLOCKED" in result.stderr
-        # Verify stdout JSON has deny fields
+        # Verify stdout JSON has deny fields for all supported tools
         stdout_json = json.loads(result.stdout)
+        # Claude Code format (nested hookSpecificOutput)
+        hook_output = stdout_json["hookSpecificOutput"]
+        assert hook_output["permissionDecision"] == "deny"
+        assert hook_output["hookEventName"] == "PreToolUse"
+        assert "BLOCKED" in hook_output["permissionDecisionReason"]
+        # Copilot/Cursor format (top-level)
         assert stdout_json["permission"] == "deny"
         assert stdout_json["permissionDecision"] == "deny"
 
