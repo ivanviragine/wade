@@ -68,3 +68,30 @@ class TestCheckConfigCommand:
         result = _run(["check-config"], cwd=bare)
         assert result.returncode == 1
         assert "CONFIG_NOT_FOUND" in result.stdout
+
+    def test_valid_knowledge_config(self, e2e_repo: Path) -> None:
+        """wade check-config accepts a valid knowledge section."""
+        config_path = e2e_repo / ".wade.yml"
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8")
+            + "\nknowledge:\n  enabled: true\n  path: docs/KNOWLEDGE.md\n",
+            encoding="utf-8",
+        )
+
+        result = _run(["check-config"], cwd=e2e_repo)
+        assert result.returncode == 0
+        assert "VALID_CONFIG" in result.stdout
+
+    def test_invalid_knowledge_path_escape(self, e2e_repo: Path) -> None:
+        """wade check-config rejects knowledge paths that escape the repo root."""
+        config_path = e2e_repo / ".wade.yml"
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8")
+            + "\nknowledge:\n  enabled: true\n  path: ../KNOWLEDGE.md\n",
+            encoding="utf-8",
+        )
+
+        result = _run(["check-config"], cwd=e2e_repo)
+        assert result.returncode == 3
+        assert "INVALID_CONFIG" in result.stdout
+        assert "knowledge.path: must be inside the project root" in result.stdout
