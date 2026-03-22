@@ -33,7 +33,7 @@ class TestResolveKnowledgePath:
     def test_custom_path(self, project_root: Path) -> None:
         config = KnowledgeConfig(enabled=True, path="docs/LEARNINGS.md")
         result = resolve_knowledge_path(project_root, config)
-        assert result == project_root / "docs/LEARNINGS.md"
+        assert result == (project_root / "docs/LEARNINGS.md").resolve()
 
 
 class TestResolveKnowledgePathSecurity:
@@ -72,6 +72,12 @@ class TestEnsureKnowledgeFile:
         path = ensure_knowledge_file(project_root, config)
         assert path.exists()
         assert path.parent.name == "docs"
+
+    def test_rejects_directory_path(self, project_root: Path) -> None:
+        (project_root / "somedir").mkdir()
+        config = KnowledgeConfig(enabled=True, path="somedir")
+        with pytest.raises(ValueError, match="points to a directory"):
+            ensure_knowledge_file(project_root, config)
 
 
 class TestAppendKnowledge:

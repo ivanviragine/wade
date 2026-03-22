@@ -22,6 +22,8 @@ def resolve_knowledge_path(project_root: Path, config: KnowledgeConfig) -> Path:
 
     Rejects absolute paths and paths that escape the project root via ``..``.
     """
+    if Path(config.path).is_absolute():
+        raise ValueError(f"Invalid knowledge path {config.path!r}: must be inside project root")
     root = project_root.resolve()
     resolved = (root / config.path).resolve()
     if not resolved.is_relative_to(root):
@@ -37,6 +39,8 @@ def ensure_knowledge_file(project_root: Path, config: KnowledgeConfig) -> Path:
     Returns the path to the knowledge file.
     """
     path = resolve_knowledge_path(project_root, config)
+    if path.is_dir():
+        raise ValueError(f"Knowledge path {config.path!r} points to a directory, not a file")
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(KNOWLEDGE_TEMPLATE, encoding="utf-8")
