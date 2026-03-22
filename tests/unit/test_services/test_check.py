@@ -280,3 +280,22 @@ class TestValidateConfig:
         assert "INVALID_CONFIG" in output
         assert f"path={config}" in output
         assert "error:" in output
+
+    def test_valid_config_with_knowledge_section(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nknowledge:\n  enabled: true\n  path: KNOWLEDGE.md\n")
+        result = validate_config(tmp_path)
+        assert result.is_valid, f"Errors: {result.errors}"
+
+    def test_valid_config_with_knowledge_enabled_only(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nknowledge:\n  enabled: true\n")
+        result = validate_config(tmp_path)
+        assert result.is_valid, f"Errors: {result.errors}"
+
+    def test_invalid_knowledge_enabled_not_bool(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nknowledge:\n  enabled: 'yes'\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("knowledge.enabled" in e and "boolean" in e for e in result.errors)

@@ -295,8 +295,25 @@ def _validate_config_file(config_path: Path) -> list[str]:
         else:
             _validate_hooks_section(hooks, errors)
 
+    # Validate knowledge section
+    knowledge = raw.get("knowledge")
+    if knowledge is not None:
+        if not isinstance(knowledge, dict):
+            errors.append("knowledge: must be a mapping")
+        else:
+            _validate_knowledge_section(knowledge, errors)
+
     # Check for unsupported top-level keys
-    supported_keys = {"version", "project", "ai", "models", "provider", "permissions", "hooks"}
+    supported_keys = {
+        "version",
+        "project",
+        "ai",
+        "models",
+        "provider",
+        "permissions",
+        "hooks",
+        "knowledge",
+    }
     for key in raw:
         if key not in supported_keys:
             errors.append(
@@ -471,3 +488,19 @@ def _validate_hooks_section(hooks: dict[str, Any], errors: list[str]) -> None:
     for key in hooks:
         if key not in valid_keys:
             errors.append(f"hooks.{key}: unsupported key")
+
+
+def _validate_knowledge_section(knowledge: dict[str, Any], errors: list[str]) -> None:
+    """Validate the knowledge section."""
+    enabled = knowledge.get("enabled")
+    if enabled is not None and not isinstance(enabled, bool):
+        errors.append("knowledge.enabled: must be a boolean (true or false)")
+
+    path = knowledge.get("path")
+    if path is not None and not isinstance(path, str):
+        errors.append("knowledge.path: must be a string")
+
+    valid_keys = {"enabled", "path"}
+    for key in knowledge:
+        if key not in valid_keys:
+            errors.append(f"knowledge.{key}: unsupported key")
