@@ -13,6 +13,7 @@ from wade.models.config import (
     AIConfig,
     ComplexityModelMapping,
     HooksConfig,
+    KnowledgeConfig,
     PermissionsConfig,
     ProjectConfig,
     ProjectSettings,
@@ -172,6 +173,15 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
         copy_to_worktree=hooks_raw.get("copy_to_worktree", []),
     )
 
+    # Parse knowledge section
+    knowledge_raw = raw.get("knowledge", {}) or {}
+    if not isinstance(knowledge_raw, dict):
+        raise ValueError("knowledge must be a mapping")
+    knowledge = KnowledgeConfig(
+        enabled=knowledge_raw.get("enabled", False),
+        path=knowledge_raw.get("path", "KNOWLEDGE.md"),
+    )
+
     return ProjectConfig(
         version=version,
         project=project,
@@ -180,6 +190,7 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
         provider=provider,
         permissions=permissions,
         hooks=hooks,
+        knowledge=knowledge,
         config_path=str(config_path),
         project_root=str(config_path.parent),
     )

@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.9.0] — 2026-03-22
+
+### Features
+
+- add project knowledge file for cross-session AI learning (#207) (6130c49)
+
 ## [v0.8.3] — 2026-03-20
 
 ### Documentation

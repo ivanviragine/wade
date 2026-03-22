@@ -30,6 +30,22 @@ Always use `wade task create` for interactive issue creation.
 Using `gh` directly bypasses label enforcement, snapshot/diff detection, and
 dependency analysis hooks.
 
+## Project Knowledge
+
+If the project knowledge file exists (check `.wade.yml` → `knowledge.path`,
+default: `KNOWLEDGE.md`), read it at the start of this session for context
+from previous planning and implementation sessions.
+
+Before writing `PR-SUMMARY.md`, if knowledge capture is enabled
+(check `.wade.yml` → `knowledge.enabled`) and you discovered important project
+patterns, conventions, or gotchas during this session, capture them:
+
+```bash
+echo "Your learnings here" | wade knowledge add --session implementation --issue <number>
+```
+
+Then commit the updated knowledge file alongside your other changes.
+
 ## First action: check your context
 
 Run `wade implementation-session check` as your **first action**:

@@ -97,7 +97,16 @@ def _extract_file_path(data: dict[str, object]) -> str | None:
     return None
 
 
-WRITE_TOOL_NAMES = {"write", "edit", "multiedit", "create", "delete", "save", "append"}
+WRITE_TOOL_NAMES = {
+    "write",
+    "edit",
+    "multiedit",
+    "create",
+    "delete",
+    "save",
+    "append",
+    "notebookedit",
+}
 
 
 def _extract_tool_name(data: dict[str, object]) -> str | None:
@@ -110,19 +119,29 @@ def _extract_tool_name(data: dict[str, object]) -> str | None:
 
 
 def _deny(file_path: str) -> None:
-    """Output denial and exit with code 2."""
+    """Output denial and exit."""
     msg = (
         f"BLOCKED by plan-session guard: cannot write to '{file_path}'. "
         "In plan mode, only plan artifacts (PLAN.md, PLAN-*.md, prompt.txt, "
         ".transcript, .commit-msg, PR-SUMMARY.md, .claude/plans/*) may be written. "
         "Do NOT modify source code files."
     )
-    # stderr for Claude Code / Gemini / human-readable
+    # stderr for human-readable output
     print(msg, file=sys.stderr)
-    # stdout JSON for Copilot (permissionDecision) and Cursor (permission)
+    # stdout JSON — multi-tool compatible:
+    # - Claude Code: reads hookSpecificOutput.permissionDecision
+    # - Cursor: reads top-level permission
+    # - Copilot: reads top-level permissionDecision
+    # - Gemini: reads top-level decision (also uses exit code 2 as emergency brake)
     result = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": msg,
+        },
         "permission": "deny",
         "permissionDecision": "deny",
+        "decision": "deny",
         "reason": msg,
     }
     print(json.dumps(result))

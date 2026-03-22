@@ -32,6 +32,23 @@ Always use `wade task create` for interactive issue creation.
 Using `gh` directly bypasses label enforcement, snapshot/diff detection, and
 dependency analysis hooks.
 
+## Project Knowledge
+
+If the project knowledge file exists (check `.wade.yml` → `knowledge.path`,
+default: `KNOWLEDGE.md`), read it at the start of this session for context
+from previous planning and implementation sessions.
+
+Before running `wade plan-session done`, if knowledge capture is enabled
+(check `.wade.yml` → `knowledge.enabled`) and you discovered important project
+patterns, conventions, or gotchas during this session, capture them:
+
+```bash
+echo "Your learnings here" | wade knowledge add --session plan
+```
+
+The `--issue` flag is optional (issue numbers may not exist yet during planning).
+Running `wade knowledge add` is allowed even though this is a planning session.
+
 ## Your role
 
 1. **Plan the feature** with the user — analyze, break down, propose.
@@ -114,7 +131,7 @@ repo working directory.
 - Do not create GitHub Issues — wade does this after you exit
 - Do not implement any code (even after leaving planning mode)
 - Do not run `wade implement`, `wade implementation-session done`, or `wade implementation-session sync`
-- Do not write files into the repo directory — only to the temp dir
+- Do not write files into the repo directory — only to the temp dir (exception: `wade knowledge add` is allowed)
 - Do not skip the review step — always present a plan summary and invite
   modifications before suggesting the user exits
 - Do not skip `wade plan-session done` — always validate before suggesting the user exits

@@ -128,6 +128,7 @@ def init(
 
     project_settings = _prompt_project_settings(root, non_interactive)
     hooks_setup = _prompt_hooks_setup(non_interactive)
+    knowledge_setup = _prompt_knowledge_setup(non_interactive)
 
     # If provider setup requested adding .env to copy_to_worktree, inject it
     if provider_setup.get("add_env_to_copy"):
@@ -165,6 +166,16 @@ def init(
     _prompt_configure_shell_integration(non_interactive)
     _prompt_configure_completions(non_interactive)
 
+    # If knowledge is enabled, add the knowledge path to copy_to_worktree
+    if knowledge_setup.get("enabled"):
+        knowledge_path: str = knowledge_setup.get("path", "KNOWLEDGE.md")
+        # Reject absolute or escaping paths
+        if not knowledge_path.startswith("/") and ".." not in knowledge_path.split("/"):
+            copy_list_k: list[str] = hooks_setup.get("copy_to_worktree", [])
+            if knowledge_path not in copy_list_k:
+                copy_list_k.append(knowledge_path)
+            hooks_setup["copy_to_worktree"] = copy_list_k
+
     # Write phase
     if not non_interactive:
         console.rule("Initing")
@@ -184,6 +195,7 @@ def init(
             hooks_setup=hooks_setup,
             force=not non_interactive,
             provider_setup=provider_setup,
+            knowledge_setup=knowledge_setup,
         )
     else:
         _write_config(
@@ -197,8 +209,26 @@ def init(
             command_overrides=command_overrides,
             hooks_setup=hooks_setup,
             provider_setup=provider_setup,
+            knowledge_setup=knowledge_setup,
         )
         console.success(f"Created {config_path.name}")
+
+    # Create knowledge file if enabled
+    if knowledge_setup.get("enabled"):
+        from wade.models.config import KnowledgeConfig
+        from wade.services.knowledge_service import ensure_knowledge_file
+
+        kconfig = KnowledgeConfig(
+            enabled=True,
+            path=knowledge_setup.get("path", "KNOWLEDGE.md"),
+        )
+        kpath = root / kconfig.path
+        existed = kpath.exists()
+        ensure_knowledge_file(root, kconfig)
+        if existed:
+            console.info(f"Knowledge file {kpath.name} already exists")
+        else:
+            console.success(f"Created {kpath.name}")
 
     # 5. Update .gitignore
     _ensure_gitignore(root)
@@ -1258,6 +1288,43 @@ def _prompt_hooks_setup(
     return defaults
 
 
+def _prompt_knowledge_setup(
+    non_interactive: bool,
+) -> dict[str, Any]:
+    """Collect knowledge file settings — opt-in feature for cross-session learning.
+
+    Returns a dict with keys: enabled (bool), path (str).
+    """
+    from wade.ui import prompts
+
+    defaults: dict[str, Any] = {
+        "enabled": False,
+        "path": "KNOWLEDGE.md",
+    }
+
+    if non_interactive:
+        return defaults
+
+    console.rule("Project knowledge")
+
+    enabled = prompts.confirm(
+        "Enable project knowledge file for cross-session AI learning?", default=False
+    )
+    if not enabled:
+        return defaults
+
+    defaults["enabled"] = True
+    path = prompts.input_prompt(
+        "Knowledge file path",
+        default="KNOWLEDGE.md",
+        allow_empty=False,
+    )
+    if path.strip():
+        defaults["path"] = path.strip()
+
+    return defaults
+
+
 def _prompt_model_mapping(
     tool: str | None,
     mapping: ComplexityModelMapping,
@@ -1604,6 +1671,7 @@ def _write_config(
     command_overrides: dict[str, dict[str, str]] | None = None,
     hooks_setup: dict[str, Any] | None = None,
     provider_setup: dict[str, Any] | None = None,
+    knowledge_setup: dict[str, Any] | None = None,
 ) -> None:
     """Write a fresh .wade.yml config file."""
     config_dict: dict[str, Any] = {"version": 2}
@@ -1693,6 +1761,13 @@ def _write_config(
     hooks_dict["copy_to_worktree"] = copy_files
     config_dict["hooks"] = hooks_dict
 
+    # Build knowledge section
+    if knowledge_setup and knowledge_setup.get("enabled"):
+        config_dict["knowledge"] = {
+            "enabled": True,
+            "path": knowledge_setup.get("path", "KNOWLEDGE.md"),
+        }
+
     config_path.write_text(
         yaml.dump(config_dict, default_flow_style=False, sort_keys=False),
         encoding="utf-8",
@@ -1711,6 +1786,7 @@ def _patch_config(
     hooks_setup: dict[str, Any] | None = None,
     force: bool = False,
     provider_setup: dict[str, Any] | None = None,
+    knowledge_setup: dict[str, Any] | None = None,
 ) -> None:
     """Patch values into an existing config.
 
@@ -1897,6 +1973,18 @@ def _patch_config(
                 if existing_settings:
                     provider["settings"] = existing_settings
         raw["provider"] = provider
+
+    # Patch knowledge section
+    if knowledge_setup and knowledge_setup.get("enabled"):
+        knowledge = raw.get("knowledge") or {}
+        if force or not knowledge.get("enabled"):
+            knowledge["enabled"] = True
+            changed = True
+        k_path = knowledge_setup.get("path", "KNOWLEDGE.md")
+        if k_path and (force or not knowledge.get("path")):
+            knowledge["path"] = k_path
+            changed = True
+        raw["knowledge"] = knowledge
 
     if changed:
         config_path.write_text(

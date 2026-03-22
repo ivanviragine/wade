@@ -1,5 +1,7 @@
 Follow @.claude/skills/plan-session/SKILL.md for session rules.
 
+If a project knowledge file is configured (see `.wade.yml` → `knowledge`), read it for project context.
+
 # Goal
 
 Let's plan a feature. You'll plan the feature, break it down into one or more

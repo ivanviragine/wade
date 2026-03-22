@@ -4,6 +4,8 @@ If you cannot see the plan contents above, read the file `PLAN.md` in the root o
 
 Follow @.claude/skills/implementation-session/SKILL.md for session rules.
 
+If a project knowledge file is configured (see `.wade.yml` → `knowledge`), read it for project context.
+
 # Critical rules
 
 1. **First action**: run `wade implementation-session check` to verify you're in a worktree.
