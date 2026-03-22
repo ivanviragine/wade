@@ -166,11 +166,13 @@ def init(
 
     # If knowledge is enabled, add the knowledge path to copy_to_worktree
     if knowledge_setup.get("enabled"):
-        knowledge_path = knowledge_setup.get("path", "KNOWLEDGE.md")
-        copy_list_k: list[str] = hooks_setup.get("copy_to_worktree", [])
-        if knowledge_path not in copy_list_k:
-            copy_list_k.append(knowledge_path)
-        hooks_setup["copy_to_worktree"] = copy_list_k
+        knowledge_path: str = knowledge_setup.get("path", "KNOWLEDGE.md")
+        # Reject absolute or escaping paths
+        if not knowledge_path.startswith("/") and ".." not in knowledge_path.split("/"):
+            copy_list_k: list[str] = hooks_setup.get("copy_to_worktree", [])
+            if knowledge_path not in copy_list_k:
+                copy_list_k.append(knowledge_path)
+            hooks_setup["copy_to_worktree"] = copy_list_k
 
     # Write phase
     if not non_interactive:
@@ -218,8 +220,13 @@ def init(
             enabled=True,
             path=knowledge_setup.get("path", "KNOWLEDGE.md"),
         )
-        kpath = ensure_knowledge_file(root, kconfig)
-        console.success(f"Created {kpath.name}")
+        kpath = root / kconfig.path
+        existed = kpath.exists()
+        ensure_knowledge_file(root, kconfig)
+        if existed:
+            console.info(f"Knowledge file {kpath.name} already exists")
+        else:
+            console.success(f"Created {kpath.name}")
 
     # 5. Update .gitignore
     _ensure_gitignore(root)

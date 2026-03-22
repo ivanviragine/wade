@@ -34,17 +34,19 @@ dependency analysis hooks.
 
 ## Project Knowledge
 
-If `KNOWLEDGE.md` exists at the project root, read it at the start of this
-session for context from previous planning and implementation sessions.
+If the project knowledge file exists (check `.wade.yml` → `knowledge.path`,
+default: `KNOWLEDGE.md`), read it at the start of this session for context
+from previous planning and implementation sessions.
 
 Before running `wade plan-session done`, if knowledge capture is enabled
 (check `.wade.yml` → `knowledge.enabled`) and you discovered important project
 patterns, conventions, or gotchas during this session, capture them:
 
 ```bash
-echo "Your learnings here" | wade knowledge add --session plan --issue <number>
+echo "Your learnings here" | wade knowledge add --session plan
 ```
 
+The `--issue` flag is optional (issue numbers may not exist yet during planning).
 Running `wade knowledge add` is allowed even though this is a planning session.
 
 ## Your role

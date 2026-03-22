@@ -4,7 +4,7 @@ If you cannot see the plan contents above, read the file `PLAN.md` in the root o
 
 Follow @.claude/skills/implementation-session/SKILL.md for session rules.
 
-If KNOWLEDGE.md exists, read it for project context.
+If a project knowledge file is configured (see `.wade.yml` → `knowledge`), read it for project context.
 
 # Critical rules
 

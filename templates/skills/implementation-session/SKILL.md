@@ -32,8 +32,9 @@ dependency analysis hooks.
 
 ## Project Knowledge
 
-If `KNOWLEDGE.md` exists at the project root, read it at the start of this
-session for context from previous planning and implementation sessions.
+If the project knowledge file exists (check `.wade.yml` → `knowledge.path`,
+default: `KNOWLEDGE.md`), read it at the start of this session for context
+from previous planning and implementation sessions.
 
 Before writing `PR-SUMMARY.md`, if knowledge capture is enabled
 (check `.wade.yml` → `knowledge.enabled`) and you discovered important project
@@ -43,7 +44,7 @@ patterns, conventions, or gotchas during this session, capture them:
 echo "Your learnings here" | wade knowledge add --session implementation --issue <number>
 ```
 
-Then commit the updated `KNOWLEDGE.md` alongside your other changes.
+Then commit the updated knowledge file alongside your other changes.
 
 ## First action: check your context
 

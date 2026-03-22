@@ -1,6 +1,6 @@
 Follow @.claude/skills/plan-session/SKILL.md for session rules.
 
-If KNOWLEDGE.md exists, read it for project context.
+If a project knowledge file is configured (see `.wade.yml` → `knowledge`), read it for project context.
 
 # Goal
 

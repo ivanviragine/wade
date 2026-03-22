@@ -18,8 +18,17 @@ Read this at the start of every session. Add new entries via `wade knowledge add
 
 
 def resolve_knowledge_path(project_root: Path, config: KnowledgeConfig) -> Path:
-    """Resolve absolute path to the knowledge file from config."""
-    return project_root / config.path
+    """Resolve absolute path to the knowledge file from config.
+
+    Rejects absolute paths and paths that escape the project root via ``..``.
+    """
+    root = project_root.resolve()
+    resolved = (root / config.path).resolve()
+    if not resolved.is_relative_to(root):
+        raise ValueError(
+            f"Invalid knowledge path {config.path!r}: must be inside project root {root}"
+        )
+    return resolved
 
 
 def ensure_knowledge_file(project_root: Path, config: KnowledgeConfig) -> Path:
@@ -29,6 +38,7 @@ def ensure_knowledge_file(project_root: Path, config: KnowledgeConfig) -> Path:
     """
     path = resolve_knowledge_path(project_root, config)
     if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(KNOWLEDGE_TEMPLATE, encoding="utf-8")
     return path
 

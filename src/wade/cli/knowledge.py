@@ -10,6 +10,8 @@ knowledge_app = typer.Typer(
     help="Project knowledge management.",
 )
 
+VALID_SESSION_TYPES = ("plan", "implementation")
+
 
 @knowledge_app.command()
 def add(
@@ -22,6 +24,12 @@ def add(
     from wade.config.loader import load_config
     from wade.services.knowledge_service import append_knowledge
     from wade.ui.console import console
+
+    if session not in VALID_SESSION_TYPES:
+        console.error(
+            f"Invalid session type '{session}'. Must be one of: {', '.join(VALID_SESSION_TYPES)}"
+        )
+        raise typer.Exit(1)
 
     if sys.stdin.isatty():
         console.error("No content provided. Pipe content via stdin.")
@@ -38,7 +46,7 @@ def add(
         console.warn("Knowledge capture is not enabled. Run `wade init` to enable it.")
         raise typer.Exit(1)
 
-    project_root = Path.cwd()
+    project_root = Path(config.project_root) if config.project_root else Path.cwd()
     path = append_knowledge(
         project_root=project_root,
         config=config.knowledge,

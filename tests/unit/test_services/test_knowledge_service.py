@@ -36,6 +36,23 @@ class TestResolveKnowledgePath:
         assert result == project_root / "docs/LEARNINGS.md"
 
 
+class TestResolveKnowledgePathSecurity:
+    def test_rejects_absolute_path(self, project_root: Path) -> None:
+        config = KnowledgeConfig(enabled=True, path="/etc/passwd")
+        with pytest.raises(ValueError, match="must be inside project root"):
+            resolve_knowledge_path(project_root, config)
+
+    def test_rejects_path_traversal(self, project_root: Path) -> None:
+        config = KnowledgeConfig(enabled=True, path="../../etc/passwd")
+        with pytest.raises(ValueError, match="must be inside project root"):
+            resolve_knowledge_path(project_root, config)
+
+    def test_allows_nested_path(self, project_root: Path) -> None:
+        config = KnowledgeConfig(enabled=True, path="docs/LEARNINGS.md")
+        result = resolve_knowledge_path(project_root, config)
+        assert result == (project_root / "docs/LEARNINGS.md").resolve()
+
+
 class TestEnsureKnowledgeFile:
     def test_creates_file_with_template(self, project_root: Path, config: KnowledgeConfig) -> None:
         path = ensure_knowledge_file(project_root, config)
@@ -49,6 +66,12 @@ class TestEnsureKnowledgeFile:
 
         path = ensure_knowledge_file(project_root, config)
         assert path.read_text(encoding="utf-8") == existing_content
+
+    def test_creates_parent_directories(self, project_root: Path) -> None:
+        config = KnowledgeConfig(enabled=True, path="docs/LEARNINGS.md")
+        path = ensure_knowledge_file(project_root, config)
+        assert path.exists()
+        assert path.parent.name == "docs"
 
 
 class TestAppendKnowledge:

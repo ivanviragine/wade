@@ -97,6 +97,9 @@ class TestBlockedFiles:
         # Copilot/Cursor format (top-level)
         assert stdout_json["permission"] == "deny"
         assert stdout_json["permissionDecision"] == "deny"
+        # Gemini format (top-level)
+        assert stdout_json["decision"] == "deny"
+        assert "BLOCKED" in stdout_json["reason"]
 
 
 class TestToolStdinFormats:
