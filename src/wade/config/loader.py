@@ -174,9 +174,7 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
     )
 
     # Parse knowledge section
-    knowledge_raw = raw.get("knowledge", {}) or {}
-    if not isinstance(knowledge_raw, dict):
-        raise ValueError("knowledge must be a mapping")
+    knowledge_raw = _section_mapping(raw, "knowledge")
     knowledge = KnowledgeConfig(
         enabled=knowledge_raw.get("enabled", False),
         path=knowledge_raw.get("path", "KNOWLEDGE.md"),

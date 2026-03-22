@@ -238,6 +238,25 @@ class TestParseCommandConfig:
         assert config.ai.review_plan.enabled is None
 
 
+class TestKnowledgeConfig:
+    def test_knowledge_config_parsed(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nknowledge:\n  enabled: true\n  path: docs/KNOWLEDGE.md\n"
+        )
+
+        config = parse_config_file(config_path)
+        assert config.knowledge.enabled is True
+        assert config.knowledge.path == "docs/KNOWLEDGE.md"
+
+    def test_falsey_non_mapping_knowledge_rejected(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nknowledge: false\n")
+
+        with pytest.raises(ConfigError, match="knowledge must be a mapping"):
+            parse_config_file(config_path)
+
+
 class TestProviderSettings:
     """Tests that provider settings dict is parsed from config."""
 

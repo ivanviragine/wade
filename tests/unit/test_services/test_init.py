@@ -341,6 +341,36 @@ class TestInit:
         config = yaml.safe_load((tmp_git_repo / ".wade.yml").read_text())
         assert config["project"]["main_branch"] == "main"
 
+    @patch(
+        "wade.services.init_service._prompt_knowledge_setup",
+        return_value={"enabled": True, "path": "docs/KNOWLEDGE.md"},
+    )
+    def test_init_with_knowledge_enabled_creates_file_and_config(
+        self, _mock_knowledge: MagicMock, tmp_git_repo: Path
+    ) -> None:
+        success = init(project_root=tmp_git_repo, non_interactive=True)
+        assert success
+
+        config = yaml.safe_load((tmp_git_repo / ".wade.yml").read_text())
+        assert config["knowledge"] == {"enabled": True, "path": "docs/KNOWLEDGE.md"}
+        assert "docs/KNOWLEDGE.md" in config["hooks"]["copy_to_worktree"]
+
+        knowledge_path = tmp_git_repo / "docs" / "KNOWLEDGE.md"
+        assert knowledge_path.exists()
+        assert knowledge_path.read_text(encoding="utf-8").startswith("# Project Knowledge")
+
+    @patch(
+        "wade.services.init_service._prompt_knowledge_setup",
+        return_value={"enabled": True, "path": "../KNOWLEDGE.md"},
+    )
+    def test_init_rejects_invalid_knowledge_path_before_writing_config(
+        self, _mock_knowledge: MagicMock, tmp_git_repo: Path
+    ) -> None:
+        success = init(project_root=tmp_git_repo, non_interactive=True)
+        assert not success
+        assert not (tmp_git_repo / ".wade.yml").exists()
+        assert not (tmp_git_repo.parent / "KNOWLEDGE.md").exists()
+
 
 # ---------------------------------------------------------------------------
 # _select_ai_tool tests

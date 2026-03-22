@@ -47,3 +47,19 @@ class TestCheckConfig:
         result = runner.invoke(app, ["check-config"])
         assert result.exit_code == 1
         assert "CONFIG_NOT_FOUND" in result.output
+
+    def test_valid_knowledge_config(
+        self, tmp_wade_project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """check-config should accept the knowledge section when it is valid."""
+        config_path = tmp_wade_project / ".wade.yml"
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8")
+            + "knowledge:\n  enabled: true\n  path: docs/KNOWLEDGE.md\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.chdir(tmp_wade_project)
+        result = runner.invoke(app, ["check-config"])
+        assert result.exit_code == 0
+        assert "VALID_CONFIG" in result.output

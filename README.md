@@ -134,6 +134,7 @@ wade 42
 | `wade update` | Upgrade WADE and refresh project files |
 | `wade deinit` | Remove WADE from the current project |
 | `wade check-config` | Validate `.wade.yml` configuration |
+| `wade knowledge add` | Append a project learning from stdin |
 
 Short aliases: `wade p` (plan), `wade i <N>` (implement), `wade r <N>` (review pr-comments).
 

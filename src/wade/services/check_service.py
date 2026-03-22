@@ -303,8 +303,25 @@ def _validate_config_file(config_path: Path) -> list[str]:
         else:
             _validate_hooks_section(hooks, errors)
 
+    # Validate knowledge section
+    knowledge = raw.get("knowledge")
+    if knowledge is not None:
+        if not isinstance(knowledge, dict):
+            errors.append("knowledge: must be a mapping")
+        else:
+            _validate_knowledge_section(knowledge, config_path, errors)
+
     # Check for unsupported top-level keys
-    supported_keys = {"version", "project", "ai", "models", "provider", "permissions", "hooks"}
+    supported_keys = {
+        "version",
+        "project",
+        "ai",
+        "models",
+        "provider",
+        "permissions",
+        "hooks",
+        "knowledge",
+    }
     for key in raw:
         if key not in supported_keys:
             errors.append(
@@ -529,3 +546,31 @@ def _validate_hooks_section(hooks: dict[str, Any], errors: list[str]) -> None:
     for key in hooks:
         if key not in valid_keys:
             errors.append(f"hooks.{key}: unsupported key")
+
+
+def _validate_knowledge_section(
+    knowledge: dict[str, Any], config_path: Path, errors: list[str]
+) -> None:
+    """Validate the project knowledge section."""
+    enabled = knowledge.get("enabled")
+    if enabled is not None and not isinstance(enabled, bool):
+        errors.append("knowledge.enabled: must be true or false")
+
+    path_value = knowledge.get("path")
+    if path_value is not None:
+        if not isinstance(path_value, str) or not path_value.strip():
+            errors.append("knowledge.path: must be a non-empty relative path")
+        else:
+            root = config_path.parent.resolve()
+            candidate = Path(path_value)
+            if candidate.is_absolute():
+                errors.append("knowledge.path: must be inside the project root")
+            else:
+                resolved = (root / path_value).resolve()
+                if not resolved.is_relative_to(root):
+                    errors.append("knowledge.path: must be inside the project root")
+
+    valid_keys = {"enabled", "path"}
+    for key in knowledge:
+        if key not in valid_keys:
+            errors.append(f"knowledge.{key}: unsupported key")

@@ -47,11 +47,18 @@ def add(
         raise typer.Exit(1)
 
     project_root = Path(config.project_root) if config.project_root else Path.cwd()
-    path = append_knowledge(
-        project_root=project_root,
-        config=config.knowledge,
-        content=content,
-        session_type=session,
-        issue_ref=issue,
-    )
+    try:
+        path = append_knowledge(
+            project_root=project_root,
+            config=config.knowledge,
+            content=content,
+            session_type=session,
+            issue_ref=issue,
+        )
+    except ValueError as exc:
+        console.error_with_fix(
+            str(exc),
+            "Update .wade.yml so knowledge.path points to a file inside the current project",
+        )
+        raise typer.Exit(1) from exc
     console.success(f"Knowledge entry added to {path.name}")

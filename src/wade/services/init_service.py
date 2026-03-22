@@ -23,6 +23,7 @@ from wade.models.ai import AIToolID
 from wade.models.config import (
     AI_COMMAND_NAMES,
     ComplexityModelMapping,
+    KnowledgeConfig,
 )
 from wade.skills import installer, pointer
 from wade.skills.installer import get_wade_repo_root
@@ -129,6 +130,10 @@ def init(
     project_settings = _prompt_project_settings(root, non_interactive)
     hooks_setup = _prompt_hooks_setup(non_interactive)
     knowledge_setup = _prompt_knowledge_setup(non_interactive)
+    normalized_knowledge_setup = _normalize_knowledge_setup(root, knowledge_setup)
+    if normalized_knowledge_setup is None:
+        return False
+    knowledge_setup = normalized_knowledge_setup
 
     # If provider setup requested adding .env to copy_to_worktree, inject it
     if provider_setup.get("add_env_to_copy"):
@@ -169,12 +174,10 @@ def init(
     # If knowledge is enabled, add the knowledge path to copy_to_worktree
     if knowledge_setup.get("enabled"):
         knowledge_path: str = knowledge_setup.get("path", "KNOWLEDGE.md")
-        # Reject absolute or escaping paths
-        if not knowledge_path.startswith("/") and ".." not in knowledge_path.split("/"):
-            copy_list_k: list[str] = hooks_setup.get("copy_to_worktree", [])
-            if knowledge_path not in copy_list_k:
-                copy_list_k.append(knowledge_path)
-            hooks_setup["copy_to_worktree"] = copy_list_k
+        copy_list_k: list[str] = hooks_setup.get("copy_to_worktree", [])
+        if knowledge_path not in copy_list_k:
+            copy_list_k.append(knowledge_path)
+        hooks_setup["copy_to_worktree"] = copy_list_k
 
     # Write phase
     if not non_interactive:
@@ -215,7 +218,6 @@ def init(
 
     # Create knowledge file if enabled
     if knowledge_setup.get("enabled"):
-        from wade.models.config import KnowledgeConfig
         from wade.services.knowledge_service import ensure_knowledge_file
 
         kconfig = KnowledgeConfig(
@@ -1323,6 +1325,36 @@ def _prompt_knowledge_setup(
         defaults["path"] = path.strip()
 
     return defaults
+
+
+def _normalize_knowledge_setup(
+    project_root: Path,
+    knowledge_setup: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Validate and canonicalize knowledge config before writing config."""
+    if not knowledge_setup.get("enabled"):
+        return knowledge_setup
+
+    from wade.services.knowledge_service import resolve_knowledge_path
+
+    path_value = str(knowledge_setup.get("path", "KNOWLEDGE.md")).strip() or "KNOWLEDGE.md"
+    try:
+        resolved = resolve_knowledge_path(
+            project_root,
+            KnowledgeConfig(enabled=True, path=path_value),
+        )
+    except ValueError as exc:
+        console.error_with_fix(
+            str(exc),
+            "Use a relative file path inside the repository, for example "
+            "KNOWLEDGE.md or docs/KNOWLEDGE.md",
+        )
+        return None
+
+    normalized = resolved.relative_to(project_root.resolve()).as_posix()
+    normalized_setup = dict(knowledge_setup)
+    normalized_setup["path"] = normalized
+    return normalized_setup
 
 
 def _prompt_model_mapping(
