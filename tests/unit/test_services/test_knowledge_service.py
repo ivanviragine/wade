@@ -28,7 +28,7 @@ def config() -> KnowledgeConfig:
 class TestResolveKnowledgePath:
     def test_default_path(self, project_root: Path, config: KnowledgeConfig) -> None:
         result = resolve_knowledge_path(project_root, config)
-        assert result == project_root / "KNOWLEDGE.md"
+        assert result == (project_root / "KNOWLEDGE.md").resolve()
 
     def test_custom_path(self, project_root: Path) -> None:
         config = KnowledgeConfig(enabled=True, path="docs/LEARNINGS.md")
