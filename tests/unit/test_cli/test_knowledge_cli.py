@@ -45,6 +45,17 @@ class TestKnowledgeGetCommand:
             result = runner.invoke(app, ["knowledge", "get"])
         assert result.exit_code == 1
 
+    def test_exits_1_when_path_is_directory(self, tmp_path: Path) -> None:
+        (tmp_path / "somedir").mkdir()
+        config = ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=True, path="somedir"),
+        )
+        with patch("wade.config.loader.load_config", return_value=config):
+            result = runner.invoke(app, ["knowledge", "get"])
+        assert result.exit_code == 1
+        assert "directory" in result.output.lower()
+
     def test_help_shows_get_command(self) -> None:
         result = runner.invoke(app, ["knowledge", "--help"])
         assert result.exit_code == 0

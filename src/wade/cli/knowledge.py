@@ -78,5 +78,9 @@ def get() -> None:
         print("No knowledge file found.", file=sys.stderr)
         raise typer.Exit(0)
 
-    content = read_knowledge(project_root, config.knowledge)
+    try:
+        content = read_knowledge(project_root, config.knowledge)
+    except ValueError as exc:
+        console.error(str(exc))
+        raise typer.Exit(1) from exc
     console.raw(content)
