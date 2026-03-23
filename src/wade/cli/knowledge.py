@@ -63,7 +63,7 @@ def get() -> None:
     from pathlib import Path
 
     from wade.config.loader import load_config
-    from wade.services.knowledge_service import read_knowledge, resolve_knowledge_path
+    from wade.services.knowledge_service import read_knowledge
     from wade.ui.console import console
 
     config = load_config()
@@ -73,12 +73,11 @@ def get() -> None:
 
     project_root = Path(config.project_root) if config.project_root else Path.cwd()
     try:
-        path = resolve_knowledge_path(project_root, config.knowledge)
-        if not path.exists():
-            print("No knowledge file found.", file=sys.stderr)
-            raise typer.Exit(0)
         content = read_knowledge(project_root, config.knowledge)
-    except ValueError as exc:
+    except (ValueError, OSError) as exc:
         console.error(str(exc))
         raise typer.Exit(1) from exc
+    if not content:
+        print("No knowledge file found.", file=sys.stderr)
+        raise typer.Exit(0)
     console.raw(content)

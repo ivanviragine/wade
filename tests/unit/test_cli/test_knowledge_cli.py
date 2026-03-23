@@ -56,6 +56,22 @@ class TestKnowledgeGetCommand:
         assert result.exit_code == 1
         assert "directory" in result.output.lower()
 
+    def test_exits_1_on_os_error(self, tmp_path: Path) -> None:
+        config = ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
+        )
+        with (
+            patch("wade.config.loader.load_config", return_value=config),
+            patch(
+                "wade.services.knowledge_service.read_knowledge",
+                side_effect=OSError("Permission denied"),
+            ),
+        ):
+            result = runner.invoke(app, ["knowledge", "get"])
+        assert result.exit_code == 1
+        assert "Permission denied" in result.output
+
     def test_help_shows_get_command(self) -> None:
         result = runner.invoke(app, ["knowledge", "--help"])
         assert result.exit_code == 0
