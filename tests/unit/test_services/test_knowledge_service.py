@@ -11,6 +11,7 @@ from wade.services.knowledge_service import (
     KNOWLEDGE_TEMPLATE,
     append_knowledge,
     ensure_knowledge_file,
+    read_knowledge,
     resolve_knowledge_path,
 )
 
@@ -78,6 +79,32 @@ class TestEnsureKnowledgeFile:
         config = KnowledgeConfig(enabled=True, path="somedir")
         with pytest.raises(ValueError, match="points to a directory"):
             ensure_knowledge_file(project_root, config)
+
+
+class TestReadKnowledge:
+    def test_returns_content_when_file_exists(
+        self, project_root: Path, config: KnowledgeConfig
+    ) -> None:
+        content = "# Knowledge\n\nSome content.\n"
+        (project_root / "KNOWLEDGE.md").write_text(content, encoding="utf-8")
+        assert read_knowledge(project_root, config) == content
+
+    def test_returns_empty_string_when_file_missing(
+        self, project_root: Path, config: KnowledgeConfig
+    ) -> None:
+        assert read_knowledge(project_root, config) == ""
+
+    def test_does_not_create_file_when_missing(
+        self, project_root: Path, config: KnowledgeConfig
+    ) -> None:
+        read_knowledge(project_root, config)
+        assert not (project_root / "KNOWLEDGE.md").exists()
+
+    def test_reads_from_custom_path(self, project_root: Path) -> None:
+        config = KnowledgeConfig(enabled=True, path="docs/LEARNINGS.md")
+        (project_root / "docs").mkdir()
+        (project_root / "docs" / "LEARNINGS.md").write_text("# Learnings\n", encoding="utf-8")
+        assert read_knowledge(project_root, config) == "# Learnings\n"
 
 
 class TestAppendKnowledge:

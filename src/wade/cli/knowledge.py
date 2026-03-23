@@ -1,4 +1,4 @@
-"""Knowledge subcommands — add project learnings."""
+"""Knowledge subcommands — add and read project learnings."""
 
 from __future__ import annotations
 
@@ -55,3 +55,28 @@ def add(
         issue_ref=issue,
     )
     console.success(f"Knowledge entry added to {path.name}")
+
+
+@knowledge_app.command()
+def get() -> None:
+    """Print the project knowledge file to stdout."""
+    from pathlib import Path
+
+    from wade.config.loader import load_config
+    from wade.services.knowledge_service import read_knowledge, resolve_knowledge_path
+    from wade.ui.console import console
+
+    config = load_config()
+    if not config.knowledge.enabled:
+        console.error("Knowledge capture is not enabled. Run `wade init` to enable it.")
+        raise typer.Exit(1)
+
+    project_root = Path(config.project_root) if config.project_root else Path.cwd()
+    path = resolve_knowledge_path(project_root, config.knowledge)
+
+    if not path.exists():
+        print("No knowledge file found.", file=sys.stderr)
+        raise typer.Exit(0)
+
+    content = read_knowledge(project_root, config.knowledge)
+    console.raw(content)

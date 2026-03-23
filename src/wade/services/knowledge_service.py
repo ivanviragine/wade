@@ -47,6 +47,18 @@ def ensure_knowledge_file(project_root: Path, config: KnowledgeConfig) -> Path:
     return path
 
 
+def read_knowledge(project_root: Path, config: KnowledgeConfig) -> str:
+    """Read and return the project knowledge file content.
+
+    Returns empty string if the file does not exist.
+    Does not create the file.
+    """
+    path = resolve_knowledge_path(project_root, config)
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8")
+
+
 def append_knowledge(
     project_root: Path,
     config: KnowledgeConfig,

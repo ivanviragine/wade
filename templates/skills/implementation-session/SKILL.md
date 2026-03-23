@@ -32,9 +32,9 @@ dependency analysis hooks.
 
 ## Project Knowledge
 
-If the project knowledge file exists (check `.wade.yml` → `knowledge.path`,
-default: `KNOWLEDGE.md`), read it at the start of this session for context
-from previous planning and implementation sessions.
+Run `wade knowledge get` at the start of this session to read project context
+from previous planning and implementation sessions. If knowledge is disabled
+or the file doesn't exist, the command exits cleanly (exit 0, no stdout output).
 
 Before writing `PR-SUMMARY.md`, if knowledge capture is enabled
 (check `.wade.yml` → `knowledge.enabled`) and you discovered important project
