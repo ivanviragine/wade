@@ -54,3 +54,36 @@ class TestKnowledgeAdd:
         assert result.exit_code == 1
         assert "must be inside project root" in result.output
         assert not (tmp_wade_project.parent / "escape.md").exists()
+
+    def test_add_rejects_invalid_session_type(
+        self, tmp_wade_project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config_path = tmp_wade_project / ".wade.yml"
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        config["knowledge"] = {"enabled": True, "path": "KNOWLEDGE.md"}
+        config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+
+        monkeypatch.chdir(tmp_wade_project)
+        result = runner.invoke(
+            app,
+            ["knowledge", "add", "--session", "review"],
+            input="This should not be accepted.\n",
+        )
+
+        assert result.exit_code == 1
+        assert "Invalid session type" in result.output
+        assert not (tmp_wade_project / "KNOWLEDGE.md").exists()
+
+    def test_add_requires_knowledge_enabled(
+        self, tmp_wade_project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_wade_project)
+        result = runner.invoke(
+            app,
+            ["knowledge", "add", "--session", "plan"],
+            input="This should be blocked until knowledge is enabled.\n",
+        )
+
+        assert result.exit_code == 1
+        assert "Knowledge capture is not enabled" in result.output
+        assert not (tmp_wade_project / "KNOWLEDGE.md").exists()

@@ -32,6 +32,7 @@ class TestHelp:
         assert "wade" in result.output
         assert "task" in result.output
         assert "worktree" in result.output
+        assert "knowledge" in result.output
 
     def test_task_help(self) -> None:
         result = runner.invoke(app, ["task", "--help"])
@@ -49,6 +50,11 @@ class TestHelp:
         assert result.exit_code == 0
         assert "list" in result.output
         assert "remove" in result.output
+
+    def test_knowledge_help(self) -> None:
+        result = runner.invoke(app, ["knowledge", "--help"])
+        assert result.exit_code == 0
+        assert "add" in result.output
 
     def test_implementation_session_help(self) -> None:
         result = runner.invoke(app, ["implementation-session", "--help"])
