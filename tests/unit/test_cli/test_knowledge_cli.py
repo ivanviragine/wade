@@ -34,6 +34,7 @@ class TestKnowledgeGetCommand:
         with patch("wade.config.loader.load_config", return_value=config):
             result = runner.invoke(app, ["knowledge", "get"])
         assert result.exit_code == 0
+        assert "No knowledge file found." in result.output
 
     def test_exits_1_when_disabled(self, tmp_path: Path) -> None:
         config = ProjectConfig(

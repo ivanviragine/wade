@@ -100,6 +100,12 @@ class TestReadKnowledge:
         read_knowledge(project_root, config)
         assert not (project_root / "KNOWLEDGE.md").exists()
 
+    def test_raises_when_path_is_directory(self, project_root: Path) -> None:
+        (project_root / "somedir").mkdir()
+        config = KnowledgeConfig(enabled=True, path="somedir")
+        with pytest.raises(ValueError, match="points to a directory"):
+            read_knowledge(project_root, config)
+
     def test_reads_from_custom_path(self, project_root: Path) -> None:
         config = KnowledgeConfig(enabled=True, path="docs/LEARNINGS.md")
         (project_root / "docs").mkdir()

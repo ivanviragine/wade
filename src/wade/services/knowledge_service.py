@@ -56,6 +56,8 @@ def read_knowledge(project_root: Path, config: KnowledgeConfig) -> str:
     path = resolve_knowledge_path(project_root, config)
     if not path.exists():
         return ""
+    if path.is_dir():
+        raise ValueError(f"Knowledge path {config.path!r} points to a directory, not a file")
     return path.read_text(encoding="utf-8")
 
 
