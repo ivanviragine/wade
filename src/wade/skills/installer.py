@@ -101,6 +101,29 @@ IMPLEMENT_SKILLS: list[str] = ["implementation-session", "task"]
 REVIEW_SKILLS: list[str] = ["review-pr-comments-session", "task"]
 
 
+def get_managed_gitignore_patterns(project_root: Path) -> list[str]:
+    """Compute gitignore patterns for wade-managed skill directories and cross-tool dirs.
+
+    Returns patterns that should be added to the managed gitignore block:
+    - ``.claude/skills/<name>/`` for every name in ``MANAGED_SKILL_NAMES``
+    - Each ``CROSS_TOOL_DIRS`` entry, but only if it is a symlink or does not
+      exist yet (real user directories are left alone).
+    """
+    patterns: list[str] = []
+
+    # All managed skill directories (current + legacy)
+    for name in sorted(MANAGED_SKILL_NAMES):
+        patterns.append(f".claude/skills/{name}/")
+
+    # Cross-tool symlink dirs — only if symlink or absent
+    for cross_dir in CROSS_TOOL_DIRS:
+        cross_path = project_root / cross_dir
+        if cross_path.is_symlink() or not cross_path.exists():
+            patterns.append(cross_dir)
+
+    return patterns
+
+
 def install_skills(
     project_root: Path,
     is_self_init: bool = False,

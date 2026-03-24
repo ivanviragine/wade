@@ -243,6 +243,15 @@ create a GitHub Issue from it:
 3. List the created issues and show `wade implement <number>` as a hint.
    Do **not** run the command yourself — the human starts work sessions.
 
+## Wade-managed skills
+
+The following skill directories under `.claude/skills/` are **managed by wade**
+and must not be modified, committed, or deleted:
+`plan-session`, `implementation-session`, `review-pr-comments-session`, `task`, `deps`.
+
+These are installed per-session in worktrees by wade and are already gitignored.
+User-created custom skills under `.claude/skills/` are not affected.
+
 ## Skills reference
 
 - **About to create GitHub Issues** → read @.claude/skills/task/SKILL.md first

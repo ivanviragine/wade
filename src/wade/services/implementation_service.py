@@ -164,6 +164,44 @@ def _format_uncommitted_summary(cwd: Path) -> str:
     return ", ".join(parts) if parts else "dirty"
 
 
+def _check_tracked_managed_files(cwd: Path) -> list[str]:
+    """Return tracked wade-managed files that should not be committed.
+
+    Checks for:
+    - Skill directories from ``MANAGED_SKILL_NAMES``
+    - Cross-tool symlink directories
+    - The wade-generated plan_write_guard.py hook
+    """
+    from wade.skills.installer import CROSS_TOOL_DIRS, MANAGED_SKILL_NAMES
+
+    # Build path prefixes to check against git index
+    prefixes: list[str] = []
+    for name in MANAGED_SKILL_NAMES:
+        prefixes.append(f".claude/skills/{name}/")
+    for cross_dir in CROSS_TOOL_DIRS:
+        prefixes.append(f"{cross_dir}/")
+    prefixes.append(".claude/hooks/plan_write_guard.py")
+
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "--cached"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return []
+
+    tracked: list[str] = []
+    for line in result.stdout.splitlines():
+        path = line.strip()
+        if any(path.startswith(p) or path == p for p in prefixes):
+            tracked.append(path)
+
+    return sorted(tracked)
+
+
 def write_plan_md(
     worktree_path: Path,
     task: Task,
@@ -2294,6 +2332,18 @@ def done(
             "Commit or stash your changes first",
             "git stash",
         )
+        return False
+
+    # Check for tracked wade-managed files that should never be committed
+    tracked_managed = _check_tracked_managed_files(cwd)
+    if tracked_managed:
+        console.error("Wade-managed files are tracked in git — these must not be committed")
+        for path in tracked_managed:
+            console.detail(f"  {path}")
+        console.info("Untrack them with:")
+        for path in tracked_managed:
+            console.detail(f"  git rm --cached {path}")
+        console.info("Then commit the removal and re-run done.")
         return False
 
     main_branch = config.project.main_branch
