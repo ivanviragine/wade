@@ -405,13 +405,13 @@ class TestGetAnnotatedKnowledge:
     ) -> None:
         assert get_annotated_knowledge(project_root, config) is None
 
-    def test_returns_unmodified_when_no_ratings(
+    def test_annotates_id_backed_entries_with_zero_scores(
         self, project_root: Path, config: KnowledgeConfig
     ) -> None:
         self._make_knowledge_file(project_root)
         result = get_annotated_knowledge(project_root, config)
         assert result is not None
-        assert "[+" not in result
+        assert result.count("[+0/-0]") == 2
         assert "Useful content." in result
         assert "Outdated content." in result
 

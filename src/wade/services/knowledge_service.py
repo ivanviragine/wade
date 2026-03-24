@@ -175,6 +175,8 @@ def read_ratings(ratings_path: Path) -> dict[str, EntryRating]:
     """
     if not ratings_path.exists():
         return {}
+    if ratings_path.is_dir():
+        raise ValueError(f"Ratings path {ratings_path!s} points to a directory, not a file")
     fd = ratings_path.open("r", encoding="utf-8")
     try:
         fcntl.flock(fd, fcntl.LOCK_SH)
@@ -199,6 +201,8 @@ def _read_modify_write_ratings(
     ``modify_fn`` receives the current ratings dict and mutates it in place.
     """
     ratings_path.parent.mkdir(parents=True, exist_ok=True)
+    if ratings_path.exists() and ratings_path.is_dir():
+        raise ValueError(f"Ratings path {ratings_path!s} points to a directory, not a file")
     # Open for read+write, creating if needed
     with ratings_path.open("a+", encoding="utf-8") as fd:
         fcntl.flock(fd, fcntl.LOCK_EX)
@@ -295,7 +299,7 @@ def get_annotated_knowledge(
         up = entry_rating.up if entry_rating else 0
         down = entry_rating.down if entry_rating else 0
         net_score = up - down
-        has_ratings = entry_rating is not None and (entry_rating.up > 0 or entry_rating.down > 0)
+        should_annotate = entry.entry_id is not None
 
         # Apply min_score filter
         if min_score is not None and net_score < min_score:
@@ -303,7 +307,7 @@ def get_annotated_knowledge(
 
         # Re-build the heading with score annotation
         heading_match = _ENTRY_HEADING_RE.match(entry.raw.split("\n")[0])
-        if heading_match and has_ratings:
+        if heading_match and should_annotate:
             id_part = f"{entry.entry_id} | " if entry.entry_id else ""
             heading = f"## {id_part}{entry.date} | {entry.heading_rest} [+{up}/-{down}]"
             raw_lines = entry.raw.split("\n")
