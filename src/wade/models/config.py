@@ -75,6 +75,7 @@ class AICommandConfig(BaseModel):
     mode: str | None = None
     yolo: bool | None = None
     enabled: bool | None = None
+    timeout: int | None = None
 
 
 AI_COMMAND_NAMES: tuple[str, ...] = (

@@ -120,6 +120,19 @@ class TestValidateConfig:
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("ai.plan.tool" in e for e in result.errors)
 
+    def test_valid_command_timeout(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nai:\n  review_plan:\n    timeout: 300\n")
+        result = validate_config(tmp_path)
+        assert result.is_valid, f"Errors: {result.errors}"
+
+    def test_invalid_command_timeout(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nai:\n  review_plan:\n    timeout: 0\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("ai.review_plan.timeout" in e for e in result.errors)
+
     def test_unsupported_top_level_key(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"
         config.write_text("version: 2\nunknown_key: value\n")

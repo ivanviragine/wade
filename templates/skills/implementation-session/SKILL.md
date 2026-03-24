@@ -37,12 +37,23 @@ from previous planning and implementation sessions.
 - If knowledge is disabled, it exits with code 1.
 - If the file doesn't exist, it exits with code 0 and prints an informational message to stderr.
 
+After reading knowledge entries, rate entries that were useful or unhelpful:
+```bash
+wade knowledge rate <entry-id> up    # entry was useful
+wade knowledge rate <entry-id> down  # entry was outdated or misleading
+```
+
 Before writing `PR-SUMMARY.md`, if knowledge capture is enabled
 (check `.wade.yml` → `knowledge.enabled`) and you discovered important project
 patterns, conventions, or gotchas during this session, capture them:
 
 ```bash
 echo "Your learnings here" | wade knowledge add --session implementation --issue <number>
+```
+
+If a new entry corrects or replaces an existing one, use `--supersedes`:
+```bash
+echo "Corrected info" | wade knowledge add --session implementation --issue <number> --supersedes <old-entry-id>
 ```
 
 Then commit the updated knowledge file alongside your other changes.

@@ -415,7 +415,7 @@ def _validate_ai_section(ai: dict[str, Any], errors: list[str]) -> None:
 
 def _validate_ai_command_section(cmd: str, cmd_section: dict[str, Any], errors: list[str]) -> None:
     """Validate one per-command AI config subsection."""
-    valid_keys = {"tool", "model", "mode", "effort", "enabled", "yolo"}
+    valid_keys = {"tool", "model", "mode", "effort", "enabled", "yolo", "timeout"}
 
     tool = cmd_section.get("tool")
     if tool is not None and str(tool) and str(tool) not in _VALID_AI_TOOLS:
@@ -444,6 +444,12 @@ def _validate_ai_command_section(cmd: str, cmd_section: dict[str, Any], errors: 
     yolo = cmd_section.get("yolo")
     if yolo is not None and not isinstance(yolo, bool):
         errors.append(f"ai.{cmd}.yolo: must be true or false")
+
+    timeout = cmd_section.get("timeout")
+    if timeout is not None and (
+        isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0
+    ):
+        errors.append(f"ai.{cmd}.timeout: must be a positive integer")
 
     for key in cmd_section:
         if key not in valid_keys:

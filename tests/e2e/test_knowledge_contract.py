@@ -39,7 +39,8 @@ class TestKnowledgeCommands:
         )
 
         assert result.returncode == 0
-        assert "Knowledge entry added to KNOWLEDGE.md" in result.stdout
+        assert "Knowledge entry " in result.stdout
+        assert " added to KNOWLEDGE.md" in result.stdout
         knowledge_path = e2e_repo / "docs" / "KNOWLEDGE.md"
         assert knowledge_path.exists()
         knowledge_text = knowledge_path.read_text(encoding="utf-8")
@@ -79,3 +80,36 @@ class TestKnowledgeCommands:
         assert result.returncode == 1
         assert result.stdout == ""
         assert "Knowledge capture is not enabled" in result.stderr
+
+    def test_knowledge_rate_updates_sidecar_file(self, e2e_repo: Path) -> None:
+        """knowledge rate should update the sidecar ratings file for an existing entry."""
+        _write_knowledge_config(e2e_repo)
+        knowledge_path = e2e_repo / "docs" / "KNOWLEDGE.md"
+        knowledge_path.parent.mkdir(parents=True, exist_ok=True)
+        knowledge_path.write_text(
+            (
+                "# Project Knowledge\n\n---\n\n## a1b2c3d4 | 2026-03-24 | plan\n\n"
+                "Prefer labels.\n\n---\n"
+            ),
+            encoding="utf-8",
+        )
+
+        result = _run(["knowledge", "rate", "a1b2c3d4", "up"], cwd=e2e_repo)
+
+        assert result.returncode == 0
+        ratings_text = (e2e_repo / "docs" / "KNOWLEDGE.ratings.yml").read_text(encoding="utf-8")
+        assert "a1b2c3d4:" in ratings_text
+        assert "up: 1" in ratings_text
+
+    def test_knowledge_rate_invalid_path_exits_cleanly(self, e2e_repo: Path) -> None:
+        """knowledge rate should fail cleanly for configured paths outside the repo."""
+        _write_knowledge_config(e2e_repo, path="../escape.md")
+
+        result = _run(["knowledge", "rate", "a1b2c3d4", "up"], cwd=e2e_repo)
+
+        assert result.returncode == 1
+        assert (
+            "Update .wade.yml so knowledge.path points to a file inside the current"
+            in result.stdout
+        )
+        assert "must be inside project root" in result.stderr

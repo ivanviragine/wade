@@ -139,3 +139,35 @@ class TestKnowledgeGet:
 
         assert result.exit_code == 1
         assert "must be inside project root" in result.output
+
+
+class TestKnowledgeRate:
+    def test_rate_updates_sidecar_file(
+        self, tmp_wade_project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _write_knowledge_config(tmp_wade_project)
+        (tmp_wade_project / "KNOWLEDGE.md").write_text(
+            (
+                "# Project Knowledge\n\n---\n\n## a1b2c3d4 | 2026-03-24 | plan\n\n"
+                "Prefer labels.\n\n---\n"
+            ),
+            encoding="utf-8",
+        )
+
+        monkeypatch.chdir(tmp_wade_project)
+        result = runner.invoke(app, ["knowledge", "rate", "a1b2c3d4", "up"])
+
+        assert result.exit_code == 0
+        ratings = yaml.safe_load((tmp_wade_project / "KNOWLEDGE.ratings.yml").read_text())
+        assert ratings["a1b2c3d4"]["up"] == 1
+
+    def test_rate_invalid_path_exits_cleanly(
+        self, tmp_wade_project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _write_knowledge_config(tmp_wade_project, path="../escape.md")
+
+        monkeypatch.chdir(tmp_wade_project)
+        result = runner.invoke(app, ["knowledge", "rate", "a1b2c3d4", "up"])
+
+        assert result.exit_code == 1
+        assert "must be inside project root" in result.output

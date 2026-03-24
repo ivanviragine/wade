@@ -171,12 +171,16 @@ def init(
     _prompt_configure_shell_integration(non_interactive)
     _prompt_configure_completions(non_interactive)
 
-    # If knowledge is enabled, add the knowledge path to copy_to_worktree
+    # If knowledge is enabled, add the knowledge + ratings paths to copy_to_worktree.
     if knowledge_setup.get("enabled"):
+        from wade.services.knowledge_service import resolve_ratings_path
+
         knowledge_path: str = knowledge_setup.get("path", "KNOWLEDGE.md")
         copy_list_k: list[str] = hooks_setup.get("copy_to_worktree", [])
-        if knowledge_path not in copy_list_k:
-            copy_list_k.append(knowledge_path)
+        ratings_path = str(resolve_ratings_path(Path(knowledge_path)))
+        for managed_path in (knowledge_path, ratings_path):
+            if managed_path not in copy_list_k:
+                copy_list_k.append(managed_path)
         hooks_setup["copy_to_worktree"] = copy_list_k
 
     # Write phase
@@ -1783,14 +1787,13 @@ def _write_config(
             provider_dict["settings"] = provider_setup["settings"]
     config_dict["provider"] = provider_dict
 
-    # Build hooks section — always include .wade.yml in copy_to_worktree
+    # Build hooks section (internal files like .wade.yml are auto-copied at runtime)
     hooks_dict: dict[str, Any] = {}
     if hooks_setup and hooks_setup.get("post_worktree_create"):
         hooks_dict["post_worktree_create"] = hooks_setup["post_worktree_create"]
     copy_files: list[str] = list(hooks_setup.get("copy_to_worktree", [])) if hooks_setup else []
-    if ".wade.yml" not in copy_files:
-        copy_files.append(".wade.yml")
-    hooks_dict["copy_to_worktree"] = copy_files
+    if copy_files:
+        hooks_dict["copy_to_worktree"] = copy_files
     config_dict["hooks"] = hooks_dict
 
     # Build knowledge section
@@ -1963,12 +1966,6 @@ def _patch_config(
                     existing_copy.append(f)
                     changed = True
             hooks["copy_to_worktree"] = existing_copy
-    # Always ensure .wade.yml is in copy_to_worktree
-    copy_list: list[str] = hooks.get("copy_to_worktree") or []
-    if ".wade.yml" not in copy_list:
-        copy_list.append(".wade.yml")
-        changed = True
-    hooks["copy_to_worktree"] = copy_list
     raw["hooks"] = hooks
 
     # Patch provider section

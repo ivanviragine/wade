@@ -17,6 +17,7 @@ from wade.git.repo import GitError
 from wade.models.ai import ModelBreakdown, TokenUsage
 from wade.models.config import (
     HooksConfig,
+    KnowledgeConfig,
     ProjectConfig,
     ProjectSettings,
 )
@@ -27,6 +28,7 @@ from wade.services.implementation_service import (
     _build_graph_from_issues,
     _build_implementation_issue_context_header,
     _capture_post_session_usage,
+    _effective_copy_files,
     _parse_overwrite_paths,
     _post_implementation_lifecycle_direct,
     _post_implementation_lifecycle_pr,
@@ -61,6 +63,65 @@ class TestResolveWorktreesDir:
         assert result == Path("/tmp/wt")
 
 
+class TestEffectiveCopyFiles:
+    def test_always_includes_wade_yml(self) -> None:
+        config = ProjectConfig(hooks=HooksConfig(copy_to_worktree=[".env"]))
+        files = _effective_copy_files(config)
+        assert ".wade.yml" in files
+        assert ".env" in files
+
+    def test_no_duplicate_wade_yml(self) -> None:
+        config = ProjectConfig(hooks=HooksConfig(copy_to_worktree=[".wade.yml", ".env"]))
+        files = _effective_copy_files(config)
+        assert files.count(".wade.yml") == 1
+
+    def test_includes_knowledge_path_when_enabled(self) -> None:
+        config = ProjectConfig(
+            hooks=HooksConfig(copy_to_worktree=[".env"]),
+            knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
+        )
+        files = _effective_copy_files(config)
+        assert "KNOWLEDGE.md" in files
+        assert "KNOWLEDGE.ratings.yml" in files
+        assert ".wade.yml" in files
+
+    def test_nested_knowledge_path_preserves_nested_ratings_path(self) -> None:
+        config = ProjectConfig(
+            knowledge=KnowledgeConfig(enabled=True, path="docs/LEARNINGS.md"),
+        )
+        files = _effective_copy_files(config)
+        assert "docs/LEARNINGS.md" in files
+        assert "docs/LEARNINGS.ratings.yml" in files
+        assert "LEARNINGS.ratings.yml" not in files
+
+    def test_excludes_knowledge_path_when_disabled(self) -> None:
+        config = ProjectConfig(
+            hooks=HooksConfig(copy_to_worktree=[".env"]),
+            knowledge=KnowledgeConfig(enabled=False),
+        )
+        files = _effective_copy_files(config)
+        assert "KNOWLEDGE.md" not in files
+
+    def test_rejects_absolute_knowledge_path(self) -> None:
+        config = ProjectConfig(
+            knowledge=KnowledgeConfig(enabled=True, path="/etc/secrets"),
+        )
+        files = _effective_copy_files(config)
+        assert "/etc/secrets" not in files
+
+    def test_rejects_escaping_knowledge_path(self) -> None:
+        config = ProjectConfig(
+            knowledge=KnowledgeConfig(enabled=True, path="../outside.md"),
+        )
+        files = _effective_copy_files(config)
+        assert "../outside.md" not in files
+
+    def test_empty_user_config(self) -> None:
+        config = ProjectConfig()
+        files = _effective_copy_files(config)
+        assert ".wade.yml" in files
+
+
 class TestBootstrapWorktree:
     def test_copies_configured_files(self, tmp_path: Path) -> None:
         repo_root = tmp_path / "repo"
@@ -88,6 +149,30 @@ class TestBootstrapWorktree:
         )
         # Should not raise
         bootstrap_worktree(worktree, config, repo_root)
+
+    def test_copies_knowledge_ratings_sidecar_when_enabled(self, tmp_path: Path) -> None:
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        knowledge_dir = repo_root / "docs"
+        knowledge_dir.mkdir()
+        (knowledge_dir / "LEARNINGS.md").write_text("# Knowledge\n", encoding="utf-8")
+        (knowledge_dir / "LEARNINGS.ratings.yml").write_text(
+            "a1b2c3d4:\n  up: 1\n",
+            encoding="utf-8",
+        )
+
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+
+        config = ProjectConfig(
+            knowledge=KnowledgeConfig(enabled=True, path="docs/LEARNINGS.md"),
+        )
+        bootstrap_worktree(worktree, config, repo_root)
+
+        assert (worktree / "docs" / "LEARNINGS.md").read_text(encoding="utf-8") == "# Knowledge\n"
+        assert (worktree / "docs" / "LEARNINGS.ratings.yml").read_text(
+            encoding="utf-8"
+        ) == "a1b2c3d4:\n  up: 1\n"
 
     def test_propagates_allowlist_when_configured(self, tmp_path: Path) -> None:
         """Allowlist is copied to worktree when project root has Bash(wade *) configured."""

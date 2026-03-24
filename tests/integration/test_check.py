@@ -63,3 +63,18 @@ class TestCheckConfig:
         result = runner.invoke(app, ["check-config"])
         assert result.exit_code == 0
         assert "VALID_CONFIG" in result.output
+
+    def test_valid_review_timeout_config(
+        self, tmp_wade_project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """check-config should accept positive per-command timeouts."""
+        config_path = tmp_wade_project / ".wade.yml"
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8") + "ai:\n  review_plan:\n    timeout: 300\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.chdir(tmp_wade_project)
+        result = runner.invoke(app, ["check-config"])
+        assert result.exit_code == 0
+        assert "VALID_CONFIG" in result.output

@@ -87,6 +87,7 @@ class TestHelp:
         assert result.exit_code == 0
         assert "add" in result.output
         assert "get" in result.output
+        assert "rate" in result.output
 
     def test_implementation_session_help(self) -> None:
         result = runner.invoke(app, ["implementation-session", "--help"])

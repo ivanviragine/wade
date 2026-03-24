@@ -1386,7 +1386,6 @@ class TestWriteConfigHooks:
         _write_config(config_path, "claude", ComplexityModelMapping())
         config = yaml.safe_load(config_path.read_text())
         assert "hooks" in config
-        assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
 
     def test_write_config_with_setup_script(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
@@ -1395,7 +1394,6 @@ class TestWriteConfigHooks:
         config = yaml.safe_load(config_path.read_text())
         assert config["hooks"]["post_worktree_create"] == "scripts/setup.sh"
         assert ".env" in config["hooks"]["copy_to_worktree"]
-        assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
 
     def test_write_config_no_commented_hooks(self, tmp_path: Path) -> None:
         """Config should not contain commented-out hooks block."""
@@ -1411,13 +1409,6 @@ class TestWriteConfigHooks:
 
 
 class TestPatchConfigHooks:
-    def test_patch_always_adds_wade_yml(self, tmp_path: Path) -> None:
-        config_path = tmp_path / ".wade.yml"
-        config_path.write_text(yaml.dump({"version": 2}), encoding="utf-8")
-        _patch_config(config_path, "claude", ComplexityModelMapping(), force=True)
-        config = yaml.safe_load(config_path.read_text())
-        assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
-
     def test_patch_preserves_existing_hooks(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text(
@@ -1432,7 +1423,6 @@ class TestPatchConfigHooks:
         _patch_config(config_path, "claude", ComplexityModelMapping(), force=True)
         config = yaml.safe_load(config_path.read_text())
         assert ".env" in config["hooks"]["copy_to_worktree"]
-        assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
 
     def test_patch_force_sets_hooks_setup(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
@@ -1444,22 +1434,6 @@ class TestPatchConfigHooks:
         config = yaml.safe_load(config_path.read_text())
         assert config["hooks"]["post_worktree_create"] == "scripts/setup.sh"
         assert ".env" in config["hooks"]["copy_to_worktree"]
-        assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
-
-    def test_patch_idempotent_wade_yml(self, tmp_path: Path) -> None:
-        config_path = tmp_path / ".wade.yml"
-        config_path.write_text(
-            yaml.dump(
-                {
-                    "version": 2,
-                    "hooks": {"copy_to_worktree": [".wade.yml"]},
-                }
-            ),
-            encoding="utf-8",
-        )
-        _patch_config(config_path, "claude", ComplexityModelMapping(), force=True)
-        config = yaml.safe_load(config_path.read_text())
-        assert config["hooks"]["copy_to_worktree"].count(".wade.yml") == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1561,12 +1535,31 @@ class TestPromptCommitOrLocal:
 
         assert config_path.read_text() == original
 
-    def test_init_non_interactive_adds_copy_to_worktree(self, tmp_git_repo: Path) -> None:
-        """Full init in non-interactive mode should set copy_to_worktree."""
+    def test_init_non_interactive_creates_config(self, tmp_git_repo: Path) -> None:
+        """Full init in non-interactive mode should create a valid config."""
         init(project_root=tmp_git_repo, non_interactive=True)
 
         config = yaml.safe_load((tmp_git_repo / ".wade.yml").read_text())
-        assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
+        assert config["version"] == 2
+
+    @patch("wade.services.init_service._prompt_knowledge_setup")
+    def test_init_knowledge_nested_path_adds_correct_ratings_to_copy(
+        self,
+        mock_knowledge_setup: MagicMock,
+        tmp_git_repo: Path,
+    ) -> None:
+        """init() with nested knowledge path must add the full sidecar path.
+
+        Regression guard: a .name-based stripping bug would produce
+        'LEARNINGS.ratings.yml' instead of 'docs/LEARNINGS.ratings.yml'.
+        """
+        mock_knowledge_setup.return_value = {"enabled": True, "path": "docs/LEARNINGS.md"}
+        init(project_root=tmp_git_repo, non_interactive=True)
+
+        config = yaml.safe_load((tmp_git_repo / ".wade.yml").read_text())
+        copy_list = config["hooks"]["copy_to_worktree"]
+        assert "docs/LEARNINGS.ratings.yml" in copy_list
+        assert "LEARNINGS.ratings.yml" not in copy_list
 
 
 # ---------------------------------------------------------------------------

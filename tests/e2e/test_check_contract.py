@@ -95,3 +95,28 @@ class TestCheckConfigCommand:
         assert result.returncode == 3
         assert "INVALID_CONFIG" in result.stdout
         assert "knowledge.path: must be inside the project root" in result.stdout
+
+    def test_valid_review_timeout_config(self, e2e_repo: Path) -> None:
+        """wade check-config accepts the new per-command timeout field."""
+        config_path = e2e_repo / ".wade.yml"
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8") + "\nai:\n  review_plan:\n    timeout: 300\n",
+            encoding="utf-8",
+        )
+
+        result = _run(["check-config"], cwd=e2e_repo)
+        assert result.returncode == 0
+        assert "VALID_CONFIG" in result.stdout
+
+    def test_invalid_review_timeout_rejected(self, e2e_repo: Path) -> None:
+        """wade check-config rejects non-positive per-command timeout values."""
+        config_path = e2e_repo / ".wade.yml"
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8") + "\nai:\n  review_plan:\n    timeout: 0\n",
+            encoding="utf-8",
+        )
+
+        result = _run(["check-config"], cwd=e2e_repo)
+        assert result.returncode == 3
+        assert "INVALID_CONFIG" in result.stdout
+        assert "ai.review_plan.timeout: must be a positive integer" in result.stdout

@@ -20,8 +20,10 @@ def _review_config(
     *,
     review_plan_mode: str = "prompt",
     review_plan_enabled: bool | None = True,
+    review_plan_timeout: int | None = None,
     review_implementation_mode: str = "prompt",
     review_implementation_enabled: bool | None = True,
+    review_implementation_timeout: int | None = None,
     default_tool: str | None = "claude",
 ) -> ProjectConfig:
     """Build a review-capable project config without relying on repo-local config."""
@@ -31,10 +33,12 @@ def _review_config(
             review_plan=AICommandConfig(
                 mode=review_plan_mode,
                 enabled=review_plan_enabled,
+                timeout=review_plan_timeout,
             ),
             review_implementation=AICommandConfig(
                 mode=review_implementation_mode,
                 enabled=review_implementation_enabled,
+                timeout=review_implementation_timeout,
             ),
         )
     )
@@ -190,6 +194,35 @@ class TestReviewPlan:
         call_args = mock_delegate.call_args[0][0]
         assert call_args.mode == DelegationMode.PROMPT
         assert call_args.ai_tool is None
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    def test_headless_timeout_is_forwarded(
+        self,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        plan_file = tmp_path / "PLAN.md"
+        plan_file.write_text("# Plan")
+        mock_template.return_value = "{plan_content}"
+        mock_config.return_value = _review_config(
+            review_plan_enabled=True,
+            review_plan_mode="headless",
+            review_plan_timeout=300,
+        )
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.HEADLESS
+        )
+
+        result = review_plan(str(plan_file))
+        assert result.success is True
+
+        call_args = mock_delegate.call_args[0][0]
+        assert call_args.mode == DelegationMode.HEADLESS
+        assert call_args.timeout == 300
 
 
 # ---------------------------------------------------------------------------
