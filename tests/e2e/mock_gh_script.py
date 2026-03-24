@@ -35,9 +35,14 @@ def _default_state() -> dict[str, object]:
 
 def _load_state() -> dict[str, object]:
     try:
-        return json.loads(STATE.read_text(encoding="utf-8"))
+        loaded = json.loads(STATE.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return _default_state()
+    if not isinstance(loaded, dict):
+        raise ValueError(
+            f"mock-gh state at {STATE} must be a JSON object, got {type(loaded).__name__}"
+        )
+    return loaded
 
 
 def _save_state(state: dict[str, object]) -> None:
