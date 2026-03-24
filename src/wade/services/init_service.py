@@ -37,7 +37,7 @@ GITIGNORE_MARKER_START: Final = (
 )
 GITIGNORE_MARKER_END: Final = "# wade:end"
 
-# Actual patterns placed between the markers
+# Actual patterns placed between the markers (static base set)
 GITIGNORE_ENTRIES: Final = [
     ".wade/",
     ".wade-managed",
@@ -2023,9 +2023,20 @@ def _patch_config(
         logger.info("config.patched", path=str(config_path))
 
 
-def _gitignore_block() -> str:
+def get_gitignore_entries(project_root: Path) -> list[str]:
+    """Compute the full list of gitignore entries for a project.
+
+    Combines the static base entries with dynamic patterns from the skill
+    registry (managed skill dirs + cross-tool symlink dirs).
+    """
+    from wade.skills.installer import get_managed_gitignore_patterns
+
+    return GITIGNORE_ENTRIES + get_managed_gitignore_patterns(project_root)
+
+
+def _gitignore_block(project_root: Path) -> str:
     """Build the full managed block (markers + entries)."""
-    inner = "\n".join(GITIGNORE_ENTRIES)
+    inner = "\n".join(get_gitignore_entries(project_root))
     return f"{GITIGNORE_MARKER_START}\n{inner}\n{GITIGNORE_MARKER_END}\n"
 
 
@@ -2041,7 +2052,8 @@ def _ensure_gitignore(project_root: Path) -> None:
     from wade.utils.markdown import extract_marker_block, has_marker_block, remove_marker_block
 
     gitignore = project_root / ".gitignore"
-    block = _gitignore_block()
+    entries = get_gitignore_entries(project_root)
+    block = _gitignore_block(project_root)
 
     if not gitignore.is_file():
         gitignore.write_text(block, encoding="utf-8")
@@ -2052,7 +2064,7 @@ def _ensure_gitignore(project_root: Path) -> None:
     if has_marker_block(existing, GITIGNORE_MARKER_START, GITIGNORE_MARKER_END):
         # Staleness check — skip file write if content is already current
         inner = extract_marker_block(existing, GITIGNORE_MARKER_START, GITIGNORE_MARKER_END)
-        if inner == "\n".join(GITIGNORE_ENTRIES):
+        if inner == "\n".join(entries):
             return
         # Stale — replace the block in place
         cleaned = remove_marker_block(existing, GITIGNORE_MARKER_START, GITIGNORE_MARKER_END)

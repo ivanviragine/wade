@@ -33,6 +33,7 @@ from wade.services.init_service import (
     _validate_clickup_token,
     _write_config,
     deinit,
+    get_gitignore_entries,
     init,
     update,
 )
@@ -1329,24 +1330,50 @@ class TestUpdateExtended:
 
 
 class TestGitignoreEntries:
-    """Verify GITIGNORE_ENTRIES includes all wade-managed paths."""
+    """Verify GITIGNORE_ENTRIES (static base) includes all wade-managed paths."""
 
     def test_contains_wade_config(self) -> None:
         assert ".wade.yml" in GITIGNORE_ENTRIES
 
-    def test_no_skill_dirs(self) -> None:
-        """Skills are per-session in worktrees — no tool dirs in gitignore."""
+    def test_base_no_blanket_dirs(self) -> None:
+        """Base entries should not blanket-ignore .claude/ or .claude/hooks/."""
         assert ".claude/" not in GITIGNORE_ENTRIES
-        assert ".github/skills" not in GITIGNORE_ENTRIES
-        assert ".agents/" not in GITIGNORE_ENTRIES
-        assert ".gemini/" not in GITIGNORE_ENTRIES
-        assert ".cursor/" not in GITIGNORE_ENTRIES
+        assert ".claude/hooks/" not in GITIGNORE_ENTRIES
 
     def test_contains_internal_files(self) -> None:
         assert ".wade/" in GITIGNORE_ENTRIES
         assert ".wade-managed" in GITIGNORE_ENTRIES
         assert "PLAN.md" in GITIGNORE_ENTRIES
         assert "PR-SUMMARY.md" in GITIGNORE_ENTRIES
+
+    def test_computed_entries_include_skill_dirs(self, tmp_path: Path) -> None:
+        """get_gitignore_entries includes managed skill directories."""
+        from wade.skills.installer import MANAGED_SKILL_NAMES
+
+        entries = get_gitignore_entries(tmp_path)
+        for name in MANAGED_SKILL_NAMES:
+            assert f".claude/skills/{name}/" in entries
+
+    def test_computed_entries_include_cross_tool_dirs(self, tmp_path: Path) -> None:
+        """get_gitignore_entries includes cross-tool dirs when absent."""
+        from wade.skills.installer import CROSS_TOOL_DIRS
+
+        entries = get_gitignore_entries(tmp_path)
+        for cross_dir in CROSS_TOOL_DIRS:
+            assert cross_dir in entries
+
+    def test_computed_entries_skip_real_cross_tool_dirs(self, tmp_path: Path) -> None:
+        """get_gitignore_entries skips cross-tool dirs that are real directories."""
+        from wade.skills.installer import CROSS_TOOL_DIRS
+
+        for cross_dir in CROSS_TOOL_DIRS:
+            real_dir = tmp_path / cross_dir
+            real_dir.mkdir(parents=True, exist_ok=True)
+            (real_dir / "user-file.md").write_text("user content")
+
+        entries = get_gitignore_entries(tmp_path)
+        for cross_dir in CROSS_TOOL_DIRS:
+            assert cross_dir not in entries
 
 
 # ---------------------------------------------------------------------------
