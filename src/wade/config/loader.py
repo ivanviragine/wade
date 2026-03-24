@@ -193,4 +193,5 @@ def _parse_command_config(raw: dict[str, Any] | None) -> AICommandConfig:
         effort=raw.get("effort"),
         yolo=raw.get("yolo"),
         enabled=raw.get("enabled"),
+        timeout=raw.get("timeout"),
     )
