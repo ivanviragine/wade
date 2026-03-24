@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.11.1] — 2026-03-24
+
+### Bug Fixes
+
+- prevent wade-managed skills from being committed in inited projects (#214) (6f7e789)
+
+### Other Changes
+
+- Knowledge service thumbs-up/down (#212) (8063192)
+
 ## [v0.11.0] — 2026-03-24
 
 ### Features
