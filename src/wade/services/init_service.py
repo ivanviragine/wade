@@ -175,9 +175,9 @@ def init(
             # Also add the sidecar ratings file
             from wade.services.knowledge_service import resolve_ratings_path
 
-            ratings_name = resolve_ratings_path(Path(knowledge_path)).name
-            if ratings_name not in copy_list_k:
-                copy_list_k.append(ratings_name)
+            ratings_path = str(resolve_ratings_path(Path(knowledge_path)))
+            if ratings_path not in copy_list_k:
+                copy_list_k.append(ratings_path)
             hooks_setup["copy_to_worktree"] = copy_list_k
 
     # Write phase

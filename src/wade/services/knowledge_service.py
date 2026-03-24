@@ -6,12 +6,12 @@ import fcntl
 import re
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
+from pydantic import BaseModel
 
 from wade.models.config import KnowledgeConfig
 
@@ -30,19 +30,15 @@ _ENTRY_HEADING_RE = re.compile(
     r"^## (?:([0-9a-f]{8}) \| )?(\d{4}-\d{2}-\d{2}) \| (.+?)(?:\s+\[.*\])?\s*$"
 )
 
-RatingsDict = dict[str, dict[str, Any]]
 
-
-@dataclass(frozen=True)
-class KnowledgeEntry:
+class KnowledgeEntry(BaseModel, frozen=True):
     """Result of appending a knowledge entry."""
 
     path: Path
     entry_id: str
 
 
-@dataclass(frozen=True)
-class ParsedEntry:
+class ParsedEntry(BaseModel, frozen=True):
     """A parsed knowledge entry from the knowledge file."""
 
     entry_id: str | None
@@ -50,6 +46,14 @@ class ParsedEntry:
     heading_rest: str
     content: str
     raw: str
+
+
+class EntryRating(BaseModel):
+    """Rating data for a single knowledge entry."""
+
+    up: int = 0
+    down: int = 0
+    superseded_by: str | None = None
 
 
 def _generate_entry_id() -> str:
@@ -163,26 +167,33 @@ def find_entry_id(knowledge_path: Path, entry_id: str) -> bool:
     return any(e.entry_id == entry_id for e in entries)
 
 
-def read_ratings(ratings_path: Path) -> RatingsDict:
+def read_ratings(ratings_path: Path) -> dict[str, EntryRating]:
     """Load the sidecar ratings YAML file.
 
     Returns an empty dict if the file doesn't exist.
+    Acquires a shared read lock to prevent observing a partial write.
     """
     if not ratings_path.exists():
         return {}
-    content = ratings_path.read_text(encoding="utf-8")
+    fd = ratings_path.open("r", encoding="utf-8")
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH)
+        content = fd.read()
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        fd.close()
     if not content.strip():
         return {}
     data: Any = yaml.safe_load(content)
-    if isinstance(data, dict):
-        return data
-    return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: EntryRating(**v) if isinstance(v, dict) else EntryRating() for k, v in data.items()}
 
 
 def _read_modify_write_ratings(
     ratings_path: Path,
-    modify_fn: Callable[[RatingsDict], None],
-) -> RatingsDict:
+    modify_fn: Callable[[dict[str, EntryRating]], None],
+) -> dict[str, EntryRating]:
     """Read-modify-write the ratings file under an exclusive lock.
 
     ``modify_fn`` receives the current ratings dict and mutates it in place.
@@ -194,17 +205,21 @@ def _read_modify_write_ratings(
         fcntl.flock(fd, fcntl.LOCK_EX)
         fd.seek(0)
         content = fd.read()
-        data: RatingsDict = {}
+        data: dict[str, EntryRating] = {}
         if content.strip():
             loaded: Any = yaml.safe_load(content)
             if isinstance(loaded, dict):
-                data = loaded
+                data = {
+                    k: EntryRating(**v) if isinstance(v, dict) else EntryRating()
+                    for k, v in loaded.items()
+                }
 
         modify_fn(data)
 
         fd.seek(0)
         fd.truncate()
-        yaml.safe_dump(data, fd, default_flow_style=False, sort_keys=True)
+        raw = {k: v.model_dump(exclude_none=True) for k, v in data.items()}
+        yaml.safe_dump(raw, fd, default_flow_style=False, sort_keys=True)
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
         fd.close()
@@ -223,11 +238,12 @@ def record_rating(
     if direction not in ("up", "down"):
         raise ValueError(f"Invalid direction {direction!r}: must be 'up' or 'down'")
 
-    def _modify(data: RatingsDict) -> None:
-        entry = data.setdefault(entry_id, {"up": 0, "down": 0})
-        entry.setdefault("up", 0)
-        entry.setdefault("down", 0)
-        entry[direction] = int(entry[direction]) + 1
+    def _modify(data: dict[str, EntryRating]) -> None:
+        entry = data.setdefault(entry_id, EntryRating())
+        if direction == "up":
+            entry.up += 1
+        else:
+            entry.down += 1
 
     _read_modify_write_ratings(ratings_path, _modify)
 
@@ -239,9 +255,9 @@ def record_supersede(
 ) -> None:
     """Record a supersedes link: old_id is superseded by new_id."""
 
-    def _modify(data: RatingsDict) -> None:
-        entry = data.setdefault(old_id, {"up": 0, "down": 0})
-        entry["superseded_by"] = new_id
+    def _modify(data: dict[str, EntryRating]) -> None:
+        entry = data.setdefault(old_id, EntryRating())
+        entry.superseded_by = new_id
 
     _read_modify_write_ratings(ratings_path, _modify)
 
@@ -276,11 +292,11 @@ def get_annotated_knowledge(
 
     result_parts = [header]
     for entry in entries:
-        entry_ratings = ratings.get(entry.entry_id, {}) if entry.entry_id else {}
-        up = int(entry_ratings.get("up", 0)) if entry_ratings else 0
-        down = int(entry_ratings.get("down", 0)) if entry_ratings else 0
+        entry_rating = ratings.get(entry.entry_id) if entry.entry_id else None
+        up = entry_rating.up if entry_rating else 0
+        down = entry_rating.down if entry_rating else 0
         net_score = up - down
-        has_ratings = bool(entry_ratings) and (up > 0 or down > 0)
+        has_ratings = entry_rating is not None and (entry_rating.up > 0 or entry_rating.down > 0)
 
         # Apply min_score filter
         if min_score is not None and net_score < min_score:
@@ -316,7 +332,14 @@ def append_knowledge(
     """
     path = ensure_knowledge_file(project_root, config)
 
+    existing_ids = {
+        parsed.entry_id
+        for parsed in parse_entries(path.read_text(encoding="utf-8"))
+        if parsed.entry_id is not None
+    }
     entry_id = _generate_entry_id()
+    while entry_id in existing_ids:
+        entry_id = _generate_entry_id()
     timestamp = datetime.now(tz=UTC).strftime("%Y-%m-%d")
     issue_part = f" | Issue #{issue_ref}" if issue_ref else ""
     header = f"## {entry_id} | {timestamp} | {session_type}{issue_part}"

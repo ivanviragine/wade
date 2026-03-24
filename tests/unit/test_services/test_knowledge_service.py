@@ -332,8 +332,8 @@ class TestReadRatings:
         data = {"a1b2c3d4": {"up": 3, "down": 1}}
         ratings_path.write_text(yaml.safe_dump(data), encoding="utf-8")
         result = read_ratings(ratings_path)
-        assert result["a1b2c3d4"]["up"] == 3
-        assert result["a1b2c3d4"]["down"] == 1
+        assert result["a1b2c3d4"].up == 3
+        assert result["a1b2c3d4"].down == 1
 
 
 class TestRecordRating:
@@ -341,15 +341,15 @@ class TestRecordRating:
         ratings_path = tmp_path / "KNOWLEDGE.ratings.yml"
         record_rating(ratings_path, "a1b2c3d4", "up")
         data = read_ratings(ratings_path)
-        assert data["a1b2c3d4"]["up"] == 1
-        assert data["a1b2c3d4"]["down"] == 0
+        assert data["a1b2c3d4"].up == 1
+        assert data["a1b2c3d4"].down == 0
 
     def test_records_down(self, tmp_path: Path) -> None:
         ratings_path = tmp_path / "KNOWLEDGE.ratings.yml"
         record_rating(ratings_path, "a1b2c3d4", "down")
         data = read_ratings(ratings_path)
-        assert data["a1b2c3d4"]["up"] == 0
-        assert data["a1b2c3d4"]["down"] == 1
+        assert data["a1b2c3d4"].up == 0
+        assert data["a1b2c3d4"].down == 1
 
     def test_increments_existing_count(self, tmp_path: Path) -> None:
         ratings_path = tmp_path / "KNOWLEDGE.ratings.yml"
@@ -357,8 +357,8 @@ class TestRecordRating:
         record_rating(ratings_path, "a1b2c3d4", "up")
         record_rating(ratings_path, "a1b2c3d4", "down")
         data = read_ratings(ratings_path)
-        assert data["a1b2c3d4"]["up"] == 2
-        assert data["a1b2c3d4"]["down"] == 1
+        assert data["a1b2c3d4"].up == 2
+        assert data["a1b2c3d4"].down == 1
 
     def test_rejects_invalid_direction(self, tmp_path: Path) -> None:
         ratings_path = tmp_path / "KNOWLEDGE.ratings.yml"
@@ -370,8 +370,8 @@ class TestRecordRating:
         record_rating(ratings_path, "a1b2c3d4", "up")
         record_rating(ratings_path, "f5e6d7c8", "down")
         data = read_ratings(ratings_path)
-        assert data["a1b2c3d4"]["up"] == 1
-        assert data["f5e6d7c8"]["down"] == 1
+        assert data["a1b2c3d4"].up == 1
+        assert data["f5e6d7c8"].down == 1
 
 
 class TestRecordSupersede:
@@ -379,7 +379,7 @@ class TestRecordSupersede:
         ratings_path = tmp_path / "KNOWLEDGE.ratings.yml"
         record_supersede(ratings_path, "old12345", "new67890")
         data = read_ratings(ratings_path)
-        assert data["old12345"]["superseded_by"] == "new67890"
+        assert data["old12345"].superseded_by == "new67890"
 
     def test_preserves_existing_ratings(self, tmp_path: Path) -> None:
         ratings_path = tmp_path / "KNOWLEDGE.ratings.yml"
@@ -387,8 +387,8 @@ class TestRecordSupersede:
         record_rating(ratings_path, "old12345", "down")
         record_supersede(ratings_path, "old12345", "new67890")
         data = read_ratings(ratings_path)
-        assert data["old12345"]["down"] == 2
-        assert data["old12345"]["superseded_by"] == "new67890"
+        assert data["old12345"].down == 2
+        assert data["old12345"].superseded_by == "new67890"
 
 
 class TestGetAnnotatedKnowledge:
