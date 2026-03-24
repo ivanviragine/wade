@@ -27,6 +27,7 @@ def add(
     from wade.config.loader import load_config
     from wade.services.knowledge_service import (
         append_knowledge,
+        find_entry_id,
         record_supersede,
         resolve_knowledge_path,
         resolve_ratings_path,
@@ -55,14 +56,11 @@ def add(
         raise typer.Exit(1)
 
     project_root = Path(config.project_root) if config.project_root else Path.cwd()
+    knowledge_path = resolve_knowledge_path(project_root, config.knowledge)
 
-    if supersedes:
-        from wade.services.knowledge_service import find_entry_id
-
-        knowledge_path = resolve_knowledge_path(project_root, config.knowledge)
-        if not find_entry_id(knowledge_path, supersedes):
-            console.error(f"Entry ID '{supersedes}' not found in knowledge file.")
-            raise typer.Exit(1)
+    if supersedes and not find_entry_id(knowledge_path, supersedes):
+        console.error(f"Entry ID '{supersedes}' not found in knowledge file.")
+        raise typer.Exit(1)
 
     result = append_knowledge(
         project_root=project_root,
@@ -73,7 +71,7 @@ def add(
     )
 
     if supersedes:
-        ratings_path = resolve_ratings_path(resolve_knowledge_path(project_root, config.knowledge))
+        ratings_path = resolve_ratings_path(knowledge_path)
         record_supersede(ratings_path, supersedes, result.entry_id)
         console.success(
             f"Knowledge entry {result.entry_id} added to {result.path.name} "
