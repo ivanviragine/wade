@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.10.0] — 2026-03-24
+
+### Features
+
+- add `knowledge get` command to read project knowledge file (#211) (bc1c05d)
+
 ## [v0.9.1] — 2026-03-22
 
 ### Bug Fixes
