@@ -89,10 +89,10 @@ class TestReadKnowledge:
         (project_root / "KNOWLEDGE.md").write_text(content, encoding="utf-8")
         assert read_knowledge(project_root, config) == content
 
-    def test_returns_empty_string_when_file_missing(
+    def test_returns_none_when_file_missing(
         self, project_root: Path, config: KnowledgeConfig
     ) -> None:
-        assert read_knowledge(project_root, config) == ""
+        assert read_knowledge(project_root, config) is None
 
     def test_does_not_create_file_when_missing(
         self, project_root: Path, config: KnowledgeConfig

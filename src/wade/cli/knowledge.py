@@ -77,7 +77,7 @@ def get() -> None:
     except (ValueError, OSError) as exc:
         console.error(str(exc))
         raise typer.Exit(1) from exc
-    if not content:
+    if content is None:
         print("No knowledge file found.", file=sys.stderr)
         raise typer.Exit(0)
     console.raw(content)
