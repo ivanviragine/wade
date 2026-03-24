@@ -173,7 +173,7 @@ def _check_tracked_managed_files(cwd: Path) -> list[str]:
     - Cross-tool symlink directories
     - The wade-generated plan_write_guard.py hook
     """
-    from wade.skills.installer import CROSS_TOOL_DIRS, MANAGED_SKILL_NAMES
+    from wade.skills.installer import CROSS_TOOL_DIRS, MANAGED_SKILL_NAMES, PLAN_GUARD_HOOK_FILES
 
     # Build path roots to check against git index (bare, no trailing slash).
     # git ls-files --cached reports tracked symlinks without trailing slashes,
@@ -183,8 +183,7 @@ def _check_tracked_managed_files(cwd: Path) -> list[str]:
         cross_path = cwd / cross_dir
         if cross_path.is_symlink() or not cross_path.exists():
             roots.append(cross_dir)
-    for tool_dir in [".claude/hooks", ".cursor/hooks", ".copilot/hooks", ".gemini/hooks"]:
-        roots.append(f"{tool_dir}/plan_write_guard.py")
+    roots.extend(PLAN_GUARD_HOOK_FILES)
 
     try:
         result = subprocess.run(

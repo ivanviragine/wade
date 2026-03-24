@@ -1354,6 +1354,14 @@ class TestGitignoreEntries:
         for name in MANAGED_SKILL_NAMES:
             assert f".claude/skills/{name}/" in entries
 
+    def test_computed_entries_include_plan_guard_hooks(self, tmp_path: Path) -> None:
+        """get_gitignore_entries includes specific wade-managed hook files."""
+        from wade.skills.installer import PLAN_GUARD_HOOK_FILES
+
+        entries = get_gitignore_entries(tmp_path)
+        for hook_file in PLAN_GUARD_HOOK_FILES:
+            assert hook_file in entries
+
     def test_computed_entries_include_cross_tool_dirs(self, tmp_path: Path) -> None:
         """get_gitignore_entries includes cross-tool dirs when absent."""
         from wade.skills.installer import CROSS_TOOL_DIRS

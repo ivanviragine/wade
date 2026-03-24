@@ -7,6 +7,7 @@ from pathlib import Path
 from wade.skills.installer import (
     CROSS_TOOL_DIRS,
     MANAGED_SKILL_NAMES,
+    PLAN_GUARD_HOOK_FILES,
     get_managed_gitignore_patterns,
 )
 
@@ -16,6 +17,11 @@ class TestGetManagedGitignorePatterns:
         patterns = get_managed_gitignore_patterns(tmp_path)
         for name in MANAGED_SKILL_NAMES:
             assert f".claude/skills/{name}/" in patterns
+
+    def test_includes_plan_guard_hook_files(self, tmp_path: Path) -> None:
+        patterns = get_managed_gitignore_patterns(tmp_path)
+        for hook_file in PLAN_GUARD_HOOK_FILES:
+            assert hook_file in patterns
 
     def test_includes_cross_tool_dirs_when_absent(self, tmp_path: Path) -> None:
         """Cross-tool dirs that don't exist yet should be included."""
