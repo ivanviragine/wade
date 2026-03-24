@@ -7,6 +7,7 @@ All output respects Rich markup and goes to the appropriate stream
 from __future__ import annotations
 
 import contextlib
+import sys
 from typing import TYPE_CHECKING, Any
 
 from rich.console import Console as RichConsole
@@ -135,10 +136,11 @@ class Console:
     def raw(self, text: str) -> None:
         """Print raw text without any formatting or word-wrapping.
 
-        Uses Python's built-in print() instead of Rich's Console.print()
-        to avoid Rich inserting line breaks in JSON output.
+        Uses stdout directly instead of Rich's Console.print() so the output is
+        byte-for-byte stable for JSON and file-content passthrough commands.
         """
-        print(text)
+        sys.stdout.write(text)
+        sys.stdout.flush()
 
     def section(self, title: str) -> None:
         """Bold section heading (minor sub-headings)."""

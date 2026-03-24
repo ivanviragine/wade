@@ -2107,7 +2107,7 @@ def sync(
         ev = SyncEvent(event=event, data=data)
         events.append(ev)
         if json_output:
-            console.raw(json.dumps({"event": event, **data}))
+            console.raw(json.dumps({"event": event, **data}) + "\n")
 
     # Pre-flight checks
     try:
@@ -2767,7 +2767,7 @@ def list_sessions(
         return sessions
 
     if json_output:
-        console.raw(json.dumps(sessions, indent=2))
+        console.raw(json.dumps(sessions, indent=2) + "\n")
         return sessions
 
     if not sessions:

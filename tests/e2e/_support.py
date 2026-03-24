@@ -41,6 +41,7 @@ def _run(
     args: list[str],
     cwd: Path,
     env: dict[str, str] | None = None,
+    input_text: str | None = None,
     timeout: int = 30,
 ) -> subprocess.CompletedProcess[str]:
     """Run a wade CLI command as a subprocess."""
@@ -59,6 +60,7 @@ def _run(
     return subprocess.run(
         [WADE, *args],
         cwd=cwd,
+        input=input_text,
         capture_output=True,
         text=True,
         timeout=timeout,

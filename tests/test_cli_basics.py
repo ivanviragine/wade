@@ -7,7 +7,7 @@ from unittest.mock import patch
 from typer.testing import CliRunner
 
 import wade
-from wade.cli.main import app
+from wade.cli.main import _should_print_version_banner, app
 
 runner = CliRunner()
 
@@ -23,6 +23,19 @@ class TestVersion:
         result = runner.invoke(app, ["-V"])
         assert result.exit_code == 0
         assert wade.__version__ in result.output
+
+
+class TestVersionBannerRules:
+    def test_knowledge_get_suppresses_startup_banner(self) -> None:
+        assert not _should_print_version_banner("knowledge", ["wade", "knowledge", "get"])
+
+    def test_root_flags_do_not_break_knowledge_get_suppression(self) -> None:
+        assert not _should_print_version_banner(
+            "knowledge", ["wade", "--verbose", "knowledge", "get"]
+        )
+
+    def test_other_subcommands_keep_startup_banner(self) -> None:
+        assert _should_print_version_banner("task", ["wade", "task", "list"])
 
 
 class TestHelp:

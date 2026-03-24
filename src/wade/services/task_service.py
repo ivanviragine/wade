@@ -526,7 +526,7 @@ def list_tasks(
             }
             for t in tasks
         ]
-        console.raw(json.dumps(output, indent=2))
+        console.raw(json.dumps(output, indent=2) + "\n")
         return tasks
 
     if quiet:
@@ -652,7 +652,7 @@ def read_task(
             "labels": [label.name for label in task.labels],
             "url": task.url,
         }
-        console.raw(json.dumps(output, indent=2))
+        console.raw(json.dumps(output, indent=2) + "\n")
     else:
         state_variant = "open" if task.state == TaskState.OPEN else "closed"
         state_str = console.badge_str(task.state.value, state_variant)
