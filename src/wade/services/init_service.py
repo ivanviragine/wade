@@ -164,7 +164,7 @@ def init(
     _prompt_configure_shell_integration(non_interactive)
     _prompt_configure_completions(non_interactive)
 
-    # If knowledge is enabled, add the knowledge path to copy_to_worktree
+    # If knowledge is enabled, add the knowledge + ratings paths to copy_to_worktree
     if knowledge_setup.get("enabled"):
         knowledge_path: str = knowledge_setup.get("path", "KNOWLEDGE.md")
         # Reject absolute or escaping paths
@@ -172,6 +172,12 @@ def init(
             copy_list_k: list[str] = hooks_setup.get("copy_to_worktree", [])
             if knowledge_path not in copy_list_k:
                 copy_list_k.append(knowledge_path)
+            # Also add the sidecar ratings file
+            from wade.services.knowledge_service import resolve_ratings_path
+
+            ratings_name = resolve_ratings_path(Path(knowledge_path)).name
+            if ratings_name not in copy_list_k:
+                copy_list_k.append(ratings_name)
             hooks_setup["copy_to_worktree"] = copy_list_k
 
     # Write phase
