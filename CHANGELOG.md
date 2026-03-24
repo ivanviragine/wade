@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.11.0] — 2026-03-24
+
+### Features
+
+- auto-copy internal wade files to worktrees regardless of user config (0b81145)
+- add timeout field to AICommandConfig and wire through review delegation (073c57b)
+
 ## [v0.10.0] — 2026-03-24
 
 ### Features

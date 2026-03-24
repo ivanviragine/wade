@@ -97,6 +97,7 @@ def _run_review_delegation(
         ai_tool=resolved_tool,
         model=resolved_model,
         effort=effort_str,
+        **({"timeout": cmd_config.timeout} if cmd_config.timeout is not None else {}),
     )
 
     if delegation_mode in (DelegationMode.INTERACTIVE, DelegationMode.HEADLESS):

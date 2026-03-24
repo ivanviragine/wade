@@ -1757,14 +1757,13 @@ def _write_config(
             provider_dict["settings"] = provider_setup["settings"]
     config_dict["provider"] = provider_dict
 
-    # Build hooks section — always include .wade.yml in copy_to_worktree
+    # Build hooks section (internal files like .wade.yml are auto-copied at runtime)
     hooks_dict: dict[str, Any] = {}
     if hooks_setup and hooks_setup.get("post_worktree_create"):
         hooks_dict["post_worktree_create"] = hooks_setup["post_worktree_create"]
     copy_files: list[str] = list(hooks_setup.get("copy_to_worktree", [])) if hooks_setup else []
-    if ".wade.yml" not in copy_files:
-        copy_files.append(".wade.yml")
-    hooks_dict["copy_to_worktree"] = copy_files
+    if copy_files:
+        hooks_dict["copy_to_worktree"] = copy_files
     config_dict["hooks"] = hooks_dict
 
     # Build knowledge section
@@ -1937,12 +1936,6 @@ def _patch_config(
                     existing_copy.append(f)
                     changed = True
             hooks["copy_to_worktree"] = existing_copy
-    # Always ensure .wade.yml is in copy_to_worktree
-    copy_list: list[str] = hooks.get("copy_to_worktree") or []
-    if ".wade.yml" not in copy_list:
-        copy_list.append(".wade.yml")
-        changed = True
-    hooks["copy_to_worktree"] = copy_list
     raw["hooks"] = hooks
 
     # Patch provider section

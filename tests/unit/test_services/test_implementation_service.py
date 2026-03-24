@@ -16,6 +16,7 @@ from wade.ai_tools.gemini import GeminiAdapter
 from wade.git.repo import GitError
 from wade.models.config import (
     HooksConfig,
+    KnowledgeConfig,
     ProjectConfig,
     ProjectSettings,
 )
@@ -25,6 +26,7 @@ from wade.services.implementation_service import (
     ImplementResult,
     _build_graph_from_issues,
     _build_implementation_issue_context_header,
+    _effective_copy_files,
     _parse_overwrite_paths,
     _post_implementation_lifecycle_direct,
     _post_implementation_lifecycle_pr,
@@ -57,6 +59,55 @@ class TestResolveWorktreesDir:
         )
         result = _resolve_worktrees_dir(config, Path("/some/repo"))
         assert result == Path("/tmp/wt")
+
+
+class TestEffectiveCopyFiles:
+    def test_always_includes_wade_yml(self) -> None:
+        config = ProjectConfig(hooks=HooksConfig(copy_to_worktree=[".env"]))
+        files = _effective_copy_files(config)
+        assert ".wade.yml" in files
+        assert ".env" in files
+
+    def test_no_duplicate_wade_yml(self) -> None:
+        config = ProjectConfig(hooks=HooksConfig(copy_to_worktree=[".wade.yml", ".env"]))
+        files = _effective_copy_files(config)
+        assert files.count(".wade.yml") == 1
+
+    def test_includes_knowledge_path_when_enabled(self) -> None:
+        config = ProjectConfig(
+            hooks=HooksConfig(copy_to_worktree=[".env"]),
+            knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
+        )
+        files = _effective_copy_files(config)
+        assert "KNOWLEDGE.md" in files
+        assert ".wade.yml" in files
+
+    def test_excludes_knowledge_path_when_disabled(self) -> None:
+        config = ProjectConfig(
+            hooks=HooksConfig(copy_to_worktree=[".env"]),
+            knowledge=KnowledgeConfig(enabled=False),
+        )
+        files = _effective_copy_files(config)
+        assert "KNOWLEDGE.md" not in files
+
+    def test_rejects_absolute_knowledge_path(self) -> None:
+        config = ProjectConfig(
+            knowledge=KnowledgeConfig(enabled=True, path="/etc/secrets"),
+        )
+        files = _effective_copy_files(config)
+        assert "/etc/secrets" not in files
+
+    def test_rejects_escaping_knowledge_path(self) -> None:
+        config = ProjectConfig(
+            knowledge=KnowledgeConfig(enabled=True, path="../outside.md"),
+        )
+        files = _effective_copy_files(config)
+        assert "../outside.md" not in files
+
+    def test_empty_user_config(self) -> None:
+        config = ProjectConfig()
+        files = _effective_copy_files(config)
+        assert ".wade.yml" in files
 
 
 class TestBootstrapWorktree:
