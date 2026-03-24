@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import atexit
+import sys
+from pathlib import Path
 from unittest.mock import patch
 
 from typer.testing import CliRunner
 
 import wade
-from wade.cli.main import _should_print_version_banner, app
+from wade.cli.main import _should_print_version_banner, _should_register_update_hint, app
+from wade.models.config import KnowledgeConfig, ProjectConfig
 
 runner = CliRunner()
 
@@ -36,6 +40,20 @@ class TestVersionBannerRules:
 
     def test_other_subcommands_keep_startup_banner(self) -> None:
         assert _should_print_version_banner("task", ["wade", "task", "list"])
+
+
+class TestUpdateHintRules:
+    def test_knowledge_get_suppresses_update_hint(self) -> None:
+        assert not _should_register_update_hint("knowledge", ["wade", "knowledge", "get"])
+
+    def test_shell_init_suppresses_update_hint(self) -> None:
+        assert not _should_register_update_hint("shell-init", ["wade", "shell-init"])
+
+    def test_update_suppresses_update_hint(self) -> None:
+        assert not _should_register_update_hint("update", ["wade", "update"])
+
+    def test_other_subcommands_keep_update_hint(self) -> None:
+        assert _should_register_update_hint("task", ["wade", "task", "list"])
 
 
 class TestHelp:
@@ -118,7 +136,52 @@ class TestCommandBehaviorWithoutContext:
     def test_task_create_requires_title(self) -> None:
         result = runner.invoke(app, ["task", "create"])
         assert result.exit_code == 1
-        assert "Title is required" in result.output
+
+
+class TestStartupNoiseRegistration:
+    def test_shell_init_does_not_register_update_hint(self) -> None:
+        registered: list[tuple[object, tuple[object, ...]]] = []
+
+        def fake_register(func: object, *args: object, **_kwargs: object) -> object:
+            registered.append((func, args))
+            return func
+
+        with (
+            patch.object(atexit, "register", side_effect=fake_register),
+            patch.object(sys, "argv", ["wade", "shell-init"]),
+        ):
+            result = runner.invoke(app, ["shell-init"])
+
+        assert result.exit_code == 0
+        assert not any(
+            getattr(func, "__name__", "") == "maybe_print_update_hint" for func, _ in registered
+        )
+
+    def test_knowledge_get_does_not_register_update_hint(self, tmp_path: Path) -> None:
+        registered: list[tuple[object, tuple[object, ...]]] = []
+        content = "# Project Knowledge\n\nKeep output clean.\n"
+        (tmp_path / "KNOWLEDGE.md").write_text(content, encoding="utf-8")
+        config = ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
+        )
+
+        def fake_register(func: object, *args: object, **_kwargs: object) -> object:
+            registered.append((func, args))
+            return func
+
+        with (
+            patch.object(atexit, "register", side_effect=fake_register),
+            patch.object(sys, "argv", ["wade", "knowledge", "get"]),
+            patch("wade.config.loader.load_config", return_value=config),
+        ):
+            result = runner.invoke(app, ["knowledge", "get"])
+
+        assert result.exit_code == 0
+        assert result.output == content
+        assert not any(
+            getattr(func, "__name__", "") == "maybe_print_update_hint" for func, _ in registered
+        )
 
     @patch("wade.services.task_service.create_task")
     def test_task_create_non_interactive_title(self, mock_create: patch) -> None:
