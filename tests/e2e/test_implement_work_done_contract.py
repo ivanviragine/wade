@@ -142,6 +142,61 @@ class TestImplementTaskCommand:
         assert hook_marker.is_file()
         assert hook_marker.read_text(encoding="utf-8").strip() == "hook-ran"
 
+    def test_implement_task_cd_copies_knowledge_files_and_ratings_sidecar(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """implement --cd should bootstrap managed knowledge files into the worktree."""
+        issue_number = 46
+        issue_title = "Copy knowledge files into worktree"
+        _seed_mock_issue(
+            mock_gh_cli["state_file"],
+            issue_number=issue_number,
+            title=issue_title,
+            body="## Tasks\n- Verify managed knowledge file bootstrap\n",
+        )
+
+        config_path = e2e_repo / ".wade.yml"
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8")
+            + "\n"
+            + "knowledge:\n"
+            + "  enabled: true\n"
+            + "  path: docs/LEARNINGS.md\n",
+            encoding="utf-8",
+        )
+
+        knowledge_dir = e2e_repo / "docs"
+        knowledge_dir.mkdir(exist_ok=True)
+        knowledge_text = (
+            "# Project Knowledge\n\n---\n\n## a1b2c3d4 | 2026-03-24 | plan\n\n"
+            "Prefer labels.\n\n---\n"
+        )
+        ratings_text = "a1b2c3d4:\n  up: 1\n"
+        (knowledge_dir / "LEARNINGS.md").write_text(knowledge_text, encoding="utf-8")
+        (knowledge_dir / "LEARNINGS.ratings.yml").write_text(ratings_text, encoding="utf-8")
+
+        _init_origin_remote(e2e_repo)
+        branch_name = "feat/46-copy-knowledge-files-into-worktree"
+        expected_worktree = (
+            e2e_repo.parent / ".worktrees" / e2e_repo.name / branch_name.replace("/", "-")
+        )
+
+        result = _run(["implement", str(issue_number), "--cd"], cwd=e2e_repo)
+        assert result.returncode == 0
+        assert Path(result.stdout.strip()) == expected_worktree
+
+        copied_config = (expected_worktree / ".wade.yml").read_text(encoding="utf-8")
+        assert "knowledge:" in copied_config
+        assert "path: docs/LEARNINGS.md" in copied_config
+        assert (expected_worktree / "docs" / "LEARNINGS.md").read_text(
+            encoding="utf-8"
+        ) == knowledge_text
+        assert (expected_worktree / "docs" / "LEARNINGS.ratings.yml").read_text(
+            encoding="utf-8"
+        ) == ratings_text
+
 
 class TestWorkDoneCommand:
     """Test `wade implementation-session done` via CLI subprocess."""
