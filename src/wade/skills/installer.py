@@ -101,6 +101,29 @@ IMPLEMENT_SKILLS: list[str] = ["implementation-session", "task"]
 REVIEW_SKILLS: list[str] = ["review-pr-comments-session", "task"]
 
 
+def get_managed_gitignore_patterns(project_root: Path) -> list[str]:
+    """Compute gitignore patterns for wade-managed skill directories and cross-tool dirs.
+
+    Returns patterns that should be added to the managed gitignore block:
+    - ``.claude/skills/<name>/`` for every name in ``MANAGED_SKILL_NAMES``
+    - Each ``CROSS_TOOL_DIRS`` entry, but only if it is a symlink or does not
+      exist yet (real user directories are left alone).
+    """
+    patterns: list[str] = []
+
+    # All managed skill directories (current + legacy)
+    for name in sorted(MANAGED_SKILL_NAMES):
+        patterns.append(f".claude/skills/{name}/")
+
+    # Cross-tool symlink dirs — only if symlink or absent
+    for cross_dir in CROSS_TOOL_DIRS:
+        cross_path = project_root / cross_dir
+        if cross_path.is_symlink() or not cross_path.exists():
+            patterns.append(cross_dir)
+
+    return patterns
+
+
 def install_skills(
     project_root: Path,
     is_self_init: bool = False,
@@ -183,8 +206,12 @@ def install_skills(
     # Ensure primary skills dir exists before cross-tool symlinks
     primary_skills_dir.mkdir(parents=True, exist_ok=True)
 
-    # Cross-tool symlinks
+    # Cross-tool symlinks — skip real user-owned directories
     for cross_dir in CROSS_TOOL_DIRS:
+        cross_path = project_root / cross_dir
+        if cross_path.exists() and not cross_path.is_symlink():
+            logger.debug("skills.skip_cross_tool_user_dir", path=str(cross_path))
+            continue
         _link_cross_tool(project_root, cross_dir, primary_skills_dir)
         installed.append(cross_dir)
 
@@ -204,9 +231,7 @@ def remove_skills(project_root: Path) -> list[str]:
         if cross_path.is_symlink():
             cross_path.unlink()
             removed.append(cross_dir)
-        elif cross_path.is_dir():
-            shutil.rmtree(cross_path)
-            removed.append(cross_dir)
+        # Real user-owned directories are not removed
 
     # Remove skill directories (current + legacy)
     primary_skills_dir = project_root / ".claude" / "skills"

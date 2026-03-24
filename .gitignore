@@ -27,12 +27,8 @@ htmlcov/
 
 # wade runtime (per-project, gitignored)
 
-# AI tooling — local agent settings and installed skill copies
-.agents/
+# Claude Code local settings (not covered by managed block)
 .claude/
-.cursor/skills
-.gemini/
-.github/skills
 
 # OS
 .DS_Store
@@ -53,4 +49,19 @@ archive/
 .wade.yml
 PLAN.md
 PR-SUMMARY.md
+.claude/skills/address-reviews-session/
+.claude/skills/deps/
+.claude/skills/implementation-session/
+.claude/skills/plan-session/
+.claude/skills/pr-summary/
+.claude/skills/review-pr-comments-session/
+.claude/skills/review-session/
+.claude/skills/sync/
+.claude/skills/task/
+.claude/skills/work-session/
+.claude/skills/workflow/
+.github/skills
+.agents/skills
+.gemini/skills
+.cursor/skills
 # wade:end
