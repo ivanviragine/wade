@@ -200,29 +200,28 @@ def _read_modify_write_ratings(
     """
     ratings_path.parent.mkdir(parents=True, exist_ok=True)
     # Open for read+write, creating if needed
-    fd = ratings_path.open("a+", encoding="utf-8")
-    try:
+    with ratings_path.open("a+", encoding="utf-8") as fd:
         fcntl.flock(fd, fcntl.LOCK_EX)
-        fd.seek(0)
-        content = fd.read()
-        data: dict[str, EntryRating] = {}
-        if content.strip():
-            loaded: Any = yaml.safe_load(content)
-            if isinstance(loaded, dict):
-                data = {
-                    k: EntryRating(**v) if isinstance(v, dict) else EntryRating()
-                    for k, v in loaded.items()
-                }
+        try:
+            fd.seek(0)
+            content = fd.read()
+            data: dict[str, EntryRating] = {}
+            if content.strip():
+                loaded: Any = yaml.safe_load(content)
+                if isinstance(loaded, dict):
+                    data = {
+                        k: EntryRating(**v) if isinstance(v, dict) else EntryRating()
+                        for k, v in loaded.items()
+                    }
 
-        modify_fn(data)
+            modify_fn(data)
 
-        fd.seek(0)
-        fd.truncate()
-        raw = {k: v.model_dump(exclude_none=True) for k, v in data.items()}
-        yaml.safe_dump(raw, fd, default_flow_style=False, sort_keys=True)
-    finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        fd.close()
+            fd.seek(0)
+            fd.truncate()
+            raw = {k: v.model_dump(exclude_none=True) for k, v in data.items()}
+            yaml.safe_dump(raw, fd, default_flow_style=False, sort_keys=True)
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
     return data
 
 
