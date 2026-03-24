@@ -206,8 +206,12 @@ def install_skills(
     # Ensure primary skills dir exists before cross-tool symlinks
     primary_skills_dir.mkdir(parents=True, exist_ok=True)
 
-    # Cross-tool symlinks
+    # Cross-tool symlinks — skip real user-owned directories
     for cross_dir in CROSS_TOOL_DIRS:
+        cross_path = project_root / cross_dir
+        if cross_path.exists() and not cross_path.is_symlink():
+            logger.debug("skills.skip_cross_tool_user_dir", path=str(cross_path))
+            continue
         _link_cross_tool(project_root, cross_dir, primary_skills_dir)
         installed.append(cross_dir)
 
@@ -227,9 +231,7 @@ def remove_skills(project_root: Path) -> list[str]:
         if cross_path.is_symlink():
             cross_path.unlink()
             removed.append(cross_dir)
-        elif cross_path.is_dir():
-            shutil.rmtree(cross_path)
-            removed.append(cross_dir)
+        # Real user-owned directories are not removed
 
     # Remove skill directories (current + legacy)
     primary_skills_dir = project_root / ".claude" / "skills"

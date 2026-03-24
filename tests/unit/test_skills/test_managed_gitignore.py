@@ -25,14 +25,16 @@ class TestGetManagedGitignorePatterns:
 
     def test_includes_cross_tool_dir_when_symlink(self, tmp_path: Path) -> None:
         """Cross-tool dirs that are symlinks should be included."""
-        cross = tmp_path / ".github" / "skills"
-        cross.parent.mkdir(parents=True)
         target = tmp_path / ".claude" / "skills"
         target.mkdir(parents=True)
-        cross.symlink_to(target)
+        for cross_dir in CROSS_TOOL_DIRS:
+            cross = tmp_path / cross_dir
+            cross.parent.mkdir(parents=True, exist_ok=True)
+            cross.symlink_to(target)
 
         patterns = get_managed_gitignore_patterns(tmp_path)
-        assert ".github/skills" in patterns
+        for cross_dir in CROSS_TOOL_DIRS:
+            assert cross_dir in patterns
 
     def test_excludes_cross_tool_dir_when_real_directory(self, tmp_path: Path) -> None:
         """Real user directories should NOT be gitignored."""

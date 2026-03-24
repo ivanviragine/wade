@@ -29,25 +29,27 @@ class TestCheckTrackedManagedFiles:
         tracked = _check_tracked_managed_files(tmp_git_repo)
         assert ".claude/skills/implementation-session/SKILL.md" in tracked
 
-    def test_detects_tracked_cross_tool_file(self, tmp_git_repo: Path) -> None:
-        cross_dir = tmp_git_repo / ".github" / "skills"
-        cross_dir.mkdir(parents=True)
-        (cross_dir / "something.md").write_text("content")
+    def test_detects_tracked_cross_tool_symlink(self, tmp_git_repo: Path) -> None:
+        target = tmp_git_repo / ".claude" / "skills"
+        target.mkdir(parents=True)
+        cross_link = tmp_git_repo / ".github" / "skills"
+        cross_link.parent.mkdir(parents=True)
+        cross_link.symlink_to(target)
         subprocess.run(
-            ["git", "add", ".github/skills/something.md"],
+            ["git", "add", ".github/skills"],
             cwd=tmp_git_repo,
             check=True,
             capture_output=True,
         )
         subprocess.run(
-            ["git", "commit", "-m", "add cross-tool"],
+            ["git", "commit", "-m", "add cross-tool symlink"],
             cwd=tmp_git_repo,
             check=True,
             capture_output=True,
         )
 
         tracked = _check_tracked_managed_files(tmp_git_repo)
-        assert ".github/skills/something.md" in tracked
+        assert ".github/skills" in tracked
 
     def test_detects_tracked_plan_write_guard(self, tmp_git_repo: Path) -> None:
         hook_dir = tmp_git_repo / ".claude" / "hooks"

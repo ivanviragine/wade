@@ -174,13 +174,16 @@ def _check_tracked_managed_files(cwd: Path) -> list[str]:
     """
     from wade.skills.installer import CROSS_TOOL_DIRS, MANAGED_SKILL_NAMES
 
-    # Build path prefixes to check against git index
-    prefixes: list[str] = []
-    for name in MANAGED_SKILL_NAMES:
-        prefixes.append(f".claude/skills/{name}/")
+    # Build path roots to check against git index (bare, no trailing slash).
+    # git ls-files --cached reports tracked symlinks without trailing slashes,
+    # so trailing-slash prefixes would miss them.
+    roots: list[str] = [f".claude/skills/{name}" for name in MANAGED_SKILL_NAMES]
     for cross_dir in CROSS_TOOL_DIRS:
-        prefixes.append(f"{cross_dir}/")
-    prefixes.append(".claude/hooks/plan_write_guard.py")
+        cross_path = cwd / cross_dir
+        if cross_path.is_symlink() or not cross_path.exists():
+            roots.append(cross_dir)
+    for tool_dir in [".claude/hooks", ".cursor/hooks", ".copilot/hooks", ".gemini/hooks"]:
+        roots.append(f"{tool_dir}/plan_write_guard.py")
 
     try:
         result = subprocess.run(
@@ -196,7 +199,7 @@ def _check_tracked_managed_files(cwd: Path) -> list[str]:
     tracked: list[str] = []
     for line in result.stdout.splitlines():
         path = line.strip()
-        if any(path.startswith(p) or path == p for p in prefixes):
+        if any(path == root or path.startswith(f"{root}/") for root in roots):
             tracked.append(path)
 
     return sorted(tracked)

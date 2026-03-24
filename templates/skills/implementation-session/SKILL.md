@@ -249,7 +249,13 @@ The following skill directories under `.claude/skills/` are **managed by wade**
 and must not be modified, committed, or deleted:
 `plan-session`, `implementation-session`, `review-pr-comments-session`, `task`, `deps`.
 
-These are installed per-session in worktrees by wade and are already gitignored.
+Wade also installs cross-tool alias symlinks per-session in worktrees:
+`.github/skills`, `.agents/skills`, `.gemini/skills`, `.cursor/skills`.
+These point to `.claude/skills/` and are gitignored automatically. Do **not**
+modify, commit, or delete these alias directories — touching their symlinked
+locations can cause surprising `done()` failures.
+
+All of the above are installed per-session in worktrees by wade and are already gitignored.
 User-created custom skills under `.claude/skills/` are not affected.
 
 ## Skills reference
