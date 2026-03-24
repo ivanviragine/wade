@@ -229,6 +229,25 @@ def _install_plan_guard_hooks(worktree_path: Path) -> None:
     logger.info("implementation.plan_guard_hooks_installed", path=str(worktree_path))
 
 
+def _effective_copy_files(config: ProjectConfig) -> list[str]:
+    """Compute the full list of files to copy into a new worktree.
+
+    Merges user-configured copy_to_worktree with internal wade files
+    that must always be present (.wade.yml, knowledge path when enabled).
+    """
+    internal: list[str] = [".wade.yml"]
+    if config.knowledge.enabled:
+        kpath = config.knowledge.path
+        if not kpath.startswith("/") and ".." not in kpath.split("/"):
+            internal.append(kpath)
+
+    files: list[str] = list(config.hooks.copy_to_worktree)
+    for f in internal:
+        if f not in files:
+            files.append(f)
+    return files
+
+
 def bootstrap_worktree(
     worktree_path: Path,
     config: ProjectConfig,
@@ -245,8 +264,9 @@ def bootstrap_worktree(
         skills: If provided, install only the listed skills instead of all.
         plan_mode: If True, install file-write guard hooks for plan sessions.
     """
-    # Copy configured files
-    for filename in config.hooks.copy_to_worktree:
+    # Copy configured files + internal wade files that must always be present
+    copy_files = _effective_copy_files(config)
+    for filename in copy_files:
         src = repo_root / filename
         dest = worktree_path / filename
         if src.is_file():
