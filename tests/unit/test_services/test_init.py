@@ -1488,6 +1488,25 @@ class TestPromptCommitOrLocal:
         config = yaml.safe_load((tmp_git_repo / ".wade.yml").read_text())
         assert ".wade.yml" in config["hooks"]["copy_to_worktree"]
 
+    @patch("wade.services.init_service._prompt_knowledge_setup")
+    def test_init_knowledge_nested_path_adds_correct_ratings_to_copy(
+        self,
+        mock_knowledge_setup: MagicMock,
+        tmp_git_repo: Path,
+    ) -> None:
+        """init() with nested knowledge path must add the full sidecar path.
+
+        Regression guard: a .name-based stripping bug would produce
+        'LEARNINGS.ratings.yml' instead of 'docs/LEARNINGS.ratings.yml'.
+        """
+        mock_knowledge_setup.return_value = {"enabled": True, "path": "docs/LEARNINGS.md"}
+        init(project_root=tmp_git_repo, non_interactive=True)
+
+        config = yaml.safe_load((tmp_git_repo / ".wade.yml").read_text())
+        copy_list = config["hooks"]["copy_to_worktree"]
+        assert "docs/LEARNINGS.ratings.yml" in copy_list
+        assert "LEARNINGS.ratings.yml" not in copy_list
+
 
 # ---------------------------------------------------------------------------
 # Provider setup helpers

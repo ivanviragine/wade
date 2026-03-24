@@ -160,7 +160,7 @@ def parse_entries(text: str) -> list[ParsedEntry]:
 
 def find_entry_id(knowledge_path: Path, entry_id: str) -> bool:
     """Check whether an entry ID exists in the knowledge file."""
-    if not knowledge_path.exists():
+    if not knowledge_path.is_file():
         return False
     text = knowledge_path.read_text(encoding="utf-8")
     entries = parse_entries(text)
