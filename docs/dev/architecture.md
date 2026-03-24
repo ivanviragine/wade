@@ -202,7 +202,7 @@ knowledge:
 
 **Worktree hooks**: The `hooks` section lets projects run setup automatically when a worktree is created. `post_worktree_create` points to a script that runs in the new worktree (e.g., installing dependencies). `copy_to_worktree` lists files to copy from the project root into the worktree before the hook runs (e.g., `.env`). Hook failures are non-fatal — a warning is logged and the session continues.
 
-**Project knowledge**: The optional `knowledge` section enables a project knowledge file for cross-session AI learning. `wade init` can create the file and add it to `hooks.copy_to_worktree` so sessions can read and update the same relative path from worktrees. The path must stay inside the project root.
+**Project knowledge**: The optional `knowledge` section enables a project knowledge file for cross-session AI learning. `wade init` can create the file and add it to `hooks.copy_to_worktree` so sessions can read and update the same relative path from worktrees. `wade knowledge add` appends learnings to that file, and `wade knowledge get` prints its current contents. The path must stay inside the project root.
 
 ## Config Migration Pipeline
 

@@ -135,6 +135,7 @@ wade 42
 | `wade deinit` | Remove WADE from the current project |
 | `wade check-config` | Validate `.wade.yml` configuration |
 | `wade knowledge add` | Append a project learning from stdin |
+| `wade knowledge get` | Print the current project knowledge file |
 
 Short aliases: `wade p` (plan), `wade i <N>` (implement), `wade r <N>` (review pr-comments).
 
