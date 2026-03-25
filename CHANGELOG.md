@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.11.2] — 2026-03-25
+
+### Tests
+
+- rehabilitate workflow test reliability (#146) (26771d3)
+
 ## [v0.11.1] — 2026-03-24
 
 ### Bug Fixes
