@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from wade.models.config import ProviderConfig, ProviderID
-from wade.models.task import Label, TaskState
+from wade.models.task import Complexity, Label, TaskState
 from wade.providers.clickup import ClickUpProvider, _parse_clickup_task
 from wade.utils.http import APIError
 
@@ -94,6 +94,11 @@ class TestParseClickupTask:
         assert task.labels[0].name == "bug"
         assert task.labels[0].color == "d73a4a"
         assert task.labels[1].name == "feature"
+
+    def test_complexity_tag_is_case_insensitive(self) -> None:
+        raw = _make_raw_task(tags=[{"name": " Complexity:VERY_COMPLEX ", "tag_bg": "#c5def5"}])
+        task = _parse_clickup_task(raw)
+        assert task.complexity == Complexity.VERY_COMPLEX
 
     def test_null_body(self) -> None:
         raw = _make_raw_task(description="")

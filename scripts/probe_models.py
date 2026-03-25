@@ -351,6 +351,23 @@ def report_cli_args() -> bool:
     return has_cli_diff
 
 
+def _build_probe_subprocess_env() -> dict[str, str]:
+    """Build an env for nested probe subprocesses without AI-session sentinels.
+
+    When this developer helper is run inside an existing Claude Code session,
+    passing the session sentinel vars through can make a child Claude invocation
+    mis-detect itself as nested. Strip the sentinels before launching the
+    headless correction subprocess.
+    """
+    import os
+
+    env = os.environ.copy()
+    env.pop("CLAUDECODE", None)  # Backward compatibility with older env naming
+    env.pop("CLAUDE_CODE", None)
+    env.pop("CLAUDE_CODE_ENTRYPOINT", None)
+    return env
+
+
 def main() -> int:
     from wade.ui.console import console
 
@@ -452,10 +469,7 @@ def main() -> int:
         "Please apply the following changes to the lists:\n" + "\n".join(diff_summary)
     )
 
-    import os
-
-    env = os.environ.copy()
-    env.pop("CLAUDECODE", None)  # Prevent nested session crash if user runs this inside Claude Code
+    env = _build_probe_subprocess_env()
 
     expected_schema = {
         "type": "object",

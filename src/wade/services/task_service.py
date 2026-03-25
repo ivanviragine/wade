@@ -12,12 +12,14 @@ from typing import Any
 import structlog
 
 from wade.config.loader import load_config
+from wade.models.ai import ModelBreakdown
 from wade.models.config import ProjectConfig
 from wade.models.task import Complexity, Label, LabelType, PlanFile, Task, TaskState
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.ui.console import console
 from wade.utils.markdown import remove_marker_block
+from wade.utils.token_usage_markdown import build_token_usage_block
 
 logger = structlog.get_logger()
 
@@ -252,86 +254,39 @@ def build_plan_summary_block(
     model_breakdown: list[dict[str, Any]] | None = None,
 ) -> str:
     """Build the plan summary markdown block."""
-    from wade.ai_tools.transcript import format_count
+    extra_rows: list[str] | None = None
+    if per_issue_estimate is not None and per_issue_estimate > 0:
+        from wade.ai_tools.transcript import format_count
 
-    bd = model_breakdown or []
-    multi = len(bd) > 1
+        extra_rows = [f"| This issue (est.) | **{format_count(per_issue_estimate)}** |"]
 
-    if multi:
-        names = [row.get("model", "unknown") for row in bd]
-        n = len(names)
-        header = "| Metric | Total | " + " | ".join(f"`{m}`" for m in names) + " |"
-        sep = "| " + " | ".join(["---"] * (2 + n)) + " |"
-        empty = " |" * n
-
-        lines = [
-            PLAN_SUMMARY_MARKER_START,
-            "",
-            "## Token Usage (Planning)",
-            "",
-            header,
-            sep,
-        ]
-
-        if ai_tool:
-            lines.append(f"| Tool | `{ai_tool}` |{empty}")
-
-        if total_tokens is not None and total_tokens > 0:
-            per_total = " | ".join(
-                f"**{format_count(row.get('input', 0) + row.get('output', 0) + row.get('cached', 0))}**"  # noqa: E501
-                for row in bd
+    breakdown_rows: list[ModelBreakdown] | None = None
+    if model_breakdown:
+        breakdown_rows = [
+            ModelBreakdown(
+                model=str(row.get("model", "unknown")),
+                input_tokens=int(row.get("input", 0) or 0),
+                output_tokens=int(row.get("output", 0) or 0),
+                cached_tokens=int(row.get("cached", 0) or 0),
             )
-            lines.append(f"| Total tokens | **{format_count(total_tokens)}** | {per_total} |")
-            if input_tokens is not None:
-                per_inp = " | ".join(f"**{format_count(row.get('input', 0))}**" for row in bd)
-                lines.append(f"| Input tokens | **{format_count(input_tokens)}** | {per_inp} |")
-            if output_tokens is not None:
-                per_out = " | ".join(f"**{format_count(row.get('output', 0))}**" for row in bd)
-                lines.append(f"| Output tokens | **{format_count(output_tokens)}** | {per_out} |")
-            if cached_tokens is not None:
-                per_cache = " | ".join(f"**{format_count(row.get('cached', 0))}**" for row in bd)
-                lines.append(f"| Cached tokens | **{format_count(cached_tokens)}** | {per_cache} |")
-        else:
-            lines.append(f"| Total tokens | *unavailable* |{empty}")
-
-        if premium_requests is not None and premium_requests > 0:
-            lines.append(f"| Premium requests (est.) | **{premium_requests}** |{empty}")
-
-    else:
-        lines = [
-            PLAN_SUMMARY_MARKER_START,
-            "",
-            "## Token Usage (Planning)",
-            "",
-            "| Metric | Value |",
-            "| --- | --- |",
+            for row in model_breakdown
         ]
 
-        if ai_tool:
-            lines.append(f"| Tool | `{ai_tool}` |")
-        if model:
-            lines.append(f"| Model | `{model}` |")
-
-        if total_tokens is not None and total_tokens > 0:
-            lines.append(f"| Total tokens | **{format_count(total_tokens)}** |")
-            if input_tokens is not None:
-                lines.append(f"| Input tokens | **{format_count(input_tokens)}** |")
-            if output_tokens is not None:
-                lines.append(f"| Output tokens | **{format_count(output_tokens)}** |")
-            if cached_tokens is not None:
-                lines.append(f"| Cached tokens | **{format_count(cached_tokens)}** |")
-            if per_issue_estimate is not None and per_issue_estimate > 0:
-                lines.append(f"| This issue (est.) | **{format_count(per_issue_estimate)}** |")
-        else:
-            lines.append("| Total tokens | *unavailable* |")
-
-        if premium_requests is not None and premium_requests > 0:
-            lines.append(f"| Premium requests (est.) | **{premium_requests}** |")
-
-    lines.append("")
-    lines.append(PLAN_SUMMARY_MARKER_END)
-
-    return "\n".join(lines)
+    block = build_token_usage_block(
+        marker_start=PLAN_SUMMARY_MARKER_START,
+        marker_end=PLAN_SUMMARY_MARKER_END,
+        heading="## Token Usage (Planning)",
+        ai_tool=ai_tool,
+        model=model,
+        total_tokens=total_tokens,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cached_tokens=cached_tokens,
+        extra_metric_rows=extra_rows,
+        premium_requests=premium_requests,
+        model_breakdown=breakdown_rows,
+    )
+    return block
 
 
 def apply_plan_token_usage(
@@ -571,7 +526,7 @@ def list_tasks(
             }
             for t in tasks
         ]
-        console.raw(json.dumps(output, indent=2))
+        console.raw(json.dumps(output, indent=2) + "\n")
         return tasks
 
     if quiet:
@@ -697,7 +652,7 @@ def read_task(
             "labels": [label.name for label in task.labels],
             "url": task.url,
         }
-        console.raw(json.dumps(output, indent=2))
+        console.raw(json.dumps(output, indent=2) + "\n")
     else:
         state_variant = "open" if task.state == TaskState.OPEN else "closed"
         state_str = console.badge_str(task.state.value, state_variant)

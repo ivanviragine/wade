@@ -135,6 +135,29 @@ class TestClassifyStaleness:
         )
         assert result == WorktreeState.ACTIVE
 
+    def test_deleted_issue_prefetch_none_does_not_refetch(self, tmp_git_repo: Path) -> None:
+        """Prefetched missing tasks should not trigger a second provider read."""
+        from wade.git.worktree import create_worktree
+
+        branch = "feat/42-test"
+        wt_dir = tmp_git_repo.parent / "wt-42"
+        create_worktree(tmp_git_repo, branch, wt_dir, "main")
+
+        provider = MagicMock()
+
+        result = classify_staleness(
+            repo_root=tmp_git_repo,
+            branch=branch,
+            main_branch="main",
+            issue_number="42",
+            provider=provider,
+            task=None,
+            task_lookup_attempted=True,
+        )
+
+        assert result == WorktreeState.STALE_EMPTY
+        provider.read_task.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # Implementation usage block
@@ -185,10 +208,36 @@ class TestBuildImplUsageBlock:
         # Multi-model: names appear as column headers, not row starters
         assert "| Metric | Total | `claude-opus-4-6` | `claude-haiku-4-5` |" in block
         assert "| Input tokens | **3,400** | **3,000** | **400** |" in block
+        assert "| Cached tokens | **500** | **500** | **0** |" in block
         assert "**400**" in block
         # No standalone model-name rows (rows that start with the model name)
         assert "\n| `claude-opus-4-6`" not in block
         assert "\n| `claude-haiku-4-5`" not in block
+
+    def test_breakdown_only_derives_aggregate_rows(self) -> None:
+        from wade.models.ai import ModelBreakdown
+
+        usage = TokenUsage(
+            model_breakdown=[
+                ModelBreakdown(
+                    model="claude-opus-4-6",
+                    input_tokens=3000,
+                    output_tokens=1000,
+                    cached_tokens=500,
+                ),
+                ModelBreakdown(
+                    model="claude-haiku-4-5",
+                    input_tokens=400,
+                    output_tokens=100,
+                    cached_tokens=0,
+                ),
+            ],
+        )
+        block = build_impl_usage_block(ai_tool="claude", token_usage=usage)
+        assert "| Total tokens | **5,000** | **4,500** | **500** |" in block
+        assert "| Input tokens | **3,400** | **3,000** | **400** |" in block
+        assert "| Output tokens | **1,100** | **1,000** | **100** |" in block
+        assert "| Cached tokens | **500** | **500** | **0** |" in block
 
     def test_single_model_no_extra_row(self) -> None:
         from wade.models.ai import ModelBreakdown
@@ -667,6 +716,33 @@ class TestListSessions:
         ):
             sessions = list_sessions(json_output=True, project_root=tmp_git_repo)
             assert len(sessions) == 1
+
+    def test_gracefully_handles_issue_lookup_failures(self, tmp_git_repo: Path) -> None:
+        from wade.git.worktree import create_worktree
+
+        wt_dir = tmp_git_repo.parent / "wt-42"
+        create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
+
+        provider = MagicMock()
+        provider.read_task_or_none.side_effect = RuntimeError("gh unavailable")
+
+        with (
+            patch(
+                "wade.services.implementation_service.load_config",
+                return_value=ProjectConfig(
+                    project=ProjectSettings(main_branch="main"),
+                ),
+            ),
+            patch("wade.services.implementation_service.get_provider", return_value=provider),
+        ):
+            sessions = list_sessions(json_output=True, project_root=tmp_git_repo)
+
+        assert len(sessions) == 1
+        assert sessions[0]["issue"] == "42"
+        assert sessions[0]["issue_state"] is None
+        assert sessions[0]["issue_title"] is None
+        assert sessions[0]["staleness"] == WorktreeState.ACTIVE.value
+        provider.read_task.assert_not_called()
 
     def test_show_all_includes_main(self, tmp_git_repo: Path) -> None:
         with patch(

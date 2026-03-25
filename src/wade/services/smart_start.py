@@ -264,6 +264,11 @@ def smart_start(
             )
         )
 
+    if not prompts.is_tty():
+        default_label, default_action = menu_options[0]
+        console.info(f"Non-interactive mode — defaulting to '{default_label}'.")
+        return default_action()
+
     labels = [label for label, _ in menu_options]
     choice = prompts.select(
         f"PR #{pr_number_int} exists — what do you want to do?",
@@ -308,7 +313,18 @@ def _run_review_pr_comments(
         )
     elif outcome == PollOutcome.QUIET_TIMEOUT:
         review_service._quiet_next_steps_prompt(
-            repo_root, branch_name, issue_number, worktree_path, pr_number, provider
+            repo_root,
+            branch_name,
+            issue_number,
+            worktree_path,
+            pr_number,
+            provider,
+            ai_tool=ctx.ai_tool,
+            model=ctx.model,
+            detach=ctx.detach,
+            ai_explicit=ctx.ai_explicit,
+            model_explicit=ctx.model_explicit,
+            yolo=ctx.yolo,
         )
         return True
     else:  # INTERRUPTED or PR_CLOSED
@@ -385,6 +401,10 @@ def _run_continue_working(
 
     resumable = _get_latest_resumable_session(repo_root, pr_number)
     if not resumable:
+        return ctx.run_implement()
+
+    if not prompts.is_tty():
+        console.info("Non-interactive mode — starting a new session instead of resuming.")
         return ctx.run_implement()
 
     session_id = resumable.session_id

@@ -72,6 +72,7 @@ from wade.utils.terminal import (
     start_title_keeper,
     stop_title_keeper,
 )
+from wade.utils.token_usage_markdown import resolve_token_usage_totals
 
 logger = structlog.get_logger()
 
@@ -172,7 +173,7 @@ def _check_tracked_managed_files(cwd: Path) -> list[str]:
     - Cross-tool symlink directories
     - The wade-generated plan_write_guard.py hook
     """
-    from wade.skills.installer import CROSS_TOOL_DIRS, MANAGED_SKILL_NAMES
+    from wade.skills.installer import CROSS_TOOL_DIRS, MANAGED_SKILL_NAMES, PLAN_GUARD_HOOK_FILES
 
     # Build path roots to check against git index (bare, no trailing slash).
     # git ls-files --cached reports tracked symlinks without trailing slashes,
@@ -182,8 +183,7 @@ def _check_tracked_managed_files(cwd: Path) -> list[str]:
         cross_path = cwd / cross_dir
         if cross_path.is_symlink() or not cross_path.exists():
             roots.append(cross_dir)
-    for tool_dir in [".claude/hooks", ".cursor/hooks", ".copilot/hooks", ".gemini/hooks"]:
-        roots.append(f"{tool_dir}/plan_write_guard.py")
+    roots.extend(PLAN_GUARD_HOOK_FILES)
 
     try:
         result = subprocess.run(
@@ -274,13 +274,16 @@ def _effective_copy_files(config: ProjectConfig) -> list[str]:
     """Compute the full list of files to copy into a new worktree.
 
     Merges user-configured copy_to_worktree with internal wade files
-    that must always be present (.wade.yml, knowledge path when enabled).
+    that must always be present (.wade.yml, knowledge path + ratings when enabled).
     """
+    from wade.services.knowledge_service import resolve_ratings_path
+
     internal: list[str] = [".wade.yml"]
     if config.knowledge.enabled:
         kpath = config.knowledge.path
         if not kpath.startswith("/") and ".." not in kpath.split("/"):
             internal.append(kpath)
+            internal.append(str(resolve_ratings_path(Path(kpath))))
 
     files: list[str] = list(config.hooks.copy_to_worktree)
     for f in internal:
@@ -524,6 +527,37 @@ def bootstrap_draft_pr(
         return None
 
 
+def _usage_has_token_metrics(usage: TokenUsage | None) -> bool:
+    """Return True when usage contains aggregate or per-model token metrics."""
+    return bool(
+        usage
+        and (
+            usage.total_tokens is not None
+            or usage.input_tokens is not None
+            or usage.output_tokens is not None
+            or usage.cached_tokens is not None
+            or (usage.premium_requests or 0) > 0
+            or usage.model_breakdown
+        )
+    )
+
+
+def _resolve_usage_totals(
+    token_usage: TokenUsage | None,
+) -> tuple[int | None, int | None, int | None, int | None]:
+    """Resolve aggregate token counts, deriving them from breakdown rows when needed."""
+    if token_usage is None:
+        return None, None, None, None
+
+    return resolve_token_usage_totals(
+        total_tokens=token_usage.total_tokens,
+        input_tokens=token_usage.input_tokens,
+        output_tokens=token_usage.output_tokens,
+        cached_tokens=token_usage.cached_tokens,
+        model_breakdown=token_usage.model_breakdown,
+    )
+
+
 def _capture_post_session_usage(
     transcript_path: Path | None,
     adapter: AbstractAITool,
@@ -549,7 +583,7 @@ def _capture_post_session_usage(
         logger.warning("implementation.transcript_parse_failed", error=str(e))
         return None
 
-    has_tokens = usage and (usage.total_tokens or usage.input_tokens)
+    has_tokens = _usage_has_token_metrics(usage)
     has_session = usage and usage.session_id
     if not has_tokens and not has_session:
         logger.warning("implementation.no_token_usage", transcript=str(transcript_path))
@@ -569,20 +603,25 @@ def _capture_post_session_usage(
             current_body = git_pr.get_pr_body(repo_root, pr_number)
             if current_body is not None:
                 new_body = current_body
-                assert usage is not None
-                new_body = append_impl_usage_entry(
-                    new_body,
-                    ai_tool=ai_tool,
-                    model=effective_model,
-                    token_usage=usage,
-                )
+                if has_tokens:
+                    assert usage is not None
+                    new_body = append_impl_usage_entry(
+                        new_body,
+                        ai_tool=ai_tool,
+                        model=effective_model,
+                        token_usage=usage,
+                    )
                 if has_session:
                     assert usage is not None and usage.session_id is not None
                     new_body = append_session_to_body(
-                        new_body, phase="Implement", ai_tool=ai_tool, session_id=usage.session_id
+                        new_body,
+                        phase="Implement",
+                        ai_tool=ai_tool,
+                        session_id=usage.session_id,
                     )
                 if git_pr.update_pr_body(repo_root, pr_number, new_body):
-                    console.success("Updated PR with implementation usage stats.")
+                    if has_tokens:
+                        console.success("Updated PR with implementation usage stats.")
                     logger.info(
                         "implementation.impl_usage_updated",
                         pr=pr_number,
@@ -598,20 +637,25 @@ def _capture_post_session_usage(
         with contextlib.suppress(Exception):
             task = provider.read_task(str(issue_number))
             new_body = task.body
-            assert usage is not None
-            new_body = append_impl_usage_entry(
-                new_body,
-                ai_tool=ai_tool,
-                model=effective_model,
-                token_usage=usage,
-            )
+            if has_tokens:
+                assert usage is not None
+                new_body = append_impl_usage_entry(
+                    new_body,
+                    ai_tool=ai_tool,
+                    model=effective_model,
+                    token_usage=usage,
+                )
             if has_session:
                 assert usage is not None and usage.session_id is not None
                 new_body = append_session_to_body(
-                    new_body, phase="Implement", ai_tool=ai_tool, session_id=usage.session_id
+                    new_body,
+                    phase="Implement",
+                    ai_tool=ai_tool,
+                    session_id=usage.session_id,
                 )
             provider.update_task(str(issue_number), body=new_body)
-            console.success("Updated issue with implementation usage stats.")
+            if has_tokens:
+                console.success("Updated issue with implementation usage stats.")
             logger.info("implementation.impl_usage_issue_updated", issue=issue_number)
 
     return effective_model
@@ -659,11 +703,28 @@ def _post_implementation_lifecycle(
     worktree_path: Path | None,
     config: ProjectConfig,
     provider: AbstractTaskProvider,
+    *,
+    ai_tool: str | None = None,
+    model: str | None = None,
+    detach: bool = False,
+    ai_explicit: bool = False,
+    model_explicit: bool = False,
+    yolo: bool | None = None,
 ) -> MergeStatus:
     """Run post-implementation lifecycle and return the merge status."""
     if config.project.merge_strategy == MergeStrategy.PR:
         return _post_implementation_lifecycle_pr(
-            repo_root, branch, issue_number, worktree_path, provider
+            repo_root,
+            branch,
+            issue_number,
+            worktree_path,
+            provider,
+            ai_tool=ai_tool,
+            model=model,
+            detach=detach,
+            ai_explicit=ai_explicit,
+            model_explicit=model_explicit,
+            yolo=yolo,
         )
     return _post_implementation_lifecycle_direct(
         repo_root, branch, issue_number, worktree_path, config, provider
@@ -736,6 +797,13 @@ def _post_implementation_lifecycle_pr(
     issue_number: str | int | None,
     worktree_path: Path | None,
     provider: AbstractTaskProvider,
+    *,
+    ai_tool: str | None = None,
+    model: str | None = None,
+    detach: bool = False,
+    ai_explicit: bool = False,
+    model_explicit: bool = False,
+    yolo: bool | None = None,
 ) -> MergeStatus:
     """Run the PR-based post-implementation lifecycle."""
     pr_info = git_pr.get_pr_for_branch(repo_root, branch)
@@ -749,8 +817,11 @@ def _post_implementation_lifecycle_pr(
         return MergeStatus.NOT_MERGED
 
     pr_url = str(pr_info.get("url", ""))
-    if pr_url and prompts.confirm("Open PR in browser?", default=True):
+    if pr_url and prompts.is_tty() and prompts.confirm("Open PR in browser?", default=True):
         webbrowser.open(pr_url)
+
+    if not prompts.is_tty():
+        return MergeStatus.NOT_MERGED
 
     choice = prompts.select(
         f"PR #{pr_number} — what next?",
@@ -763,10 +834,30 @@ def _post_implementation_lifecycle_pr(
 
         outcome = review_service.poll_for_reviews(provider, repo_root, int(pr_number), branch)
         if outcome == PollOutcome.COMMENTS_FOUND and issue_number:
-            _ = review_service.start(str(issue_number), project_root=repo_root)
+            _ = review_service.start(
+                str(issue_number),
+                ai_tool=ai_tool,
+                model=model,
+                project_root=repo_root,
+                detach=detach,
+                ai_explicit=ai_explicit,
+                model_explicit=model_explicit,
+                yolo=yolo,
+            )
         elif outcome == PollOutcome.QUIET_TIMEOUT:
             review_service._quiet_next_steps_prompt(
-                repo_root, branch, issue_number, worktree_path, int(pr_number), provider
+                repo_root,
+                branch,
+                issue_number,
+                worktree_path,
+                int(pr_number),
+                provider,
+                ai_tool=ai_tool,
+                model=model,
+                detach=detach,
+                ai_explicit=ai_explicit,
+                model_explicit=model_explicit,
+                yolo=yolo,
             )
         return MergeStatus.NOT_MERGED
 
@@ -1295,6 +1386,7 @@ def start(
                     )
 
                 if launch_completed:
+                    effective_model = resolved_model or detected_model
                     try:
                         merge_status = _post_implementation_lifecycle(
                             repo_root=repo_root,
@@ -1303,6 +1395,12 @@ def start(
                             worktree_path=worktree_path,
                             config=config,
                             provider=provider,
+                            ai_tool=resolved_tool,
+                            model=effective_model,
+                            detach=detach,
+                            ai_explicit=ai_explicit,
+                            model_explicit=model_explicit,
+                            yolo=resolved_yolo,
                         )
                     except Exception:
                         logger.exception("post_implementation_lifecycle.failed")
@@ -1613,6 +1711,8 @@ def classify_staleness(
     issue_number: str | None = None,
     provider: AbstractTaskProvider | None = None,
     task: Task | None = None,
+    task_lookup_attempted: bool = False,
+    task_lookup_failed: bool = False,
 ) -> WorktreeState:
     """Classify a worktree's staleness.
 
@@ -1622,15 +1722,24 @@ def classify_staleness(
     - STALE_MERGED — branch merged into main
     - STALE_REMOTE_GONE — remote tracking branch deleted
 
-    If task is provided, it is used directly (avoiding a redundant fetch).
-    If task is None but issue_number and provider are provided, the task is fetched.
+    If task_lookup_failed is True, issue state is treated as unknown and the
+    worktree is kept ACTIVE as a fail-safe.
+    If task_lookup_attempted is True, *task* is treated as the final result of
+    that lookup (including None for deleted/missing issues) and no re-fetch
+    occurs.
+    If task_lookup_attempted is False but issue_number and provider are
+    provided, the task is fetched on demand.
     """
     from wade.models.task import TaskState
 
     # 1. If issue number, check issue state
     if issue_number and provider:
-        # Use provided task if available, otherwise fetch it
-        if task is not None:
+        if task_lookup_failed:
+            return WorktreeState.ACTIVE
+
+        # Use provided lookup result (including None for deleted issues),
+        # otherwise fetch it on demand.
+        if task_lookup_attempted:
             issue_task = task
         else:
             try:
@@ -1640,7 +1749,7 @@ def classify_staleness(
                 # Can't read issue — treat as active (fail-safe)
                 return WorktreeState.ACTIVE
 
-        if issue_task.state == TaskState.OPEN:
+        if issue_task is not None and issue_task.state == TaskState.OPEN:
             return WorktreeState.ACTIVE
 
     # 2. Count commits ahead of main
@@ -1691,6 +1800,8 @@ def _build_session_usage_table(
 
     breakdown = token_usage.model_breakdown if token_usage else []
     multi = len(breakdown) > 1
+    total_tokens, input_tokens, output_tokens, cached_tokens = _resolve_usage_totals(token_usage)
+    has_tokens = _usage_has_token_metrics(token_usage)
 
     lines: list[str] = []
 
@@ -1706,9 +1817,7 @@ def _build_session_usage_table(
         if ai_tool:
             lines.append(f"| Tool | `{ai_tool}` |{empty}")
 
-        has_tokens = token_usage and token_usage.total_tokens and token_usage.total_tokens > 0
         if has_tokens:
-            assert token_usage is not None  # for type narrowing
 
             def per(attr: str) -> str:
                 return " | ".join(f"**{format_count(getattr(r, attr))}**" for r in breakdown)
@@ -1717,17 +1826,16 @@ def _build_session_usage_table(
                 f"**{format_count((r.input_tokens or 0) + (r.output_tokens or 0) + (r.cached_tokens or 0))}**"  # noqa: E501
                 for r in breakdown
             )
-            lines.append(
-                f"| Total tokens | **{format_count(token_usage.total_tokens)}** | {per_total} |"
-            )
-            if token_usage.input_tokens:
-                inp_total = format_count(token_usage.input_tokens)
+            if total_tokens is not None:
+                lines.append(f"| Total tokens | **{format_count(total_tokens)}** | {per_total} |")
+            if input_tokens is not None:
+                inp_total = format_count(input_tokens)
                 lines.append(f"| Input tokens | **{inp_total}** | {per('input_tokens')} |")
-            if token_usage.output_tokens:
-                out_total = format_count(token_usage.output_tokens)
+            if output_tokens is not None:
+                out_total = format_count(output_tokens)
                 lines.append(f"| Output tokens | **{out_total}** | {per('output_tokens')} |")
-            if token_usage.cached_tokens:
-                cac_total = format_count(token_usage.cached_tokens)
+            if cached_tokens is not None:
+                cac_total = format_count(cached_tokens)
                 lines.append(f"| Cached tokens | **{cac_total}** | {per('cached_tokens')} |")
         else:
             lines.append(f"| Total tokens | *unavailable* |{empty}")
@@ -1748,16 +1856,15 @@ def _build_session_usage_table(
         if model:
             lines.append(f"| Model | `{model}` |")
 
-        has_tokens = token_usage and token_usage.total_tokens and token_usage.total_tokens > 0
         if has_tokens:
-            assert token_usage is not None  # for type narrowing
-            lines.append(f"| Total tokens | **{format_count(token_usage.total_tokens)}** |")
-            if token_usage.input_tokens:
-                lines.append(f"| Input tokens | **{format_count(token_usage.input_tokens)}** |")
-            if token_usage.output_tokens:
-                lines.append(f"| Output tokens | **{format_count(token_usage.output_tokens)}** |")
-            if token_usage.cached_tokens:
-                lines.append(f"| Cached tokens | **{format_count(token_usage.cached_tokens)}** |")
+            if total_tokens is not None:
+                lines.append(f"| Total tokens | **{format_count(total_tokens)}** |")
+            if input_tokens is not None:
+                lines.append(f"| Input tokens | **{format_count(input_tokens)}** |")
+            if output_tokens is not None:
+                lines.append(f"| Output tokens | **{format_count(output_tokens)}** |")
+            if cached_tokens is not None:
+                lines.append(f"| Cached tokens | **{format_count(cached_tokens)}** |")
         else:
             lines.append("| Total tokens | *unavailable* |")
 
@@ -2063,7 +2170,7 @@ def sync(
         ev = SyncEvent(event=event, data=data)
         events.append(ev)
         if json_output:
-            console.raw(json.dumps({"event": event, **data}))
+            console.raw(json.dumps({"event": event, **data}) + "\n")
 
     # Pre-flight checks
     try:
@@ -2684,11 +2791,21 @@ def list_sessions(
         task_info: Task | None = None
         issue_state: str | None = None
         issue_title: str | None = None
+        task_lookup_attempted = False
+        task_lookup_failed = False
         if issue_number:
+            task_lookup_attempted = True
             try:
                 task_info = provider_inst.read_task_or_none(issue_number)
-            except RuntimeError:
+            except Exception:
+                logger.debug(
+                    "implementation.list_issue_read_failed",
+                    issue=issue_number,
+                    branch=wt_branch,
+                    exc_info=True,
+                )
                 task_info = None
+                task_lookup_failed = True
             if task_info:
                 issue_state = task_info.state.value
                 issue_title = task_info.title
@@ -2700,6 +2817,8 @@ def list_sessions(
             issue_number=issue_number,
             provider=provider_inst,
             task=task_info,
+            task_lookup_attempted=task_lookup_attempted,
+            task_lookup_failed=task_lookup_failed,
         )
 
         # Count commits ahead
@@ -2723,7 +2842,7 @@ def list_sessions(
         return sessions
 
     if json_output:
-        console.raw(json.dumps(sessions, indent=2))
+        console.raw(json.dumps(sessions, indent=2) + "\n")
         return sessions
 
     if not sessions:

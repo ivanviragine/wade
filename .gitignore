@@ -60,6 +60,10 @@ PR-SUMMARY.md
 .claude/skills/task/
 .claude/skills/work-session/
 .claude/skills/workflow/
+.claude/hooks/plan_write_guard.py
+.copilot/hooks/plan_write_guard.py
+.cursor/hooks/plan_write_guard.py
+.gemini/hooks/plan_write_guard.py
 .github/skills
 .agents/skills
 .gemini/skills

@@ -1,4 +1,4 @@
-"""Background update check — poll PyPI for newer wade releases.
+"""Background update check — poll PyPI for newer wade-cli releases.
 
 Checks are cached for 2 hours to avoid network overhead on every command.
 All errors are silently swallowed; this must never disrupt user workflows.
@@ -22,7 +22,7 @@ import structlog
 logger = structlog.get_logger()
 
 CHECK_INTERVAL_SECS = 7200  # 2 hours
-PYPI_URL = "https://pypi.org/pypi/wade/json"
+PYPI_URL = "https://pypi.org/pypi/wade-cli/json"
 CACHE_FILE = Path.home() / ".local" / "share" / "wade" / "update-check.json"
 
 
@@ -73,7 +73,7 @@ def _save_cache(latest_version: str, timestamp: float) -> None:
 
 
 def _fetch_latest_version() -> str | None:
-    """Fetch the latest wade version from PyPI. Returns None on any error."""
+    """Fetch the latest wade-cli version from PyPI. Returns None on any error."""
     try:
         with urlopen(PYPI_URL, timeout=5) as resp:
             data = json.loads(resp.read())

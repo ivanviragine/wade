@@ -21,6 +21,7 @@ from wade.services.implementation_service import (
 from wade.services.review_service import (
     _capture_review_session_usage,
     _post_review_lifecycle,
+    _quiet_next_steps_prompt,
     _recover_worktree,
     build_review_prompt,
     count_unresolved_threads,
@@ -1400,6 +1401,174 @@ class TestRecoverWorktree:
 
 
 # ---------------------------------------------------------------------------
+# _quiet_next_steps_prompt()
+# ---------------------------------------------------------------------------
+
+
+class TestQuietNextStepsPrompt:
+    """Tests for the shared quiet next-steps prompt."""
+
+    @patch("wade.services.review_service.poll_for_reviews")
+    @patch("wade.services.review_service._merge_pr")
+    @patch("wade.ui.prompts.is_tty", return_value=False)
+    def test_non_tty_returns_without_prompting(
+        self,
+        mock_is_tty: MagicMock,
+        mock_merge: MagicMock,
+        mock_poll: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        provider = MagicMock()
+
+        _quiet_next_steps_prompt(tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider)
+
+        mock_poll.assert_not_called()
+        mock_merge.assert_not_called()
+
+    @patch("wade.services.review_service.get_comprehensive_review_status")
+    @patch("wade.services.review_service.start")
+    @patch("wade.services.review_service.poll_for_reviews")
+    @patch("wade.ui.prompts.select", return_value=0)
+    @patch("wade.ui.prompts.is_tty", return_value=True)
+    def test_keep_polling_comments_found_recurses_to_start_with_repo_root(
+        self,
+        mock_is_tty: MagicMock,
+        mock_select: MagicMock,
+        mock_poll: MagicMock,
+        mock_start: MagicMock,
+        mock_status: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """When comments arrive while polling, restart review in the same repo root."""
+        from wade.models.review import PollOutcome, PRReviewStatus
+
+        mock_status.return_value = PRReviewStatus()
+        mock_poll.return_value = PollOutcome.COMMENTS_FOUND
+        provider = MagicMock()
+
+        _quiet_next_steps_prompt(tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider)
+
+        mock_start.assert_called_once_with(
+            "42",
+            ai_tool=None,
+            model=None,
+            project_root=tmp_path,
+            detach=False,
+            ai_explicit=False,
+            model_explicit=False,
+            yolo=None,
+        )
+
+    @patch("wade.services.review_service.get_comprehensive_review_status")
+    @patch("wade.services.review_service.start")
+    @patch("wade.services.review_service.poll_for_reviews")
+    @patch("wade.ui.prompts.select", return_value=0)
+    @patch("wade.ui.prompts.is_tty", return_value=True)
+    def test_keep_polling_comments_found_preserves_review_context(
+        self,
+        mock_is_tty: MagicMock,
+        mock_select: MagicMock,
+        mock_poll: MagicMock,
+        mock_start: MagicMock,
+        mock_status: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Restart after quiet polling should preserve explicit review options."""
+        from wade.models.review import PollOutcome, PRReviewStatus
+
+        mock_status.return_value = PRReviewStatus()
+        mock_poll.return_value = PollOutcome.COMMENTS_FOUND
+        provider = MagicMock()
+
+        _quiet_next_steps_prompt(
+            tmp_path,
+            "feat/42",
+            "42",
+            tmp_path / "wt",
+            99,
+            provider,
+            ai_tool="claude",
+            model="claude-sonnet-4-5",
+            detach=True,
+            ai_explicit=True,
+            model_explicit=True,
+            yolo=True,
+        )
+
+        mock_start.assert_called_once_with(
+            "42",
+            ai_tool="claude",
+            model="claude-sonnet-4-5",
+            project_root=tmp_path,
+            detach=True,
+            ai_explicit=True,
+            model_explicit=True,
+            yolo=True,
+        )
+
+    @patch("wade.services.review_service.get_comprehensive_review_status")
+    @patch("wade.services.review_service._merge_pr")
+    @patch("wade.services.review_service.poll_for_reviews")
+    @patch("wade.ui.prompts.select", return_value=1)
+    @patch("wade.ui.prompts.is_tty", return_value=True)
+    def test_pending_reviewers_hide_merge_option(
+        self,
+        mock_is_tty: MagicMock,
+        mock_select: MagicMock,
+        mock_poll: MagicMock,
+        mock_merge: MagicMock,
+        mock_status: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Quiet prompt should not offer merge while reviewers are still pending."""
+        from wade.models.review import PendingReviewer, PRReviewStatus
+
+        mock_status.return_value = PRReviewStatus(
+            pending_reviewers=[PendingReviewer(name="charlie", is_team=False)]
+        )
+        provider = MagicMock()
+
+        _quiet_next_steps_prompt(tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider)
+
+        mock_select.assert_called_once_with(
+            "PR #99 — what next?",
+            ["Keep polling", "Exit without merging"],
+        )
+        mock_poll.assert_not_called()
+        mock_merge.assert_not_called()
+
+    @patch("wade.services.review_service.get_comprehensive_review_status")
+    @patch("wade.services.review_service.poll_for_reviews")
+    @patch("wade.ui.prompts.select")
+    @patch("wade.ui.prompts.is_tty", return_value=True)
+    def test_menu_rechecks_pending_reviewers_after_quiet_timeout(
+        self,
+        mock_is_tty: MagicMock,
+        mock_select: MagicMock,
+        mock_poll: MagicMock,
+        mock_status: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Quiet menu should refresh reviewer state after each polling cycle."""
+        from wade.models.review import PendingReviewer, PollOutcome, PRReviewStatus
+
+        mock_status.side_effect = [
+            PRReviewStatus(pending_reviewers=[PendingReviewer(name="charlie", is_team=False)]),
+            PRReviewStatus(),
+        ]
+        mock_poll.return_value = PollOutcome.QUIET_TIMEOUT
+        mock_select.side_effect = [0, 2]
+        provider = MagicMock()
+
+        _quiet_next_steps_prompt(tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider)
+
+        first_options = mock_select.call_args_list[0].args[1]
+        second_options = mock_select.call_args_list[1].args[1]
+        assert first_options == ["Keep polling", "Exit without merging"]
+        assert second_options == ["Keep polling", "Merge PR", "Exit without merging"]
+
+
+# ---------------------------------------------------------------------------
 # _post_review_lifecycle()
 # ---------------------------------------------------------------------------
 
@@ -1408,9 +1577,26 @@ class TestPostReviewLifecycle:
     """Tests for the _post_review_lifecycle() helper."""
 
     @patch("wade.services.review_service._merge_pr")
+    @patch("wade.services.review_service.poll_for_reviews")
+    @patch("wade.ui.prompts.is_tty", return_value=False)
+    def test_non_tty_skips_menu(
+        self,
+        mock_is_tty: MagicMock,
+        mock_poll: MagicMock,
+        mock_merge: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        provider = MagicMock()
+        _post_review_lifecycle(tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider)
+        mock_poll.assert_not_called()
+        mock_merge.assert_not_called()
+
+    @patch("wade.services.review_service._merge_pr")
     @patch("wade.ui.prompts.select", return_value=0)
+    @patch("wade.ui.prompts.is_tty", return_value=True)
     def test_merge_choice_calls_merge_pr(
         self,
+        mock_is_tty: MagicMock,
         mock_select: MagicMock,
         mock_merge: MagicMock,
         tmp_path: Path,
@@ -1422,8 +1608,10 @@ class TestPostReviewLifecycle:
     @patch("wade.services.review_service.poll_for_reviews")
     @patch("wade.services.review_service._merge_pr")
     @patch("wade.ui.prompts.select", return_value=1)
+    @patch("wade.ui.prompts.is_tty", return_value=True)
     def test_wait_choice_polls_for_reviews(
         self,
+        mock_is_tty: MagicMock,
         mock_select: MagicMock,
         mock_merge: MagicMock,
         mock_poll: MagicMock,
@@ -1441,8 +1629,10 @@ class TestPostReviewLifecycle:
     @patch("wade.services.review_service.poll_for_reviews")
     @patch("wade.services.review_service._merge_pr")
     @patch("wade.ui.prompts.select", return_value=1)
+    @patch("wade.ui.prompts.is_tty", return_value=True)
     def test_wait_quiet_timeout_routes_to_quiet_prompt(
         self,
+        mock_is_tty: MagicMock,
         mock_select: MagicMock,
         mock_merge: MagicMock,
         mock_poll: MagicMock,
@@ -1457,14 +1647,29 @@ class TestPostReviewLifecycle:
         _post_review_lifecycle(tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider)
         mock_merge.assert_not_called()
         mock_poll.assert_called_once()
-        mock_quiet.assert_called_once()
+        mock_quiet.assert_called_once_with(
+            tmp_path,
+            "feat/42",
+            "42",
+            tmp_path / "wt",
+            99,
+            provider,
+            ai_tool=None,
+            model=None,
+            detach=False,
+            ai_explicit=False,
+            model_explicit=False,
+            yolo=None,
+        )
 
     @patch("wade.services.review_service.start")
     @patch("wade.services.review_service.poll_for_reviews")
     @patch("wade.services.review_service._merge_pr")
     @patch("wade.ui.prompts.select", return_value=1)
+    @patch("wade.ui.prompts.is_tty", return_value=True)
     def test_wait_comments_found_recurses_to_start(
         self,
+        mock_is_tty: MagicMock,
         mock_select: MagicMock,
         mock_merge: MagicMock,
         mock_poll: MagicMock,
@@ -1478,4 +1683,58 @@ class TestPostReviewLifecycle:
         provider = MagicMock()
         _post_review_lifecycle(tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider)
         mock_merge.assert_not_called()
-        mock_start.assert_called_once_with("42")
+        mock_start.assert_called_once_with(
+            "42",
+            ai_tool=None,
+            model=None,
+            project_root=tmp_path,
+            detach=False,
+            ai_explicit=False,
+            model_explicit=False,
+            yolo=None,
+        )
+
+    @patch("wade.services.review_service.start")
+    @patch("wade.services.review_service.poll_for_reviews")
+    @patch("wade.services.review_service._merge_pr")
+    @patch("wade.ui.prompts.select", return_value=1)
+    @patch("wade.ui.prompts.is_tty", return_value=True)
+    def test_wait_comments_found_preserves_review_context(
+        self,
+        mock_is_tty: MagicMock,
+        mock_select: MagicMock,
+        mock_merge: MagicMock,
+        mock_poll: MagicMock,
+        mock_start: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Restart after post-review polling should preserve explicit review options."""
+        from wade.models.review import PollOutcome
+
+        mock_poll.return_value = PollOutcome.COMMENTS_FOUND
+        provider = MagicMock()
+        _post_review_lifecycle(
+            tmp_path,
+            "feat/42",
+            "42",
+            tmp_path / "wt",
+            99,
+            provider,
+            ai_tool="claude",
+            model="claude-sonnet-4-5",
+            detach=True,
+            ai_explicit=True,
+            model_explicit=True,
+            yolo=True,
+        )
+        mock_merge.assert_not_called()
+        mock_start.assert_called_once_with(
+            "42",
+            ai_tool="claude",
+            model="claude-sonnet-4-5",
+            project_root=tmp_path,
+            detach=True,
+            ai_explicit=True,
+            model_explicit=True,
+            yolo=True,
+        )

@@ -8,7 +8,6 @@ findings as PR comment.
 from __future__ import annotations
 
 import contextlib
-import re
 from pathlib import Path
 
 import structlog
@@ -20,19 +19,19 @@ from wade.git import repo as git_repo
 from wade.git import sync as git_sync
 from wade.git.repo import GitError
 from wade.models.batch import BatchIssueContext, BatchReviewContext
+from wade.models.config import AICommandConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationResult
+from wade.models.task import parse_tracking_child_ids
 from wade.providers.registry import get_provider
 from wade.services.review_delegation_service import (
     _check_review_enabled,
+    _load_review_config,
     _run_review_delegation,
 )
 from wade.skills.installer import load_prompt_template
 from wade.ui.console import console
 
 logger = structlog.get_logger()
-
-_CHECKLIST_RE = re.compile(r"- \[[ xX]\] #(\d+)")
-"""Matches ``- [ ] #42`` or ``- [x] #42`` in a tracking issue body."""
 
 
 def extract_child_issues(tracking_body: str) -> list[str]:
@@ -43,7 +42,7 @@ def extract_child_issues(tracking_body: str) -> list[str]:
     Returns:
         List of issue number strings (without ``#`` prefix).
     """
-    return _CHECKLIST_RE.findall(tracking_body)
+    return parse_tracking_child_ids(tracking_body, include_checked=True)
 
 
 def gather_batch_context(
@@ -261,6 +260,8 @@ def _format_batch_context(ctx: BatchReviewContext) -> str:
 def run_coherence_review(
     ctx: BatchReviewContext,
     *,
+    config: ProjectConfig | None = None,
+    cmd_config: AICommandConfig | None = None,
     ai_tool: str | None = None,
     model: str | None = None,
     mode: str | None = None,
@@ -268,12 +269,15 @@ def run_coherence_review(
     ai_explicit: bool = False,
     model_explicit: bool = False,
     effort_explicit: bool = False,
+    repo_root: Path | None = None,
 ) -> DelegationResult:
     """Run AI coherence review on the batch context.
 
     Posts findings as a comment on the review PR if one exists.
     """
-    skip = _check_review_enabled("review_batch")
+    if config is None or cmd_config is None:
+        config, cmd_config = _load_review_config("review_batch", repo_root)
+    skip = _check_review_enabled("review_batch", cmd_config)
     if skip is not None:
         return skip
 
@@ -284,6 +288,8 @@ def run_coherence_review(
     result = _run_review_delegation(
         prompt,
         "review_batch",
+        config=config,
+        cmd_config=cmd_config,
         ai_tool=ai_tool,
         model=model,
         mode=mode,
@@ -293,11 +299,17 @@ def run_coherence_review(
         effort_explicit=effort_explicit,
     )
 
-    # Post findings to PR as a comment
-    if result.success and not result.skipped and ctx.pr_number:
+    # Post findings only when the AI produced actual review output.
+    if (
+        result.success
+        and not result.skipped
+        and result.mode != DelegationMode.PROMPT
+        and bool(result.feedback.strip())
+        and ctx.pr_number
+    ):
         try:
-            repo_root = git_repo.get_repo_root(Path.cwd())
-            git_pr.comment_on_pr(repo_root, ctx.pr_number, result.feedback)
+            comment_repo_root = repo_root or git_repo.get_repo_root(Path.cwd())
+            git_pr.comment_on_pr(comment_repo_root, ctx.pr_number, result.feedback)
             console.info(f"Review posted as comment on PR #{ctx.pr_number}")
         except Exception:
             logger.debug("batch_review.comment_failed", exc_info=True)
@@ -336,6 +348,11 @@ def review_batch(
             feedback="Not inside a git repository.",
             mode=DelegationMode.PROMPT,
         )
+
+    config, cmd_config = _load_review_config("review_batch", repo_root)
+    skip = _check_review_enabled("review_batch", cmd_config)
+    if skip is not None:
+        return skip
 
     console.rule(f"Batch coherence review — tracking #{tracking_issue_id}")
 
@@ -382,6 +399,8 @@ def review_batch(
         console.step("Running AI coherence review...")
         result = run_coherence_review(
             ctx,
+            config=config,
+            cmd_config=cmd_config,
             ai_tool=ai_tool,
             model=model,
             mode=mode,
@@ -389,6 +408,7 @@ def review_batch(
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
             effort_explicit=effort_explicit,
+            repo_root=repo_root,
         )
 
         return result

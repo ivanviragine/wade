@@ -12,10 +12,13 @@ uv pip install -e ".[dev]"
 ./scripts/test.sh                                                         # all tests (excludes live)
 ./scripts/test.sh tests/unit/                                             # unit tests only
 ./scripts/test.sh tests/integration/                                      # integration tests only
-RUN_LIVE_GH_TESTS=1 uv run python -m pytest tests/live/ -v               # live GitHub tests
+./scripts/test-e2e.sh                                                     # deterministic e2e contract lane
+./scripts/test-e2e-docker.sh                                              # deterministic e2e in Docker (CI-equivalent)
+RUN_LIVE_GH_TESTS=1 WADE_LIVE_REPO=/path/to/repo ./scripts/test-live-gh.sh # manual live GitHub lane
+RUN_LIVE_AI_TESTS=1 ANTHROPIC_API_KEY=... WADE_LIVE_AI_TIMEOUT=45 ./scripts/test-live-ai.sh # manual live AI lane (API-key-backed, not /login session auth)
 
 # Run a single test file
-./scripts/test.sh tests/unit/test_models/test_config.py
+./scripts/test.sh tests/unit/test_config/test_loader.py
 
 # Run tests matching a pattern
 ./scripts/test.sh -k "test_pattern"
@@ -188,13 +191,18 @@ hooks:
   post_worktree_create: scripts/setup-worktree.sh
   copy_to_worktree:
     - .env
+knowledge:
+  enabled: true
+  path: KNOWLEDGE.md
 ```
 
 **Model complexity mapping**: The `models` section maps AI tool names to complexity-tiered model IDs (`easy`, `medium`, `complex`, `very_complex`). When `wade implement` is invoked, the service reads the `complexity:X` label from the issue (falling back to `## Complexity` in the body), maps it to the appropriate configured model, and passes it as `--model` to the AI tool — unless the user explicitly passed `--model` themselves.
 
-**Per-command AI tool and model overrides**: The `ai` section supports `plan`, `deps`, `implement`, `review_plan`, `review_implementation`, and `review_batch` sub-sections, each with optional `tool`, `model`, and `mode` keys. The fallback chain is: CLI `--ai`/`--model` flag -> command-specific config -> global `default_tool`. This is implemented in `ProjectConfig.get_ai_tool(command)` and `ProjectConfig.get_model(command)`.
+**Per-command AI tool and model overrides**: The `ai` section supports `plan`, `deps`, `implement`, `review_plan`, `review_implementation`, and `review_batch` sub-sections, with optional `tool`, `model`, `mode`, `effort`, `enabled`, `yolo`, and `timeout` keys as applicable. The fallback chain is: CLI `--ai`/`--model` flag -> command-specific config -> global `default_tool`. This is implemented in `ProjectConfig.get_ai_tool(command)` and `ProjectConfig.get_model(command)`. When `mode` is omitted, `review_plan` and `review_implementation` default to `prompt`, while `review_batch` defaults to `interactive`.
 
 **Worktree hooks**: The `hooks` section lets projects run setup automatically when a worktree is created. `post_worktree_create` points to a script that runs in the new worktree (e.g., installing dependencies). `copy_to_worktree` lists files to copy from the project root into the worktree before the hook runs (e.g., `.env`). Hook failures are non-fatal — a warning is logged and the session continues.
+
+**Project knowledge**: The optional `knowledge` section enables a project knowledge file for cross-session AI learning. `wade init` can create the file and add it, plus its `.ratings.yml` sidecar, to `hooks.copy_to_worktree` so sessions can read and update the same relative path from worktrees. `wade knowledge add` appends learnings to that file, `wade knowledge get` prints its current contents, and `wade knowledge rate` records thumbs-up/thumbs-down feedback per entry in the sidecar file. The path must stay inside the project root.
 
 ## Config Migration Pipeline
 
@@ -235,7 +243,7 @@ All AI-interactive commands follow the same pattern:
 
 Each AI tool adapter must implement the abstract method `capabilities()` (binary name, model flag syntax, headless flag). All other methods — `initial_message_args()`, `launch()`, `parse_transcript()`, `is_model_compatible()`, and `build_launch_command()` — have default implementations and can be overridden as needed. The `launch()` method accepts an optional `transcript_path: Path | None` parameter — when provided, the adapter captures session output to that file for post-session token usage extraction. When adding a new AI-interactive command, follow this existing pattern.
 
-**Deps delegation modes**: `deps_service.py` runs analysis via the generic delegation infrastructure (`delegation_service.py`). The default mode is `headless`; it can be overridden to `interactive` or `prompt` via the `ai.deps.mode` config key or the `--mode` CLI flag. There is no automatic fallback between modes — the resolved mode is used directly.
+**Deps delegation modes**: `deps_service.py` runs analysis via the generic delegation infrastructure (`delegation_service.py`). The default mode is `headless`; it can be overridden to `interactive` or `prompt` via the `ai.deps.mode` config key or the `--mode` CLI flag. There is no automatic fallback between modes — the resolved mode is used directly. Prompt mode prints the raw dependency-analysis prompt with no AI-tool requirement or worktree bootstrap. Headless and interactive modes perform the real AI launch path and are the only modes that create the temporary analysis worktree.
 
 ## Issue Detection (Snapshot/Diff Pattern)
 
@@ -279,7 +287,7 @@ When wade installs skills into a target project (`wade init`), the skills refere
 
 **`wade implement`:**
 - `--detach` — Launch AI in a new terminal tab/window (non-blocking). Uses `build_launch_command()` + `launch_in_new_terminal()`.
-- `--cd` — Create worktree, print its path to stdout, and exit (no AI launch). Used internally by `wade cd`.
+- `--cd` — Create worktree, print its path to stdout, and exit without launching AI. Deterministic setup still runs first (for example worktree bootstrap and draft-PR bootstrap when needed). Used internally by `wade cd`.
 
 **`wade implementation-session done`:**
 - `target` (positional) — Optional issue number, worktree name, or plan file path. When a file path is given, creates the issue first; when a number/name, finds the worktree; when omitted, detects from current branch.

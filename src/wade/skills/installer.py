@@ -93,6 +93,14 @@ MANAGED_SKILL_NAMES: set[str] = set(SKILL_FILES) | _LEGACY_SKILLS
 # Cross-tool directories that get symlinked to .claude/skills
 CROSS_TOOL_DIRS = [".github/skills", ".agents/skills", ".gemini/skills", ".cursor/skills"]
 
+# Wade-managed plan guard hook files that should never be committed.
+PLAN_GUARD_HOOK_FILES = [
+    ".claude/hooks/plan_write_guard.py",
+    ".cursor/hooks/plan_write_guard.py",
+    ".copilot/hooks/plan_write_guard.py",
+    ".gemini/hooks/plan_write_guard.py",
+]
+
 # --- Command-to-skill mapping: which skills each session type needs ---
 
 PLAN_SKILLS: list[str] = ["plan-session", "task", "deps"]
@@ -106,6 +114,7 @@ def get_managed_gitignore_patterns(project_root: Path) -> list[str]:
 
     Returns patterns that should be added to the managed gitignore block:
     - ``.claude/skills/<name>/`` for every name in ``MANAGED_SKILL_NAMES``
+    - Each plan guard hook file in ``PLAN_GUARD_HOOK_FILES``
     - Each ``CROSS_TOOL_DIRS`` entry, but only if it is a symlink or does not
       exist yet (real user directories are left alone).
     """
@@ -114,6 +123,9 @@ def get_managed_gitignore_patterns(project_root: Path) -> list[str]:
     # All managed skill directories (current + legacy)
     for name in sorted(MANAGED_SKILL_NAMES):
         patterns.append(f".claude/skills/{name}/")
+
+    for hook_file in PLAN_GUARD_HOOK_FILES:
+        patterns.append(hook_file)
 
     # Cross-tool symlink dirs — only if symlink or absent
     for cross_dir in CROSS_TOOL_DIRS:

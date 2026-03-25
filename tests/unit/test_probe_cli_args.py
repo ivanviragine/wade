@@ -164,6 +164,28 @@ class TestProbeCliArgs:
         assert result["effort"] is True
 
 
+class TestProbeSubprocessEnv:
+    def test_strips_claude_code_sentinels(self) -> None:
+        from probe_models import _build_probe_subprocess_env
+
+        with patch.dict(
+            "os.environ",
+            {
+                "CLAUDECODE": "1",
+                "CLAUDE_CODE": "1",
+                "CLAUDE_CODE_ENTRYPOINT": "codex",
+                "KEEP_ME": "yes",
+            },
+            clear=True,
+        ):
+            env = _build_probe_subprocess_env()
+
+        assert "CLAUDECODE" not in env
+        assert "CLAUDE_CODE" not in env
+        assert "CLAUDE_CODE_ENTRYPOINT" not in env
+        assert env["KEEP_ME"] == "yes"
+
+
 # ---------------------------------------------------------------------------
 # probe_codex — web scrape fallback
 # ---------------------------------------------------------------------------

@@ -40,6 +40,43 @@ def version_callback(value: bool) -> None:
         raise typer.Exit()
 
 
+def _argv_subcommand_path(argv: list[str]) -> list[str]:
+    """Extract the invoked subcommand path after root-level options."""
+    path: list[str] = []
+    parsing_root_flags = True
+    for token in argv[1:]:
+        if parsing_root_flags and token in {"--verbose", "-v", "--version", "-V"}:
+            continue
+        if parsing_root_flags and token.startswith("-"):
+            continue
+        parsing_root_flags = False
+        if token.startswith("-"):
+            break
+        path.append(token)
+        if len(path) == 2:
+            break
+    return path
+
+
+def _is_passthrough_subcommand(argv: list[str]) -> bool:
+    """Return whether argv targets a passthrough command with exact output contracts."""
+    return _argv_subcommand_path(argv) in (["shell-init"], ["knowledge", "get"])
+
+
+def _should_print_version_banner(invoked_subcommand: str | None, argv: list[str]) -> bool:
+    """Return whether startup should print the stderr version banner."""
+    if invoked_subcommand is None:
+        return False
+    return not _is_passthrough_subcommand(argv)
+
+
+def _should_register_update_hint(invoked_subcommand: str | None, argv: list[str]) -> bool:
+    """Return whether startup should register the delayed update hint."""
+    if invoked_subcommand == "update":
+        return False
+    return not _is_passthrough_subcommand(argv)
+
+
 @app.callback()
 def main(
     ctx: typer.Context,
@@ -74,10 +111,11 @@ def main(
     log_setup.configure(verbose=verbose)
 
     # Register background update nag — fires after command output, before shell prompt.
-    atexit.register(maybe_print_update_hint, wade.__version__, ctx.invoked_subcommand)
+    if _should_register_update_hint(ctx.invoked_subcommand, sys.argv):
+        atexit.register(maybe_print_update_hint, wade.__version__, ctx.invoked_subcommand)
 
     if ctx.invoked_subcommand is not None:
-        if ctx.invoked_subcommand != "shell-init":
+        if _should_print_version_banner(ctx.invoked_subcommand, sys.argv):
             from wade.ui.console import console
 
             console.err.print(f"  [dim]wade v{wade.__version__}[/]")

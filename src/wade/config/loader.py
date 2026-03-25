@@ -8,6 +8,7 @@ from typing import Any
 import yaml
 
 from wade.models.config import (
+    AI_COMMAND_NAMES,
     AICommandConfig,
     AIConfig,
     ComplexityModelMapping,
@@ -94,12 +95,22 @@ def parse_config_file(config_path: Path) -> ProjectConfig:
         raise ConfigError(f"Invalid config structure in {config_path}: {e}") from e
 
 
+def _section_mapping(raw: dict[str, Any], key: str) -> dict[str, Any]:
+    """Return a top-level section as a mapping or raise a structural error."""
+    section = raw.get(key)
+    if section is None:
+        return {}
+    if not isinstance(section, dict):
+        raise TypeError(f"{key} must be a mapping")
+    return section
+
+
 def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
     """Build a ProjectConfig from raw YAML dict."""
     version = raw.get("version", 2)
 
     # Parse project section
-    project_raw = raw.get("project", {}) or {}
+    project_raw = _section_mapping(raw, "project")
     project = ProjectSettings(
         main_branch=project_raw.get("main_branch"),
         issue_label=project_raw.get("issue_label", "feature-plan"),
@@ -109,24 +120,22 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
     )
 
     # Parse ai section
-    ai_raw = raw.get("ai", {}) or {}
+    ai_raw = _section_mapping(raw, "ai")
+    command_configs = {cmd: _parse_command_config(ai_raw.get(cmd, {})) for cmd in AI_COMMAND_NAMES}
+    # Back-compat: accept legacy `ai.work` as the implement override.
+    command_configs["implement"] = _parse_command_config(
+        ai_raw.get("implement") if "implement" in ai_raw else ai_raw.get("work", {})
+    )
     ai = AIConfig(
         default_tool=ai_raw.get("default_tool"),
         default_model=ai_raw.get("default_model"),
         effort=ai_raw.get("effort"),
         yolo=ai_raw.get("yolo"),
-        plan=_parse_command_config(ai_raw.get("plan", {})),
-        deps=_parse_command_config(ai_raw.get("deps", {})),
-        implement=_parse_command_config(
-            ai_raw.get("implement") if "implement" in ai_raw else ai_raw.get("work", {})
-        ),
-        review_plan=_parse_command_config(ai_raw.get("review_plan", {})),
-        review_implementation=_parse_command_config(ai_raw.get("review_implementation", {})),
-        review_batch=_parse_command_config(ai_raw.get("review_batch", {})),
+        **command_configs,
     )
 
     # Parse models section (nested: tool → complexity → model)
-    models_raw = raw.get("models", {}) or {}
+    models_raw = _section_mapping(raw, "models")
     models: dict[str, ComplexityModelMapping] = {}
     for tool_name, mapping_raw in models_raw.items():
         if isinstance(mapping_raw, dict):
@@ -138,31 +147,34 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
             )
 
     # Parse provider section
-    provider_raw = raw.get("provider", {}) or {}
+    provider_raw = _section_mapping(raw, "provider")
+    provider_settings = provider_raw.get("settings") or {}
+    if not isinstance(provider_settings, dict):
+        raise TypeError("provider.settings must be a mapping")
     provider = ProviderConfig(
         name=provider_raw.get("name", "github"),
         project=provider_raw.get("project"),
         api_token_env=provider_raw.get("api_token_env"),
-        settings=provider_raw.get("settings") or {},
+        settings=provider_settings,
     )
 
-    # Parse permissions section
-    permissions_raw = raw.get("permissions", {}) or {}
+    permissions_raw = _section_mapping(raw, "permissions")
+    allowed_commands = permissions_raw.get("allowed_commands")
+    if allowed_commands is not None and not isinstance(allowed_commands, list):
+        raise TypeError("permissions.allowed_commands must be a list")
     permissions = PermissionsConfig(
-        allowed_commands=permissions_raw.get("allowed_commands", ["wade:*"]),
+        allowed_commands=allowed_commands if allowed_commands is not None else ["wade:*"],
     )
 
     # Parse hooks section
-    hooks_raw = raw.get("hooks", {}) or {}
+    hooks_raw = _section_mapping(raw, "hooks")
     hooks = HooksConfig(
         post_worktree_create=hooks_raw.get("post_worktree_create"),
         copy_to_worktree=hooks_raw.get("copy_to_worktree", []),
     )
 
     # Parse knowledge section
-    knowledge_raw = raw.get("knowledge", {}) or {}
-    if not isinstance(knowledge_raw, dict):
-        raise ValueError("knowledge must be a mapping")
+    knowledge_raw = _section_mapping(raw, "knowledge")
     knowledge = KnowledgeConfig(
         enabled=knowledge_raw.get("enabled", False),
         path=knowledge_raw.get("path", "KNOWLEDGE.md"),

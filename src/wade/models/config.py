@@ -78,6 +78,21 @@ class AICommandConfig(BaseModel):
     timeout: int | None = None
 
 
+AI_COMMAND_NAMES: tuple[str, ...] = (
+    "plan",
+    "deps",
+    "implement",
+    "review_plan",
+    "review_implementation",
+    "review_batch",
+)
+"""Canonical per-command AI config sections supported by WADE."""
+
+
+LEGACY_AI_COMMAND_ALIASES: dict[str, str] = {"work": "implement"}
+"""Back-compat aliases accepted in config validation/loading paths."""
+
+
 class AIConfig(BaseModel):
     """AI tool configuration section."""
 

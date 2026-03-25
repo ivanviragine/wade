@@ -178,6 +178,21 @@ class TestDelegateHeadless:
         assert "exec" in cmd
         assert "Review code" in cmd
 
+    @patch("wade.services.delegation_service.run")
+    def test_headless_yolo_is_forwarded(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(returncode=0, stdout="done\n")
+        req = DelegationRequest(
+            mode=DelegationMode.HEADLESS,
+            prompt="Implement change",
+            ai_tool="claude",
+            yolo=True,
+        )
+        result = _delegate_headless(req)
+        assert result.success is True
+
+        cmd = mock_run.call_args[0][0]
+        assert "--dangerously-skip-permissions" in cmd
+
 
 # ---------------------------------------------------------------------------
 # Interactive mode
@@ -249,6 +264,31 @@ class TestDelegateInteractive:
         result = _delegate_interactive(req)
         assert result.success is False
         assert "No output file" in result.feedback
+
+    @patch("wade.services.delegation_service.deliver_prompt_if_needed")
+    @patch("wade.services.delegation_service.AbstractAITool.get")
+    def test_interactive_yolo_is_forwarded(
+        self,
+        mock_get: MagicMock,
+        mock_deliver: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_adapter = MagicMock()
+        mock_adapter.capabilities.return_value = MagicMock(blocks_until_exit=True)
+        mock_adapter.launch.side_effect = lambda **_kw: (tmp_path / "out.txt").write_text("ok")
+        mock_get.return_value = mock_adapter
+
+        output_file = tmp_path / "out.txt"
+        req = DelegationRequest(
+            mode=DelegationMode.INTERACTIVE,
+            prompt="Review",
+            ai_tool="claude",
+            output_file=output_file,
+            yolo=True,
+        )
+        result = _delegate_interactive(req)
+        assert result.success is True
+        assert mock_adapter.launch.call_args.kwargs["yolo"] is True
 
 
 # ---------------------------------------------------------------------------
