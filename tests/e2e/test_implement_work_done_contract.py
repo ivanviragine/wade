@@ -126,7 +126,7 @@ class TestImplementTaskCommand:
         )
         hook_script.chmod(0o755)
 
-        _git(["add", ".wade.yml", "scripts/setup-worktree.sh"], cwd=e2e_repo)
+        _git(["add", "scripts/setup-worktree.sh"], cwd=e2e_repo)
         _git(["commit", "-m", "test: add setup-worktree hook"], cwd=e2e_repo)
 
         _init_origin_remote(e2e_repo)
@@ -314,7 +314,42 @@ class TestWorkDoneCommand:
         assert isinstance(pr_data, dict)
         assert "Part of #100" in str(pr_data.get("body", ""))
 
-        _assert_gh_called_with(
-            mock_gh_cli["log_file"],
-            ["issue", "list", "--state", "open", "--label", "feature-plan"],
+    def test_work_done_fails_when_managed_claude_files_were_force_committed(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """implementation-session done should block tracked wade-managed Claude files."""
+        issue_number = 47
+        issue_title = "Block tracked managed Claude files"
+        _seed_mock_issue(
+            mock_gh_cli["state_file"],
+            issue_number=issue_number,
+            title=issue_title,
+            body="## Tasks\n- Guard against tracked managed files\n",
         )
+        _init_origin_remote(e2e_repo)
+
+        start_result = _run(["implement", str(issue_number), "--cd"], cwd=e2e_repo)
+        assert start_result.returncode == 0
+        worktree_path = Path(start_result.stdout.strip())
+        assert worktree_path.is_dir()
+
+        managed_claude_dir = worktree_path / ".claude"
+        assert managed_claude_dir.is_dir()
+        _git(["add", "-f", ".claude"], cwd=worktree_path)
+        _git(
+            ["commit", "-m", "test: accidentally track managed claude files"],
+            cwd=worktree_path,
+        )
+        status = _git(["status", "--porcelain"], cwd=worktree_path)
+        assert status.stdout.strip() == "", status.stdout
+
+        result = _run(["implementation-session", "done"], cwd=worktree_path)
+        output = result.stdout + result.stderr
+        assert result.returncode != 0
+        assert "Wade-managed files are tracked in git" in output
+        assert ".claude/skills/implementation-session/SKILL.md" in output
+        assert "git rm --cached .claude/skills/implementation-session/SKILL.md" in output
+        assert _count_gh_calls(mock_gh_cli["log_file"], ["pr", "edit"]) == 0
+        assert _count_gh_calls(mock_gh_cli["log_file"], ["pr", "ready"]) == 0

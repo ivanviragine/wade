@@ -11,6 +11,11 @@ import pytest
 
 from tests.e2e._support import MAIN_BRANCH, WADE, MockGhCli, _git
 from tests.e2e.mock_gh_script import MOCK_GH_SCRIPT
+from wade.services.init_service import (
+    GITIGNORE_MARKER_END,
+    GITIGNORE_MARKER_START,
+    get_gitignore_entries,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -53,9 +58,14 @@ ai:
 """,
         encoding="utf-8",
     )
+    entries = "\n".join(get_gitignore_entries(repo))
+    (repo / ".gitignore").write_text(
+        f"{GITIGNORE_MARKER_START}\n{entries}\n{GITIGNORE_MARKER_END}\n",
+        encoding="utf-8",
+    )
 
-    _git(["add", ".wade.yml"], cwd=repo)
-    _git(["commit", "-m", "Add wade config"], cwd=repo)
+    _git(["add", ".gitignore"], cwd=repo)
+    _git(["commit", "-m", "Add managed gitignore block"], cwd=repo)
 
     (repo / ".wade").mkdir()
     return repo
