@@ -482,7 +482,9 @@ def bootstrap_draft_pr(
         # re-target it to the parent branch.
         if base_branch:
             pr_number = int(existing_pr["number"])
-            git_pr.update_pr_base(repo_root, pr_number, base_branch)
+            if not git_pr.update_pr_base(repo_root, pr_number, base_branch):
+                console.error(f"Failed to retarget existing PR #{pr_number} to {base_branch}.")
+                return None
         logger.info(
             "bootstrap_draft_pr.existing",
             branch=branch_name,

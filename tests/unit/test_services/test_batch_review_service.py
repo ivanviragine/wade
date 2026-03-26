@@ -202,11 +202,13 @@ class TestCreateIntegrationBranch:
                     issue_number="10",
                     issue_title="Feature A",
                     branch_name="feat/10-feature-a",
+                    local_ref_exists=True,
                 ),
                 BatchIssueContext(
                     issue_number="11",
                     issue_title="Feature B",
                     branch_name="feat/11-feature-b",
+                    local_ref_exists=True,
                 ),
             ],
             main_branch="main",
@@ -242,11 +244,13 @@ class TestCreateIntegrationBranch:
                     issue_number="10",
                     issue_title="Feature A",
                     branch_name="feat/10-feature-a",
+                    local_ref_exists=True,
                 ),
                 BatchIssueContext(
                     issue_number="11",
                     issue_title="Feature B",
                     branch_name="feat/11-feature-b",
+                    local_ref_exists=True,
                 ),
             ],
             main_branch="main",
@@ -309,6 +313,7 @@ class TestCreateIntegrationBranch:
                     issue_number="10",
                     issue_title="Already merged",
                     branch_name="feat/10-already-merged",
+                    local_ref_exists=True,
                     status="MERGED",
                 ),
             ],
@@ -687,7 +692,14 @@ class TestReviewBatch:
         mock_repo.get_current_branch.return_value = "main"
         mock_load_review_config.return_value = (config, config.ai.review_batch)
         ctx = BatchReviewContext(
-            issues=[BatchIssueContext(issue_number="10", issue_title="Feature A", branch_name="x")],
+            issues=[
+                BatchIssueContext(
+                    issue_number="10",
+                    issue_title="Feature A",
+                    branch_name="x",
+                    local_ref_exists=True,
+                )
+            ],
             tracking_issue="99",
         )
         mock_gather.return_value = ctx
@@ -849,18 +861,21 @@ class TestCreateIntegrationBranchWithChains:
                     issue_number="10",
                     issue_title="Chain root",
                     branch_name="feat/10-root",
+                    local_ref_exists=True,
                     base_branch="main",
                 ),
                 BatchIssueContext(
                     issue_number="20",
                     issue_title="Chain middle",
                     branch_name="feat/20-middle",
+                    local_ref_exists=True,
                     base_branch="feat/10-root",
                 ),
                 BatchIssueContext(
                     issue_number="30",
                     issue_title="Chain tip",
                     branch_name="feat/30-tip",
+                    local_ref_exists=True,
                     base_branch="feat/20-middle",
                 ),
             ],
@@ -896,16 +911,19 @@ class TestCreateIntegrationBranchWithChains:
                     issue_number="10",
                     issue_title="Chain root",
                     branch_name="feat/10-root",
+                    local_ref_exists=True,
                 ),
                 BatchIssueContext(
                     issue_number="20",
                     issue_title="Chain tip",
                     branch_name="feat/20-tip",
+                    local_ref_exists=True,
                 ),
                 BatchIssueContext(
                     issue_number="50",
                     issue_title="Independent",
                     branch_name="feat/50-independent",
+                    local_ref_exists=True,
                 ),
             ],
             main_branch="main",

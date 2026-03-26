@@ -11,7 +11,7 @@ class BatchIssueContext(BaseModel):
     issue_number: str
     issue_title: str
     branch_name: str | None = None
-    local_ref_exists: bool = True
+    local_ref_exists: bool = False
     pr_number: int | None = None
     pr_url: str | None = None
     diff_stat: str = ""

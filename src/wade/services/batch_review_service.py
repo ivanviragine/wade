@@ -195,8 +195,9 @@ def gather_batch_context(
                 incremental = git_repo.diff_stat_between(
                     repo, parent.branch_name, child.branch_name
                 )
-                if incremental:
-                    child.diff_stat = incremental
+                child.diff_stat = incremental
+            elif child and child.base_branch and child.base_branch != main_branch:
+                child.diff_stat = ""
 
     return BatchReviewContext(
         issues=issues,
