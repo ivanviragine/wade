@@ -165,7 +165,8 @@ def gather_batch_context(
             BatchIssueContext(
                 issue_number=num,
                 issue_title=task.title,
-                branch_name=branch_name if branch_available else None,
+                branch_name=branch_name,
+                local_ref_exists=branch_available,
                 pr_number=pr_number,
                 pr_url=pr_url,
                 diff_stat=diff_stat,
@@ -183,7 +184,14 @@ def gather_batch_context(
         for i in range(1, len(chain)):
             child = issue_by_num.get(chain[i])
             parent = issue_by_num.get(chain[i - 1])
-            if child and parent and child.branch_name and parent.branch_name:
+            if (
+                child
+                and parent
+                and child.branch_name
+                and parent.branch_name
+                and child.local_ref_exists
+                and parent.local_ref_exists
+            ):
                 incremental = git_repo.diff_stat_between(
                     repo, parent.branch_name, child.branch_name
                 )
@@ -230,7 +238,7 @@ def create_integration_branch(
     git_repo.checkout(repo_root, integration_branch)
 
     for issue in ctx.issues:
-        if not issue.branch_name:
+        if not issue.local_ref_exists or not issue.branch_name:
             continue
 
         if issue.status == "MERGED":
@@ -481,7 +489,7 @@ def review_batch(
             skipped=True,
         )
 
-    branches_available = [i for i in ctx.issues if i.branch_name]
+    branches_available = [i for i in ctx.issues if i.local_ref_exists]
     if not branches_available:
         console.warn("No branches found for any child issue.")
         return DelegationResult(

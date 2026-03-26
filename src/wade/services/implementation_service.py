@@ -2224,7 +2224,7 @@ def sync(
         base_branch_file = cwd / ".wade" / "base_branch"
         if base_branch_file.is_file():
             stored_base = base_branch_file.read_text().strip()
-            if stored_base:
+            if stored_base and git_branch.branch_exists(repo_root, stored_base):
                 main_branch = stored_base
 
     resolved_main = main_branch or config.project.main_branch

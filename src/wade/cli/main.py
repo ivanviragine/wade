@@ -294,7 +294,10 @@ def implement_cmd(
         rest = chain_remaining[1:]
         # The next task's base is the current task's branch
         next_base = result.branch_name
-        base_flag = f" --base {next_base}" if next_base else ""
+        if next_base is None:
+            console.error("Cannot continue chain: previous step did not return a branch name.")
+            raise typer.Exit(1)
+        base_flag = f" --base {next_base}"
         chain_flag = f" --chain {','.join(rest)}" if rest else ""
 
         console.empty()
