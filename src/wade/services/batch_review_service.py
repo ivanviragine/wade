@@ -75,17 +75,25 @@ def _detect_chains(issues: list[BatchIssueContext]) -> list[list[str]]:
         if issue.issue_number in parents and issue.issue_number not in children:
             roots.add(issue.issue_number)
 
-    # Build chains by following parent -> child links
-    child_of: dict[str, str] = {v: k for k, v in parent_of.items()}
+    # Build chains by following parent -> child links.
+    # A parent may have multiple children (fan-out), which produces separate chains.
+    children_of: dict[str, list[str]] = {}
+    for child_num, parent_num in parent_of.items():
+        children_of.setdefault(parent_num, []).append(child_num)
+
     chains: list[list[str]] = []
+
+    def _walk(current: str, path: list[str]) -> None:
+        kids = children_of.get(current, [])
+        if not kids:
+            if len(path) > 1:
+                chains.append(path)
+            return
+        for kid in sorted(kids):
+            _walk(kid, [*path, kid])
+
     for root in sorted(roots):
-        chain = [root]
-        current = root
-        while current in child_of:
-            current = child_of[current]
-            chain.append(current)
-        if len(chain) > 1:
-            chains.append(chain)
+        _walk(root, [root])
 
     return chains
 

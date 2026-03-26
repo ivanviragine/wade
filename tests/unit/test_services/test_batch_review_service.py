@@ -789,6 +789,33 @@ class TestDetectChains:
         assert ["10", "20"] in chains
         assert ["30", "40"] in chains
 
+    def test_fan_out_produces_separate_chains(self) -> None:
+        """Parent with two children produces two chains."""
+        issues = [
+            BatchIssueContext(
+                issue_number="10",
+                issue_title="Root",
+                branch_name="feat/10-root",
+                base_branch="main",
+            ),
+            BatchIssueContext(
+                issue_number="20",
+                issue_title="Child A",
+                branch_name="feat/20-child-a",
+                base_branch="feat/10-root",
+            ),
+            BatchIssueContext(
+                issue_number="30",
+                issue_title="Child B",
+                branch_name="feat/30-child-b",
+                base_branch="feat/10-root",
+            ),
+        ]
+        chains = _detect_chains(issues)
+        assert len(chains) == 2
+        assert ["10", "20"] in chains
+        assert ["10", "30"] in chains
+
     def test_no_branch_name_ignored(self) -> None:
         issues = [
             BatchIssueContext(issue_number="10", issue_title="No branch"),
