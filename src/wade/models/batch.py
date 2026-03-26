@@ -11,12 +11,14 @@ class BatchIssueContext(BaseModel):
     issue_number: str
     issue_title: str
     branch_name: str | None = None
+    local_ref_exists: bool = False
     pr_number: int | None = None
     pr_url: str | None = None
     diff_stat: str = ""
     merged: bool = False
     conflict: bool = False
     status: str = ""
+    base_branch: str | None = None
 
 
 class BatchReviewContext(BaseModel):
@@ -28,3 +30,4 @@ class BatchReviewContext(BaseModel):
     integration_branch: str | None = None
     pr_number: int | None = None
     pr_url: str | None = None
+    chains: list[list[str]] = Field(default_factory=list)

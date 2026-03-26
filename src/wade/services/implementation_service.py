@@ -449,6 +449,7 @@ def bootstrap_draft_pr(
     plan_body: str,
     config: ProjectConfig,
     repo_root: Path,
+    base_branch: str | None = None,
 ) -> dict[str, str | int] | None:
     """Create branch + push + draft PR for an issue.
 
@@ -461,6 +462,8 @@ def bootstrap_draft_pr(
         plan_body: Plan content to embed in the draft PR body.
         config: Project configuration.
         repo_root: Repository root directory.
+        base_branch: When set, branch from this instead of main and target
+            the PR at it (stacked PR for chain execution).
 
     Returns:
         Dict with "number" (int) and "url" (str) keys, or None on failure.
@@ -475,6 +478,13 @@ def bootstrap_draft_pr(
     # Check if PR already exists for this branch
     existing_pr = git_pr.get_pr_for_branch(repo_root, branch_name)
     if existing_pr:
+        # If a stacked base was requested but the existing PR targets main,
+        # re-target it to the parent branch.
+        if base_branch:
+            pr_number = int(existing_pr["number"])
+            if not git_pr.update_pr_base(repo_root, pr_number, base_branch):
+                console.error(f"Failed to retarget existing PR #{pr_number} to {base_branch}.")
+                return None
         logger.info(
             "bootstrap_draft_pr.existing",
             branch=branch_name,
@@ -482,14 +492,16 @@ def bootstrap_draft_pr(
         )
         return existing_pr
 
-    # Create branch from main (if not exists)
+    # Resolve the effective base for branch creation and PR target
     main_branch = config.project.main_branch or git_repo.detect_main_branch(repo_root)
+    effective_base = base_branch or main_branch
+
     if not git_branch.branch_exists(repo_root, branch_name):
-        git_branch.create_branch(repo_root, branch_name, main_branch)
+        git_branch.create_branch(repo_root, branch_name, effective_base)
         logger.info("bootstrap_draft_pr.branch_created", branch=branch_name)
 
     # Scaffold commit so GitHub accepts the draft PR (needs ≥1 commit ahead of base)
-    if git_branch.commits_ahead(repo_root, branch_name, main_branch) == 0:
+    if git_branch.commits_ahead(repo_root, branch_name, effective_base) == 0:
         git_branch.create_scaffold_commit(
             repo_root,
             branch_name,
@@ -506,13 +518,13 @@ def bootstrap_draft_pr(
     # Build draft PR body with plan markers
     body = _build_draft_pr_body(plan_body, issue_number)
 
-    # Create draft PR
+    # Create draft PR targeting the effective base (parent branch for stacked PRs)
     try:
         pr_info = git_pr.create_pr(
             repo_root=repo_root,
             title=issue_title,
             body=body,
-            base=main_branch,
+            base=effective_base,
             head=branch_name,
             draft=True,
         )
@@ -988,6 +1000,7 @@ def start(
     resume_session_id: str | None = None,
     resume_ai_tool: str | None = None,
     yolo: bool | None = None,
+    base_branch: str | None = None,
 ) -> ImplementResult:
     """Start an implementation session on an issue.
 
@@ -1132,6 +1145,9 @@ def start(
         # Resolve main branch and compute worktree path (only needed for worktree creation)
         main_branch = config.project.main_branch or git_repo.detect_main_branch(repo_root)
 
+        # For stacked branches (chain execution), use the provided base instead of main
+        effective_base = base_branch or main_branch
+
         worktrees_dir = _resolve_worktrees_dir(config, repo_root)
         repo_name = repo_root.name
         worktree_path = worktrees_dir / repo_name / branch_name.replace("/", "-")
@@ -1146,6 +1162,7 @@ def start(
                 plan_body=task.body or f"Implements #{task.id}: {task.title}",
                 config=config,
                 repo_root=repo_root,
+                base_branch=base_branch,
             )
             if pr_info:
                 console.success(f"Draft PR #{pr_info.get('number')}: {pr_info.get('url')}")
@@ -1197,7 +1214,7 @@ def start(
                             repo_root=repo_root,
                             branch_name=branch_name,
                             worktree_dir=worktree_path,
-                            base_branch=main_branch,
+                            base_branch=effective_base,
                         )
                 console.kv("Worktree", str(branch_name))
                 console.kv("Path", str(worktree_path))
@@ -1212,6 +1229,13 @@ def start(
 
         write_plan_md(worktree_path, task, plan_content=plan_content)
         bootstrap_worktree(worktree_path, config, repo_root, skills=IMPLEMENT_SKILLS)
+
+        # Store stacked base branch metadata so sync can use it instead of main
+        if base_branch:
+            wade_dir = worktree_path / ".wade"
+            wade_dir.mkdir(exist_ok=True)
+            (wade_dir / "base_branch").write_text(base_branch + "\n")
+            console.detail(f"Stacked on {base_branch}")
 
         # Add in-progress label and move to in-progress on project board (both non-critical)
         with contextlib.suppress(Exception):
@@ -1432,6 +1456,7 @@ def start(
         return ImplementResult(
             success=merge_status != MergeStatus.MERGE_FAILED,
             merged=merge_status == MergeStatus.MERGED,
+            branch_name=branch_name,
         )
     finally:
         console.out = _original_out
@@ -2200,6 +2225,15 @@ def sync(
             main_branch=main_branch or "",
             events=events,
         )
+
+    # Check for stacked base branch metadata (written by start() for chain execution).
+    # When present, sync against the parent branch instead of main.
+    if not main_branch:
+        base_branch_file = cwd / ".wade" / "base_branch"
+        if base_branch_file.is_file():
+            stored_base = base_branch_file.read_text().strip()
+            if stored_base and git_branch.branch_exists(repo_root, stored_base):
+                main_branch = stored_base
 
     resolved_main = main_branch or config.project.main_branch
     if not resolved_main:

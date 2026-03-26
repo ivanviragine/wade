@@ -9,6 +9,7 @@ from wade.models.batch import BatchIssueContext, BatchReviewContext
 from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationResult
 from wade.services.batch_review_service import (
+    _detect_chains,
     _format_batch_context,
     extract_child_issues,
 )
@@ -201,11 +202,13 @@ class TestCreateIntegrationBranch:
                     issue_number="10",
                     issue_title="Feature A",
                     branch_name="feat/10-feature-a",
+                    local_ref_exists=True,
                 ),
                 BatchIssueContext(
                     issue_number="11",
                     issue_title="Feature B",
                     branch_name="feat/11-feature-b",
+                    local_ref_exists=True,
                 ),
             ],
             main_branch="main",
@@ -241,11 +244,13 @@ class TestCreateIntegrationBranch:
                     issue_number="10",
                     issue_title="Feature A",
                     branch_name="feat/10-feature-a",
+                    local_ref_exists=True,
                 ),
                 BatchIssueContext(
                     issue_number="11",
                     issue_title="Feature B",
                     branch_name="feat/11-feature-b",
+                    local_ref_exists=True,
                 ),
             ],
             main_branch="main",
@@ -308,6 +313,7 @@ class TestCreateIntegrationBranch:
                     issue_number="10",
                     issue_title="Already merged",
                     branch_name="feat/10-already-merged",
+                    local_ref_exists=True,
                     status="MERGED",
                 ),
             ],
@@ -686,7 +692,14 @@ class TestReviewBatch:
         mock_repo.get_current_branch.return_value = "main"
         mock_load_review_config.return_value = (config, config.ai.review_batch)
         ctx = BatchReviewContext(
-            issues=[BatchIssueContext(issue_number="10", issue_title="Feature A", branch_name="x")],
+            issues=[
+                BatchIssueContext(
+                    issue_number="10",
+                    issue_title="Feature A",
+                    branch_name="x",
+                    local_ref_exists=True,
+                )
+            ],
             tracking_issue="99",
         )
         mock_gather.return_value = ctx
@@ -705,3 +718,264 @@ class TestReviewBatch:
         assert mock_review.call_args.kwargs["repo_root"] == repo_root
         assert mock_review.call_args.kwargs["config"] == config
         assert mock_review.call_args.kwargs["cmd_config"] == config.ai.review_batch
+
+
+# ---------------------------------------------------------------------------
+# _detect_chains
+# ---------------------------------------------------------------------------
+
+
+class TestDetectChains:
+    def test_simple_chain(self) -> None:
+        issues = [
+            BatchIssueContext(
+                issue_number="10",
+                issue_title="Task A",
+                branch_name="feat/10-task-a",
+                base_branch="main",
+            ),
+            BatchIssueContext(
+                issue_number="20",
+                issue_title="Task B",
+                branch_name="feat/20-task-b",
+                base_branch="feat/10-task-a",
+            ),
+            BatchIssueContext(
+                issue_number="30",
+                issue_title="Task C",
+                branch_name="feat/30-task-c",
+                base_branch="feat/20-task-b",
+            ),
+        ]
+        chains = _detect_chains(issues)
+        assert len(chains) == 1
+        assert chains[0] == ["10", "20", "30"]
+
+    def test_no_chains(self) -> None:
+        issues = [
+            BatchIssueContext(
+                issue_number="10",
+                issue_title="Task A",
+                branch_name="feat/10-task-a",
+                base_branch="main",
+            ),
+            BatchIssueContext(
+                issue_number="20",
+                issue_title="Task B",
+                branch_name="feat/20-task-b",
+                base_branch="main",
+            ),
+        ]
+        chains = _detect_chains(issues)
+        assert chains == []
+
+    def test_two_chains(self) -> None:
+        issues = [
+            BatchIssueContext(
+                issue_number="10",
+                issue_title="Chain 1 root",
+                branch_name="feat/10-root",
+                base_branch="main",
+            ),
+            BatchIssueContext(
+                issue_number="20",
+                issue_title="Chain 1 child",
+                branch_name="feat/20-child",
+                base_branch="feat/10-root",
+            ),
+            BatchIssueContext(
+                issue_number="30",
+                issue_title="Chain 2 root",
+                branch_name="feat/30-root2",
+                base_branch="main",
+            ),
+            BatchIssueContext(
+                issue_number="40",
+                issue_title="Chain 2 child",
+                branch_name="feat/40-child2",
+                base_branch="feat/30-root2",
+            ),
+        ]
+        chains = _detect_chains(issues)
+        assert len(chains) == 2
+        assert ["10", "20"] in chains
+        assert ["30", "40"] in chains
+
+    def test_fan_out_produces_separate_chains(self) -> None:
+        """Parent with two children produces two chains."""
+        issues = [
+            BatchIssueContext(
+                issue_number="10",
+                issue_title="Root",
+                branch_name="feat/10-root",
+                base_branch="main",
+            ),
+            BatchIssueContext(
+                issue_number="20",
+                issue_title="Child A",
+                branch_name="feat/20-child-a",
+                base_branch="feat/10-root",
+            ),
+            BatchIssueContext(
+                issue_number="30",
+                issue_title="Child B",
+                branch_name="feat/30-child-b",
+                base_branch="feat/10-root",
+            ),
+        ]
+        chains = _detect_chains(issues)
+        assert len(chains) == 2
+        assert ["10", "20"] in chains
+        assert ["10", "30"] in chains
+
+    def test_no_branch_name_ignored(self) -> None:
+        issues = [
+            BatchIssueContext(issue_number="10", issue_title="No branch"),
+        ]
+        chains = _detect_chains(issues)
+        assert chains == []
+
+
+# ---------------------------------------------------------------------------
+# create_integration_branch with chains
+# ---------------------------------------------------------------------------
+
+
+class TestCreateIntegrationBranchWithChains:
+    @patch("wade.services.batch_review_service.git_sync")
+    @patch("wade.services.batch_review_service.git_repo")
+    @patch("wade.services.batch_review_service.git_branch")
+    def test_skips_intermediate_chain_members(
+        self,
+        mock_branch: MagicMock,
+        mock_repo: MagicMock,
+        mock_sync: MagicMock,
+    ) -> None:
+        from wade.services.batch_review_service import create_integration_branch
+
+        mock_branch.branch_exists.return_value = False
+
+        ctx = BatchReviewContext(
+            issues=[
+                BatchIssueContext(
+                    issue_number="10",
+                    issue_title="Chain root",
+                    branch_name="feat/10-root",
+                    local_ref_exists=True,
+                    base_branch="main",
+                ),
+                BatchIssueContext(
+                    issue_number="20",
+                    issue_title="Chain middle",
+                    branch_name="feat/20-middle",
+                    local_ref_exists=True,
+                    base_branch="feat/10-root",
+                ),
+                BatchIssueContext(
+                    issue_number="30",
+                    issue_title="Chain tip",
+                    branch_name="feat/30-tip",
+                    local_ref_exists=True,
+                    base_branch="feat/20-middle",
+                ),
+            ],
+            main_branch="main",
+            tracking_issue="99",
+            chains=[["10", "20", "30"]],
+        )
+
+        result = create_integration_branch(Path("/repo"), ctx)
+
+        # Only the tip (#30) should be merged; intermediates are skipped
+        mock_repo.merge_no_edit.assert_called_once_with(Path("/repo"), "feat/30-tip")
+        assert result.issues[0].merged is True  # root: intermediate, skipped
+        assert result.issues[1].merged is True  # middle: intermediate, skipped
+        assert result.issues[2].merged is True  # tip: actually merged
+
+    @patch("wade.services.batch_review_service.git_sync")
+    @patch("wade.services.batch_review_service.git_repo")
+    @patch("wade.services.batch_review_service.git_branch")
+    def test_independent_issues_still_merged(
+        self,
+        mock_branch: MagicMock,
+        mock_repo: MagicMock,
+        mock_sync: MagicMock,
+    ) -> None:
+        from wade.services.batch_review_service import create_integration_branch
+
+        mock_branch.branch_exists.return_value = False
+
+        ctx = BatchReviewContext(
+            issues=[
+                BatchIssueContext(
+                    issue_number="10",
+                    issue_title="Chain root",
+                    branch_name="feat/10-root",
+                    local_ref_exists=True,
+                ),
+                BatchIssueContext(
+                    issue_number="20",
+                    issue_title="Chain tip",
+                    branch_name="feat/20-tip",
+                    local_ref_exists=True,
+                ),
+                BatchIssueContext(
+                    issue_number="50",
+                    issue_title="Independent",
+                    branch_name="feat/50-independent",
+                    local_ref_exists=True,
+                ),
+            ],
+            main_branch="main",
+            tracking_issue="99",
+            chains=[["10", "20"]],
+        )
+
+        create_integration_branch(Path("/repo"), ctx)
+
+        # #10 is intermediate (skipped), #20 is tip (merged), #50 is independent (merged)
+        assert mock_repo.merge_no_edit.call_count == 2
+        merge_args = [call.args[1] for call in mock_repo.merge_no_edit.call_args_list]
+        assert "feat/20-tip" in merge_args
+        assert "feat/50-independent" in merge_args
+        assert "feat/10-root" not in merge_args
+
+
+# ---------------------------------------------------------------------------
+# _format_batch_context with chains
+# ---------------------------------------------------------------------------
+
+
+class TestFormatBatchContextWithChains:
+    def test_renders_chain_structure(self) -> None:
+        ctx = BatchReviewContext(
+            issues=[
+                BatchIssueContext(
+                    issue_number="10",
+                    issue_title="Root",
+                    branch_name="feat/10-root",
+                    base_branch="main",
+                    merged=True,
+                    diff_stat=" 2 files changed",
+                ),
+                BatchIssueContext(
+                    issue_number="20",
+                    issue_title="Child",
+                    branch_name="feat/20-child",
+                    base_branch="feat/10-root",
+                    merged=True,
+                    diff_stat=" 1 file changed",
+                ),
+            ],
+            main_branch="main",
+            tracking_issue="99",
+            chains=[["10", "20"]],
+        )
+
+        output = _format_batch_context(ctx)
+
+        assert "Chain:" in output
+        assert "#10" in output
+        assert "#20" in output
+        assert "Stacked on:" in output
+        assert "Diff (incremental)" in output
