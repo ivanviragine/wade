@@ -310,6 +310,7 @@ def _run_review_pr_comments(
             ai_explicit=ctx.ai_explicit,
             model_explicit=ctx.model_explicit,
             yolo=ctx.yolo,
+            yolo_explicit=(ctx.yolo is not None),
         )
     elif outcome == PollOutcome.QUIET_TIMEOUT:
         review_service._quiet_next_steps_prompt(
