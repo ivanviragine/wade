@@ -1571,6 +1571,7 @@ class TestPostImplementationLifecyclePr:
             ai_explicit=True,
             model_explicit=True,
             yolo=True,
+            yolo_explicit=False,
         )
 
     def test_wait_for_reviews_quiet_timeout_preserves_review_context(self, tmp_path: Path) -> None:
@@ -1621,6 +1622,7 @@ class TestPostImplementationLifecyclePr:
             ai_explicit=True,
             model_explicit=True,
             yolo=True,
+            yolo_explicit=False,
         )
 
     def test_no_pr_found_returns_not_merged(self, tmp_path: Path) -> None:
