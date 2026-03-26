@@ -1767,8 +1767,36 @@ class TestBatchChainFlag:
 class TestChainContinuation:
     """Tests for the --chain continuation loop in implement_cmd."""
 
-    def test_chain_continues_on_merge(self) -> None:
-        """When merged=True and user confirms, next issue in chain starts."""
+    def test_chain_continues_on_confirm(self) -> None:
+        """When user confirms, next issue in chain starts with stacked base."""
+        from typer.testing import CliRunner
+
+        from wade.cli.main import app
+
+        runner = CliRunner()
+        calls: list[dict[str, object]] = []
+
+        def fake_start(**kwargs: object) -> ImplementResult:
+            calls.append(kwargs)
+            return ImplementResult(
+                success=True, merged=False, branch_name=f"feat/{len(calls)}-branch"
+            )
+
+        with (
+            patch("wade.services.implementation_service.start", side_effect=fake_start),
+            patch("wade.ui.prompts.confirm", return_value=True),
+            patch("wade.ui.prompts.select", return_value=0),
+        ):
+            result = runner.invoke(app, ["implement", "1", "--chain", "2,3"])
+
+        assert result.exit_code == 0
+        assert len(calls) == 3  # Issues 1, 2, 3
+        # Second call should have base_branch from first call's branch_name
+        assert calls[1]["base_branch"] == "feat/1-branch"
+        assert calls[2]["base_branch"] == "feat/2-branch"
+
+    def test_chain_continues_without_merge_gate(self) -> None:
+        """Chain continues even when merged=False (stacked branches)."""
         from typer.testing import CliRunner
 
         from wade.cli.main import app
@@ -1779,7 +1807,7 @@ class TestChainContinuation:
         def fake_start(**kwargs: object) -> ImplementResult:
             nonlocal call_count
             call_count += 1
-            return ImplementResult(success=True, merged=True)
+            return ImplementResult(success=True, merged=False, branch_name=f"feat/{call_count}-x")
 
         with (
             patch("wade.services.implementation_service.start", side_effect=fake_start),
@@ -1789,30 +1817,10 @@ class TestChainContinuation:
             result = runner.invoke(app, ["implement", "1", "--chain", "2,3"])
 
         assert result.exit_code == 0
-        assert call_count == 3  # Issues 1, 2, 3
-
-    def test_chain_pauses_on_pending_review(self) -> None:
-        """When merged=False, chain pauses with a helpful hint."""
-        from typer.testing import CliRunner
-
-        from wade.cli.main import app
-
-        runner = CliRunner()
-
-        with (
-            patch(
-                "wade.services.implementation_service.start",
-                return_value=ImplementResult(success=True, merged=False),
-            ),
-            patch("wade.ui.prompts.select", return_value=0),
-        ):
-            result = runner.invoke(app, ["implement", "1", "--chain", "2,3"])
-
-        assert result.exit_code == 0
-        assert "paused" in result.output.lower() or "pending" in result.output.lower()
+        assert call_count == 3  # No merge gate — all three run
 
     def test_chain_stops_on_decline(self) -> None:
-        """When merged=True but user declines, chain stops with resume hint."""
+        """When user declines, chain stops with resume hint including --base."""
         from typer.testing import CliRunner
 
         from wade.cli.main import app
@@ -1822,7 +1830,9 @@ class TestChainContinuation:
         with (
             patch(
                 "wade.services.implementation_service.start",
-                return_value=ImplementResult(success=True, merged=True),
+                return_value=ImplementResult(
+                    success=True, merged=False, branch_name="feat/1-my-branch"
+                ),
             ),
             patch("wade.ui.prompts.confirm", return_value=False),
             patch("wade.ui.prompts.select", return_value=0),
@@ -1830,7 +1840,9 @@ class TestChainContinuation:
             result = runner.invoke(app, ["implement", "1", "--chain", "2,3"])
 
         assert result.exit_code == 0
-        assert "resume" in result.output.lower() or "wade implement" in result.output.lower()
+        output_lower = result.output.lower()
+        assert "resume" in output_lower or "wade implement" in output_lower
+        assert "--base" in result.output
 
     def test_empty_chain_runs_single_issue(self) -> None:
         """No --chain flag → runs single issue, no continuation."""

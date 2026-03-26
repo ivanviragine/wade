@@ -273,6 +273,59 @@ def mark_pr_ready(repo_root: Path, pr_number: int) -> bool:
     return result.returncode == 0
 
 
+def get_pr_base_branch(repo_root: Path, pr_number: int) -> str | None:
+    """Fetch the base branch name of a pull request.
+
+    Args:
+        repo_root: Repository root directory.
+        pr_number: PR number to query.
+
+    Returns:
+        The base branch name, or None if the PR cannot be found.
+    """
+    result = _run_gh(
+        "pr",
+        "view",
+        str(pr_number),
+        "--json",
+        "baseRefName",
+        cwd=repo_root,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    try:
+        data = json.loads(result.stdout)
+        base: str = data.get("baseRefName", "")
+        return base if base else None
+    except (json.JSONDecodeError, KeyError):
+        return None
+
+
+def update_pr_base(repo_root: Path, pr_number: int, new_base: str) -> bool:
+    """Change the base branch of a pull request.
+
+    Args:
+        repo_root: Repository root directory.
+        pr_number: PR number to update.
+        new_base: New base branch name.
+
+    Returns:
+        True if the update succeeded, False otherwise.
+    """
+    log.info("pr.update_base", pr_number=pr_number, new_base=new_base)
+    result = _run_gh(
+        "pr",
+        "edit",
+        str(pr_number),
+        "--base",
+        new_base,
+        cwd=repo_root,
+        check=False,
+    )
+    return result.returncode == 0
+
+
 def comment_on_pr(repo_root: Path, pr_number: int, body: str) -> None:
     """Post a comment on a pull request via ``gh pr comment``.
 

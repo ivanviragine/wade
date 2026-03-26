@@ -250,6 +250,9 @@ def implement_cmd(
     chain: str | None = typer.Option(
         None, "--chain", hidden=True, help="Comma-separated issue IDs for sequential continuation."
     ),
+    base: str | None = typer.Option(
+        None, "--base", hidden=True, help="Base branch for stacked chain execution."
+    ),
 ) -> None:
     """Start an implementation session on an issue."""
     from wade.services.implementation_service import start as do_start
@@ -267,6 +270,10 @@ def implement_cmd(
     # Parse chain into a list of remaining issue IDs
     chain_remaining = [s.strip() for s in chain.split(",") if s.strip()] if chain else []
 
+    # For the first task in a chain, use --base if provided; subsequent tasks
+    # use the previous task's branch_name automatically.
+    current_base = base
+
     result = do_start(
         target=target,
         ai_tool=selected_ai,
@@ -278,26 +285,25 @@ def implement_cmd(
         effort=effort,
         effort_explicit=effort is not None,
         yolo=yolo or None,
+        base_branch=current_base,
     )
 
-    # Iterative chain continuation loop (merge-gated)
+    # Iterative chain continuation loop (stacked branches — no merge gate)
     while result.success and chain_remaining:
         next_issue = chain_remaining[0]
         rest = chain_remaining[1:]
+        # The next task's base is the current task's branch
+        next_base = result.branch_name
+        base_flag = f" --base {next_base}" if next_base else ""
         chain_flag = f" --chain {','.join(rest)}" if rest else ""
-
-        if not result.merged:
-            console.empty()
-            console.info("Chain paused — PR is pending review.")
-            console.hint(f"After merge, run: wade implement {next_issue}{chain_flag}")
-            break
 
         console.empty()
         if not prompts.confirm(f"Start implementation of #{next_issue}?", default=True):
-            console.hint(f"Resume chain: wade implement {next_issue}{chain_flag}")
+            console.hint(f"Resume chain: wade implement {next_issue}{base_flag}{chain_flag}")
             break
 
         chain_remaining = rest
+        current_base = next_base
 
         result = do_start(
             target=next_issue,
@@ -310,6 +316,7 @@ def implement_cmd(
             effort=effort,
             effort_explicit=effort is not None,
             yolo=yolo or None,
+            base_branch=current_base,
         )
 
     raise typer.Exit(0 if result.success else 1)
