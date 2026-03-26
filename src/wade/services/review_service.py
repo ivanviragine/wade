@@ -388,6 +388,7 @@ def start(
     ai_explicit: bool = False,
     model_explicit: bool = False,
     yolo: bool | None = None,
+    yolo_explicit: bool = False,
 ) -> bool:
     """Start a review-addressing session on an issue.
 
@@ -535,6 +536,7 @@ def start(
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
             yolo=yolo,
+            yolo_explicit=yolo_explicit,
         )
         return True
 
@@ -563,7 +565,7 @@ def start(
             tool_explicit=ai_explicit,
             model_explicit=model_explicit,
             resolved_yolo=resolved_yolo,
-            yolo_explicit=yolo is not None,
+            yolo_explicit=yolo_explicit,
         )
 
     # 7. Build review prompt
@@ -705,6 +707,7 @@ def start(
                 ai_explicit=ai_explicit,
                 model_explicit=model_explicit,
                 yolo=resolved_yolo,
+                yolo_explicit=yolo_explicit,
             )
     else:
         console.info(
@@ -727,6 +730,7 @@ def start(
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
             yolo=yolo,
+            yolo_explicit=yolo_explicit,
         )
 
     return True
@@ -801,6 +805,7 @@ def _quiet_next_steps_prompt(
     ai_explicit: bool = False,
     model_explicit: bool = False,
     yolo: bool | None = None,
+    yolo_explicit: bool = False,
 ) -> None:
     """Shared next-steps menu for quiet PRs: keep polling, merge, or exit.
 
@@ -845,6 +850,7 @@ def _quiet_next_steps_prompt(
                         ai_explicit=ai_explicit,
                         model_explicit=model_explicit,
                         yolo=yolo,
+                        yolo_explicit=yolo_explicit,
                     )
                 return
             elif outcome == PollOutcome.QUIET_TIMEOUT:
@@ -872,6 +878,7 @@ def _post_review_lifecycle(
     ai_explicit: bool = False,
     model_explicit: bool = False,
     yolo: bool | None = None,
+    yolo_explicit: bool = False,
 ) -> None:
     """Post-review lifecycle menu: Merge PR or wait for new reviews."""
     from wade.ui import prompts
@@ -898,6 +905,7 @@ def _post_review_lifecycle(
                     ai_explicit=ai_explicit,
                     model_explicit=model_explicit,
                     yolo=yolo,
+                    yolo_explicit=yolo_explicit,
                 )
         elif outcome == PollOutcome.QUIET_TIMEOUT:
             _quiet_next_steps_prompt(
@@ -913,6 +921,7 @@ def _post_review_lifecycle(
                 ai_explicit=ai_explicit,
                 model_explicit=model_explicit,
                 yolo=yolo,
+                yolo_explicit=yolo_explicit,
             )
         return
 

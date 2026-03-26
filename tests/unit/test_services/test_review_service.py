@@ -1457,6 +1457,7 @@ class TestQuietNextStepsPrompt:
             ai_explicit=False,
             model_explicit=False,
             yolo=None,
+            yolo_explicit=False,
         )
 
     @patch("wade.services.review_service.get_comprehensive_review_status")
@@ -1504,6 +1505,7 @@ class TestQuietNextStepsPrompt:
             ai_explicit=True,
             model_explicit=True,
             yolo=True,
+            yolo_explicit=False,
         )
 
     @patch("wade.services.review_service.get_comprehensive_review_status")
@@ -1660,6 +1662,7 @@ class TestPostReviewLifecycle:
             ai_explicit=False,
             model_explicit=False,
             yolo=None,
+            yolo_explicit=False,
         )
 
     @patch("wade.services.review_service.start")
@@ -1692,6 +1695,7 @@ class TestPostReviewLifecycle:
             ai_explicit=False,
             model_explicit=False,
             yolo=None,
+            yolo_explicit=False,
         )
 
     @patch("wade.services.review_service.start")
@@ -1737,4 +1741,5 @@ class TestPostReviewLifecycle:
             ai_explicit=True,
             model_explicit=True,
             yolo=True,
+            yolo_explicit=False,
         )

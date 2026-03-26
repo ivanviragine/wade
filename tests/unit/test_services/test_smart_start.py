@@ -663,6 +663,7 @@ class TestRunReviewPrComments:
             ai_explicit=False,
             model_explicit=False,
             yolo=None,
+            yolo_explicit=False,
         )
 
     @patch("wade.services.review_service._quiet_next_steps_prompt")
