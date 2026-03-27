@@ -30,6 +30,20 @@ After completing a wade command, briefly report the outcome and announce the nex
   "Sync complete — your branch is up to date with main. Now running `wade implementation-session done`..."
   "Review done — no issues found. Now writing PR-SUMMARY.md..."
 
+## User interaction
+
+When you need user input at a decision point, prefer your tool's native
+asking or confirmation component (if available) over embedding questions in
+long text blocks. This makes decision points clear and actionable.
+
+Key decision points that should use structured asks:
+- After presenting the workflow recap and state: "Want any further changes, or is the session complete?"
+- If review findings need user input: "Should I address this review finding?"
+
+Keep the question concise — one sentence with clear options. Present
+supporting context (recap, state summary) as regular text *before* the
+structured question.
+
 ## Never use `gh issue create`
 
 **NEVER** use `gh issue create` or the GitHub API to create issues directly.

@@ -32,6 +32,21 @@ After completing a wade command, briefly report the outcome and announce the nex
   "Plan review done — no issues found. Now running `wade plan-session done`..."
   "Validation complete — all plan files passed. Now presenting the workflow recap and suggesting you exit..."
 
+## User interaction
+
+When you need user input at a decision point, prefer your tool's native
+asking or confirmation component (if available) over embedding questions in
+long text blocks. This makes decision points clear and actionable.
+
+Key decision points that should use structured asks:
+- After presenting the plan breakdown: "Ready to write the plan file(s)?"
+- After writing and presenting summary: "Want any modifications?"
+- After validation passes: "Plans are validated. Ready to exit? (wade will create issues automatically)"
+
+Keep the question concise — one sentence with clear options. Present
+supporting context (recap, state summary) as regular text *before* the
+structured question.
+
 ## Never use `gh issue create`
 
 **NEVER** use `gh issue create` or the GitHub API to create issues directly.
