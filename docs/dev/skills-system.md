@@ -60,7 +60,7 @@ The self-init path creates symlinks from `.claude/skills/<name>` -> `../../templ
 
 Shared content that appears verbatim in multiple skill templates lives in `templates/skills/_partials/`. Template files reference partials via placeholder strings defined in `_SKILL_PARTIALS` in `installer.py`:
 
-```
+```text
 {user_interaction_prompt}  →  _partials/user-interaction.md
 ```
 
