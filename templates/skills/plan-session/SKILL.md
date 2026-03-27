@@ -25,20 +25,10 @@ Always inform the user before running `wade` commands, reviews, or
 session lifecycle operations. Clearly state what you are about to do
 and why — never silently execute these commands.
 
-## User interaction
-
-When you need user input at a decision point, prefer your tool's native
-asking or confirmation component (if available) over embedding questions in
-long text blocks. This makes decision points clear and actionable.
-
-Key decision points that should use structured asks:
+{user_interaction_prompt}
 - After presenting the plan breakdown: "Ready to write the plan file(s)?"
 - After writing and presenting summary: "Want any modifications?"
 - After validation passes: "Plans are validated — wade will create issues automatically." Then ask: "Ready to exit?"
-
-Keep the question concise — one sentence with clear options. Present
-supporting context (recap, state summary) as regular text *before* the
-structured question.
 
 ## Never use `gh issue create`
 

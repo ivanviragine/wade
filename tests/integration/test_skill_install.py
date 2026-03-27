@@ -170,6 +170,31 @@ class TestSelectiveSkillInstallation:
         assert custom_dir.is_dir(), "user-owned skill dir should be preserved"
         assert (custom_dir / "SKILL.md").read_text() == "# My Custom Skill"
 
+    def test_partial_expansion_in_installed_skill(self, tmp_git_repo: Path) -> None:
+        """Partial placeholders are expanded when skills are copied to a project."""
+        from wade.skills.installer import install_skills
+
+        install_skills(tmp_git_repo, skills=["plan-session"])
+
+        skill_md = tmp_git_repo / ".claude" / "skills" / "plan-session" / "SKILL.md"
+        assert skill_md.is_file()
+        content = skill_md.read_text(encoding="utf-8")
+        assert "{user_interaction_prompt}" not in content, "Placeholder must be expanded"
+        assert "## User interaction" in content, "Partial heading must be injected"
+        assert "Key decision points:" in content, "Partial content must be injected"
+
+    def test_self_init_inject_skills_are_not_symlinked(self, tmp_git_repo: Path) -> None:
+        """In self-init mode, inject skills are processed copies — not directory symlinks."""
+        from wade.skills.installer import install_skills
+
+        install_skills(tmp_git_repo, is_self_init=True, skills=["plan-session"])
+
+        skill_dir = tmp_git_repo / ".claude" / "skills" / "plan-session"
+        assert not skill_dir.is_symlink(), "plan-session should not be a dir symlink in self-init"
+        assert skill_dir.is_dir()
+        content = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+        assert "{user_interaction_prompt}" not in content
+
     def test_selective_install_prunes_stale_skills(self, tmp_git_repo: Path) -> None:
         """Re-bootstrapping with different skills removes previously installed ones."""
         from wade.skills.installer import IMPLEMENT_SKILLS, REVIEW_SKILLS, install_skills
