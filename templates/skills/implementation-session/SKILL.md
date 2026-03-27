@@ -23,6 +23,10 @@ Always inform the user before running `wade` commands, reviews, or
 session lifecycle operations. Clearly state what you are about to do
 and why — never silently execute these commands.
 
+{user_interaction_prompt}
+- After presenting the workflow recap and state: "Want any further changes, or is the session complete?"
+- If review findings need user input: "Should I address this review finding?"
+
 ## Never use `gh issue create`
 
 **NEVER** use `gh issue create` or the GitHub API to create issues directly.

@@ -25,6 +25,11 @@ Always inform the user before running `wade` commands, reviews, or
 session lifecycle operations. Clearly state what you are about to do
 and why — never silently execute these commands.
 
+{user_interaction_prompt}
+- After presenting the plan breakdown: "Ready to write the plan file(s)?"
+- After writing and presenting summary: "Want any modifications?"
+- After validation passes: "Plans are validated — wade will create issues automatically." Then ask: "Ready to exit?"
+
 ## Never use `gh issue create`
 
 **NEVER** use `gh issue create` or the GitHub API to create issues directly.
