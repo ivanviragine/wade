@@ -19,7 +19,7 @@ class CursorHookEntry(BaseModel):
     tools: list[str]
 
 
-def configure_plan_hooks(worktree_path: Path, guard_script: Path) -> None:
+def _configure_cursor_hook(worktree_path: Path, guard_script: Path, log_event: str) -> None:
     """Write .cursor/hooks.json with a preToolUse guard entry.
 
     Merges with any existing hooks config.  Idempotent — re-running
@@ -34,5 +34,23 @@ def configure_plan_hooks(worktree_path: Path, guard_script: Path) -> None:
         ),
         dedup_key="command",
         ensure_path=["preToolUse"],
-        log_event="cursor_hooks.configured",
+        log_event=log_event,
     )
+
+
+def configure_worktree_hooks(worktree_path: Path, guard_script: Path) -> None:
+    """Write .cursor/hooks.json with a preToolUse worktree guard entry.
+
+    Merges with any existing hooks config.  Idempotent — re-running
+    with the same guard_script path is a no-op.
+    """
+    _configure_cursor_hook(worktree_path, guard_script, "cursor_worktree_hooks.configured")
+
+
+def configure_plan_hooks(worktree_path: Path, guard_script: Path) -> None:
+    """Write .cursor/hooks.json with a preToolUse guard entry.
+
+    Merges with any existing hooks config.  Idempotent — re-running
+    with the same guard_script path is a no-op.
+    """
+    _configure_cursor_hook(worktree_path, guard_script, "cursor_hooks.configured")

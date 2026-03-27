@@ -11,3 +11,6 @@ If a project knowledge file is configured (see `.wade.yml` → `knowledge`), rea
 1. **First action**: run `wade implementation-session check` to verify you're in a worktree.
 2. **Never** push branches or create PRs manually — use `wade implementation-session done`.
 3. **Before closing**: write `PR-SUMMARY.md` in the worktree root, then sync with main via `wade implementation-session sync --json`.
+4. **At session end**: always present a workflow recap (which wade commands you ran),
+   current state (PR status, branch, issue), and what happens next. Then suggest
+   the user exits.

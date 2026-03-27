@@ -20,6 +20,25 @@ class GeminiHookEntry(BaseModel):
     tools: list[str]
 
 
+def configure_worktree_hooks(worktree_path: Path, guard_script: Path) -> None:
+    """Write .gemini/settings.json with a BeforeTool worktree guard entry.
+
+    Merges with any existing settings.  Idempotent — re-running
+    with the same guard_script path is a no-op.
+    """
+    upsert_hook_entry(
+        hooks_file=worktree_path / ".gemini" / "settings.json",
+        entry=GeminiHookEntry(
+            event="BeforeTool",
+            command=f"python3 {guard_script.resolve()}",
+            tools=[".*"],
+        ),
+        dedup_key="command",
+        ensure_path=["hooks"],
+        log_event="gemini_worktree_hooks.configured",
+    )
+
+
 def configure_plan_hooks(worktree_path: Path, guard_script: Path) -> None:
     """Write .gemini/settings.json with a BeforeTool guard entry.
 

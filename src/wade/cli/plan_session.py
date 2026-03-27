@@ -33,11 +33,6 @@ def done(
         raise typer.Exit(1)
 
     console.success(f"Plan validation passed ({len(result.warnings)} warning(s)).")
-    console.info(
-        "SESSION COMPLETE — do not implement anything. "
-        "Suggest the user to exit the session now. "
-        "wade will read the plan files and create GitHub issues automatically."
-    )
 
     # Remind agent to review if reviews are enabled. Advisory only —
     # must never turn a successful validation into a failure.
@@ -49,5 +44,12 @@ def done(
             console.hint("P.s.: run `wade review plan <plan_file>` if you haven't already.")
     except Exception:
         pass
+
+    console.info(
+        "SESSION COMPLETE — do not implement anything. "
+        "Present the workflow recap and what happens next to the user. "
+        "Suggest they exit the session now. "
+        "wade will read the plan files and create GitHub issues and draft PRs automatically."
+    )
 
     raise typer.Exit(0)
