@@ -25,6 +25,13 @@ Always inform the user before running `wade` commands, reviews, or
 session lifecycle operations. Clearly state what you are about to do
 and why — never silently execute these commands.
 
+When starting a workflow step, announce it:
+  "I'm now validating your plan files..."
+
+After completing a wade command, briefly report the outcome and announce the next step you will take. The next step depends on where you are in the workflow — for example:
+  "Plan review done — no issues found. Now running `wade plan-session done`..."
+  "Validation complete — all plan files passed. Now presenting the workflow recap and suggesting you exit..."
+
 {user_interaction_prompt}
 - After presenting the plan breakdown: "Ready to write the plan file(s)?"
 - After writing and presenting summary: "Want any modifications?"
@@ -86,8 +93,20 @@ Running `wade knowledge add` is allowed even though this is a planning session.
 6. **Validate** — run `wade plan-session done <plan_dir>` (the temp dir from your prompt).
    If it exits with errors, fix each reported issue and re-run until it passes.
    Warnings are informational and do not block proceeding.
-7. **Stop** — once validation passes, suggest the user exits. wade reads
-   the files and creates lightweight GitHub Issues + draft PRs automatically.
+7. **Present results and suggest exit** — once validation passes, provide a
+   brief **workflow recap** and **what happens next**:
+
+   Workflow recap (list only the steps you actually performed):
+   - Wrote plan file(s) to the temp directory
+   - Ran plan review (`wade review plan`)
+   - Validated plans (`wade plan-session done`)
+
+   What happens next:
+   - After you exit, wade will automatically create GitHub issue(s) and draft PR(s)
+     from your plan files
+   - To start implementation: `wade implement <issue-number>`
+
+   Then suggest the user exits the session.
 
 You do **not** create issues, implement code, run `wade implement`, `wade implementation-session done`, or `wade implementation-session sync`,
 or make any code changes. Planning only.

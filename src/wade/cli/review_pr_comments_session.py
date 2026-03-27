@@ -112,10 +112,16 @@ def done(
                 elif level == "info":
                     console.info(message)
             if not messages:
-                console.info("SESSION COMPLETE — push succeeded.")
+                console.info(
+                    "SESSION COMPLETE — push succeeded. "
+                    "Present the workflow recap, current state, and next steps to the user. "
+                    "Suggest they exit the session."
+                )
         else:
             console.warn(
-                "SESSION COMPLETE — push succeeded, but review status could not be verified."
+                "SESSION COMPLETE — push succeeded, but review status could not be verified. "
+                "Present the workflow recap, current state, and next steps to the user. "
+                "Suggest they exit the session."
             )
     raise typer.Exit(0 if success else 1)
 
