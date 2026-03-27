@@ -6,7 +6,8 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import wade.ai_tools  # noqa: F401 — triggers adapter auto-registration
+import crossby.ai_tools  # noqa: F401 — triggers adapter auto-registration
+
 from wade.models.config import AICommandConfig
 from wade.models.delegation import DelegationMode, DelegationRequest
 from wade.services.delegation_service import (

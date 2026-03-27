@@ -8,6 +8,7 @@ from typing import Any
 
 import structlog
 import yaml
+from crossby.models.ai import AIToolID
 
 from wade.config.loader import (
     ConfigError,
@@ -17,7 +18,6 @@ from wade.config.loader import (
 )
 from wade.git import repo
 from wade.git.repo import GitError
-from wade.models.ai import AIToolID
 from wade.models.session import MergeStrategy
 from wade.providers import registered_provider_names
 

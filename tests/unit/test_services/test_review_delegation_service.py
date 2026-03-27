@@ -5,7 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from wade.models.ai import EffortLevel
+from crossby.models.ai import EffortLevel
+
 from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationResult
 from wade.services.review_delegation_service import (

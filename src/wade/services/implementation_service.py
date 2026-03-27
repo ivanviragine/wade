@@ -18,8 +18,9 @@ from pathlib import Path
 from typing import Any
 
 import structlog
+from crossby.ai_tools import AbstractAITool
+from crossby.models.ai import AIToolID, TokenUsage
 
-from wade.ai_tools.base import AbstractAITool
 from wade.config.loader import load_config
 from wade.git import branch as git_branch
 from wade.git import pr as git_pr
@@ -27,7 +28,6 @@ from wade.git import repo as git_repo
 from wade.git import sync as git_sync
 from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
-from wade.models.ai import AIToolID, TokenUsage
 from wade.models.config import ProjectConfig
 from wade.models.deps import DependencyGraph
 from wade.models.session import (
@@ -250,10 +250,10 @@ def _install_plan_guard_hooks(worktree_path: Path) -> None:
         shutil.copy2(guard_src, dest)
 
     # Configure each tool's hook config with its own guard script copy
-    from wade.config.claude_allowlist import configure_plan_hooks as configure_claude_hooks
-    from wade.config.copilot_hooks import configure_plan_hooks as configure_copilot_hooks
-    from wade.config.cursor_hooks import configure_plan_hooks as configure_cursor_hooks
-    from wade.config.gemini_hooks import configure_plan_hooks as configure_gemini_hooks
+    from crossby.config.claude_allowlist import configure_plan_hooks as configure_claude_hooks
+    from crossby.config.copilot_hooks import configure_plan_hooks as configure_copilot_hooks
+    from crossby.config.cursor_hooks import configure_plan_hooks as configure_cursor_hooks
+    from crossby.config.gemini_hooks import configure_plan_hooks as configure_gemini_hooks
 
     configure_claude_hooks(
         worktree_path, worktree_path / ".claude" / "hooks" / "plan_write_guard.py"
@@ -334,18 +334,17 @@ def bootstrap_worktree(
     logger.debug("implementation.bootstrap_skills", path=str(worktree_path))
 
     # Always propagate allowlist to worktree — configure_allowlist is idempotent
-    from wade.config.claude_allowlist import configure_allowlist
+    from crossby.config.claude_allowlist import configure_allowlist
 
-    configure_allowlist(worktree_path, extra_patterns=config.permissions.allowed_commands)
+    configure_allowlist(worktree_path, ["wade:*", *config.permissions.allowed_commands])
 
     # Propagate Cursor allowlist to worktree's per-project .cursor/cli.json
-    from wade.config.cursor_allowlist import configure_allowlist as configure_cursor_allowlist
-    from wade.config.cursor_allowlist import is_allowlist_configured as is_cursor_configured
+    from crossby.config.cursor_allowlist import configure_allowlist as configure_cursor_allowlist
+    from crossby.config.cursor_allowlist import is_allowlist_configured as is_cursor_configured
 
-    if is_cursor_configured() or is_cursor_configured(repo_root):
-        configure_cursor_allowlist(
-            worktree_path, extra_patterns=config.permissions.allowed_commands
-        )
+    wp = ["wade:*"]
+    if is_cursor_configured(patterns=wp) or is_cursor_configured(repo_root, patterns=wp):
+        configure_cursor_allowlist(worktree_path, ["wade:*", *config.permissions.allowed_commands])
 
     # Run post-create hook
     if config.hooks.post_worktree_create:
@@ -1243,7 +1242,7 @@ def start(
                     if prompt:
                         deliver_prompt_if_needed(adapter, prompt)
                     exit_code = adapter.launch(
-                        worktree_path=worktree_path,
+                        working_dir=worktree_path,
                         model=resolved_model,
                         prompt=prompt,
                         transcript_path=transcript_path,
@@ -1687,7 +1686,7 @@ def _build_session_usage_table(
     Generates the table rows for one session, used by both impl and review
     usage block builders.
     """
-    from wade.ai_tools.transcript import format_count
+    from crossby.ai_tools.transcript import format_count
 
     breakdown = token_usage.model_breakdown if token_usage else []
     multi = len(breakdown) > 1

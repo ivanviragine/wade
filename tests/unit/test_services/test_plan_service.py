@@ -60,7 +60,7 @@ class TestResolveAITool:
     def test_detection_fallback(self) -> None:
         config = ProjectConfig()
         with patch("wade.services.plan_service.AbstractAITool.detect_installed") as mock:
-            from wade.models.ai import AIToolID
+            from crossby.models.ai import AIToolID
 
             mock.return_value = [AIToolID.CLAUDE]
             result = resolve_ai_tool(None, config)

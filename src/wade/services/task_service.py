@@ -6,6 +6,7 @@ label ensure/add/remove for planned-by/implemented-by metadata.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any
 
@@ -252,7 +253,7 @@ def build_plan_summary_block(
     model_breakdown: list[dict[str, Any]] | None = None,
 ) -> str:
     """Build the plan summary markdown block."""
-    from wade.ai_tools.transcript import format_count
+    from crossby.ai_tools.transcript import format_count
 
     bd = model_breakdown or []
     multi = len(bd) > 1
@@ -350,7 +351,7 @@ def apply_plan_token_usage(
 
     For multi-issue plans, tokens are allocated proportionally by body line count.
     """
-    from wade.ai_tools.transcript import allocate_tokens
+    allocate_tokens = _allocate_tokens
 
     if not issue_numbers:
         return
@@ -777,3 +778,25 @@ def close_task(
     except Exception as e:
         console.error(f"Failed to close #{task_id}: {e}")
         return False
+
+
+def _allocate_tokens(total_tokens: int, line_counts: list[int]) -> list[int]:
+    """Distribute tokens across issues proportionally by line count."""
+    n = len(line_counts)
+    if n == 0:
+        return []
+    if n == 1:
+        return [total_tokens]
+    total_lines = sum(line_counts)
+    if total_lines <= 0:
+        base = total_tokens // n
+        remainder = total_tokens % n
+        return [base + (1 if i < remainder else 0) for i in range(n)]
+    result: list[int] = []
+    running_sum = 0
+    for i in range(n - 1):
+        alloc = math.floor(total_tokens * line_counts[i] / total_lines)
+        result.append(alloc)
+        running_sum += alloc
+    result.append(total_tokens - running_sum)
+    return result

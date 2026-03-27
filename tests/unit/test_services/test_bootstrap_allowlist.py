@@ -6,10 +6,11 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from wade.config.claude_allowlist import WADE_ALLOW_PATTERN
-from wade.config.cursor_allowlist import WADE_ALLOW_PATTERN as CURSOR_WADE_ALLOW_PATTERN
 from wade.models.config import HooksConfig, PermissionsConfig, ProjectConfig, ProjectSettings
 from wade.services.implementation_service import bootstrap_worktree
+
+WADE_ALLOW_PATTERN = "Bash(wade:*)"
+CURSOR_WADE_ALLOW_PATTERN = "Shell(wade:*)"
 
 
 class TestBootstrapAllowlistPropagation:
@@ -92,10 +93,10 @@ class TestBootstrapCursorAllowlistPropagation:
         # Set up global Cursor config with wade pattern
         global_config = Path.home() / ".cursor" / "cli-config.json"
         with (
-            patch("wade.config.cursor_allowlist._GLOBAL_CONFIG_PATH", global_config),
+            patch("crossby.config.cursor_allowlist._GLOBAL_CONFIG_PATH", global_config),
             patch(
-                "wade.config.cursor_allowlist.is_allowlist_configured",
-                side_effect=lambda root=None: root is None,
+                "crossby.config.cursor_allowlist.is_allowlist_configured",
+                side_effect=lambda root=None, patterns=None: root is None,
             ),
             patch("subprocess.run"),
         ):

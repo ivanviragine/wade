@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
+from crossby.models.ai import AIToolID
 
-from wade.models.ai import AIToolID
 from wade.models.config import ComplexityModelMapping
 from wade.services.init_service import (
     GITIGNORE_ENTRIES,
@@ -1220,7 +1220,7 @@ class TestUpdateExtended:
         ):
             init(project_root=tmp_git_repo, non_interactive=True)
 
-        with patch("wade.config.claude_allowlist.configure_allowlist") as mock_allow:
+        with patch("crossby.config.claude_allowlist.configure_allowlist") as mock_allow:
             update(project_root=tmp_git_repo, skip_self_upgrade=True)
             mock_allow.assert_called_once()
 

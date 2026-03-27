@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import wade.ai_tools  # noqa: F401 — registers all adapters via __init_subclass__
-from wade.models.ai import EffortLevel
+import crossby.ai_tools  # noqa: F401 — registers all adapters via __init_subclass__
+from crossby.models.ai import EffortLevel
+
 from wade.services.ai_resolution import confirm_ai_selection
 
 # ---------------------------------------------------------------------------
@@ -20,7 +21,7 @@ _MODEL_B = "claude-opus-4-6"
 
 def _make_installed(*names: str):
     """Return a list of AIToolID-like values."""
-    from wade.models.ai import AIToolID
+    from crossby.models.ai import AIToolID
 
     return [AIToolID(n) for n in names]
 
@@ -34,7 +35,7 @@ _IS_TTY = "wade.ui.prompts.is_tty"
 _SELECT = "wade.ui.prompts.select"
 _INPUT_PROMPT = "wade.ui.prompts.input_prompt"
 _DETECT = "wade.services.ai_resolution.AbstractAITool.detect_installed"
-_MODELS_FOR_TOOL = "wade.data.get_models_for_tool"
+_MODELS_FOR_TOOL = "crossby.data.get_models_for_tool"
 _CONSOLE_KV = "wade.ui.console.console.kv"
 
 

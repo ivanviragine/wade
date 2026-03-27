@@ -15,9 +15,9 @@ import tempfile
 from pathlib import Path
 
 import structlog
+from crossby.ai_tools import AbstractAITool
+from crossby.models.ai import AIToolID, EffortLevel
 
-from wade.ai_tools.base import AbstractAITool
-from wade.models.ai import AIToolID, EffortLevel
 from wade.models.config import AICommandConfig
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
 from wade.services.prompt_delivery import deliver_prompt_if_needed
@@ -203,7 +203,7 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
         try:
             deliver_prompt_if_needed(adapter, interactive_prompt)
             adapter.launch(
-                worktree_path=session_cwd,
+                working_dir=session_cwd,
                 model=request.model,
                 prompt=interactive_prompt,
                 trusted_dirs=trusted,

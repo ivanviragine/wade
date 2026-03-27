@@ -5,8 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from crossby.models.ai import TokenUsage
+
 from wade.git.repo import GitError
-from wade.models.ai import TokenUsage
 from wade.models.config import ProjectConfig, ProjectSettings
 from wade.models.session import WorktreeState
 from wade.models.task import Task, TaskState
@@ -162,7 +163,7 @@ class TestBuildImplUsageBlock:
         assert "| Output tokens | **2,000** |" in block
 
     def test_with_model_breakdown(self) -> None:
-        from wade.models.ai import ModelBreakdown
+        from crossby.models.ai import ModelBreakdown
 
         usage = TokenUsage(
             total_tokens=5000,
@@ -191,7 +192,7 @@ class TestBuildImplUsageBlock:
         assert "\n| `claude-haiku-4-5`" not in block
 
     def test_single_model_no_extra_row(self) -> None:
-        from wade.models.ai import ModelBreakdown
+        from crossby.models.ai import ModelBreakdown
 
         usage = TokenUsage(
             total_tokens=1000,

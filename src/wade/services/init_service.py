@@ -13,16 +13,14 @@ from typing import Any, Final
 
 import structlog
 import yaml
+from crossby.ai_tools import AbstractAITool
+from crossby.config.defaults import get_defaults
+from crossby.models.ai import AIToolID
+from crossby.models.config import ComplexityModelMapping
 
-from wade.ai_tools.base import AbstractAITool
-from wade.config.defaults import get_defaults
 from wade.config.loader import ConfigError, ensure_yaml_mapping, find_config_file, load_config
 from wade.git import repo
 from wade.git.repo import GitError
-from wade.models.ai import AIToolID
-from wade.models.config import (
-    ComplexityModelMapping,
-)
 from wade.skills import installer, pointer
 from wade.skills.installer import get_wade_repo_root
 from wade.ui.console import console
@@ -294,8 +292,9 @@ def update(
     Never overwrites .wade.yml user values — only patches missing keys
     and refreshes skill files.
     """
+    from crossby.config.claude_allowlist import configure_allowlist
+
     from wade import __version__
-    from wade.config.claude_allowlist import configure_allowlist
     from wade.config.migrations import run_all_migrations
 
     cwd = project_root or Path.cwd()
@@ -358,13 +357,13 @@ def update(
     # Step 8-9: Silently configure tool-specific settings (idempotent)
     if "claude" in tools_in_use:
         extra = config.permissions.allowed_commands
-        configure_allowlist(root, extra_patterns=extra)
+        configure_allowlist(root, ["wade:*", *extra])
     if "cursor" in tools_in_use:
-        from wade.config.cursor_allowlist import (
+        from crossby.config.cursor_allowlist import (
             configure_allowlist as configure_cursor_allowlist,
         )
 
-        configure_cursor_allowlist(root, extra_patterns=config.permissions.allowed_commands)
+        configure_cursor_allowlist(root, ["wade:*", *config.permissions.allowed_commands])
     if "gemini" in tools_in_use:
         _configure_gemini_experimental()
 
@@ -618,10 +617,11 @@ def _prompt_configure_gemini_experimental(non_interactive: bool) -> None:
 
 def _prompt_configure_allowlist(root: Path, non_interactive: bool) -> None:
     """Prompt user to configure the Claude Code allowlist, skipping if already set."""
-    from wade.config.claude_allowlist import configure_allowlist, is_allowlist_configured
+    from crossby.config.claude_allowlist import configure_allowlist, is_allowlist_configured
+
     from wade.ui import prompts
 
-    if is_allowlist_configured(root):
+    if is_allowlist_configured(root, ["wade:*"]):
         return
 
     if non_interactive:
@@ -632,16 +632,17 @@ def _prompt_configure_allowlist(root: Path, non_interactive: bool) -> None:
         " (skips Bash approval in implementation sessions)",
         default=True,
     ):
-        configure_allowlist(root, extra_patterns=["wade:*"])
+        configure_allowlist(root, ["wade:*"])
         console.success("Added Bash([step]wade:*[/]) to .claude/settings.json allowlist")
 
 
 def _prompt_cursor_settings(root: Path, non_interactive: bool) -> None:
     """Prompt for Cursor CLI-specific settings: command allowlist."""
-    from wade.config.cursor_allowlist import configure_allowlist, is_allowlist_configured
+    from crossby.config.cursor_allowlist import configure_allowlist, is_allowlist_configured
+
     from wade.ui import prompts
 
-    if is_allowlist_configured(root):
+    if is_allowlist_configured(root, ["wade:*"]):
         return
 
     if non_interactive:
@@ -653,7 +654,7 @@ def _prompt_cursor_settings(root: Path, non_interactive: bool) -> None:
         " (skips Shell approval in implementation sessions)",
         default=True,
     ):
-        configure_allowlist(root, extra_patterns=["wade *"])
+        configure_allowlist(root, ["wade:*"])
         console.success("Added Shell([step]wade[/] *) to .cursor/cli.json allowlist")
 
 
@@ -845,10 +846,10 @@ def _prompt_claude_code_settings(root: Path, non_interactive: bool) -> None:
     import contextlib
     import json
 
-    from wade.config.claude_allowlist import is_allowlist_configured
+    from crossby.config.claude_allowlist import is_allowlist_configured
 
     # Pre-check: skip entire section if everything is already configured
-    allowlist_done = is_allowlist_configured(root)
+    allowlist_done = is_allowlist_configured(root, ["wade:*"])
     statusline_done = False
     settings_path = Path.home() / ".claude" / "settings.json"
     if settings_path.is_file():
@@ -934,7 +935,8 @@ def _prompt_ai_section(
     try:
         adapter = AbstractAITool.get(selected_tool)
         if adapter.capabilities().supports_effort:
-            from wade.models.ai import EffortLevel
+            from crossby.models.ai import EffortLevel
+
             from wade.ui import prompts as ui_prompts
 
             effort_choices = ["(none — use tool default)", *[e.value for e in EffortLevel]]
@@ -1400,7 +1402,7 @@ def _collect_model_options(
     """Return the full flat model list from the registry for the select menu."""
     if not tool:
         return []
-    from wade.data import get_models_for_tool
+    from crossby.data import get_models_for_tool
 
     return get_models_for_tool(tool)
 

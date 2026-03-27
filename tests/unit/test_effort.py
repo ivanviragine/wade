@@ -5,8 +5,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
-
-from wade.models.ai import AIToolID, EffortLevel
+from crossby.models.ai import AIToolID, EffortLevel
 
 # ---------------------------------------------------------------------------
 # EffortLevel enum
@@ -116,7 +115,7 @@ class TestAdapterSupportsEffort:
         [AIToolID.CLAUDE, AIToolID.CODEX, AIToolID.CURSOR, AIToolID.OPENCODE],
     )
     def test_supports_effort_true(self, tool_id: AIToolID) -> None:
-        from wade.ai_tools.base import AbstractAITool
+        from crossby.ai_tools import AbstractAITool
 
         adapter = AbstractAITool.get(tool_id)
         assert adapter.capabilities().supports_effort is True
@@ -126,7 +125,7 @@ class TestAdapterSupportsEffort:
         [AIToolID.COPILOT, AIToolID.GEMINI, AIToolID.ANTIGRAVITY, AIToolID.VSCODE],
     )
     def test_supports_effort_false(self, tool_id: AIToolID) -> None:
-        from wade.ai_tools.base import AbstractAITool
+        from crossby.ai_tools import AbstractAITool
 
         adapter = AbstractAITool.get(tool_id)
         assert adapter.capabilities().supports_effort is False
@@ -139,7 +138,7 @@ class TestAdapterSupportsEffort:
 
 class TestClaudeEffortArgs:
     def _get_adapter(self):
-        from wade.ai_tools.claude import ClaudeAdapter
+        from crossby.ai_tools.claude import ClaudeAdapter
 
         return ClaudeAdapter()
 
@@ -166,7 +165,7 @@ class TestClaudeEffortArgs:
 
 class TestCodexEffortArgs:
     def _get_adapter(self):
-        from wade.ai_tools.codex import CodexAdapter
+        from crossby.ai_tools.codex import CodexAdapter
 
         return CodexAdapter()
 
@@ -194,7 +193,7 @@ class TestCodexEffortArgs:
 
 class TestCursorEffort:
     def _get_adapter(self):
-        from wade.ai_tools.cursor import CursorAdapter
+        from crossby.ai_tools.cursor import CursorAdapter
 
         return CursorAdapter()
 
@@ -235,7 +234,7 @@ class TestCursorEffort:
 
 class TestOpenCodeEffortArgs:
     def _get_adapter(self):
-        from wade.ai_tools.opencode import OpenCodeAdapter
+        from crossby.ai_tools.opencode import OpenCodeAdapter
 
         return OpenCodeAdapter()
 
@@ -265,7 +264,7 @@ class TestBuildLaunchCommandEffort:
     """Test that build_launch_command threads effort correctly."""
 
     def test_effort_args_appended_for_supported_tool(self) -> None:
-        from wade.ai_tools.claude import ClaudeAdapter
+        from crossby.ai_tools.claude import ClaudeAdapter
 
         adapter = ClaudeAdapter()
         cmd = adapter.build_launch_command(model="claude-sonnet-4-6", effort=EffortLevel.HIGH)
@@ -274,21 +273,21 @@ class TestBuildLaunchCommandEffort:
         assert cmd[idx + 1] == "high"
 
     def test_effort_none_no_extra_args(self) -> None:
-        from wade.ai_tools.claude import ClaudeAdapter
+        from crossby.ai_tools.claude import ClaudeAdapter
 
         adapter = ClaudeAdapter()
         cmd = adapter.build_launch_command(model="claude-sonnet-4-6", effort=None)
         assert "--effort" not in cmd
 
     def test_cursor_effort_changes_model(self) -> None:
-        from wade.ai_tools.cursor import CursorAdapter
+        from crossby.ai_tools.cursor import CursorAdapter
 
         adapter = CursorAdapter()
         cmd = adapter.build_launch_command(model="sonnet-4.6", effort=EffortLevel.HIGH)
         assert "sonnet-4.6-thinking" in cmd
 
     def test_cursor_low_effort_keeps_model(self) -> None:
-        from wade.ai_tools.cursor import CursorAdapter
+        from crossby.ai_tools.cursor import CursorAdapter
 
         adapter = CursorAdapter()
         cmd = adapter.build_launch_command(model="sonnet-4.6", effort=EffortLevel.LOW)
@@ -296,7 +295,7 @@ class TestBuildLaunchCommandEffort:
         assert "sonnet-4.6-thinking" not in cmd
 
     def test_unsupported_tool_ignores_effort(self) -> None:
-        from wade.ai_tools.copilot import CopilotAdapter
+        from crossby.ai_tools.copilot import CopilotAdapter
 
         adapter = CopilotAdapter()
         cmd_without = adapter.build_launch_command()
@@ -416,7 +415,7 @@ _CONSOLE_KV = "wade.ui.console.console.kv"
 
 
 def _make_installed(*names: str):
-    from wade.models.ai import AIToolID
+    from crossby.models.ai import AIToolID
 
     return [AIToolID(n) for n in names]
 
