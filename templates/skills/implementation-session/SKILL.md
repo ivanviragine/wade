@@ -23,6 +23,17 @@ Always inform the user before running `wade` commands, reviews, or
 session lifecycle operations. Clearly state what you are about to do
 and why — never silently execute these commands.
 
+When starting a workflow step, announce it:
+  "I'm now syncing your branch with main..."
+
+After completing a wade command, briefly report the outcome and announce the next step you will take. The next step depends on where you are in the workflow — for example:
+  "Sync complete — your branch is up to date with main. Now running `wade implementation-session done`..."
+  "Review done — no issues found. Now writing PR-SUMMARY.md..."
+
+{user_interaction_prompt}
+- After presenting the workflow recap and state: "Want any further changes, or is the session complete?"
+- If review findings need user input: "Should I address this review finding?"
+
 ## Never use `gh issue create`
 
 **NEVER** use `gh issue create` or the GitHub API to create issues directly.
@@ -207,11 +218,29 @@ it is cleaned up automatically by `implement` after the human merges the PR.
 This is a **mandatory** final step. If `wade implementation-session done` fails, debug and
 fix the error — do NOT bypass it.
 
-**Step 5 — Review with the user:**
+**Step 5 — Present results to the user:**
 
-Present the PR link and a brief recap of what was implemented. Ask if they'd
-like any further changes — apply them and repeat Steps 1–5 if so, or confirm
-the session is complete if not.
+Provide a brief **workflow recap** and **current state summary**, then suggest
+the user exits the session.
+
+Workflow recap (list only the steps you actually performed):
+- Ran self-review (`wade review implementation`)
+- Wrote PR-SUMMARY.md
+- Synced with main (`wade implementation-session sync`)
+- Pushed and opened/updated PR (`wade implementation-session done`)
+
+Current state:
+- PR #{number} is open and ready for review at {url}
+- Issue #{number} will close automatically when the PR is merged
+- Branch: {branch_name}
+
+What happens next:
+- After you exit, wade will monitor the PR for review comments
+- To address review feedback later: `wade review pr-comments <issue>`
+- To check PR status: `wade status <issue>`
+
+Ask if they'd like any further changes — apply them and repeat Steps 1–5 if
+so. If not, suggest the user exits so wade can continue the workflow.
 
 ### Working on a child issue (sub-issue of a tracking/epic)
 

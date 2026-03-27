@@ -31,6 +31,42 @@ class TestRun:
         assert exc_info.value.returncode == 127
 
 
+class TestRunRetries:
+    def test_retries_on_failure_then_succeeds(self) -> None:
+        """Retries after failure and returns result on eventual success."""
+        with (
+            patch("wade.utils.process.subprocess.run") as mock_run,
+            patch("wade.utils.process.time.sleep") as mock_sleep,
+        ):
+            mock_run.side_effect = [
+                MagicMock(returncode=1, stderr="TLS handshake timeout", stdout=""),
+                MagicMock(returncode=0, stderr="", stdout="ok"),
+            ]
+            result = run(["gh", "issue", "edit", "1"], retries=2)
+        assert result.returncode == 0
+        assert mock_run.call_count == 2
+        mock_sleep.assert_called_once_with(1)
+
+    def test_raises_after_all_retries_exhausted(self) -> None:
+        """Raises CommandError after all retries fail."""
+        with (
+            patch("wade.utils.process.subprocess.run") as mock_run,
+            patch("wade.utils.process.time.sleep"),
+        ):
+            mock_run.return_value = MagicMock(returncode=1, stderr="network error", stdout="")
+            with pytest.raises(CommandError):
+                run(["gh", "issue", "edit", "1"], retries=2)
+        assert mock_run.call_count == 3  # 1 initial + 2 retries
+
+    def test_no_retry_without_retries_param(self) -> None:
+        """Default behavior (retries=0) raises immediately on failure."""
+        with patch("wade.utils.process.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stderr="error", stdout="")
+            with pytest.raises(CommandError):
+                run(["false"])
+        assert mock_run.call_count == 1
+
+
 class TestRunSilent:
     def test_success(self) -> None:
         assert run_silent(["true"]) is True

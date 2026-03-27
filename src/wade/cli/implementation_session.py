@@ -100,11 +100,6 @@ def done(
     if success:
         from wade.ui.console import console
 
-        console.info(
-            "SESSION COMPLETE — do not make further changes. "
-            "Present the PR link to the user and suggest they exit the session."
-        )
-
         # Remind agent to review if reviews are enabled. Advisory only —
         # must never turn a successful completion into a failure.
         try:
@@ -115,4 +110,10 @@ def done(
                 console.hint("P.s.: run `wade review implementation` if you haven't already.")
         except Exception:
             pass
+
+        console.info(
+            "SESSION COMPLETE — do not make further changes. "
+            "Present the workflow recap, current state, and next steps to the user. "
+            "Suggest they exit the session."
+        )
     raise typer.Exit(0 if success else 1)
