@@ -54,7 +54,23 @@ In inited projects (normal init), `wade init` copies skill files (not symlinks),
 3. Add the skill directory to the cleanup logic in `init_service.py` (deinit path)
 4. Reference the skill from `plan-session/SKILL.md`, `implementation-session/SKILL.md`, or `review-pr-comments-session/SKILL.md` as appropriate
 
-The self-init path creates symlinks from `.claude/skills/<name>` -> `../../templates/skills/<name>` to avoid file duplication when working on wade itself.
+The self-init path creates symlinks from `.claude/skills/<name>` -> `../../templates/skills/<name>` to avoid file duplication when working on wade itself. Exception: skills in `INJECT_SKILLS` (currently all three session skills) are always installed as processed copies — even in self-init mode — because their templates contain placeholder strings that must be expanded before agents read them (see Partial Templates below).
+
+## Partial Templates
+
+Shared content that appears verbatim in multiple skill templates lives in `templates/skills/_partials/`. Template files reference partials via placeholder strings defined in `_SKILL_PARTIALS` in `installer.py`:
+
+```
+{user_interaction_prompt}  →  _partials/user-interaction.md
+```
+
+The installer expands these placeholders when copying skill files to a project. The `_partials/` directory is never installed into target projects — it is consumed at install time only.
+
+**To add a new partial:**
+1. Create `templates/skills/_partials/<name>.md`
+2. Add an entry to `_SKILL_PARTIALS` in `installer.py`
+3. Use the placeholder string in the relevant skill template(s)
+4. Add the skill to `INJECT_SKILLS` if it is not already there
 
 ## Agent Skills (templates/skills/)
 

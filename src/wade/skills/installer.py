@@ -83,9 +83,11 @@ SKILL_FILES: dict[str, list[str]] = {
 # Skills that should always be overwritten on update
 ALWAYS_OVERWRITE = {"plan-session", "implementation-session", "review-pr-comments-session"}
 
-# Skills that use partial injection — their SKILL.md contains placeholder strings
-# that are expanded at install time. These cannot be installed as directory symlinks
-# in self-init mode because the agent would see unexpanded placeholders.
+# Skills whose SKILL.md files contain placeholder strings (see _SKILL_PARTIALS) that
+# must be expanded at install time.  These cannot be installed as plain directory
+# symlinks in self-init mode because the agent would see unexpanded placeholders.
+# Currently the same set as ALWAYS_OVERWRITE — kept separate because the concerns
+# are distinct and may diverge if new skills are added.
 INJECT_SKILLS = {"plan-session", "implementation-session", "review-pr-comments-session"}
 
 # Old skill names removed in the phase-skill refactor — cleaned up during update
@@ -158,7 +160,9 @@ def install_skills(
 
     Args:
         project_root: Root of the target project.
-        is_self_init: If True, create symlinks instead of copies.
+        is_self_init: If True, symlink skill directories instead of copying files.
+            Skills in ``INJECT_SKILLS`` are always processed copies even in this mode,
+            because their templates contain placeholders that must be expanded.
         force: If True, overwrite existing files.
         templates_dir: Override the skills templates directory.
             Useful for worktrees where templates live in the worktree itself.
@@ -166,7 +170,8 @@ def install_skills(
             ``SKILL_FILES``.  When ``None`` (default), all skills are installed.
 
     Returns:
-        List of installed file paths (relative to project root).
+        List of installed paths (relative to project root).  Symlinked skill
+        directories are reported at directory level; copied skills at file level.
     """
     installed: list[str] = []
     if templates_dir is None:
