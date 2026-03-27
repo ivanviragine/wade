@@ -667,6 +667,57 @@ class TestDone:
             result = done(project_root=tmp_git_repo)
             assert not result
 
+    def test_done_reads_stacked_base_branch(self, tmp_git_repo: Path) -> None:
+        """done() reads .wade/base_branch and targets parent branch instead of main."""
+        # Create a parent branch
+        from wade.git import branch as git_branch
+        from wade.git.worktree import create_worktree
+        from wade.services.implementation_service import done
+
+        git_branch.create_branch(tmp_git_repo, "feat/1-parent", "main")
+
+        # Create worktree for child issue
+        wt_dir = tmp_git_repo.parent / "wt-2"
+        create_worktree(tmp_git_repo, "feat/2-child", wt_dir, "feat/1-parent")
+
+        # Gitignore .wade/ so it doesn't make the tree dirty
+        (wt_dir / ".gitignore").write_text(".wade/\n")
+
+        # Write base_branch file (as start() would for chains)
+        wade_dir = wt_dir / ".wade"
+        wade_dir.mkdir(parents=True, exist_ok=True)
+        (wade_dir / "base_branch").write_text("feat/1-parent\n")
+
+        # Commit test file and .gitignore so the tree is clean
+        (wt_dir / "test.txt").write_text("test")
+        import subprocess
+
+        subprocess.run(["git", "add", ".gitignore", "test.txt"], cwd=wt_dir, check=True)
+        subprocess.run(["git", "commit", "-m", "test"], cwd=wt_dir, check=True)
+
+        mock_provider = MagicMock()
+        mock_task = Task(id="2", title="Child", body="", state=TaskState.OPEN)
+        mock_provider.read_task.return_value = mock_task
+        mock_provider.find_parent_issue.return_value = None
+
+        with (
+            patch(
+                "wade.services.implementation_service.load_config",
+                return_value=ProjectConfig(
+                    project=ProjectSettings(main_branch="main"),
+                ),
+            ),
+            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
+            patch("wade.services.implementation_service._done_via_pr") as mock_pr,
+        ):
+            mock_pr.return_value = True
+            done(project_root=wt_dir)
+
+        # Verify _done_via_pr was called with parent branch, not main
+        assert mock_pr.called
+        call_kwargs = mock_pr.call_args
+        assert call_kwargs[1]["main_branch"] == "feat/1-parent"
+
 
 # ---------------------------------------------------------------------------
 # List sessions tests

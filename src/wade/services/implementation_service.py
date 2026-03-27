@@ -1544,12 +1544,22 @@ def batch(
         yolo_explicit=yolo is not None,
     )
 
+    if not model_explicit:
+        console.info("Model: auto (per-issue complexity)")
+
     # Check for dependency ordering
     # Try to load deps from issue bodies (look for "Depends on" references)
     graph = _build_graph_from_issues(issue_numbers, config)
 
     if graph and graph.edges:
-        independent, chains = graph.partition(issue_numbers)
+        try:
+            independent, chains = graph.partition(issue_numbers)
+        except ValueError:
+            console.error(
+                "Dependency cycle detected among the requested issues. "
+                "Remove or fix the circular 'Depends on' references and retry."
+            )
+            return False
         console.info(f"Dependency analysis: {len(independent)} independent, {len(chains)} chain(s)")
     else:
         independent = issue_numbers
@@ -1565,7 +1575,7 @@ def batch(
         cmd = ["wade", "implement", issue_id]
         if resolved_tool:
             cmd.extend(["--ai", resolved_tool])
-        if resolved_model:
+        if resolved_model and model_explicit:
             cmd.extend(["--model", resolved_model])
         if resolved_effort:
             cmd.extend(["--effort", resolved_effort.value])
@@ -1594,34 +1604,233 @@ def batch(
         console.panel("  No issues to launch", title="Batch started")
         return False
 
+    # Try to launch terminals (best-effort, non-fatal)
     console.step(f"Launching {len(batch_items)} session(s) in new terminal window")
     launched = launch_batch_in_terminals(batch_items)
 
-    if not launched:
-        console.warn("Could not launch terminals for batch")
-        return False
-
-    console.panel(f"  Launched {len(batch_items)} implementation session(s)", title="Batch started")
-
-    # Post-batch coherence review prompt
-    tracking_id = None
-    try:
-        provider = get_provider(config)
-        tracking_id = provider.find_parent_issue(issue_numbers[0], label=config.project.issue_label)
-    except Exception:
-        logger.debug("batch.find_parent_failed", exc_info=True)
-
-    if prompts.is_tty() and tracking_id:
-        choice = prompts.select(
-            "Coherence review (run after all sessions complete)",
-            ["Run later", "Skip"],
+    if launched:
+        console.panel(
+            f"  Launched {len(batch_items)} implementation session(s)",
+            title="Batch started",
         )
-        if choice == 0:  # Run later
-            console.hint(f"Run when ready: wade review batch {tracking_id}")
-    elif tracking_id:
-        console.hint(f"After all sessions complete: wade review batch {tracking_id}")
+    else:
+        console.warn("Could not launch terminals — run these commands manually:")
+        for cmd, _cwd, _title in batch_items:
+            console.detail(f"  {' '.join(cmd)}")
+
+    # Find tracking issue by checking all batch issues (not just the first)
+    tracking_id = _find_tracking_issue(issue_numbers, config)
+
+    # Enter polling loop to monitor session progress
+    poll_batch_completion(
+        issue_numbers=issue_numbers,
+        repo_root=repo_root,
+        config=config,
+        tracking_id=tracking_id,
+    )
 
     return True
+
+
+def _find_tracking_issue(
+    issue_numbers: list[str],
+    config: ProjectConfig,
+) -> str | None:
+    """Find a parent/tracking issue by checking all batch issue numbers."""
+    try:
+        provider = get_provider(config)
+        for num in issue_numbers:
+            tracking_id = provider.find_parent_issue(num, label=config.project.issue_label)
+            if tracking_id:
+                return tracking_id
+    except Exception:
+        logger.debug("batch.find_parent_failed", exc_info=True)
+    return None
+
+
+# --- Batch session status ---
+
+_BATCH_STATUS_NOT_STARTED = "not_started"
+_BATCH_STATUS_IN_PROGRESS = "in_progress"
+_BATCH_STATUS_DONE = "done"
+_BATCH_STATUS_MERGED = "merged"
+
+_POLL_INTERVAL_SECONDS = 30
+_POLL_TIMEOUT_SECONDS = 4 * 60 * 60  # 4 hours
+
+
+def _classify_issue_status(
+    issue_num: str,
+    pr_by_issue: dict[str, dict[str, Any]],
+    branch_set: set[str],
+    main_branch: str,
+    repo_root: Path,
+) -> str:
+    """Classify the status of a single issue in a batch.
+
+    Returns one of the _BATCH_STATUS_* constants.
+    """
+    pr = pr_by_issue.get(issue_num)
+    if pr:
+        if pr.get("mergedAt"):
+            return _BATCH_STATUS_MERGED
+        if pr.get("isDraft", False):
+            return _BATCH_STATUS_IN_PROGRESS
+        # Open (not draft) → done (done marks PR ready)
+        return _BATCH_STATUS_DONE
+
+    # No PR — check if branch exists (direct merge strategy or done not yet run)
+    pattern = rf"/0*{re.escape(issue_num)}(?:-|$)"
+    matching_branches = [b for b in branch_set if re.search(pattern, b)]
+    if matching_branches:
+        # Branch exists but no PR — check for commits ahead of base
+        for branch in matching_branches:
+            try:
+                ahead = git_branch.commits_ahead(repo_root, branch, main_branch)
+                if ahead > 0:
+                    return _BATCH_STATUS_IN_PROGRESS
+            except GitError:
+                pass
+        return _BATCH_STATUS_IN_PROGRESS
+
+    return _BATCH_STATUS_NOT_STARTED
+
+
+def _build_pr_index(
+    repo_root: Path,
+    issue_numbers: list[str],
+) -> dict[str, dict[str, Any]]:
+    """Build a mapping from issue number to PR data using a single gh pr list call."""
+    prs = git_pr.list_prs(repo_root, state="all", limit=200)
+    issue_set = set(issue_numbers)
+    result: dict[str, dict[str, Any]] = {}
+    for pr in prs:
+        head_ref = str(pr.get("headRefName", ""))
+        extracted = extract_issue_from_branch(head_ref)
+        if extracted and extracted in issue_set:
+            result[extracted] = dict(pr)
+    return result
+
+
+def _get_remote_branches(repo_root: Path) -> set[str]:
+    """Get the set of remote branch names."""
+    try:
+        result = subprocess.run(
+            ["git", "branch", "-r", "--format=%(refname:short)"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return set()
+
+
+def poll_batch_completion(
+    issue_numbers: list[str],
+    repo_root: Path,
+    config: ProjectConfig,
+    tracking_id: str | None = None,
+    *,
+    poll_interval: int = _POLL_INTERVAL_SECONDS,
+    timeout: int = _POLL_TIMEOUT_SECONDS,
+) -> None:
+    """Poll for completion of all batch sessions, showing live progress.
+
+    Monitors PRs and branches until all sessions complete, then optionally
+    auto-triggers coherence review. Handles Ctrl+C gracefully.
+    """
+    import time
+
+    main_branch = config.project.main_branch or "main"
+
+    console.info("Monitoring batch progress (Ctrl+C to exit)...")
+
+    interrupted = False
+    elapsed = 0
+    pr_index: dict[str, dict[str, Any]] = {}
+    branch_set: set[str] = set()
+
+    try:
+        while elapsed < timeout:
+            # Fetch latest remote state
+            with contextlib.suppress(GitError):
+                git_sync.fetch_origin(repo_root)
+
+            pr_index = _build_pr_index(repo_root, issue_numbers)
+            branch_set = _get_remote_branches(repo_root)
+
+            statuses: dict[str, str] = {}
+            for num in issue_numbers:
+                statuses[num] = _classify_issue_status(
+                    num, pr_index, branch_set, main_branch, repo_root
+                )
+
+            done_count = sum(
+                1 for s in statuses.values() if s in (_BATCH_STATUS_DONE, _BATCH_STATUS_MERGED)
+            )
+            in_progress = sum(1 for s in statuses.values() if s == _BATCH_STATUS_IN_PROGRESS)
+            not_started = sum(1 for s in statuses.values() if s == _BATCH_STATUS_NOT_STARTED)
+            total = len(issue_numbers)
+
+            console.step(
+                f"Waiting... ({done_count}/{total} done, "
+                f"{in_progress} in progress, {not_started} pending)"
+            )
+
+            if done_count == total:
+                break
+
+            time.sleep(poll_interval)
+            elapsed += poll_interval
+
+    except KeyboardInterrupt:
+        interrupted = True
+        console.info("")  # newline after ^C
+
+    # Print final summary
+    pr_index = _build_pr_index(repo_root, issue_numbers) if not interrupted else pr_index
+    branch_set = _get_remote_branches(repo_root) if not interrupted else branch_set
+    final_statuses: dict[str, str] = {}
+    for num in issue_numbers:
+        final_statuses[num] = _classify_issue_status(
+            num, pr_index, branch_set, main_branch, repo_root
+        )
+
+    done_count = sum(
+        1 for s in final_statuses.values() if s in (_BATCH_STATUS_DONE, _BATCH_STATUS_MERGED)
+    )
+    total = len(issue_numbers)
+    lines = []
+    for num in issue_numbers:
+        status = final_statuses[num]
+        label = {
+            _BATCH_STATUS_DONE: "completed",
+            _BATCH_STATUS_MERGED: "merged",
+            _BATCH_STATUS_IN_PROGRESS: "in progress",
+            _BATCH_STATUS_NOT_STARTED: "not started",
+        }.get(status, status)
+        pr = pr_index.get(num)
+        url = f" {pr['url']}" if pr and pr.get("url") else ""
+        lines.append(f"  #{num}: {label}{url}")
+
+    console.panel("\n".join(lines), title=f"Batch summary ({done_count}/{total} done)")
+
+    if interrupted:
+        console.hint("Interrupted. Resume monitoring: wade implement-batch --poll")
+        return
+
+    if elapsed >= timeout:
+        console.warn("Polling timed out. Check session status manually.")
+        return
+
+    # All sessions complete — auto-trigger coherence review
+    if tracking_id and done_count == total:
+        console.info(f"All sessions complete. Running coherence review for #{tracking_id}...")
+        from wade.services.batch_review_service import review_batch
+
+        review_batch(tracking_id, project_root=repo_root)
 
 
 def _build_graph_from_issues(
@@ -2503,6 +2712,15 @@ def done(
         except GitError:
             console.error("Cannot detect main branch")
             return False
+
+    # Check for stacked base branch metadata (written by start() for chain execution).
+    # When present, target the parent branch instead of main — same as sync().
+    if wt_path:
+        base_branch_file = wt_path / ".wade" / "base_branch"
+        if base_branch_file.is_file():
+            stored_base = base_branch_file.read_text().strip()
+            if stored_base and git_branch.branch_exists(repo_root, stored_base):
+                main_branch = stored_base
 
     console.rule(f"done #{issue_number}")
 

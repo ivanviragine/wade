@@ -223,6 +223,37 @@ def get_pr_for_branch(repo_root: Path, branch: str) -> dict[str, str | int | boo
         return None
 
 
+def list_prs(
+    repo_root: Path,
+    *,
+    state: str = "all",
+    limit: int = 100,
+) -> list[dict[str, str | int | bool]]:
+    """List PRs for the repository.
+
+    Returns a list of dicts with number, url, headRefName, state, isDraft, mergedAt keys.
+    Uses a single ``gh pr list`` call to avoid per-branch API requests.
+    """
+    result = _run_gh(
+        "pr",
+        "list",
+        "--state",
+        state,
+        "--limit",
+        str(limit),
+        "--json",
+        "number,url,headRefName,state,isDraft,mergedAt",
+        cwd=repo_root,
+        check=False,
+    )
+    if result.returncode != 0:
+        return []
+    try:
+        return json.loads(result.stdout)  # type: ignore[no-any-return]
+    except (json.JSONDecodeError, KeyError):
+        return []
+
+
 def get_pr_body(repo_root: Path, pr_number: int) -> str | None:
     """Fetch the body of a pull request.
 

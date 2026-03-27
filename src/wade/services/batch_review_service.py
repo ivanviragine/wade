@@ -223,6 +223,12 @@ def create_integration_branch(
     integration_branch = f"batch-review/{ctx.tracking_issue}"
     main_branch = ctx.main_branch
 
+    # Validate clean tree before checkout to avoid conflicts with uncommitted work
+    if not git_repo.is_clean(repo_root):
+        raise GitError(
+            "Working tree has uncommitted changes. Commit or stash before running batch review."
+        )
+
     # Determine which issues are intermediate chain members (not tips).
     # Only chain tips need to be merged — intermediates are already included.
     chain_intermediates: set[str] = set()
