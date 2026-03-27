@@ -114,6 +114,14 @@ PLAN_GUARD_HOOK_FILES = [
     ".gemini/hooks/plan_write_guard.py",
 ]
 
+# Wade-managed worktree guard hook files that should never be committed.
+WORKTREE_GUARD_HOOK_FILES = [
+    ".claude/hooks/worktree_guard.py",
+    ".cursor/hooks/worktree_guard.py",
+    ".copilot/hooks/worktree_guard.py",
+    ".gemini/hooks/worktree_guard.py",
+]
+
 # --- Command-to-skill mapping: which skills each session type needs ---
 
 PLAN_SKILLS: list[str] = ["plan-session", "task", "deps"]
@@ -138,6 +146,9 @@ def get_managed_gitignore_patterns(project_root: Path) -> list[str]:
         patterns.append(f".claude/skills/{name}/")
 
     for hook_file in PLAN_GUARD_HOOK_FILES:
+        patterns.append(hook_file)
+
+    for hook_file in WORKTREE_GUARD_HOOK_FILES:
         patterns.append(hook_file)
 
     # Cross-tool symlink dirs — only if symlink or absent

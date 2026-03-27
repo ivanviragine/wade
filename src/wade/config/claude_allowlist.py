@@ -115,12 +115,26 @@ def configure_allowlist(
     logger.info("claude_allowlist.configured", path=str(settings_path))
 
 
+def configure_worktree_hooks(worktree_path: Path, guard_script: Path) -> None:
+    """Add PreToolUse hooks to .claude/settings.json for worktree guard.
+
+    Merges a ``hooks.PreToolUse`` entry into the existing settings.
+    Idempotent — re-running with the same guard_script path is a no-op.
+    """
+    _configure_pretooluse_hook(worktree_path, guard_script, "claude_worktree_hooks.configured")
+
+
 def configure_plan_hooks(worktree_path: Path, guard_script: Path) -> None:
     """Add PreToolUse hooks to .claude/settings.json for plan-session guard.
 
     Merges a ``hooks.PreToolUse`` entry into the existing settings.
     Idempotent — re-running with the same guard_script path is a no-op.
     """
+    _configure_pretooluse_hook(worktree_path, guard_script, "claude_plan_hooks.configured")
+
+
+def _configure_pretooluse_hook(worktree_path: Path, guard_script: Path, log_event: str) -> None:
+    """Internal helper: add a PreToolUse hook entry to .claude/settings.json."""
     settings_path = worktree_path / ".claude" / "settings.json"
 
     existing: dict[str, object] = {}
@@ -166,4 +180,4 @@ def configure_plan_hooks(worktree_path: Path, guard_script: Path) -> None:
         json.dumps(existing, indent=2) + "\n",
         encoding="utf-8",
     )
-    logger.info("claude_plan_hooks.configured", path=str(settings_path))
+    logger.info(log_event, path=str(settings_path))
