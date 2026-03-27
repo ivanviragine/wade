@@ -26,8 +26,8 @@ and why — never silently execute these commands.
 When starting a workflow step, announce it:
   "I'm now syncing your branch with main..."
 
-After completing a wade command, briefly report the outcome:
-  "Sync complete — your branch is up to date with main."
+After completing a wade command, briefly report the outcome and announce the next step:
+  "Sync complete — your branch is up to date with main. Now running `wade implementation-session done`..."
 
 ## Never use `gh issue create`
 

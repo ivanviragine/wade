@@ -28,8 +28,8 @@ and why — never silently execute these commands.
 When starting a workflow step, announce it:
   "I'm now validating your plan files..."
 
-After completing a wade command, briefly report the outcome:
-  "Validation complete — all plan files passed."
+After completing a wade command, briefly report the outcome and announce the next step:
+  "Validation complete — all plan files passed. Now presenting the workflow recap and suggesting you exit..."
 
 ## Never use `gh issue create`
 
