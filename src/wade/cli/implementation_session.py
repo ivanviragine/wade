@@ -60,8 +60,9 @@ def catchup(
             from wade.ui.console import console
 
             console.info(
-                "ACTION REQUIRED — resolve the conflicts listed above, "
-                "then re-run wade implementation-session catchup."
+                "ACTION REQUIRED — merge aborted (inspection-only), no conflict markers remain. "
+                "Resolve manually via `git merge` or `git rebase`, then re-run "
+                "wade implementation-session catchup."
             )
         raise typer.Exit(2)
     elif any(

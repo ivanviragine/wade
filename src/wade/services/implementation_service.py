@@ -1244,7 +1244,8 @@ def start(
                 if catchup_result.conflicts:
                     console.warn(
                         "Startup catchup: merge conflict — "
-                        "run `wade implementation-session catchup --json` to resolve."
+                        "run `git merge origin/<base>` manually to resolve, then "
+                        "re-run `wade implementation-session catchup --json` for inspection."
                     )
                 else:
                     console.warn("Startup catchup failed — proceeding anyway.")
