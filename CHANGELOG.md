@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.13.0] — 2026-03-27
+
+### Features
+
+- add workflow recap and state summary to all session skills (#223) (5171e7b)
+
 ## [v0.12.0] — 2026-03-27
 
 ### Features
