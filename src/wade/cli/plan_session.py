@@ -49,7 +49,7 @@ def done(
         "SESSION COMPLETE — do not implement anything. "
         "Present the workflow recap and what happens next to the user. "
         "Suggest they exit the session now. "
-        "wade will read the plan files and create GitHub issues automatically."
+        "wade will read the plan files and create GitHub issues and draft PRs automatically."
     )
 
     raise typer.Exit(0)

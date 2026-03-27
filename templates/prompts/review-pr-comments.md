@@ -16,5 +16,5 @@ There are {comment_count} unresolved comment(s) across {file_count} file(s).
 5. **Never** push branches or create PRs manually — use `wade review-pr-comments-session done`.
 6. **Before closing**: sync with main via `wade review-pr-comments-session sync --json`.
 7. **At session end**: always present a workflow recap (which wade commands you ran),
-   current state (PR status, threads resolved), and what happens next. Then suggest
+   current state (PR status, threads resolved and remaining), and what happens next. Then suggest
    the user exits.
