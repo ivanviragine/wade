@@ -28,7 +28,7 @@ from wade.git import sync as git_sync
 from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
 from wade.models.ai import AIToolID, TokenUsage
-from wade.models.config import ProjectConfig
+from wade.models.config import AI_COMMAND_NAMES, ProjectConfig
 from wade.models.deps import DependencyGraph
 from wade.models.session import (
     ImplementResult,
@@ -363,16 +363,25 @@ def bootstrap_worktree(
         install_skills(worktree_path, is_self_init=False, force=True, skills=skills)
     logger.debug("implementation.bootstrap_skills", path=str(worktree_path))
 
+    # Inject AGENTS.md pointer into worktree (after skills, which may add AGENTS.md content)
+    from wade.skills import pointer
+
+    pointer.ensure_pointer(worktree_path)
+    logger.debug("implementation.bootstrap_pointer", path=str(worktree_path))
+
     # Always propagate allowlist to worktree — configure_allowlist is idempotent
     from wade.config.claude_allowlist import configure_allowlist
 
     configure_allowlist(worktree_path, extra_patterns=config.permissions.allowed_commands)
 
-    # Propagate Cursor allowlist to worktree's per-project .cursor/cli.json
+    # Propagate Cursor allowlist to worktree's per-project .cursor/cli.json.
+    # Check both global cursor config and whether cursor is the project's AI tool —
+    # the project-level .cursor/cli.json is no longer written to main (gitignored).
     from wade.config.cursor_allowlist import configure_allowlist as configure_cursor_allowlist
     from wade.config.cursor_allowlist import is_allowlist_configured as is_cursor_configured
 
-    if is_cursor_configured() or is_cursor_configured(repo_root):
+    cursor_in_config = any(config.get_ai_tool(cmd) == "cursor" for cmd in [None, *AI_COMMAND_NAMES])
+    if cursor_in_config or is_cursor_configured() or is_cursor_configured(repo_root):
         configure_cursor_allowlist(
             worktree_path, extra_patterns=config.permissions.allowed_commands
         )

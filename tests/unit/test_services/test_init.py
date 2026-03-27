@@ -307,11 +307,11 @@ class TestInit:
         for entry in GITIGNORE_ENTRIES:
             assert entry in content
 
-    def test_init_creates_agents_pointer(self, tmp_git_repo: Path) -> None:
+    def test_init_does_not_write_agents_pointer_to_main(self, tmp_git_repo: Path) -> None:
+        """init() no longer writes the AGENTS.md pointer to main — only worktrees get it."""
         init(project_root=tmp_git_repo, non_interactive=True)
-        assert (tmp_git_repo / "AGENTS.md").is_file()
-        content = (tmp_git_repo / "AGENTS.md").read_text()
-        assert "Git Workflow" in content
+        assert not (tmp_git_repo / "AGENTS.md").is_file()
+        assert not (tmp_git_repo / "CLAUDE.md").exists()
 
     def test_init_with_ai_tool(self, tmp_git_repo: Path) -> None:
         init(project_root=tmp_git_repo, ai_tool="claude", non_interactive=True)
@@ -1171,6 +1171,10 @@ class TestDeinit:
 
     def test_deinit_removes_pointer(self, tmp_git_repo: Path) -> None:
         init(project_root=tmp_git_repo, non_interactive=True)
+        # Simulate an older-style main-checkout pointer (pointer now lives in worktrees)
+        from wade.skills.pointer import write_pointer
+
+        write_pointer(tmp_git_repo / "AGENTS.md")
         assert (tmp_git_repo / "AGENTS.md").is_file()
 
         deinit(project_root=tmp_git_repo, force=True)
@@ -1218,7 +1222,8 @@ class TestDeinit:
         assert init(project_root=tmp_git_repo, ai_tool="claude", non_interactive=True)
         assert (tmp_git_repo / ".wade.yml").is_file()
         assert (tmp_git_repo / MANIFEST_FILENAME).is_file()
-        assert (tmp_git_repo / "AGENTS.md").is_file()
+        # AGENTS.md pointer is not written to main during init
+        assert not (tmp_git_repo / "AGENTS.md").is_file()
 
         # Update
         assert update(project_root=tmp_git_repo)
@@ -1269,8 +1274,8 @@ class TestUpdateExtended:
             update(project_root=tmp_git_repo, skip_self_upgrade=True)
             mock_mig.assert_called_once()
 
-    def test_update_configures_allowlist(self, tmp_git_repo: Path) -> None:
-        """update() should call configure_allowlist when Claude is the configured tool."""
+    def test_update_does_not_configure_allowlist_on_main(self, tmp_git_repo: Path) -> None:
+        """update() must NOT write project-level allowlist to main — only worktrees get it."""
         with patch(
             "wade.services.init_service.AbstractAITool.detect_installed",
             return_value=[AIToolID.CLAUDE],
@@ -1279,30 +1284,31 @@ class TestUpdateExtended:
 
         with patch("wade.config.claude_allowlist.configure_allowlist") as mock_allow:
             update(project_root=tmp_git_repo, skip_self_upgrade=True)
-            mock_allow.assert_called_once()
+            mock_allow.assert_not_called()
+        # .claude/settings.json must NOT be created on main during update
+        assert not (tmp_git_repo / ".claude" / "settings.json").is_file()
 
-    def test_update_configures_allowlist_for_review_batch_tool(self, tmp_git_repo: Path) -> None:
-        """review_batch-only config should still count as Claude usage for allowlists."""
+    def test_update_migrates_ai_artifacts_off_main(self, tmp_git_repo: Path) -> None:
+        """update() should remove AI tool artifacts from main (migration for older installs)."""
         init(project_root=tmp_git_repo, non_interactive=True)
-        (tmp_git_repo / ".wade.yml").write_text(
-            "version: 2\n"
-            "ai:\n"
-            "  review_batch:\n"
-            "    tool: claude\n"
-            "    mode: headless\n"
-            "permissions:\n"
-            "  allowed_commands:\n"
-            "    - wade *\n"
-            "    - ./scripts/check.sh *\n",
-            encoding="utf-8",
-        )
+        # Simulate artifacts left by an older wade version
+        from wade.config.claude_allowlist import configure_allowlist
+        from wade.skills.pointer import write_pointer
 
-        with patch("wade.config.claude_allowlist.configure_allowlist") as mock_allow:
-            update(project_root=tmp_git_repo, skip_self_upgrade=True)
-            mock_allow.assert_called_once_with(
-                tmp_git_repo,
-                extra_patterns=["wade *", "./scripts/check.sh *"],
-            )
+        configure_allowlist(tmp_git_repo)
+        write_pointer(tmp_git_repo / "AGENTS.md")
+        (tmp_git_repo / "CLAUDE.md").symlink_to("AGENTS.md")
+
+        assert (tmp_git_repo / ".claude" / "settings.json").is_file()
+        assert (tmp_git_repo / "AGENTS.md").is_file()
+        assert (tmp_git_repo / "CLAUDE.md").is_symlink()
+
+        update(project_root=tmp_git_repo, skip_self_upgrade=True)
+
+        # All AI artifacts should be cleaned up from main
+        assert not (tmp_git_repo / ".claude" / "settings.json").is_file()
+        assert not (tmp_git_repo / "AGENTS.md").is_file()
+        assert not (tmp_git_repo / "CLAUDE.md").exists()
 
     def test_skip_self_upgrade_flag(self, tmp_git_repo: Path) -> None:
         """skip_self_upgrade=True should not call _maybe_self_upgrade."""
