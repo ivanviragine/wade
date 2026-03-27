@@ -34,7 +34,7 @@ long text blocks. This makes decision points clear and actionable.
 Key decision points that should use structured asks:
 - After presenting the plan breakdown: "Ready to write the plan file(s)?"
 - After writing and presenting summary: "Want any modifications?"
-- After validation passes: "Plans are validated. Ready to exit? (wade will create issues automatically)"
+- After validation passes: "Plans are validated — wade will create issues automatically." Then ask: "Ready to exit?"
 
 Keep the question concise — one sentence with clear options. Present
 supporting context (recap, state summary) as regular text *before* the
