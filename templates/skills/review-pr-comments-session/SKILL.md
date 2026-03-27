@@ -23,6 +23,12 @@ Always inform the user before running `wade` commands, reviews, or
 session lifecycle operations. Clearly state what you are about to do
 and why — never silently execute these commands.
 
+When starting a workflow step, announce it:
+  "I'm now syncing your branch with main..."
+
+After completing a wade command, briefly report the outcome:
+  "Sync complete — your branch is up to date with main."
+
 ## Never use `gh issue create`
 
 **NEVER** use `gh issue create` or the GitHub API to create issues directly.
@@ -181,11 +187,28 @@ wade review-pr-comments-session done
 This is a **mandatory** completion step. If it fails, debug and fix the error —
 do NOT bypass it.
 
-**Step 4 — Review with the user:**
+**Step 4 — Present results to the user:**
 
-Present the PR link and a brief recap of what was addressed. Ask if they'd
-like any further changes — apply them and repeat Steps 1–4 if so, or confirm
-the session is complete if not.
+Provide a brief **workflow recap** and **current state summary**, then suggest
+the user exits the session.
+
+Workflow recap (list only the steps you actually performed):
+- Fetched review comments (`wade review-pr-comments-session fetch`)
+- Addressed N comment(s), resolved N thread(s)
+- Wrote PR-SUMMARY.md
+- Synced with main (`wade review-pr-comments-session sync`)
+- Pushed changes (`wade review-pr-comments-session done`)
+
+Current state:
+- PR #{number} has been updated at {url}
+- {N} review thread(s) resolved, {M} remaining (if any)
+
+What happens next:
+- After you exit, wade will continue monitoring the PR
+- Reviewers will be notified of your changes automatically
+
+Ask if they'd like any further changes — apply them and repeat Steps 1–4 if
+so. If not, suggest the user exits so wade can continue the workflow.
 
 ## Skills reference
 
