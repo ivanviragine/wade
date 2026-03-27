@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.12.0] — 2026-03-27
+
+### Features
+
+- instruct AI agents to use native confirmation and question components (#225) (2ce2785)
+
 ## [v0.11.3] — 2026-03-26
 
 ### Bug Fixes
