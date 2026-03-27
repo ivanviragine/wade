@@ -27,9 +27,9 @@ In inited projects, `wade init` writes the workflow pointer to whichever of `AGE
 When `wade init` runs on this repo (self-init mode), the installer creates symlinks so edits to skill templates are reflected immediately:
 
 ```
-.claude/skills/plan-session              ->  ../../templates/skills/plan-session              (symlink)
-.claude/skills/implementation-session   ->  ../../templates/skills/implementation-session   (symlink)
-.claude/skills/review-pr-comments-session  ->  ../../templates/skills/review-pr-comments-session  (symlink)
+.claude/skills/plan-session              ->  processed copy (self-init exception via INJECT_SKILLS)
+.claude/skills/implementation-session   ->  processed copy (self-init exception via INJECT_SKILLS)
+.claude/skills/review-pr-comments-session ->  processed copy (self-init exception via INJECT_SKILLS)
 .claude/skills/task                     ->  ../../templates/skills/task                     (symlink)
 .claude/skills/deps                     ->  ../../templates/skills/deps                     (symlink)
 
