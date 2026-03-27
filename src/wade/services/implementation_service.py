@@ -1266,6 +1266,22 @@ def start(
             (wade_dir / "base_branch").write_text(base_branch + "\n")
             console.detail(f"Stacked on {base_branch}")
 
+        # Catchup: sync worktree with base branch before AI launch (non-blocking)
+        try:
+            catchup_result = catchup(project_root=worktree_path)
+            if not catchup_result.success:
+                if catchup_result.conflicts:
+                    console.warn(
+                        "Startup catchup: merge conflict — "
+                        "run `git merge origin/<base>` manually to resolve, then "
+                        "re-run `wade implementation-session catchup --json` for inspection."
+                    )
+                else:
+                    console.warn("Startup catchup failed — proceeding anyway.")
+        except Exception:
+            logger.debug("start.catchup_failed", exc_info=True)
+            console.warn("Startup catchup failed — proceeding anyway.")
+
         # Add in-progress label and move to in-progress on project board (both non-critical)
         with contextlib.suppress(Exception):
             add_in_progress_label(provider, task.id)
@@ -2202,61 +2218,41 @@ def _build_pr_body(
 
 
 # ---------------------------------------------------------------------------
-# Implementation sync
+# Implementation sync / catchup
 # ---------------------------------------------------------------------------
 
 
-def sync(
-    dry_run: bool = False,
-    main_branch: str | None = None,
+def _sync_preflight(
+    cwd: Path,
+    main_branch_override: str | None,
+    config: Any,
+    emit: Any,
+    *,
     json_output: bool = False,
-    project_root: Path | None = None,
-    session_type: str = "implementation",
-) -> SyncResult:
-    """Sync current branch with main.
+) -> tuple[Path, str, str] | SyncResult:
+    """Run pre-flight checks shared by sync() and catchup().
 
-    Flow:
-    1. Pre-flight checks (in git repo, not on main, clean worktree)
-    2. Fetch origin
-    3. Count commits behind
-    4. Merge (unless dry-run or up-to-date)
-    5. Emit structured events
+    Resolves the repo root, current branch, and base branch. Emits ERROR
+    events via ``emit`` on failure (which populates the caller's events list).
+
+    Returns:
+        (repo_root, current_branch, resolved_main) on success.
+        SyncResult(events=[]) on failure — caller must add its events list.
     """
-    config = load_config(project_root)
-    cwd = project_root or Path.cwd()
-    events: list[SyncEvent] = []
-
-    def emit(event: SyncEventType, **data: str | int) -> None:
-        ev = SyncEvent(event=event, data=data)
-        events.append(ev)
-        if json_output:
-            console.raw(json.dumps({"event": event, **data}) + "\n")
-
-    # Pre-flight checks
     try:
         repo_root = git_repo.get_repo_root(cwd)
     except GitError:
         emit(SyncEventType.ERROR, reason="not_git_repo")
-        return SyncResult(
-            success=False,
-            current_branch="",
-            main_branch=main_branch or "",
-            events=events,
-        )
+        return SyncResult(success=False, current_branch="", main_branch=main_branch_override or "")
 
     try:
         current = git_repo.get_current_branch(cwd)
     except GitError:
         emit(SyncEventType.ERROR, reason="detached_head")
-        return SyncResult(
-            success=False,
-            current_branch="",
-            main_branch=main_branch or "",
-            events=events,
-        )
+        return SyncResult(success=False, current_branch="", main_branch=main_branch_override or "")
 
-    # Check for stacked base branch metadata (written by start() for chain execution).
-    # When present, sync against the parent branch instead of main.
+    # Stacked branch: prefer the stored parent branch over main.
+    main_branch = main_branch_override
     if not main_branch:
         base_branch_file = cwd / ".wade" / "base_branch"
         if base_branch_file.is_file():
@@ -2270,23 +2266,12 @@ def sync(
             resolved_main = git_repo.detect_main_branch(repo_root)
         except GitError:
             emit(SyncEventType.ERROR, reason="no_main_branch")
-            return SyncResult(
-                success=False,
-                current_branch=current,
-                main_branch="",
-                events=events,
-            )
+            return SyncResult(success=False, current_branch=current, main_branch="")
 
     if current == resolved_main:
         emit(SyncEventType.ERROR, reason="on_main_branch")
-        return SyncResult(
-            success=False,
-            current_branch=current,
-            main_branch=resolved_main,
-            events=events,
-        )
+        return SyncResult(success=False, current_branch=current, main_branch=resolved_main)
 
-    # Check clean — with detailed diagnostics
     if not git_repo.is_clean(cwd):
         detail_str = _format_uncommitted_summary(cwd)
         emit(SyncEventType.ERROR, reason="dirty_worktree", details=detail_str)
@@ -2296,17 +2281,43 @@ def sync(
                 "Commit or stash your changes first",
                 "git stash",
             )
-        return SyncResult(
-            success=False,
-            current_branch=current,
-            main_branch=resolved_main,
-            events=events,
-        )
+        return SyncResult(success=False, current_branch=current, main_branch=resolved_main)
 
-    emit(SyncEventType.PREFLIGHT_OK, current_branch=current, main_branch=resolved_main)
-    if not json_output:
-        console.step(f"Syncing {current} with {resolved_main}")
+    return (repo_root, current, resolved_main)
 
+
+def _merge_base(
+    repo_root: Path,
+    current: str,
+    resolved_main: str,
+    emit: Any,
+    *,
+    dry_run: bool = False,
+    json_output: bool = False,
+    abort_on_conflict: bool = False,
+    session_type: str = "implementation",
+) -> SyncResult:
+    """Fetch, count commits behind, and merge base branch into current branch.
+
+    Shared by both sync() and catchup(). Pre-flight checks are the caller's
+    responsibility. Emits events via the provided ``emit`` callable (which
+    also populates the caller's events list).
+
+    Args:
+        repo_root: Repository root.
+        current: Current branch name.
+        resolved_main: The resolved base/main branch name.
+        emit: Callable(event, **data) that records events.
+        dry_run: Preview without merging.
+        json_output: Suppress console output (JSON mode).
+        abort_on_conflict: When True, abort the merge on conflict (catchup
+            path) so the worktree stays clean. When False (sync path), leave
+            the merge in progress for the AI to resolve manually.
+        session_type: Used in the conflict hint message.
+
+    Returns:
+        SyncResult with success/conflicts/commits_merged (events=[]).
+    """
     # Fetch
     merge_ref = resolved_main
     try:
@@ -2335,24 +2346,14 @@ def sync(
         if not json_output:
             console.success("Already up to date.")
         emit(SyncEventType.DONE, branch=current, main=resolved_main)
-        return SyncResult(
-            success=True,
-            current_branch=current,
-            main_branch=resolved_main,
-            events=events,
-        )
+        return SyncResult(success=True, current_branch=current, main_branch=resolved_main)
 
     if dry_run:
         emit(SyncEventType.DRY_RUN, action="merge_main_into_feature", behind=behind)
         if not json_output:
             console.info(f"Dry run: {behind} commit(s) would be merged.")
         emit(SyncEventType.DONE, branch=current, main=resolved_main)
-        return SyncResult(
-            success=True,
-            current_branch=current,
-            main_branch=resolved_main,
-            events=events,
-        )
+        return SyncResult(success=True, current_branch=current, main_branch=resolved_main)
 
     # Merge
     if not json_output:
@@ -2370,33 +2371,165 @@ def sync(
             current_branch=current,
             main_branch=resolved_main,
             commits_merged=behind,
-            events=events,
         )
 
     # Conflicts
     conflicts = merge_result.conflicts
+
+    if abort_on_conflict:
+        try:
+            git_sync.abort_merge(repo_root)
+        except GitError:
+            logger.error("catchup.abort_merge_failed", exc_info=True)
+            emit(SyncEventType.ERROR, reason="abort_merge_failed")
+            return SyncResult(
+                success=False,
+                current_branch=current,
+                main_branch=resolved_main,
+            )
+
     emit(SyncEventType.CONFLICT, source=resolved_main, target=current, files="\n".join(conflicts))
     if not json_output:
         console.error(f"Merge conflict in {len(conflicts)} file(s):")
         for f in conflicts:
             console.detail(f)
         console.empty()
-        console.hint("Resolve conflicts, then run:")
-        console.out.print(f"      [prompt.dimmed]$ wade {session_type}-session sync[/]")
+        if not abort_on_conflict:
+            console.hint("Resolve conflicts, then run:")
+            console.out.print(f"      [prompt.dimmed]$ wade {session_type}-session sync[/]")
 
-    # Get conflict diff
-    try:
-        diff_output = git_repo.diff_stat(repo_root)
-        if diff_output.strip():
-            emit(SyncEventType.CONFLICT_DIFF, diff=diff_output)
-    except GitError:
-        logger.debug("sync.conflict_diff_read_failed", exc_info=True)
+    if not abort_on_conflict:
+        try:
+            diff_output = git_repo.diff_stat(repo_root)
+            if diff_output.strip():
+                emit(SyncEventType.CONFLICT_DIFF, diff=diff_output)
+        except GitError:
+            logger.debug("sync.conflict_diff_read_failed", exc_info=True)
 
     return SyncResult(
         success=False,
         current_branch=current,
         main_branch=resolved_main,
         conflicts=conflicts,
+    )
+
+
+def sync(
+    dry_run: bool = False,
+    main_branch: str | None = None,
+    json_output: bool = False,
+    project_root: Path | None = None,
+    session_type: str = "implementation",
+) -> SyncResult:
+    """Sync current branch with main.
+
+    Flow:
+    1. Pre-flight checks (in git repo, not on main, clean worktree)
+    2. Fetch origin
+    3. Count commits behind
+    4. Merge (unless dry-run or up-to-date)
+    5. Emit structured events
+    """
+    config = load_config(project_root)
+    cwd = project_root or Path.cwd()
+    events: list[SyncEvent] = []
+
+    def emit(event: SyncEventType, **data: str | int) -> None:
+        ev = SyncEvent(event=event, data=data)
+        events.append(ev)
+        if json_output:
+            console.raw(json.dumps({"event": event, **data}) + "\n")
+
+    preflight = _sync_preflight(cwd, main_branch, config, emit, json_output=json_output)
+    if isinstance(preflight, SyncResult):
+        return SyncResult(
+            success=preflight.success,
+            current_branch=preflight.current_branch,
+            main_branch=preflight.main_branch,
+            events=events,
+        )
+    repo_root, current, resolved_main = preflight
+
+    emit(SyncEventType.PREFLIGHT_OK, current_branch=current, main_branch=resolved_main)
+    if not json_output:
+        console.step(f"Syncing {current} with {resolved_main}")
+
+    result = _merge_base(
+        repo_root,
+        current,
+        resolved_main,
+        emit,
+        dry_run=dry_run,
+        json_output=json_output,
+        abort_on_conflict=False,
+        session_type=session_type,
+    )
+    return SyncResult(
+        success=result.success,
+        current_branch=result.current_branch,
+        main_branch=result.main_branch,
+        conflicts=result.conflicts,
+        commits_merged=result.commits_merged,
+        events=events,
+    )
+
+
+def catchup(
+    dry_run: bool = False,
+    main_branch: str | None = None,
+    json_output: bool = False,
+    project_root: Path | None = None,
+) -> SyncResult:
+    """Sync the worktree branch with its base branch at session startup.
+
+    Similar to sync() but aborts the merge on conflict so the worktree
+    stays clean for the AI. Called automatically from start() before AI
+    launch, and also available as a CLI command for manual retries.
+
+    Does not push after merge — that is done()'s job.
+
+    Returns:
+        SyncResult with up_to_date/merged/conflict/error status.
+    """
+    config = load_config(project_root)
+    cwd = project_root or Path.cwd()
+    events: list[SyncEvent] = []
+
+    def emit(event: SyncEventType, **data: str | int) -> None:
+        ev = SyncEvent(event=event, data=data)
+        events.append(ev)
+        if json_output:
+            console.raw(json.dumps({"event": event, **data}) + "\n")
+
+    preflight = _sync_preflight(cwd, main_branch, config, emit, json_output=json_output)
+    if isinstance(preflight, SyncResult):
+        return SyncResult(
+            success=preflight.success,
+            current_branch=preflight.current_branch,
+            main_branch=preflight.main_branch,
+            events=events,
+        )
+    repo_root, current, resolved_main = preflight
+
+    emit(SyncEventType.PREFLIGHT_OK, current_branch=current, main_branch=resolved_main)
+    if not json_output:
+        console.step(f"Catching up {current} with {resolved_main}")
+
+    result = _merge_base(
+        repo_root,
+        current,
+        resolved_main,
+        emit,
+        dry_run=dry_run,
+        json_output=json_output,
+        abort_on_conflict=True,
+    )
+    return SyncResult(
+        success=result.success,
+        current_branch=result.current_branch,
+        main_branch=result.main_branch,
+        conflicts=result.conflicts,
+        commits_merged=result.commits_merged,
         events=events,
     )
 

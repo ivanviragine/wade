@@ -79,6 +79,35 @@ Run `wade implementation-session check` as your **first action**:
   `wade implement`.
 - `NOT_IN_GIT_REPO` — you are not inside a git repository.
 
+## Catchup: startup sync with base branch
+
+`wade implement` automatically syncs your worktree branch with the base branch
+at startup (before this session begins). The catchup output appears in the
+startup log.
+
+**If the startup output reports a merge conflict**, note that the catchup
+command always aborts the merge and leaves the worktree clean — there are no
+conflict markers to resolve. `wade implementation-session catchup --json` is
+inspection-only: it re-runs the same aborted catchup to report which files
+conflict, but the merge will be aborted again.
+
+To produce resolvable conflicts, run the merge manually:
+
+```bash
+git fetch origin
+git merge origin/<main-branch>   # use the actual base branch name
+```
+
+Then resolve using the standard flow:
+1. Run `git diff --name-only --diff-filter=U` to list conflicted files
+2. Read each conflicted file — understand both sides of the conflict
+3. Resolve the conflict markers in each file
+4. Stage only the resolved files: `git add <file1> <file2> ...`
+5. Complete the merge: `git commit --no-edit`
+
+The closing `sync` step remains necessary for changes that land on the base
+branch *during* your implementation session.
+
 ## Worktree safety
 
 All **code changes** (edits, new files, commits) **must** happen in a worktree.

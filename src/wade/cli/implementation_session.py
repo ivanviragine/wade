@@ -30,6 +30,59 @@ def check() -> None:
 
 
 @implementation_session_app.command()
+def catchup(
+    json_output: bool = typer.Option(False, "--json", help="Output structured JSON events."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview without merging."),
+    main_branch: str | None = typer.Option(
+        None, "--main-branch", help="Override main branch name."
+    ),
+) -> None:
+    """Sync current branch with base branch (early catchup at session startup)."""
+    from wade.services.implementation_service import catchup as do_catchup
+
+    result = do_catchup(
+        dry_run=dry_run,
+        main_branch=main_branch,
+        json_output=json_output,
+    )
+    # Exit codes: 0=success, 2=conflict, 4=preflight failure, 1=other error
+    if result.success:
+        if not json_output:
+            from wade.ui.console import console
+
+            if any(e.event == SyncEventType.DRY_RUN for e in result.events):
+                console.info("Catchup preview complete.")
+            else:
+                console.info("Catchup complete — branch is up to date.")
+        raise typer.Exit(0)
+    elif result.conflicts:
+        if not json_output:
+            from wade.ui.console import console
+
+            console.info(
+                "ACTION REQUIRED — merge aborted (inspection-only), no conflict markers remain. "
+                "Resolve manually via `git merge` or `git rebase`, then re-run "
+                "wade implementation-session catchup."
+            )
+        raise typer.Exit(2)
+    elif any(
+        e.event == SyncEventType.ERROR
+        and e.data.get("reason")
+        in (
+            "not_git_repo",
+            "detached_head",
+            "no_main_branch",
+            "on_main_branch",
+            "dirty_worktree",
+        )
+        for e in result.events
+    ):
+        raise typer.Exit(4)
+    else:
+        raise typer.Exit(1)
+
+
+@implementation_session_app.command()
 def sync(
     json_output: bool = typer.Option(False, "--json", help="Output structured JSON events."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview without merging."),
