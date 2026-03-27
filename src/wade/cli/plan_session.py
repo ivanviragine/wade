@@ -48,7 +48,7 @@ def done(
     console.info(
         "SESSION COMPLETE — do not implement anything. "
         "Present the workflow recap and what happens next to the user. "
-        "Suggest them to exit the session now. "
+        "Suggest they exit the session now. "
         "wade will read the plan files and create GitHub issues automatically."
     )
 
