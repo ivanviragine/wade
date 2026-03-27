@@ -69,3 +69,7 @@ PR-SUMMARY.md
 .gemini/skills
 .cursor/skills
 # wade:end
+.copilot/
+.cursor/
+.gemini/
+.github/hooks/
