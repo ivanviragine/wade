@@ -745,11 +745,13 @@ def _allocate_tokens(total_tokens: int, line_counts: list[int]) -> list[int]:
         base = total_tokens // n
         remainder = total_tokens % n
         return [base + (1 if i < remainder else 0) for i in range(n)]
-    result: list[int] = []
-    running_sum = 0
-    for i in range(n - 1):
-        alloc = math.floor(total_tokens * line_counts[i] / total_lines)
-        result.append(alloc)
-        running_sum += alloc
-    result.append(total_tokens - running_sum)
+    raw = [total_tokens * count / total_lines for count in line_counts]
+    result = [math.floor(v) for v in raw]
+    remainder = total_tokens - sum(result)
+    for idx, _ in sorted(
+        enumerate(raw),
+        key=lambda item: item[1] - math.floor(item[1]),
+        reverse=True,
+    )[:remainder]:
+        result[idx] += 1
     return result

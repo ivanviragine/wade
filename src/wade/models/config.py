@@ -32,13 +32,10 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from crossby.models.config import ComplexityModelMapping
+from crossby.models.config import ComplexityModelMapping as ComplexityModelMapping
 from pydantic import BaseModel, Field
 
 from wade.models.session import MergeStrategy
-
-# Re-export so existing consumers can import from wade.models.config
-__all__ = ["ComplexityModelMapping"]
 
 
 class ProviderID(StrEnum):
