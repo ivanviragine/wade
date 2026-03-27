@@ -1293,20 +1293,24 @@ class TestUpdateExtended:
         init(project_root=tmp_git_repo, non_interactive=True)
         # Simulate artifacts left by an older wade version
         from wade.config.claude_allowlist import configure_allowlist
+        from wade.config.cursor_allowlist import configure_allowlist as configure_cursor_allowlist
         from wade.skills.pointer import write_pointer
 
         configure_allowlist(tmp_git_repo)
+        configure_cursor_allowlist(tmp_git_repo)
         write_pointer(tmp_git_repo / "AGENTS.md")
         (tmp_git_repo / "CLAUDE.md").symlink_to("AGENTS.md")
 
         assert (tmp_git_repo / ".claude" / "settings.json").is_file()
+        assert (tmp_git_repo / ".cursor" / "cli.json").is_file()
         assert (tmp_git_repo / "AGENTS.md").is_file()
         assert (tmp_git_repo / "CLAUDE.md").is_symlink()
 
         update(project_root=tmp_git_repo, skip_self_upgrade=True)
 
-        # All AI artifacts should be cleaned up from main
+        # All AI artifacts should be cleaned up from main (both Claude and Cursor)
         assert not (tmp_git_repo / ".claude" / "settings.json").is_file()
+        assert not (tmp_git_repo / ".cursor" / "cli.json").is_file()
         assert not (tmp_git_repo / "AGENTS.md").is_file()
         assert not (tmp_git_repo / "CLAUDE.md").exists()
 

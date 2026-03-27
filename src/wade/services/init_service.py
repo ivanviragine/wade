@@ -431,6 +431,9 @@ def _migrate_ai_artifacts_off_main(project_root: Path) -> list[str]:
     """
     import json as _json
 
+    from wade.config.claude_allowlist import WADE_ALLOW_PATTERN as _CLAUDE_WADE_PATTERN
+    from wade.config.cursor_allowlist import WADE_ALLOW_PATTERN as _CURSOR_WADE_PATTERN
+
     removed: list[str] = []
 
     # Remove CLAUDE.md symlink only if wade created it (points to AGENTS.md)
@@ -447,12 +450,21 @@ def _migrate_ai_artifacts_off_main(project_root: Path) -> list[str]:
         if target.is_file() and pointer.remove_pointer(target):
             removed.append(name)
 
-    # Remove .claude/settings.json if it contains only wade-managed allowlist
+    # Remove .claude/settings.json only when it contains exclusively wade-managed
+    # content.  Require the exact top-level key set {"permissions"} (not a subset)
+    # and verify the wade allow-pattern is present so user-only allowlists and
+    # files extended with hook keys are never removed.
     claude_settings = project_root / ".claude" / "settings.json"
     if claude_settings.is_file():
         try:
             raw = _json.loads(claude_settings.read_text(encoding="utf-8"))
-            if isinstance(raw, dict) and set(raw.keys()) <= {"permissions"}:
+            allow = raw.get("permissions", {}).get("allow", []) if isinstance(raw, dict) else []
+            if (
+                isinstance(raw, dict)
+                and set(raw.keys()) == {"permissions"}
+                and isinstance(allow, list)
+                and _CLAUDE_WADE_PATTERN in allow
+            ):
                 claude_settings.unlink()
                 removed.append(".claude/settings.json")
                 claude_dir = project_root / ".claude"
@@ -461,12 +473,19 @@ def _migrate_ai_artifacts_off_main(project_root: Path) -> list[str]:
         except (_json.JSONDecodeError, OSError):
             pass
 
-    # Remove .cursor/cli.json if it contains only wade-managed allowlist
+    # Remove .cursor/cli.json only when it contains exclusively wade-managed
+    # content (same exact-match logic as for .claude/settings.json above).
     cursor_cli = project_root / ".cursor" / "cli.json"
     if cursor_cli.is_file():
         try:
             raw = _json.loads(cursor_cli.read_text(encoding="utf-8"))
-            if isinstance(raw, dict) and set(raw.keys()) <= {"permissions"}:
+            allow = raw.get("permissions", {}).get("allow", []) if isinstance(raw, dict) else []
+            if (
+                isinstance(raw, dict)
+                and set(raw.keys()) == {"permissions"}
+                and isinstance(allow, list)
+                and _CURSOR_WADE_PATTERN in allow
+            ):
                 cursor_cli.unlink()
                 removed.append(".cursor/cli.json")
                 cursor_dir = project_root / ".cursor"
@@ -559,7 +578,9 @@ def deinit(project_root: Path | None = None, force: bool = False) -> bool:
     removed = installer.remove_skills(root)
     console.info(f"Removed {len(removed)} skill entries")
 
-    # Remove AGENTS.md pointer
+    # Remove AGENTS.md pointer and wade-created CLAUDE.md symlink.
+    # Also cleans up .claude/settings.json and .cursor/cli.json (handles repos
+    # that reach deinit without ever running wade update).
     for name in ("AGENTS.md", "CLAUDE.md"):
         target = root / name
         if target.is_symlink() and name == "CLAUDE.md":
@@ -570,6 +591,11 @@ def deinit(project_root: Path | None = None, force: bool = False) -> bool:
                 console.info("Removed CLAUDE.md symlink")
         elif target.is_file() and pointer.remove_pointer(target):
             console.info(f"Removed workflow pointer from {name}")
+
+    removed_ai = _migrate_ai_artifacts_off_main(root)
+    for artifact in removed_ai:
+        if artifact not in ("AGENTS.md", "CLAUDE.md"):
+            console.info(f"Removed {artifact}")
 
     # Remove config
     config_path = root / ".wade.yml"

@@ -319,12 +319,82 @@ def _effective_copy_files(config: ProjectConfig) -> list[str]:
     return files
 
 
+def _suppress_pointer_artifacts(worktree_path: Path) -> None:
+    """Prevent pointer-injected files from appearing dirty in the worktree.
+
+    Called after ensure_pointer() so git status checks (is_clean) remain clean.
+    - Tracked files (e.g. an existing AGENTS.md): marked --skip-worktree so
+      local modifications are invisible to git status.
+    - Untracked new files (e.g. a freshly created CLAUDE.md symlink): added to
+      the worktree-local git exclude so they don't appear as '??'.
+
+    Failures are silently swallowed — git commands may not be available in all
+    contexts (tests, unusual setups), and a failed suppression is not fatal.
+    """
+    try:
+        _do_suppress_pointer_artifacts(worktree_path)
+    except Exception:
+        logger.debug("implementation.suppress_pointer_skipped", path=str(worktree_path))
+
+
+def _do_suppress_pointer_artifacts(worktree_path: Path) -> None:
+    """Internal implementation of _suppress_pointer_artifacts."""
+    pointer_files = ("AGENTS.md", "CLAUDE.md")
+    untracked: list[str] = []
+
+    for name in pointer_files:
+        target = worktree_path / name
+        if not (target.exists() or target.is_symlink()):
+            continue
+        # Check whether the file is tracked in the git index
+        ls_result = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", name],
+            cwd=str(worktree_path),
+            capture_output=True,
+        )
+        if ls_result.returncode == 0:
+            # Tracked: --skip-worktree hides local modifications from git status
+            subprocess.run(
+                ["git", "update-index", "--skip-worktree", name],
+                cwd=str(worktree_path),
+                capture_output=True,
+            )
+            logger.debug("implementation.skip_worktree", file=name)
+        else:
+            untracked.append(name)
+
+    if not untracked:
+        return
+
+    # Add untracked pointer files to the worktree-local git exclude so they
+    # don't appear as '??' in git status.
+    gitdir_result = subprocess.run(
+        ["git", "rev-parse", "--absolute-git-dir"],
+        cwd=str(worktree_path),
+        capture_output=True,
+        text=True,
+    )
+    if gitdir_result.returncode != 0:
+        return
+    gitdir = Path(gitdir_result.stdout.strip())
+    exclude_file = gitdir / "info" / "exclude"
+    exclude_file.parent.mkdir(parents=True, exist_ok=True)
+    existing = exclude_file.read_text(encoding="utf-8") if exclude_file.is_file() else ""
+    existing_lines = set(existing.splitlines())
+    to_add = [name for name in untracked if name not in existing_lines]
+    if to_add:
+        new_content = existing.rstrip("\n") + "\n" + "\n".join(to_add) + "\n"
+        exclude_file.write_text(new_content, encoding="utf-8")
+        logger.debug("implementation.exclude_pointer_files", files=to_add)
+
+
 def bootstrap_worktree(
     worktree_path: Path,
     config: ProjectConfig,
     repo_root: Path,
     skills: list[str] | None = None,
     plan_mode: bool = False,
+    selected_ai_tool: str | None = None,
 ) -> None:
     """Run post-creation bootstrap: copy files, install skills, run hooks.
 
@@ -334,6 +404,9 @@ def bootstrap_worktree(
         repo_root: Root of the main repository checkout.
         skills: If provided, install only the listed skills instead of all.
         plan_mode: If True, install file-write guard hooks for plan sessions.
+        selected_ai_tool: Effective AI tool for this session (e.g. ``"cursor"``).
+            When provided, takes precedence over persisted config when deciding
+            whether to configure tool-specific worktree settings.
     """
     # Copy configured files + internal wade files that must always be present
     copy_files = _effective_copy_files(config)
@@ -367,6 +440,7 @@ def bootstrap_worktree(
     from wade.skills import pointer
 
     pointer.ensure_pointer(worktree_path)
+    _suppress_pointer_artifacts(worktree_path)
     logger.debug("implementation.bootstrap_pointer", path=str(worktree_path))
 
     # Always propagate allowlist to worktree — configure_allowlist is idempotent
@@ -381,7 +455,12 @@ def bootstrap_worktree(
     from wade.config.cursor_allowlist import is_allowlist_configured as is_cursor_configured
 
     cursor_in_config = any(config.get_ai_tool(cmd) == "cursor" for cmd in [None, *AI_COMMAND_NAMES])
-    if cursor_in_config or is_cursor_configured() or is_cursor_configured(repo_root):
+    if (
+        selected_ai_tool == "cursor"
+        or cursor_in_config
+        or is_cursor_configured()
+        or is_cursor_configured(repo_root)
+    ):
         configure_cursor_allowlist(
             worktree_path, extra_patterns=config.permissions.allowed_commands
         )
@@ -1266,7 +1345,13 @@ def start(
         from wade.skills.installer import IMPLEMENT_SKILLS
 
         write_plan_md(worktree_path, task, plan_content=plan_content)
-        bootstrap_worktree(worktree_path, config, repo_root, skills=IMPLEMENT_SKILLS)
+        bootstrap_worktree(
+            worktree_path,
+            config,
+            repo_root,
+            skills=IMPLEMENT_SKILLS,
+            selected_ai_tool=resolved_tool,
+        )
 
         # Store stacked base branch metadata so sync can use it instead of main
         if base_branch:
