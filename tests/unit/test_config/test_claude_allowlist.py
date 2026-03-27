@@ -9,6 +9,7 @@ from wade.config.claude_allowlist import (
     WADE_ALLOW_PATTERN,
     configure_allowlist,
     configure_plan_hooks,
+    configure_worktree_hooks,
     is_allowlist_configured,
 )
 
@@ -294,6 +295,47 @@ class TestConfigurePlanHooks:
         guard = tmp_path / "guard.py"
         guard.touch()
         configure_plan_hooks(tmp_path, guard)
+
+        settings_path = tmp_path / ".claude" / "settings.json"
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        assert WADE_ALLOW_PATTERN in data["permissions"]["allow"]
+        assert len(data["hooks"]["PreToolUse"]) == 1
+
+
+class TestConfigureWorktreeHooks:
+    """Tests for configure_worktree_hooks()."""
+
+    def test_adds_pretooluse_hook(self, tmp_path: Path) -> None:
+        guard = tmp_path / "guard.py"
+        guard.touch()
+        configure_worktree_hooks(tmp_path, guard)
+
+        settings_path = tmp_path / ".claude" / "settings.json"
+        assert settings_path.is_file()
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        hooks = data["hooks"]["PreToolUse"]
+        assert len(hooks) == 1
+        assert hooks[0]["matcher"] == "Edit|Write|NotebookEdit"
+        assert isinstance(hooks[0]["hooks"], list)
+        assert len(hooks[0]["hooks"]) == 1
+        assert hooks[0]["hooks"][0]["type"] == "command"
+        assert hooks[0]["hooks"][0]["command"] == f"python3 {guard}"
+
+    def test_idempotent(self, tmp_path: Path) -> None:
+        guard = tmp_path / "guard.py"
+        guard.touch()
+        configure_worktree_hooks(tmp_path, guard)
+        configure_worktree_hooks(tmp_path, guard)
+
+        settings_path = tmp_path / ".claude" / "settings.json"
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        assert len(data["hooks"]["PreToolUse"]) == 1
+
+    def test_merges_with_existing_allowlist(self, tmp_path: Path) -> None:
+        configure_allowlist(tmp_path)
+        guard = tmp_path / "guard.py"
+        guard.touch()
+        configure_worktree_hooks(tmp_path, guard)
 
         settings_path = tmp_path / ".claude" / "settings.json"
         data = json.loads(settings_path.read_text(encoding="utf-8"))

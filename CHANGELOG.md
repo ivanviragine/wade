@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.14.0] — 2026-03-27
+
+### Features
+
+- add worktree file-write guard hook for implementation sessions (#230) (39f2543)
+
 ## [v0.13.1] — 2026-03-27
 
 ### Bug Fixes
