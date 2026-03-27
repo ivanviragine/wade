@@ -55,9 +55,10 @@ def test_pr_strategy_prompts_merge_on_existing_pr(
     repo_root = tmp_path / "repo"
     wt_path = tmp_path / "wt"
     wt_path.mkdir()  # Needs to exist for is_dir() check
-    _post_implementation_lifecycle(
-        repo_root, "feat/42-test", 42, wt_path, _config(MergeStrategy.PR), provider
-    )
+    with patch("wade.services.implementation_service.prompts.is_tty", return_value=True):
+        _post_implementation_lifecycle(
+            repo_root, "feat/42-test", 42, wt_path, _config(MergeStrategy.PR), provider
+        )
 
     # select is called with "Merge PR" / "Wait for reviews" — user picks 0 (Merge PR)
     mock_select.assert_called_once()
@@ -113,14 +114,15 @@ def test_pr_strategy_user_declines_merge(
 
     mock_poll.return_value = PollOutcome.INTERRUPTED
     provider = MagicMock()
-    _post_implementation_lifecycle(
-        tmp_path / "repo",
-        "feat/42-test",
-        42,
-        tmp_path / "wt",
-        _config(MergeStrategy.PR),
-        provider,
-    )
+    with patch("wade.services.implementation_service.prompts.is_tty", return_value=True):
+        _post_implementation_lifecycle(
+            tmp_path / "repo",
+            "feat/42-test",
+            42,
+            tmp_path / "wt",
+            _config(MergeStrategy.PR),
+            provider,
+        )
 
     # select returns 1 (Wait for reviews) — merge should NOT be called
     mock_select.assert_called_once()
@@ -149,14 +151,15 @@ def test_pr_strategy_merge_failure_preserves_branch(
     provider = MagicMock()
     mock_merge_pr.side_effect = subprocess.CalledProcessError(1, ["gh", "pr", "merge"])
 
-    _post_implementation_lifecycle(
-        tmp_path / "repo",
-        "feat/42-test",
-        42,
-        tmp_path / "wt",
-        _config(MergeStrategy.PR),
-        provider,
-    )
+    with patch("wade.services.implementation_service.prompts.is_tty", return_value=True):
+        _post_implementation_lifecycle(
+            tmp_path / "repo",
+            "feat/42-test",
+            42,
+            tmp_path / "wt",
+            _config(MergeStrategy.PR),
+            provider,
+        )
 
     # merge_pr raised, so no push or delete should have happened
     mock_merge_pr.assert_called_once()
@@ -190,14 +193,15 @@ def test_pr_strategy_merge_failure_restores_branch(
     wt_path.mkdir()
     mock_merge_pr.side_effect = subprocess.CalledProcessError(1, ["gh", "pr", "merge"])
 
-    _post_implementation_lifecycle(
-        tmp_path / "repo",
-        "feat/42-test",
-        42,
-        wt_path,
-        _config(MergeStrategy.PR),
-        provider,
-    )
+    with patch("wade.services.implementation_service.prompts.is_tty", return_value=True):
+        _post_implementation_lifecycle(
+            tmp_path / "repo",
+            "feat/42-test",
+            42,
+            wt_path,
+            _config(MergeStrategy.PR),
+            provider,
+        )
 
     # Should have called checkout to restore branch after merge failure
     mock_checkout.assert_called_once_with(wt_path, "feat/42-test")
@@ -209,6 +213,7 @@ def test_pr_strategy_merge_failure_restores_branch(
 @patch("wade.services.implementation_service.git_worktree.remove_worktree")
 @patch("wade.services.implementation_service.git_pr.merge_pr")
 @patch("wade.services.implementation_service.git_repo.is_clean", return_value=True)
+@patch("wade.services.implementation_service.prompts.select", return_value=0)
 @patch("wade.services.implementation_service.prompts.confirm", return_value=True)
 @patch("wade.services.implementation_service.webbrowser.open")
 @patch(
@@ -219,6 +224,7 @@ def test_pr_strategy_cleanup_and_pull_after_merge(
     _mock_get_pr: MagicMock,
     _mock_webbrowser_open: MagicMock,
     _mock_confirm: MagicMock,
+    _mock_select: MagicMock,
     _mock_is_clean: MagicMock,
     _mock_merge_pr: MagicMock,
     mock_remove_worktree: MagicMock,
@@ -233,9 +239,10 @@ def test_pr_strategy_cleanup_and_pull_after_merge(
     wt_path = tmp_path / "wt"
     wt_path.mkdir()  # Needs to exist for is_dir() check
 
-    _post_implementation_lifecycle(
-        repo_root, "feat/42-test", 42, wt_path, _config(MergeStrategy.PR), provider
-    )
+    with patch("wade.services.implementation_service.prompts.is_tty", return_value=True):
+        _post_implementation_lifecycle(
+            repo_root, "feat/42-test", 42, wt_path, _config(MergeStrategy.PR), provider
+        )
 
     # Worktree is removed AFTER successful merge
     mock_remove_worktree.assert_called_once_with(repo_root, wt_path)

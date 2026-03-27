@@ -320,7 +320,7 @@ def create_tracking_issue(
 
 
 def _run_delegation(
-    ai_tool: str,
+    ai_tool: str | None,
     prompt: str,
     mode: DelegationMode,
     *,
@@ -408,36 +408,42 @@ def analyze_deps(
         # deps defaults to headless (not prompt) when no mode is configured
         delegation_mode = resolve_mode(cmd_config) if cmd_config.mode else DelegationMode.HEADLESS
 
-    # Resolve AI tool
-    resolved_tool = resolve_ai_tool(ai_tool, config, "deps")
-    if not resolved_tool:
-        console.error("No AI tool available for dependency analysis.")
-        return None
+    resolved_tool: str | None = None
+    resolved_model: str | None = None
+    resolved_effort: EffortLevel | None = None
 
-    resolved_model = resolve_model(model, config, "deps", tool=resolved_tool)
-    resolved_effort = resolve_effort(effort, config, "deps", tool=resolved_tool)
+    if delegation_mode != DelegationMode.PROMPT:
+        resolved_tool = resolve_ai_tool(ai_tool, config, "deps")
+        if not resolved_tool:
+            console.error("No AI tool available for dependency analysis.")
+            return None
 
-    console.rule("wade task deps")
-    console.kv("Issues", str(len(issue_numbers)))
+        resolved_model = resolve_model(model, config, "deps", tool=resolved_tool)
+        resolved_effort = resolve_effort(effort, config, "deps", tool=resolved_tool)
 
-    # Offer interactive confirmation unless all flags were explicitly provided.
-    resolved_tool, resolved_model, resolved_effort, _yolo = confirm_ai_selection(
-        resolved_tool,
-        resolved_model,
-        tool_explicit=ai_explicit,
-        model_explicit=model_explicit,
-        resolved_effort=resolved_effort,
-        effort_explicit=effort_explicit,
-    )
-    if not resolved_tool:
-        console.error("No AI tool selected.")
-        return None
+        console.rule("wade task deps")
+        console.kv("Issues", str(len(issue_numbers)))
+
+        # Prompt mode is raw prompt generation, so it should not run AI-selection UX.
+        resolved_tool, resolved_model, resolved_effort, _yolo = confirm_ai_selection(
+            resolved_tool,
+            resolved_model,
+            tool_explicit=ai_explicit,
+            model_explicit=model_explicit,
+            resolved_effort=resolved_effort,
+            effort_explicit=effort_explicit,
+        )
+        if not resolved_tool:
+            console.error("No AI tool selected.")
+            return None
 
     # Set up worktree for deps analysis
     standalone_worktree: Path | None = None
     deps_cwd: Path | None = None
 
-    if planning_worktree is not None:
+    if delegation_mode == DelegationMode.PROMPT:
+        deps_cwd = None
+    elif planning_worktree is not None:
         # Reuse existing planning worktree (deps skill already installed)
         deps_cwd = planning_worktree
     else:
@@ -471,21 +477,24 @@ def analyze_deps(
     context = build_context(provider, issue_numbers)
     prompt = build_deps_prompt(context)
 
-    # Fetch titles for display
     valid_numbers = set(issue_numbers)
     task_titles: dict[str, str] = {}
-    for num in issue_numbers:
-        try:
-            task = provider.read_task(num)
-            task_titles[num] = task.title
-            console.step(f"#{num}: {task.title}")
-        except Exception:
-            logger.debug("deps.issue_read_failed", issue_num=num, exc_info=True)
-            task_titles[num] = f"Issue #{num}"
+    if delegation_mode != DelegationMode.PROMPT:
+        for num in issue_numbers:
+            try:
+                task = provider.read_task(num)
+                task_titles[num] = task.title
+                console.step(f"#{num}: {task.title}")
+            except Exception:
+                logger.debug("deps.issue_read_failed", issue_num=num, exc_info=True)
+                task_titles[num] = f"Issue #{num}"
 
     # Run AI analysis via delegation infrastructure
     effort_str = resolved_effort.value if isinstance(resolved_effort, EffortLevel) else None
-    console.step(f"Running {resolved_tool} ({delegation_mode.value}) for dependency analysis...")
+    if delegation_mode != DelegationMode.PROMPT and resolved_tool:
+        console.step(
+            f"Running {resolved_tool} ({delegation_mode.value}) for dependency analysis..."
+        )
     output = _run_delegation(
         resolved_tool,
         prompt,
@@ -495,6 +504,13 @@ def analyze_deps(
         allowed_commands=config.permissions.allowed_commands,
         cwd=deps_cwd,
     )
+
+    if delegation_mode == DelegationMode.PROMPT:
+        if output:
+            console.out.print(output)
+            return DependencyGraph()
+        console.error("Could not generate dependency analysis prompt.")
+        return None
 
     if output:
         console.success(f"Analysis complete ({delegation_mode.value} mode).")
@@ -509,11 +525,6 @@ def analyze_deps(
 
             repo_root = git_repo.get_repo_root(project_root or Path.cwd())
             git_worktree.remove_worktree(repo_root, standalone_worktree, force=True)
-
-    # Prompt mode: the output is the raw template text, not AI output.
-    # The user must run the prompt manually and re-run with a different mode.
-    if delegation_mode == DelegationMode.PROMPT:
-        return DependencyGraph()
 
     # Parse edges
     edges = parse_deps_output(output, valid_numbers) if output else []

@@ -113,6 +113,17 @@ class TestParseGhTask:
         assert len(task.labels) == 1
         assert task.labels[0].label_type == LabelType.PLANNED_BY
 
+    def test_complexity_label_is_case_insensitive(self) -> None:
+        raw = {
+            "number": 42,
+            "title": "Complex issue",
+            "body": "",
+            "state": "OPEN",
+            "labels": [{"name": " Complexity:VERY_COMPLEX ", "color": "C5DEF5", "description": ""}],
+        }
+        task = _parse_gh_task(raw)
+        assert task.complexity == Complexity.VERY_COMPLEX
+
 
 # ---------------------------------------------------------------------------
 # Issue CRUD tests
@@ -238,13 +249,12 @@ class TestReadTaskOrNone:
         assert task is None
 
     @patch("wade.providers.github.run")
-    def test_returns_none_on_parse_error(
-        self, mock_run: MagicMock, provider: GitHubProvider
-    ) -> None:
-        """read_task_or_none returns None on unparseable output (exit 0)."""
+    def test_raises_on_parse_error(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
+        """read_task_or_none raises when JSON is invalid."""
         mock_run.return_value = _make_completed("invalid json")
 
-        assert provider.read_task_or_none("42") is None
+        with pytest.raises(RuntimeError, match="Failed to parse issue 42 response"):
+            provider.read_task_or_none("42")
 
     @patch("wade.providers.github.run")
     def test_uses_check_false(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
@@ -448,6 +458,30 @@ class TestFindParentIssue:
     def test_found_without_hash(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         issues = [
             {"number": 10, "body": "## Tasks\n- [ ] 42. Add feature"},
+        ]
+        mock_run.return_value = _make_completed(json.dumps(issues))
+
+        parent = provider.find_parent_issue("42")
+        assert parent == "10"
+
+    @patch("wade.providers.github.run")
+    def test_found_with_backticked_hash(
+        self, mock_run: MagicMock, provider: GitHubProvider
+    ) -> None:
+        issues = [
+            {"number": 10, "body": "## Tasks\n- [ ] `#42`\n- [ ] `#43`"},
+        ]
+        mock_run.return_value = _make_completed(json.dumps(issues))
+
+        parent = provider.find_parent_issue("42")
+        assert parent == "10"
+
+    @patch("wade.providers.github.run")
+    def test_found_with_indented_checklist_item(
+        self, mock_run: MagicMock, provider: GitHubProvider
+    ) -> None:
+        issues = [
+            {"number": 10, "body": "Tracking issue\n  - [ ] `#42`\n\t- [ ] #43"},
         ]
         mock_run.return_value = _make_completed(json.dumps(issues))
 

@@ -12,6 +12,7 @@ from crossby.ai_tools.claude import ClaudeAdapter
 from crossby.ai_tools.codex import CodexAdapter
 from crossby.ai_tools.copilot import CopilotAdapter
 from crossby.ai_tools.gemini import GeminiAdapter
+from crossby.models.ai import ModelBreakdown, TokenUsage
 
 from wade.git.repo import GitError
 from wade.models.config import (
@@ -26,6 +27,7 @@ from wade.services.implementation_service import (
     ImplementResult,
     _build_graph_from_issues,
     _build_implementation_issue_context_header,
+    _capture_post_session_usage,
     _effective_copy_files,
     _parse_overwrite_paths,
     _post_implementation_lifecycle_direct,
@@ -80,7 +82,17 @@ class TestEffectiveCopyFiles:
         )
         files = _effective_copy_files(config)
         assert "KNOWLEDGE.md" in files
+        assert "KNOWLEDGE.ratings.yml" in files
         assert ".wade.yml" in files
+
+    def test_nested_knowledge_path_preserves_nested_ratings_path(self) -> None:
+        config = ProjectConfig(
+            knowledge=KnowledgeConfig(enabled=True, path="docs/LEARNINGS.md"),
+        )
+        files = _effective_copy_files(config)
+        assert "docs/LEARNINGS.md" in files
+        assert "docs/LEARNINGS.ratings.yml" in files
+        assert "LEARNINGS.ratings.yml" not in files
 
     def test_excludes_knowledge_path_when_disabled(self) -> None:
         config = ProjectConfig(
@@ -137,6 +149,30 @@ class TestBootstrapWorktree:
         )
         # Should not raise
         bootstrap_worktree(worktree, config, repo_root)
+
+    def test_copies_knowledge_ratings_sidecar_when_enabled(self, tmp_path: Path) -> None:
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        knowledge_dir = repo_root / "docs"
+        knowledge_dir.mkdir()
+        (knowledge_dir / "LEARNINGS.md").write_text("# Knowledge\n", encoding="utf-8")
+        (knowledge_dir / "LEARNINGS.ratings.yml").write_text(
+            "a1b2c3d4:\n  up: 1\n",
+            encoding="utf-8",
+        )
+
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+
+        config = ProjectConfig(
+            knowledge=KnowledgeConfig(enabled=True, path="docs/LEARNINGS.md"),
+        )
+        bootstrap_worktree(worktree, config, repo_root)
+
+        assert (worktree / "docs" / "LEARNINGS.md").read_text(encoding="utf-8") == "# Knowledge\n"
+        assert (worktree / "docs" / "LEARNINGS.ratings.yml").read_text(
+            encoding="utf-8"
+        ) == "a1b2c3d4:\n  up: 1\n"
 
     def test_propagates_allowlist_when_configured(self, tmp_path: Path) -> None:
         """Allowlist is copied to worktree when project root has Bash(wade *) configured."""
@@ -606,10 +642,8 @@ class TestImplementationStart:
 
     def test_reuses_existing_worktree(self, tmp_path: Path) -> None:
         """Idempotency: list_worktrees returns matching branch → create_worktree NOT called."""
-        from wade.git.branch import make_branch_name
-
         task = self._make_task()
-        branch_name = make_branch_name("feat", int(task.id), task.title)
+        branch_name = "feat/42-test-task"
         existing_wt = tmp_path / "existing-wt"
         existing_wt.mkdir()
 
@@ -1057,6 +1091,168 @@ class TestPullMainAfterMerge:
         mock_console.hint.assert_called_once()
 
 
+class TestCapturePostSessionUsage:
+    def test_session_only_updates_session_blocks_without_impl_usage(self, tmp_path: Path) -> None:
+        """Session-only transcript data should still be persisted to PR/issue bodies."""
+        transcript = tmp_path / ".transcript"
+        transcript.write_text("resume me\n")
+
+        adapter = MagicMock()
+        adapter.parse_transcript.return_value = TokenUsage(session_id="session-abc-123")
+
+        provider = MagicMock()
+        provider.read_task.return_value = Task(id="42", title="Test issue", body="Issue body\n")
+
+        with (
+            patch(
+                "wade.services.implementation_service.git_pr.get_pr_for_branch",
+                return_value={"number": 7},
+            ),
+            patch(
+                "wade.services.implementation_service.git_pr.get_pr_body",
+                return_value="PR body\n",
+            ),
+            patch(
+                "wade.services.implementation_service.git_pr.update_pr_body",
+                return_value=True,
+            ) as mock_update_pr,
+            patch("wade.services.implementation_service.console") as mock_console,
+        ):
+            model = _capture_post_session_usage(
+                transcript_path=transcript,
+                adapter=adapter,
+                repo_root=tmp_path,
+                branch="feat/42-test",
+                ai_tool="claude",
+                model=None,
+                issue_number="42",
+                provider=provider,
+            )
+
+        assert model is None
+        mock_console.warn.assert_not_called()
+
+        updated_pr_body = mock_update_pr.call_args.args[2]
+        assert "wade:sessions:start" in updated_pr_body
+        assert "session-abc-123" in updated_pr_body
+        assert "wade:impl-usage:start" not in updated_pr_body
+
+        provider.update_task.assert_called_once()
+        updated_issue_body = provider.update_task.call_args.kwargs["body"]
+        assert "wade:sessions:start" in updated_issue_body
+        assert "session-abc-123" in updated_issue_body
+        assert "wade:impl-usage:start" not in updated_issue_body
+
+    def test_breakdown_only_usage_still_updates_impl_usage_blocks(self, tmp_path: Path) -> None:
+        """Per-model-only usage data should still be persisted to PR and issue bodies."""
+        transcript = tmp_path / ".transcript"
+        transcript.write_text("resume me\n")
+
+        adapter = MagicMock()
+        adapter.parse_transcript.return_value = TokenUsage(
+            model_breakdown=[
+                ModelBreakdown(
+                    model="claude-sonnet-4-6",
+                    input_tokens=120,
+                    output_tokens=30,
+                    cached_tokens=0,
+                )
+            ]
+        )
+
+        provider = MagicMock()
+        provider.read_task.return_value = Task(id="42", title="Test issue", body="Issue body\n")
+
+        with (
+            patch(
+                "wade.services.implementation_service.git_pr.get_pr_for_branch",
+                return_value={"number": 7},
+            ),
+            patch(
+                "wade.services.implementation_service.git_pr.get_pr_body",
+                return_value="PR body\n",
+            ),
+            patch(
+                "wade.services.implementation_service.git_pr.update_pr_body",
+                return_value=True,
+            ) as mock_update_pr,
+            patch("wade.services.implementation_service.console") as mock_console,
+        ):
+            model = _capture_post_session_usage(
+                transcript_path=transcript,
+                adapter=adapter,
+                repo_root=tmp_path,
+                branch="feat/42-test",
+                ai_tool="claude",
+                model=None,
+                issue_number="42",
+                provider=provider,
+            )
+
+        assert model == "claude-sonnet-4-6"
+        mock_console.warn.assert_not_called()
+
+        updated_pr_body = mock_update_pr.call_args.args[2]
+        assert "wade:impl-usage:start" in updated_pr_body
+        assert "**150**" in updated_pr_body
+        assert "**0**" in updated_pr_body
+
+        provider.update_task.assert_called_once()
+        updated_issue_body = provider.update_task.call_args.kwargs["body"]
+        assert "wade:impl-usage:start" in updated_issue_body
+        assert "**150**" in updated_issue_body
+
+    def test_premium_only_usage_still_updates_impl_usage_blocks(self, tmp_path: Path) -> None:
+        """Premium-only transcript data should still be persisted to PR and issue bodies."""
+        transcript = tmp_path / ".transcript"
+        transcript.write_text("resume me\n")
+
+        adapter = MagicMock()
+        adapter.parse_transcript.return_value = TokenUsage(premium_requests=2)
+
+        provider = MagicMock()
+        provider.read_task.return_value = Task(id="42", title="Test issue", body="Issue body\n")
+
+        with (
+            patch(
+                "wade.services.implementation_service.git_pr.get_pr_for_branch",
+                return_value={"number": 7},
+            ),
+            patch(
+                "wade.services.implementation_service.git_pr.get_pr_body",
+                return_value="PR body\n",
+            ),
+            patch(
+                "wade.services.implementation_service.git_pr.update_pr_body",
+                return_value=True,
+            ) as mock_update_pr,
+            patch("wade.services.implementation_service.console") as mock_console,
+        ):
+            model = _capture_post_session_usage(
+                transcript_path=transcript,
+                adapter=adapter,
+                repo_root=tmp_path,
+                branch="feat/42-test",
+                ai_tool="claude",
+                model=None,
+                issue_number="42",
+                provider=provider,
+            )
+
+        assert model is None
+        mock_console.warn.assert_not_called()
+
+        updated_pr_body = mock_update_pr.call_args.args[2]
+        assert "wade:impl-usage:start" in updated_pr_body
+        assert "| Premium requests (est.) | **2** |" in updated_pr_body
+        assert "| Total tokens | *unavailable* |" not in updated_pr_body
+
+        provider.update_task.assert_called_once()
+        updated_issue_body = provider.update_task.call_args.kwargs["body"]
+        assert "wade:impl-usage:start" in updated_issue_body
+        assert "| Premium requests (est.) | **2** |" in updated_issue_body
+
+
 # ---------------------------------------------------------------------------
 # Tracking issue detection in start()
 # ---------------------------------------------------------------------------
@@ -1121,6 +1317,34 @@ class TestStartTrackingDetection:
 
         assert result.success is False
         mock_batch.assert_not_called()
+
+    def test_tracking_issue_backticked_refs_redirects_to_batch(self, tmp_path: Path) -> None:
+        """Checklist refs wrapped in backticks still trigger batch mode."""
+        task = Task(
+            id="173",
+            title="Tracking: #167, #169, #171",
+            body="- [ ] `#167`\n  - [ ] #169\n- [x] `#171`\n",
+        )
+        mock_provider = MagicMock()
+        mock_provider.read_task.return_value = task
+
+        with (
+            patch(
+                "wade.services.implementation_service.load_config",
+                return_value=self._make_config(),
+            ),
+            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.batch") as mock_batch,
+        ):
+            mock_prompts.confirm.return_value = True
+            mock_batch.return_value = True
+            result = start("173", project_root=tmp_path)
+
+        assert result.success is True
+        mock_batch.assert_called_once()
+        assert mock_batch.call_args.kwargs["issue_numbers"] == ["167", "169"]
 
     def test_regular_issue_not_affected(self, tmp_path: Path) -> None:
         """start() on a non-tracking issue proceeds normally (no batch redirect)."""
@@ -1234,6 +1458,29 @@ class TestImplementResult:
 class TestPostImplementationLifecyclePr:
     """Tests for _post_implementation_lifecycle_pr — merged status propagation."""
 
+    def test_non_tty_returns_not_merged_without_browser_or_merge(self, tmp_path: Path) -> None:
+        """Non-interactive runs should never auto-open or auto-merge a PR."""
+        mock_provider = MagicMock()
+        with (
+            patch(
+                "wade.git.pr.get_pr_for_branch",
+                return_value={"number": 10, "url": "http://test"},
+            ),
+            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.webbrowser.open") as mock_open,
+            patch("wade.services.implementation_service._merge_pr") as mock_merge,
+            patch("wade.services.review_service.poll_for_reviews") as mock_poll,
+        ):
+            mock_prompts.is_tty.return_value = False
+            result = _post_implementation_lifecycle_pr(
+                tmp_path, "feat/42", "42", tmp_path / "wt", mock_provider
+            )
+
+        assert result == MergeStatus.NOT_MERGED
+        mock_open.assert_not_called()
+        mock_merge.assert_not_called()
+        mock_poll.assert_not_called()
+
     def test_merge_pr_returns_merged(self, tmp_path: Path) -> None:
         """User chooses 'Merge PR' → returns MERGED."""
         mock_provider = MagicMock()
@@ -1248,6 +1495,7 @@ class TestPostImplementationLifecyclePr:
                 return_value=MergeStatus.MERGED,
             ),
         ):
+            mock_prompts.is_tty.return_value = True
             mock_prompts.confirm.return_value = False  # Don't open in browser
             mock_prompts.select.return_value = 0  # "Merge PR"
             result = _post_implementation_lifecycle_pr(
@@ -1271,12 +1519,111 @@ class TestPostImplementationLifecyclePr:
                 return_value=PollOutcome.INTERRUPTED,
             ),
         ):
+            mock_prompts.is_tty.return_value = True
             mock_prompts.confirm.return_value = False
             mock_prompts.select.return_value = 1  # "Wait for reviews"
             result = _post_implementation_lifecycle_pr(
                 tmp_path, "feat/42", "42", tmp_path / "wt", mock_provider
             )
         assert result == MergeStatus.NOT_MERGED
+
+    def test_wait_for_reviews_comments_found_preserves_review_context(self, tmp_path: Path) -> None:
+        """Polling into review mode should preserve the resolved implementation context."""
+        from wade.models.review import PollOutcome
+
+        mock_provider = MagicMock()
+        with (
+            patch(
+                "wade.git.pr.get_pr_for_branch",
+                return_value={"number": 10, "url": "http://test"},
+            ),
+            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch(
+                "wade.services.review_service.poll_for_reviews",
+                return_value=PollOutcome.COMMENTS_FOUND,
+            ),
+            patch("wade.services.review_service.start") as mock_review_start,
+        ):
+            mock_prompts.is_tty.return_value = True
+            mock_prompts.confirm.return_value = False
+            mock_prompts.select.return_value = 1  # "Wait for reviews"
+            result = _post_implementation_lifecycle_pr(
+                tmp_path,
+                "feat/42",
+                "42",
+                tmp_path / "wt",
+                mock_provider,
+                ai_tool="claude",
+                model="claude-sonnet-4-5",
+                detach=True,
+                ai_explicit=True,
+                model_explicit=True,
+                yolo=True,
+            )
+
+        assert result == MergeStatus.NOT_MERGED
+        mock_review_start.assert_called_once_with(
+            "42",
+            ai_tool="claude",
+            model="claude-sonnet-4-5",
+            project_root=tmp_path,
+            detach=True,
+            ai_explicit=True,
+            model_explicit=True,
+            yolo=True,
+            yolo_explicit=False,
+        )
+
+    def test_wait_for_reviews_quiet_timeout_preserves_review_context(self, tmp_path: Path) -> None:
+        """Quiet timeout should forward the original implementation context to review UX."""
+        from wade.models.review import PollOutcome
+
+        mock_provider = MagicMock()
+        with (
+            patch(
+                "wade.git.pr.get_pr_for_branch",
+                return_value={"number": 10, "url": "http://test"},
+            ),
+            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch(
+                "wade.services.review_service.poll_for_reviews",
+                return_value=PollOutcome.QUIET_TIMEOUT,
+            ),
+            patch("wade.services.review_service._quiet_next_steps_prompt") as mock_quiet,
+        ):
+            mock_prompts.is_tty.return_value = True
+            mock_prompts.confirm.return_value = False
+            mock_prompts.select.return_value = 1  # "Wait for reviews"
+            result = _post_implementation_lifecycle_pr(
+                tmp_path,
+                "feat/42",
+                "42",
+                tmp_path / "wt",
+                mock_provider,
+                ai_tool="claude",
+                model="claude-sonnet-4-5",
+                detach=True,
+                ai_explicit=True,
+                model_explicit=True,
+                yolo=True,
+            )
+
+        assert result == MergeStatus.NOT_MERGED
+        mock_quiet.assert_called_once_with(
+            tmp_path,
+            "feat/42",
+            "42",
+            tmp_path / "wt",
+            10,
+            mock_provider,
+            ai_tool="claude",
+            model="claude-sonnet-4-5",
+            detach=True,
+            ai_explicit=True,
+            model_explicit=True,
+            yolo=True,
+            yolo_explicit=False,
+        )
 
     def test_no_pr_found_returns_not_merged(self, tmp_path: Path) -> None:
         """No open PR → returns NOT_MERGED."""
@@ -1422,8 +1769,36 @@ class TestBatchChainFlag:
 class TestChainContinuation:
     """Tests for the --chain continuation loop in implement_cmd."""
 
-    def test_chain_continues_on_merge(self) -> None:
-        """When merged=True and user confirms, next issue in chain starts."""
+    def test_chain_continues_on_confirm(self) -> None:
+        """When user confirms, next issue in chain starts with stacked base."""
+        from typer.testing import CliRunner
+
+        from wade.cli.main import app
+
+        runner = CliRunner()
+        calls: list[dict[str, object]] = []
+
+        def fake_start(**kwargs: object) -> ImplementResult:
+            calls.append(kwargs)
+            return ImplementResult(
+                success=True, merged=False, branch_name=f"feat/{len(calls)}-branch"
+            )
+
+        with (
+            patch("wade.services.implementation_service.start", side_effect=fake_start),
+            patch("wade.ui.prompts.confirm", return_value=True),
+            patch("wade.ui.prompts.select", return_value=0),
+        ):
+            result = runner.invoke(app, ["implement", "1", "--chain", "2,3"])
+
+        assert result.exit_code == 0
+        assert len(calls) == 3  # Issues 1, 2, 3
+        # Second call should have base_branch from first call's branch_name
+        assert calls[1]["base_branch"] == "feat/1-branch"
+        assert calls[2]["base_branch"] == "feat/2-branch"
+
+    def test_chain_continues_without_merge_gate(self) -> None:
+        """Chain continues even when merged=False (stacked branches)."""
         from typer.testing import CliRunner
 
         from wade.cli.main import app
@@ -1434,7 +1809,7 @@ class TestChainContinuation:
         def fake_start(**kwargs: object) -> ImplementResult:
             nonlocal call_count
             call_count += 1
-            return ImplementResult(success=True, merged=True)
+            return ImplementResult(success=True, merged=False, branch_name=f"feat/{call_count}-x")
 
         with (
             patch("wade.services.implementation_service.start", side_effect=fake_start),
@@ -1444,30 +1819,10 @@ class TestChainContinuation:
             result = runner.invoke(app, ["implement", "1", "--chain", "2,3"])
 
         assert result.exit_code == 0
-        assert call_count == 3  # Issues 1, 2, 3
-
-    def test_chain_pauses_on_pending_review(self) -> None:
-        """When merged=False, chain pauses with a helpful hint."""
-        from typer.testing import CliRunner
-
-        from wade.cli.main import app
-
-        runner = CliRunner()
-
-        with (
-            patch(
-                "wade.services.implementation_service.start",
-                return_value=ImplementResult(success=True, merged=False),
-            ),
-            patch("wade.ui.prompts.select", return_value=0),
-        ):
-            result = runner.invoke(app, ["implement", "1", "--chain", "2,3"])
-
-        assert result.exit_code == 0
-        assert "paused" in result.output.lower() or "pending" in result.output.lower()
+        assert call_count == 3  # No merge gate — all three run
 
     def test_chain_stops_on_decline(self) -> None:
-        """When merged=True but user declines, chain stops with resume hint."""
+        """When user declines, chain stops with resume hint including --base."""
         from typer.testing import CliRunner
 
         from wade.cli.main import app
@@ -1477,7 +1832,9 @@ class TestChainContinuation:
         with (
             patch(
                 "wade.services.implementation_service.start",
-                return_value=ImplementResult(success=True, merged=True),
+                return_value=ImplementResult(
+                    success=True, merged=False, branch_name="feat/1-my-branch"
+                ),
             ),
             patch("wade.ui.prompts.confirm", return_value=False),
             patch("wade.ui.prompts.select", return_value=0),
@@ -1485,7 +1842,9 @@ class TestChainContinuation:
             result = runner.invoke(app, ["implement", "1", "--chain", "2,3"])
 
         assert result.exit_code == 0
-        assert "resume" in result.output.lower() or "wade implement" in result.output.lower()
+        output_lower = result.output.lower()
+        assert "resume" in output_lower or "wade implement" in output_lower
+        assert "--base" in result.output
 
     def test_empty_chain_runs_single_issue(self) -> None:
         """No --chain flag → runs single issue, no continuation."""

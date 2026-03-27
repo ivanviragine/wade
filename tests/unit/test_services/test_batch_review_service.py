@@ -6,12 +6,32 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from wade.models.batch import BatchIssueContext, BatchReviewContext
-from wade.models.config import ProjectConfig
+from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationResult
 from wade.services.batch_review_service import (
+    _detect_chains,
     _format_batch_context,
     extract_child_issues,
 )
+
+
+def _batch_review_config(
+    *,
+    review_batch_mode: str | None = None,
+    review_batch_enabled: bool | None = True,
+    default_tool: str | None = "claude",
+) -> ProjectConfig:
+    """Build a review-batch config without depending on repo-local .wade.yml."""
+    return ProjectConfig(
+        ai=AIConfig(
+            default_tool=default_tool,
+            review_batch=AICommandConfig(
+                mode=review_batch_mode,
+                enabled=review_batch_enabled,
+            ),
+        )
+    )
+
 
 # ---------------------------------------------------------------------------
 # extract_child_issues
@@ -46,6 +66,11 @@ class TestExtractChildIssues:
             "- [ ] #102\n\n"
             "## Notes\nSome notes here."
         )
+        result = extract_child_issues(body)
+        assert result == ["100", "101", "102"]
+
+    def test_supports_backticked_and_indented_items(self) -> None:
+        body = "## Checklist\n  - [ ] `#100`\n- [x] #101\n\t- [X] `#102`\n"
         result = extract_child_issues(body)
         assert result == ["100", "101", "102"]
 
@@ -177,11 +202,13 @@ class TestCreateIntegrationBranch:
                     issue_number="10",
                     issue_title="Feature A",
                     branch_name="feat/10-feature-a",
+                    local_ref_exists=True,
                 ),
                 BatchIssueContext(
                     issue_number="11",
                     issue_title="Feature B",
                     branch_name="feat/11-feature-b",
+                    local_ref_exists=True,
                 ),
             ],
             main_branch="main",
@@ -217,11 +244,13 @@ class TestCreateIntegrationBranch:
                     issue_number="10",
                     issue_title="Feature A",
                     branch_name="feat/10-feature-a",
+                    local_ref_exists=True,
                 ),
                 BatchIssueContext(
                     issue_number="11",
                     issue_title="Feature B",
                     branch_name="feat/11-feature-b",
+                    local_ref_exists=True,
                 ),
             ],
             main_branch="main",
@@ -284,6 +313,7 @@ class TestCreateIntegrationBranch:
                     issue_number="10",
                     issue_title="Already merged",
                     branch_name="feat/10-already-merged",
+                    local_ref_exists=True,
                     status="MERGED",
                 ),
             ],
@@ -401,19 +431,12 @@ class TestFormatBatchContext:
 
 
 class TestRunCoherenceReview:
-    @patch("wade.services.batch_review_service._check_review_enabled")
-    def test_skipped_when_disabled(
-        self,
-        mock_check: MagicMock,
-    ) -> None:
+    @patch("wade.services.batch_review_service._load_review_config")
+    def test_skipped_when_disabled(self, mock_load_review_config: MagicMock) -> None:
         from wade.services.batch_review_service import run_coherence_review
 
-        mock_check.return_value = DelegationResult(
-            success=True,
-            feedback="Review skipped.",
-            mode=DelegationMode.PROMPT,
-            skipped=True,
-        )
+        config = _batch_review_config(review_batch_enabled=False)
+        mock_load_review_config.return_value = (config, config.ai.review_batch)
 
         ctx = BatchReviewContext(tracking_issue="99")
         result = run_coherence_review(ctx)
@@ -424,24 +447,25 @@ class TestRunCoherenceReview:
     @patch("wade.services.batch_review_service.git_pr")
     @patch("wade.services.batch_review_service.git_repo")
     @patch("wade.services.batch_review_service._run_review_delegation")
-    @patch("wade.services.batch_review_service._check_review_enabled")
+    @patch("wade.services.batch_review_service._load_review_config")
     @patch("wade.services.batch_review_service.load_prompt_template")
-    def test_posts_to_pr(
+    def test_posts_headless_feedback_to_pr(
         self,
         mock_template: MagicMock,
-        mock_check: MagicMock,
+        mock_load_review_config: MagicMock,
         mock_delegation: MagicMock,
         mock_repo: MagicMock,
         mock_pr: MagicMock,
     ) -> None:
         from wade.services.batch_review_service import run_coherence_review
 
-        mock_check.return_value = None
+        config = _batch_review_config(review_batch_mode="headless", review_batch_enabled=True)
+        mock_load_review_config.return_value = (config, config.ai.review_batch)
         mock_template.return_value = "Review:\n{batch_context}"
         mock_delegation.return_value = DelegationResult(
             success=True,
             feedback="All looks good!",
-            mode=DelegationMode.PROMPT,
+            mode=DelegationMode.HEADLESS,
         )
         mock_repo.get_repo_root.return_value = Path("/repo")
 
@@ -458,6 +482,121 @@ class TestRunCoherenceReview:
         assert result.success is True
         mock_pr.comment_on_pr.assert_called_once_with(Path("/repo"), 42, "All looks good!")
 
+    @patch("wade.services.batch_review_service.git_pr")
+    @patch("wade.services.batch_review_service.git_repo")
+    @patch("wade.services.batch_review_service._run_review_delegation")
+    @patch("wade.services.batch_review_service._load_review_config")
+    @patch("wade.services.batch_review_service.load_prompt_template")
+    def test_uses_explicit_repo_root_for_config_and_commenting(
+        self,
+        mock_template: MagicMock,
+        mock_load_review_config: MagicMock,
+        mock_delegation: MagicMock,
+        mock_repo: MagicMock,
+        mock_pr: MagicMock,
+    ) -> None:
+        from wade.services.batch_review_service import run_coherence_review
+
+        config = _batch_review_config(review_batch_mode="headless", review_batch_enabled=True)
+        mock_load_review_config.return_value = (config, config.ai.review_batch)
+        mock_template.return_value = "Review:\n{batch_context}"
+        mock_delegation.return_value = DelegationResult(
+            success=True,
+            feedback="All looks good!",
+            mode=DelegationMode.HEADLESS,
+        )
+
+        ctx = BatchReviewContext(
+            issues=[
+                BatchIssueContext(issue_number="10", issue_title="Feature A", merged=True),
+            ],
+            tracking_issue="99",
+            pr_number=42,
+        )
+
+        result = run_coherence_review(ctx, repo_root=Path("/repo"))
+
+        assert result.success is True
+        mock_load_review_config.assert_called_once_with("review_batch", Path("/repo"))
+        mock_pr.comment_on_pr.assert_called_once_with(Path("/repo"), 42, "All looks good!")
+        mock_repo.get_repo_root.assert_not_called()
+
+    @patch("wade.services.batch_review_service.git_pr")
+    @patch("wade.services.batch_review_service.git_repo")
+    @patch("wade.services.batch_review_service._run_review_delegation")
+    @patch("wade.services.batch_review_service._load_review_config")
+    @patch("wade.services.batch_review_service.load_prompt_template")
+    def test_prompt_mode_does_not_post_self_review_prompt_to_pr(
+        self,
+        mock_template: MagicMock,
+        mock_load_review_config: MagicMock,
+        mock_delegation: MagicMock,
+        mock_repo: MagicMock,
+        mock_pr: MagicMock,
+    ) -> None:
+        from wade.services.batch_review_service import run_coherence_review
+
+        config = _batch_review_config(review_batch_mode="prompt", review_batch_enabled=True)
+        mock_load_review_config.return_value = (config, config.ai.review_batch)
+        mock_template.return_value = "Review:\n{batch_context}"
+        mock_delegation.return_value = DelegationResult(
+            success=True,
+            feedback="Review:\nDo this review yourself.",
+            mode=DelegationMode.PROMPT,
+        )
+        mock_repo.get_repo_root.return_value = Path("/repo")
+
+        ctx = BatchReviewContext(
+            issues=[
+                BatchIssueContext(issue_number="10", issue_title="Feature A", merged=True),
+            ],
+            tracking_issue="99",
+            pr_number=42,
+        )
+
+        result = run_coherence_review(ctx)
+
+        assert result.success is True
+        mock_pr.comment_on_pr.assert_not_called()
+
+    @patch("wade.services.batch_review_service.git_pr")
+    @patch("wade.services.batch_review_service.git_repo")
+    @patch("wade.services.batch_review_service._run_review_delegation")
+    @patch("wade.services.batch_review_service._load_review_config")
+    @patch("wade.services.batch_review_service.load_prompt_template")
+    def test_empty_headless_feedback_does_not_post_blank_comment(
+        self,
+        mock_template: MagicMock,
+        mock_load_review_config: MagicMock,
+        mock_delegation: MagicMock,
+        mock_repo: MagicMock,
+        mock_pr: MagicMock,
+    ) -> None:
+        from wade.services.batch_review_service import run_coherence_review
+
+        config = _batch_review_config(review_batch_mode="headless", review_batch_enabled=True)
+        mock_load_review_config.return_value = (config, config.ai.review_batch)
+        mock_template.return_value = "Review:\n{batch_context}"
+        mock_delegation.return_value = DelegationResult(
+            success=True,
+            feedback="   ",
+            mode=DelegationMode.HEADLESS,
+        )
+        mock_repo.get_repo_root.return_value = Path("/repo")
+
+        ctx = BatchReviewContext(
+            issues=[
+                BatchIssueContext(issue_number="10", issue_title="Feature A", merged=True),
+            ],
+            tracking_issue="99",
+            pr_number=42,
+        )
+
+        result = run_coherence_review(ctx)
+
+        assert result.success is True
+        mock_pr.comment_on_pr.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # review_batch (main entry point)
@@ -465,6 +604,28 @@ class TestRunCoherenceReview:
 
 
 class TestReviewBatch:
+    @patch("wade.services.batch_review_service.gather_batch_context")
+    @patch("wade.services.batch_review_service._load_review_config")
+    @patch("wade.services.batch_review_service.git_repo")
+    def test_disabled_skips_before_side_effects(
+        self,
+        mock_repo: MagicMock,
+        mock_load_review_config: MagicMock,
+        mock_gather: MagicMock,
+    ) -> None:
+        from wade.services.batch_review_service import review_batch
+
+        config = _batch_review_config(review_batch_enabled=False)
+        mock_repo.get_repo_root.return_value = Path("/repo")
+        mock_load_review_config.return_value = (config, config.ai.review_batch)
+
+        result = review_batch("99")
+
+        assert result.success is True
+        assert result.skipped is True
+        mock_load_review_config.assert_called_once_with("review_batch", Path("/repo"))
+        mock_gather.assert_not_called()
+
     @patch("wade.services.batch_review_service.git_repo")
     def test_not_in_repo_fails(
         self,
@@ -484,10 +645,12 @@ class TestReviewBatch:
     @patch("wade.services.batch_review_service.create_review_pr")
     @patch("wade.services.batch_review_service.create_integration_branch")
     @patch("wade.services.batch_review_service.gather_batch_context")
+    @patch("wade.services.batch_review_service._load_review_config")
     @patch("wade.services.batch_review_service.git_repo")
     def test_no_issues_skips(
         self,
         mock_repo: MagicMock,
+        mock_load_review_config: MagicMock,
         mock_gather: MagicMock,
         mock_integration: MagicMock,
         mock_pr: MagicMock,
@@ -495,7 +658,9 @@ class TestReviewBatch:
     ) -> None:
         from wade.services.batch_review_service import review_batch
 
+        config = _batch_review_config(review_batch_enabled=True)
         mock_repo.get_repo_root.return_value = Path("/repo")
+        mock_load_review_config.return_value = (config, config.ai.review_batch)
         mock_gather.return_value = BatchReviewContext(tracking_issue="99")
 
         result = review_batch("99")
@@ -503,3 +668,314 @@ class TestReviewBatch:
         assert result.success is True
         assert result.skipped is True
         mock_integration.assert_not_called()
+
+    @patch("wade.services.batch_review_service.run_coherence_review")
+    @patch("wade.services.batch_review_service.create_review_pr")
+    @patch("wade.services.batch_review_service.create_integration_branch")
+    @patch("wade.services.batch_review_service.gather_batch_context")
+    @patch("wade.services.batch_review_service._load_review_config")
+    @patch("wade.services.batch_review_service.git_repo")
+    def test_passes_repo_root_to_coherence_review(
+        self,
+        mock_repo: MagicMock,
+        mock_load_review_config: MagicMock,
+        mock_gather: MagicMock,
+        mock_integration: MagicMock,
+        mock_pr_create: MagicMock,
+        mock_review: MagicMock,
+    ) -> None:
+        from wade.services.batch_review_service import review_batch
+
+        repo_root = Path("/repo")
+        config = _batch_review_config(review_batch_enabled=True)
+        mock_repo.get_repo_root.return_value = repo_root
+        mock_repo.get_current_branch.return_value = "main"
+        mock_load_review_config.return_value = (config, config.ai.review_batch)
+        ctx = BatchReviewContext(
+            issues=[
+                BatchIssueContext(
+                    issue_number="10",
+                    issue_title="Feature A",
+                    branch_name="x",
+                    local_ref_exists=True,
+                )
+            ],
+            tracking_issue="99",
+        )
+        mock_gather.return_value = ctx
+        mock_integration.return_value = ctx
+        mock_pr_create.return_value = ctx
+        mock_review.return_value = DelegationResult(
+            success=True,
+            feedback="Looks good!",
+            mode=DelegationMode.HEADLESS,
+        )
+
+        result = review_batch("99", project_root=Path("/repo/subdir"))
+
+        assert result.success is True
+        mock_review.assert_called_once()
+        assert mock_review.call_args.kwargs["repo_root"] == repo_root
+        assert mock_review.call_args.kwargs["config"] == config
+        assert mock_review.call_args.kwargs["cmd_config"] == config.ai.review_batch
+
+
+# ---------------------------------------------------------------------------
+# _detect_chains
+# ---------------------------------------------------------------------------
+
+
+class TestDetectChains:
+    def test_simple_chain(self) -> None:
+        issues = [
+            BatchIssueContext(
+                issue_number="10",
+                issue_title="Task A",
+                branch_name="feat/10-task-a",
+                base_branch="main",
+            ),
+            BatchIssueContext(
+                issue_number="20",
+                issue_title="Task B",
+                branch_name="feat/20-task-b",
+                base_branch="feat/10-task-a",
+            ),
+            BatchIssueContext(
+                issue_number="30",
+                issue_title="Task C",
+                branch_name="feat/30-task-c",
+                base_branch="feat/20-task-b",
+            ),
+        ]
+        chains = _detect_chains(issues)
+        assert len(chains) == 1
+        assert chains[0] == ["10", "20", "30"]
+
+    def test_no_chains(self) -> None:
+        issues = [
+            BatchIssueContext(
+                issue_number="10",
+                issue_title="Task A",
+                branch_name="feat/10-task-a",
+                base_branch="main",
+            ),
+            BatchIssueContext(
+                issue_number="20",
+                issue_title="Task B",
+                branch_name="feat/20-task-b",
+                base_branch="main",
+            ),
+        ]
+        chains = _detect_chains(issues)
+        assert chains == []
+
+    def test_two_chains(self) -> None:
+        issues = [
+            BatchIssueContext(
+                issue_number="10",
+                issue_title="Chain 1 root",
+                branch_name="feat/10-root",
+                base_branch="main",
+            ),
+            BatchIssueContext(
+                issue_number="20",
+                issue_title="Chain 1 child",
+                branch_name="feat/20-child",
+                base_branch="feat/10-root",
+            ),
+            BatchIssueContext(
+                issue_number="30",
+                issue_title="Chain 2 root",
+                branch_name="feat/30-root2",
+                base_branch="main",
+            ),
+            BatchIssueContext(
+                issue_number="40",
+                issue_title="Chain 2 child",
+                branch_name="feat/40-child2",
+                base_branch="feat/30-root2",
+            ),
+        ]
+        chains = _detect_chains(issues)
+        assert len(chains) == 2
+        assert ["10", "20"] in chains
+        assert ["30", "40"] in chains
+
+    def test_fan_out_produces_separate_chains(self) -> None:
+        """Parent with two children produces two chains."""
+        issues = [
+            BatchIssueContext(
+                issue_number="10",
+                issue_title="Root",
+                branch_name="feat/10-root",
+                base_branch="main",
+            ),
+            BatchIssueContext(
+                issue_number="20",
+                issue_title="Child A",
+                branch_name="feat/20-child-a",
+                base_branch="feat/10-root",
+            ),
+            BatchIssueContext(
+                issue_number="30",
+                issue_title="Child B",
+                branch_name="feat/30-child-b",
+                base_branch="feat/10-root",
+            ),
+        ]
+        chains = _detect_chains(issues)
+        assert len(chains) == 2
+        assert ["10", "20"] in chains
+        assert ["10", "30"] in chains
+
+    def test_no_branch_name_ignored(self) -> None:
+        issues = [
+            BatchIssueContext(issue_number="10", issue_title="No branch"),
+        ]
+        chains = _detect_chains(issues)
+        assert chains == []
+
+
+# ---------------------------------------------------------------------------
+# create_integration_branch with chains
+# ---------------------------------------------------------------------------
+
+
+class TestCreateIntegrationBranchWithChains:
+    @patch("wade.services.batch_review_service.git_sync")
+    @patch("wade.services.batch_review_service.git_repo")
+    @patch("wade.services.batch_review_service.git_branch")
+    def test_skips_intermediate_chain_members(
+        self,
+        mock_branch: MagicMock,
+        mock_repo: MagicMock,
+        mock_sync: MagicMock,
+    ) -> None:
+        from wade.services.batch_review_service import create_integration_branch
+
+        mock_branch.branch_exists.return_value = False
+
+        ctx = BatchReviewContext(
+            issues=[
+                BatchIssueContext(
+                    issue_number="10",
+                    issue_title="Chain root",
+                    branch_name="feat/10-root",
+                    local_ref_exists=True,
+                    base_branch="main",
+                ),
+                BatchIssueContext(
+                    issue_number="20",
+                    issue_title="Chain middle",
+                    branch_name="feat/20-middle",
+                    local_ref_exists=True,
+                    base_branch="feat/10-root",
+                ),
+                BatchIssueContext(
+                    issue_number="30",
+                    issue_title="Chain tip",
+                    branch_name="feat/30-tip",
+                    local_ref_exists=True,
+                    base_branch="feat/20-middle",
+                ),
+            ],
+            main_branch="main",
+            tracking_issue="99",
+            chains=[["10", "20", "30"]],
+        )
+
+        result = create_integration_branch(Path("/repo"), ctx)
+
+        # Only the tip (#30) should be merged; intermediates are skipped
+        mock_repo.merge_no_edit.assert_called_once_with(Path("/repo"), "feat/30-tip")
+        assert result.issues[0].merged is True  # root: intermediate, skipped
+        assert result.issues[1].merged is True  # middle: intermediate, skipped
+        assert result.issues[2].merged is True  # tip: actually merged
+
+    @patch("wade.services.batch_review_service.git_sync")
+    @patch("wade.services.batch_review_service.git_repo")
+    @patch("wade.services.batch_review_service.git_branch")
+    def test_independent_issues_still_merged(
+        self,
+        mock_branch: MagicMock,
+        mock_repo: MagicMock,
+        mock_sync: MagicMock,
+    ) -> None:
+        from wade.services.batch_review_service import create_integration_branch
+
+        mock_branch.branch_exists.return_value = False
+
+        ctx = BatchReviewContext(
+            issues=[
+                BatchIssueContext(
+                    issue_number="10",
+                    issue_title="Chain root",
+                    branch_name="feat/10-root",
+                    local_ref_exists=True,
+                ),
+                BatchIssueContext(
+                    issue_number="20",
+                    issue_title="Chain tip",
+                    branch_name="feat/20-tip",
+                    local_ref_exists=True,
+                ),
+                BatchIssueContext(
+                    issue_number="50",
+                    issue_title="Independent",
+                    branch_name="feat/50-independent",
+                    local_ref_exists=True,
+                ),
+            ],
+            main_branch="main",
+            tracking_issue="99",
+            chains=[["10", "20"]],
+        )
+
+        create_integration_branch(Path("/repo"), ctx)
+
+        # #10 is intermediate (skipped), #20 is tip (merged), #50 is independent (merged)
+        assert mock_repo.merge_no_edit.call_count == 2
+        merge_args = [call.args[1] for call in mock_repo.merge_no_edit.call_args_list]
+        assert "feat/20-tip" in merge_args
+        assert "feat/50-independent" in merge_args
+        assert "feat/10-root" not in merge_args
+
+
+# ---------------------------------------------------------------------------
+# _format_batch_context with chains
+# ---------------------------------------------------------------------------
+
+
+class TestFormatBatchContextWithChains:
+    def test_renders_chain_structure(self) -> None:
+        ctx = BatchReviewContext(
+            issues=[
+                BatchIssueContext(
+                    issue_number="10",
+                    issue_title="Root",
+                    branch_name="feat/10-root",
+                    base_branch="main",
+                    merged=True,
+                    diff_stat=" 2 files changed",
+                ),
+                BatchIssueContext(
+                    issue_number="20",
+                    issue_title="Child",
+                    branch_name="feat/20-child",
+                    base_branch="feat/10-root",
+                    merged=True,
+                    diff_stat=" 1 file changed",
+                ),
+            ],
+            main_branch="main",
+            tracking_issue="99",
+            chains=[["10", "20"]],
+        )
+
+        output = _format_batch_context(ctx)
+
+        assert "Chain:" in output
+        assert "#10" in output
+        assert "#20" in output
+        assert "Stacked on:" in output
+        assert "Diff (incremental)" in output

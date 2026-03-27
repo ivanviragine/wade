@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import atexit
+import sys
+from pathlib import Path
 from unittest.mock import patch
 
 from typer.testing import CliRunner
 
 import wade
-from wade.cli.main import app
+from wade.cli.main import _should_print_version_banner, _should_register_update_hint, app
+from wade.models.config import KnowledgeConfig, ProjectConfig
 
 runner = CliRunner()
 
@@ -25,6 +29,33 @@ class TestVersion:
         assert wade.__version__ in result.output
 
 
+class TestVersionBannerRules:
+    def test_knowledge_get_suppresses_startup_banner(self) -> None:
+        assert not _should_print_version_banner("knowledge", ["wade", "knowledge", "get"])
+
+    def test_root_flags_do_not_break_knowledge_get_suppression(self) -> None:
+        assert not _should_print_version_banner(
+            "knowledge", ["wade", "--verbose", "knowledge", "get"]
+        )
+
+    def test_other_subcommands_keep_startup_banner(self) -> None:
+        assert _should_print_version_banner("task", ["wade", "task", "list"])
+
+
+class TestUpdateHintRules:
+    def test_knowledge_get_suppresses_update_hint(self) -> None:
+        assert not _should_register_update_hint("knowledge", ["wade", "knowledge", "get"])
+
+    def test_shell_init_suppresses_update_hint(self) -> None:
+        assert not _should_register_update_hint("shell-init", ["wade", "shell-init"])
+
+    def test_update_suppresses_update_hint(self) -> None:
+        assert not _should_register_update_hint("update", ["wade", "update"])
+
+    def test_other_subcommands_keep_update_hint(self) -> None:
+        assert _should_register_update_hint("task", ["wade", "task", "list"])
+
+
 class TestHelp:
     def test_root_help(self) -> None:
         result = runner.invoke(app, ["--help"])
@@ -32,6 +63,7 @@ class TestHelp:
         assert "wade" in result.output
         assert "task" in result.output
         assert "worktree" in result.output
+        assert "knowledge" in result.output
 
     def test_task_help(self) -> None:
         result = runner.invoke(app, ["task", "--help"])
@@ -49,6 +81,13 @@ class TestHelp:
         assert result.exit_code == 0
         assert "list" in result.output
         assert "remove" in result.output
+
+    def test_knowledge_help(self) -> None:
+        result = runner.invoke(app, ["knowledge", "--help"])
+        assert result.exit_code == 0
+        assert "add" in result.output
+        assert "get" in result.output
+        assert "rate" in result.output
 
     def test_implementation_session_help(self) -> None:
         result = runner.invoke(app, ["implementation-session", "--help"])
@@ -93,11 +132,57 @@ class TestCommandBehaviorWithoutContext:
         ):
             result = runner.invoke(app, ["plan"])
         assert result.exit_code == 1
+        assert "No AI tool specified and none detected" in result.output
 
     def test_task_create_requires_title(self) -> None:
         result = runner.invoke(app, ["task", "create"])
         assert result.exit_code == 1
-        assert "Title is required" in result.output
+
+
+class TestStartupNoiseRegistration:
+    def test_shell_init_does_not_register_update_hint(self) -> None:
+        registered: list[tuple[object, tuple[object, ...]]] = []
+
+        def fake_register(func: object, *args: object, **_kwargs: object) -> object:
+            registered.append((func, args))
+            return func
+
+        with (
+            patch.object(atexit, "register", side_effect=fake_register),
+            patch.object(sys, "argv", ["wade", "shell-init"]),
+        ):
+            result = runner.invoke(app, ["shell-init"])
+
+        assert result.exit_code == 0
+        assert not any(
+            getattr(func, "__name__", "") == "maybe_print_update_hint" for func, _ in registered
+        )
+
+    def test_knowledge_get_does_not_register_update_hint(self, tmp_path: Path) -> None:
+        registered: list[tuple[object, tuple[object, ...]]] = []
+        content = "# Project Knowledge\n\nKeep output clean.\n"
+        (tmp_path / "KNOWLEDGE.md").write_text(content, encoding="utf-8")
+        config = ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
+        )
+
+        def fake_register(func: object, *args: object, **_kwargs: object) -> object:
+            registered.append((func, args))
+            return func
+
+        with (
+            patch.object(atexit, "register", side_effect=fake_register),
+            patch.object(sys, "argv", ["wade", "knowledge", "get"]),
+            patch("wade.config.loader.load_config", return_value=config),
+        ):
+            result = runner.invoke(app, ["knowledge", "get"])
+
+        assert result.exit_code == 0
+        assert result.output == content
+        assert not any(
+            getattr(func, "__name__", "") == "maybe_print_update_hint" for func, _ in registered
+        )
 
     @patch("wade.services.task_service.create_task")
     def test_task_create_non_interactive_title(self, mock_create: patch) -> None:
@@ -154,12 +239,14 @@ class TestCommandBehaviorWithoutContext:
             app, ["task", "create", "--title", "Fix", "--body-file", "/nonexistent/file.md"]
         )
         assert result.exit_code == 1
+        assert "File not found: /nonexistent/file.md" in result.output
 
     @patch("wade.services.task_service.list_tasks", return_value=[])
     def test_task_list_exits(self, mock_list: patch) -> None:
         # task list exits 0 when no tasks are found
         result = runner.invoke(app, ["task", "list"])
         assert result.exit_code == 0
+        mock_list.assert_called_once_with(state="open", show_deps=False, json_mode=False)
 
     def test_implementation_session_done_exits_with_error(self) -> None:
         # implementation-session done exits 1 when the branch has no issue number.
@@ -172,8 +259,11 @@ class TestCommandBehaviorWithoutContext:
         assert "Cannot extract issue number" in result.output
 
     def test_implementation_session_sync_exits_with_error(self) -> None:
-        # implementation-session sync outside a worktree exits 4 (preflight failure)
-        result = runner.invoke(app, ["implementation-session", "sync"])
+        # implementation-session sync on main exits 4 (preflight failure).
+        # Mock branch name so this assertion is deterministic regardless of the
+        # caller's checkout (main checkout vs feature worktree).
+        with patch("wade.git.repo.get_current_branch", return_value="main"):
+            result = runner.invoke(app, ["implementation-session", "sync"])
         assert result.exit_code == 4
 
     @patch("wade.git.worktree.list_worktrees", return_value=[])
@@ -198,3 +288,4 @@ class TestInteractiveMenu:
         with patch("wade.ui.prompts.menu", return_value=5):
             result = runner.invoke(app, [])
             assert result.exit_code == 0
+            assert "AI-agent-driven git workflow management CLI." in result.output

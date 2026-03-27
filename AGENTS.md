@@ -31,6 +31,8 @@ Two distinct worlds interact in this codebase. Always be clear which one you are
 |--------|---------|
 | `./scripts/test.sh` | Run all tests (excludes live) |
 | `./scripts/test.sh tests/unit/` | Unit tests only |
+| `./scripts/test-e2e.sh` | Deterministic E2E contract tests (host lane) |
+| `./scripts/test-e2e-docker.sh` | Deterministic E2E contract tests in Docker (CI-equivalent) |
 | `./scripts/check.sh` | Lint + type-check (both) |
 | `./scripts/check.sh --lint` | Lint + format check only |
 | `./scripts/check.sh --types` | Type check (strict mypy) only |
@@ -115,33 +117,6 @@ When developing WADE, **only touch the left column**. Always edit `templates/ski
 Use [Conventional Commits](https://www.conventionalcommits.org/):
 `feat:` (minor), `fix:` (patch), `docs:` (patch), `refactor:` (patch),
 `test:` (patch), `chore:` (patch). Breaking changes (`feat!:`) -> major.
-
-**Before every commit — mandatory sequence (Python changes only):**
-
-> Skip this if your commit touches only non-Python files (e.g. `.md`, `.gitignore`, `templates/`).
-
-```bash
-./scripts/fmt.sh           # auto-fix formatting in-place
-./scripts/check.sh --lint  # verify lint passes — fix any remaining errors before proceeding
-```
-
-**Commit using a message file** (handles pre-commit hook retries without rewriting the message):
-
-```bash
-# Write message once
-cat > .commit-msg << 'EOF'
-feat: your message here
-EOF
-
-git add <files>
-git commit -F .commit-msg
-
-# If hooks auto-modified files, just re-add and retry — same file:
-git add <auto-modified-files>
-git commit -F .commit-msg
-```
-
-`.commit-msg` is gitignored — never committed.
 
 ## Change Checklist
 

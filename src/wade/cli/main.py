@@ -40,6 +40,43 @@ def version_callback(value: bool) -> None:
         raise typer.Exit()
 
 
+def _argv_subcommand_path(argv: list[str]) -> list[str]:
+    """Extract the invoked subcommand path after root-level options."""
+    path: list[str] = []
+    parsing_root_flags = True
+    for token in argv[1:]:
+        if parsing_root_flags and token in {"--verbose", "-v", "--version", "-V"}:
+            continue
+        if parsing_root_flags and token.startswith("-"):
+            continue
+        parsing_root_flags = False
+        if token.startswith("-"):
+            break
+        path.append(token)
+        if len(path) == 2:
+            break
+    return path
+
+
+def _is_passthrough_subcommand(argv: list[str]) -> bool:
+    """Return whether argv targets a passthrough command with exact output contracts."""
+    return _argv_subcommand_path(argv) in (["shell-init"], ["knowledge", "get"])
+
+
+def _should_print_version_banner(invoked_subcommand: str | None, argv: list[str]) -> bool:
+    """Return whether startup should print the stderr version banner."""
+    if invoked_subcommand is None:
+        return False
+    return not _is_passthrough_subcommand(argv)
+
+
+def _should_register_update_hint(invoked_subcommand: str | None, argv: list[str]) -> bool:
+    """Return whether startup should register the delayed update hint."""
+    if invoked_subcommand == "update":
+        return False
+    return not _is_passthrough_subcommand(argv)
+
+
 @app.callback()
 def main(
     ctx: typer.Context,
@@ -74,10 +111,11 @@ def main(
     log_setup.configure(verbose=verbose)
 
     # Register background update nag — fires after command output, before shell prompt.
-    atexit.register(maybe_print_update_hint, wade.__version__, ctx.invoked_subcommand)
+    if _should_register_update_hint(ctx.invoked_subcommand, sys.argv):
+        atexit.register(maybe_print_update_hint, wade.__version__, ctx.invoked_subcommand)
 
     if ctx.invoked_subcommand is not None:
-        if ctx.invoked_subcommand != "shell-init":
+        if _should_print_version_banner(ctx.invoked_subcommand, sys.argv):
             from wade.ui.console import console
 
             console.err.print(f"  [dim]wade v{wade.__version__}[/]")
@@ -212,6 +250,9 @@ def implement_cmd(
     chain: str | None = typer.Option(
         None, "--chain", hidden=True, help="Comma-separated issue IDs for sequential continuation."
     ),
+    base: str | None = typer.Option(
+        None, "--base", hidden=True, help="Base branch for stacked chain execution."
+    ),
 ) -> None:
     """Start an implementation session on an issue."""
     from wade.services.implementation_service import start as do_start
@@ -229,6 +270,10 @@ def implement_cmd(
     # Parse chain into a list of remaining issue IDs
     chain_remaining = [s.strip() for s in chain.split(",") if s.strip()] if chain else []
 
+    # For the first task in a chain, use --base if provided; subsequent tasks
+    # use the previous task's branch_name automatically.
+    current_base = base
+
     result = do_start(
         target=target,
         ai_tool=selected_ai,
@@ -240,26 +285,28 @@ def implement_cmd(
         effort=effort,
         effort_explicit=effort is not None,
         yolo=yolo or None,
+        base_branch=current_base,
     )
 
-    # Iterative chain continuation loop (merge-gated)
+    # Iterative chain continuation loop (stacked branches — no merge gate)
     while result.success and chain_remaining:
         next_issue = chain_remaining[0]
         rest = chain_remaining[1:]
+        # The next task's base is the current task's branch
+        next_base = result.branch_name
+        if next_base is None:
+            console.error("Cannot continue chain: previous step did not return a branch name.")
+            raise typer.Exit(1)
+        base_flag = f" --base {next_base}"
         chain_flag = f" --chain {','.join(rest)}" if rest else ""
-
-        if not result.merged:
-            console.empty()
-            console.info("Chain paused — PR is pending review.")
-            console.hint(f"After merge, run: wade implement {next_issue}{chain_flag}")
-            break
 
         console.empty()
         if not prompts.confirm(f"Start implementation of #{next_issue}?", default=True):
-            console.hint(f"Resume chain: wade implement {next_issue}{chain_flag}")
+            console.hint(f"Resume chain: wade implement {next_issue}{base_flag}{chain_flag}")
             break
 
         chain_remaining = rest
+        current_base = next_base
 
         result = do_start(
             target=next_issue,
@@ -272,6 +319,7 @@ def implement_cmd(
             effort=effort,
             effort_explicit=effort is not None,
             yolo=yolo or None,
+            base_branch=current_base,
         )
 
     raise typer.Exit(0 if result.success else 1)

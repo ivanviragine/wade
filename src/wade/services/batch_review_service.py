@@ -8,7 +8,6 @@ findings as PR comment.
 from __future__ import annotations
 
 import contextlib
-import re
 from pathlib import Path
 
 import structlog
@@ -20,19 +19,19 @@ from wade.git import repo as git_repo
 from wade.git import sync as git_sync
 from wade.git.repo import GitError
 from wade.models.batch import BatchIssueContext, BatchReviewContext
+from wade.models.config import AICommandConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationResult
+from wade.models.task import parse_tracking_child_ids
 from wade.providers.registry import get_provider
 from wade.services.review_delegation_service import (
     _check_review_enabled,
+    _load_review_config,
     _run_review_delegation,
 )
 from wade.skills.installer import load_prompt_template
 from wade.ui.console import console
 
 logger = structlog.get_logger()
-
-_CHECKLIST_RE = re.compile(r"- \[[ xX]\] #(\d+)")
-"""Matches ``- [ ] #42`` or ``- [x] #42`` in a tracking issue body."""
 
 
 def extract_child_issues(tracking_body: str) -> list[str]:
@@ -43,7 +42,60 @@ def extract_child_issues(tracking_body: str) -> list[str]:
     Returns:
         List of issue number strings (without ``#`` prefix).
     """
-    return _CHECKLIST_RE.findall(tracking_body)
+    return parse_tracking_child_ids(tracking_body, include_checked=True)
+
+
+def _detect_chains(issues: list[BatchIssueContext]) -> list[list[str]]:
+    """Detect dependency chains from PR base branches.
+
+    A chain exists when issue B's PR base branch matches issue A's branch name.
+    Returns a list of chains, each a list of issue numbers in order.
+    """
+    # Build lookup: branch_name -> issue_number
+    branch_to_issue: dict[str, str] = {}
+    for issue in issues:
+        if issue.branch_name:
+            branch_to_issue[issue.branch_name] = issue.issue_number
+
+    # Build parent mapping: issue_number -> parent_issue_number
+    parent_of: dict[str, str] = {}
+    for issue in issues:
+        if issue.base_branch and issue.base_branch in branch_to_issue:
+            parent_of[issue.issue_number] = branch_to_issue[issue.base_branch]
+
+    # Find chain roots (issues that are parents but not children, or children
+    # whose parent is outside the batch)
+    children = set(parent_of.keys())
+    parents = set(parent_of.values())
+    roots = parents - children
+
+    # Also add issues that have children but aren't themselves children
+    # (they start a chain even if they branch from main)
+    for issue in issues:
+        if issue.issue_number in parents and issue.issue_number not in children:
+            roots.add(issue.issue_number)
+
+    # Build chains by following parent -> child links.
+    # A parent may have multiple children (fan-out), which produces separate chains.
+    children_of: dict[str, list[str]] = {}
+    for child_num, parent_num in parent_of.items():
+        children_of.setdefault(parent_num, []).append(child_num)
+
+    chains: list[list[str]] = []
+
+    def _walk(current: str, path: list[str]) -> None:
+        kids = children_of.get(current, [])
+        if not kids:
+            if len(path) > 1:
+                chains.append(path)
+            return
+        for kid in sorted(kids):
+            _walk(kid, [*path, kid])
+
+    for root in sorted(roots):
+        _walk(root, [root])
+
+    return chains
 
 
 def gather_batch_context(
@@ -53,7 +105,8 @@ def gather_batch_context(
     """Read tracking issue and gather context for all child issues.
 
     For each child issue: reads the task, computes the expected branch name,
-    checks for an existing PR, and collects diff stats.
+    checks for an existing PR, and collects diff stats. Detects chain structure
+    from PR base branches and computes incremental diffs for chain members.
     """
     config = load_config(repo_root)
     provider = get_provider(config)
@@ -98,6 +151,11 @@ def gather_batch_context(
         pr_url = str(pr_info["url"]) if pr_info and "url" in pr_info else None
         status = str(pr_info.get("state", "")) if pr_info else ""
 
+        # Fetch PR base branch to detect chain structure
+        pr_base_branch: str | None = None
+        if pr_number:
+            pr_base_branch = git_pr.get_pr_base_branch(repo, pr_number)
+
         branch_available = git_branch.branch_exists(repo, branch_name)
         diff_stat = ""
         if branch_available:
@@ -107,18 +165,45 @@ def gather_batch_context(
             BatchIssueContext(
                 issue_number=num,
                 issue_title=task.title,
-                branch_name=branch_name if branch_available else None,
+                branch_name=branch_name,
+                local_ref_exists=branch_available,
                 pr_number=pr_number,
                 pr_url=pr_url,
                 diff_stat=diff_stat,
                 status=status,
+                base_branch=pr_base_branch,
             )
         )
+
+    # Detect chains and compute incremental diffs for chain members
+    chains = _detect_chains(issues)
+
+    # For chain members (non-root), recompute diff_stat against parent branch
+    issue_by_num = {i.issue_number: i for i in issues}
+    for chain in chains:
+        for i in range(1, len(chain)):
+            child = issue_by_num.get(chain[i])
+            parent = issue_by_num.get(chain[i - 1])
+            if (
+                child
+                and parent
+                and child.branch_name
+                and parent.branch_name
+                and child.local_ref_exists
+                and parent.local_ref_exists
+            ):
+                incremental = git_repo.diff_stat_between(
+                    repo, parent.branch_name, child.branch_name
+                )
+                child.diff_stat = incremental
+            elif child and child.base_branch and child.base_branch != main_branch:
+                child.diff_stat = ""
 
     return BatchReviewContext(
         issues=issues,
         main_branch=main_branch,
         tracking_issue=tracking_issue_id,
+        chains=chains,
     )
 
 
@@ -128,7 +213,8 @@ def create_integration_branch(
 ) -> BatchReviewContext:
     """Create an integration branch and merge all batch branches into it.
 
-    On merge conflict: aborts the merge, marks the issue as conflicting,
+    For chains, only the tip branch is merged (it already contains all predecessor
+    changes). On merge conflict: aborts the merge, marks the issue as conflicting,
     and continues with the remaining branches.
 
     Returns:
@@ -136,6 +222,14 @@ def create_integration_branch(
     """
     integration_branch = f"batch-review/{ctx.tracking_issue}"
     main_branch = ctx.main_branch
+
+    # Determine which issues are intermediate chain members (not tips).
+    # Only chain tips need to be merged — intermediates are already included.
+    chain_intermediates: set[str] = set()
+    for chain in ctx.chains:
+        # All members except the last (the tip) are intermediates
+        for member in chain[:-1]:
+            chain_intermediates.add(member)
 
     # Delete existing integration branch if present
     if git_branch.branch_exists(repo_root, integration_branch):
@@ -145,7 +239,7 @@ def create_integration_branch(
     git_repo.checkout(repo_root, integration_branch)
 
     for issue in ctx.issues:
-        if not issue.branch_name:
+        if not issue.local_ref_exists or not issue.branch_name:
             continue
 
         if issue.status == "MERGED":
@@ -153,6 +247,15 @@ def create_integration_branch(
             # PRs would conflict if we tried to re-merge the feature branch).
             issue.merged = True
             logger.info("batch_review.already_merged", issue=issue.issue_number)
+            continue
+
+        if issue.issue_number in chain_intermediates:
+            # Intermediate chain member — skip merge, the tip includes these changes
+            issue.merged = True
+            logger.info(
+                "batch_review.chain_intermediate_skipped",
+                issue=issue.issue_number,
+            )
             continue
 
         try:
@@ -236,6 +339,16 @@ def _format_batch_context(ctx: BatchReviewContext) -> str:
     lines.append(f"**Main branch:** {ctx.main_branch}")
     if ctx.integration_branch:
         lines.append(f"**Integration branch:** {ctx.integration_branch}")
+
+    # Render chain structure if detected
+    if ctx.chains:
+        lines.append("")
+        lines.append("## Dependency chains")
+        lines.append("")
+        lines.append("These issues form stacked PR chains. Review incremental changes per member:")
+        for chain in ctx.chains:
+            chain_str = " → ".join(f"#{num}" for num in chain)
+            lines.append(f"- **Chain:** {chain_str}")
     lines.append("")
 
     for issue in ctx.issues:
@@ -243,6 +356,8 @@ def _format_batch_context(ctx: BatchReviewContext) -> str:
         lines.append(f"- **Branch:** {issue.branch_name or '(no branch)'}")
         if issue.pr_url:
             lines.append(f"- **PR:** {issue.pr_url}")
+        if issue.base_branch and issue.base_branch != ctx.main_branch:
+            lines.append(f"- **Stacked on:** {issue.base_branch}")
         lines.append(f"- **Status:** {issue.status or 'unknown'}")
         if issue.merged:
             lines.append("- **Merge:** successfully merged into integration branch")
@@ -252,7 +367,12 @@ def _format_batch_context(ctx: BatchReviewContext) -> str:
             lines.append("- **Merge:** skipped (no branch available)")
 
         if issue.diff_stat:
-            lines.append(f"\n```\n{issue.diff_stat.strip()}\n```")
+            diff_label = (
+                "Diff (incremental)"
+                if (issue.base_branch and issue.base_branch != ctx.main_branch)
+                else "Diff"
+            )
+            lines.append(f"\n**{diff_label}:**\n```\n{issue.diff_stat.strip()}\n```")
         lines.append("")
 
     return "\n".join(lines)
@@ -261,6 +381,8 @@ def _format_batch_context(ctx: BatchReviewContext) -> str:
 def run_coherence_review(
     ctx: BatchReviewContext,
     *,
+    config: ProjectConfig | None = None,
+    cmd_config: AICommandConfig | None = None,
     ai_tool: str | None = None,
     model: str | None = None,
     mode: str | None = None,
@@ -268,12 +390,15 @@ def run_coherence_review(
     ai_explicit: bool = False,
     model_explicit: bool = False,
     effort_explicit: bool = False,
+    repo_root: Path | None = None,
 ) -> DelegationResult:
     """Run AI coherence review on the batch context.
 
     Posts findings as a comment on the review PR if one exists.
     """
-    skip = _check_review_enabled("review_batch")
+    if config is None or cmd_config is None:
+        config, cmd_config = _load_review_config("review_batch", repo_root)
+    skip = _check_review_enabled("review_batch", cmd_config)
     if skip is not None:
         return skip
 
@@ -284,6 +409,8 @@ def run_coherence_review(
     result = _run_review_delegation(
         prompt,
         "review_batch",
+        config=config,
+        cmd_config=cmd_config,
         ai_tool=ai_tool,
         model=model,
         mode=mode,
@@ -293,11 +420,17 @@ def run_coherence_review(
         effort_explicit=effort_explicit,
     )
 
-    # Post findings to PR as a comment
-    if result.success and not result.skipped and ctx.pr_number:
+    # Post findings only when the AI produced actual review output.
+    if (
+        result.success
+        and not result.skipped
+        and result.mode != DelegationMode.PROMPT
+        and bool(result.feedback.strip())
+        and ctx.pr_number
+    ):
         try:
-            repo_root = git_repo.get_repo_root(Path.cwd())
-            git_pr.comment_on_pr(repo_root, ctx.pr_number, result.feedback)
+            comment_repo_root = repo_root or git_repo.get_repo_root(Path.cwd())
+            git_pr.comment_on_pr(comment_repo_root, ctx.pr_number, result.feedback)
             console.info(f"Review posted as comment on PR #{ctx.pr_number}")
         except Exception:
             logger.debug("batch_review.comment_failed", exc_info=True)
@@ -337,6 +470,11 @@ def review_batch(
             mode=DelegationMode.PROMPT,
         )
 
+    config, cmd_config = _load_review_config("review_batch", repo_root)
+    skip = _check_review_enabled("review_batch", cmd_config)
+    if skip is not None:
+        return skip
+
     console.rule(f"Batch coherence review — tracking #{tracking_issue_id}")
 
     # Step 1: Gather context
@@ -352,7 +490,7 @@ def review_batch(
             skipped=True,
         )
 
-    branches_available = [i for i in ctx.issues if i.branch_name]
+    branches_available = [i for i in ctx.issues if i.local_ref_exists]
     if not branches_available:
         console.warn("No branches found for any child issue.")
         return DelegationResult(
@@ -382,6 +520,8 @@ def review_batch(
         console.step("Running AI coherence review...")
         result = run_coherence_review(
             ctx,
+            config=config,
+            cmd_config=cmd_config,
             ai_tool=ai_tool,
             model=model,
             mode=mode,
@@ -389,6 +529,7 @@ def review_batch(
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
             effort_explicit=effort_explicit,
+            repo_root=repo_root,
         )
 
         return result

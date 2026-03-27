@@ -29,6 +29,7 @@ class TestDelegationRequest:
         assert req.timeout == 120
         assert req.trusted_dirs == []
         assert req.allowed_commands == []
+        assert req.yolo is False
 
     def test_full_request(self) -> None:
         req = DelegationRequest(
@@ -42,6 +43,7 @@ class TestDelegationRequest:
             output_file=Path("/tmp/out.txt"),
             trusted_dirs=["/tmp"],
             allowed_commands=["wade *"],
+            yolo=True,
         )
         assert req.ai_tool == "claude"
         assert req.model == "claude-sonnet-4-6"
@@ -51,6 +53,7 @@ class TestDelegationRequest:
         assert req.output_file == Path("/tmp/out.txt")
         assert req.trusted_dirs == ["/tmp"]
         assert req.allowed_commands == ["wade *"]
+        assert req.yolo is True
 
 
 class TestDelegationResult:
@@ -63,6 +66,7 @@ class TestDelegationResult:
         assert result.success is True
         assert result.feedback == "Looks good!"
         assert result.exit_code == 0
+        assert result.skipped is False
 
     def test_failure_result(self) -> None:
         result = DelegationResult(
@@ -73,3 +77,14 @@ class TestDelegationResult:
         )
         assert result.success is False
         assert result.exit_code == 1
+        assert result.skipped is False
+
+    def test_skipped_result(self) -> None:
+        result = DelegationResult(
+            success=True,
+            feedback="Review skipped",
+            mode=DelegationMode.PROMPT,
+            skipped=True,
+        )
+        assert result.success is True
+        assert result.skipped is True

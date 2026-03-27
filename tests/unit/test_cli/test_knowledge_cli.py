@@ -169,6 +169,16 @@ class TestKnowledgeRateCommand:
             result = runner.invoke(app, ["knowledge", "rate", "a1b2c3d4", "up"])
         assert result.exit_code == 1
 
+    def test_exits_1_on_invalid_path(self, tmp_path: Path) -> None:
+        config = ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=True, path="../escape.md"),
+        )
+        with patch("wade.config.loader.load_config", return_value=config):
+            result = runner.invoke(app, ["knowledge", "rate", "a1b2c3d4", "up"])
+        assert result.exit_code == 1
+        assert "must be inside project root" in result.output
+
     def test_creates_ratings_file(self, tmp_path: Path) -> None:
         config = self._setup_knowledge(tmp_path)
         ratings_path = resolve_ratings_path(tmp_path / "KNOWLEDGE.md")

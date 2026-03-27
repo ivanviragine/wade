@@ -163,21 +163,28 @@ class TestPlanSummary:
     def test_build_block_with_breakdown(self) -> None:
         block = build_plan_summary_block(
             total_tokens=5000,
-            input_tokens=3400,
-            output_tokens=1100,
             model_breakdown=[
                 {"model": "claude-opus-4-6", "input": 3000, "output": 1000, "cached": 500},
                 {"model": "claude-haiku-4-5", "input": 400, "output": 100, "cached": 0},
             ],
         )
         assert "### Model Breakdown" not in block
-        # Multi-model: names appear as column headers, not row starters
-        assert "| Metric | Total | `claude-opus-4-6` | `claude-haiku-4-5` |" in block
-        assert "| Input tokens | **3,400** | **3,000** | **400** |" in block
-        assert "| Output tokens | **1,100** | **1,000** | **100** |" in block
-        # No standalone model-name rows (not a row starter)
-        assert "\n| `claude-opus-4-6`" not in block
-        assert "\n| `claude-haiku-4-5`" not in block
+        assert "| `claude-opus-4-6`" in block
+        assert "| `claude-haiku-4-5`" in block
+        assert "**3,000** in · **1,000** out · **500** cached" in block
+        assert "**400** in · **100** out · **0** cached" in block
+
+    def test_build_block_derives_totals_from_breakdown(self) -> None:
+        block = build_plan_summary_block(
+            model_breakdown=[
+                {"model": "claude-opus-4-6", "input": 3000, "output": 1000, "cached": 500},
+                {"model": "claude-haiku-4-5", "input": 400, "output": 100, "cached": 0},
+            ],
+        )
+        assert "| Total tokens | **5,000** |" in block
+        assert "| Input tokens | **3,400** |" in block
+        assert "| Output tokens | **1,100** |" in block
+        assert "| Cached tokens | **500** |" in block
 
     def test_build_block_with_premium(self) -> None:
         block = build_plan_summary_block(

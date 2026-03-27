@@ -18,6 +18,7 @@ from wade.models.task import (
     is_tracking_issue,
     parse_all_issue_refs,
     parse_complexity_from_body,
+    parse_complexity_from_labels,
     parse_tracking_child_ids,
 )
 
@@ -137,6 +138,20 @@ class TestParseComplexityFromBody:
         assert parse_complexity_from_body("## COMPLEXITY\neasy\n") == Complexity.EASY
 
 
+class TestParseComplexityFromLabels:
+    def test_parses_lowercase_label(self) -> None:
+        labels = [Label(name="complexity:complex")]
+        assert parse_complexity_from_labels(labels) == Complexity.COMPLEX
+
+    def test_parses_case_insensitive_label(self) -> None:
+        labels = [Label(name=" Complexity:VERY_COMPLEX ")]
+        assert parse_complexity_from_labels(labels) == Complexity.VERY_COMPLEX
+
+    def test_invalid_complexity_label_returns_none(self) -> None:
+        labels = [Label(name="complexity:unknown")]
+        assert parse_complexity_from_labels(labels) is None
+
+
 class TestIsTrackingIssue:
     def test_tracking_prefix(self) -> None:
         assert is_tracking_issue("Tracking: #167, #169, #171") is True
@@ -178,6 +193,18 @@ class TestParseTrackingChildIds:
         body = "- [x] #167\n- [x] #169\n"
         assert parse_tracking_child_ids(body) == []
 
+    def test_supports_backticked_refs(self) -> None:
+        body = "- [ ] `#167`\n- [x] `#169`\n- [ ] `#171`\n"
+        assert parse_tracking_child_ids(body) == ["167", "171"]
+
+    def test_supports_indented_items(self) -> None:
+        body = "  - [ ] #42\n\t- [ ] `#44`\n"
+        assert parse_tracking_child_ids(body) == ["42", "44"]
+
+    def test_include_checked_returns_all_checklist_issue_refs(self) -> None:
+        body = "- [x] #167\n- [ ] `#169`\n- [X] #171\n"
+        assert parse_tracking_child_ids(body, include_checked=True) == ["167", "169", "171"]
+
 
 class TestHasChecklistItems:
     def test_detects_unchecked_with_ref(self) -> None:
@@ -188,6 +215,9 @@ class TestHasChecklistItems:
 
     def test_detects_uppercase_checked(self) -> None:
         assert has_checklist_items("- [X] `#42`\n") is True
+
+    def test_detects_indented_items(self) -> None:
+        assert has_checklist_items("  - [ ] #42\n\t- [x] `#43`\n") is True
 
     def test_detects_unchecked_without_ref(self) -> None:
         # Checklist line has no inline #N — the ref is on a separate line.

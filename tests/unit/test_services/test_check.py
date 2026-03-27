@@ -120,6 +120,19 @@ class TestValidateConfig:
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("ai.plan.tool" in e for e in result.errors)
 
+    def test_valid_command_timeout(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nai:\n  review_plan:\n    timeout: 300\n")
+        result = validate_config(tmp_path)
+        assert result.is_valid, f"Errors: {result.errors}"
+
+    def test_invalid_command_timeout(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nai:\n  review_plan:\n    timeout: 0\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("ai.review_plan.timeout" in e for e in result.errors)
+
     def test_unsupported_top_level_key(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"
         config.write_text("version: 2\nunknown_key: value\n")
@@ -258,6 +271,21 @@ class TestValidateConfig:
         result = validate_config(tmp_path)
         assert result.is_valid, f"Errors: {result.errors}"
 
+    def test_valid_review_batch_and_yolo_keys(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text(
+            "version: 2\n"
+            "ai:\n"
+            "  yolo: true\n"
+            "  review_batch:\n"
+            "    tool: claude\n"
+            "    mode: headless\n"
+            "    enabled: false\n"
+            "    yolo: true\n"
+        )
+        result = validate_config(tmp_path)
+        assert result.is_valid, f"Errors: {result.errors}"
+
     def test_invalid_review_plan_tool(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"
         config.write_text("version: 2\nai:\n  review_plan:\n    tool: nonexistent\n")
@@ -272,6 +300,36 @@ class TestValidateConfig:
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("ai.review_implementation.tool" in e for e in result.errors)
 
+    def test_invalid_review_batch_mode(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nai:\n  review_batch:\n    mode: invalid\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("ai.review_batch.mode" in e for e in result.errors)
+
+    def test_invalid_ai_yolo_type(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nai:\n  yolo: sometimes\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("ai.yolo" in e for e in result.errors)
+
+    def test_invalid_ai_command_unknown_key(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nai:\n  review_batch:\n    unexpected: true\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("ai.review_batch.unexpected" in e for e in result.errors)
+
+    def test_rejects_duplicate_canonical_and_legacy_ai_sections(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text(
+            "version: 2\nai:\n  implement:\n    tool: claude\n  work:\n    tool: codex\n"
+        )
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("duplicates ai.implement" in e for e in result.errors)
+
     def test_output_format_invalid(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"
         config.write_text("version: 99\n")
@@ -283,7 +341,7 @@ class TestValidateConfig:
 
     def test_valid_config_with_knowledge_section(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"
-        config.write_text("version: 2\nknowledge:\n  enabled: true\n  path: KNOWLEDGE.md\n")
+        config.write_text("version: 2\nknowledge:\n  enabled: true\n  path: docs/KNOWLEDGE.md\n")
         result = validate_config(tmp_path)
         assert result.is_valid, f"Errors: {result.errors}"
 
@@ -307,12 +365,19 @@ class TestValidateConfig:
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("knowledge.path" in e and "string" in e for e in result.errors)
 
-    def test_invalid_knowledge_unsupported_key(self, tmp_path: Path) -> None:
+    def test_invalid_knowledge_path_escape(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"
-        config.write_text("version: 2\nknowledge:\n  enabled: true\n  foo: bar\n")
+        config.write_text("version: 2\nknowledge:\n  enabled: true\n  path: ../KNOWLEDGE.md\n")
         result = validate_config(tmp_path)
         assert result.exit_code == ConfigExitCode.INVALID
-        assert any("knowledge.foo" in e and "unsupported" in e for e in result.errors)
+        assert any("knowledge.path" in e and "inside the project root" in e for e in result.errors)
+
+    def test_invalid_knowledge_unsupported_key(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nknowledge:\n  enabled: true\n  mode: shared\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("knowledge.mode" in e and "unsupported" in e for e in result.errors)
 
     def test_invalid_knowledge_not_mapping(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"

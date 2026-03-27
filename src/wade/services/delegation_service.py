@@ -116,6 +116,7 @@ def _delegate_headless(request: DelegationRequest) -> DelegationResult:
         trusted_dirs=trusted,
         allowed_commands=request.allowed_commands or None,
         effort=_parse_effort(request.effort),
+        yolo=request.yolo,
     )
 
     try:
@@ -209,6 +210,7 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
                 trusted_dirs=trusted,
                 allowed_commands=request.allowed_commands or None,
                 effort=_parse_effort(request.effort),
+                yolo=request.yolo,
             )
 
             # Non-blocking tools return immediately — wait for user

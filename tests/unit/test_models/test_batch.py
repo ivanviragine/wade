@@ -17,6 +17,7 @@ class TestBatchIssueContext:
         assert ctx.merged is False
         assert ctx.conflict is False
         assert ctx.status == ""
+        assert ctx.base_branch is None
 
     def test_full(self) -> None:
         ctx = BatchIssueContext(
@@ -56,6 +57,7 @@ class TestBatchReviewContext:
         assert ctx.integration_branch is None
         assert ctx.pr_number is None
         assert ctx.pr_url is None
+        assert ctx.chains == []
 
     def test_with_issues(self) -> None:
         issues = [

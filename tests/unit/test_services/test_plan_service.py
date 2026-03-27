@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from crossby.models.ai import TokenUsage
 
 from wade.models.config import AIConfig, ProjectConfig
 from wade.models.task import PlanFile
@@ -15,6 +17,7 @@ from wade.services.plan_service import (
     _offer_to_implement,
     discover_plan_files,
     get_plan_prompt_template,
+    plan,
     plan_done,
     render_plan_prompt,
     run_ai_planning_session,
@@ -282,6 +285,63 @@ class TestPlanFile:
 
 
 class TestTranscriptWiring:
+    def test_codex_prefixes_plan_command(self, tmp_path: Path) -> None:
+        """Codex planning sessions should prefix prompt with /plan."""
+        with (
+            patch("wade.services.plan_service.render_plan_prompt", return_value="Plan this issue"),
+            patch("wade.services.plan_service.AbstractAITool.get") as mock_get,
+            patch("wade.services.plan_service.run_with_transcript") as mock_rwt,
+        ):
+            adapter = MagicMock()
+            adapter.build_launch_command.return_value = ["codex", "--sandbox", "workspace-write"]
+            mock_get.return_value = adapter
+            mock_rwt.return_value = 0
+
+            run_ai_planning_session(
+                ai_tool="codex",
+                plan_dir=str(tmp_path),
+                model=None,
+                transcript_path=tmp_path / ".transcript",
+            )
+
+            kwargs = adapter.build_launch_command.call_args.kwargs
+            assert kwargs["initial_message"].startswith("/plan ")
+            prompt_file = tmp_path / "prompt.txt"
+            assert prompt_file.is_file()
+            assert prompt_file.read_text().startswith("/plan ")
+
+    def test_unknown_ai_tool_missing_binary_returns_1(self, tmp_path: Path) -> None:
+        """Unknown tool should fail with code 1 when binary is missing."""
+        with (
+            patch(
+                "wade.services.plan_service.AbstractAITool.get", side_effect=ValueError("unknown")
+            ),
+            patch(
+                "wade.services.plan_service.subprocess.run",
+                side_effect=FileNotFoundError("not found"),
+            ),
+        ):
+            result = run_ai_planning_session(
+                ai_tool="nonexistent-tool",
+                plan_dir=str(tmp_path),
+            )
+            assert result == 1
+
+    def test_unknown_ai_tool_passes_subprocess_exit_code(self, tmp_path: Path) -> None:
+        """Unknown tool fallback should propagate subprocess exit code."""
+        completed = subprocess.CompletedProcess(args=["x"], returncode=7)
+        with (
+            patch(
+                "wade.services.plan_service.AbstractAITool.get", side_effect=ValueError("unknown")
+            ),
+            patch("wade.services.plan_service.subprocess.run", return_value=completed),
+        ):
+            result = run_ai_planning_session(
+                ai_tool="some-tool",
+                plan_dir=str(tmp_path),
+            )
+            assert result == 7
+
     def test_claude_no_output_file_flag(self, tmp_path: Path) -> None:
         """run_ai_planning_session must NOT add --output-file (flag doesn't exist in Claude CLI).
 
@@ -626,6 +686,71 @@ class TestPlanDone:
         result = plan_done(tmp_path)
         assert result.has_errors
         assert any("conventional commit" in d.message for d in result.errors)
+
+
+class TestPlanOrchestrator:
+    def test_plan_returns_false_when_no_ai_tool_available(self) -> None:
+        """plan() should fail fast with a clear error when no AI tool is resolved."""
+        with (
+            patch("wade.services.plan_service.load_config", return_value=ProjectConfig()),
+            patch("wade.services.plan_service.get_provider", return_value=MagicMock()),
+            patch("wade.services.plan_service.resolve_ai_tool", return_value=None),
+            patch("wade.services.plan_service.console") as mock_console,
+        ):
+            assert plan() is False
+            mock_console.error.assert_called_once()
+
+    def test_plan_creates_issues_from_plan_files_without_snapshot_fallback(
+        self, tmp_path: Path
+    ) -> None:
+        """Regression: plan() should rely on plan files, not snapshot-based detection."""
+        provider = MagicMock()
+        provider.snapshot_task_numbers.side_effect = AssertionError(
+            "snapshot_task_numbers should not be called"
+        )
+        adapter = MagicMock()
+        adapter.capabilities.return_value = MagicMock(blocks_until_exit=True)
+        plan_file = PlanFile(
+            path=tmp_path / "plan-1.md",
+            title="Add deterministic tests",
+            body="## Tasks\n- Add tests\n",
+            sections={"tasks": "- Add tests"},
+        )
+
+        with (
+            patch(
+                "wade.services.plan_service.load_config",
+                return_value=ProjectConfig(ai=AIConfig(default_tool="claude")),
+            ),
+            patch("wade.services.plan_service.get_provider", return_value=provider),
+            patch("wade.services.plan_service.resolve_ai_tool", return_value="claude"),
+            patch("wade.services.plan_service.resolve_model", return_value=None),
+            patch(
+                "wade.services.plan_service.confirm_ai_selection",
+                return_value=("claude", None, None, False),
+            ),
+            patch("wade.services.plan_service.ensure_task_label"),
+            patch("wade.services.plan_service.run_ai_planning_session", return_value=0),
+            patch("wade.services.plan_service.AbstractAITool.get", return_value=adapter),
+            patch(
+                "wade.services.plan_service._extract_token_usage",
+                return_value=TokenUsage(total_tokens=123),
+            ),
+            patch("wade.services.plan_service.validate_plan_files", return_value=[plan_file]),
+            patch("wade.services.plan_service._create_issues_from_plans", return_value=["101"]),
+            patch(
+                "wade.services.plan_service._finalize_issues", return_value=None
+            ) as mock_finalize,
+            patch("wade.services.plan_service._cleanup_plan_dir"),
+            patch("wade.services.plan_service.set_terminal_title"),
+            patch("wade.services.plan_service.start_title_keeper"),
+            patch("wade.services.plan_service.stop_title_keeper"),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+        ):
+            assert plan(project_root=tmp_path) is True
+
+        provider.snapshot_task_numbers.assert_not_called()
+        mock_finalize.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

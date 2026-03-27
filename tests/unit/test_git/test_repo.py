@@ -39,6 +39,7 @@ class TestStash:
         with patch("wade.git.repo._run_git") as mock_run:
             mock_run.return_value.returncode = 1
             result = stash(tmp_path)
+            mock_run.assert_called_once_with("stash", "--quiet", cwd=tmp_path, check=False)
             assert result.returncode == 1
 
 
@@ -54,6 +55,7 @@ class TestStashPop:
         with patch("wade.git.repo._run_git") as mock_run:
             mock_run.return_value.returncode = 1
             result = stash_pop(tmp_path)
+            mock_run.assert_called_once_with("stash", "pop", "--quiet", cwd=tmp_path, check=False)
             assert result.returncode == 1
 
 

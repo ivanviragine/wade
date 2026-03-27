@@ -10,7 +10,7 @@ from crossby.models.ai import EffortLevel
 from wade.config.loader import load_config
 from wade.git import repo as git_repo
 from wade.git.repo import GitError
-from wade.models.config import AICommandConfig
+from wade.models.config import AICommandConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
 from wade.services.ai_resolution import (
     confirm_ai_selection,
@@ -26,10 +26,18 @@ from wade.utils.process import run
 logger = structlog.get_logger()
 
 
-def _check_review_enabled(command: str) -> DelegationResult | None:
-    """Return a skip result if the review command is disabled, else None."""
-    config = load_config()
+def _load_review_config(
+    command: str,
+    project_root: Path | None = None,
+) -> tuple[ProjectConfig, AICommandConfig]:
+    """Load project config and extract the per-command review configuration."""
+    config = load_config(project_root)
     cmd_config: AICommandConfig = getattr(config.ai, command)
+    return config, cmd_config
+
+
+def _check_review_enabled(command: str, cmd_config: AICommandConfig) -> DelegationResult | None:
+    """Return a skip result if the review command is disabled, else None."""
     if cmd_config.enabled is False:
         config_key = f"ai.{command}.enabled"
         console.info(f"Review skipped — not enabled in .wade.yml ({config_key}).")
@@ -46,6 +54,8 @@ def _run_review_delegation(
     prompt: str,
     command: str,
     *,
+    config: ProjectConfig | None = None,
+    cmd_config: AICommandConfig | None = None,
     ai_tool: str | None = None,
     model: str | None = None,
     mode: str | None = None,
@@ -55,8 +65,8 @@ def _run_review_delegation(
     effort_explicit: bool = False,
 ) -> DelegationResult:
     """Shared pipeline: config load → mode resolve → AI resolve → confirm → delegate → display."""
-    config = load_config()
-    cmd_config: AICommandConfig = getattr(config.ai, command)
+    if config is None or cmd_config is None:
+        config, cmd_config = _load_review_config(command)
 
     try:
         default_mode = (
@@ -74,12 +84,15 @@ def _run_review_delegation(
             exit_code=1,
         )
 
-    resolved_tool = resolve_ai_tool(ai_tool, config, command=command)
-    resolved_model = resolve_model(model, config, command=command, tool=resolved_tool)
-    resolved_effort = resolve_effort(effort, config, command=command, tool=resolved_tool)
+    resolved_tool: str | None = None
+    resolved_model: str | None = None
+    resolved_effort: EffortLevel | None = None
 
-    # Confirmation prompt (skipped in prompt mode — no AI tool needed)
-    if delegation_mode != DelegationMode.PROMPT and resolved_tool:
+    if delegation_mode != DelegationMode.PROMPT:
+        resolved_tool = resolve_ai_tool(ai_tool, config, command=command)
+        resolved_model = resolve_model(model, config, command=command, tool=resolved_tool)
+        resolved_effort = resolve_effort(effort, config, command=command, tool=resolved_tool)
+
         resolved_tool, resolved_model, resolved_effort, _yolo = confirm_ai_selection(
             resolved_tool,
             resolved_model,
@@ -126,7 +139,8 @@ def review_plan(
     effort_explicit: bool = False,
 ) -> DelegationResult:
     """Review a plan file via the delegation infrastructure."""
-    skip = _check_review_enabled("review_plan")
+    config, cmd_config = _load_review_config("review_plan")
+    skip = _check_review_enabled("review_plan", cmd_config)
     if skip is not None:
         return skip
 
@@ -147,6 +161,8 @@ def review_plan(
     return _run_review_delegation(
         prompt,
         "review_plan",
+        config=config,
+        cmd_config=cmd_config,
         ai_tool=ai_tool,
         model=model,
         mode=mode,
@@ -192,7 +208,8 @@ def review_implementation(
     effort_explicit: bool = False,
 ) -> DelegationResult:
     """Review implementation changes via the delegation infrastructure."""
-    skip = _check_review_enabled("review_implementation")
+    config, cmd_config = _load_review_config("review_implementation")
+    skip = _check_review_enabled("review_implementation", cmd_config)
     if skip is not None:
         return skip
 
@@ -232,6 +249,8 @@ def review_implementation(
     return _run_review_delegation(
         prompt,
         "review_implementation",
+        config=config,
+        cmd_config=cmd_config,
         ai_tool=ai_tool,
         model=model,
         mode=mode,

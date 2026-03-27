@@ -8,7 +8,7 @@ from typing import Any
 
 import structlog
 import yaml
-from crossby.models.ai import AIToolID
+from crossby.models.ai import AIToolID, EffortLevel
 
 from wade.config.loader import (
     ConfigError,
@@ -18,6 +18,8 @@ from wade.config.loader import (
 )
 from wade.git import repo
 from wade.git.repo import GitError
+from wade.models.config import AI_COMMAND_NAMES, LEGACY_AI_COMMAND_ALIASES
+from wade.models.delegation import DelegationMode
 from wade.models.session import MergeStrategy
 from wade.providers import registered_provider_names
 
@@ -177,6 +179,12 @@ def check_worktree(cwd: Path | None = None) -> CheckResult:
 # Valid AI tool names for config validation
 _VALID_AI_TOOLS = {t.value for t in AIToolID}
 
+# Valid effort levels
+_VALID_EFFORT_LEVELS = {e.value for e in EffortLevel}
+
+# Valid delegation modes
+_VALID_DELEGATION_MODES = {m.value for m in DelegationMode}
+
 # Valid merge strategies
 _VALID_MERGE_STRATEGIES = {s.value for s in MergeStrategy}
 
@@ -301,7 +309,7 @@ def _validate_config_file(config_path: Path) -> list[str]:
         if not isinstance(knowledge, dict):
             errors.append("knowledge: must be a mapping")
         else:
-            _validate_knowledge_section(knowledge, errors)
+            _validate_knowledge_section(knowledge, config_path, errors)
 
     # Check for unsupported top-level keys
     supported_keys = {
@@ -362,34 +370,90 @@ def _validate_ai_section(ai: dict[str, Any], errors: list[str]) -> None:
             f"Use one of: {', '.join(sorted(_VALID_AI_TOOLS))}"
         )
 
+    effort = ai.get("effort")
+    if effort is not None and str(effort) not in _VALID_EFFORT_LEVELS:
+        errors.append(
+            f"ai.effort: '{effort}' is invalid. "
+            f"Use one of: {', '.join(sorted(_VALID_EFFORT_LEVELS))}"
+        )
+
+    yolo = ai.get("yolo")
+    if yolo is not None and not isinstance(yolo, bool):
+        errors.append("ai.yolo: must be true or false")
+
     # Validate per-command sections
-    for cmd in ("plan", "deps", "implement", "work", "review_plan", "review_implementation"):
+    seen_sections: dict[str, str] = {}
+    for cmd in (*AI_COMMAND_NAMES, *LEGACY_AI_COMMAND_ALIASES):
         cmd_section = ai.get(cmd)
         if cmd_section is not None:
+            canonical_cmd = LEGACY_AI_COMMAND_ALIASES.get(cmd, cmd)
+            previous_key = seen_sections.get(canonical_cmd)
+            if previous_key is not None and previous_key != cmd:
+                errors.append(
+                    f"ai.{cmd}: duplicates ai.{previous_key}. "
+                    f"Use only one section for '{canonical_cmd}'"
+                )
+                continue
+            seen_sections[canonical_cmd] = cmd
             if not isinstance(cmd_section, dict):
                 errors.append(f"ai.{cmd}: must be a mapping")
             else:
-                tool = cmd_section.get("tool")
-                if tool is not None and str(tool) and str(tool) not in _VALID_AI_TOOLS:
-                    errors.append(
-                        f"ai.{cmd}.tool: '{tool}' is invalid. "
-                        f"Use one of: {', '.join(sorted(_VALID_AI_TOOLS))}"
-                    )
+                _validate_ai_command_section(cmd, cmd_section, errors)
 
     valid_keys = {
         "default_tool",
         "default_model",
         "effort",
-        "plan",
-        "deps",
-        "implement",
-        "work",
-        "review_plan",
-        "review_implementation",
+        "yolo",
+        *AI_COMMAND_NAMES,
+        *LEGACY_AI_COMMAND_ALIASES,
     }
     for key in ai:
         if key not in valid_keys:
             errors.append(f"ai.{key}: unsupported key")
+
+
+def _validate_ai_command_section(cmd: str, cmd_section: dict[str, Any], errors: list[str]) -> None:
+    """Validate one per-command AI config subsection."""
+    valid_keys = {"tool", "model", "mode", "effort", "enabled", "yolo", "timeout"}
+
+    tool = cmd_section.get("tool")
+    if tool is not None and str(tool) and str(tool) not in _VALID_AI_TOOLS:
+        errors.append(
+            f"ai.{cmd}.tool: '{tool}' is invalid. Use one of: {', '.join(sorted(_VALID_AI_TOOLS))}"
+        )
+
+    mode = cmd_section.get("mode")
+    if mode is not None and str(mode) not in _VALID_DELEGATION_MODES:
+        errors.append(
+            f"ai.{cmd}.mode: '{mode}' is invalid. "
+            f"Use one of: {', '.join(sorted(_VALID_DELEGATION_MODES))}"
+        )
+
+    effort = cmd_section.get("effort")
+    if effort is not None and str(effort) not in _VALID_EFFORT_LEVELS:
+        errors.append(
+            f"ai.{cmd}.effort: '{effort}' is invalid. "
+            f"Use one of: {', '.join(sorted(_VALID_EFFORT_LEVELS))}"
+        )
+
+    enabled = cmd_section.get("enabled")
+    if enabled is not None and not isinstance(enabled, bool):
+        errors.append(f"ai.{cmd}.enabled: must be true or false")
+
+    yolo = cmd_section.get("yolo")
+    if yolo is not None and not isinstance(yolo, bool):
+        errors.append(f"ai.{cmd}.yolo: must be true or false")
+
+    timeout = cmd_section.get("timeout")
+    if timeout is not None and (
+        isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0
+    ):
+        errors.append(f"ai.{cmd}.timeout: must be a positive integer")
+
+    for key in cmd_section:
+        if key not in valid_keys:
+            errors.append(f"ai.{cmd}.{key}: unsupported key")
 
 
 def _validate_models_section(models: dict[str, Any], errors: list[str]) -> None:
@@ -490,15 +554,29 @@ def _validate_hooks_section(hooks: dict[str, Any], errors: list[str]) -> None:
             errors.append(f"hooks.{key}: unsupported key")
 
 
-def _validate_knowledge_section(knowledge: dict[str, Any], errors: list[str]) -> None:
-    """Validate the knowledge section."""
+def _validate_knowledge_section(
+    knowledge: dict[str, Any], config_path: Path, errors: list[str]
+) -> None:
+    """Validate the project knowledge section."""
     enabled = knowledge.get("enabled")
     if enabled is not None and not isinstance(enabled, bool):
         errors.append("knowledge.enabled: must be a boolean (true or false)")
 
-    path = knowledge.get("path")
-    if path is not None and not isinstance(path, str):
-        errors.append("knowledge.path: must be a string")
+    path_value = knowledge.get("path")
+    if path_value is not None:
+        if not isinstance(path_value, str):
+            errors.append("knowledge.path: must be a string")
+        elif not path_value.strip():
+            errors.append("knowledge.path: must be a non-empty relative path")
+        else:
+            root = config_path.parent.resolve()
+            candidate = Path(path_value)
+            if candidate.is_absolute():
+                errors.append("knowledge.path: must be inside the project root")
+            else:
+                resolved = (root / path_value).resolve()
+                if not resolved.is_relative_to(root):
+                    errors.append("knowledge.path: must be inside the project root")
 
     valid_keys = {"enabled", "path"}
     for key in knowledge:

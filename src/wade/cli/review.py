@@ -158,6 +158,7 @@ def review_pr_comments_cmd(
         ai_explicit=selected_ai is not None,
         model_explicit=model is not None,
         yolo=yolo or None,
+        yolo_explicit=yolo,
     )
     raise typer.Exit(0 if success else 1)
 

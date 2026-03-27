@@ -41,6 +41,11 @@ models:
 provider:
   name: github
 
+permissions:
+  allowed_commands:
+    - wade *
+    - ./scripts/check.sh *
+
 hooks:
   post_worktree_create: scripts/setup-worktree.sh
   copy_to_worktree:
@@ -79,6 +84,7 @@ class TestParseConfigFile:
         assert config.ai.default_model == "claude-haiku-4.5"
         assert config.ai.plan.tool == "claude"
         assert config.provider.name == "github"
+        assert config.permissions.allowed_commands == ["wade *", "./scripts/check.sh *"]
         assert config.hooks.post_worktree_create == "scripts/setup-worktree.sh"
         assert config.hooks.copy_to_worktree == [".env"]
 
@@ -184,6 +190,25 @@ class TestParseCommandConfig:
         assert config.ai.review_implementation.tool == "copilot"
         assert config.ai.review_implementation.mode == "headless"
 
+    def test_review_batch_and_yolo_parsed(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\n"
+            "ai:\n"
+            "  yolo: true\n"
+            "  review_batch:\n"
+            "    tool: claude\n"
+            "    mode: headless\n"
+            "    enabled: false\n"
+            "    yolo: true\n"
+        )
+        config = parse_config_file(config_path)
+        assert config.ai.yolo is True
+        assert config.ai.review_batch.tool == "claude"
+        assert config.ai.review_batch.mode == "headless"
+        assert config.ai.review_batch.enabled is False
+        assert config.ai.review_batch.yolo is True
+
     def test_global_effort_parsed(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text("version: 2\nai:\n  effort: medium\n")
@@ -211,6 +236,25 @@ class TestParseCommandConfig:
         config_path.write_text("version: 2\nai:\n  review_plan:\n    tool: claude\n")
         config = parse_config_file(config_path)
         assert config.ai.review_plan.enabled is None
+
+
+class TestKnowledgeConfig:
+    def test_knowledge_config_parsed(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nknowledge:\n  enabled: true\n  path: docs/KNOWLEDGE.md\n"
+        )
+
+        config = parse_config_file(config_path)
+        assert config.knowledge.enabled is True
+        assert config.knowledge.path == "docs/KNOWLEDGE.md"
+
+    def test_falsey_non_mapping_knowledge_rejected(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nknowledge: false\n")
+
+        with pytest.raises(ConfigError, match="knowledge must be a mapping"):
+            parse_config_file(config_path)
 
 
 class TestProviderSettings:
@@ -243,6 +287,20 @@ class TestProviderSettings:
         config_path.write_text("version: 2\nprovider:\n  name: github\n  settings:\n")
         config = parse_config_file(config_path)
         assert config.provider.settings == {}
+
+
+class TestPermissionsParsing:
+    def test_permissions_parsed(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\n"
+            "permissions:\n"
+            "  allowed_commands:\n"
+            "    - wade *\n"
+            "    - ./scripts/test.sh *\n"
+        )
+        config = parse_config_file(config_path)
+        assert config.permissions.allowed_commands == ["wade *", "./scripts/test.sh *"]
 
 
 class TestParseConfigFileErrors:

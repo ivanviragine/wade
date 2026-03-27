@@ -408,6 +408,7 @@ class TestRunDelegation:
 class TestAnalyzeDepsMode:
     """Tests for analyze_deps with mode parameter and prompt-mode early return."""
 
+    @patch("wade.services.deps_service.console.out.print")
     @patch("wade.services.deps_service.create_tracking_issue")
     @patch("wade.services.deps_service.apply_deps_to_issues")
     @patch("wade.services.deps_service.delegate")
@@ -428,6 +429,7 @@ class TestAnalyzeDepsMode:
         mock_delegate: MagicMock,
         mock_apply: MagicMock,
         mock_tracking: MagicMock,
+        mock_print: MagicMock,
     ) -> None:
         """Prompt mode should return empty graph and skip edge parsing."""
         from wade.models.config import AICommandConfig, AIConfig
@@ -437,14 +439,8 @@ class TestAnalyzeDepsMode:
         provider.read_task.side_effect = [
             Task(id="1", title="Auth", body="Login"),
             Task(id="2", title="DB", body="Schema"),
-            Task(id="1", title="Auth", body="Login"),
-            Task(id="2", title="DB", body="Schema"),
         ]
         mock_provider.return_value = provider
-        mock_resolve_tool.return_value = "claude"
-        mock_resolve_model.return_value = None
-        mock_resolve_effort.return_value = None
-        mock_confirm.return_value = ("claude", None, None, False)
         mock_delegate.return_value = DelegationResult(
             success=True,
             feedback="raw prompt text",
@@ -454,7 +450,11 @@ class TestAnalyzeDepsMode:
         result = analyze_deps(["1", "2"], mode="prompt")
         assert result is not None
         assert result.edges == []
-        # Edge parsing and apply should be skipped
+        mock_print.assert_called_once_with("raw prompt text")
+        mock_resolve_tool.assert_not_called()
+        mock_resolve_model.assert_not_called()
+        mock_resolve_effort.assert_not_called()
+        mock_confirm.assert_not_called()
         mock_apply.assert_not_called()
         mock_tracking.assert_not_called()
 

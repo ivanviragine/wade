@@ -21,6 +21,7 @@ from crossby.models.config import ComplexityModelMapping
 from wade.config.loader import ConfigError, ensure_yaml_mapping, find_config_file, load_config
 from wade.git import repo
 from wade.git.repo import GitError
+from wade.models.config import AI_COMMAND_NAMES, KnowledgeConfig
 from wade.skills import installer, pointer
 from wade.skills.installer import get_wade_repo_root
 from wade.ui.console import console
@@ -49,6 +50,7 @@ _GITIGNORE_LEGACY_ENTRIES: Final = [
 ]
 
 MANIFEST_FILENAME = ".wade-managed"
+_COMMAND_OVERRIDE_NAMES = tuple(cmd for cmd in AI_COMMAND_NAMES if cmd != "implement")
 
 
 def get_wade_root() -> Path:
@@ -125,6 +127,10 @@ def init(
     project_settings = _prompt_project_settings(root, non_interactive)
     hooks_setup = _prompt_hooks_setup(non_interactive)
     knowledge_setup = _prompt_knowledge_setup(non_interactive)
+    normalized_knowledge_setup = _normalize_knowledge_setup(root, knowledge_setup)
+    if normalized_knowledge_setup is None:
+        return False
+    knowledge_setup = normalized_knowledge_setup
 
     # If provider setup requested adding .env to copy_to_worktree, inject it
     if provider_setup.get("add_env_to_copy"):
@@ -162,21 +168,17 @@ def init(
     _prompt_configure_shell_integration(non_interactive)
     _prompt_configure_completions(non_interactive)
 
-    # If knowledge is enabled, add the knowledge + ratings paths to copy_to_worktree
+    # If knowledge is enabled, add the knowledge + ratings paths to copy_to_worktree.
     if knowledge_setup.get("enabled"):
-        knowledge_path: str = knowledge_setup.get("path", "KNOWLEDGE.md")
-        # Reject absolute or escaping paths
-        if not knowledge_path.startswith("/") and ".." not in knowledge_path.split("/"):
-            copy_list_k: list[str] = hooks_setup.get("copy_to_worktree", [])
-            if knowledge_path not in copy_list_k:
-                copy_list_k.append(knowledge_path)
-            # Also add the sidecar ratings file
-            from wade.services.knowledge_service import resolve_ratings_path
+        from wade.services.knowledge_service import resolve_ratings_path
 
-            ratings_path = str(resolve_ratings_path(Path(knowledge_path)))
-            if ratings_path not in copy_list_k:
-                copy_list_k.append(ratings_path)
-            hooks_setup["copy_to_worktree"] = copy_list_k
+        knowledge_path: str = knowledge_setup.get("path", "KNOWLEDGE.md")
+        copy_list_k: list[str] = hooks_setup.get("copy_to_worktree", [])
+        ratings_path = str(resolve_ratings_path(Path(knowledge_path)))
+        for managed_path in (knowledge_path, ratings_path):
+            if managed_path not in copy_list_k:
+                copy_list_k.append(managed_path)
+        hooks_setup["copy_to_worktree"] = copy_list_k
 
     # Write phase
     if not non_interactive:
@@ -217,7 +219,6 @@ def init(
 
     # Create knowledge file if enabled
     if knowledge_setup.get("enabled"):
-        from wade.models.config import KnowledgeConfig
         from wade.services.knowledge_service import ensure_knowledge_file
 
         kconfig = KnowledgeConfig(
@@ -349,7 +350,7 @@ def update(
 
     # Compute which tools are actually configured for this project
     tools_in_use: set[str] = set()
-    for cmd in [None, "plan", "deps", "implement", "review_plan", "review_implementation"]:
+    for cmd in [None, *AI_COMMAND_NAMES]:
         t = config.get_ai_tool(cmd)
         if t:
             tools_in_use.add(t)
@@ -1331,6 +1332,36 @@ def _prompt_knowledge_setup(
     return defaults
 
 
+def _normalize_knowledge_setup(
+    project_root: Path,
+    knowledge_setup: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Validate and canonicalize knowledge config before writing config."""
+    if not knowledge_setup.get("enabled"):
+        return knowledge_setup
+
+    from wade.services.knowledge_service import resolve_knowledge_path
+
+    path_value = str(knowledge_setup.get("path", "KNOWLEDGE.md")).strip() or "KNOWLEDGE.md"
+    try:
+        resolved = resolve_knowledge_path(
+            project_root,
+            KnowledgeConfig(enabled=True, path=path_value),
+        )
+    except ValueError as exc:
+        console.error_with_fix(
+            str(exc),
+            "Use a relative file path inside the repository, for example "
+            "KNOWLEDGE.md or docs/KNOWLEDGE.md",
+        )
+        return None
+
+    normalized = resolved.relative_to(project_root.resolve()).as_posix()
+    normalized_setup = dict(knowledge_setup)
+    normalized_setup["path"] = normalized
+    return normalized_setup
+
+
 def _prompt_model_mapping(
     tool: str | None,
     mapping: ComplexityModelMapping,
@@ -1516,7 +1547,8 @@ def _prompt_command_overrides(
     Returns a dict like:
         {"plan": {"tool": "claude", "model": "..."}, "deps": {},
          "review_plan": {"enabled": "true", "mode": "prompt"},
-         "review_implementation": {"enabled": "false"}}
+         "review_implementation": {"enabled": "false"},
+         "review_batch": {"enabled": "true", "mode": "interactive"}}
 
     Empty dicts for commands with no overrides.
     Review commands include an "enabled" key ("true"/"false" as strings).
@@ -1524,7 +1556,7 @@ def _prompt_command_overrides(
     from wade.ui import prompts
 
     if non_interactive:
-        return {"plan": {}, "deps": {}, "review_plan": {}, "review_implementation": {}}
+        return {cmd_name: {} for cmd_name in _COMMAND_OVERRIDE_NAMES}
 
     # Build selectable list: installed tools + "Skip (use default)"
     skip_label = "Skip (use default)"
@@ -1537,13 +1569,9 @@ def _prompt_command_overrides(
         ("deps", "AI tool", "Dependency analysis"),
         ("review_plan", "AI tool", "Plan review"),
         ("review_implementation", "AI tool", "Implementation review"),
+        ("review_batch", "AI tool", "Batch review"),
     ]
-    result: dict[str, dict[str, str]] = {
-        "plan": {},
-        "deps": {},
-        "review_plan": {},
-        "review_implementation": {},
-    }
+    result: dict[str, dict[str, str]] = {cmd_name: {} for cmd_name in _COMMAND_OVERRIDE_NAMES}
     tool_for_cmd: list[str | None] = [None] * len(cmd_triples)
 
     def _ask_tool_and_model(
@@ -1622,10 +1650,11 @@ def _prompt_command_overrides(
                 "interactive (AI session)",
             ]
             mode_values = ["prompt", "headless", "interactive"]
+            default_mode_idx = 2 if cmd_name == "review_batch" else 0
             mode_idx = prompts.select(
                 f"  Delegation mode for {section.lower()}",
                 mode_options,
-                default=0,
+                default=default_mode_idx,
             )
             mode = mode_values[mode_idx]
             result[cmd_name]["mode"] = mode
@@ -1713,9 +1742,9 @@ def _write_config(
     if implement_tool and implement_tool != ai_tool:
         ai_section["implement"] = {"tool": implement_tool}
 
-    # Write per-command overrides (plan, deps, review_plan, review_implementation)
+    # Write per-command overrides.
     if command_overrides:
-        for cmd_name in ("plan", "deps", "review_plan", "review_implementation"):
+        for cmd_name in _COMMAND_OVERRIDE_NAMES:
             overrides = command_overrides.get(cmd_name, {})
             if overrides:
                 cmd_section: dict[str, Any] = {}
@@ -1869,9 +1898,9 @@ def _patch_config(
         raw["ai"] = ai
         changed = True
 
-    # Patch command overrides (plan, deps, review_plan, review_implementation)
+    # Patch command overrides.
     if command_overrides is not None:
-        for cmd_name in ("plan", "deps", "review_plan", "review_implementation"):
+        for cmd_name in _COMMAND_OVERRIDE_NAMES:
             overrides = command_overrides.get(cmd_name, {})
             if force:
                 if overrides:

@@ -99,7 +99,10 @@ class ImplementResult(BaseModel):
         merged: Whether the code was merged into main (PR squash-merge or
             direct merge). ``False`` when the user chose "Wait for reviews",
             "Skip", or the merge outcome is unknown.
+        branch_name: The branch name created for this task. Used by chain
+            continuation to set the next task's base branch.
     """
 
     success: bool
     merged: bool = False
+    branch_name: str | None = None
