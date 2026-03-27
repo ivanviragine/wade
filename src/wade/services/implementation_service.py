@@ -2350,7 +2350,13 @@ def _merge_base(
         try:
             git_sync.abort_merge(repo_root)
         except GitError:
-            logger.debug("catchup.abort_merge_failed", exc_info=True)
+            logger.error("catchup.abort_merge_failed", exc_info=True)
+            emit(SyncEventType.ERROR, reason="abort_merge_failed")
+            return SyncResult(
+                success=False,
+                current_branch=current,
+                main_branch=resolved_main,
+            )
 
     emit(SyncEventType.CONFLICT, source=resolved_main, target=current, files="\n".join(conflicts))
     if not json_output:

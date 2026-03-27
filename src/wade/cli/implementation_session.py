@@ -50,7 +50,10 @@ def catchup(
         if not json_output:
             from wade.ui.console import console
 
-            console.info("Catchup complete — branch is up to date.")
+            if any(e.event == SyncEventType.DRY_RUN for e in result.events):
+                console.info("Catchup preview complete.")
+            else:
+                console.info("Catchup complete — branch is up to date.")
         raise typer.Exit(0)
     elif result.conflicts:
         if not json_output:
