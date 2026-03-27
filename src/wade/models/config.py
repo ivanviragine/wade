@@ -37,7 +37,7 @@ from pydantic import BaseModel, Field
 
 from wade.models.session import MergeStrategy
 
-# Re-export for consumers that import from wade.models.config
+# Re-export so existing consumers can import from wade.models.config
 __all__ = ["ComplexityModelMapping"]
 
 

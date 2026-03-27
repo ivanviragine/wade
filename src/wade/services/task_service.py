@@ -306,8 +306,6 @@ def apply_plan_token_usage(
 
     For multi-issue plans, tokens are allocated proportionally by body line count.
     """
-    allocate_tokens = _allocate_tokens
-
     if not issue_numbers:
         return
 
@@ -327,7 +325,7 @@ def apply_plan_token_usage(
     # Allocate tokens proportionally
     per_issue_tokens: list[int | None]
     if total_tokens and len(issue_numbers) > 1:
-        per_issue_tokens = list(allocate_tokens(total_tokens, line_counts))
+        per_issue_tokens = list(_allocate_tokens(total_tokens, line_counts))
     elif total_tokens:
         per_issue_tokens = [total_tokens]
     else:
