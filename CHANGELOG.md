@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.15.1] — 2026-03-28
+
+### Refactoring
+
+- move AGENTS.md pointer and AI tool settings from main to worktree-only (#234) (27007f0)
+
 ## [v0.15.0] — 2026-03-27
 
 ### Features
