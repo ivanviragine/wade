@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.15.0] — 2026-03-27
+
+### Features
+
+- add catchup step to sync worktree with base branch at implementation startup (#232) (947b5ce)
+
 ## [v0.14.0] — 2026-03-27
 
 ### Features
