@@ -212,8 +212,7 @@ What happens next:
 - After you exit, wade will continue monitoring the PR
 - Reviewers will be notified of your changes automatically
 
-Ask if they'd like any further changes — apply them and repeat Steps 1–4 if
-so. If not, suggest the user exits so wade can continue the workflow.
+Use your tool's native question component to ask: "Want any further changes, or is the session complete?" Apply them and repeat Steps 1–4 if so. Otherwise, suggest the user exits so wade can continue the workflow.
 
 ## Skills reference
 
