@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.15.3] — 2026-03-28
+
+### Bug Fixes
+
+- batch mode bugs and orchestrator improvements (#228) (0314b75)
+
 ## [v0.15.2] — 2026-03-28
 
 ### Bug Fixes
