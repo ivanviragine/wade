@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 import structlog
+from pydantic import BaseModel, Field
 
 from wade.git.repo import GitError
 
@@ -16,6 +17,19 @@ log = structlog.get_logger(__name__)
 
 class GhCliError(GitError):
     """Raised when a ``gh`` CLI command fails."""
+
+
+class PRSummary(BaseModel):
+    """Summary of a pull request as returned by ``gh pr list``."""
+
+    model_config = {"populate_by_name": True}
+
+    number: int
+    url: str
+    head_ref_name: str = Field(alias="headRefName")
+    state: str
+    is_draft: bool = Field(alias="isDraft")
+    merged_at: str | None = Field(default=None, alias="mergedAt")
 
 
 def _run_gh(
@@ -240,6 +254,50 @@ def get_pr_for_branch(repo_root: Path, branch: str) -> dict[str, str | int | boo
         }
     except (json.JSONDecodeError, KeyError):
         return None
+
+
+def list_prs(
+    repo_root: Path,
+    *,
+    state: str = "all",
+    limit: int = 100,
+) -> list[PRSummary]:
+    """List PRs for the repository.
+
+    Returns a list of PRSummary objects with number, url, headRefName, state,
+    isDraft, mergedAt fields.  Uses a single ``gh pr list`` call to avoid
+    per-branch API requests.  Returns an empty list on any failure (missing
+    ``gh`` binary, non-zero exit, or bad JSON).
+    """
+    try:
+        result = _run_gh(
+            "pr",
+            "list",
+            "--state",
+            state,
+            "--limit",
+            str(limit),
+            "--json",
+            "number,url,headRefName,state,isDraft,mergedAt",
+            cwd=repo_root,
+            check=False,
+        )
+    except GhCliError:
+        return []
+    if result.returncode != 0:
+        return []
+    try:
+        rows = json.loads(result.stdout)
+        if not isinstance(rows, list):
+            return []
+        prs: list[PRSummary] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                return []
+            prs.append(PRSummary(**row))
+        return prs
+    except (json.JSONDecodeError, TypeError, KeyError, ValueError):
+        return []
 
 
 def get_pr_body(repo_root: Path, pr_number: int) -> str | None:

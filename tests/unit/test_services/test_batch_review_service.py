@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from wade.models.batch import BatchIssueContext, BatchReviewContext
 from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationResult
@@ -186,6 +188,28 @@ class TestCreateIntegrationBranch:
     @patch("wade.services.batch_review_service.git_sync")
     @patch("wade.services.batch_review_service.git_repo")
     @patch("wade.services.batch_review_service.git_branch")
+    def test_dirty_tree_raises(
+        self,
+        mock_branch: MagicMock,
+        mock_repo: MagicMock,
+        mock_sync: MagicMock,
+    ) -> None:
+        from wade.git.repo import GitError
+        from wade.services.batch_review_service import create_integration_branch
+
+        mock_repo.is_clean.return_value = False
+        ctx = BatchReviewContext(
+            issues=[],
+            main_branch="main",
+            tracking_issue="99",
+        )
+
+        with pytest.raises(GitError, match="uncommitted changes"):
+            create_integration_branch(Path("/repo"), ctx)
+
+    @patch("wade.services.batch_review_service.git_sync")
+    @patch("wade.services.batch_review_service.git_repo")
+    @patch("wade.services.batch_review_service.git_branch")
     def test_merges_branches(
         self,
         mock_branch: MagicMock,
@@ -195,6 +219,7 @@ class TestCreateIntegrationBranch:
         from wade.services.batch_review_service import create_integration_branch
 
         mock_branch.branch_exists.return_value = False
+        mock_repo.is_clean.return_value = True
 
         ctx = BatchReviewContext(
             issues=[
@@ -237,6 +262,7 @@ class TestCreateIntegrationBranch:
         from wade.services.batch_review_service import create_integration_branch
 
         mock_branch.branch_exists.return_value = False
+        mock_repo.is_clean.return_value = True
 
         ctx = BatchReviewContext(
             issues=[
@@ -280,6 +306,7 @@ class TestCreateIntegrationBranch:
         from wade.services.batch_review_service import create_integration_branch
 
         mock_branch.branch_exists.return_value = False
+        mock_repo.is_clean.return_value = True
 
         ctx = BatchReviewContext(
             issues=[
@@ -306,6 +333,7 @@ class TestCreateIntegrationBranch:
         from wade.services.batch_review_service import create_integration_branch
 
         mock_branch.branch_exists.return_value = False
+        mock_repo.is_clean.return_value = True
 
         ctx = BatchReviewContext(
             issues=[
@@ -854,6 +882,7 @@ class TestCreateIntegrationBranchWithChains:
         from wade.services.batch_review_service import create_integration_branch
 
         mock_branch.branch_exists.return_value = False
+        mock_repo.is_clean.return_value = True
 
         ctx = BatchReviewContext(
             issues=[
@@ -904,6 +933,7 @@ class TestCreateIntegrationBranchWithChains:
         from wade.services.batch_review_service import create_integration_branch
 
         mock_branch.branch_exists.return_value = False
+        mock_repo.is_clean.return_value = True
 
         ctx = BatchReviewContext(
             issues=[
