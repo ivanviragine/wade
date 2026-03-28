@@ -288,8 +288,15 @@ def list_prs(
         return []
     try:
         rows = json.loads(result.stdout)
-        return [PRSummary(**row) for row in rows]
-    except (json.JSONDecodeError, KeyError, ValueError):
+        if not isinstance(rows, list):
+            return []
+        prs: list[PRSummary] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                return []
+            prs.append(PRSummary(**row))
+        return prs
+    except (json.JSONDecodeError, TypeError, KeyError, ValueError):
         return []
 
 

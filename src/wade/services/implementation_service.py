@@ -1655,7 +1655,11 @@ def batch(
 
     # Try to launch terminals (best-effort, non-fatal)
     console.step(f"Launching {len(batch_items)} session(s) in new terminal window")
-    launched = launch_batch_in_terminals(batch_items)
+    try:
+        launched = launch_batch_in_terminals(batch_items)
+    except Exception as exc:
+        logger.warning("batch.launch_failed", error=str(exc), exc_info=True)
+        launched = False
 
     if launched:
         console.panel(
@@ -1829,7 +1833,12 @@ def poll_batch_completion(
     import time
 
     poll_interval = max(1, poll_interval)
-    main_branch = config.project.main_branch or "main"
+    main_branch = config.project.main_branch
+    if not main_branch:
+        try:
+            main_branch = git_repo.detect_main_branch(repo_root)
+        except GitError:
+            main_branch = "main"
 
     console.info("Monitoring batch progress (Ctrl+C to exit)...")
 
