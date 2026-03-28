@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.15.2] — 2026-03-28
+
+### Bug Fixes
+
+- add inline dialog reminders at key decision points in session skills (#236) (34ca81b)
+
 ## [v0.15.1] — 2026-03-28
 
 ### Refactoring
