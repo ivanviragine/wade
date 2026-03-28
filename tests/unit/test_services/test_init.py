@@ -1172,8 +1172,6 @@ class TestDeinit:
     def test_deinit_removes_pointer(self, tmp_git_repo: Path) -> None:
         init(project_root=tmp_git_repo, non_interactive=True)
         # Simulate an older-style main-checkout pointer (pointer now lives in worktrees)
-        from wade.skills.pointer import write_pointer
-
         write_pointer(tmp_git_repo / "AGENTS.md")
         assert (tmp_git_repo / "AGENTS.md").is_file()
 
@@ -1294,7 +1292,6 @@ class TestUpdateExtended:
         # Simulate artifacts left by an older wade version
         from wade.config.claude_allowlist import configure_allowlist
         from wade.config.cursor_allowlist import configure_allowlist as configure_cursor_allowlist
-        from wade.skills.pointer import write_pointer
 
         configure_allowlist(tmp_git_repo)
         configure_cursor_allowlist(tmp_git_repo)

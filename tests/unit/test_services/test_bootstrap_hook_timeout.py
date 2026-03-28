@@ -97,9 +97,8 @@ class TestBootstrapHookTimeout:
             # so locate the hook call by timeout kwarg rather than asserting called_once.
             bootstrap_worktree(worktree_path, config, repo_root)
 
-            assert mock_run.called
-            call_kwargs = mock_run.call_args[1]
-            assert call_kwargs["timeout"] == 60
+            hook_calls = [c for c in mock_run.call_args_list if c.kwargs.get("timeout") == 60]
+            assert len(hook_calls) == 1
 
     def test_bootstrap_hook_timeout_includes_hook_path(self, tmp_path: Path) -> None:
         """RuntimeError message should include the hook path for debugging."""
