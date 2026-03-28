@@ -18,7 +18,7 @@ class TestCursorWorktreeHooks:
         assert hooks_file.is_file()
         data = json.loads(hooks_file.read_text(encoding="utf-8"))
         assert len(data["preToolUse"]) == 1
-        assert data["preToolUse"][0]["tools"] == ["Write", "Delete"]
+        assert data["preToolUse"][0]["tools"] == ["Write", "Edit", "Delete"]
 
     def test_idempotent(self, tmp_path: Path) -> None:
         guard = tmp_path / "guard.py"
@@ -54,7 +54,7 @@ class TestCursorPlanHooks:
         assert hooks_file.is_file()
         data = json.loads(hooks_file.read_text(encoding="utf-8"))
         assert len(data["preToolUse"]) == 1
-        assert data["preToolUse"][0]["tools"] == ["Write", "Delete"]
+        assert data["preToolUse"][0]["tools"] == ["Write", "Edit", "Delete"]
 
     def test_idempotent(self, tmp_path: Path) -> None:
         guard = tmp_path / "guard.py"
