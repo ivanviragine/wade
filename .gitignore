@@ -25,19 +25,12 @@ env/
 htmlcov/
 .mypy_cache/
 
-# wade runtime (per-project, gitignored)
-
-# Claude Code local settings (not covered by managed block)
+# AI tool directories (wade-managed — never committed in this repo)
+.agents/
 .claude/
-
-# AI tool session files written by worktree bootstrap (not covered by managed block)
-# These are per-session artifacts that should never be committed on main.
-.cursor/hooks.json
-.cursor/hooks/worktree_guard.py
-.cursor/cli.json
-.gemini/settings.json
-.gemini/hooks/worktree_guard.py
-.copilot/hooks/worktree_guard.py
+.copilot/
+.cursor/
+.gemini/
 .github/hooks/
 
 # OS
@@ -46,9 +39,6 @@ Thumbs.db
 
 # uv
 uv.lock
-
-# Temporary commit message file (agents use this to avoid rewriting on hook retries)
-.commit-msg
 
 # Local archive (pre-reset export)
 archive/
@@ -59,6 +49,7 @@ archive/
 .wade.yml
 PLAN.md
 PR-SUMMARY.md
+.commit-msg
 .claude/skills/address-reviews-session/
 .claude/skills/deps/
 .claude/skills/implementation-session/
@@ -78,12 +69,13 @@ PR-SUMMARY.md
 .cursor/hooks/worktree_guard.py
 .copilot/hooks/worktree_guard.py
 .gemini/hooks/worktree_guard.py
+.cursor/hooks.json
+.gemini/settings.json
+.github/hooks/hooks.json
+.claude/settings.json
+.cursor/cli.json
 .github/skills
 .agents/skills
 .gemini/skills
 .cursor/skills
 # wade:end
-.copilot/
-.cursor/
-.gemini/
-.github/hooks/
