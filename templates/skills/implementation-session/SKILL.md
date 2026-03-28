@@ -268,8 +268,7 @@ What happens next:
 - To address review feedback later: `wade review pr-comments <issue>`
 - To check PR status: `wade status <issue>`
 
-Ask if they'd like any further changes — apply them and repeat Steps 1–5 if
-so. If not, suggest the user exits so wade can continue the workflow.
+Use your tool's native question component to ask: "Want any further changes, or is the session complete?" Apply them and repeat Steps 1–5 if so. Otherwise, suggest the user exits so wade can continue the workflow.
 
 ### Working on a child issue (sub-issue of a tracking/epic)
 

@@ -76,11 +76,10 @@ Running `wade knowledge add` is allowed even though this is a planning session.
 ## Your role
 
 1. **Plan the feature** with the user — analyze, break down, propose.
-2. **Present the plan(s)** to the user and ask for confirmation before writing any files.
+2. **Present the plan(s)** to the user. Use your tool's native question component to ask: "Ready to write the plan file(s)?" before writing any files.
 3. **Write plan file(s)** to the temp directory shown in your prompt.
 4. **Review with the user** — present a summary of every plan file you wrote
-   (title, complexity, key tasks). Ask if they'd like any modifications — apply
-   them and repeat if so, or proceed to step 5 if not.
+   (title, complexity, key tasks). Use your tool's native question component to ask: "Want any modifications?" If so, apply them and repeat; otherwise proceed to step 5.
 5. **Review** — after writing plan files, run `wade review plan <plan_file>` for
    each plan file you created and check the exit code:
    - **Exit 0**: Review completed externally or skipped. If there is output, it
@@ -106,7 +105,7 @@ Running `wade knowledge add` is allowed even though this is a planning session.
      from your plan files
    - To start implementation: `wade implement <issue-number>`
 
-   Then suggest the user exits the session.
+   Then use your tool's native question component to ask: "Ready to exit?"
 
 You do **not** create issues, implement code, run `wade implement`, `wade implementation-session done`, or `wade implementation-session sync`,
 or make any code changes. Planning only.
