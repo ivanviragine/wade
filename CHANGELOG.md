@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.15.4] — 2026-03-27
+
+### Chores
+
+- add worktree_guard.py to gitignore for all AI tool dirs (639a7d1)
+
 ## [v0.15.3] — 2026-03-28
 
 ### Bug Fixes
