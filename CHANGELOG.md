@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.15.5] — 2026-03-28
+
+### Chores
+
+- audit and fix gitignore patterns for wade-managed artifacts (#237) (be2661d)
+
 ## [v0.15.4] — 2026-03-27
 
 ### Chores
