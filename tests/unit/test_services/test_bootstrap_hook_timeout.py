@@ -64,10 +64,13 @@ class TestBootstrapHookTimeout:
             # Should not raise
             bootstrap_worktree(worktree_path, config, repo_root)
 
-            # Verify subprocess.run was called with timeout=60
-            mock_run.assert_called_once()
-            call_kwargs = mock_run.call_args[1]
-            assert call_kwargs["timeout"] == 60
+            # Verify the hook was called with timeout=60.
+            # bootstrap_worktree may make additional subprocess calls (e.g. git
+            # commands for pointer artifact suppression), so we locate the hook
+            # call by its timeout kwarg rather than asserting called_once.
+            hook_calls = [c for c in mock_run.call_args_list if c.kwargs.get("timeout") == 60]
+            assert len(hook_calls) == 1
+            assert hook_calls[0].kwargs["timeout"] == 60
 
     def test_bootstrap_hook_called_process_error_is_caught(self, tmp_path: Path) -> None:
         """CalledProcessError from the hook is caught and logged as a warning, not re-raised."""
@@ -89,12 +92,13 @@ class TestBootstrapHookTimeout:
         with patch("subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.CalledProcessError(1, "cmd", stderr=b"error")
 
-            # Should not raise — CalledProcessError is suppressed and logged
+            # Should not raise — CalledProcessError is suppressed and logged.
+            # bootstrap_worktree may make additional subprocess calls before the hook,
+            # so locate the hook call by timeout kwarg rather than asserting called_once.
             bootstrap_worktree(worktree_path, config, repo_root)
 
-            mock_run.assert_called_once()
-            call_kwargs = mock_run.call_args[1]
-            assert call_kwargs["timeout"] == 60
+            hook_calls = [c for c in mock_run.call_args_list if c.kwargs.get("timeout") == 60]
+            assert len(hook_calls) == 1
 
     def test_bootstrap_hook_timeout_includes_hook_path(self, tmp_path: Path) -> None:
         """RuntimeError message should include the hook path for debugging."""

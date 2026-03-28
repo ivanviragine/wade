@@ -47,10 +47,14 @@ class TestInitCommand:
         assert config["models"]["claude"]["medium"] != config["models"]["claude"]["easy"]
         assert "permissions" not in config
         assert (repo / ".wade-managed").is_file()
-        assert (repo / "AGENTS.md").is_file()
-        assert (repo / "CLAUDE.md").is_symlink()
+        # AGENTS.md pointer is no longer written to main during init — only to worktrees
+        assert not (repo / "AGENTS.md").is_file()
+        assert not (repo / "CLAUDE.md").exists()
 
         gitignore = (repo / ".gitignore").read_text(encoding="utf-8")
         assert "# wade:start" in gitignore
         assert "# wade:end" in gitignore
         assert ".wade-managed" in gitignore
+        # Settings files are gitignored (written to worktrees only)
+        assert ".claude/settings.json" in gitignore
+        assert ".cursor/cli.json" in gitignore

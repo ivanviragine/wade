@@ -122,6 +122,13 @@ WORKTREE_GUARD_HOOK_FILES = [
     ".gemini/hooks/worktree_guard.py",
 ]
 
+# Wade-managed hook config files written alongside hook scripts — never committed.
+HOOK_CONFIG_FILES = [
+    ".cursor/hooks.json",
+    ".gemini/settings.json",
+    ".github/hooks/hooks.json",
+]
+
 # --- Command-to-skill mapping: which skills each session type needs ---
 
 PLAN_SKILLS: list[str] = ["plan-session", "task", "deps"]
@@ -136,6 +143,8 @@ def get_managed_gitignore_patterns(project_root: Path) -> list[str]:
     Returns patterns that should be added to the managed gitignore block:
     - ``.claude/skills/<name>/`` for every name in ``MANAGED_SKILL_NAMES``
     - Each plan guard hook file in ``PLAN_GUARD_HOOK_FILES``
+    - ``.claude/settings.json`` and ``.cursor/cli.json`` (written per-session
+      to worktrees only — never committed on main)
     - Each ``CROSS_TOOL_DIRS`` entry, but only if it is a symlink or does not
       exist yet (real user directories are left alone).
     """
@@ -150,6 +159,13 @@ def get_managed_gitignore_patterns(project_root: Path) -> list[str]:
 
     for hook_file in WORKTREE_GUARD_HOOK_FILES:
         patterns.append(hook_file)
+
+    for config_file in HOOK_CONFIG_FILES:
+        patterns.append(config_file)
+
+    # AI tool settings written to worktrees only — ignore on main
+    patterns.append(".claude/settings.json")
+    patterns.append(".cursor/cli.json")
 
     # Cross-tool symlink dirs — only if symlink or absent
     for cross_dir in CROSS_TOOL_DIRS:

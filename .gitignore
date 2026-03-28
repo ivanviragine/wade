@@ -30,6 +30,16 @@ htmlcov/
 # Claude Code local settings (not covered by managed block)
 .claude/
 
+# AI tool session files written by worktree bootstrap (not covered by managed block)
+# These are per-session artifacts that should never be committed on main.
+.cursor/hooks.json
+.cursor/hooks/worktree_guard.py
+.cursor/cli.json
+.gemini/settings.json
+.gemini/hooks/worktree_guard.py
+.copilot/hooks/worktree_guard.py
+.github/hooks/
+
 # OS
 .DS_Store
 Thumbs.db

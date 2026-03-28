@@ -84,8 +84,7 @@ def init(
     4. Generate .wade.yml config
     5. Install skill files
     6. Update .gitignore
-    7. Write AGENTS.md pointer
-    8. Write .wade-managed manifest
+    7. Write .wade-managed manifest
 
     Returns True on success.
     """
@@ -163,9 +162,7 @@ def init(
             tools_in_use.add(cmd_cfg["tool"])
 
     if "claude" in tools_in_use:
-        _prompt_claude_code_settings(root, non_interactive)
-    if "cursor" in tools_in_use:
-        _prompt_cursor_settings(root, non_interactive)
+        _prompt_claude_code_settings(non_interactive)
     if "gemini" in tools_in_use:
         _prompt_configure_gemini_experimental(non_interactive)
     _prompt_configure_shell_integration(non_interactive)
@@ -239,12 +236,7 @@ def init(
     # 5. Update .gitignore
     _ensure_gitignore(root)
 
-    # 6. AGENTS.md pointer
-    pointer_path = pointer.ensure_pointer(root)
-    if pointer_path:
-        console.success(f"Workflow pointer in {Path(pointer_path).name}")
-
-    # 7. Write manifest (no skills on main — skills are installed per-session in worktrees)
+    # 6. Write manifest (no skills on main — skills are installed per-session in worktrees)
     _write_manifest(root, [])
     console.success("Wrote .wade-managed manifest")
 
@@ -288,16 +280,15 @@ def update(
     5.  Run config migration pipeline
     6.  Reload config + backfill probed models
     7.  Refresh skill files (force overwrite)
-    8.  Configure AI tool allowlists (Claude, Cursor)
-    9.  Configure Gemini experimental (if applicable)
-    10. Refresh .gitignore + AGENTS.md pointer
+    8.  Configure Gemini experimental (if applicable)
+    9.  Refresh .gitignore
+    10. Clean up AI tool artifacts from main checkout (migration)
     11. Rebuild manifest with version
 
     Never overwrites .wade.yml user values — only patches missing keys
     and refreshes skill files.
     """
     from wade import __version__
-    from wade.config.claude_allowlist import configure_allowlist
     from wade.config.migrations import run_all_migrations
 
     cwd = project_root or Path.cwd()
@@ -357,22 +348,17 @@ def update(
         if t:
             tools_in_use.add(t)
 
-    # Step 8-9: Silently configure tool-specific settings (idempotent)
-    if "claude" in tools_in_use:
-        extra = config.permissions.allowed_commands
-        configure_allowlist(root, extra_patterns=extra)
-    if "cursor" in tools_in_use:
-        from wade.config.cursor_allowlist import (
-            configure_allowlist as configure_cursor_allowlist,
-        )
-
-        configure_cursor_allowlist(root, extra_patterns=config.permissions.allowed_commands)
+    # Step 8: Configure Gemini experimental (if applicable)
     if "gemini" in tools_in_use:
         _configure_gemini_experimental()
 
-    # Step 10: Refresh .gitignore + AGENTS.md pointer
+    # Step 9: Refresh .gitignore
     _ensure_gitignore(root)
-    pointer.ensure_pointer(root)
+
+    # Step 10: Clean up AI tool artifacts from main checkout (migration)
+    removed_artifacts = _migrate_ai_artifacts_off_main(root)
+    if removed_artifacts:
+        console.info(f"Removed {len(removed_artifacts)} AI tool artifact(s) from main checkout")
 
     # Step 11: Rebuild manifest with version (no skills on main)
     _write_manifest(root, [])
@@ -425,6 +411,88 @@ def _migrate_skills_off_main(project_root: Path) -> list[str]:
     ]:
         if parent.is_dir() and not any(parent.iterdir()):
             parent.rmdir()
+
+    return removed
+
+
+def _migrate_ai_artifacts_off_main(project_root: Path) -> list[str]:
+    """Remove AI-tool artifacts written to main by older wade versions.
+
+    These files are now written only to worktrees during bootstrap.  This
+    cleans them up from the main checkout so they no longer appear as diffs.
+
+    Removed (when only wade-managed content is present):
+    - CLAUDE.md symlink (if wade-created, pointing to AGENTS.md)
+    - AGENTS.md pointer block
+    - .claude/settings.json (project-level allowlist only)
+    - .cursor/cli.json (project-level allowlist only)
+
+    Returns list of removed paths (relative to project root).
+    """
+    import json as _json
+
+    from wade.config.claude_allowlist import WADE_ALLOW_PATTERN as _CLAUDE_WADE_PATTERN
+    from wade.config.cursor_allowlist import WADE_ALLOW_PATTERN as _CURSOR_WADE_PATTERN
+
+    removed: list[str] = []
+
+    # Remove CLAUDE.md symlink only if wade created it (points to AGENTS.md)
+    claude_md = project_root / "CLAUDE.md"
+    if claude_md.is_symlink():
+        link_target = claude_md.resolve()
+        if link_target == (project_root / "AGENTS.md").resolve():
+            claude_md.unlink()
+            removed.append("CLAUDE.md")
+
+    # Remove pointer block from AGENTS.md (or CLAUDE.md if it exists as a file)
+    for name in ("AGENTS.md", "CLAUDE.md"):
+        target = project_root / name
+        if target.is_file() and pointer.remove_pointer(target):
+            removed.append(name)
+
+    # Remove .claude/settings.json only when it contains exclusively wade-managed
+    # content.  Require the exact top-level key set {"permissions"} (not a subset)
+    # and verify the wade allow-pattern is present so user-only allowlists and
+    # files extended with hook keys are never removed.
+    claude_settings = project_root / ".claude" / "settings.json"
+    if claude_settings.is_file():
+        try:
+            raw = _json.loads(claude_settings.read_text(encoding="utf-8"))
+            allow = raw.get("permissions", {}).get("allow", []) if isinstance(raw, dict) else []
+            if (
+                isinstance(raw, dict)
+                and set(raw.keys()) == {"permissions"}
+                and isinstance(allow, list)
+                and _CLAUDE_WADE_PATTERN in allow
+            ):
+                claude_settings.unlink()
+                removed.append(".claude/settings.json")
+                claude_dir = project_root / ".claude"
+                if claude_dir.is_dir() and not any(claude_dir.iterdir()):
+                    claude_dir.rmdir()
+        except (_json.JSONDecodeError, OSError):
+            pass
+
+    # Remove .cursor/cli.json only when it contains exclusively wade-managed
+    # content (same exact-match logic as for .claude/settings.json above).
+    cursor_cli = project_root / ".cursor" / "cli.json"
+    if cursor_cli.is_file():
+        try:
+            raw = _json.loads(cursor_cli.read_text(encoding="utf-8"))
+            allow = raw.get("permissions", {}).get("allow", []) if isinstance(raw, dict) else []
+            if (
+                isinstance(raw, dict)
+                and set(raw.keys()) == {"permissions"}
+                and isinstance(allow, list)
+                and _CURSOR_WADE_PATTERN in allow
+            ):
+                cursor_cli.unlink()
+                removed.append(".cursor/cli.json")
+                cursor_dir = project_root / ".cursor"
+                if cursor_dir.is_dir() and not any(cursor_dir.iterdir()):
+                    cursor_dir.rmdir()
+        except (_json.JSONDecodeError, OSError):
+            pass
 
     return removed
 
@@ -485,7 +553,9 @@ def _read_manifest_version(root: Path) -> str | None:
 def deinit(project_root: Path | None = None, force: bool = False) -> bool:
     """Remove WADE from a project.
 
-    Removes: skills, config, manifest, .gitignore entries, AGENTS.md pointer.
+    Removes: skills, config, manifest, .gitignore entries, AGENTS.md pointer
+    (if present — pointer may not exist on main since wade now only injects
+    it into worktrees).
     """
     cwd = project_root or Path.cwd()
 
@@ -508,7 +578,9 @@ def deinit(project_root: Path | None = None, force: bool = False) -> bool:
     removed = installer.remove_skills(root)
     console.info(f"Removed {len(removed)} skill entries")
 
-    # Remove AGENTS.md pointer
+    # Remove AGENTS.md pointer and wade-created CLAUDE.md symlink.
+    # Also cleans up .claude/settings.json and .cursor/cli.json (handles repos
+    # that reach deinit without ever running wade update).
     for name in ("AGENTS.md", "CLAUDE.md"):
         target = root / name
         if target.is_symlink() and name == "CLAUDE.md":
@@ -519,6 +591,11 @@ def deinit(project_root: Path | None = None, force: bool = False) -> bool:
                 console.info("Removed CLAUDE.md symlink")
         elif target.is_file() and pointer.remove_pointer(target):
             console.info(f"Removed workflow pointer from {name}")
+
+    removed_ai = _migrate_ai_artifacts_off_main(root)
+    for artifact in removed_ai:
+        if artifact not in ("AGENTS.md", "CLAUDE.md"):
+            console.info(f"Removed {artifact}")
 
     # Remove config
     config_path = root / ".wade.yml"
@@ -616,47 +693,6 @@ def _prompt_configure_gemini_experimental(non_interactive: bool) -> None:
     ):
         _configure_gemini_experimental()
         console.success("Enabled experimental.plan in ~/.gemini/settings.json")
-
-
-def _prompt_configure_allowlist(root: Path, non_interactive: bool) -> None:
-    """Prompt user to configure the Claude Code allowlist, skipping if already set."""
-    from wade.config.claude_allowlist import configure_allowlist, is_allowlist_configured
-    from wade.ui import prompts
-
-    if is_allowlist_configured(root):
-        return
-
-    if non_interactive:
-        return
-
-    if prompts.confirm(
-        "Auto-approve wade commands in Claude Code?"
-        " (skips Bash approval in implementation sessions)",
-        default=True,
-    ):
-        configure_allowlist(root, extra_patterns=["wade:*"])
-        console.success("Added Bash([step]wade:*[/]) to .claude/settings.json allowlist")
-
-
-def _prompt_cursor_settings(root: Path, non_interactive: bool) -> None:
-    """Prompt for Cursor CLI-specific settings: command allowlist."""
-    from wade.config.cursor_allowlist import configure_allowlist, is_allowlist_configured
-    from wade.ui import prompts
-
-    if is_allowlist_configured(root):
-        return
-
-    if non_interactive:
-        return
-
-    console.rule("Cursor CLI")
-    if prompts.confirm(
-        "Auto-approve wade commands in Cursor CLI?"
-        " (skips Shell approval in implementation sessions)",
-        default=True,
-    ):
-        configure_allowlist(root, extra_patterns=["wade *"])
-        console.success("Added Shell([step]wade[/] *) to .cursor/cli.json allowlist")
 
 
 def _configure_statusline() -> None:
@@ -842,28 +878,23 @@ def _prompt_configure_completions(non_interactive: bool) -> None:
             console.warn("Could not install CLI autocompletion")
 
 
-def _prompt_claude_code_settings(root: Path, non_interactive: bool) -> None:
-    """Prompt for Claude Code-specific settings: allowlist and statusline."""
+def _prompt_claude_code_settings(non_interactive: bool) -> None:
+    """Prompt for Claude Code-specific settings: statusline."""
     import contextlib
     import json
 
-    from wade.config.claude_allowlist import is_allowlist_configured
-
-    # Pre-check: skip entire section if everything is already configured
-    allowlist_done = is_allowlist_configured(root)
-    statusline_done = False
     settings_path = Path.home() / ".claude" / "settings.json"
+    statusline_done = False
     if settings_path.is_file():
         with contextlib.suppress(json.JSONDecodeError, OSError):
             raw = json.loads(settings_path.read_text(encoding="utf-8"))
             if isinstance(raw, dict) and "statusLine" in raw:
                 statusline_done = True
-    if allowlist_done and statusline_done:
+    if statusline_done:
         return
 
     if not non_interactive:
         console.rule("Claude Code")
-    _prompt_configure_allowlist(root, non_interactive)
     _prompt_configure_statusline(non_interactive)
 
 
@@ -2168,8 +2199,6 @@ def _commit_wade_files(root: Path, installed: list[str]) -> None:
 
     files_to_add = [".wade.yml", ".gitignore", MANIFEST_FILENAME]
     files_to_add.extend(installed)
-    if (root / "AGENTS.md").exists():
-        files_to_add.append("AGENTS.md")
 
     try:
         subprocess.run(

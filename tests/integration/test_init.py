@@ -35,12 +35,16 @@ class TestInit:
         assert "permissions" not in config
 
         assert (tmp_git_repo / ".wade-managed").is_file()
-        assert (tmp_git_repo / "AGENTS.md").is_file()
-        assert (tmp_git_repo / "CLAUDE.md").exists()
+        # AGENTS.md pointer is now written per-session in worktrees, not during init
+        assert not (tmp_git_repo / "AGENTS.md").is_file()
+        assert not (tmp_git_repo / "CLAUDE.md").exists()
 
         gitignore = (tmp_git_repo / ".gitignore").read_text()
         assert "# wade:start" in gitignore
         assert "# wade:end" in gitignore
+        # Settings files are gitignored (written to worktrees only)
+        assert ".claude/settings.json" in gitignore
+        assert ".cursor/cli.json" in gitignore
 
 
 class TestDeinit:

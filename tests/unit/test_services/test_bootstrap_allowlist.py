@@ -252,3 +252,71 @@ class TestBootstrapPlanMode:
         # Gemini settings.json should exist (worktree guard)
         gemini_settings = worktree_path / ".gemini" / "settings.json"
         assert gemini_settings.is_file()
+
+
+class TestBootstrapPointerInjection:
+    """Tests that bootstrap_worktree() injects the AGENTS.md pointer into worktrees."""
+
+    def test_pointer_written_to_worktree(self, tmp_path: Path) -> None:
+        """bootstrap_worktree writes the AGENTS.md pointer to the worktree."""
+        worktree_path = tmp_path / "worktree"
+        worktree_path.mkdir()
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        config = ProjectConfig(
+            project=ProjectSettings(),
+            hooks=HooksConfig(),
+            permissions=PermissionsConfig(),
+        )
+
+        with patch("subprocess.run"):
+            bootstrap_worktree(worktree_path, config, repo_root)
+
+        # AGENTS.md should be created in the worktree with the pointer block
+        agents_md = worktree_path / "AGENTS.md"
+        assert agents_md.is_file(), "AGENTS.md pointer should be written to worktree"
+        content = agents_md.read_text()
+        assert "<!-- wade:pointer:start -->" in content
+
+    def test_pointer_not_written_to_main(self, tmp_path: Path) -> None:
+        """bootstrap_worktree does not touch repo_root AGENTS.md."""
+        worktree_path = tmp_path / "worktree"
+        worktree_path.mkdir()
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        config = ProjectConfig(
+            project=ProjectSettings(),
+            hooks=HooksConfig(),
+            permissions=PermissionsConfig(),
+        )
+
+        with patch("subprocess.run"):
+            bootstrap_worktree(worktree_path, config, repo_root)
+
+        # repo_root should not have AGENTS.md
+        assert not (repo_root / "AGENTS.md").is_file()
+
+    def test_pointer_follows_existing_agents_content(self, tmp_path: Path) -> None:
+        """bootstrap_worktree appends pointer after existing AGENTS.md content."""
+        worktree_path = tmp_path / "worktree"
+        worktree_path.mkdir()
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        # Pre-populate AGENTS.md with project content
+        (worktree_path / "AGENTS.md").write_text("# Project Guide\n\nExisting content.\n")
+
+        config = ProjectConfig(
+            project=ProjectSettings(),
+            hooks=HooksConfig(),
+            permissions=PermissionsConfig(),
+        )
+
+        with patch("subprocess.run"):
+            bootstrap_worktree(worktree_path, config, repo_root)
+
+        content = (worktree_path / "AGENTS.md").read_text()
+        assert "# Project Guide" in content
+        assert "<!-- wade:pointer:start -->" in content
