@@ -13,6 +13,7 @@ from wade.ai_tools.claude import ClaudeAdapter
 from wade.ai_tools.codex import CodexAdapter
 from wade.ai_tools.copilot import CopilotAdapter
 from wade.ai_tools.gemini import GeminiAdapter
+from wade.git.pr import PRSummary
 from wade.git.repo import GitError
 from wade.models.ai import ModelBreakdown, TokenUsage
 from wade.models.config import (
@@ -1002,26 +1003,47 @@ class TestImplementationBatch:
 # ---------------------------------------------------------------------------
 
 
+def _make_pr(**kwargs: object) -> PRSummary:
+    """Build a PRSummary with sensible defaults for tests."""
+    defaults: dict[str, object] = {
+        "number": 1,
+        "url": "http://pr/1",
+        "headRefName": "feat/1-test",
+        "state": "OPEN",
+        "isDraft": False,
+        "mergedAt": None,
+    }
+    defaults.update(kwargs)
+    return PRSummary(**defaults)  # type: ignore[arg-type]
+
+
 class TestClassifyIssueStatus:
     """Tests for _classify_issue_status()."""
 
     def test_merged_pr(self, tmp_path: Path) -> None:
-        pr_by_issue = {"1": {"mergedAt": "2024-01-01", "isDraft": False}}
+        pr_by_issue = {"1": _make_pr(mergedAt="2024-01-01", state="MERGED")}
         result = _classify_issue_status("1", pr_by_issue, set(), "main", tmp_path)
         assert result == _BATCH_STATUS_MERGED
 
     def test_draft_pr_is_in_progress(self, tmp_path: Path) -> None:
-        pr_by_issue = {"1": {"isDraft": True, "mergedAt": None}}
+        pr_by_issue = {"1": _make_pr(isDraft=True)}
         result = _classify_issue_status("1", pr_by_issue, set(), "main", tmp_path)
         assert result == _BATCH_STATUS_IN_PROGRESS
 
     def test_open_pr_not_draft_is_done(self, tmp_path: Path) -> None:
-        pr_by_issue = {"1": {"isDraft": False, "mergedAt": None}}
+        pr_by_issue = {"1": _make_pr()}
         result = _classify_issue_status("1", pr_by_issue, set(), "main", tmp_path)
         assert result == _BATCH_STATUS_DONE
 
+    def test_closed_pr_without_merge_is_not_done(self, tmp_path: Path) -> None:
+        pr_by_issue = {"1": _make_pr(state="CLOSED")}
+        with patch("wade.services.implementation_service._is_merged_to_main", return_value=False):
+            result = _classify_issue_status("1", pr_by_issue, set(), "main", tmp_path)
+        assert result == _BATCH_STATUS_NOT_STARTED
+
     def test_no_pr_no_branch_is_not_started(self, tmp_path: Path) -> None:
-        result = _classify_issue_status("1", {}, set(), "main", tmp_path)
+        with patch("wade.services.implementation_service._is_merged_to_main", return_value=False):
+            result = _classify_issue_status("1", {}, set(), "main", tmp_path)
         assert result == _BATCH_STATUS_NOT_STARTED
 
     def test_no_pr_with_branch_is_in_progress(self, tmp_path: Path) -> None:
@@ -1030,15 +1052,20 @@ class TestClassifyIssueStatus:
             result = _classify_issue_status("1", {}, branches, "main", tmp_path)
         assert result == _BATCH_STATUS_IN_PROGRESS
 
+    def test_no_pr_no_branch_direct_merge_is_done(self, tmp_path: Path) -> None:
+        with patch("wade.services.implementation_service._is_merged_to_main", return_value=True):
+            result = _classify_issue_status("1", {}, set(), "main", tmp_path)
+        assert result == _BATCH_STATUS_DONE
+
 
 class TestBuildPrIndex:
     """Tests for _build_pr_index()."""
 
     def test_maps_prs_to_issue_numbers(self, tmp_path: Path) -> None:
         mock_prs = [
-            {"headRefName": "feat/1-auth", "number": 10, "url": "http://pr/10"},
-            {"headRefName": "feat/2-fix", "number": 11, "url": "http://pr/11"},
-            {"headRefName": "feat/99-other", "number": 12, "url": "http://pr/12"},
+            _make_pr(number=10, headRefName="feat/1-auth", url="http://pr/10"),
+            _make_pr(number=11, headRefName="feat/2-fix", url="http://pr/11"),
+            _make_pr(number=12, headRefName="feat/99-other", url="http://pr/12"),
         ]
         with patch("wade.git.pr.list_prs", return_value=mock_prs):
             result = _build_pr_index(tmp_path, ["1", "2"])
@@ -1085,8 +1112,8 @@ class TestPollBatchCompletion:
     def test_exits_when_all_done(self, tmp_path: Path) -> None:
         """Polling exits immediately when all issues are done."""
         pr_index = {
-            "1": {"isDraft": False, "mergedAt": None, "url": "http://pr/1"},
-            "2": {"isDraft": False, "mergedAt": None, "url": "http://pr/2"},
+            "1": _make_pr(number=1, url="http://pr/1"),
+            "2": _make_pr(number=2, url="http://pr/2"),
         }
         with (
             patch("wade.services.implementation_service._build_pr_index", return_value=pr_index),
@@ -1105,7 +1132,7 @@ class TestPollBatchCompletion:
     def test_auto_triggers_review_batch(self, tmp_path: Path) -> None:
         """Auto-triggers coherence review when tracking issue exists and all done."""
         pr_index = {
-            "1": {"isDraft": False, "mergedAt": None, "url": "http://pr/1"},
+            "1": _make_pr(number=1, url="http://pr/1"),
         }
         with (
             patch("wade.services.implementation_service._build_pr_index", return_value=pr_index),
@@ -1851,26 +1878,40 @@ class TestPostImplementationLifecycleDirect:
 class TestBatchChainFlag:
     """Tests for batch() --chain flag propagation."""
 
+    def _chain_patches(self, tmp_path: Path, **overrides: object):  # type: ignore[no-untyped-def]
+        """Common patches for chain flag tests (prevents real polling)."""
+        from contextlib import ExitStack
+
+        defaults = {
+            "wade.services.implementation_service.load_config": ProjectConfig(),
+            "wade.git.repo.get_repo_root": tmp_path,
+            "wade.services.implementation_service._build_graph_from_issues": None,
+            "wade.services.implementation_service.launch_batch_in_terminals": True,
+            "wade.services.implementation_service._find_tracking_issue": None,
+            "wade.services.implementation_service.poll_batch_completion": None,
+        }
+        defaults.update(overrides)
+        stack = ExitStack()
+        mocks = {}
+        for target, rv in defaults.items():
+            m = stack.enter_context(patch(target, return_value=rv))
+            mocks[target.rsplit(".", 1)[-1]] = m
+        return stack, mocks
+
     def test_chain_flag_appended_to_first_in_chain(self, tmp_path: Path) -> None:
         """First issue in a dependency chain gets --chain with remaining IDs."""
         mock_graph = MagicMock()
         mock_graph.edges = [MagicMock()]
         mock_graph.partition.return_value = ([], [["1", "2", "3"]])
 
-        with (
-            patch("wade.services.implementation_service.load_config", return_value=ProjectConfig()),
-            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
-            patch(
-                "wade.services.implementation_service._build_graph_from_issues",
-                return_value=mock_graph,
-            ),
-            patch(
-                "wade.services.implementation_service.launch_batch_in_terminals", return_value=True
-            ) as mock_batch,
-        ):
+        stack, mocks = self._chain_patches(
+            tmp_path,
+            **{"wade.services.implementation_service._build_graph_from_issues": mock_graph},
+        )
+        with stack:
             batch(["1", "2", "3"], project_root=tmp_path)
 
-        items = mock_batch.call_args[0][0]
+        items = mocks["launch_batch_in_terminals"].call_args[0][0]
         assert len(items) == 1
         cmd = items[0][0]
         assert "--chain" in cmd
@@ -1883,38 +1924,24 @@ class TestBatchChainFlag:
         mock_graph.edges = [MagicMock()]
         mock_graph.partition.return_value = ([], [["1"]])
 
-        with (
-            patch("wade.services.implementation_service.load_config", return_value=ProjectConfig()),
-            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
-            patch(
-                "wade.services.implementation_service._build_graph_from_issues",
-                return_value=mock_graph,
-            ),
-            patch(
-                "wade.services.implementation_service.launch_batch_in_terminals", return_value=True
-            ) as mock_batch,
-        ):
+        stack, mocks = self._chain_patches(
+            tmp_path,
+            **{"wade.services.implementation_service._build_graph_from_issues": mock_graph},
+        )
+        with stack:
             batch(["1"], project_root=tmp_path)
 
-        items = mock_batch.call_args[0][0]
+        items = mocks["launch_batch_in_terminals"].call_args[0][0]
         cmd = items[0][0]
         assert "--chain" not in cmd
 
     def test_independent_issues_no_chain_flag(self, tmp_path: Path) -> None:
         """Independent issues (no deps) do not get --chain."""
-        with (
-            patch("wade.services.implementation_service.load_config", return_value=ProjectConfig()),
-            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
-            patch(
-                "wade.services.implementation_service._build_graph_from_issues", return_value=None
-            ),
-            patch(
-                "wade.services.implementation_service.launch_batch_in_terminals", return_value=True
-            ) as mock_batch,
-        ):
+        stack, mocks = self._chain_patches(tmp_path)
+        with stack:
             batch(["1", "2"], project_root=tmp_path)
 
-        items = mock_batch.call_args[0][0]
+        items = mocks["launch_batch_in_terminals"].call_args[0][0]
         for item in items:
             assert "--chain" not in item[0]
 

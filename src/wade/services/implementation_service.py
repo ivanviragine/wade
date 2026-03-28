@@ -1562,6 +1562,7 @@ def batch(
     resolved_model = resolve_model(model, config, "implement", tool=resolved_tool)
     resolved_effort = resolve_effort(effort, config, "implement", tool=resolved_tool)
     resolved_yolo = resolve_yolo(yolo, config, "implement", tool=resolved_tool)
+    _pre_model = resolved_model
     resolved_tool, resolved_model, resolved_effort, resolved_yolo = confirm_ai_selection(
         resolved_tool,
         resolved_model,
@@ -1572,6 +1573,9 @@ def batch(
         resolved_yolo=resolved_yolo,
         yolo_explicit=yolo is not None,
     )
+    # If the user changed the model interactively, propagate it explicitly to child sessions
+    if not model_explicit and resolved_model != _pre_model:
+        model_explicit = True
 
     if not model_explicit:
         console.info("Model: auto (per-issue complexity)")
@@ -1668,12 +1672,17 @@ def _find_tracking_issue(
     """Find a parent/tracking issue by checking all batch issue numbers."""
     try:
         provider = get_provider(config)
-        for num in issue_numbers:
-            tracking_id = provider.find_parent_issue(num, label=config.project.issue_label)
-            if tracking_id:
-                return tracking_id
     except Exception:
         logger.debug("batch.find_parent_failed", exc_info=True)
+        return None
+    for num in issue_numbers:
+        try:
+            tracking_id = provider.find_parent_issue(num, label=config.project.issue_label)
+        except Exception:
+            logger.debug("batch.find_parent_failed", exc_info=True, issue=num)
+            continue
+        if tracking_id:
+            return tracking_id
     return None
 
 
@@ -1688,9 +1697,29 @@ _POLL_INTERVAL_SECONDS = 30
 _POLL_TIMEOUT_SECONDS = 4 * 60 * 60  # 4 hours
 
 
+def _is_merged_to_main(repo_root: Path, issue_num: str, main_branch: str) -> bool:
+    """Return True if a branch for this issue was merged directly into main.
+
+    Searches recent merge commits on ``origin/<main_branch>`` for the typical
+    branch-name pattern (e.g. "feat/227-..." or "fix/227-...").
+    """
+    try:
+        result = subprocess.run(
+            ["git", "log", f"origin/{main_branch}", "--oneline", "-100"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        pattern = rf"/0*{re.escape(issue_num)}(?:[^0-9]|$)"
+        return bool(re.search(pattern, result.stdout))
+    except FileNotFoundError:
+        return False
+
+
 def _classify_issue_status(
     issue_num: str,
-    pr_by_issue: dict[str, dict[str, Any]],
+    pr_by_issue: dict[str, git_pr.PRSummary],
     branch_set: set[str],
     main_branch: str,
     repo_root: Path,
@@ -1701,18 +1730,20 @@ def _classify_issue_status(
     """
     pr = pr_by_issue.get(issue_num)
     if pr:
-        if pr.get("mergedAt"):
+        if pr.merged_at:
             return _BATCH_STATUS_MERGED
-        if pr.get("isDraft", False):
+        if pr.is_draft:
             return _BATCH_STATUS_IN_PROGRESS
-        # Open (not draft) → done (done marks PR ready)
-        return _BATCH_STATUS_DONE
+        if pr.state != "CLOSED":
+            # Open, non-draft → done (done marks PR ready)
+            return _BATCH_STATUS_DONE
+        # CLOSED without merged_at — PR was abandoned; fall through to branch check
 
-    # No PR — check if branch exists (direct merge strategy or done not yet run)
+    # No PR (or abandoned PR) — check if branch exists
     pattern = rf"/0*{re.escape(issue_num)}(?:-|$)"
     matching_branches = [b for b in branch_set if re.search(pattern, b)]
     if matching_branches:
-        # Branch exists but no PR — check for commits ahead of base
+        # Branch exists — check for commits ahead of base
         for branch in matching_branches:
             try:
                 ahead = git_branch.commits_ahead(repo_root, branch, main_branch)
@@ -1722,38 +1753,47 @@ def _classify_issue_status(
                 pass
         return _BATCH_STATUS_IN_PROGRESS
 
+    # No PR, no branch — check for direct merge to main
+    if _is_merged_to_main(repo_root, issue_num, main_branch):
+        return _BATCH_STATUS_DONE
+
     return _BATCH_STATUS_NOT_STARTED
 
 
 def _build_pr_index(
     repo_root: Path,
     issue_numbers: list[str],
-) -> dict[str, dict[str, Any]]:
+) -> dict[str, git_pr.PRSummary]:
     """Build a mapping from issue number to PR data using a single gh pr list call."""
     prs = git_pr.list_prs(repo_root, state="all", limit=200)
     issue_set = set(issue_numbers)
-    result: dict[str, dict[str, Any]] = {}
+    result: dict[str, git_pr.PRSummary] = {}
     for pr in prs:
-        head_ref = str(pr.get("headRefName", ""))
-        extracted = extract_issue_from_branch(head_ref)
+        extracted = extract_issue_from_branch(pr.head_ref_name)
         if extracted and extracted in issue_set:
-            result[extracted] = dict(pr)
+            result[extracted] = pr
     return result
 
 
 def _get_remote_branches(repo_root: Path) -> set[str]:
-    """Get the set of remote branch names."""
-    try:
-        result = subprocess.run(
-            ["git", "branch", "-r", "--format=%(refname:short)"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return {line.strip() for line in result.stdout.splitlines() if line.strip()}
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return set()
+    """Get the set of remote and local branch names."""
+    branches: set[str] = set()
+    for args in (
+        ["git", "branch", "-r", "--format=%(refname:short)"],
+        ["git", "branch", "--format=%(refname:short)"],
+    ):
+        try:
+            result = subprocess.run(
+                args,
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            branches.update(line.strip() for line in result.stdout.splitlines() if line.strip())
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            pass
+    return branches
 
 
 def poll_batch_completion(
@@ -1772,13 +1812,14 @@ def poll_batch_completion(
     """
     import time
 
+    poll_interval = max(1, poll_interval)
     main_branch = config.project.main_branch or "main"
 
     console.info("Monitoring batch progress (Ctrl+C to exit)...")
 
     interrupted = False
     elapsed = 0
-    pr_index: dict[str, dict[str, Any]] = {}
+    pr_index: dict[str, git_pr.PRSummary] = {}
     branch_set: set[str] = set()
 
     try:
@@ -1841,13 +1882,15 @@ def poll_batch_completion(
             _BATCH_STATUS_NOT_STARTED: "not started",
         }.get(status, status)
         pr = pr_index.get(num)
-        url = f" {pr['url']}" if pr and pr.get("url") else ""
+        url = f" {pr.url}" if pr and pr.url else ""
         lines.append(f"  #{num}: {label}{url}")
 
     console.panel("\n".join(lines), title=f"Batch summary ({done_count}/{total} done)")
 
     if interrupted:
-        console.hint("Interrupted. Resume monitoring: wade implement-batch --poll")
+        console.hint(
+            "Interrupted. To resume monitoring, rerun `wade implement-batch` with the same issues."
+        )
         return
 
     if elapsed >= timeout:
