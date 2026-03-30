@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.15.6] — 2026-03-30
+
+### Bug Fixes
+
+- plan-session and worktree guard hooks not blocking writes in Claude Code (#241) (dadaf82)
+
 ## [v0.15.5] — 2026-03-28
 
 ### Chores
