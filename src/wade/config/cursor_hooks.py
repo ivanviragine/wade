@@ -30,7 +30,7 @@ def _configure_cursor_hook(worktree_path: Path, guard_script: Path, log_event: s
         entry=CursorHookEntry(
             event="preToolUse",
             command=f"python3 {guard_script.resolve()}",
-            tools=["Write", "Delete"],
+            tools=["Write", "Edit", "Delete"],
         ),
         dedup_key="command",
         ensure_path=["preToolUse"],

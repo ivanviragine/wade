@@ -44,6 +44,7 @@ GITIGNORE_ENTRIES: Final = [
     ".wade.yml",
     "PLAN.md",
     "PR-SUMMARY.md",
+    ".commit-msg",
 ]
 
 # Entries added by older versions without markers — used for backward-compat cleanup
