@@ -977,7 +977,7 @@ def _post_implementation_lifecycle_pr(
                 yolo=yolo,
                 yolo_explicit=yolo_explicit,
             )
-        elif outcome == PollOutcome.QUIET_TIMEOUT:
+        elif outcome in (PollOutcome.QUIET_TIMEOUT, PollOutcome.REVIEW_COMPLETE):
             review_service._quiet_next_steps_prompt(
                 repo_root,
                 branch,

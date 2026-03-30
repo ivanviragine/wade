@@ -48,6 +48,7 @@ class ReviewBotStatus(StrEnum):
 
     PAUSED = "paused"
     IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
 
 
 class PollOutcome(StrEnum):
@@ -55,6 +56,7 @@ class PollOutcome(StrEnum):
 
     COMMENTS_FOUND = "comments_found"
     QUIET_TIMEOUT = "quiet_timeout"
+    REVIEW_COMPLETE = "review_complete"
     PR_CLOSED = "pr_closed"
     INTERRUPTED = "interrupted"
 
@@ -94,7 +96,7 @@ def detect_coderabbit_review_status(
     if "review in progress by coderabbit.ai" in normalized:
         return ReviewBotStatus.IN_PROGRESS
 
-    return None
+    return ReviewBotStatus.COMPLETED
 
 
 # ---------------------------------------------------------------------------

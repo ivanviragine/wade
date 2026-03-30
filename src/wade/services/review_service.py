@@ -334,6 +334,10 @@ def poll_for_reviews(
                 time.sleep(poll_interval)
                 continue
 
+            if status.bot_status == ReviewBotStatus.COMPLETED and not status.actionable_threads:
+                console.info("Review bot completed — no actionable comments found.")
+                return PollOutcome.REVIEW_COMPLETE
+
             if status.actionable_threads:
                 count = len(status.actionable_threads)
                 is_bot = status.bot_status is not None
@@ -853,7 +857,7 @@ def _quiet_next_steps_prompt(
                         yolo_explicit=yolo_explicit,
                     )
                 return
-            elif outcome == PollOutcome.QUIET_TIMEOUT:
+            elif outcome in (PollOutcome.QUIET_TIMEOUT, PollOutcome.REVIEW_COMPLETE):
                 continue  # Show menu again
             else:  # INTERRUPTED or PR_CLOSED
                 return
@@ -907,7 +911,7 @@ def _post_review_lifecycle(
                     yolo=yolo,
                     yolo_explicit=yolo_explicit,
                 )
-        elif outcome == PollOutcome.QUIET_TIMEOUT:
+        elif outcome in (PollOutcome.QUIET_TIMEOUT, PollOutcome.REVIEW_COMPLETE):
             _quiet_next_steps_prompt(
                 repo_root,
                 branch,
