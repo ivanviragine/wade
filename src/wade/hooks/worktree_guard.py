@@ -125,12 +125,12 @@ def _deny(file_path: str, worktree_root: Path) -> None:
     result = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
+            "permissionDecision": "block",
             "permissionDecisionReason": msg,
         },
         "permission": "deny",
         "permissionDecision": "deny",
-        "decision": "deny",
+        "decision": "block",
         "reason": msg,
     }
     print(json.dumps(result))

@@ -96,12 +96,12 @@ class TestOutsideWorktree:
         # Verify structured JSON output
         stdout_json = json.loads(result.stdout)
         hook_output = stdout_json["hookSpecificOutput"]
-        assert hook_output["permissionDecision"] == "deny"
+        assert hook_output["permissionDecision"] == "block"
         assert hook_output["hookEventName"] == "PreToolUse"
         assert "BLOCKED" in hook_output["permissionDecisionReason"]
         assert stdout_json["permission"] == "deny"
         assert stdout_json["permissionDecision"] == "deny"
-        assert stdout_json["decision"] == "deny"
+        assert stdout_json["decision"] == "block"
         assert "BLOCKED" in stdout_json["reason"]
 
     def test_deny_message_contains_worktree_root(self, tmp_path: Path) -> None:
