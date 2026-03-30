@@ -101,7 +101,7 @@ class TestDetectCoderabbitReviewStatus:
         ]
         assert detect_coderabbit_review_status(comments) == ReviewBotStatus.IN_PROGRESS
 
-    def test_completed_review_returns_none(self) -> None:
+    def test_completed_review_returns_completed(self) -> None:
         comments = [
             {
                 "login": "coderabbitai[bot]",
@@ -111,7 +111,7 @@ class TestDetectCoderabbitReviewStatus:
                 ),
             }
         ]
-        assert detect_coderabbit_review_status(comments) is None
+        assert detect_coderabbit_review_status(comments) == ReviewBotStatus.COMPLETED
 
     def test_no_coderabbit_comments(self) -> None:
         comments = [
@@ -138,8 +138,8 @@ class TestDetectCoderabbitReviewStatus:
                 ),
             },
         ]
-        # Latest comment has no paused/in-progress marker -> None
-        assert detect_coderabbit_review_status(comments) is None
+        # Latest comment has no paused/in-progress marker -> COMPLETED
+        assert detect_coderabbit_review_status(comments) == ReviewBotStatus.COMPLETED
 
     def test_paused_overrides_earlier_completed(self) -> None:
         """A newer paused comment takes precedence over an older completed one."""
@@ -644,6 +644,7 @@ class TestPollOutcome:
 
         assert PollOutcome.COMMENTS_FOUND == "comments_found"
         assert PollOutcome.QUIET_TIMEOUT == "quiet_timeout"
+        assert PollOutcome.REVIEW_COMPLETE == "review_complete"
         assert PollOutcome.PR_CLOSED == "pr_closed"
         assert PollOutcome.INTERRUPTED == "interrupted"
 
