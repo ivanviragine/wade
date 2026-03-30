@@ -98,6 +98,21 @@ class TestSkillInstallation:
         assert "{review_enforcement_rule}" not in content, "Placeholder must be removed"
         assert "## Never skip review" not in content, "Rule must be absent when suppressed"
 
+    def test_review_enforcement_rule_suppressed_via_config(self, tmp_git_repo: Path) -> None:
+        """bootstrap_worktree with review_implementation.enabled=False suppresses the rule."""
+        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
+        from wade.services.implementation_service import bootstrap_worktree
+
+        config = ProjectConfig(ai=AIConfig(review_implementation=AICommandConfig(enabled=False)))
+        bootstrap_worktree(tmp_git_repo, config, tmp_git_repo, skills=["implementation-session"])
+
+        skill_md = tmp_git_repo / ".claude" / "skills" / "implementation-session" / "SKILL.md"
+        content = skill_md.read_text(encoding="utf-8")
+        assert "{review_enforcement_rule}" not in content, "Placeholder must be removed"
+        assert "## Never skip review" not in content, (
+            "Rule must be absent when suppressed via config"
+        )
+
     def test_self_init_inject_skills_are_not_symlinked(self, tmp_git_repo: Path) -> None:
         """In self-init mode, inject skills are processed copies — not directory symlinks."""
         from wade.skills.installer import install_skills

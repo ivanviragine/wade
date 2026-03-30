@@ -382,9 +382,10 @@ def _copy_skill_file(
         p in content for p in _SKILL_PARTIALS
     )
     if needs_expansion or extra_partials:
+        base_templates_dir = skills_templates_dir or src.parent.parent
         content = _expand_partials(
             content,
-            skills_templates_dir or src.parent,
+            base_templates_dir,
             extra_partials=extra_partials,
         )
     dest.write_text(content, encoding="utf-8")
