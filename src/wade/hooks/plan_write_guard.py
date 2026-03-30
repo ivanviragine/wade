@@ -11,7 +11,7 @@ Allowed basenames / patterns:
   - .transcript
   - .commit-msg
   - PR-SUMMARY.md
-  - Anything under .claude/plans/
+  - Anything under .claude/plans/ or .wade/plans/
 
 Exit codes:
   0 — allow (or fail-open on parse error)
@@ -38,6 +38,8 @@ ALLOWED_BASENAMES = [
 ALLOWED_DIR_PREFIXES = [
     ".claude/plans/",
     ".claude/plans\\",  # Windows paths
+    ".wade/plans/",
+    ".wade/plans\\",  # Windows paths
 ]
 
 
@@ -123,7 +125,7 @@ def _deny(file_path: str) -> None:
     msg = (
         f"BLOCKED by plan-session guard: cannot write to '{file_path}'. "
         "In plan mode, only plan artifacts (PLAN.md, PLAN-*.md, prompt.txt, "
-        ".transcript, .commit-msg, PR-SUMMARY.md, .claude/plans/*) may be written. "
+        ".transcript, .commit-msg, PR-SUMMARY.md, .claude/plans/*, .wade/plans/*) may be written. "
         "Do NOT modify source code files."
     )
     # stderr for human-readable output
@@ -136,12 +138,12 @@ def _deny(file_path: str) -> None:
     result = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
+            "permissionDecision": "block",
             "permissionDecisionReason": msg,
         },
         "permission": "deny",
         "permissionDecision": "deny",
-        "decision": "deny",
+        "decision": "block",
         "reason": msg,
     }
     print(json.dumps(result))

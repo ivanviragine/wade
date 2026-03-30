@@ -52,6 +52,9 @@ class TestAllowedFiles:
             ".claude/plans/some-plan.md",
             "/tmp/worktree/.claude/plans/design.md",
             ".claude\\plans\\windows-path.md",
+            ".wade/plans/some-plan.md",
+            "/tmp/worktree/.wade/plans/design.md",
+            ".wade\\plans\\windows-path.md",
         ],
     )
     def test_allowed_basenames(self, file_path: str) -> None:
@@ -91,14 +94,14 @@ class TestBlockedFiles:
         stdout_json = json.loads(result.stdout)
         # Claude Code format (nested hookSpecificOutput)
         hook_output = stdout_json["hookSpecificOutput"]
-        assert hook_output["permissionDecision"] == "deny"
+        assert hook_output["permissionDecision"] == "block"
         assert hook_output["hookEventName"] == "PreToolUse"
         assert "BLOCKED" in hook_output["permissionDecisionReason"]
         # Copilot/Cursor format (top-level)
         assert stdout_json["permission"] == "deny"
         assert stdout_json["permissionDecision"] == "deny"
-        # Gemini format (top-level)
-        assert stdout_json["decision"] == "deny"
+        # Gemini/Claude Code top-level decision
+        assert stdout_json["decision"] == "block"
         assert "BLOCKED" in stdout_json["reason"]
 
 
