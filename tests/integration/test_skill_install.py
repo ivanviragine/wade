@@ -72,6 +72,32 @@ class TestSkillInstallation:
         assert "## User interaction" in content, "Partial heading must be injected"
         assert "Key decision points:" in content, "Partial content must be injected"
 
+    def test_review_enforcement_rule_expanded_by_default(self, tmp_git_repo: Path) -> None:
+        """review_enforcement_rule partial is included by default (reviews enabled)."""
+        from wade.skills.installer import install_skills
+
+        install_skills(tmp_git_repo, skills=["implementation-session"])
+
+        skill_md = tmp_git_repo / ".claude" / "skills" / "implementation-session" / "SKILL.md"
+        content = skill_md.read_text(encoding="utf-8")
+        assert "{review_enforcement_rule}" not in content, "Placeholder must be expanded"
+        assert "## Never skip review" in content, "Rule heading must be present by default"
+
+    def test_review_enforcement_rule_suppressed_by_extra_partials(self, tmp_git_repo: Path) -> None:
+        """Passing empty string via extra_partials suppresses the review enforcement rule."""
+        from wade.skills.installer import install_skills
+
+        install_skills(
+            tmp_git_repo,
+            skills=["implementation-session"],
+            extra_partials={"{review_enforcement_rule}": ""},
+        )
+
+        skill_md = tmp_git_repo / ".claude" / "skills" / "implementation-session" / "SKILL.md"
+        content = skill_md.read_text(encoding="utf-8")
+        assert "{review_enforcement_rule}" not in content, "Placeholder must be removed"
+        assert "## Never skip review" not in content, "Rule must be absent when suppressed"
+
     def test_self_init_inject_skills_are_not_symlinked(self, tmp_git_repo: Path) -> None:
         """In self-init mode, inject skills are processed copies — not directory symlinks."""
         from wade.skills.installer import install_skills

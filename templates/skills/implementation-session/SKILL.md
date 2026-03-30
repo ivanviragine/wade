@@ -41,15 +41,7 @@ Always use `wade task create` for interactive issue creation.
 Using `gh` directly bypasses label enforcement, snapshot/diff detection, and
 dependency analysis hooks.
 
-## Never skip review when reviews are enabled
-
-If `review_implementation.enabled` is `true` in `.wade.yml` (or not explicitly
-set to `false`), you **must** run `wade review implementation` **before** calling
-`wade implementation-session done`.
-
-If you see the review reminder in the `done` output, it means you skipped this
-step — go back, run the review, address any findings, then present results to
-the user.
+{review_enforcement_rule}
 
 ## Project Knowledge
 
