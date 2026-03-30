@@ -41,6 +41,8 @@ Always use `wade task create` for interactive issue creation.
 Using `gh` directly bypasses label enforcement, snapshot/diff detection, and
 dependency analysis hooks.
 
+{review_enforcement_rule}
+
 ## Project Knowledge
 
 Run `wade knowledge get` at the start of this session to read project context
@@ -207,7 +209,7 @@ directly.
 
 To finalize your work, follow these steps in order:
 
-**Step 1 — Review (if you haven't already):**
+**Step 1 — Review [MANDATORY]:**
 
 Run `wade review implementation` to review your changes and check the exit code:
 - **Exit 0**: Review completed externally or skipped. If there is output, it is
@@ -220,7 +222,8 @@ Run `wade review implementation` to review your changes and check the exit code:
 
 For staged-only review: `wade review implementation --staged`.
 
-**Do not proceed to Step 2 until this step is complete and any actionable
+**This step is mandatory when `review_implementation.enabled` is not `false`.
+Do NOT proceed to Step 2 until this step is complete and any actionable
 findings are addressed and committed.**
 
 **Step 2 — Write PR summary:**

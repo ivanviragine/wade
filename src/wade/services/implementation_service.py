@@ -422,6 +422,13 @@ def bootstrap_worktree(
     from wade.skills.installer import get_wade_repo_root, install_skills
 
     is_self = repo_root.resolve() == get_wade_repo_root().resolve()
+
+    # Suppress the review-enforcement rule when reviews are explicitly disabled.
+    # An empty string overrides the default file-based partial expansion.
+    skill_extra_partials: dict[str, str] | None = None
+    if config.ai.review_implementation.enabled is False:
+        skill_extra_partials = {"{review_enforcement_rule}": ""}
+
     if is_self:
         # Worktree has its own templates/ checkout — symlink to those
         wt_templates = worktree_path / "templates" / "skills"
@@ -431,9 +438,16 @@ def bootstrap_worktree(
             force=True,
             templates_dir=wt_templates,
             skills=skills,
+            extra_partials=skill_extra_partials,
         )
     else:
-        install_skills(worktree_path, is_self_init=False, force=True, skills=skills)
+        install_skills(
+            worktree_path,
+            is_self_init=False,
+            force=True,
+            skills=skills,
+            extra_partials=skill_extra_partials,
+        )
     logger.debug("implementation.bootstrap_skills", path=str(worktree_path))
 
     # Inject AGENTS.md pointer into worktree (after skills, which may add AGENTS.md content)

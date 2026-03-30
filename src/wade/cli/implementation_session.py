@@ -160,7 +160,10 @@ def done(
 
             config = load_config()
             if config.ai.review_implementation.enabled is not False:
-                console.hint("P.s.: run `wade review implementation` if you haven't already.")
+                console.warn(
+                    "Review not confirmed — run `wade review implementation` now "
+                    "if you haven't already, then present results to the user."
+                )
         except Exception:
             pass
 

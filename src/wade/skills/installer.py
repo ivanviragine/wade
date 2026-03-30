@@ -14,6 +14,7 @@ logger = structlog.get_logger()
 # Maps placeholder string → relative path inside templates/skills/_partials/.
 _SKILL_PARTIALS: dict[str, str] = {
     "{user_interaction_prompt}": "_partials/user-interaction.md",
+    "{review_enforcement_rule}": "_partials/review-enforcement-rule.md",
 }
 
 
@@ -182,6 +183,7 @@ def install_skills(
     force: bool = False,
     templates_dir: Path | None = None,
     skills: list[str] | None = None,
+    extra_partials: dict[str, str] | None = None,
 ) -> list[str]:
     """Install skill files to a project.
 
@@ -265,7 +267,11 @@ def install_skills(
                     continue
                 dest = primary_skills_dir / skill_name / filename
                 if _copy_skill_file(
-                    src, dest, overwrite=overwrite, skills_templates_dir=templates_dir
+                    src,
+                    dest,
+                    overwrite=overwrite,
+                    skills_templates_dir=templates_dir,
+                    extra_partials=extra_partials,
                 ):
                     installed.append(f".claude/skills/{skill_name}/{filename}")
 
@@ -325,13 +331,22 @@ def remove_skills(project_root: Path) -> list[str]:
     return removed
 
 
-def _expand_partials(content: str, skills_templates_dir: Path) -> str:
+def _expand_partials(
+    content: str,
+    skills_templates_dir: Path,
+    extra_partials: dict[str, str] | None = None,
+) -> str:
     """Expand placeholder strings in *content* using partial template files.
 
-    Each key in ``_SKILL_PARTIALS`` is replaced with the contents of the
-    corresponding file under ``skills_templates_dir``.  Unknown partial paths
-    are left unchanged with a warning.
+    ``extra_partials`` (placeholder → replacement string) are applied first, so
+    callers can override or suppress any entry in ``_SKILL_PARTIALS`` by passing
+    an empty string.  File-based partials in ``_SKILL_PARTIALS`` are applied
+    afterwards for any placeholders still present.  Unknown partial paths are
+    left unchanged with a warning.
     """
+    if extra_partials:
+        for placeholder, replacement in extra_partials.items():
+            content = content.replace(placeholder, replacement)
     for placeholder, rel_path in _SKILL_PARTIALS.items():
         if placeholder not in content:
             continue
@@ -348,11 +363,13 @@ def _copy_skill_file(
     dest: Path,
     overwrite: bool = False,
     skills_templates_dir: Path | None = None,
+    extra_partials: dict[str, str] | None = None,
 ) -> bool:
     """Copy a single skill file, creating parent dirs as needed.
 
     If ``skills_templates_dir`` is provided, placeholder strings in the file
-    content (see ``_SKILL_PARTIALS``) are expanded before writing.
+    content (see ``_SKILL_PARTIALS``) are expanded before writing.  Any
+    ``extra_partials`` overrides are applied first (see ``_expand_partials``).
 
     Returns True if file was installed, False if skipped.
     """
@@ -361,8 +378,16 @@ def _copy_skill_file(
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     content = src.read_text(encoding="utf-8")
-    if skills_templates_dir is not None and any(p in content for p in _SKILL_PARTIALS):
-        content = _expand_partials(content, skills_templates_dir)
+    needs_expansion = skills_templates_dir is not None and any(
+        p in content for p in _SKILL_PARTIALS
+    )
+    if needs_expansion or extra_partials:
+        base_templates_dir = skills_templates_dir or src.parent.parent
+        content = _expand_partials(
+            content,
+            base_templates_dir,
+            extra_partials=extra_partials,
+        )
     dest.write_text(content, encoding="utf-8")
     logger.debug("skills.copied", src=str(src), dest=str(dest))
     return True
