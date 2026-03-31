@@ -66,3 +66,15 @@ class TestWriteGeminiPolicy:
         write_gemini_policy(tmp_path, ['path/with"quote'])
         content = (tmp_path / ".gemini" / "policies" / "wade.toml").read_text()
         assert 'commandPrefix = "path/with\\"quote"' in content
+
+    def test_escapes_backslashes_in_binary(self, tmp_path: Path) -> None:
+        write_gemini_policy(tmp_path, [r"path\with\slashes"])
+        content = (tmp_path / ".gemini" / "policies" / "wade.toml").read_text()
+        assert 'commandPrefix = "path\\\\with\\\\slashes"' in content
+
+    def test_clears_stale_policy_when_empty_list(self, tmp_path: Path) -> None:
+        write_gemini_policy(tmp_path, ["wade *"])
+        policy_file = tmp_path / ".gemini" / "policies" / "wade.toml"
+        assert policy_file.exists()
+        write_gemini_policy(tmp_path, [])
+        assert not policy_file.exists()
