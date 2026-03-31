@@ -283,6 +283,28 @@ class TestParseEntries:
         assert entries[0].entry_id == "a1b2c3d4"
         assert entries[0].heading_rest == "plan"
 
+    def test_parses_entry_with_descriptive_id_hyphens(self) -> None:
+        text = "## config-sync-tool | 2026-03-24 | plan\n\nContent with custom ID.\n\n---\n"
+        entries = parse_entries(text)
+        assert len(entries) == 1
+        assert entries[0].entry_id == "config-sync-tool"
+        assert entries[0].date == "2026-03-24"
+        assert entries[0].heading_rest == "plan"
+        assert entries[0].content == "Content with custom ID."
+
+    def test_parses_entry_with_descriptive_id_underscores(self) -> None:
+        text = "## my_entry_name | 2026-03-24 | implementation | Issue #42\n\nContent.\n\n---\n"
+        entries = parse_entries(text)
+        assert len(entries) == 1
+        assert entries[0].entry_id == "my_entry_name"
+        assert entries[0].heading_rest == "implementation | Issue #42"
+
+    def test_parses_entry_with_descriptive_id_mixed_alphanumeric(self) -> None:
+        text = "## entry123abc | 2026-03-24 | plan\n\nMixed alphanumeric ID.\n\n---\n"
+        entries = parse_entries(text)
+        assert len(entries) == 1
+        assert entries[0].entry_id == "entry123abc"
+
     def test_handles_empty_text(self) -> None:
         assert parse_entries("") == []
 
