@@ -62,15 +62,10 @@ class GeminiAdapter(AbstractAITool):
         return ["--output-format", "json"]
 
     def allowed_commands_args(self, commands: list[str]) -> list[str]:
-        """Translate canonical patterns to Gemini --allowed-tools flags.
+        """Gemini CLI uses the Policy Engine instead of --allowed-tools flags.
 
-        Canonical ``"cmd args"`` becomes ``"shell(cmd:args)"``.
+        Allowed commands are written to ``.gemini/policies/wade.toml`` by
+        ``write_gemini_policy()`` before launch.  The deprecated
+        ``--allowed-tools`` flag is not emitted.
         """
-        result: list[str] = []
-        for cmd in commands:
-            parts = cmd.split(None, 1)
-            binary = parts[0]
-            args = parts[1] if len(parts) > 1 else ""
-            pattern = f"shell({binary}:{args})" if args else f"shell({binary})"
-            result.extend(["--allowed-tools", pattern])
-        return result
+        return []

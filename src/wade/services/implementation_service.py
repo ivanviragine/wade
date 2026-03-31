@@ -479,6 +479,14 @@ def bootstrap_worktree(
             worktree_path, extra_patterns=config.permissions.allowed_commands
         )
 
+    # Propagate Gemini policy to worktree's .gemini/policies/wade.toml.
+    # Gemini CLI uses the Policy Engine (TOML files) instead of --allowed-tools.
+    gemini_in_config = any(config.get_ai_tool(cmd) == "gemini" for cmd in [None, *AI_COMMAND_NAMES])
+    if (selected_ai_tool == "gemini" or gemini_in_config) and config.permissions.allowed_commands:
+        from wade.config.gemini_policy import write_gemini_policy
+
+        write_gemini_policy(worktree_path, config.permissions.allowed_commands)
+
     # Run post-create hook
     if config.hooks.post_worktree_create:
         hook_path = repo_root / config.hooks.post_worktree_create

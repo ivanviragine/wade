@@ -3,6 +3,21 @@
 Writes `.gemini/settings.json` (project-level) with a `BeforeTool` entry
 that runs the plan write guard script.  Gemini may only support global
 config — writing project-level is a best-effort approach.
+
+The hooks schema expected by Gemini CLI is an object keyed by event name:
+
+    {
+      "hooks": {
+        "BeforeTool": [
+          {
+            "matcher": ".*",
+            "hooks": [
+              {"type": "command", "command": "python3 /path/to/guard.py"}
+            ]
+          }
+        ]
+      }
+    }
 """
 
 from __future__ import annotations
@@ -14,10 +29,14 @@ from pydantic import BaseModel
 from wade.config.hooks_util import upsert_hook_entry
 
 
-class GeminiHookEntry(BaseModel):
-    event: str
+class GeminiHookCommand(BaseModel):
+    type: str = "command"
     command: str
-    tools: list[str]
+
+
+class GeminiHookEntry(BaseModel):
+    matcher: str
+    hooks: list[GeminiHookCommand]
 
 
 def configure_worktree_hooks(worktree_path: Path, guard_script: Path) -> None:
@@ -29,12 +48,11 @@ def configure_worktree_hooks(worktree_path: Path, guard_script: Path) -> None:
     upsert_hook_entry(
         hooks_file=worktree_path / ".gemini" / "settings.json",
         entry=GeminiHookEntry(
-            event="BeforeTool",
-            command=f"python3 {guard_script.resolve()}",
-            tools=[".*"],
+            matcher=".*",
+            hooks=[GeminiHookCommand(command=f"python3 {guard_script.resolve()}")],
         ),
-        dedup_key="command",
-        ensure_path=["hooks"],
+        dedup_key="matcher",
+        ensure_path=["hooks", "BeforeTool"],
         log_event="gemini_worktree_hooks.configured",
     )
 
@@ -48,11 +66,10 @@ def configure_plan_hooks(worktree_path: Path, guard_script: Path) -> None:
     upsert_hook_entry(
         hooks_file=worktree_path / ".gemini" / "settings.json",
         entry=GeminiHookEntry(
-            event="BeforeTool",
-            command=f"python3 {guard_script.resolve()}",
-            tools=[".*"],
+            matcher=".*",
+            hooks=[GeminiHookCommand(command=f"python3 {guard_script.resolve()}")],
         ),
-        dedup_key="command",
-        ensure_path=["hooks"],
+        dedup_key="matcher",
+        ensure_path=["hooks", "BeforeTool"],
         log_event="gemini_hooks.configured",
     )

@@ -110,6 +110,13 @@ def _delegate_headless(request: DelegationRequest) -> DelegationResult:
 
     defaults = [str(session_cwd), tempfile.gettempdir()]
     trusted = defaults + [d for d in request.trusted_dirs if d not in defaults]
+
+    # Write Gemini policy file before launch (replaces deprecated --allowed-tools flag)
+    if request.ai_tool == AIToolID.GEMINI and request.allowed_commands:
+        from wade.config.gemini_policy import write_gemini_policy
+
+        write_gemini_policy(session_cwd, request.allowed_commands)
+
     cmd = adapter.build_launch_command(
         model=request.model,
         prompt=request.prompt,
@@ -202,6 +209,12 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
             )
 
         try:
+            # Write Gemini policy file before launch (replaces deprecated --allowed-tools flag)
+            if request.ai_tool == AIToolID.GEMINI and request.allowed_commands:
+                from wade.config.gemini_policy import write_gemini_policy
+
+                write_gemini_policy(session_cwd, request.allowed_commands)
+
             deliver_prompt_if_needed(adapter, interactive_prompt)
             adapter.launch(
                 worktree_path=session_cwd,
