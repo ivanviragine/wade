@@ -23,10 +23,11 @@ def _command_to_rule(cmd: str) -> str:
     """Translate a canonical command pattern to a TOML [[rule]] block."""
     parts = cmd.split(None, 1)
     binary = parts[0]
+    escaped = binary.replace("\\", "\\\\").replace('"', '\\"')
     return (
         "[[rule]]\n"
         f'toolName = "run_shell_command"\n'
-        f'commandPrefix = "{binary}"\n'
+        f'commandPrefix = "{escaped}"\n'
         f'decision = "allow"\n'
         f"priority = {_PRIORITY}\n"
     )
@@ -38,10 +39,11 @@ def write_gemini_policy(worktree_path: Path, allowed_commands: list[str]) -> Non
     Overwrites any previously written policy file.  Idempotent when called
     with the same list.  Does nothing if *allowed_commands* is empty.
     """
-    if not allowed_commands:
+    valid_commands = [cmd for cmd in allowed_commands if cmd.strip()]
+    if not valid_commands:
         return
 
-    rules = [_command_to_rule(cmd) for cmd in allowed_commands]
+    rules = [_command_to_rule(cmd) for cmd in valid_commands]
     content = "\n".join(rules)
 
     policy_dir = worktree_path / ".gemini" / "policies"

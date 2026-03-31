@@ -50,3 +50,19 @@ class TestWriteGeminiPolicy:
         content = (tmp_path / ".gemini" / "policies" / "wade.toml").read_text()
         assert 'commandPrefix = "wade"' in content
         assert "old-cmd" not in content
+
+    def test_skips_empty_and_whitespace_commands(self, tmp_path: Path) -> None:
+        write_gemini_policy(tmp_path, ["", "  ", "wade *"])
+        content = (tmp_path / ".gemini" / "policies" / "wade.toml").read_text()
+        assert content.count("[[rule]]") == 1
+        assert 'commandPrefix = "wade"' in content
+
+    def test_all_empty_commands_writes_nothing(self, tmp_path: Path) -> None:
+        write_gemini_policy(tmp_path, ["", "  "])
+        policy_file = tmp_path / ".gemini" / "policies" / "wade.toml"
+        assert not policy_file.exists()
+
+    def test_escapes_special_characters_in_binary(self, tmp_path: Path) -> None:
+        write_gemini_policy(tmp_path, ['path/with"quote'])
+        content = (tmp_path / ".gemini" / "policies" / "wade.toml").read_text()
+        assert 'commandPrefix = "path/with\\"quote"' in content
