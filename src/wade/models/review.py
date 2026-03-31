@@ -149,6 +149,11 @@ def filter_actionable_threads(threads: list[ReviewThread]) -> list[ReviewThread]
     return [t for t in threads if not t.is_resolved and not t.is_outdated and t.comments]
 
 
+def filter_unresolved_threads(threads: list[ReviewThread]) -> list[ReviewThread]:
+    """Return all unresolved threads with at least one comment, including outdated ones."""
+    return [t for t in threads if not t.is_resolved and t.comments]
+
+
 # ---------------------------------------------------------------------------
 # Markdown formatting
 # ---------------------------------------------------------------------------
@@ -221,8 +226,19 @@ def _format_thread(thread: ReviewThread) -> list[str]:
     if first.url:
         loc_parts.append(f"([link]({first.url}))")
 
+    if thread.is_outdated:
+        loc_parts.append("[OUTDATED]")
+
     lines.append(f"### {' '.join(loc_parts)}" if loc_parts else "### Comment")
     lines.append("")
+
+    # Outdated notice
+    if thread.is_outdated:
+        lines.append(
+            "> **Note:** This thread is outdated — the code it references has changed."
+            " Address the underlying concern in the current version of the code."
+        )
+        lines.append("")
 
     # Thread ID for resolution
     if thread.id:
@@ -303,11 +319,22 @@ class PRReviewStatus(BaseModel):
     """
 
     actionable_threads: list[ReviewThread] = []
+    all_unresolved_threads: list[ReviewThread] = []
     reviews: list[PRReview] = []
     pending_reviewers: list[PendingReviewer] = []
     bot_status: ReviewBotStatus | None = None
     fetch_failed: bool = False
     latest_commit_pushed_at: datetime | None = None
+
+    @property
+    def effective_unresolved_threads(self) -> list[ReviewThread]:
+        """Best available unresolved thread list.
+
+        Prefers ``all_unresolved_threads`` (includes outdated) when populated.
+        Falls back to ``actionable_threads`` for providers that only set the
+        legacy field, preserving backward compatibility.
+        """
+        return self.all_unresolved_threads or self.actionable_threads
 
     def is_commit_fresh(self, grace_seconds: int = RECENT_COMMIT_GRACE_SECONDS) -> bool:
         """True if the latest commit is within the recent-commit grace period.
@@ -370,7 +397,7 @@ class PRReviewStatus(BaseModel):
 
         All clear requires:
         - Status was fetched successfully (no transient failures)
-        - No unresolved actionable threads
+        - No unresolved threads (including outdated ones)
         - No CHANGES_REQUESTED from any reviewer
         - No bot currently processing (IN_PROGRESS)
 
@@ -378,7 +405,7 @@ class PRReviewStatus(BaseModel):
         """
         if self.fetch_failed:
             return False
-        if self.actionable_threads:
+        if self.effective_unresolved_threads:
             return False
         if self.has_changes_requested:
             return False
@@ -421,8 +448,8 @@ def format_review_status_summary(
             )
         )
 
-    # Unresolved threads
-    thread_count = len(status.actionable_threads)
+    # Unresolved threads (includes outdated; falls back to actionable for legacy providers)
+    thread_count = len(status.effective_unresolved_threads)
     if thread_count > 0:
         messages.append(
             (
