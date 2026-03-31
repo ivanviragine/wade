@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.15.7] — 2026-03-30
+
+### Bug Fixes
+
+- strengthen review enforcement in implementation-session done command (#239) (1f1043e)
+- detect completed bot reviews in PR comment polling (#243) (c7589e0)
+
 ## [v0.15.6] — 2026-03-30
 
 ### Bug Fixes
