@@ -136,8 +136,9 @@ def fetch_reviews(
         print("Review status fetch failed — status may be incomplete. Try again shortly.")
         return False
 
-    # all_unresolved_threads covers both actionable (non-outdated) and outdated threads
-    all_threads = status.all_unresolved_threads
+    # all_unresolved_threads covers both actionable (non-outdated) and outdated threads;
+    # falls back to actionable_threads for providers that don't set it.
+    all_threads = status.effective_unresolved_threads
     outdated = [t for t in all_threads if t.is_outdated]
 
     if not all_threads:
@@ -154,12 +155,8 @@ def fetch_reviews(
         if status.changes_requested_by:
             names = ", ".join(f"@{a}" for a in status.changes_requested_by)
             print(f"\nNote: Changes requested by {names} (PR-level review).")
-            for review in status.reviews:
-                if (
-                    review.state == ReviewState.CHANGES_REQUESTED
-                    and not review.is_bot
-                    and review.body
-                ):
+            for review in status.latest_reviews_by_author.values():
+                if review.state == ReviewState.CHANGES_REQUESTED and review.body:
                     print(f"\n@{review.author}'s review:\n{review.body}")
         if status.pending_reviewers:
             names = ", ".join(
@@ -176,8 +173,8 @@ def fetch_reviews(
     if status.changes_requested_by:
         pr_level_reviews = [
             r
-            for r in status.reviews
-            if r.state == ReviewState.CHANGES_REQUESTED and not r.is_bot and r.body
+            for r in status.latest_reviews_by_author.values()
+            if r.state == ReviewState.CHANGES_REQUESTED and r.body
         ]
         if pr_level_reviews:
             print("\n## PR-Level Changes Requested\n")
@@ -371,20 +368,21 @@ def poll_for_reviews(
                 time.sleep(poll_interval)
                 continue
 
+            eff_threads = status.effective_unresolved_threads
             if (
                 status.bot_status == ReviewBotStatus.COMPLETED
-                and not status.all_unresolved_threads
+                and not eff_threads
                 and not status.has_changes_requested
             ):
                 console.info("Review bot completed — no actionable comments found.")
                 return PollOutcome.REVIEW_COMPLETE
 
-            if status.all_unresolved_threads or status.has_changes_requested:
-                count = len(status.all_unresolved_threads)
+            if eff_threads or status.has_changes_requested:
+                count = len(eff_threads)
                 is_bot = status.bot_status is not None
                 settle = bot_settle if is_bot else human_settle
                 reviewer_type = "bot" if is_bot else "reviewer"
-                if status.all_unresolved_threads:
+                if eff_threads:
                     console.info(
                         f"Found {count} new review comment(s)."
                         f" Waiting {settle}s for {reviewer_type} to finish..."
@@ -528,14 +526,14 @@ def start(
     if status.fetch_failed:
         console.warn("Review status fetch failed — status may be incomplete. Try again shortly.")
         return False
-    # Use all_unresolved_threads (actionable + outdated) as the broader review signal.
-    effective_threads = status.all_unresolved_threads
-    source_for_stats = effective_threads if effective_threads else status.actionable_threads
+    # Use all_unresolved_threads (actionable + outdated) as the broader review signal;
+    # falls back to actionable_threads for providers that don't set it.
+    effective_threads = status.effective_unresolved_threads
     file_paths = {
-        t.first_comment.path for t in source_for_stats if t.first_comment and t.first_comment.path
+        t.first_comment.path for t in effective_threads if t.first_comment and t.first_comment.path
     }
     file_count = len(file_paths) + (
-        1 if any(t.first_comment and not t.first_comment.path for t in source_for_stats) else 0
+        1 if any(t.first_comment and not t.first_comment.path for t in effective_threads) else 0
     )
     comment_count = len(effective_threads)
 

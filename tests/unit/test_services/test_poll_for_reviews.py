@@ -463,3 +463,40 @@ def test_bot_completed_no_signals_returns_review_complete(
 
     assert result == PollOutcome.REVIEW_COMPLETE
     mock_sleep.assert_not_called()
+
+
+@patch(_SLEEP)
+@patch(_STATUS)
+@patch(_GET_PR)
+def test_actionable_only_no_all_unresolved_threads(
+    mock_get_pr: MagicMock,
+    mock_status: MagicMock,
+    mock_sleep: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """Compat: provider sets only actionable_threads (all_unresolved_threads empty).
+
+    Polling must still detect the thread and return COMMENTS_FOUND, exercising
+    the _effective_unresolved_threads fallback path.
+    """
+    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    thread = _make_thread()
+    # Simulate a legacy provider that only populates actionable_threads
+    mock_status.return_value = PRReviewStatus(
+        actionable_threads=[thread],
+        # all_unresolved_threads intentionally omitted — defaults to []
+        bot_status=None,
+    )
+
+    result = poll_for_reviews(
+        _provider(),
+        tmp_path,
+        42,
+        "feat/42-test",
+        poll_interval=60,
+        bot_settle=60,
+        human_settle=120,
+    )
+
+    assert result == PollOutcome.COMMENTS_FOUND
+    mock_sleep.assert_called_once_with(120)

@@ -326,6 +326,16 @@ class PRReviewStatus(BaseModel):
     fetch_failed: bool = False
     latest_commit_pushed_at: datetime | None = None
 
+    @property
+    def effective_unresolved_threads(self) -> list[ReviewThread]:
+        """Best available unresolved thread list.
+
+        Prefers ``all_unresolved_threads`` (includes outdated) when populated.
+        Falls back to ``actionable_threads`` for providers that only set the
+        legacy field, preserving backward compatibility.
+        """
+        return self.all_unresolved_threads or self.actionable_threads
+
     def is_commit_fresh(self, grace_seconds: int = RECENT_COMMIT_GRACE_SECONDS) -> bool:
         """True if the latest commit is within the recent-commit grace period.
 
@@ -387,7 +397,7 @@ class PRReviewStatus(BaseModel):
 
         All clear requires:
         - Status was fetched successfully (no transient failures)
-        - No unresolved actionable threads
+        - No unresolved threads (including outdated ones)
         - No CHANGES_REQUESTED from any reviewer
         - No bot currently processing (IN_PROGRESS)
 
@@ -395,7 +405,7 @@ class PRReviewStatus(BaseModel):
         """
         if self.fetch_failed:
             return False
-        if self.actionable_threads:
+        if self.effective_unresolved_threads:
             return False
         if self.has_changes_requested:
             return False
@@ -438,8 +448,8 @@ def format_review_status_summary(
             )
         )
 
-    # Unresolved threads
-    thread_count = len(status.actionable_threads)
+    # Unresolved threads (includes outdated; falls back to actionable for legacy providers)
+    thread_count = len(status.effective_unresolved_threads)
     if thread_count > 0:
         messages.append(
             (
