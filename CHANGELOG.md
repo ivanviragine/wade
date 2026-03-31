@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.15.9] — 2026-03-31
+
+### Bug Fixes
+
+- relax knowledge entry ID regex to allow descriptive IDs (#247) (51d85ae)
+
 ## [v0.15.8] — 2026-03-31
 
 ### Bug Fixes
