@@ -26,8 +26,10 @@ from wade.models.review import (
     PollOutcome,
     PRReviewStatus,
     ReviewBotStatus,
+    ReviewState,
     detect_coderabbit_review_status,
     filter_actionable_threads,
+    filter_unresolved_threads,
     format_review_threads_markdown,
 )
 from wade.models.task import Task
@@ -133,9 +135,12 @@ def fetch_reviews(
     if status.fetch_failed:
         print("Review status fetch failed — status may be incomplete. Try again shortly.")
         return False
-    actionable = status.actionable_threads
 
-    if not actionable:
+    # all_unresolved_threads covers both actionable (non-outdated) and outdated threads
+    all_threads = status.all_unresolved_threads
+    outdated = [t for t in all_threads if t.is_outdated]
+
+    if not all_threads:
         if status.bot_status == ReviewBotStatus.PAUSED:
             print("No unresolved review comments found, but CodeRabbit review is paused.")
             print("Comments may arrive when the review is resumed.")
@@ -149,6 +154,13 @@ def fetch_reviews(
         if status.changes_requested_by:
             names = ", ".join(f"@{a}" for a in status.changes_requested_by)
             print(f"\nNote: Changes requested by {names} (PR-level review).")
+            for review in status.reviews:
+                if (
+                    review.state == ReviewState.CHANGES_REQUESTED
+                    and not review.is_bot
+                    and review.body
+                ):
+                    print(f"\n@{review.author}'s review:\n{review.body}")
         if status.pending_reviewers:
             names = ", ".join(
                 f"@{r.name}" + (" (team)" if r.is_team else "") for r in status.pending_reviewers
@@ -156,8 +168,31 @@ def fetch_reviews(
             print(f"\nAwaiting review from {names}.")
         return True
 
-    # Output formatted markdown to stdout (for AI consumption)
-    print(format_review_threads_markdown(actionable))
+    # Output formatted markdown to stdout (for AI consumption).
+    # Includes both actionable (non-outdated) and outdated threads; outdated ones are annotated.
+    print(format_review_threads_markdown(all_threads))
+
+    # Append PR-level changes_requested review bodies (if any)
+    if status.changes_requested_by:
+        pr_level_reviews = [
+            r
+            for r in status.reviews
+            if r.state == ReviewState.CHANGES_REQUESTED and not r.is_bot and r.body
+        ]
+        if pr_level_reviews:
+            print("\n## PR-Level Changes Requested\n")
+            for review in pr_level_reviews:
+                print(f"### @{review.author}'s review\n\n{review.body}\n")
+        else:
+            names = ", ".join(f"@{a}" for a in status.changes_requested_by)
+            print(f"\n> **Note:** Changes also requested by {names} (PR-level review, no body).\n")
+
+    if outdated:
+        print(
+            f"\n> **Note:** {len(outdated)} thread(s) above are outdated"
+            " — they reference code that has since changed."
+        )
+
     return True
 
 
@@ -276,10 +311,12 @@ def _fallback_review_status(
         return PRReviewStatus(fetch_failed=True)
 
     actionable = filter_actionable_threads(all_threads)
+    all_unresolved = filter_unresolved_threads(all_threads)
     bot_status = _check_review_bot_status(provider, pr_number)
 
     return PRReviewStatus(
         actionable_threads=actionable,
+        all_unresolved_threads=all_unresolved,
         bot_status=bot_status,
     )
 
@@ -334,23 +371,34 @@ def poll_for_reviews(
                 time.sleep(poll_interval)
                 continue
 
-            if status.bot_status == ReviewBotStatus.COMPLETED and not status.actionable_threads:
+            if (
+                status.bot_status == ReviewBotStatus.COMPLETED
+                and not status.all_unresolved_threads
+                and not status.has_changes_requested
+            ):
                 console.info("Review bot completed — no actionable comments found.")
                 return PollOutcome.REVIEW_COMPLETE
 
-            if status.actionable_threads:
-                count = len(status.actionable_threads)
+            if status.all_unresolved_threads or status.has_changes_requested:
+                count = len(status.all_unresolved_threads)
                 is_bot = status.bot_status is not None
                 settle = bot_settle if is_bot else human_settle
                 reviewer_type = "bot" if is_bot else "reviewer"
-                console.info(
-                    f"Found {count} new review comment(s). "
-                    f"Waiting {settle}s for {reviewer_type} to finish..."
-                )
+                if status.all_unresolved_threads:
+                    console.info(
+                        f"Found {count} new review comment(s)."
+                        f" Waiting {settle}s for {reviewer_type} to finish..."
+                    )
+                else:
+                    names = ", ".join(f"@{a}" for a in status.changes_requested_by)
+                    console.info(
+                        f"Changes requested by {names}."
+                        f" Waiting {settle}s for {reviewer_type} to finish..."
+                    )
                 time.sleep(settle)
                 return PollOutcome.COMMENTS_FOUND
 
-            # No actionable threads, no bot blocking — apply quiet-timeout logic.
+            # No review signals, no bot blocking — apply quiet-timeout logic.
             if status.is_commit_fresh():
                 # Commit too recent; reset quiet timer and keep polling.
                 quiet_start = None
@@ -480,19 +528,19 @@ def start(
     if status.fetch_failed:
         console.warn("Review status fetch failed — status may be incomplete. Try again shortly.")
         return False
-    comment_count = len(status.actionable_threads)
+    # Use all_unresolved_threads (actionable + outdated) as the broader review signal.
+    effective_threads = status.all_unresolved_threads
+    source_for_stats = effective_threads if effective_threads else status.actionable_threads
     file_paths = {
-        t.first_comment.path
-        for t in status.actionable_threads
-        if t.first_comment and t.first_comment.path
+        t.first_comment.path for t in source_for_stats if t.first_comment and t.first_comment.path
     }
     file_count = len(file_paths) + (
-        1
-        if any(t.first_comment and not t.first_comment.path for t in status.actionable_threads)
-        else 0
+        1 if any(t.first_comment and not t.first_comment.path for t in source_for_stats) else 0
     )
+    comment_count = len(effective_threads)
 
-    if comment_count == 0:
+    # --- No review signals: check bot status, commit freshness, quiet-exit ---
+    if not effective_threads and not status.has_changes_requested:
         if status.bot_status == ReviewBotStatus.PAUSED:
             console.warn(
                 "CodeRabbit review is paused — comments may arrive when resumed.\n"
@@ -501,13 +549,6 @@ def start(
             return True
         if status.bot_status == ReviewBotStatus.IN_PROGRESS:
             console.warn("CodeRabbit is still reviewing — try again shortly.")
-            return True
-        if status.has_changes_requested:
-            names = ", ".join(f"@{a}" for a in status.changes_requested_by)
-            console.warn(
-                f"No inline comments, but changes requested by {names} "
-                "(PR-level review). Check the PR for details."
-            )
             return True
 
         # No blocking conditions — message depends on commit freshness.
@@ -544,7 +585,18 @@ def start(
         )
         return True
 
-    console.info(f"Found {comment_count} unresolved comment(s) across {file_count} location(s)")
+    # --- We have review signals: proceed with session ---
+    if effective_threads:
+        outdated_count = sum(1 for t in effective_threads if t.is_outdated)
+        outdated_note = f" ({outdated_count} on outdated code)" if outdated_count else ""
+        console.info(
+            f"Found {comment_count} unresolved comment(s)"
+            f" across {file_count} location(s){outdated_note}"
+        )
+    else:
+        # Only PR-level changes_requested, no inline threads
+        names = ", ".join(f"@{a}" for a in status.changes_requested_by)
+        console.info(f"Changes requested by {names} (PR-level review) — launching review session")
 
     # 5. Re-bootstrap skills (ensures review-pr-comments-session skill is installed)
     from wade.skills.installer import REVIEW_SKILLS

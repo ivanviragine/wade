@@ -26,6 +26,7 @@ from wade.models.review import (
     ReviewThread,
     detect_coderabbit_review_status,
     filter_actionable_threads,
+    filter_unresolved_threads,
 )
 from wade.models.task import (
     Label,
@@ -609,6 +610,7 @@ mutation($threadId: ID!) {
 
         return PRReviewStatus(
             actionable_threads=filter_actionable_threads(threads),
+            all_unresolved_threads=filter_unresolved_threads(threads),
             reviews=reviews,
             pending_reviewers=pending_reviewers,
             bot_status=bot_status,

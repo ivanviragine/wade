@@ -149,6 +149,11 @@ def filter_actionable_threads(threads: list[ReviewThread]) -> list[ReviewThread]
     return [t for t in threads if not t.is_resolved and not t.is_outdated and t.comments]
 
 
+def filter_unresolved_threads(threads: list[ReviewThread]) -> list[ReviewThread]:
+    """Return all unresolved threads with at least one comment, including outdated ones."""
+    return [t for t in threads if not t.is_resolved and t.comments]
+
+
 # ---------------------------------------------------------------------------
 # Markdown formatting
 # ---------------------------------------------------------------------------
@@ -221,8 +226,19 @@ def _format_thread(thread: ReviewThread) -> list[str]:
     if first.url:
         loc_parts.append(f"([link]({first.url}))")
 
+    if thread.is_outdated:
+        loc_parts.append("[OUTDATED]")
+
     lines.append(f"### {' '.join(loc_parts)}" if loc_parts else "### Comment")
     lines.append("")
+
+    # Outdated notice
+    if thread.is_outdated:
+        lines.append(
+            "> **Note:** This thread is outdated — the code it references has changed."
+            " Address the underlying concern in the current version of the code."
+        )
+        lines.append("")
 
     # Thread ID for resolution
     if thread.id:
@@ -303,6 +319,7 @@ class PRReviewStatus(BaseModel):
     """
 
     actionable_threads: list[ReviewThread] = []
+    all_unresolved_threads: list[ReviewThread] = []
     reviews: list[PRReview] = []
     pending_reviewers: list[PendingReviewer] = []
     bot_status: ReviewBotStatus | None = None

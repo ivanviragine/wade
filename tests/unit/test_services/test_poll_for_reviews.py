@@ -44,8 +44,10 @@ def test_human_comments_settle_120s(
 ) -> None:
     """Human reviewer comment found — should settle for 120s and return COMMENTS_FOUND."""
     mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    thread = _make_thread()
     mock_status.return_value = PRReviewStatus(
-        actionable_threads=[_make_thread()],
+        actionable_threads=[thread],
+        all_unresolved_threads=[thread],
         bot_status=None,
     )
 
@@ -74,8 +76,10 @@ def test_bot_comments_settle_60s(
 ) -> None:
     """Bot reviewer comment found — should settle for 60s and return COMMENTS_FOUND."""
     mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    thread = _make_thread()
     mock_status.return_value = PRReviewStatus(
-        actionable_threads=[_make_thread()],
+        actionable_threads=[thread],
+        all_unresolved_threads=[thread],
         bot_status=ReviewBotStatus.PAUSED,
     )
 
@@ -141,10 +145,12 @@ def test_bot_in_progress_keeps_polling_then_finds_comments(
 ) -> None:
     """Bot IN_PROGRESS should keep polling, then detect comments after bot finishes."""
     mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    thread = _make_thread()
     mock_status.side_effect = [
         PRReviewStatus(bot_status=ReviewBotStatus.IN_PROGRESS),
         PRReviewStatus(
-            actionable_threads=[_make_thread()],
+            actionable_threads=[thread],
+            all_unresolved_threads=[thread],
             bot_status=ReviewBotStatus.PAUSED,
         ),
     ]
@@ -176,9 +182,12 @@ def test_transient_fetch_failure_keeps_polling(
 ) -> None:
     """Transient fetch failure should keep polling and eventually find comments."""
     mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    thread = _make_thread()
     mock_status.side_effect = [
         PRReviewStatus(fetch_failed=True),
-        PRReviewStatus(actionable_threads=[_make_thread()], bot_status=None),
+        PRReviewStatus(
+            actionable_threads=[thread], all_unresolved_threads=[thread], bot_status=None
+        ),
     ]
 
     result = poll_for_reviews(
@@ -287,3 +296,170 @@ def test_fresh_commit_resets_quiet_timer(
     )
 
     assert result == PollOutcome.QUIET_TIMEOUT
+
+
+# ---------------------------------------------------------------------------
+# New tests: outdated threads and PR-level changes_requested
+# ---------------------------------------------------------------------------
+
+
+def _make_outdated_thread() -> ReviewThread:
+    return ReviewThread(
+        id="t_outdated",
+        is_resolved=False,
+        is_outdated=True,
+        comments=[ReviewComment(author="alice", body="please fix this")],
+    )
+
+
+@patch(_SLEEP)
+@patch(_STATUS)
+@patch(_GET_PR)
+def test_outdated_threads_return_comments_found(
+    mock_get_pr: MagicMock,
+    mock_status: MagicMock,
+    mock_sleep: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """Outdated-but-unresolved threads should be detected and return COMMENTS_FOUND."""
+    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    outdated = _make_outdated_thread()
+    mock_status.return_value = PRReviewStatus(
+        actionable_threads=[],
+        all_unresolved_threads=[outdated],
+        bot_status=None,
+    )
+
+    result = poll_for_reviews(
+        _provider(),
+        tmp_path,
+        42,
+        "feat/42-test",
+        poll_interval=60,
+        bot_settle=60,
+        human_settle=120,
+    )
+
+    assert result == PollOutcome.COMMENTS_FOUND
+    mock_sleep.assert_called_once_with(120)
+
+
+@patch(_SLEEP)
+@patch(_STATUS)
+@patch(_GET_PR)
+def test_changes_requested_no_threads_returns_comments_found(
+    mock_get_pr: MagicMock,
+    mock_status: MagicMock,
+    mock_sleep: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """PR-level CHANGES_REQUESTED with no inline threads should return COMMENTS_FOUND."""
+    from wade.models.review import PRReview, ReviewState
+
+    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    mock_status.return_value = PRReviewStatus(
+        actionable_threads=[],
+        all_unresolved_threads=[],
+        reviews=[PRReview(author="bob", state=ReviewState.CHANGES_REQUESTED)],
+        bot_status=None,
+    )
+
+    result = poll_for_reviews(
+        _provider(),
+        tmp_path,
+        42,
+        "feat/42-test",
+        poll_interval=60,
+        bot_settle=60,
+        human_settle=120,
+    )
+
+    assert result == PollOutcome.COMMENTS_FOUND
+    mock_sleep.assert_called_once_with(120)
+
+
+@patch(_SLEEP)
+@patch(_STATUS)
+@patch(_GET_PR)
+def test_bot_completed_with_outdated_threads_returns_comments_found(
+    mock_get_pr: MagicMock,
+    mock_status: MagicMock,
+    _mock_sleep: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """Bot completed but outdated threads remain — COMMENTS_FOUND, not REVIEW_COMPLETE."""
+    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    outdated = _make_outdated_thread()
+    mock_status.return_value = PRReviewStatus(
+        actionable_threads=[],
+        all_unresolved_threads=[outdated],
+        bot_status=ReviewBotStatus.COMPLETED,
+    )
+
+    result = poll_for_reviews(
+        _provider(),
+        tmp_path,
+        42,
+        "feat/42-test",
+        poll_interval=60,
+        bot_settle=60,
+        human_settle=120,
+    )
+
+    assert result == PollOutcome.COMMENTS_FOUND
+
+
+@patch(_SLEEP)
+@patch(_STATUS)
+@patch(_GET_PR)
+def test_bot_completed_with_changes_requested_returns_comments_found(
+    mock_get_pr: MagicMock,
+    mock_status: MagicMock,
+    _mock_sleep: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """Bot completed + CHANGES_REQUESTED with no threads — should return COMMENTS_FOUND."""
+    from wade.models.review import PRReview, ReviewState
+
+    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    mock_status.return_value = PRReviewStatus(
+        actionable_threads=[],
+        all_unresolved_threads=[],
+        reviews=[PRReview(author="alice", state=ReviewState.CHANGES_REQUESTED)],
+        bot_status=ReviewBotStatus.COMPLETED,
+    )
+
+    result = poll_for_reviews(
+        _provider(),
+        tmp_path,
+        42,
+        "feat/42-test",
+        poll_interval=60,
+        bot_settle=60,
+        human_settle=120,
+    )
+
+    assert result == PollOutcome.COMMENTS_FOUND
+
+
+@patch(_SLEEP)
+@patch(_STATUS)
+@patch(_GET_PR)
+def test_bot_completed_no_signals_returns_review_complete(
+    mock_get_pr: MagicMock,
+    mock_status: MagicMock,
+    mock_sleep: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """Bot completed with no threads and no changes_requested — REVIEW_COMPLETE."""
+    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    mock_status.return_value = PRReviewStatus(
+        actionable_threads=[],
+        all_unresolved_threads=[],
+        bot_status=ReviewBotStatus.COMPLETED,
+    )
+
+    result = poll_for_reviews(_provider(), tmp_path, 42, "feat/42-test")
+
+    assert result == PollOutcome.REVIEW_COMPLETE
+    mock_sleep.assert_not_called()
