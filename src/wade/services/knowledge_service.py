@@ -26,8 +26,9 @@ Read this at the start of every session. Add new entries via `wade knowledge add
 
 # Regex to match entry headings: ## <id> | <date> | <session_type> [+N/-M]
 # Also matches old-style headings without IDs: ## <date> | <session_type>
+# ID can be 8-char hex (legacy), alphanumeric with hyphens and underscores, or absent.
 _ENTRY_HEADING_RE = re.compile(
-    r"^## (?:([0-9a-f]{8}) \| )?(\d{4}-\d{2}-\d{2}) \| (.+?)(?:\s+\[.*\])?\s*$"
+    r"^## (?:([a-zA-Z0-9_-]+) \| )?(\d{4}-\d{2}-\d{2}) \| (.+?)(?:\s+\[.*\])?\s*$"
 )
 
 

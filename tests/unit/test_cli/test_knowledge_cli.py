@@ -187,6 +187,37 @@ class TestKnowledgeRateCommand:
             runner.invoke(app, ["knowledge", "rate", "a1b2c3d4", "up"])
         assert ratings_path.exists()
 
+    def test_rate_descriptive_id_with_hyphens(self, tmp_path: Path) -> None:
+        content = (
+            KNOWLEDGE_TEMPLATE
+            + "\n## config-sync-tool | 2026-03-24 | implementation\n\n"
+            + "Descriptive ID entry.\n\n---\n"
+        )
+        (tmp_path / "KNOWLEDGE.md").write_text(content, encoding="utf-8")
+        config = ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
+        )
+        with patch("wade.config.loader.load_config", return_value=config):
+            result = runner.invoke(app, ["knowledge", "rate", "config-sync-tool", "up"])
+        assert result.exit_code == 0
+        assert "+1" in result.output
+
+    def test_rate_descriptive_id_with_underscores(self, tmp_path: Path) -> None:
+        content = (
+            KNOWLEDGE_TEMPLATE
+            + "\n## my_entry_name | 2026-03-24 | plan\n\nCustom underscore ID.\n\n---\n"
+        )
+        (tmp_path / "KNOWLEDGE.md").write_text(content, encoding="utf-8")
+        config = ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
+        )
+        with patch("wade.config.loader.load_config", return_value=config):
+            result = runner.invoke(app, ["knowledge", "rate", "my_entry_name", "down"])
+        assert result.exit_code == 0
+        assert "-1" in result.output
+
 
 class TestKnowledgeAddSupersedes:
     def test_supersedes_flag(self, tmp_path: Path) -> None:
