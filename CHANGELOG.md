@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.15.8] — 2026-03-31
+
+### Bug Fixes
+
+- PR comment polling misses outdated threads and PR-level reviews (#245) (82c03ec)
+
 ## [v0.15.7] — 2026-03-30
 
 ### Bug Fixes
