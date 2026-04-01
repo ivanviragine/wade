@@ -1,83 +1,74 @@
-"""Tests for get_managed_gitignore_patterns in skills/installer.py."""
+"""Tests for get_worktree_gitignore_entries in skills/installer.py."""
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from wade.skills.installer import (
-    CROSS_TOOL_DIRS,
     HOOK_CONFIG_FILES,
-    MANAGED_SKILL_NAMES,
     PLAN_GUARD_HOOK_FILES,
+    SKILL_FILES,
     WORKTREE_GUARD_HOOK_FILES,
-    get_managed_gitignore_patterns,
+    get_worktree_gitignore_entries,
 )
 
 
-class TestGetManagedGitignorePatterns:
-    def test_includes_all_managed_skill_names(self, tmp_path: Path) -> None:
-        patterns = get_managed_gitignore_patterns(tmp_path)
-        for name in MANAGED_SKILL_NAMES:
-            assert f".claude/skills/{name}/" in patterns
+class TestGetWorktreeGitignoreEntries:
+    def test_includes_specific_skill_files_not_directories(self) -> None:
+        entries = get_worktree_gitignore_entries()
+        # Must list specific files, never whole directories like ".claude/skills/task/"
+        for name, files in SKILL_FILES.items():
+            for filename in files:
+                assert f".claude/skills/{name}/{filename}" in entries
+            # Directory pattern must NOT be present
+            assert f".claude/skills/{name}/" not in entries
 
-    def test_includes_plan_guard_hook_files(self, tmp_path: Path) -> None:
-        patterns = get_managed_gitignore_patterns(tmp_path)
+    def test_includes_plan_guard_hook_files(self) -> None:
+        entries = get_worktree_gitignore_entries()
         for hook_file in PLAN_GUARD_HOOK_FILES:
-            assert hook_file in patterns
+            assert hook_file in entries
 
-    def test_includes_worktree_guard_hook_files(self, tmp_path: Path) -> None:
-        patterns = get_managed_gitignore_patterns(tmp_path)
+    def test_includes_worktree_guard_hook_files(self) -> None:
+        entries = get_worktree_gitignore_entries()
         for hook_file in WORKTREE_GUARD_HOOK_FILES:
-            assert hook_file in patterns
+            assert hook_file in entries
 
-    def test_includes_hook_config_files(self, tmp_path: Path) -> None:
-        patterns = get_managed_gitignore_patterns(tmp_path)
+    def test_includes_hook_config_files(self) -> None:
+        entries = get_worktree_gitignore_entries()
         for config_file in HOOK_CONFIG_FILES:
-            assert config_file in patterns
+            assert config_file in entries
 
-    def test_includes_session_settings_files(self, tmp_path: Path) -> None:
-        patterns = get_managed_gitignore_patterns(tmp_path)
-        assert ".claude/settings.json" in patterns
-        assert ".cursor/cli.json" in patterns
+    def test_includes_session_settings_files(self) -> None:
+        entries = get_worktree_gitignore_entries()
+        assert ".claude/settings.json" in entries
+        assert ".cursor/cli.json" in entries
 
-    def test_includes_cross_tool_dirs_when_absent(self, tmp_path: Path) -> None:
-        """Cross-tool dirs that don't exist yet should be included."""
-        patterns = get_managed_gitignore_patterns(tmp_path)
-        for cross_dir in CROSS_TOOL_DIRS:
-            assert cross_dir in patterns
+    def test_includes_session_artifacts(self) -> None:
+        entries = get_worktree_gitignore_entries()
+        assert "PLAN.md" in entries
+        assert "PR-SUMMARY.md" in entries
+        assert ".commit-msg" in entries
+        assert ".wade/" in entries
+        assert ".wade-managed" in entries
 
-    def test_includes_cross_tool_dir_when_symlink(self, tmp_path: Path) -> None:
-        """Cross-tool dirs that are symlinks should be included."""
-        target = tmp_path / ".claude" / "skills"
-        target.mkdir(parents=True)
-        for cross_dir in CROSS_TOOL_DIRS:
-            cross = tmp_path / cross_dir
-            cross.parent.mkdir(parents=True, exist_ok=True)
-            cross.symlink_to(target)
+    def test_does_not_include_cross_tool_dirs(self) -> None:
+        """Cross-tool dirs are added conditionally by write_worktree_gitignore."""
+        entries = get_worktree_gitignore_entries()
+        assert ".github/skills" not in entries
+        assert ".agents/skills" not in entries
 
-        patterns = get_managed_gitignore_patterns(tmp_path)
-        for cross_dir in CROSS_TOOL_DIRS:
-            assert cross_dir in patterns
+    def test_does_not_include_pointer_files(self) -> None:
+        """Pointer files are added conditionally by write_worktree_gitignore."""
+        entries = get_worktree_gitignore_entries()
+        assert "AGENTS.md" not in entries
+        assert "CLAUDE.md" not in entries
 
-    def test_excludes_cross_tool_dir_when_real_directory(self, tmp_path: Path) -> None:
-        """Real user directories should NOT be gitignored."""
-        for cross_dir in CROSS_TOOL_DIRS:
-            real_dir = tmp_path / cross_dir
-            real_dir.mkdir(parents=True, exist_ok=True)
-            (real_dir / "user-file.md").write_text("user content")
-
-        patterns = get_managed_gitignore_patterns(tmp_path)
-        for cross_dir in CROSS_TOOL_DIRS:
-            assert cross_dir not in patterns
-
-    def test_skill_patterns_are_sorted(self, tmp_path: Path) -> None:
-        patterns = get_managed_gitignore_patterns(tmp_path)
-        skill_patterns = [p for p in patterns if p.startswith(".claude/skills/")]
-        assert skill_patterns == sorted(skill_patterns)
-
-    def test_adding_skill_to_registry_adds_to_patterns(self, tmp_path: Path) -> None:
-        """Verify all MANAGED_SKILL_NAMES (current + legacy) are covered."""
-        patterns = get_managed_gitignore_patterns(tmp_path)
-        skill_entries = {p for p in patterns if p.startswith(".claude/skills/")}
-        expected = {f".claude/skills/{name}/" for name in MANAGED_SKILL_NAMES}
-        assert expected == skill_entries
+    def test_skill_entries_are_sorted_by_skill_name(self) -> None:
+        entries = get_worktree_gitignore_entries()
+        skill_entries = [e for e in entries if e.startswith(".claude/skills/")]
+        # Entries should be grouped and sorted by skill name
+        skill_names = []
+        for e in skill_entries:
+            parts = e.split("/")
+            name = parts[2]
+            if not skill_names or skill_names[-1] != name:
+                skill_names.append(name)
+        assert skill_names == sorted(skill_names)

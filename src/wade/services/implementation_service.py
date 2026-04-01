@@ -63,7 +63,11 @@ from wade.services.task_service import (
 )
 from wade.ui import prompts
 from wade.ui.console import console
-from wade.utils.markdown import append_session_to_body, remove_marker_block
+from wade.utils.markdown import (
+    append_session_to_body,
+    has_marker_block,
+    remove_marker_block,
+)
 from wade.utils.terminal import (
     compose_implement_title,
     launch_batch_in_terminals,
@@ -75,6 +79,10 @@ from wade.utils.terminal import (
 from wade.utils.token_usage_markdown import resolve_token_usage_totals
 
 logger = structlog.get_logger()
+
+# --- Worktree gitignore block markers ---
+WORKTREE_GITIGNORE_MARKER_START = "# wade:worktree:start"
+WORKTREE_GITIGNORE_MARKER_END = "# wade:worktree:end"
 
 # --- Implementation usage block markers ---
 IMPL_USAGE_MARKER_START = "<!-- wade:impl-usage:start -->"
@@ -319,6 +327,87 @@ def _effective_copy_files(config: ProjectConfig) -> list[str]:
     return files
 
 
+def write_worktree_gitignore(worktree_path: Path) -> None:
+    """Append a ``# wade:worktree:start`` block to ``.gitignore`` in the worktree.
+
+    Lists **specific files** (never directories, except ``.wade/``) so that
+    user-owned files in the same parent directories are never hidden.
+
+    Also adds conditional entries for cross-tool symlinks (only when wade
+    created them) and untracked pointer files.
+    """
+    from wade.skills.installer import CROSS_TOOL_DIRS, get_worktree_gitignore_entries
+
+    entries = list(get_worktree_gitignore_entries())
+
+    # Conditional cross-tool symlinks (only if wade created them as symlinks)
+    for cross_dir in CROSS_TOOL_DIRS:
+        cross_path = worktree_path / cross_dir
+        if cross_path.is_symlink():
+            entries.append(cross_dir)
+
+    # Untracked pointer files (replacing broken info/exclude approach)
+    for name in ("AGENTS.md", "CLAUDE.md"):
+        target = worktree_path / name
+        if not (target.exists() or target.is_symlink()):
+            continue
+        try:
+            ls_result = subprocess.run(
+                ["git", "ls-files", "--error-unmatch", name],
+                cwd=str(worktree_path),
+                capture_output=True,
+            )
+            if ls_result.returncode != 0:
+                entries.append(name)
+        except (OSError, subprocess.SubprocessError):
+            # Git not available or worktree not valid — skip conditional entry
+            pass
+
+    block = (
+        f"\n{WORKTREE_GITIGNORE_MARKER_START}\n"
+        + "\n".join(entries)
+        + f"\n{WORKTREE_GITIGNORE_MARKER_END}\n"
+    )
+
+    gitignore = worktree_path / ".gitignore"
+    if gitignore.is_file():
+        existing = gitignore.read_text(encoding="utf-8")
+        # Remove existing worktree block if present (idempotent)
+        if has_marker_block(
+            existing, WORKTREE_GITIGNORE_MARKER_START, WORKTREE_GITIGNORE_MARKER_END
+        ):
+            existing = remove_marker_block(
+                existing, WORKTREE_GITIGNORE_MARKER_START, WORKTREE_GITIGNORE_MARKER_END
+            )
+        gitignore.write_text(existing.rstrip("\n") + "\n" + block, encoding="utf-8")
+    else:
+        gitignore.write_text(block.lstrip("\n"), encoding="utf-8")
+
+    logger.debug("implementation.worktree_gitignore_written", path=str(worktree_path))
+
+
+def strip_worktree_gitignore(worktree_path: Path) -> None:
+    """Remove the ``# wade:worktree:start`` block from ``.gitignore``.
+
+    Preserves any user content outside the block.
+    """
+    gitignore = worktree_path / ".gitignore"
+    if not gitignore.is_file():
+        return
+
+    existing = gitignore.read_text(encoding="utf-8")
+    if not has_marker_block(
+        existing, WORKTREE_GITIGNORE_MARKER_START, WORKTREE_GITIGNORE_MARKER_END
+    ):
+        return
+
+    cleaned = remove_marker_block(
+        existing, WORKTREE_GITIGNORE_MARKER_START, WORKTREE_GITIGNORE_MARKER_END
+    )
+    gitignore.write_text(cleaned, encoding="utf-8")
+    logger.debug("implementation.worktree_gitignore_stripped", path=str(worktree_path))
+
+
 def _suppress_pointer_artifacts(worktree_path: Path) -> None:
     """Prevent pointer-injected files from appearing dirty in the worktree.
 
@@ -338,9 +427,13 @@ def _suppress_pointer_artifacts(worktree_path: Path) -> None:
 
 
 def _do_suppress_pointer_artifacts(worktree_path: Path) -> None:
-    """Internal implementation of _suppress_pointer_artifacts."""
+    """Internal implementation of _suppress_pointer_artifacts.
+
+    Only handles **tracked** pointer files via ``--skip-worktree``.
+    Untracked pointer files are handled by ``write_worktree_gitignore()``
+    which includes them in the worktree gitignore block.
+    """
     pointer_files = ("AGENTS.md", "CLAUDE.md")
-    untracked: list[str] = []
 
     for name in pointer_files:
         target = worktree_path / name
@@ -360,32 +453,6 @@ def _do_suppress_pointer_artifacts(worktree_path: Path) -> None:
                 capture_output=True,
             )
             logger.debug("implementation.skip_worktree", file=name)
-        else:
-            untracked.append(name)
-
-    if not untracked:
-        return
-
-    # Add untracked pointer files to the worktree-local git exclude so they
-    # don't appear as '??' in git status.
-    gitdir_result = subprocess.run(
-        ["git", "rev-parse", "--absolute-git-dir"],
-        cwd=str(worktree_path),
-        capture_output=True,
-        text=True,
-    )
-    if gitdir_result.returncode != 0:
-        return
-    gitdir = Path(gitdir_result.stdout.strip())
-    exclude_file = gitdir / "info" / "exclude"
-    exclude_file.parent.mkdir(parents=True, exist_ok=True)
-    existing = exclude_file.read_text(encoding="utf-8") if exclude_file.is_file() else ""
-    existing_lines = set(existing.splitlines())
-    to_add = [name for name in untracked if name not in existing_lines]
-    if to_add:
-        new_content = existing.rstrip("\n") + "\n" + "\n".join(to_add) + "\n"
-        exclude_file.write_text(new_content, encoding="utf-8")
-        logger.debug("implementation.exclude_pointer_files", files=to_add)
 
 
 def bootstrap_worktree(
@@ -518,6 +585,28 @@ def bootstrap_worktree(
         _install_plan_guard_hooks(worktree_path)
     else:
         _install_worktree_guard_hooks(worktree_path)
+
+    # Write worktree gitignore block AFTER all file generation so the entry
+    # list is complete (skills, hooks, settings, pointer are all in place).
+    write_worktree_gitignore(worktree_path)
+
+    # Apply --skip-worktree on .gitignore if it is tracked so modifications
+    # from the worktree block don't appear in git status.
+    try:
+        _skip_gitignore = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", ".gitignore"],
+            cwd=str(worktree_path),
+            capture_output=True,
+        )
+        if _skip_gitignore.returncode == 0:
+            subprocess.run(
+                ["git", "update-index", "--skip-worktree", ".gitignore"],
+                cwd=str(worktree_path),
+                capture_output=True,
+            )
+            logger.debug("implementation.skip_worktree", file=".gitignore")
+    except (OSError, subprocess.SubprocessError):
+        pass  # Git not available — non-fatal
 
 
 def _detect_ai_cli_env() -> str | None:

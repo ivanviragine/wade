@@ -18,7 +18,8 @@ from wade.services.init_service import (
     _check_gh_auth,
     _clean_gitignore,
     _commit_wade_files,
-    _ensure_gitignore,
+    _ensure_wade_dir_self_ignoring,
+    _migrate_gitignore_block,
     _patch_config,
     _prompt_command_overrides,
     _prompt_commit_or_local,
@@ -33,7 +34,6 @@ from wade.services.init_service import (
     _validate_clickup_token,
     _write_config,
     deinit,
-    get_gitignore_entries,
     init,
     update,
 )
@@ -176,70 +176,16 @@ class TestSkillInstaller:
 
 
 class TestGitignoreBlock:
-    """Unit tests for _ensure_gitignore and _clean_gitignore."""
+    """Unit tests for _clean_gitignore (backward compat) and migration helpers."""
 
-    # --- _ensure_gitignore ---
-
-    def test_creates_file_when_missing(self, tmp_path: Path) -> None:
-        _ensure_gitignore(tmp_path)
-        gitignore = tmp_path / ".gitignore"
-        assert gitignore.is_file()
-        content = gitignore.read_text()
-        assert GITIGNORE_MARKER_START in content
-        assert GITIGNORE_MARKER_END in content
-        for entry in GITIGNORE_ENTRIES:
-            assert entry in content
-
-    def test_appends_block_to_existing_file(self, tmp_path: Path) -> None:
-        gitignore = tmp_path / ".gitignore"
-        gitignore.write_text("__pycache__/\n*.py[cod]\n")
-        _ensure_gitignore(tmp_path)
-        content = gitignore.read_text()
-        assert "__pycache__/" in content  # original preserved
-        assert GITIGNORE_MARKER_START in content
-
-    def test_idempotent_when_already_current(self, tmp_path: Path) -> None:
-        _ensure_gitignore(tmp_path)
-        mtime_after_first = (tmp_path / ".gitignore").stat().st_mtime
-        _ensure_gitignore(tmp_path)
-        mtime_after_second = (tmp_path / ".gitignore").stat().st_mtime
-        assert mtime_after_first == mtime_after_second  # file not touched
-
-    def test_replaces_stale_block(self, tmp_path: Path) -> None:
-        gitignore = tmp_path / ".gitignore"
-        gitignore.write_text(
-            f"__pycache__/\n\n{GITIGNORE_MARKER_START}\nold-entry.txt\n{GITIGNORE_MARKER_END}\n"
-        )
-        _ensure_gitignore(tmp_path)
-        content = gitignore.read_text()
-        assert "old-entry.txt" not in content
-        assert "__pycache__/" in content  # user content preserved
-        for entry in GITIGNORE_ENTRIES:
-            assert entry in content
-        # Block appears exactly once
-        assert content.count(GITIGNORE_MARKER_START) == 1
-
-    def test_migrates_old_style_entries(self, tmp_path: Path) -> None:
-        """Old-style entries (no markers) are cleaned up and replaced with block."""
-        gitignore = tmp_path / ".gitignore"
-        gitignore.write_text(
-            "__pycache__/\n# wade managed files\n.wade-managed\n.issue-context.md\nPLAN.md\n"
-        )
-        _ensure_gitignore(tmp_path)
-        content = gitignore.read_text()
-        assert GITIGNORE_MARKER_START in content
-        assert "__pycache__/" in content
-        # Old comment removed; entries now inside the block
-        assert content.count("PLAN.md") == 1
-        assert ".issue-context.md" not in content
-        assert "# wade managed files" not in content
-
-    # --- _clean_gitignore ---
+    # --- _clean_gitignore (backward compat for deinit) ---
 
     def test_removes_marker_block(self, tmp_path: Path) -> None:
-        _ensure_gitignore(tmp_path)
+        gitignore = tmp_path / ".gitignore"
+        inner = "\n".join(GITIGNORE_ENTRIES)
+        gitignore.write_text(f"{GITIGNORE_MARKER_START}\n{inner}\n{GITIGNORE_MARKER_END}\n")
         _clean_gitignore(tmp_path)
-        content = (tmp_path / ".gitignore").read_text()
+        content = gitignore.read_text()
         assert GITIGNORE_MARKER_START not in content
         assert GITIGNORE_MARKER_END not in content
         for entry in GITIGNORE_ENTRIES:
@@ -247,12 +193,15 @@ class TestGitignoreBlock:
 
     def test_preserves_user_content_on_clean(self, tmp_path: Path) -> None:
         gitignore = tmp_path / ".gitignore"
-        gitignore.write_text("__pycache__/\n*.py[cod]\n")
-        _ensure_gitignore(tmp_path)
+        inner = "\n".join(GITIGNORE_ENTRIES)
+        gitignore.write_text(
+            f"__pycache__/\n*.py[cod]\n\n{GITIGNORE_MARKER_START}\n{inner}\n{GITIGNORE_MARKER_END}\n"
+        )
         _clean_gitignore(tmp_path)
-        content = (tmp_path / ".gitignore").read_text()
+        content = gitignore.read_text()
         assert "__pycache__/" in content
         assert "*.py[cod]" in content
+        assert GITIGNORE_MARKER_START not in content
 
     def test_backward_compat_removes_old_style_entries(self, tmp_path: Path) -> None:
         """Deinit on a project inited before markers were introduced."""
@@ -270,6 +219,43 @@ class TestGitignoreBlock:
 
     def test_clean_no_op_when_no_file(self, tmp_path: Path) -> None:
         _clean_gitignore(tmp_path)  # must not raise
+
+    # --- _migrate_gitignore_block ---
+
+    def test_migrate_removes_stale_block(self, tmp_path: Path) -> None:
+        gitignore = tmp_path / ".gitignore"
+        inner = "\n".join(GITIGNORE_ENTRIES)
+        gitignore.write_text(
+            f"__pycache__/\n\n{GITIGNORE_MARKER_START}\n{inner}\n{GITIGNORE_MARKER_END}\n"
+        )
+        _migrate_gitignore_block(tmp_path)
+        content = gitignore.read_text()
+        assert GITIGNORE_MARKER_START not in content
+        assert "__pycache__/" in content
+
+    def test_migrate_no_op_when_no_block(self, tmp_path: Path) -> None:
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text("__pycache__/\n")
+        _migrate_gitignore_block(tmp_path)
+        content = gitignore.read_text()
+        assert "__pycache__/" in content
+
+    def test_migrate_no_op_when_no_file(self, tmp_path: Path) -> None:
+        _migrate_gitignore_block(tmp_path)  # must not raise
+
+    # --- _ensure_wade_dir_self_ignoring ---
+
+    def test_creates_wade_dir_with_gitignore(self, tmp_path: Path) -> None:
+        _ensure_wade_dir_self_ignoring(tmp_path)
+        gi = tmp_path / ".wade" / ".gitignore"
+        assert gi.is_file()
+        assert gi.read_text().strip() == "*"
+
+    def test_idempotent(self, tmp_path: Path) -> None:
+        _ensure_wade_dir_self_ignoring(tmp_path)
+        _ensure_wade_dir_self_ignoring(tmp_path)
+        gi = tmp_path / ".wade" / ".gitignore"
+        assert gi.read_text().strip() == "*"
 
 
 # ---------------------------------------------------------------------------
@@ -297,15 +283,19 @@ class TestInit:
         content = manifest.read_text()
         assert ".wade.yml" in content
 
-    def test_init_creates_gitignore_block(self, tmp_git_repo: Path) -> None:
+    def test_init_does_not_create_gitignore_block(self, tmp_git_repo: Path) -> None:
+        """init() no longer writes a committed gitignore block."""
         init(project_root=tmp_git_repo, non_interactive=True)
         gitignore = tmp_git_repo / ".gitignore"
-        assert gitignore.is_file()
-        content = gitignore.read_text()
-        assert GITIGNORE_MARKER_START in content
-        assert GITIGNORE_MARKER_END in content
-        for entry in GITIGNORE_ENTRIES:
-            assert entry in content
+        if gitignore.is_file():
+            content = gitignore.read_text()
+            assert GITIGNORE_MARKER_START not in content
+
+    def test_init_creates_wade_dir_self_ignoring(self, tmp_git_repo: Path) -> None:
+        init(project_root=tmp_git_repo, non_interactive=True)
+        gi = tmp_git_repo / ".wade" / ".gitignore"
+        assert gi.is_file()
+        assert gi.read_text().strip() == "*"
 
     def test_init_does_not_write_agents_pointer_to_main(self, tmp_git_repo: Path) -> None:
         """init() no longer writes the AGENTS.md pointer to main — only worktrees get it."""
@@ -1337,58 +1327,15 @@ class TestUpdateExtended:
 
 
 class TestGitignoreEntries:
-    """Verify GITIGNORE_ENTRIES (static base) includes all wade-managed paths."""
+    """Verify GITIGNORE_ENTRIES constants are kept for backward compat (_clean_gitignore)."""
 
-    def test_contains_wade_config(self) -> None:
+    def test_constants_still_exist(self) -> None:
+        """Constants needed by _clean_gitignore for backward compat."""
         assert ".wade.yml" in GITIGNORE_ENTRIES
-
-    def test_base_no_blanket_dirs(self) -> None:
-        """Base entries should not blanket-ignore .claude/ or .claude/hooks/."""
-        assert ".claude/" not in GITIGNORE_ENTRIES
-        assert ".claude/hooks/" not in GITIGNORE_ENTRIES
-
-    def test_contains_internal_files(self) -> None:
         assert ".wade/" in GITIGNORE_ENTRIES
         assert ".wade-managed" in GITIGNORE_ENTRIES
-        assert "PLAN.md" in GITIGNORE_ENTRIES
-        assert "PR-SUMMARY.md" in GITIGNORE_ENTRIES
-
-    def test_computed_entries_include_skill_dirs(self, tmp_path: Path) -> None:
-        """get_gitignore_entries includes managed skill directories."""
-        from wade.skills.installer import MANAGED_SKILL_NAMES
-
-        entries = get_gitignore_entries(tmp_path)
-        for name in MANAGED_SKILL_NAMES:
-            assert f".claude/skills/{name}/" in entries
-
-    def test_computed_entries_include_plan_guard_hooks(self, tmp_path: Path) -> None:
-        """get_gitignore_entries includes specific wade-managed hook files."""
-        from wade.skills.installer import PLAN_GUARD_HOOK_FILES
-
-        entries = get_gitignore_entries(tmp_path)
-        for hook_file in PLAN_GUARD_HOOK_FILES:
-            assert hook_file in entries
-
-    def test_computed_entries_include_cross_tool_dirs(self, tmp_path: Path) -> None:
-        """get_gitignore_entries includes cross-tool dirs when absent."""
-        from wade.skills.installer import CROSS_TOOL_DIRS
-
-        entries = get_gitignore_entries(tmp_path)
-        for cross_dir in CROSS_TOOL_DIRS:
-            assert cross_dir in entries
-
-    def test_computed_entries_skip_real_cross_tool_dirs(self, tmp_path: Path) -> None:
-        """get_gitignore_entries skips cross-tool dirs that are real directories."""
-        from wade.skills.installer import CROSS_TOOL_DIRS
-
-        for cross_dir in CROSS_TOOL_DIRS:
-            real_dir = tmp_path / cross_dir
-            real_dir.mkdir(parents=True, exist_ok=True)
-            (real_dir / "user-file.md").write_text("user content")
-
-        entries = get_gitignore_entries(tmp_path)
-        for cross_dir in CROSS_TOOL_DIRS:
-            assert cross_dir not in entries
+        assert GITIGNORE_MARKER_START
+        assert GITIGNORE_MARKER_END
 
 
 # ---------------------------------------------------------------------------

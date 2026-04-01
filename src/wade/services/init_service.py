@@ -83,9 +83,9 @@ def init(
     2. Detect/select AI tool
     3. Collect project settings
     4. Generate .wade.yml config
-    5. Install skill files
-    6. Update .gitignore
-    7. Write .wade-managed manifest
+    5. Write .wade-managed manifest
+    6. Make .wade/ self-ignoring
+    7. Commit .wade.yml
 
     Returns True on success.
     """
@@ -234,12 +234,12 @@ def init(
         else:
             console.success(f"Created {kpath.name}")
 
-    # 5. Update .gitignore
-    _ensure_gitignore(root)
-
-    # 6. Write manifest (no skills on main — skills are installed per-session in worktrees)
+    # 5. Write manifest (no skills on main — skills are installed per-session in worktrees)
     _write_manifest(root, [])
     console.success("Wrote .wade-managed manifest")
+
+    # 6. Make .wade/ self-ignoring so it doesn't appear as untracked on main
+    _ensure_wade_dir_self_ignoring(root)
 
     # Validate the config we just wrote
     from wade.services.check_service import validate_config
@@ -282,9 +282,10 @@ def update(
     6.  Reload config + backfill probed models
     7.  Refresh skill files (force overwrite)
     8.  Configure Gemini experimental (if applicable)
-    9.  Refresh .gitignore
-    10. Clean up AI tool artifacts from main checkout (migration)
-    11. Rebuild manifest with version
+    9.  Migrate — remove stale committed gitignore block
+    10. Make .wade/ self-ignoring
+    11. Clean up AI tool artifacts from main checkout (migration)
+    12. Rebuild manifest with version
 
     Never overwrites .wade.yml user values — only patches missing keys
     and refreshes skill files.
@@ -353,15 +354,18 @@ def update(
     if "gemini" in tools_in_use:
         _configure_gemini_experimental()
 
-    # Step 9: Refresh .gitignore
-    _ensure_gitignore(root)
+    # Step 9: Migrate — remove stale committed gitignore block (if present)
+    _migrate_gitignore_block(root)
 
-    # Step 10: Clean up AI tool artifacts from main checkout (migration)
+    # Step 10: Make .wade/ self-ignoring (idempotent)
+    _ensure_wade_dir_self_ignoring(root)
+
+    # Step 11: Clean up AI tool artifacts from main checkout (migration)
     removed_artifacts = _migrate_ai_artifacts_off_main(root)
     if removed_artifacts:
         console.info(f"Removed {len(removed_artifacts)} AI tool artifact(s) from main checkout")
 
-    # Step 11: Rebuild manifest with version (no skills on main)
+    # Step 12: Rebuild manifest with version (no skills on main)
     _write_manifest(root, [])
 
     console.panel("  All managed files are up to date.", title="WADE updated")
@@ -554,9 +558,9 @@ def _read_manifest_version(root: Path) -> str | None:
 def deinit(project_root: Path | None = None, force: bool = False) -> bool:
     """Remove WADE from a project.
 
-    Removes: skills, config, manifest, .gitignore entries, AGENTS.md pointer
-    (if present — pointer may not exist on main since wade now only injects
-    it into worktrees).
+    Removes: skills, config, manifest, AGENTS.md pointer (if present).
+    Also cleans stale ``.gitignore`` block for backward compat with projects
+    that still have the old ``# wade:start`` committed block.
     """
     cwd = project_root or Path.cwd()
 
@@ -2055,69 +2059,37 @@ def _patch_config(
         logger.info("config.patched", path=str(config_path))
 
 
-def get_gitignore_entries(project_root: Path) -> list[str]:
-    """Compute the full list of gitignore entries for a project.
+def _migrate_gitignore_block(project_root: Path) -> None:
+    """Remove the stale committed ``# wade:start`` block from ``.gitignore``.
 
-    Combines the static base entries with dynamic patterns from the skill
-    registry (managed skill dirs + cross-tool symlink dirs).
+    Called during ``update()`` to migrate existing projects.  New projects
+    created after this change will never have the committed block.
     """
-    from wade.skills.installer import get_managed_gitignore_patterns
-
-    return GITIGNORE_ENTRIES + get_managed_gitignore_patterns(project_root)
-
-
-def _gitignore_block(project_root: Path) -> str:
-    """Build the full managed block (markers + entries)."""
-    inner = "\n".join(get_gitignore_entries(project_root))
-    return f"{GITIGNORE_MARKER_START}\n{inner}\n{GITIGNORE_MARKER_END}\n"
-
-
-def _ensure_gitignore(project_root: Path) -> None:
-    """Add or refresh the wade-managed block in .gitignore.
-
-    Uses start/end markers so the block can be reliably located on every
-    subsequent init or update.  Existing user content is always preserved.
-
-    Migration: if the file already has old-style entries (no markers), they
-    are removed and replaced with the marker-wrapped block.
-    """
-    from wade.utils.markdown import extract_marker_block, has_marker_block, remove_marker_block
+    from wade.utils.markdown import has_marker_block
 
     gitignore = project_root / ".gitignore"
-    entries = get_gitignore_entries(project_root)
-    block = _gitignore_block(project_root)
-
     if not gitignore.is_file():
-        gitignore.write_text(block, encoding="utf-8")
         return
 
     existing = gitignore.read_text(encoding="utf-8")
-
     if has_marker_block(existing, GITIGNORE_MARKER_START, GITIGNORE_MARKER_END):
-        # Staleness check — skip file write if content is already current
-        inner = extract_marker_block(existing, GITIGNORE_MARKER_START, GITIGNORE_MARKER_END)
-        if inner == "\n".join(entries):
-            return
-        # Stale — replace the block in place
-        cleaned = remove_marker_block(existing, GITIGNORE_MARKER_START, GITIGNORE_MARKER_END)
-        base = cleaned.rstrip("\n")
-        gitignore.write_text((base + "\n\n" + block) if base else block, encoding="utf-8")
-        return
+        _clean_gitignore(project_root)
+        console.info("Removed stale wade gitignore block — commit the change:")
+        console.detail(
+            'git add .gitignore && git commit -m "chore: remove wade managed gitignore block"'
+        )
 
-    # No markers yet — migrate: strip old-style stray entries, then append block
-    all_legacy = set(_GITIGNORE_LEGACY_ENTRIES) | set(GITIGNORE_ENTRIES)
-    lines = existing.splitlines()
-    filtered = [line for line in lines if line not in all_legacy]
 
-    # Collapse consecutive blank lines left behind by removed entries
-    deduped: list[str] = []
-    for line in filtered:
-        if line.strip() == "" and deduped and deduped[-1].strip() == "":
-            continue
-        deduped.append(line)
+def _ensure_wade_dir_self_ignoring(project_root: Path) -> None:
+    """Create ``.wade/.gitignore`` with ``*`` so ``.wade/`` doesn't appear untracked.
 
-    base = "\n".join(deduped).rstrip("\n")
-    gitignore.write_text((base + "\n\n" + block) if base else block, encoding="utf-8")
+    Idempotent — safe to call on every init/update.
+    """
+    wade_dir = project_root / ".wade"
+    wade_dir.mkdir(exist_ok=True)
+    gi = wade_dir / ".gitignore"
+    if not gi.is_file() or gi.read_text(encoding="utf-8").strip() != "*":
+        gi.write_text("*\n", encoding="utf-8")
 
 
 def _clean_gitignore(project_root: Path) -> None:
@@ -2174,15 +2146,13 @@ def _prompt_commit_or_local(
 ) -> None:
     """Ask whether to commit wade files or keep them local.
 
-    If the user commits, all wade files are added and committed.
-    Otherwise the user is reminded to commit ``.gitignore``.
-    ``.wade.yml`` is always in ``copy_to_worktree`` (handled during config write).
+    If the user commits, ``.wade.yml`` is added and committed.
     """
     from wade.ui import prompts
 
     if non_interactive or not prompts.is_tty():
-        console.hint("Commit at least .gitignore so worktrees stay clean:")
-        console.detail('git add .gitignore && git commit -m "chore: add wade gitignore entries"')
+        console.hint("Commit .wade.yml to your repo:")
+        console.detail('git add .wade.yml && git commit -m "chore: initialize wade"')
         return
 
     commit = prompts.confirm("Commit wade files now?", default=True)
@@ -2190,20 +2160,23 @@ def _prompt_commit_or_local(
     if commit:
         _commit_wade_files(root, installed)
     else:
-        console.hint("Commit at least .gitignore so worktrees stay clean:")
-        console.detail('git add .gitignore && git commit -m "chore: add wade gitignore entries"')
+        console.hint("Commit .wade.yml to your repo:")
+        console.detail('git add .wade.yml && git commit -m "chore: initialize wade"')
 
 
 def _commit_wade_files(root: Path, installed: list[str]) -> None:
-    """Stage and commit all wade-managed files."""
+    """Stage and commit all wade-managed files.
+
+    Only ``.wade.yml`` is committed on main — no gitignore block, no manifest.
+    """
     import subprocess
 
-    files_to_add = [".wade.yml", ".gitignore", MANIFEST_FILENAME]
+    files_to_add = [".wade.yml"]
     files_to_add.extend(installed)
 
     try:
         subprocess.run(
-            ["git", "add", "--force", "--", *files_to_add],
+            ["git", "add", "--", *files_to_add],
             cwd=root,
             check=True,
             capture_output=True,

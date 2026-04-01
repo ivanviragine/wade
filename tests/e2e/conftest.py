@@ -11,11 +11,6 @@ import pytest
 
 from tests.e2e._support import MAIN_BRANCH, WADE, MockGhCli, _git
 from tests.e2e.mock_gh_script import MOCK_GH_SCRIPT
-from wade.services.init_service import (
-    GITIGNORE_MARKER_END,
-    GITIGNORE_MARKER_START,
-    get_gitignore_entries,
-)
 
 
 @pytest.fixture(autouse=True)
@@ -58,16 +53,17 @@ ai:
 """,
         encoding="utf-8",
     )
-    entries = "\n".join(get_gitignore_entries(repo))
-    (repo / ".gitignore").write_text(
-        f"{GITIGNORE_MARKER_START}\n{entries}\n{GITIGNORE_MARKER_END}\n",
-        encoding="utf-8",
-    )
 
-    _git(["add", ".gitignore"], cwd=repo)
-    _git(["commit", "-m", "Add managed gitignore block"], cwd=repo)
+    # Commit .wade.yml and a basic .gitignore (tracked so --skip-worktree works in worktrees)
+    (repo / ".gitignore").write_text("__pycache__/\n", encoding="utf-8")
+    _git(["add", ".wade.yml", ".gitignore"], cwd=repo)
+    _git(["commit", "-m", "chore: initialize wade"], cwd=repo)
 
-    (repo / ".wade").mkdir()
+    # Create .wade/ self-ignoring runtime dir
+    wade_dir = repo / ".wade"
+    wade_dir.mkdir()
+    (wade_dir / ".gitignore").write_text("*\n", encoding="utf-8")
+
     return repo
 
 
