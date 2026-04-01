@@ -17,10 +17,15 @@ class TestGeminiWorktreeHooks:
         settings_file = tmp_path / ".gemini" / "settings.json"
         assert settings_file.is_file()
         data = json.loads(settings_file.read_text(encoding="utf-8"))
-        assert len(data["hooks"]) == 1
-        assert data["hooks"][0]["event"] == "BeforeTool"
-        assert data["hooks"][0]["tools"] == [".*"]
-        assert f"python3 {guard.resolve()}" in data["hooks"][0]["command"]
+        # hooks must be an object keyed by event name
+        assert isinstance(data["hooks"], dict)
+        before_tool = data["hooks"]["BeforeTool"]
+        assert len(before_tool) == 1
+        entry = before_tool[0]
+        assert entry["matcher"] == ".*"
+        assert len(entry["hooks"]) == 1
+        assert entry["hooks"][0]["type"] == "command"
+        assert f"python3 {guard.resolve()}" in entry["hooks"][0]["command"]
 
     def test_idempotent(self, tmp_path: Path) -> None:
         guard = tmp_path / "guard.py"
@@ -30,7 +35,7 @@ class TestGeminiWorktreeHooks:
 
         settings_file = tmp_path / ".gemini" / "settings.json"
         data = json.loads(settings_file.read_text(encoding="utf-8"))
-        assert len(data["hooks"]) == 1
+        assert len(data["hooks"]["BeforeTool"]) == 1
 
     def test_preserves_existing(self, tmp_path: Path) -> None:
         settings_file = tmp_path / ".gemini" / "settings.json"
@@ -43,7 +48,7 @@ class TestGeminiWorktreeHooks:
 
         data = json.loads(settings_file.read_text(encoding="utf-8"))
         assert data["other"] == "setting"
-        assert len(data["hooks"]) == 1
+        assert len(data["hooks"]["BeforeTool"]) == 1
 
 
 class TestGeminiPlanHooks:
@@ -55,10 +60,15 @@ class TestGeminiPlanHooks:
         settings_file = tmp_path / ".gemini" / "settings.json"
         assert settings_file.is_file()
         data = json.loads(settings_file.read_text(encoding="utf-8"))
-        assert len(data["hooks"]) == 1
-        assert data["hooks"][0]["event"] == "BeforeTool"
-        assert data["hooks"][0]["tools"] == [".*"]
-        assert f"python3 {guard.resolve()}" in data["hooks"][0]["command"]
+        # hooks must be an object keyed by event name
+        assert isinstance(data["hooks"], dict)
+        before_tool = data["hooks"]["BeforeTool"]
+        assert len(before_tool) == 1
+        entry = before_tool[0]
+        assert entry["matcher"] == ".*"
+        assert len(entry["hooks"]) == 1
+        assert entry["hooks"][0]["type"] == "command"
+        assert f"python3 {guard.resolve()}" in entry["hooks"][0]["command"]
 
     def test_idempotent(self, tmp_path: Path) -> None:
         guard = tmp_path / "guard.py"
@@ -68,7 +78,7 @@ class TestGeminiPlanHooks:
 
         settings_file = tmp_path / ".gemini" / "settings.json"
         data = json.loads(settings_file.read_text(encoding="utf-8"))
-        assert len(data["hooks"]) == 1
+        assert len(data["hooks"]["BeforeTool"]) == 1
 
     def test_preserves_existing(self, tmp_path: Path) -> None:
         settings_file = tmp_path / ".gemini" / "settings.json"
@@ -81,4 +91,4 @@ class TestGeminiPlanHooks:
 
         data = json.loads(settings_file.read_text(encoding="utf-8"))
         assert data["other"] == "setting"
-        assert len(data["hooks"]) == 1
+        assert len(data["hooks"]["BeforeTool"]) == 1

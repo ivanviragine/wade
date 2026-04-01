@@ -63,22 +63,26 @@ class TestCopilotAllowedCommands:
 
 
 class TestGeminiAllowedCommands:
-    """Tests for GeminiAdapter.allowed_commands_args()."""
+    """Tests for GeminiAdapter.allowed_commands_args().
 
-    def test_single_pattern(self) -> None:
+    Gemini CLI uses the Policy Engine (TOML files) instead of --allowed-tools,
+    so allowed_commands_args() always returns an empty list.
+    """
+
+    def test_returns_empty_single(self) -> None:
         adapter = GeminiAdapter()
         result = adapter.allowed_commands_args(["wade *"])
-        assert result == ["--allowed-tools", "shell(wade:*)"]
+        assert result == []
 
-    def test_multiple_patterns(self) -> None:
+    def test_returns_empty_multiple(self) -> None:
         adapter = GeminiAdapter()
         result = adapter.allowed_commands_args(["wade *", "./scripts/check.sh *"])
-        assert result == [
-            "--allowed-tools",
-            "shell(wade:*)",
-            "--allowed-tools",
-            "shell(./scripts/check.sh:*)",
-        ]
+        assert result == []
+
+    def test_returns_empty_list(self) -> None:
+        adapter = GeminiAdapter()
+        result = adapter.allowed_commands_args([])
+        assert result == []
 
 
 class TestCursorAllowedCommands:
