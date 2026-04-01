@@ -278,7 +278,7 @@ class TestInit:
 
     def test_init_creates_manifest(self, tmp_git_repo: Path) -> None:
         init(project_root=tmp_git_repo, non_interactive=True)
-        manifest = tmp_git_repo / MANIFEST_FILENAME
+        manifest = tmp_git_repo / ".wade" / MANIFEST_FILENAME
         assert manifest.is_file()
         content = manifest.read_text()
         assert ".wade.yml" in content
@@ -1209,7 +1209,7 @@ class TestDeinit:
         # Init
         assert init(project_root=tmp_git_repo, ai_tool="claude", non_interactive=True)
         assert (tmp_git_repo / ".wade.yml").is_file()
-        assert (tmp_git_repo / MANIFEST_FILENAME).is_file()
+        assert (tmp_git_repo / ".wade" / MANIFEST_FILENAME).is_file()
         # AGENTS.md pointer is not written to main during init
         assert not (tmp_git_repo / "AGENTS.md").is_file()
 
@@ -1219,7 +1219,7 @@ class TestDeinit:
         # Deinit
         assert deinit(project_root=tmp_git_repo, force=True)
         assert not (tmp_git_repo / ".wade.yml").is_file()
-        assert not (tmp_git_repo / MANIFEST_FILENAME).is_file()
+        assert not (tmp_git_repo / ".wade" / MANIFEST_FILENAME).is_file()
 
 
 # ---------------------------------------------------------------------------
@@ -1334,8 +1334,8 @@ class TestGitignoreEntries:
         assert ".wade.yml" in GITIGNORE_ENTRIES
         assert ".wade/" in GITIGNORE_ENTRIES
         assert ".wade-managed" in GITIGNORE_ENTRIES
-        assert GITIGNORE_MARKER_START
-        assert GITIGNORE_MARKER_END
+        assert GITIGNORE_MARKER_START.startswith("# wade:start")
+        assert GITIGNORE_MARKER_END == "# wade:end"
 
 
 # ---------------------------------------------------------------------------

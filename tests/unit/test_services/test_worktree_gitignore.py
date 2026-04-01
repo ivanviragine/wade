@@ -145,6 +145,17 @@ class TestWriteWorktreeGitignore:
 
 
 class TestStripWorktreeGitignore:
+    def test_removes_new_gitignore_when_block_was_only_content(self, tmp_path: Path) -> None:
+        """When .gitignore was created by write_worktree_gitignore, strip removes it."""
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        write_worktree_gitignore(wt)
+        assert (wt / ".gitignore").exists()
+        strip_worktree_gitignore(wt)
+        # File should be gone or empty — no wade-only residue left
+        gi = wt / ".gitignore"
+        assert not gi.exists() or gi.read_text().strip() == ""
+
     def test_removes_block(self, worktree: Path) -> None:
         write_worktree_gitignore(worktree)
         strip_worktree_gitignore(worktree)

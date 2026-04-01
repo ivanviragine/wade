@@ -327,6 +327,29 @@ def _effective_copy_files(config: ProjectConfig) -> list[str]:
     return files
 
 
+def _get_info_exclude_path(worktree_path: Path) -> Path | None:
+    """Return the ``info/exclude`` path for the given worktree.
+
+    In a linked worktree this resolves to the worktree-specific git dir
+    (e.g. ``<main>/.git/worktrees/<name>/info/exclude``).
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--git-dir"],
+            cwd=str(worktree_path),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            return None
+        git_dir = Path(result.stdout.strip())
+        if not git_dir.is_absolute():
+            git_dir = worktree_path / git_dir
+        return git_dir / "info" / "exclude"
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
 def write_worktree_gitignore(worktree_path: Path) -> None:
     """Append a ``# wade:worktree:start`` block to ``.gitignore`` in the worktree.
 
@@ -381,31 +404,72 @@ def write_worktree_gitignore(worktree_path: Path) -> None:
             )
         gitignore.write_text(existing.rstrip("\n") + "\n" + block, encoding="utf-8")
     else:
-        gitignore.write_text(block.lstrip("\n"), encoding="utf-8")
+        # No .gitignore exists — write entries to info/exclude instead of
+        # creating an untracked file that would fail is_clean() checks.
+        exclude = _get_info_exclude_path(worktree_path)
+        if exclude is not None:
+            exclude.parent.mkdir(parents=True, exist_ok=True)
+            existing_exc = ""
+            if exclude.is_file():
+                existing_exc = exclude.read_text(encoding="utf-8")
+            if has_marker_block(
+                existing_exc,
+                WORKTREE_GITIGNORE_MARKER_START,
+                WORKTREE_GITIGNORE_MARKER_END,
+            ):
+                existing_exc = remove_marker_block(
+                    existing_exc,
+                    WORKTREE_GITIGNORE_MARKER_START,
+                    WORKTREE_GITIGNORE_MARKER_END,
+                )
+            new_content = (
+                existing_exc.rstrip("\n") + "\n" + block
+                if existing_exc.strip()
+                else block.lstrip("\n")
+            )
+            exclude.write_text(new_content, encoding="utf-8")
+        else:
+            # Fallback: create .gitignore anyway (best-effort)
+            gitignore.write_text(block.lstrip("\n"), encoding="utf-8")
 
     logger.debug("implementation.worktree_gitignore_written", path=str(worktree_path))
 
 
 def strip_worktree_gitignore(worktree_path: Path) -> None:
-    """Remove the ``# wade:worktree:start`` block from ``.gitignore``.
+    """Remove the ``# wade:worktree:start`` block from ``.gitignore`` and ``info/exclude``.
 
-    Preserves any user content outside the block.
+    Preserves any user content outside the block.  If ``.gitignore`` was
+    created solely for the worktree block (empty after stripping), the file
+    is deleted so no untracked residue remains.
     """
+    # Clean .gitignore
     gitignore = worktree_path / ".gitignore"
-    if not gitignore.is_file():
-        return
+    if gitignore.is_file():
+        existing = gitignore.read_text(encoding="utf-8")
+        if has_marker_block(
+            existing, WORKTREE_GITIGNORE_MARKER_START, WORKTREE_GITIGNORE_MARKER_END
+        ):
+            cleaned = remove_marker_block(
+                existing, WORKTREE_GITIGNORE_MARKER_START, WORKTREE_GITIGNORE_MARKER_END
+            )
+            if cleaned.strip():
+                gitignore.write_text(cleaned, encoding="utf-8")
+            else:
+                gitignore.unlink(missing_ok=True)
+            logger.debug("implementation.worktree_gitignore_stripped", path=str(worktree_path))
 
-    existing = gitignore.read_text(encoding="utf-8")
-    if not has_marker_block(
-        existing, WORKTREE_GITIGNORE_MARKER_START, WORKTREE_GITIGNORE_MARKER_END
-    ):
-        return
-
-    cleaned = remove_marker_block(
-        existing, WORKTREE_GITIGNORE_MARKER_START, WORKTREE_GITIGNORE_MARKER_END
-    )
-    gitignore.write_text(cleaned, encoding="utf-8")
-    logger.debug("implementation.worktree_gitignore_stripped", path=str(worktree_path))
+    # Clean info/exclude (used when .gitignore was not tracked)
+    exclude = _get_info_exclude_path(worktree_path)
+    if exclude is not None and exclude.is_file():
+        exc_content = exclude.read_text(encoding="utf-8")
+        if has_marker_block(
+            exc_content, WORKTREE_GITIGNORE_MARKER_START, WORKTREE_GITIGNORE_MARKER_END
+        ):
+            cleaned_exc = remove_marker_block(
+                exc_content, WORKTREE_GITIGNORE_MARKER_START, WORKTREE_GITIGNORE_MARKER_END
+            )
+            exclude.write_text(cleaned_exc, encoding="utf-8")
+            logger.debug("implementation.info_exclude_stripped", path=str(worktree_path))
 
 
 def _suppress_pointer_artifacts(worktree_path: Path) -> None:
@@ -3100,6 +3164,17 @@ def done(
     if not issue_number:
         console.error(f"Cannot extract issue number from branch: {branch}")
         return False
+
+    # Restore .gitignore before cleanliness check: clear --skip-worktree
+    # and strip the worktree gitignore block so the is_clean() gate sees
+    # the true state (user changes only, no wade artifacts).
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        subprocess.run(
+            ["git", "update-index", "--no-skip-worktree", ".gitignore"],
+            cwd=str(cwd),
+            capture_output=True,
+        )
+    strip_worktree_gitignore(cwd)
 
     # Check clean
     if not git_repo.is_clean(cwd):

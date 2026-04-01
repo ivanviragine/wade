@@ -236,7 +236,7 @@ def init(
 
     # 5. Write manifest (no skills on main — skills are installed per-session in worktrees)
     _write_manifest(root, [])
-    console.success("Wrote .wade-managed manifest")
+    console.success("Wrote .wade/.wade-managed manifest")
 
     # 6. Make .wade/ self-ignoring so it doesn't appear as untracked on main
     _ensure_wade_dir_self_ignoring(root)
@@ -538,10 +538,15 @@ def _read_manifest_version(root: Path) -> str | None:
     """Read the WADE version from the .wade-managed manifest.
 
     Looks for a line like: # Managed by wade 0.1.0
+    Checks ``.wade/.wade-managed`` first, then falls back to the legacy
+    root-level location for backward compatibility.
     """
     import re
 
-    manifest = root / MANIFEST_FILENAME
+    manifest = root / ".wade" / MANIFEST_FILENAME
+    if not manifest.is_file():
+        # Fallback to legacy root-level location
+        manifest = root / MANIFEST_FILENAME
     if not manifest.is_file():
         return None
 
@@ -608,11 +613,11 @@ def deinit(project_root: Path | None = None, force: bool = False) -> bool:
         config_path.unlink()
         console.info("Removed .wade.yml")
 
-    # Remove manifest
-    manifest = root / MANIFEST_FILENAME
-    if manifest.is_file():
-        manifest.unlink()
-        console.info("Removed .wade-managed")
+    # Remove manifest (check both new .wade/ and legacy root locations)
+    for manifest in (root / ".wade" / MANIFEST_FILENAME, root / MANIFEST_FILENAME):
+        if manifest.is_file():
+            manifest.unlink()
+            console.info(f"Removed {manifest.relative_to(root)}")
 
     # Clean .gitignore
     _clean_gitignore(root)
@@ -2072,7 +2077,9 @@ def _migrate_gitignore_block(project_root: Path) -> None:
         return
 
     existing = gitignore.read_text(encoding="utf-8")
-    if has_marker_block(existing, GITIGNORE_MARKER_START, GITIGNORE_MARKER_END):
+    has_markers = has_marker_block(existing, GITIGNORE_MARKER_START, GITIGNORE_MARKER_END)
+    has_legacy = any(entry in existing for entry in _GITIGNORE_LEGACY_ENTRIES)
+    if has_markers or has_legacy:
         _clean_gitignore(project_root)
         console.info("Removed stale wade gitignore block — commit the change:")
         console.detail(
@@ -2129,13 +2136,25 @@ def _clean_gitignore(project_root: Path) -> None:
 
 
 def _write_manifest(project_root: Path, installed_files: list[str]) -> None:
-    """Write the .wade-managed manifest listing all managed files."""
+    """Write the .wade-managed manifest under ``.wade/``.
+
+    The manifest lives inside ``.wade/`` so it is auto-ignored by
+    ``.wade/.gitignore`` (which contains ``*``) and never appears as
+    an untracked file on main.
+    """
     from wade import __version__
 
-    manifest = project_root / MANIFEST_FILENAME
+    wade_dir = project_root / ".wade"
+    wade_dir.mkdir(exist_ok=True)
+    manifest = wade_dir / MANIFEST_FILENAME
     lines = [".wade.yml", *installed_files]
     lines.append(f"# Managed by wade {__version__}")
     manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    # Migration: remove legacy root-level manifest if it exists
+    legacy_manifest = project_root / MANIFEST_FILENAME
+    if legacy_manifest.is_file():
+        legacy_manifest.unlink()
 
 
 def _prompt_commit_or_local(
