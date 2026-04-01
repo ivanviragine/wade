@@ -412,10 +412,9 @@ def _suppress_pointer_artifacts(worktree_path: Path) -> None:
     """Prevent pointer-injected files from appearing dirty in the worktree.
 
     Called after ensure_pointer() so git status checks (is_clean) remain clean.
-    - Tracked files (e.g. an existing AGENTS.md): marked --skip-worktree so
-      local modifications are invisible to git status.
-    - Untracked new files (e.g. a freshly created CLAUDE.md symlink): added to
-      the worktree-local git exclude so they don't appear as '??'.
+    Tracked files (e.g. an existing AGENTS.md) are marked ``--skip-worktree``
+    so local modifications are invisible to git status.  Untracked pointer
+    files are handled by ``write_worktree_gitignore()`` instead.
 
     Failures are silently swallowed — git commands may not be available in all
     contexts (tests, unusual setups), and a failed suppression is not fatal.
