@@ -34,7 +34,7 @@ class TestInit:
         assert config["models"]["claude"]["medium"] != config["models"]["claude"]["easy"]
         assert "permissions" not in config
 
-        assert (tmp_git_repo / ".wade-managed").is_file()
+        assert (tmp_git_repo / ".wade" / ".wade-managed").is_file()
         # AGENTS.md pointer is now written per-session in worktrees, not during init
         assert not (tmp_git_repo / "AGENTS.md").is_file()
         assert not (tmp_git_repo / "CLAUDE.md").exists()
