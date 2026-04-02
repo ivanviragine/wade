@@ -3165,18 +3165,9 @@ def done(
         console.error(f"Cannot extract issue number from branch: {branch}")
         return False
 
-    # Restore .gitignore before cleanliness check: clear --skip-worktree
-    # and strip the worktree gitignore block so the is_clean() gate sees
-    # the true state (user changes only, no wade artifacts).
-    with contextlib.suppress(OSError, subprocess.SubprocessError):
-        subprocess.run(
-            ["git", "update-index", "--no-skip-worktree", ".gitignore"],
-            cwd=str(cwd),
-            capture_output=True,
-        )
-    strip_worktree_gitignore(cwd)
-
-    # Check clean
+    # Check clean — keep the worktree gitignore block in place so wade
+    # artifacts (PLAN.md, .wade/, etc.) stay hidden from git status.
+    # Strip it only after the gate passes.
     if not git_repo.is_clean(cwd):
         detail_str = _format_uncommitted_summary(cwd)
         console.error_with_fix(
@@ -3185,6 +3176,17 @@ def done(
             "git stash",
         )
         return False
+
+    # Clean gate passed — now strip the worktree gitignore block and
+    # restore .gitignore visibility so downstream operations see the
+    # true state.
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        subprocess.run(
+            ["git", "update-index", "--no-skip-worktree", ".gitignore"],
+            cwd=str(cwd),
+            capture_output=True,
+        )
+    strip_worktree_gitignore(cwd)
 
     # Check for tracked wade-managed files that should never be committed
     tracked_managed = _check_tracked_managed_files(cwd)

@@ -164,6 +164,7 @@ def get_worktree_gitignore_entries() -> list[str]:
     # AI tool settings (written per-session to worktrees only)
     entries.append(".claude/settings.json")
     entries.append(".cursor/cli.json")
+    entries.append(".gemini/policies/wade.toml")
 
     # Session artifacts
     entries.extend(

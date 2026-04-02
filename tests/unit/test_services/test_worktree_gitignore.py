@@ -219,4 +219,5 @@ class TestSuppressPointerArtifacts:
             text=True,
         )
         # 'S' prefix indicates skip-worktree
-        assert result.stdout.startswith("S")
+        assert result.stdout, "Expected AGENTS.md to be in index"
+        assert result.stdout.startswith("S"), f"Expected skip-worktree, got: {result.stdout!r}"
