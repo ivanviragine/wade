@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.15.13] — 2026-04-02
+
+### Bug Fixes
+
+- update test to check manifest at .wade/.wade-managed after #251 move (39712fd)
+
 ## [v0.15.12] — 2026-04-02
 
 ### Bug Fixes
