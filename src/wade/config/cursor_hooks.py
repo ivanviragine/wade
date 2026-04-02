@@ -6,6 +6,7 @@ plan write guard script on file-write tools.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -29,7 +30,7 @@ def _configure_cursor_hook(worktree_path: Path, guard_script: Path, log_event: s
         hooks_file=worktree_path / ".cursor" / "hooks.json",
         entry=CursorHookEntry(
             event="preToolUse",
-            command=f"python3 {guard_script.resolve()}",
+            command=f"{sys.executable} {guard_script.resolve()}",
             tools=["Write", "Edit", "Delete"],
         ),
         dedup_key="command",

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import sys
 from pathlib import Path
 
 import structlog
@@ -156,11 +157,11 @@ def _configure_pretooluse_hook(worktree_path: Path, guard_script: Path, log_even
 
     guard_entry: dict[str, object] = {
         "matcher": "Edit|Write|NotebookEdit",
-        "hooks": [{"type": "command", "command": f"python3 {guard_script}"}],
+        "hooks": [{"type": "command", "command": f"{sys.executable} {guard_script}"}],
     }
 
     # Check if already present (by hook command)
-    guard_cmd = f"python3 {guard_script}"
+    guard_cmd = f"{sys.executable} {guard_script}"
     for entry in pre_list:
         if isinstance(entry, dict):
             entry_hooks = entry.get("hooks", [])
