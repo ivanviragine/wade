@@ -293,3 +293,41 @@ class TestFailClosed:
         assert stdout_json["permission"] == "deny"
         assert stdout_json["permissionDecision"] == "deny"
         assert stdout_json["decision"] == "block"
+
+    def test_closed_stdin_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When stdin is closed, ValueError from sys.stdin.read() should cause exit 2."""
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        from unittest.mock import Mock
+
+        spec = importlib.util.spec_from_file_location("test_guard_closed_stdin", GUARD_SCRIPT)
+        assert spec and spec.loader
+        guard_module = importlib.util.module_from_spec(spec)
+
+        # Create mock stdin that raises ValueError (as happens with closed stdin)
+        mock_stdin = Mock()
+        mock_stdin.read.side_effect = ValueError("I/O operation on closed file")
+
+        monkeypatch.setattr("sys.stdin", mock_stdin, raising=False)
+        spec.loader.exec_module(guard_module)
+
+        stderr_capture = io.StringIO()
+        stdout_capture = io.StringIO()
+
+        with (
+            redirect_stderr(stderr_capture),
+            redirect_stdout(stdout_capture),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            guard_module._main_with_wrapper()
+
+        assert exc_info.value.code == 2, (
+            "Closed stdin should exit 2 (fail-closed), not 0 (fail-open)"
+        )
+        stderr_text = stderr_capture.getvalue()
+        assert "Guard error" in stderr_text or "ValueError" in stderr_text
+
+        stdout_text = stdout_capture.getvalue()
+        stdout_json = json.loads(stdout_text)
+        assert stdout_json["hookSpecificOutput"]["permissionDecision"] == "block"
+        assert stdout_json["permission"] == "deny"

@@ -175,12 +175,12 @@ def main() -> None:
 
     Wrapped by try/except in _main_with_wrapper to ensure fail-closed on exceptions.
     """
+    raw = sys.stdin.read()
+    if not raw.strip():
+        sys.exit(0)  # No input — fail open
     try:
-        raw = sys.stdin.read()
-        if not raw.strip():
-            sys.exit(0)  # No input — fail open
         data = json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
+    except json.JSONDecodeError:
         sys.exit(0)  # Malformed input — fail open
 
     if not isinstance(data, dict):
