@@ -143,6 +143,30 @@ class TestWriteWorktreeGitignore:
         assert WORKTREE_GITIGNORE_MARKER_START in content
         assert "PLAN.md" in content
 
+    def test_writes_to_info_exclude_when_no_gitignore(self, tmp_path: Path) -> None:
+        """When git is initialized but no .gitignore exists, writes to info/exclude."""
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        subprocess.run(["git", "init", "-b", "test"], cwd=wt, capture_output=True, check=True)
+
+        write_worktree_gitignore(wt)
+
+        # .gitignore should NOT be created
+        assert not (wt / ".gitignore").exists()
+
+        # Block should be in info/exclude
+        result = subprocess.run(
+            ["git", "rev-parse", "--git-dir"],
+            cwd=str(wt),
+            capture_output=True,
+            text=True,
+        )
+        git_dir = wt / result.stdout.strip()
+        exclude = git_dir / "info" / "exclude"
+        assert exclude.is_file()
+        content = exclude.read_text()
+        assert WORKTREE_GITIGNORE_MARKER_START in content
+
 
 class TestStripWorktreeGitignore:
     def test_removes_new_gitignore_when_block_was_only_content(self, tmp_path: Path) -> None:
