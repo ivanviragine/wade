@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.15.14] — 2026-04-02
+
+### Refactoring
+
+- remove commit prompt from `wade init` (#255) (3c87092)
+
 ## [v0.15.13] — 2026-04-02
 
 ### Bug Fixes
