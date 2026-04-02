@@ -252,8 +252,9 @@ def init(
         for err in check_result.errors:
             console.detail(err)
 
-    # 8. Commit or configure for local-only use
-    _prompt_commit_or_local(root, config_path, [], non_interactive)
+    # 8. Final hint for committing .wade.yml
+    console.hint("Commit .wade.yml to your repo:")
+    console.detail('git add .wade.yml && git commit -m "chore: initialize wade"')
 
     console.panel(
         "  Project initialized. Run [bold]wade plan[/] to get started.",
@@ -2155,58 +2156,3 @@ def _write_manifest(project_root: Path, installed_files: list[str]) -> None:
     legacy_manifest = project_root / MANIFEST_FILENAME
     if legacy_manifest.is_file():
         legacy_manifest.unlink()
-
-
-def _prompt_commit_or_local(
-    root: Path,
-    config_path: Path,
-    installed: list[str],
-    non_interactive: bool,
-) -> None:
-    """Ask whether to commit wade files or keep them local.
-
-    If the user commits, ``.wade.yml`` is added and committed.
-    """
-    from wade.ui import prompts
-
-    if non_interactive or not prompts.is_tty():
-        console.hint("Commit .wade.yml to your repo:")
-        console.detail('git add .wade.yml && git commit -m "chore: initialize wade"')
-        return
-
-    commit = prompts.confirm("Commit wade files now?", default=True)
-
-    if commit:
-        _commit_wade_files(root, installed)
-    else:
-        console.hint("Commit .wade.yml to your repo:")
-        console.detail('git add .wade.yml && git commit -m "chore: initialize wade"')
-
-
-def _commit_wade_files(root: Path, installed: list[str]) -> None:
-    """Stage and commit all wade-managed files.
-
-    Only ``.wade.yml`` is committed on main — no gitignore block, no manifest.
-    """
-    import subprocess
-
-    files_to_add = [".wade.yml"]
-    files_to_add.extend(installed)
-
-    try:
-        subprocess.run(
-            ["git", "add", "--", *files_to_add],
-            cwd=root,
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["git", "commit", "-m", "chore: initialize wade"],
-            cwd=root,
-            check=True,
-            capture_output=True,
-        )
-        console.success("Committed wade files")
-    except subprocess.CalledProcessError as exc:
-        logger.warning("init.commit_failed", error=exc.stderr)
-        console.warn("Could not commit wade files — commit them manually")

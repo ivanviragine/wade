@@ -17,12 +17,10 @@ from wade.services.init_service import (
     MANIFEST_FILENAME,
     _check_gh_auth,
     _clean_gitignore,
-    _commit_wade_files,
     _ensure_wade_dir_self_ignoring,
     _migrate_gitignore_block,
     _patch_config,
     _prompt_command_overrides,
-    _prompt_commit_or_local,
     _prompt_hooks_setup,
     _prompt_model_mapping,
     _prompt_project_settings,
@@ -1424,105 +1422,7 @@ class TestPatchConfigHooks:
         assert config["hooks"]["post_worktree_create"] == "scripts/setup.sh"
         assert ".env" in config["hooks"]["copy_to_worktree"]
 
-
-# ---------------------------------------------------------------------------
-# _commit_wade_files tests
-# ---------------------------------------------------------------------------
-
-
-class TestCommitWadeFiles:
-    def test_commits_files(self, tmp_git_repo: Path) -> None:
-        """git add --force + git commit should succeed on a real repo."""
-        config_path = tmp_git_repo / ".wade.yml"
-        config_path.write_text("version: 2\n")
-        gitignore = tmp_git_repo / ".gitignore"
-        gitignore.write_text(".wade/\n")
-        manifest = tmp_git_repo / MANIFEST_FILENAME
-        manifest.write_text(".wade.yml\n")
-        agents = tmp_git_repo / "AGENTS.md"
-        agents.write_text("# Agents\n")
-
-        _commit_wade_files(tmp_git_repo, [])
-
-        # Verify commit was created
-        import subprocess
-
-        result = subprocess.run(
-            ["git", "log", "--oneline", "-1"],
-            cwd=tmp_git_repo,
-            capture_output=True,
-            text=True,
-        )
-        assert "chore: initialize wade" in result.stdout
-
-    def test_handles_commit_failure(self, tmp_path: Path) -> None:
-        """When not in a git repo, should warn instead of crashing."""
-        # tmp_path is not a git repo — git add will fail
-        _commit_wade_files(tmp_path, [])
-        # Should not raise — just logs a warning
-
-
-# ---------------------------------------------------------------------------
-# _prompt_commit_or_local tests
-# ---------------------------------------------------------------------------
-
-
-class TestPromptCommitOrLocal:
-    def test_non_interactive_does_not_modify_config(self, tmp_path: Path) -> None:
-        """Non-interactive mode should not modify config (hooks handled by _write_config)."""
-        config_path = tmp_path / ".wade.yml"
-        config_path.write_text(yaml.dump({"version": 2}), encoding="utf-8")
-        original = config_path.read_text()
-
-        _prompt_commit_or_local(tmp_path, config_path, [], non_interactive=True)
-
-        assert config_path.read_text() == original
-
-    @patch("wade.ui.prompts.is_tty", return_value=False)
-    def test_no_tty_does_not_modify_config(self, _mock_tty: MagicMock, tmp_path: Path) -> None:
-        """When not a TTY, should not modify config."""
-        config_path = tmp_path / ".wade.yml"
-        config_path.write_text(yaml.dump({"version": 2}), encoding="utf-8")
-        original = config_path.read_text()
-
-        _prompt_commit_or_local(tmp_path, config_path, [], non_interactive=False)
-
-        assert config_path.read_text() == original
-
-    @patch("wade.ui.prompts.is_tty", return_value=True)
-    @patch("wade.ui.prompts.confirm", return_value=True)
-    @patch("wade.services.init_service._commit_wade_files")
-    def test_interactive_commit_yes(
-        self,
-        mock_commit: MagicMock,
-        _mock_confirm: MagicMock,
-        _mock_tty: MagicMock,
-        tmp_path: Path,
-    ) -> None:
-        """When user says yes, should call _commit_wade_files."""
-        config_path = tmp_path / ".wade.yml"
-        config_path.write_text(yaml.dump({"version": 2}), encoding="utf-8")
-
-        _prompt_commit_or_local(tmp_path, config_path, ["a.md"], non_interactive=False)
-
-        mock_commit.assert_called_once_with(tmp_path, ["a.md"])
-
-    @patch("wade.ui.prompts.is_tty", return_value=True)
-    @patch("wade.ui.prompts.confirm", return_value=False)
-    def test_interactive_commit_no_does_not_modify_config(
-        self,
-        _mock_confirm: MagicMock,
-        _mock_tty: MagicMock,
-        tmp_path: Path,
-    ) -> None:
-        """When user says no, should not modify config."""
-        config_path = tmp_path / ".wade.yml"
-        config_path.write_text(yaml.dump({"version": 2}), encoding="utf-8")
-        original = config_path.read_text()
-
-        _prompt_commit_or_local(tmp_path, config_path, [], non_interactive=False)
-
-        assert config_path.read_text() == original
+    # ---------------------------------------------------------------------------
 
     def test_init_non_interactive_creates_config(self, tmp_git_repo: Path) -> None:
         """Full init in non-interactive mode should create a valid config."""
