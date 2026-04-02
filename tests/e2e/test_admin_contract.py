@@ -46,7 +46,7 @@ class TestInitCommand:
         assert config["models"]["claude"]["complex"] == "claude-sonnet-4.6"
         assert config["models"]["claude"]["medium"] != config["models"]["claude"]["easy"]
         assert "permissions" not in config
-        assert (repo / ".wade-managed").is_file()
+        assert (repo / ".wade" / ".wade-managed").is_file()
         # AGENTS.md pointer is no longer written to main during init — only to worktrees
         assert not (repo / "AGENTS.md").is_file()
         assert not (repo / "CLAUDE.md").exists()
