@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.15.10] — 2026-04-01
+
+### Bug Fixes
+
+- Gemini CLI integration errors — hooks format, deprecated allowed-tools, and positional args (#249) (71fde4b)
+
 ## [v0.15.9] — 2026-03-31
 
 ### Bug Fixes

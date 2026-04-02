@@ -662,6 +662,8 @@ class TestReviewBatchCommand:
             ],
         )
         _remove_default_ai_tool(e2e_repo)
+        _git(["add", ".wade.yml"], cwd=e2e_repo)
+        _git(["commit", "-m", "chore: remove default ai tool for test"], cwd=e2e_repo)
 
         result = _run(
             ["review", "batch", tracking_id, "--mode", "prompt"],

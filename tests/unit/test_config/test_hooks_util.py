@@ -33,16 +33,17 @@ class TestNonDictTopLevel:
 
 
 class TestEnsurePathTraversal:
-    def test_raises_when_intermediate_segment_is_not_dict(self, tmp_path: Path) -> None:
+    def test_overwrites_when_intermediate_segment_is_not_dict(self, tmp_path: Path) -> None:
         hooks_file = tmp_path / "hooks.json"
         hooks_file.write_text(json.dumps({"hooks": "not-a-dict"}), encoding="utf-8")
-        with pytest.raises(ValueError, match="non-object data"):
-            upsert_hook_entry(
-                hooks_file,
-                _Entry(command="cmd"),
-                dedup_key="command",
-                ensure_path=["hooks", "preToolUse"],
-            )
+        upsert_hook_entry(
+            hooks_file,
+            _Entry(command="cmd"),
+            dedup_key="command",
+            ensure_path=["hooks", "preToolUse"],
+        )
+        data = json.loads(hooks_file.read_text(encoding="utf-8"))
+        assert data["hooks"]["preToolUse"] == [{"command": "cmd", "description": ""}]
 
     def test_creates_intermediate_dicts_and_appends(self, tmp_path: Path) -> None:
         hooks_file = tmp_path / "sub" / "hooks.json"

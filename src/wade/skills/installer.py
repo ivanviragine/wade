@@ -138,43 +138,46 @@ IMPLEMENT_SKILLS: list[str] = ["implementation-session", "task"]
 REVIEW_SKILLS: list[str] = ["review-pr-comments-session", "task"]
 
 
-def get_managed_gitignore_patterns(project_root: Path) -> list[str]:
-    """Compute gitignore patterns for wade-managed skill directories and cross-tool dirs.
+def get_worktree_gitignore_entries() -> list[str]:
+    """Compute gitignore entries for wade artifacts in worktrees.
 
-    Returns patterns that should be added to the managed gitignore block:
-    - ``.claude/skills/<name>/`` for every name in ``MANAGED_SKILL_NAMES``
-    - Each plan guard hook file in ``PLAN_GUARD_HOOK_FILES``
-    - ``.claude/settings.json`` and ``.cursor/cli.json`` (written per-session
-      to worktrees only — never committed on main)
-    - Each ``CROSS_TOOL_DIRS`` entry, but only if it is a symlink or does not
-      exist yet (real user directories are left alone).
+    Returns **specific file paths** (never directories, except ``.wade/``)
+    to ensure user-owned files in the same parent directories are never hidden.
+
+    Cross-tool symlinks and untracked pointer files are not included here —
+    they are added conditionally by ``write_worktree_gitignore()``.
     """
-    patterns: list[str] = []
+    entries: list[str] = []
 
-    # All managed skill directories (current + legacy)
-    for name in sorted(MANAGED_SKILL_NAMES):
-        patterns.append(f".claude/skills/{name}/")
+    # Skill files (specific files, not directories — user may have their own skills)
+    for name, files in sorted(SKILL_FILES.items()):
+        for filename in files:
+            entries.append(f".claude/skills/{name}/{filename}")
 
-    for hook_file in PLAN_GUARD_HOOK_FILES:
-        patterns.append(hook_file)
+    # Guard hook scripts
+    entries.extend(PLAN_GUARD_HOOK_FILES)
+    entries.extend(WORKTREE_GUARD_HOOK_FILES)
 
-    for hook_file in WORKTREE_GUARD_HOOK_FILES:
-        patterns.append(hook_file)
+    # Hook config files
+    entries.extend(HOOK_CONFIG_FILES)
 
-    for config_file in HOOK_CONFIG_FILES:
-        patterns.append(config_file)
+    # AI tool settings (written per-session to worktrees only)
+    entries.append(".claude/settings.json")
+    entries.append(".cursor/cli.json")
+    entries.append(".gemini/policies/wade.toml")
 
-    # AI tool settings written to worktrees only — ignore on main
-    patterns.append(".claude/settings.json")
-    patterns.append(".cursor/cli.json")
+    # Session artifacts
+    entries.extend(
+        [
+            "PLAN.md",
+            "PR-SUMMARY.md",
+            ".commit-msg",
+            ".wade/",
+            ".wade-managed",
+        ]
+    )
 
-    # Cross-tool symlink dirs — only if symlink or absent
-    for cross_dir in CROSS_TOOL_DIRS:
-        cross_path = project_root / cross_dir
-        if cross_path.is_symlink() or not cross_path.exists():
-            patterns.append(cross_dir)
-
-    return patterns
+    return entries
 
 
 def install_skills(

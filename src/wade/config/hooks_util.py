@@ -67,7 +67,15 @@ def upsert_hook_entry(
     for segment in path[:-1]:
         nested = container.setdefault(segment, {})
         if not isinstance(nested, dict):
-            raise ValueError(f"{hooks_file} has non-object data at {segment!r}")
+            # Stale data from a previous format — replace with empty dict
+            logger.warning(
+                "hooks.replaced_non_dict_segment",
+                path=str(hooks_file),
+                segment=segment,
+                replaced_type=type(nested).__name__,
+            )
+            container[segment] = {}
+            nested = container[segment]
         container = nested
 
     list_key = path[-1] if path else next(iter(entry_dict))
