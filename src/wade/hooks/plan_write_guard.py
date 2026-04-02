@@ -150,14 +150,37 @@ def _deny(file_path: str) -> None:
     sys.exit(2)
 
 
+def _fail_closed(e: Exception) -> None:
+    """Fail-closed: any unhandled exception blocks the edit."""
+    error_msg = f"Guard error: {type(e).__name__}: {e}"
+    print(error_msg, file=sys.stderr)
+    # Output JSON in all tool formats to ensure the block is respected
+    result = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "block",
+            "permissionDecisionReason": error_msg,
+        },
+        "permission": "deny",
+        "permissionDecision": "deny",
+        "decision": "block",
+        "reason": error_msg,
+    }
+    print(json.dumps(result))
+    sys.exit(2)
+
+
 def main() -> None:
-    """Read tool call JSON from stdin, check file path, allow or deny."""
+    """Read tool call JSON from stdin, check file path, allow or deny.
+
+    Wrapped by try/except in _main_with_wrapper to ensure fail-closed on exceptions.
+    """
     try:
         raw = sys.stdin.read()
         if not raw.strip():
             sys.exit(0)  # No input — fail open
         data = json.loads(raw)
-    except (json.JSONDecodeError, ValueError, OSError):
+    except (json.JSONDecodeError, ValueError):
         sys.exit(0)  # Malformed input — fail open
 
     if not isinstance(data, dict):
@@ -177,24 +200,13 @@ def main() -> None:
     _deny(file_path)
 
 
-if __name__ == "__main__":
+def _main_with_wrapper() -> None:
+    """Wrapper that enforces fail-closed behavior on any unhandled exception."""
     try:
         main()
     except Exception as e:
-        # Fail-closed: any unhandled exception blocks the edit
-        error_msg = f"Guard error: {type(e).__name__}: {e}"
-        print(error_msg, file=sys.stderr)
-        # Output JSON in all tool formats to ensure the block is respected
-        result = {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "block",
-                "permissionDecisionReason": error_msg,
-            },
-            "permission": "deny",
-            "permissionDecision": "deny",
-            "decision": "block",
-            "reason": error_msg,
-        }
-        print(json.dumps(result))
-        sys.exit(2)
+        _fail_closed(e)
+
+
+if __name__ == "__main__":
+    _main_with_wrapper()

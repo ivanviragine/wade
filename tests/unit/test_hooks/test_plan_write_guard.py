@@ -215,30 +215,81 @@ class TestFailOpen:
 class TestFailClosed:
     """Unhandled exceptions and guard errors should fail closed (exit 2, not exit 0 or 1)."""
 
-    def test_exception_in_main_exits_2_not_1(self) -> None:
-        """If the guard script raises an exception, it should exit 2 (deny), not 1 (error)."""
-        # Inject code that causes an exception: pass a non-dict as tool_input
-        # and trigger an exception during processing
-        # Actually, the current code is very defensive against exceptions.
-        # Let me create a special test that injects an exception by patching stdin.
-        # For now, we'll test the wrapper behavior with valid JSON but verify
-        # the exit codes are correct.
+    def test_exception_in_main_exits_2_not_1(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If sys.stdin.read() raises an exception, the outer wrapper should catch it and exit 2."""
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        from unittest.mock import Mock
 
-        # Create valid JSON that will be processed without error
-        data = json.dumps({"tool_input": {"file_path": "src/foo.py"}})
-        result = _run_guard(data)
-        # This should block normally (exit 2), not error (exit 1)
-        assert result.returncode == 2
-        assert "BLOCKED" in result.stderr
+        # Load the guard module fresh
+        spec = importlib.util.spec_from_file_location("test_guard_main", GUARD_SCRIPT)
+        assert spec and spec.loader
+        guard_module = importlib.util.module_from_spec(spec)
 
-    def test_guard_error_outputs_json(self) -> None:
-        """Guard errors should output JSON in all tool formats."""
-        data = json.dumps({"tool_input": {"file_path": "src/foo.py"}})
-        result = _run_guard(data)
-        assert result.returncode == 2
-        # Verify stdout is valid JSON with deny fields for all tools
-        stdout_json = json.loads(result.stdout)
+        # Create a mock stdin that raises OSError (simulating I/O failure)
+        mock_stdin = Mock()
+        mock_stdin.read.side_effect = OSError("Simulated stdin I/O failure")
+
+        # Patch sys.stdin before executing the module
+        monkeypatch.setattr("sys.stdin", mock_stdin, raising=False)
+
+        # Execute the module with patched stdin
+        spec.loader.exec_module(guard_module)
+
+        # Capture output and call _main_with_wrapper()
+        stderr_capture = io.StringIO()
+        stdout_capture = io.StringIO()
+
+        with (
+            redirect_stderr(stderr_capture),
+            redirect_stdout(stdout_capture),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            guard_module._main_with_wrapper()
+
+        assert exc_info.value.code == 2, "Should exit 2 (fail-closed) on stdin I/O error"
+        stderr_text = stderr_capture.getvalue()
+        assert "Guard error" in stderr_text or "OSError" in stderr_text
+
+        stdout_text = stdout_capture.getvalue()
+        output_json = json.loads(stdout_text)
+        assert output_json["hookSpecificOutput"]["permissionDecision"] == "block"
+        assert output_json["permission"] == "deny"
+
+    def test_guard_error_outputs_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Guard errors should output JSON in all tool formats when an exception occurs."""
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        from unittest.mock import Mock
+
+        spec = importlib.util.spec_from_file_location("test_guard_error", GUARD_SCRIPT)
+        assert spec and spec.loader
+        guard_module = importlib.util.module_from_spec(spec)
+
+        # Create mock stdin that raises a different error
+        mock_stdin = Mock()
+        mock_stdin.read.side_effect = RuntimeError("Unexpected guard processing error")
+
+        monkeypatch.setattr("sys.stdin", mock_stdin, raising=False)
+        spec.loader.exec_module(guard_module)
+
+        stderr_capture = io.StringIO()
+        stdout_capture = io.StringIO()
+
+        with (
+            redirect_stderr(stderr_capture),
+            redirect_stdout(stdout_capture),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            guard_module._main_with_wrapper()
+
+        assert exc_info.value.code == 2
+        stdout_text = stdout_capture.getvalue()
+        stdout_json = json.loads(stdout_text)
+
+        # Verify stdout is valid JSON with deny fields for all tool formats
         assert stdout_json["hookSpecificOutput"]["permissionDecision"] == "block"
+        assert stdout_json["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
         assert stdout_json["permission"] == "deny"
         assert stdout_json["permissionDecision"] == "deny"
         assert stdout_json["decision"] == "block"
