@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import subprocess
 import sys
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -31,6 +34,36 @@ def _run_guard(stdin_data: str) -> subprocess.CompletedProcess[str]:
         text=True,
         timeout=10,
     )
+
+
+def _run_guard_with_mock_stdin(
+    mock_exception: Exception,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[int | str | None, str, str]:
+    """Run guard with mocked stdin that raises the given exception.
+
+    Returns (exit_code, stderr_text, stdout_text).
+    """
+    spec = importlib.util.spec_from_file_location("test_guard", GUARD_SCRIPT)
+    assert spec and spec.loader
+    guard_module = importlib.util.module_from_spec(spec)
+
+    mock_stdin = Mock()
+    mock_stdin.read.side_effect = mock_exception
+    monkeypatch.setattr("sys.stdin", mock_stdin, raising=False)
+    spec.loader.exec_module(guard_module)
+
+    stderr_capture = io.StringIO()
+    stdout_capture = io.StringIO()
+
+    with (
+        redirect_stderr(stderr_capture),
+        redirect_stdout(stdout_capture),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        guard_module._main_with_wrapper()
+
+    return exc_info.value.code, stderr_capture.getvalue(), stdout_capture.getvalue()
 
 
 class TestAllowedFiles:
@@ -217,74 +250,21 @@ class TestFailClosed:
 
     def test_exception_in_main_exits_2_not_1(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """If sys.stdin.read() raises an exception, the outer wrapper should catch it and exit 2."""
-        import io
-        from contextlib import redirect_stderr, redirect_stdout
-        from unittest.mock import Mock
-
-        # Load the guard module fresh
-        spec = importlib.util.spec_from_file_location("test_guard_main", GUARD_SCRIPT)
-        assert spec and spec.loader
-        guard_module = importlib.util.module_from_spec(spec)
-
-        # Create a mock stdin that raises OSError (simulating I/O failure)
-        mock_stdin = Mock()
-        mock_stdin.read.side_effect = OSError("Simulated stdin I/O failure")
-
-        # Patch sys.stdin before executing the module
-        monkeypatch.setattr("sys.stdin", mock_stdin, raising=False)
-
-        # Execute the module with patched stdin
-        spec.loader.exec_module(guard_module)
-
-        # Capture output and call _main_with_wrapper()
-        stderr_capture = io.StringIO()
-        stdout_capture = io.StringIO()
-
-        with (
-            redirect_stderr(stderr_capture),
-            redirect_stdout(stdout_capture),
-            pytest.raises(SystemExit) as exc_info,
-        ):
-            guard_module._main_with_wrapper()
-
-        assert exc_info.value.code == 2, "Should exit 2 (fail-closed) on stdin I/O error"
-        stderr_text = stderr_capture.getvalue()
+        exit_code, stderr_text, stdout_text = _run_guard_with_mock_stdin(
+            OSError("Simulated stdin I/O failure"), monkeypatch
+        )
+        assert exit_code == 2, "Should exit 2 (fail-closed) on stdin I/O error"
         assert "Guard error" in stderr_text or "OSError" in stderr_text
-
-        stdout_text = stdout_capture.getvalue()
         output_json = json.loads(stdout_text)
         assert output_json["hookSpecificOutput"]["permissionDecision"] == "block"
         assert output_json["permission"] == "deny"
 
     def test_guard_error_outputs_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Guard errors should output JSON in all tool formats when an exception occurs."""
-        import io
-        from contextlib import redirect_stderr, redirect_stdout
-        from unittest.mock import Mock
-
-        spec = importlib.util.spec_from_file_location("test_guard_error", GUARD_SCRIPT)
-        assert spec and spec.loader
-        guard_module = importlib.util.module_from_spec(spec)
-
-        # Create mock stdin that raises a different error
-        mock_stdin = Mock()
-        mock_stdin.read.side_effect = RuntimeError("Unexpected guard processing error")
-
-        monkeypatch.setattr("sys.stdin", mock_stdin, raising=False)
-        spec.loader.exec_module(guard_module)
-
-        stderr_capture = io.StringIO()
-        stdout_capture = io.StringIO()
-
-        with (
-            redirect_stderr(stderr_capture),
-            redirect_stdout(stdout_capture),
-            pytest.raises(SystemExit) as exc_info,
-        ):
-            guard_module._main_with_wrapper()
-
-        assert exc_info.value.code == 2
-        stdout_text = stdout_capture.getvalue()
+        exit_code, _stderr_text, stdout_text = _run_guard_with_mock_stdin(
+            RuntimeError("Unexpected guard processing error"), monkeypatch
+        )
+        assert exit_code == 2
         stdout_json = json.loads(stdout_text)
 
         # Verify stdout is valid JSON with deny fields for all tool formats
@@ -296,38 +276,11 @@ class TestFailClosed:
 
     def test_closed_stdin_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """When stdin is closed, ValueError from sys.stdin.read() should cause exit 2."""
-        import io
-        from contextlib import redirect_stderr, redirect_stdout
-        from unittest.mock import Mock
-
-        spec = importlib.util.spec_from_file_location("test_guard_closed_stdin", GUARD_SCRIPT)
-        assert spec and spec.loader
-        guard_module = importlib.util.module_from_spec(spec)
-
-        # Create mock stdin that raises ValueError (as happens with closed stdin)
-        mock_stdin = Mock()
-        mock_stdin.read.side_effect = ValueError("I/O operation on closed file")
-
-        monkeypatch.setattr("sys.stdin", mock_stdin, raising=False)
-        spec.loader.exec_module(guard_module)
-
-        stderr_capture = io.StringIO()
-        stdout_capture = io.StringIO()
-
-        with (
-            redirect_stderr(stderr_capture),
-            redirect_stdout(stdout_capture),
-            pytest.raises(SystemExit) as exc_info,
-        ):
-            guard_module._main_with_wrapper()
-
-        assert exc_info.value.code == 2, (
-            "Closed stdin should exit 2 (fail-closed), not 0 (fail-open)"
+        exit_code, stderr_text, stdout_text = _run_guard_with_mock_stdin(
+            ValueError("I/O operation on closed file"), monkeypatch
         )
-        stderr_text = stderr_capture.getvalue()
+        assert exit_code == 2, "Closed stdin should exit 2 (fail-closed), not 0 (fail-open)"
         assert "Guard error" in stderr_text or "ValueError" in stderr_text
-
-        stdout_text = stdout_capture.getvalue()
         stdout_json = json.loads(stdout_text)
         assert stdout_json["hookSpecificOutput"]["permissionDecision"] == "block"
         assert stdout_json["permission"] == "deny"
