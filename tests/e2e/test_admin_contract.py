@@ -51,10 +51,11 @@ class TestInitCommand:
         assert not (repo / "AGENTS.md").is_file()
         assert not (repo / "CLAUDE.md").exists()
 
-        gitignore = (repo / ".gitignore").read_text(encoding="utf-8")
-        assert "# wade:start" in gitignore
-        assert "# wade:end" in gitignore
-        assert ".wade-managed" in gitignore
-        # Settings files are gitignored (written to worktrees only)
-        assert ".claude/settings.json" in gitignore
-        assert ".cursor/cli.json" in gitignore
+        # init no longer writes a committed gitignore block
+        gitignore_path = repo / ".gitignore"
+        if gitignore_path.is_file():
+            gitignore = gitignore_path.read_text(encoding="utf-8")
+            assert "# wade:start" not in gitignore
+
+        # .wade/ should be self-ignoring
+        assert (repo / ".wade" / ".gitignore").is_file()
