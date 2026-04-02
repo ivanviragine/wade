@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.15.11] — 2026-04-02
+
+### Refactoring
+
+- eliminate committed .gitignore block — move all wade artifacts to worktree-only (#251) (d1e12e9)
+
 ## [v0.15.10] — 2026-04-01
 
 ### Bug Fixes
