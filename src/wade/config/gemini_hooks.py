@@ -12,7 +12,7 @@ The hooks schema expected by Gemini CLI is an object keyed by event name:
           {
             "matcher": ".*",
             "hooks": [
-              {"type": "command", "command": "python3 /path/to/guard.py"}
+              {"type": "command", "command": "<sys.executable> /path/to/guard.py"}
             ]
           }
         ]
@@ -22,6 +22,7 @@ The hooks schema expected by Gemini CLI is an object keyed by event name:
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -49,7 +50,7 @@ def configure_worktree_hooks(worktree_path: Path, guard_script: Path) -> None:
         hooks_file=worktree_path / ".gemini" / "settings.json",
         entry=GeminiHookEntry(
             matcher=".*",
-            hooks=[GeminiHookCommand(command=f"python3 {guard_script.resolve()}")],
+            hooks=[GeminiHookCommand(command=f"{sys.executable} {guard_script.resolve()}")],
         ),
         dedup_key="matcher",
         ensure_path=["hooks", "BeforeTool"],
@@ -67,7 +68,7 @@ def configure_plan_hooks(worktree_path: Path, guard_script: Path) -> None:
         hooks_file=worktree_path / ".gemini" / "settings.json",
         entry=GeminiHookEntry(
             matcher=".*",
-            hooks=[GeminiHookCommand(command=f"python3 {guard_script.resolve()}")],
+            hooks=[GeminiHookCommand(command=f"{sys.executable} {guard_script.resolve()}")],
         ),
         dedup_key="matcher",
         ensure_path=["hooks", "BeforeTool"],

@@ -6,6 +6,7 @@ plan write guard script.  Copilot CLI reads hooks from `.github/hooks/*.json`.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -29,7 +30,7 @@ def configure_worktree_hooks(worktree_path: Path, guard_script: Path) -> None:
         hooks_file=worktree_path / ".github" / "hooks" / "hooks.json",
         entry=CopilotHookEntry(
             type="command",
-            bash=f"python3 {guard_script.resolve()}",
+            bash=f"{sys.executable} {guard_script.resolve()}",
             comment="Worktree guard for file-write tools (edit, create)",
         ),
         dedup_key="bash",
@@ -53,7 +54,7 @@ def configure_plan_hooks(worktree_path: Path, guard_script: Path) -> None:
         hooks_file=worktree_path / ".github" / "hooks" / "hooks.json",
         entry=CopilotHookEntry(
             type="command",
-            bash=f"python3 {guard_script.resolve()}",
+            bash=f"{sys.executable} {guard_script.resolve()}",
             comment="Plan write guard for file-write tools (edit, create)",
         ),
         dedup_key="bash",

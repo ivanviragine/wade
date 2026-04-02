@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 from wade.config.claude_allowlist import (
@@ -278,7 +279,7 @@ class TestConfigurePlanHooks:
         assert isinstance(hooks[0]["hooks"], list)
         assert len(hooks[0]["hooks"]) == 1
         assert hooks[0]["hooks"][0]["type"] == "command"
-        assert hooks[0]["hooks"][0]["command"] == f"python3 {guard}"
+        assert hooks[0]["hooks"][0]["command"] == f"{sys.executable} {guard}"
 
     def test_idempotent(self, tmp_path: Path) -> None:
         guard = tmp_path / "guard.py"
@@ -319,7 +320,7 @@ class TestConfigureWorktreeHooks:
         assert isinstance(hooks[0]["hooks"], list)
         assert len(hooks[0]["hooks"]) == 1
         assert hooks[0]["hooks"][0]["type"] == "command"
-        assert hooks[0]["hooks"][0]["command"] == f"python3 {guard}"
+        assert hooks[0]["hooks"][0]["command"] == f"{sys.executable} {guard}"
 
     def test_idempotent(self, tmp_path: Path) -> None:
         guard = tmp_path / "guard.py"

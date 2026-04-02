@@ -178,4 +178,23 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        # Fail-closed: any unhandled exception blocks the edit
+        error_msg = f"Guard error: {type(e).__name__}: {e}"
+        print(error_msg, file=sys.stderr)
+        # Output JSON in all tool formats to ensure the block is respected
+        result = {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "block",
+                "permissionDecisionReason": error_msg,
+            },
+            "permission": "deny",
+            "permissionDecision": "deny",
+            "decision": "block",
+            "reason": error_msg,
+        }
+        print(json.dumps(result))
+        sys.exit(2)
