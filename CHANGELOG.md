@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.15.12] — 2026-04-02
+
+### Bug Fixes
+
+- plan-session write guard fails open on hook execution errors (#253) (5f5ccb8)
+
 ## [v0.15.11] — 2026-04-02
 
 ### Refactoring
