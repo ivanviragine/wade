@@ -1,105 +1,94 @@
-# Features shipped since last PyPI release (v0.0.2)
+# What's new in WADE (v0.0.2 → v0.15.15)
 
-> Current version: **v0.15.15** | Last PyPI release: **v0.0.2**
-> Period: 2026-03-04 to 2026-04-08
-
----
-
-## Multi-Provider Task Management
-
-- **ClickUp integration** — pluggable task provider backend alongside GitHub Issues ([v0.3.0] #134)
-- **Conventional commit prefix enforcement** — plan issue titles must use conventional commit format ([v0.6.0])
-- **Plan status badges** — show `[PLANNED]` / `[NO PLAN]` badges in issue listing ([v0.5.0] #142)
-- **Tracking issue detection** — automatically detect tracking issues in `wade implement` and `wade <N>` ([v0.5.4] #183)
-
-## AI Delegation & Multi-Tool Support
-
-- **Unified AI delegation infrastructure** — generic delegation framework for plan review, code review, and dependency analysis ([v0.2.0] #122, #123, #124, #125)
-- **AI tool/model confirmation prompt** — interactive confirmation before launching AI sessions ([v0.0.6] #61)
-- **Deferred AI selection** — postpone AI tool choice until after plan check ([v0.2.0] #127)
-- **Change AI tool mid-workflow** — allow changing AI tool and model in auto-deps confirmation ([v0.2.0] #132)
-- **Timeout support** — configurable timeout field for AI commands and review delegation ([v0.11.0])
-- **Effort configuration overhaul** — `--effort` flag + `WADE_EFFORT` env var for Claude ([v0.5.8] #190)
-- **Model thinking/effort mode support** — control model reasoning depth ([v0.1.2] #81)
-- **Cursor CLI support** — full integration with Cursor's AI CLI ([v0.1.1] #72)
-- **Codex headless execution** — non-interactive execution via `exec` subcommand ([v0.5.1] #154)
-- **Codex and Gemini adapter updates** — new CLI capabilities and model discovery ([v0.5.1] #170, #172)
-- **Gemini CLI integration fixes** — hooks format, deprecated allowed-tools, positional args ([v0.15.10] #249)
-- **Native confirmation/question components** — AI agents use built-in UI components ([v0.12.0] #225)
-
-## Session Workflow
-
-- **Setup-worktree hook** — prompt for and wire a `setup-worktree.sh` script during `wade init` ([v0.1.0], [v0.0.5] #52, #53)
-- **Worktree bootstrap self-awareness** — `bootstrap_worktree` detects wade development context ([v0.0.5] #57)
-- **Auto-copy wade files to worktrees** — internal wade files copied regardless of user config ([v0.11.0])
-- **Catchup step at implementation startup** — sync worktree with base branch before implementing ([v0.15.0] #232)
-- **Workflow recap and state summary** — all session skills show recap of current workflow state ([v0.13.0] #223)
-- **Resume session option** — "Resume session" added to "Continue working" menu ([v0.1.4] #112)
-- **Offer to start working after planning** — seamless plan-to-implement transition ([v0.1.4] #107)
-- **Smart-start menu context-awareness** — menu adapts based on PR draft state and worktree ([v0.1.3] #102)
-- **Open PR in browser** — added to smart-start menu ([v0.6.1] #194)
-- **Terminal tab titles** — set terminal tab title during plan and work sessions ([v0.1.1] #70)
-- **Ghostty terminal launcher** — support for Ghostty terminal + batch terminal launcher ([v0.5.4] #179)
-- **Selective skill installation** — per-command skill installation during init ([v0.1.4] #114)
-- **CLI completion install prompt** — prompt to install shell completions during init ([v0.1.4] #116)
-- **CLI commands reorganization** — commands organized around workflow phases and audience ([v0.1.4] #110)
-- **Non-interactive task creation** — `wade new-task` works without interactive prompts ([v0.1.1] #71)
-
-## Plan Sessions
-
-- **`wade plan-done` command** — deterministic plan validation ([v0.1.1] #73)
-- **Plan file-write guard hooks** — prevent accidental writes during plan sessions ([v0.5.8] #177, [v0.15.6] #241)
-- **Plan session write guard resilience** — guard fails open on hook execution errors ([v0.15.12] #253)
-
-## Code Review & PR Workflow
-
-- **`wade address-reviews` command** — dedicated command to address PR review comments ([v0.1.1] #79)
-- **Review reminder in done commands** — prompt to review before closing sessions ([v0.5.0] #145)
-- **PR comment polling** — poll for PR comments in smart_start review flow ([v0.8.0] #202)
-- **Commit-aware review polling** — review polling tracks which comments are new per commit ([v0.7.0] #196)
-- **Active review comment polling** — "Wait for reviews" actively polls for comments ([v0.6.1] #192)
-- **Outdated thread detection** — PR comment polling catches outdated threads and PR-level reviews ([v0.15.8] #245)
-- **Bot review detection** — detect completed bot reviews (CodeRabbit) in PR comment polling ([v0.15.7] #243)
-- **CodeRabbit review bot status** — detect CodeRabbit status and clarify review prompt wording ([v0.4.0])
-- **Comprehensive PR review status reporting** — detailed review status display ([v0.5.1] #162)
-- **Stronger review enforcement** — implementation-session `done` enforces review completion ([v0.15.7] #239)
-- **Post-batch coherence review** — review session after batch operations ([v0.5.0] #144)
-- **Branch diff fallback** — fall back to branch diff when no working-tree changes found ([v0.5.1] #175)
-- **Self-review improvements** — actionable output for AI agents, renamed from "Self-review" to "Review" ([v0.5.1] #160, #164)
-
-## Batch Mode & Chaining
-
-- **Batch mode with stacked branches** — chain-aware review for batch operations ([v0.11.3] #218)
-- **Chain auto-continuation** — automatic continuation with merge-gated dependencies ([v0.5.6] #181)
-- **YOLO mode** — skip AI tool permission prompts during work sessions ([v0.4.0] #135)
-- **YOLO flag propagation** — propagate yolo_explicit flag through review session handoff ([v0.11.3] #220)
-
-## Project Knowledge System
-
-- **Project knowledge file** — cross-session AI learning via persistent knowledge entries ([v0.9.0] #207)
-- **`knowledge get` command** — read project knowledge file ([v0.10.0] #211)
-- **Knowledge thumbs-up/down** — rate knowledge entries for relevance ([v0.11.0] #212)
-- **Descriptive knowledge IDs** — relaxed regex to allow descriptive entry IDs ([v0.15.9] #247)
-
-## Worktree Safety & Artifacts
-
-- **Worktree file-write guard** — hook prevents writes outside allowed paths during implementation ([v0.14.0] #230)
-- **Session-specific file detection** — detect committed session-specific files on `done` and `sync` ([v0.15.15] #257)
-- **Wade artifacts moved to worktree-only** — AGENTS.md pointer and AI tool settings no longer committed to main ([v0.15.1] #234)
-- **Managed artifacts cleanup** — eliminate committed .gitignore block, all wade artifacts worktree-only ([v0.15.11] #251)
-- **Gitignore audit** — comprehensive audit and fix of gitignore patterns ([v0.15.5] #237)
-- **Prevent skill commits** — prevent wade-managed skills from being committed in inited projects ([v0.11.1] #214)
-- **AI tool session preservation** — preserve AI tool session data on worktree deletion ([v0.1.1] #75)
-- **AI tool permission pre-authorization** — unified and complete permission setup ([v0.1.1] #76)
-- **Wade allowlist propagation** — always propagate wade CLI allowlist to worktrees ([v0.5.3])
-
-## Infrastructure & Reliability
-
-- **Auto version bump CI workflow** — automatic version bump on PR merge ([v0.1.2])
-- **PR title linter** — CI enforces conventional commit format on PR titles ([v0.5.9])
-- **Retry logic for `gh` CLI** — retry on transient network failures ([v0.13.1])
-- **Model registry updates** — updated tier mappings for new OpenAI/Google models ([v0.5.3] #168)
+> 5 weeks. 130+ releases. Here's what shipped.
 
 ---
 
-*Generated from CHANGELOG.md — includes all features, significant enhancements, and workflow improvements shipped between v0.0.3 and v0.15.15.*
+## One command to start working: `wade 42`
+
+Type an issue number and WADE figures out the rest. It detects where you left off — no PR yet? Start implementing. PR in draft? Continue working. Reviews pending? Address them. Ready to merge? One click.
+
+The smart-start menu adapts to context: it knows your PR state, your worktree, whether you have an active session to resume. You pick what to do; WADE handles git, branches, and isolation.
+
+## AI plans before it codes
+
+`wade plan` opens a planning session where AI analyzes the feature, breaks it into tasks, and writes structured plan files — before touching any code. Plans go through **automated self-review**: WADE delegates a second AI pass to critique the plan for gaps, edge cases, and scope creep.
+
+When planning is done, WADE validates the output (structure, completeness, conventional commit titles), auto-creates GitHub Issues for each task, and offers to start implementation immediately.
+
+## AI reviews its own work
+
+Every implementation session includes a built-in review step. Before creating a PR, the AI reviews its own code for correctness, style, and completeness.
+
+Three review modes:
+- **Self-review prompt** — AI generates a structured review checklist the developer can inspect
+- **Headless delegation** — a second AI session reviews the code automatically in the background, no terminal needed
+- **Interactive delegation** — launches a new AI session in a separate terminal for a deeper, conversational review
+
+This catches issues before human reviewers ever see the PR.
+
+## Address PR reviews with one command
+
+When reviewers leave comments on your PR, run `wade 42` and pick "Review PR comments." WADE fetches all unresolved threads — including outdated ones, PR-level reviews, and bot reviews (CodeRabbit, etc.) — and launches an AI session to address each one. It tracks which comments are new since the last commit so nothing gets missed.
+
+## Batch mode: parallelize entire features
+
+`wade implement-batch` takes a tracking issue and launches all sub-tasks in parallel — each in its own terminal, its own worktree, its own branch.
+
+- Detects dependency chains automatically ("task B depends on A")
+- Independent tasks run in parallel; chains run sequentially with auto-continuation
+- Live polling dashboard shows progress across all tasks
+- Post-batch coherence review checks that parallel branches work together
+
+Turn a 10-task feature into 10 simultaneous AI sessions.
+
+## Works with your AI tool
+
+WADE is not locked to one AI. It supports **Claude Code, Cursor, Gemini CLI, OpenAI Codex**, and more — with adapter-level integration for each.
+
+- Pick your tool per-project or per-command
+- Configure model tiers (fast model for simple tasks, powerful model for complex ones)
+- Control reasoning effort with `--effort` (or `WADE_EFFORT` env var)
+- **YOLO mode** (`--yolo`): skip all confirmation prompts for fully autonomous runs
+- Headless execution for CI/CD pipelines
+
+Switch tools mid-project without changing your workflow.
+
+## Cross-session knowledge
+
+WADE maintains a project knowledge file that AI agents read at the start of every session and write to at the end. Learnings persist across sessions:
+
+- "Our API always returns wrapped responses" — saved once, known forever
+- Rate entries with thumbs-up/down to surface what's useful
+- Outdated knowledge gets superseded, not deleted
+
+The AI gets smarter about your codebase with every task it completes.
+
+## Worktree isolation & safety guardrails
+
+Every task runs in its own git worktree — fully isolated from your main branch and from other tasks. WADE adds additional safety layers:
+
+- **File-write guards** prevent AI from modifying files outside the worktree during planning sessions
+- **Auto-sync** merges the latest base branch into your worktree at session start, handling conflicts
+- **Review enforcement** blocks `done` until reviews are addressed
+- **Zero repo pollution** — all WADE artifacts live in the worktree only, never committed to your main branch
+- **Session resume** — every PR records the session ID so you can pick up exactly where you left off
+
+## Multi-provider support
+
+GitHub Issues is the default, but WADE also supports **ClickUp** as a task provider. Same workflow, different backend. More providers can be added through the pluggable provider architecture.
+
+## One-time setup: `wade init`
+
+Interactive wizard that configures everything in one pass:
+
+- Detects installed AI tools and sets defaults
+- Configures worktree directory, branch naming, labels
+- Sets up post-worktree hooks (install deps, copy `.env`, etc.)
+- Enables cross-session knowledge
+- Installs shell completions
+- Writes a single `.wade.yml` config — re-run anytime to update
+
+---
+
+*130+ releases shipped between March 4 and April 8, 2026.*
