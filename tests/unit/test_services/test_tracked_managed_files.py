@@ -1,11 +1,15 @@
-"""Tests for _check_tracked_managed_files in implementation_service.py."""
+"""Tests for _check_tracked_managed_files and dirty-check session guidance."""
 
 from __future__ import annotations
 
 import subprocess
 from pathlib import Path
 
-from wade.services.implementation_service import _check_tracked_managed_files
+from wade.services.implementation_service import (
+    _check_tracked_managed_files,
+    _get_dirty_file_paths,
+    _identify_session_dirty_files,
+)
 
 
 class TestCheckTrackedManagedFiles:
@@ -160,3 +164,185 @@ class TestCheckTrackedManagedFiles:
 
         tracked = _check_tracked_managed_files(tmp_git_repo)
         assert ".claude/skills/workflow/SKILL.md" in tracked
+
+    def test_detects_tracked_worktree_guard_hook(self, tmp_git_repo: Path) -> None:
+        hook_dir = tmp_git_repo / ".claude" / "hooks"
+        hook_dir.mkdir(parents=True)
+        (hook_dir / "worktree_guard.py").write_text("hook content")
+        subprocess.run(
+            ["git", "add", ".claude/hooks/worktree_guard.py"],
+            cwd=tmp_git_repo,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "add worktree guard"],
+            cwd=tmp_git_repo,
+            check=True,
+            capture_output=True,
+        )
+
+        tracked = _check_tracked_managed_files(tmp_git_repo)
+        assert ".claude/hooks/worktree_guard.py" in tracked
+
+    def test_detects_tracked_plan_md(self, tmp_git_repo: Path) -> None:
+        (tmp_git_repo / "PLAN.md").write_text("# Plan")
+        subprocess.run(["git", "add", "PLAN.md"], cwd=tmp_git_repo, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "add plan"],
+            cwd=tmp_git_repo,
+            check=True,
+            capture_output=True,
+        )
+
+        tracked = _check_tracked_managed_files(tmp_git_repo)
+        assert "PLAN.md" in tracked
+
+    def test_detects_tracked_pr_summary(self, tmp_git_repo: Path) -> None:
+        (tmp_git_repo / "PR-SUMMARY.md").write_text("summary")
+        subprocess.run(
+            ["git", "add", "PR-SUMMARY.md"],
+            cwd=tmp_git_repo,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "add pr summary"],
+            cwd=tmp_git_repo,
+            check=True,
+            capture_output=True,
+        )
+
+        tracked = _check_tracked_managed_files(tmp_git_repo)
+        assert "PR-SUMMARY.md" in tracked
+
+    def test_detects_tracked_commit_msg(self, tmp_git_repo: Path) -> None:
+        (tmp_git_repo / ".commit-msg").write_text("msg")
+        subprocess.run(
+            ["git", "add", ".commit-msg"],
+            cwd=tmp_git_repo,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "add commit msg"],
+            cwd=tmp_git_repo,
+            check=True,
+            capture_output=True,
+        )
+
+        tracked = _check_tracked_managed_files(tmp_git_repo)
+        assert ".commit-msg" in tracked
+
+    def test_detects_tracked_wade_managed(self, tmp_git_repo: Path) -> None:
+        (tmp_git_repo / ".wade-managed").write_text("marker")
+        subprocess.run(
+            ["git", "add", ".wade-managed"],
+            cwd=tmp_git_repo,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "add wade-managed"],
+            cwd=tmp_git_repo,
+            check=True,
+            capture_output=True,
+        )
+
+        tracked = _check_tracked_managed_files(tmp_git_repo)
+        assert ".wade-managed" in tracked
+
+    def test_detects_tracked_wade_directory(self, tmp_git_repo: Path) -> None:
+        wade_dir = tmp_git_repo / ".wade"
+        wade_dir.mkdir(parents=True)
+        (wade_dir / "base_branch").write_text("main")
+        subprocess.run(
+            ["git", "add", ".wade/base_branch"],
+            cwd=tmp_git_repo,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "add wade metadata"],
+            cwd=tmp_git_repo,
+            check=True,
+            capture_output=True,
+        )
+
+        tracked = _check_tracked_managed_files(tmp_git_repo)
+        assert ".wade/base_branch" in tracked
+
+    def test_ignores_claude_settings_json(self, tmp_git_repo: Path) -> None:
+        """User-owned .claude/settings.json must NOT be flagged."""
+        settings_dir = tmp_git_repo / ".claude"
+        settings_dir.mkdir(parents=True)
+        (settings_dir / "settings.json").write_text("{}")
+        subprocess.run(
+            ["git", "add", ".claude/settings.json"],
+            cwd=tmp_git_repo,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "add settings"],
+            cwd=tmp_git_repo,
+            check=True,
+            capture_output=True,
+        )
+
+        tracked = _check_tracked_managed_files(tmp_git_repo)
+        assert ".claude/settings.json" not in tracked
+        assert len(tracked) == 0
+
+
+class TestGetDirtyFilePaths:
+    def test_returns_modified_file(self, tmp_git_repo: Path) -> None:
+        (tmp_git_repo / "README.md").write_text("changed")
+        paths = _get_dirty_file_paths(tmp_git_repo)
+        assert "README.md" in paths
+
+    def test_returns_untracked_file(self, tmp_git_repo: Path) -> None:
+        (tmp_git_repo / "new.txt").write_text("new")
+        paths = _get_dirty_file_paths(tmp_git_repo)
+        assert "new.txt" in paths
+
+    def test_clean_repo_returns_empty(self, tmp_git_repo: Path) -> None:
+        paths = _get_dirty_file_paths(tmp_git_repo)
+        assert paths == []
+
+
+class TestIdentifySessionDirtyFiles:
+    def test_identifies_plan_md(self) -> None:
+        result = _identify_session_dirty_files(["PLAN.md", "src/app.py"])
+        assert "PLAN.md" in result
+        assert "src/app.py" not in result
+
+    def test_identifies_pr_summary(self) -> None:
+        result = _identify_session_dirty_files(["PR-SUMMARY.md"])
+        assert "PR-SUMMARY.md" in result
+
+    def test_identifies_claude_settings(self) -> None:
+        result = _identify_session_dirty_files([".claude/settings.json"])
+        assert ".claude/settings.json" in result
+
+    def test_identifies_wade_directory_files(self) -> None:
+        result = _identify_session_dirty_files([".wade/base_branch", ".wade/state"])
+        assert ".wade/base_branch" in result
+        assert ".wade/state" in result
+
+    def test_identifies_skill_file(self) -> None:
+        result = _identify_session_dirty_files([".claude/skills/implementation-session/SKILL.md"])
+        assert ".claude/skills/implementation-session/SKILL.md" in result
+
+    def test_ignores_user_files(self) -> None:
+        result = _identify_session_dirty_files(["src/main.py", "README.md"])
+        assert result == []
+
+    def test_mixed_dirty_files(self) -> None:
+        """Session artifacts are identified among normal dirty files."""
+        dirty = ["src/app.py", ".claude/settings.json", "PLAN.md", "tests/test_foo.py"]
+        result = _identify_session_dirty_files(dirty)
+        assert ".claude/settings.json" in result
+        assert "PLAN.md" in result
+        assert "src/app.py" not in result
+        assert "tests/test_foo.py" not in result

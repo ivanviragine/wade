@@ -173,15 +173,68 @@ def _format_uncommitted_summary(cwd: Path) -> str:
     return ", ".join(parts) if parts else "dirty"
 
 
+def _get_dirty_file_paths(cwd: Path) -> list[str]:
+    """Return file paths from ``git status --porcelain``."""
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return []
+
+    paths: list[str] = []
+    for line in result.stdout.splitlines():
+        if not line or len(line) < 4:
+            continue
+        path = line[3:]
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        if path.startswith('"') and path.endswith('"'):
+            path = path[1:-1]
+        paths.append(path)
+    return paths
+
+
+def _identify_session_dirty_files(dirty_paths: list[str]) -> list[str]:
+    """Return dirty file paths that are wade session artifacts.
+
+    Matches against ``get_worktree_gitignore_entries()`` — the same set
+    of paths the worktree gitignore block hides.
+    """
+    from wade.skills.installer import get_worktree_gitignore_entries
+
+    entries = get_worktree_gitignore_entries()
+    dir_prefixes = [e for e in entries if e.endswith("/")]
+    exact_paths = set(e for e in entries if not e.endswith("/"))
+
+    matched: list[str] = []
+    for path in dirty_paths:
+        if path in exact_paths or any(path.startswith(prefix) for prefix in dir_prefixes):
+            matched.append(path)
+
+    return sorted(matched)
+
+
 def _check_tracked_managed_files(cwd: Path) -> list[str]:
     """Return tracked wade-managed files that should not be committed.
 
     Checks for:
     - Skill directories from ``MANAGED_SKILL_NAMES``
     - Cross-tool symlink directories
-    - The wade-generated plan_write_guard.py hook
+    - Plan guard hook files
+    - Worktree guard hook files
+    - Session artifact exact paths (``PLAN.md``, ``PR-SUMMARY.md``, etc.)
     """
-    from wade.skills.installer import CROSS_TOOL_DIRS, MANAGED_SKILL_NAMES, PLAN_GUARD_HOOK_FILES
+    from wade.skills.installer import (
+        CROSS_TOOL_DIRS,
+        MANAGED_SKILL_NAMES,
+        PLAN_GUARD_HOOK_FILES,
+        WORKTREE_GUARD_HOOK_FILES,
+    )
 
     # Build path roots to check against git index (bare, no trailing slash).
     # git ls-files --cached reports tracked symlinks without trailing slashes,
@@ -192,6 +245,9 @@ def _check_tracked_managed_files(cwd: Path) -> list[str]:
         if cross_path.is_symlink() or not cross_path.exists():
             roots.append(cross_dir)
     roots.extend(PLAN_GUARD_HOOK_FILES)
+    roots.extend(WORKTREE_GUARD_HOOK_FILES)
+    # Session artifact exact paths (never user content)
+    roots.extend(["PLAN.md", "PR-SUMMARY.md", ".commit-msg", ".wade", ".wade-managed"])
 
     try:
         result = subprocess.run(
@@ -2803,12 +2859,32 @@ def _sync_preflight(
 
     if not git_repo.is_clean(cwd):
         detail_str = _format_uncommitted_summary(cwd)
-        emit(SyncEventType.ERROR, reason="dirty_worktree", details=detail_str)
+        dirty_paths = _get_dirty_file_paths(cwd)
+        session_files = _identify_session_dirty_files(dirty_paths)
+        if session_files:
+            emit(
+                SyncEventType.ERROR,
+                reason="dirty_worktree",
+                details=detail_str,
+                session_files=session_files,
+            )
+        else:
+            emit(SyncEventType.ERROR, reason="dirty_worktree", details=detail_str)
         if not json_output:
-            console.error_with_fix(
-                f"Working tree is dirty ({detail_str})",
-                "Commit or stash your changes first",
-                "git stash",
+            console.error(f"Working tree is dirty ({detail_str})")
+            if session_files:
+                console.warn(
+                    "The following dirty files are wade session artifacts"
+                    " \N{EM DASH} do NOT commit them."
+                )
+                console.hint("Restore with: git checkout -- <file>")
+                for sf in session_files:
+                    console.detail(sf)
+                console.empty()
+            console.hint(
+                "Commit or stash your non-session changes first"
+                if session_files
+                else "Commit or stash your changes first"
             )
         return SyncResult(success=False, current_branch=current, main_branch=resolved_main)
 
@@ -2963,7 +3039,7 @@ def sync(
     cwd = project_root or Path.cwd()
     events: list[SyncEvent] = []
 
-    def emit(event: SyncEventType, **data: str | int) -> None:
+    def emit(event: SyncEventType, **data: str | int | list[str]) -> None:
         ev = SyncEvent(event=event, data=data)
         events.append(ev)
         if json_output:
@@ -2978,6 +3054,24 @@ def sync(
             events=events,
         )
     repo_root, current, resolved_main = preflight
+
+    # Non-blocking: warn if wade-only session files are tracked in git
+    tracked_managed = _check_tracked_managed_files(cwd)
+    if tracked_managed:
+        if json_output:
+            console.raw(
+                json.dumps(
+                    {"event": "tracked_session_files_warning", "tracked_files": tracked_managed}
+                )
+                + "\n"
+            )
+        else:
+            console.warn(
+                "Wade-managed files are tracked in git \N{EM DASH} these should not be committed"
+            )
+            for path in tracked_managed:
+                console.detail(path)
+            console.hint("Untrack with: git rm --cached <file>")
 
     emit(SyncEventType.PREFLIGHT_OK, current_branch=current, main_branch=resolved_main)
     if not json_output:
@@ -3024,7 +3118,7 @@ def catchup(
     cwd = project_root or Path.cwd()
     events: list[SyncEvent] = []
 
-    def emit(event: SyncEventType, **data: str | int) -> None:
+    def emit(event: SyncEventType, **data: str | int | list[str]) -> None:
         ev = SyncEvent(event=event, data=data)
         events.append(ev)
         if json_output:
@@ -3170,10 +3264,22 @@ def done(
     # Strip it only after the gate passes.
     if not git_repo.is_clean(cwd):
         detail_str = _format_uncommitted_summary(cwd)
-        console.error_with_fix(
-            f"Working tree is dirty ({detail_str})",
-            "Commit or stash your changes first",
-            "git stash",
+        dirty_paths = _get_dirty_file_paths(cwd)
+        session_files = _identify_session_dirty_files(dirty_paths)
+        console.error(f"Working tree is dirty ({detail_str})")
+        if session_files:
+            console.warn(
+                "The following dirty files are wade session artifacts"
+                " \N{EM DASH} do NOT commit them."
+            )
+            console.hint("Restore with: git checkout -- <file>")
+            for sf in session_files:
+                console.detail(sf)
+            console.empty()
+        console.hint(
+            "Commit or stash your non-session changes first"
+            if session_files
+            else "Commit or stash your changes first"
         )
         return False
 
