@@ -1,94 +1,98 @@
-# What's new in WADE (v0.0.2 → v0.15.15)
+# What's new in WADE since v0.0.2
 
 > 5 weeks. 130+ releases. Here's what shipped.
 
+v0.0.2 already had the core: `wade 42` routing, `wade init`, AI planning, implementation with worktrees, batch mode, 7 AI tool adapters, skills, dependency analysis, terminal titles, model routing, and session logging.
+
+Everything below is **new**.
+
 ---
 
-## One command to start working: `wade 42`
+## AI self-review of plans and code
 
-Type an issue number and WADE figures out the rest. It detects where you left off — no PR yet? Start implementing. PR in draft? Continue working. Reviews pending? Address them. Ready to merge? One click.
+Before v0.0.2, the AI planned and implemented — but never checked its own work. Now every session includes a built-in review step.
 
-The smart-start menu adapts to context: it knows your PR state, your worktree, whether you have an active session to resume. You pick what to do; WADE handles git, branches, and isolation.
+**Plan review**: after the AI writes a plan, WADE delegates a second pass to critique it for gaps, missing edge cases, and scope creep — before any issues get created.
 
-## AI plans before it codes
+**Code review**: before creating a PR, the AI reviews its own implementation for correctness, style, and completeness.
 
-`wade plan` opens a planning session where AI analyzes the feature, breaks it into tasks, and writes structured plan files — before touching any code. Plans go through **automated self-review**: WADE delegates a second AI pass to critique the plan for gaps, edge cases, and scope creep.
+Three delegation modes:
+- **Prompt** — generates a structured review for the developer to inspect
+- **Headless** — a second AI session reviews automatically in the background, no terminal needed
+- **Interactive** — launches a new AI session in a separate terminal for a deeper review
 
-When planning is done, WADE validates the output (structure, completeness, conventional commit titles), auto-creates GitHub Issues for each task, and offers to start implementation immediately.
+Issues get caught before human reviewers ever see the PR.
 
-## AI reviews its own work
+## Address PR review comments with AI
 
-Every implementation session includes a built-in review step. Before creating a PR, the AI reviews its own code for correctness, style, and completeness.
+Entirely new workflow. When reviewers leave comments on your PR, run `wade 42` → "Review PR comments." WADE fetches all unresolved threads and launches an AI session to address each one.
 
-Three review modes:
-- **Self-review prompt** — AI generates a structured review checklist the developer can inspect
-- **Headless delegation** — a second AI session reviews the code automatically in the background, no terminal needed
-- **Interactive delegation** — launches a new AI session in a separate terminal for a deeper, conversational review
+- Commit-aware polling — tracks which comments are new since the last push
+- Catches outdated threads and PR-level reviews
+- Detects bot reviews (CodeRabbit, etc.) so the AI doesn't wait for a human that already approved
+- Review enforcement — `done` blocks until reviews are addressed
 
-This catches issues before human reviewers ever see the PR.
+## Post-batch coherence review
 
-## Address PR reviews with one command
-
-When reviewers leave comments on your PR, run `wade 42` and pick "Review PR comments." WADE fetches all unresolved threads — including outdated ones, PR-level reviews, and bot reviews (CodeRabbit, etc.) — and launches an AI session to address each one. It tracks which comments are new since the last commit so nothing gets missed.
-
-## Batch mode: parallelize entire features
-
-`wade implement-batch` takes a tracking issue and launches all sub-tasks in parallel — each in its own terminal, its own worktree, its own branch.
-
-- Detects dependency chains automatically ("task B depends on A")
-- Independent tasks run in parallel; chains run sequentially with auto-continuation
-- Live polling dashboard shows progress across all tasks
-- Post-batch coherence review checks that parallel branches work together
-
-Turn a 10-task feature into 10 simultaneous AI sessions.
-
-## Works with your AI tool
-
-WADE is not locked to one AI. It supports **Claude Code, Cursor, Gemini CLI, OpenAI Codex**, and more — with adapter-level integration for each.
-
-- Pick your tool per-project or per-command
-- Configure model tiers (fast model for simple tasks, powerful model for complex ones)
-- Control reasoning effort with `--effort` (or `WADE_EFFORT` env var)
-- **YOLO mode** (`--yolo`): skip all confirmation prompts for fully autonomous runs
-- Headless execution for CI/CD pipelines
-
-Switch tools mid-project without changing your workflow.
+After batch mode finishes parallel tasks, `wade review batch` checks that the branches actually work together — catches integration conflicts, duplicated logic, and inconsistent patterns across parallel PRs.
 
 ## Cross-session knowledge
 
-WADE maintains a project knowledge file that AI agents read at the start of every session and write to at the end. Learnings persist across sessions:
+WADE maintains a project knowledge file that AI agents read at session start and write to at session end. Learnings persist:
 
 - "Our API always returns wrapped responses" — saved once, known forever
 - Rate entries with thumbs-up/down to surface what's useful
-- Outdated knowledge gets superseded, not deleted
+- Outdated entries get superseded, not deleted
 
 The AI gets smarter about your codebase with every task it completes.
 
-## Worktree isolation & safety guardrails
+## Chain auto-continuation
 
-Every task runs in its own git worktree — fully isolated from your main branch and from other tasks. WADE adds additional safety layers:
+Batch mode now understands dependency chains. If task B depends on task A, WADE runs A first, waits for its PR to merge, then automatically starts B on top of A's changes — no manual intervention.
 
-- **File-write guards** prevent AI from modifying files outside the worktree during planning sessions
-- **Auto-sync** merges the latest base branch into your worktree at session start, handling conflicts
-- **Review enforcement** blocks `done` until reviews are addressed
-- **Zero repo pollution** — all WADE artifacts live in the worktree only, never committed to your main branch
-- **Session resume** — every PR records the session ID so you can pick up exactly where you left off
+## Context-aware smart-start
 
-## Multi-provider support
+`wade 42` now shows a context-aware menu based on where you actually are:
 
-GitHub Issues is the default, but WADE also supports **ClickUp** as a task provider. Same workflow, different backend. More providers can be added through the pluggable provider architecture.
+- No PR yet → start implementing
+- PR in draft → continue working or resume last session
+- PR open with reviews → address review comments
+- PR approved → merge
 
-## One-time setup: `wade init`
+It also detects tracking issues and redirects to batch mode automatically.
 
-Interactive wizard that configures everything in one pass:
+## YOLO mode
 
-- Detects installed AI tools and sets defaults
-- Configures worktree directory, branch naming, labels
-- Sets up post-worktree hooks (install deps, copy `.env`, etc.)
-- Enables cross-session knowledge
-- Installs shell completions
-- Writes a single `.wade.yml` config — re-run anytime to update
+`--yolo` skips all confirmation prompts — AI tool selection, model choice, effort level. Fully autonomous from `wade 42` to merged PR. Propagates through batch mode and chain continuation.
+
+## Effort control
+
+`--effort` flag (or `WADE_EFFORT` env var) controls how hard the AI thinks. Route simple tasks to fast models with low effort, complex tasks to powerful models with max reasoning.
+
+## Plan validation
+
+`wade plan-session done` validates plans deterministically before creating issues — checks structure, completeness, conventional commit titles. Errors block; warnings inform. No more malformed plans slipping through.
+
+## File-write guards
+
+During planning sessions, WADE hooks prevent the AI from accidentally writing code. Planning is for thinking, not implementing. Guards fail open on errors so they never block real work.
+
+## Zero repo pollution
+
+All WADE artifacts — the AGENTS.md pointer, AI tool settings, skill files, session data — now live exclusively in the worktree. Nothing gets committed to your main branch. Your repo stays clean.
+
+## Auto-sync at session start
+
+When starting or resuming implementation, WADE merges the latest base branch into the worktree and handles conflicts — before the AI writes a single line. No more building on stale code.
+
+## ClickUp provider
+
+GitHub Issues is no longer the only option. ClickUp works as a task backend with the same workflow. Same `wade 42`, different provider.
+
+## Session resume
+
+Every PR footer now records the AI tool, model, and session ID. When you come back to a task, "Resume last session" picks up exactly where the AI left off — full context preserved.
 
 ---
 
-*130+ releases shipped between March 4 and April 8, 2026.*
+*Shipped between March 4 and April 8, 2026.*
