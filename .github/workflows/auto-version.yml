@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: auto-version-bump
+  cancel-in-progress: false
+
 jobs:
   version-bump:
     # Only run when the PR was actually merged
@@ -69,5 +73,12 @@ jobs:
       - name: Push commit and tag
         if: steps.detect.outputs.bump != ''
         run: |
-          git push
-          git push --tags
+          # Pull any commits that landed since checkout (e.g. from a
+          # concurrent version-bump that finished first), then retry push.
+          for attempt in 1 2 3; do
+            git pull --rebase origin main && git push && git push --tags && exit 0
+            echo "Push attempt $attempt failed, retrying in $((attempt * 2))s..."
+            sleep $((attempt * 2))
+          done
+          echo "All push attempts failed"
+          exit 1
