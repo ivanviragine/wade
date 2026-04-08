@@ -247,7 +247,7 @@ def _check_tracked_managed_files(cwd: Path) -> list[str]:
     roots.extend(PLAN_GUARD_HOOK_FILES)
     roots.extend(WORKTREE_GUARD_HOOK_FILES)
     # Session artifact exact paths (never user content)
-    roots.extend(["PLAN.md", "PR-SUMMARY.md", ".commit-msg", ".wade-managed"])
+    roots.extend(["PLAN.md", "PR-SUMMARY.md", ".commit-msg", ".wade", ".wade-managed"])
 
     try:
         result = subprocess.run(
@@ -2861,14 +2861,16 @@ def _sync_preflight(
         detail_str = _format_uncommitted_summary(cwd)
         dirty_paths = _get_dirty_file_paths(cwd)
         session_files = _identify_session_dirty_files(dirty_paths)
-        emit(SyncEventType.ERROR, reason="dirty_worktree", details=detail_str)
-        if json_output:
-            if session_files:
-                console.raw(
-                    json.dumps({"event": "session_files_warning", "session_files": session_files})
-                    + "\n"
-                )
+        if session_files:
+            emit(
+                SyncEventType.ERROR,
+                reason="dirty_worktree",
+                details=detail_str,
+                session_files=session_files,
+            )
         else:
+            emit(SyncEventType.ERROR, reason="dirty_worktree", details=detail_str)
+        if not json_output:
             console.error(f"Working tree is dirty ({detail_str})")
             if session_files:
                 console.warn(
@@ -3037,7 +3039,7 @@ def sync(
     cwd = project_root or Path.cwd()
     events: list[SyncEvent] = []
 
-    def emit(event: SyncEventType, **data: str | int) -> None:
+    def emit(event: SyncEventType, **data: str | int | list[str]) -> None:
         ev = SyncEvent(event=event, data=data)
         events.append(ev)
         if json_output:
@@ -3116,7 +3118,7 @@ def catchup(
     cwd = project_root or Path.cwd()
     events: list[SyncEvent] = []
 
-    def emit(event: SyncEventType, **data: str | int) -> None:
+    def emit(event: SyncEventType, **data: str | int | list[str]) -> None:
         ev = SyncEvent(event=event, data=data)
         events.append(ev)
         if json_output:

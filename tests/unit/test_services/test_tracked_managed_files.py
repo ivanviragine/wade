@@ -252,6 +252,26 @@ class TestCheckTrackedManagedFiles:
         tracked = _check_tracked_managed_files(tmp_git_repo)
         assert ".wade-managed" in tracked
 
+    def test_detects_tracked_wade_directory(self, tmp_git_repo: Path) -> None:
+        wade_dir = tmp_git_repo / ".wade"
+        wade_dir.mkdir(parents=True)
+        (wade_dir / "base_branch").write_text("main")
+        subprocess.run(
+            ["git", "add", ".wade/base_branch"],
+            cwd=tmp_git_repo,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "add wade metadata"],
+            cwd=tmp_git_repo,
+            check=True,
+            capture_output=True,
+        )
+
+        tracked = _check_tracked_managed_files(tmp_git_repo)
+        assert ".wade/base_branch" in tracked
+
     def test_ignores_claude_settings_json(self, tmp_git_repo: Path) -> None:
         """User-owned .claude/settings.json must NOT be flagged."""
         settings_dir = tmp_git_repo / ".claude"

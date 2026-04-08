@@ -606,6 +606,42 @@ class TestSync:
                 if e.event == "error"
             )
 
+    def test_dirty_worktree_with_session_files_in_event(self, tmp_git_repo: Path) -> None:
+        """session_files is included in the ERROR event payload for dirty session artifacts."""
+        import subprocess
+
+        from wade.services.implementation_service import sync
+
+        subprocess.run(
+            ["git", "checkout", "-b", "feat/42-test"],
+            cwd=tmp_git_repo,
+            capture_output=True,
+            check=True,
+        )
+
+        # Create a dirty session artifact
+        (tmp_git_repo / "PLAN.md").write_text("# Plan\n")
+
+        with patch(
+            "wade.services.implementation_service.load_config",
+            return_value=ProjectConfig(
+                project=ProjectSettings(main_branch="main"),
+            ),
+        ):
+            result = sync(project_root=tmp_git_repo)
+            assert not result.success
+            error_event = next(
+                (
+                    e
+                    for e in result.events
+                    if e.event == "error" and e.data.get("reason") == "dirty_worktree"
+                ),
+                None,
+            )
+            assert error_event is not None
+            assert "session_files" in error_event.data
+            assert "PLAN.md" in error_event.data["session_files"]
+
     def test_json_output(self, tmp_git_repo: Path) -> None:
         """JSON output mode emits structured events."""
         import subprocess
