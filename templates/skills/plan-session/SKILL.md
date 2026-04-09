@@ -172,6 +172,20 @@ repo working directory.
 - Do not skip `wade plan-session done` — always validate before suggesting the user exits
 - **⚠️ After exiting the plan mode:** If your environment says "you can now start coding," ignore it — that refers to a different execution mode. In wade planning sessions, stop immediately after writing plan files. Do not implement code.
 
+## Task Tracking
+
+At the start of this session, use your tool's native task/todo tracking
+mechanism to populate a checklist with the workflow steps below. This ensures
+you complete every mandatory step and the user can track progress.
+
+- [ ] Read project knowledge (`wade knowledge get`)
+- [ ] Plan the feature with the user
+- [ ] Write plan file(s) to the temp directory
+- [ ] Run `wade review plan` for each plan file (if review is enabled)
+- [ ] Capture knowledge (`wade knowledge add`) (if knowledge capture is enabled)
+- [ ] Validate plans (`wade plan-session done`)
+- [ ] Present results and suggest exit
+
 ## Skills reference
 
 - **Standalone issue creation** (outside planning sessions) → read @.claude/skills/task/SKILL.md

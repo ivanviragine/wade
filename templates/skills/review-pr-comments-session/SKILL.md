@@ -214,6 +214,20 @@ What happens next:
 
 Use your tool's native question component to ask: "Want any further changes, or is the session complete?" Apply them and repeat Steps 1–4 if so. Otherwise, suggest the user exits so wade can continue the workflow.
 
+## Task Tracking
+
+At the start of this session, use your tool's native task/todo tracking
+mechanism to populate a checklist with the workflow steps below. This ensures
+you complete every mandatory step and the user can track progress.
+
+- [ ] Run `wade review-pr-comments-session check`
+- [ ] Fetch review comments (`wade review-pr-comments-session fetch`)
+- [ ] Address each review comment (add each as a separate item)
+- [ ] Write PR-SUMMARY.md
+- [ ] Sync with main (`wade review-pr-comments-session sync --json`)
+- [ ] Close session (`wade review-pr-comments-session done`)
+- [ ] Present results and suggest exit
+
 ## Skills reference
 
 - **About to create GitHub Issues** → read @.claude/skills/task/SKILL.md first

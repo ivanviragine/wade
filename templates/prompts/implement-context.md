@@ -4,6 +4,8 @@ If you cannot see the plan contents above, read the file `PLAN.md` in the root o
 
 Follow @.claude/skills/implementation-session/SKILL.md for session rules.
 
+Use your tool's native task/todo tracking mechanism to populate a checklist with the workflow steps from the skill before starting work.
+
 If a project knowledge file is configured (see `.wade.yml` → `knowledge`), read it for project context.
 
 # Critical rules
