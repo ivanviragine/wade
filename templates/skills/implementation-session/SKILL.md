@@ -318,6 +318,22 @@ locations can cause surprising `done()` failures.
 All of the above are installed per-session in worktrees by wade and are already gitignored.
 User-created custom skills under `.claude/skills/` are not affected.
 
+## Task Tracking
+
+At the start of this session, use your tool's native task/todo tracking
+mechanism to populate a checklist with the workflow steps below. This ensures
+you complete every mandatory step and the user can track progress.
+
+- [ ] Run `wade implementation-session check`
+- [ ] Read project knowledge (`wade knowledge get`)
+- [ ] Implementation tasks from PLAN.md (add each task as a separate item)
+- [ ] Run `wade review implementation` (if `review_implementation.enabled` is not `false`)
+- [ ] Capture knowledge (`wade knowledge add`) (if knowledge capture is enabled)
+- [ ] Write PR-SUMMARY.md
+- [ ] Sync with main (`wade implementation-session sync --json`)
+- [ ] Close session (`wade implementation-session done`)
+- [ ] Present results and suggest exit
+
 ## Skills reference
 
 - **About to create GitHub Issues** → read @.claude/skills/task/SKILL.md first
