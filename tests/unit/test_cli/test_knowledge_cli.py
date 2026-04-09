@@ -272,3 +272,127 @@ class TestKnowledgeAddSupersedes:
         import re
 
         assert re.search(r"[0-9a-f]{8}", result.output)
+
+
+class TestKnowledgeEnableCommand:
+    def test_enables_knowledge_and_creates_file(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\n", encoding="utf-8")
+
+        config = ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=False, path="KNOWLEDGE.md"),
+            config_path=str(config_path),
+        )
+        with (
+            patch("wade.config.loader.load_config", return_value=config),
+            patch("wade.config.loader.find_config_file", return_value=config_path),
+        ):
+            result = runner.invoke(app, ["knowledge", "enable"])
+
+        assert result.exit_code == 0
+        assert "Knowledge capture enabled" in result.output
+
+        # Verify config was updated
+        updated_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert updated_config["knowledge"]["enabled"] is True
+
+    def test_enables_knowledge_with_custom_path(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\n", encoding="utf-8")
+
+        config = ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=False, path="KNOWLEDGE.md"),
+            config_path=str(config_path),
+        )
+        with (
+            patch("wade.config.loader.load_config", return_value=config),
+            patch("wade.config.loader.find_config_file", return_value=config_path),
+        ):
+            result = runner.invoke(app, ["knowledge", "enable", "--path", "docs/LEARNINGS.md"])
+
+        assert result.exit_code == 0
+        assert "Knowledge capture enabled" in result.output
+        assert "docs/LEARNINGS.md" in result.output
+
+        updated_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert updated_config["knowledge"]["path"] == "docs/LEARNINGS.md"
+
+    def test_enable_fails_when_no_config(self, tmp_path: Path) -> None:
+        config = ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=False, path="KNOWLEDGE.md"),
+        )
+        with (
+            patch("wade.config.loader.load_config", return_value=config),
+            patch("wade.config.loader.find_config_file", return_value=None),
+        ):
+            result = runner.invoke(app, ["knowledge", "enable"])
+
+        assert result.exit_code == 1
+        assert ".wade.yml not found" in result.output
+
+    def test_enable_rejects_absolute_path(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\n", encoding="utf-8")
+
+        config = ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=False, path="KNOWLEDGE.md"),
+            config_path=str(config_path),
+        )
+        with (
+            patch("wade.config.loader.load_config", return_value=config),
+            patch("wade.config.loader.find_config_file", return_value=config_path),
+        ):
+            result = runner.invoke(app, ["knowledge", "enable", "--path", "/etc/passwd"])
+
+        assert result.exit_code == 1
+        assert "must be inside project root" in result.output
+
+
+class TestKnowledgeDisableCommand:
+    def test_disables_knowledge(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nknowledge:\n  enabled: true\n  path: KNOWLEDGE.md\n",
+            encoding="utf-8",
+        )
+        knowledge_file = tmp_path / "KNOWLEDGE.md"
+        knowledge_file.write_text("# Knowledge\n", encoding="utf-8")
+
+        config = ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
+            config_path=str(config_path),
+        )
+        with (
+            patch("wade.config.loader.load_config", return_value=config),
+            patch("wade.config.loader.find_config_file", return_value=config_path),
+        ):
+            result = runner.invoke(app, ["knowledge", "disable"])
+
+        assert result.exit_code == 0
+        assert "Knowledge capture disabled" in result.output
+
+        # Verify config was updated
+        updated_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert updated_config["knowledge"]["enabled"] is False
+
+        # Verify knowledge file still exists
+        assert knowledge_file.exists()
+
+    def test_disable_fails_when_no_config(self, tmp_path: Path) -> None:
+        config = ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
+        )
+        with (
+            patch("wade.config.loader.load_config", return_value=config),
+            patch("wade.config.loader.find_config_file", return_value=None),
+        ):
+            result = runner.invoke(app, ["knowledge", "disable"])
+
+        assert result.exit_code == 1
+        assert ".wade.yml not found" in result.output

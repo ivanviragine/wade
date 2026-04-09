@@ -353,3 +353,114 @@ def append_knowledge(
         f.write(entry)
 
     return KnowledgeEntry(path=path, entry_id=entry_id)
+
+
+def enable_knowledge(project_root: Path, path: str | None = None) -> None:
+    """Enable knowledge capture and optionally set a custom knowledge file path.
+
+    Sets ``knowledge.enabled: true`` in .wade.yml, optionally sets ``knowledge.path``,
+    and creates the knowledge file if it doesn't exist.
+
+    Args:
+        project_root: Root directory of the project (where .wade.yml is located).
+        path: Optional custom path for the knowledge file (relative to project root).
+              If provided, validates that it's a safe relative path.
+
+    Raises:
+        FileNotFoundError: If .wade.yml doesn't exist.
+        ValueError: If the provided path is invalid (absolute or contains `..`).
+    """
+    from wade.config.loader import find_config_file
+
+    config_path = find_config_file(project_root)
+    if config_path is None:
+        raise FileNotFoundError(".wade.yml not found — project not initialized")
+
+    # Load current config
+    try:
+        raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as e:
+        raise ValueError(f"Invalid YAML in {config_path}: {e}") from e
+
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError("Config must be a YAML mapping")
+
+    # Validate and set the path if provided
+    if path is not None:
+        # Validate path: must be relative and not escape project root
+        if Path(path).is_absolute():
+            raise ValueError(f"Invalid knowledge path {path!r}: must be inside project root")
+        root = project_root.resolve()
+        resolved = (root / path).resolve()
+        if not resolved.is_relative_to(root):
+            raise ValueError(f"Invalid knowledge path {path!r}: must be inside project root {root}")
+
+    # Update knowledge section
+    knowledge_dict = raw.get("knowledge", {}) or {}
+    if not isinstance(knowledge_dict, dict):
+        knowledge_dict = {}
+
+    knowledge_dict["enabled"] = True
+    if path is not None:
+        knowledge_dict["path"] = path
+    elif "path" not in knowledge_dict:
+        # Set default path if not already configured
+        knowledge_dict["path"] = "KNOWLEDGE.md"
+    raw["knowledge"] = knowledge_dict
+
+    # Write updated config
+    config_path.write_text(
+        yaml.dump(raw, default_flow_style=False, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    # Create knowledge file if it doesn't exist
+    knowledge_path_str = knowledge_dict.get("path", "KNOWLEDGE.md")
+    knowledge_config = KnowledgeConfig(enabled=True, path=knowledge_path_str)
+    ensure_knowledge_file(project_root, knowledge_config)
+
+
+def disable_knowledge(project_root: Path) -> None:
+    """Disable knowledge capture.
+
+    Sets ``knowledge.enabled: false`` in .wade.yml. Does not delete the knowledge file.
+
+    Args:
+        project_root: Root directory of the project (where .wade.yml is located).
+
+    Raises:
+        FileNotFoundError: If .wade.yml doesn't exist.
+        ValueError: If config is invalid.
+    """
+    from wade.config.loader import find_config_file
+
+    config_path = find_config_file(project_root)
+    if config_path is None:
+        raise FileNotFoundError(".wade.yml not found — project not initialized")
+
+    # Load current config
+    try:
+        raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as e:
+        raise ValueError(f"Invalid YAML in {config_path}: {e}") from e
+
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError("Config must be a YAML mapping")
+
+    # Update knowledge section
+    knowledge_dict = raw.get("knowledge", {}) or {}
+    if not isinstance(knowledge_dict, dict):
+        knowledge_dict = {}
+
+    knowledge_dict["enabled"] = False
+    raw["knowledge"] = knowledge_dict
+
+    # Write updated config
+    config_path.write_text(
+        yaml.dump(raw, default_flow_style=False, sort_keys=False),
+        encoding="utf-8",
+    )
