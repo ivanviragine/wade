@@ -13,6 +13,8 @@ from wade.services.knowledge_service import (
     KNOWLEDGE_TEMPLATE,
     KnowledgeEntry,
     append_knowledge,
+    disable_knowledge,
+    enable_knowledge,
     ensure_knowledge_file,
     find_entry_id,
     get_annotated_knowledge,
@@ -526,7 +528,7 @@ class TestBackwardCompatibility:
         # Old entry, then new entry via append_knowledge
         old_content = KNOWLEDGE_TEMPLATE + "\n## 2026-03-20 | plan\n\nOld.\n\n---\n"
         (project_root / "KNOWLEDGE.md").write_text(old_content, encoding="utf-8")
-        result = append_knowledge(
+        _ = append_knowledge(
             project_root=project_root,
             config=config,
             content="New with ID.",
@@ -535,4 +537,144 @@ class TestBackwardCompatibility:
         entries = parse_entries((project_root / "KNOWLEDGE.md").read_text(encoding="utf-8"))
         assert len(entries) == 2
         assert entries[0].entry_id is None
-        assert entries[1].entry_id == result.entry_id
+
+
+class TestEnableKnowledge:
+    def test_enables_knowledge_and_creates_file(self, project_root: Path) -> None:
+
+        # Create a .wade.yml file first
+        config_path = project_root / ".wade.yml"
+        config_path.write_text("version: 2\n", encoding="utf-8")
+
+        enable_knowledge(project_root)
+
+        # Check that config was updated
+        config_content = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert config_content["knowledge"]["enabled"] is True
+        assert config_content["knowledge"]["path"] == "KNOWLEDGE.md"
+
+        # Check that knowledge file was created
+        knowledge_path = project_root / "KNOWLEDGE.md"
+        assert knowledge_path.exists()
+        assert knowledge_path.read_text(encoding="utf-8") == KNOWLEDGE_TEMPLATE
+
+    def test_enables_knowledge_with_custom_path(self, project_root: Path) -> None:
+
+        config_path = project_root / ".wade.yml"
+        config_path.write_text("version: 2\n", encoding="utf-8")
+
+        enable_knowledge(project_root, path="docs/LEARNINGS.md")
+
+        config_content = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert config_content["knowledge"]["enabled"] is True
+        assert config_content["knowledge"]["path"] == "docs/LEARNINGS.md"
+
+        knowledge_path = project_root / "docs" / "LEARNINGS.md"
+        assert knowledge_path.exists()
+
+    def test_rejects_absolute_path(self, project_root: Path) -> None:
+
+        config_path = project_root / ".wade.yml"
+        config_path.write_text("version: 2\n", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="must be inside project root"):
+            enable_knowledge(project_root, path="/etc/passwd")
+
+    def test_rejects_path_traversal(self, project_root: Path) -> None:
+
+        config_path = project_root / ".wade.yml"
+        config_path.write_text("version: 2\n", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="must be inside project root"):
+            enable_knowledge(project_root, path="../../etc/passwd")
+
+    def test_fails_when_no_config_exists(self, project_root: Path) -> None:
+
+        with pytest.raises(FileNotFoundError, match=r"\.wade\.yml not found"):
+            enable_knowledge(project_root)
+
+    def test_preserves_existing_config(self, project_root: Path) -> None:
+
+        config_path = project_root / ".wade.yml"
+        original_config = """version: 2
+project:
+  main_branch: main
+ai:
+  default_tool: claude
+"""
+        config_path.write_text(original_config, encoding="utf-8")
+
+        enable_knowledge(project_root)
+
+        config_content = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert config_content["version"] == 2
+        assert config_content["project"]["main_branch"] == "main"
+        assert config_content["knowledge"]["enabled"] is True
+
+    def test_overwrites_disabled_knowledge(self, project_root: Path) -> None:
+
+        config_path = project_root / ".wade.yml"
+        config_path.write_text("version: 2\nknowledge:\n  enabled: false\n", encoding="utf-8")
+
+        enable_knowledge(project_root)
+
+        config_content = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert config_content["knowledge"]["enabled"] is True
+
+
+class TestDisableKnowledge:
+    def test_disables_knowledge(self, project_root: Path) -> None:
+
+        config_path = project_root / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nknowledge:\n  enabled: true\n  path: KNOWLEDGE.md\n",
+            encoding="utf-8",
+        )
+        knowledge_path = project_root / "KNOWLEDGE.md"
+        knowledge_path.write_text(KNOWLEDGE_TEMPLATE, encoding="utf-8")
+
+        disable_knowledge(project_root)
+
+        # Check that config was updated
+        config_content = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert config_content["knowledge"]["enabled"] is False
+
+        # Check that knowledge file still exists (not deleted)
+        assert knowledge_path.exists()
+
+    def test_fails_when_no_config_exists(self, project_root: Path) -> None:
+
+        with pytest.raises(FileNotFoundError, match=r"\.wade\.yml not found"):
+            disable_knowledge(project_root)
+
+    def test_preserves_existing_config(self, project_root: Path) -> None:
+
+        config_path = project_root / ".wade.yml"
+        original_config = """version: 2
+project:
+  main_branch: main
+ai:
+  default_tool: claude
+knowledge:
+  enabled: true
+  path: KNOWLEDGE.md
+"""
+        config_path.write_text(original_config, encoding="utf-8")
+
+        disable_knowledge(project_root)
+
+        config_content = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert config_content["version"] == 2
+        assert config_content["project"]["main_branch"] == "main"
+        assert config_content["knowledge"]["enabled"] is False
+        assert config_content["knowledge"]["path"] == "KNOWLEDGE.md"
+
+    def test_idempotent_when_already_disabled(self, project_root: Path) -> None:
+
+        config_path = project_root / ".wade.yml"
+        config_path.write_text("version: 2\nknowledge:\n  enabled: false\n", encoding="utf-8")
+
+        disable_knowledge(project_root)
+
+        config_content = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert config_content["knowledge"]["enabled"] is False

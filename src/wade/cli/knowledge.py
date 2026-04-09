@@ -170,3 +170,58 @@ def rate(
         raise typer.Exit(1) from exc
     symbol = "+" if direction == "up" else "-"
     console.success(f"Recorded {symbol}1 for entry {entry_id}")
+
+
+@knowledge_app.command()
+def enable(
+    path: str | None = typer.Option(
+        None, "--path", help="Custom path for knowledge file (relative to project root)."
+    ),
+) -> None:
+    """Enable knowledge capture and optionally set the knowledge file path."""
+    from pathlib import Path
+
+    from wade.services.knowledge_service import enable_knowledge
+    from wade.ui.console import console
+
+    project_root = Path.cwd()
+    try:
+        enable_knowledge(project_root, path=path)
+        if path:
+            console.success(f"Knowledge capture enabled with path: {path}")
+        else:
+            console.success("Knowledge capture enabled")
+    except FileNotFoundError as exc:
+        console.error(str(exc))
+        console.hint("Run `wade init` to initialize the project")
+        raise typer.Exit(1) from exc
+    except ValueError as exc:
+        console.error(str(exc))
+        raise typer.Exit(1) from exc
+    except OSError as exc:
+        console.error(f"Failed to enable knowledge: {exc}")
+        raise typer.Exit(1) from exc
+
+
+@knowledge_app.command()
+def disable() -> None:
+    """Disable knowledge capture."""
+    from pathlib import Path
+
+    from wade.services.knowledge_service import disable_knowledge
+    from wade.ui.console import console
+
+    project_root = Path.cwd()
+    try:
+        disable_knowledge(project_root)
+        console.success("Knowledge capture disabled")
+    except FileNotFoundError as exc:
+        console.error(str(exc))
+        console.hint("Run `wade init` to initialize the project")
+        raise typer.Exit(1) from exc
+    except ValueError as exc:
+        console.error(str(exc))
+        raise typer.Exit(1) from exc
+    except OSError as exc:
+        console.error(f"Failed to disable knowledge: {exc}")
+        raise typer.Exit(1) from exc

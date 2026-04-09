@@ -137,6 +137,8 @@ wade 42
 | `wade knowledge add` | Append a project learning from stdin |
 | `wade knowledge get` | Print the current project knowledge file |
 | `wade knowledge rate` | Record a thumbs-up or thumbs-down for a knowledge entry |
+| `wade knowledge enable [--path PATH]` | Enable knowledge capture and optionally set custom file path |
+| `wade knowledge disable` | Disable knowledge capture (keeps existing knowledge file) |
 
 Short aliases: `wade p` (plan), `wade i <N>` (implement), `wade r <N>` (review pr-comments).
 
