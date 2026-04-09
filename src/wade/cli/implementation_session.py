@@ -6,8 +6,6 @@ from pathlib import Path
 
 import typer
 
-from wade.models.session import SyncEventType
-
 implementation_session_app = typer.Typer(
     help="Implementation session commands (check, sync, done).",
 )
@@ -22,11 +20,9 @@ def check() -> None:
       1  NOT_IN_GIT_REPO   — not inside a git repository
       2  IN_MAIN_CHECKOUT  — unsafe for agent work
     """
-    from wade.services.check_service import check_worktree
+    from wade.cli.session_shared import run_check
 
-    result = check_worktree(Path.cwd())
-    typer.echo(result.format_output())
-    raise typer.Exit(result.exit_code)
+    run_check()
 
 
 @implementation_session_app.command()
@@ -38,6 +34,8 @@ def catchup(
     ),
 ) -> None:
     """Sync current branch with base branch (early catchup at session startup)."""
+    from wade.cli.session_shared import handle_sync_result
+    from wade.models.session import SyncEventType
     from wade.services.implementation_service import catchup as do_catchup
 
     result = do_catchup(
@@ -45,7 +43,7 @@ def catchup(
         main_branch=main_branch,
         json_output=json_output,
     )
-    # Exit codes: 0=success, 2=conflict, 4=preflight failure, 1=other error
+    # Catchup has custom success messages for dry-run vs real merge
     if result.success:
         if not json_output:
             from wade.ui.console import console
@@ -55,7 +53,8 @@ def catchup(
             else:
                 console.info("Catchup complete — branch is up to date.")
         raise typer.Exit(0)
-    elif result.conflicts:
+    # Conflicts get a catchup-specific message
+    if result.conflicts:
         if not json_output:
             from wade.ui.console import console
 
@@ -65,21 +64,10 @@ def catchup(
                 "wade implementation-session catchup."
             )
         raise typer.Exit(2)
-    elif any(
-        e.event == SyncEventType.ERROR
-        and e.data.get("reason")
-        in (
-            "not_git_repo",
-            "detached_head",
-            "no_main_branch",
-            "on_main_branch",
-            "dirty_worktree",
-        )
-        for e in result.events
-    ):
-        raise typer.Exit(4)
-    else:
-        raise typer.Exit(1)
+    # Preflight and other errors use the shared handler
+    handle_sync_result(
+        result, json_output=json_output, next_step_hint="wade implementation-session catchup"
+    )
 
 
 @implementation_session_app.command()
@@ -91,6 +79,7 @@ def sync(
     ),
 ) -> None:
     """Sync current branch with main."""
+    from wade.cli.session_shared import handle_sync_result
     from wade.services.implementation_service import sync as do_sync
 
     result = do_sync(
@@ -99,37 +88,9 @@ def sync(
         json_output=json_output,
         session_type="implementation",
     )
-    # Exit codes: 0=success, 2=conflict, 4=preflight failure, 1=other error
-    if result.success:
-        if not json_output:
-            from wade.ui.console import console
-
-            console.info("Sync complete — proceed to wade implementation-session done.")
-        raise typer.Exit(0)
-    elif result.conflicts:
-        if not json_output:
-            from wade.ui.console import console
-
-            console.info(
-                "ACTION REQUIRED — resolve the conflicts listed above, "
-                "then re-run wade implementation-session sync."
-            )
-        raise typer.Exit(2)
-    elif any(
-        e.event == SyncEventType.ERROR
-        and e.data.get("reason")
-        in (
-            "not_git_repo",
-            "detached_head",
-            "no_main_branch",
-            "on_main_branch",
-            "dirty_worktree",
-        )
-        for e in result.events
-    ):
-        raise typer.Exit(4)
-    else:
-        raise typer.Exit(1)
+    handle_sync_result(
+        result, json_output=json_output, next_step_hint="wade implementation-session done"
+    )
 
 
 @implementation_session_app.command()
@@ -164,7 +125,7 @@ def done(
                     "Review not confirmed — run `wade review implementation` now "
                     "if you haven't already, then present results to the user."
                 )
-        except Exception:
+        except Exception:  # Advisory — must never break a successful completion
             pass
 
         console.info(

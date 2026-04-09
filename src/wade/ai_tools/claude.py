@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -100,40 +99,12 @@ class ClaudeAdapter(AbstractAITool):
         The path encoding replaces every ``/`` with ``-`` **and** every ``.``
         with ``-``, so ``/Users/foo/.worktrees/bar`` becomes
         ``-Users-foo--worktrees-bar``.
-
-        Files are copied without overwriting any that already exist in the
-        main checkout's session directory, so existing memory and settings are
-        preserved.
         """
         claude_projects_dir = Path.home() / ".claude" / "projects"
+        wt_dir = claude_projects_dir / _encode_claude_path(worktree_path)
+        main_dir = claude_projects_dir / _encode_claude_path(main_checkout_path)
 
-        wt_encoded = _encode_claude_path(worktree_path)
-        main_encoded = _encode_claude_path(main_checkout_path)
-
-        wt_session_dir = claude_projects_dir / wt_encoded
-        main_session_dir = claude_projects_dir / main_encoded
-
-        if not wt_session_dir.exists():
-            logger.debug(
-                "claude.preserve_session_data.no_source",
-                worktree=str(worktree_path),
-            )
-            return True
-
-        main_session_dir.mkdir(parents=True, exist_ok=True)
-
-        copied = 0
-        for item in wt_session_dir.iterdir():
-            dest = main_session_dir / item.name
-            if dest.exists():
-                continue
-            if item.is_file():
-                shutil.copy2(item, dest)
-                copied += 1
-            elif item.is_dir():
-                shutil.copytree(item, dest)
-                copied += 1
-
+        copied = self._copy_session_data_dir(wt_dir, main_dir)
         logger.info(
             "claude.preserve_session_data.copied",
             worktree=str(worktree_path),

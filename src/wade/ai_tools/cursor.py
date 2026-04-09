@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 from typing import ClassVar
 
@@ -80,39 +79,12 @@ class CursorAdapter(AbstractAITool):
         The path encoding strips the leading ``/`` then replaces remaining
         ``/`` with ``-``, so ``/Users/foo/bar`` becomes ``Users-foo-bar``
         (note: no leading dash, unlike Claude Code).
-
-        Files are copied without overwriting any that already exist in the
-        main checkout's session directory, so existing data is preserved.
         """
         cursor_projects_dir = Path.home() / ".cursor" / "projects"
+        wt_dir = cursor_projects_dir / str(worktree_path).lstrip("/").replace("/", "-")
+        main_dir = cursor_projects_dir / str(main_checkout_path).lstrip("/").replace("/", "-")
 
-        wt_encoded = str(worktree_path).lstrip("/").replace("/", "-")
-        main_encoded = str(main_checkout_path).lstrip("/").replace("/", "-")
-
-        wt_session_dir = cursor_projects_dir / wt_encoded
-        main_session_dir = cursor_projects_dir / main_encoded
-
-        if not wt_session_dir.exists():
-            logger.debug(
-                "cursor.preserve_session_data.no_source",
-                worktree=str(worktree_path),
-            )
-            return True
-
-        main_session_dir.mkdir(parents=True, exist_ok=True)
-
-        copied = 0
-        for item in wt_session_dir.iterdir():
-            dest = main_session_dir / item.name
-            if dest.exists():
-                continue
-            if item.is_file():
-                shutil.copy2(item, dest)
-                copied += 1
-            elif item.is_dir():
-                shutil.copytree(item, dest)
-                copied += 1
-
+        copied = self._copy_session_data_dir(wt_dir, main_dir)
         logger.info(
             "cursor.preserve_session_data.copied",
             worktree=str(worktree_path),

@@ -137,6 +137,25 @@ def _deny(file_path: str, worktree_root: Path) -> None:
     sys.exit(2)
 
 
+def _fail_closed(e: Exception) -> None:
+    """Fail-closed: any unhandled exception blocks the edit."""
+    error_msg = f"Guard error: {type(e).__name__}: {e}"
+    print(error_msg, file=sys.stderr)
+    result = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "block",
+            "permissionDecisionReason": error_msg,
+        },
+        "permission": "deny",
+        "permissionDecision": "deny",
+        "decision": "block",
+        "reason": error_msg,
+    }
+    print(json.dumps(result))
+    sys.exit(2)
+
+
 def main() -> None:
     """Read tool call JSON from stdin, check file path, allow or deny."""
     try:
@@ -166,5 +185,13 @@ def main() -> None:
     _deny(file_path, worktree_root)
 
 
+def _main_with_wrapper() -> None:
+    """Wrapper that enforces fail-closed behavior on any unhandled exception."""
+    try:
+        main()
+    except Exception as e:
+        _fail_closed(e)
+
+
 if __name__ == "__main__":
-    main()
+    _main_with_wrapper()

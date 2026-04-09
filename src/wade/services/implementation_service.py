@@ -299,66 +299,47 @@ def write_plan_md(
     return plan_path
 
 
-def _install_worktree_guard_hooks(worktree_path: Path) -> None:
-    """Copy the worktree guard script and configure all AI tool hooks."""
-    from wade.hooks import get_worktree_guard_script_path
+def _install_guard_hooks(
+    worktree_path: Path,
+    *,
+    guard_type: str,
+) -> None:
+    """Copy a guard script and configure all AI tool hooks.
 
-    guard_src = get_worktree_guard_script_path()
+    Args:
+        worktree_path: Worktree directory.
+        guard_type: ``"worktree"`` or ``"plan"`` — selects the guard script
+            and the matching configure function on each tool module.
+    """
+    from wade.hooks import get_guard_script_path, get_worktree_guard_script_path
+
+    if guard_type == "worktree":
+        guard_src = get_worktree_guard_script_path()
+        script_name = "worktree_guard.py"
+    else:
+        guard_src = get_guard_script_path()
+        script_name = "plan_write_guard.py"
 
     tool_dirs = [".claude/hooks", ".cursor/hooks", ".copilot/hooks", ".gemini/hooks"]
     for tool_dir in tool_dirs:
         dest_dir = worktree_path / tool_dir
         dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / "worktree_guard.py"
-        shutil.copy2(guard_src, dest)
+        shutil.copy2(guard_src, dest_dir / script_name)
 
-    from wade.config.claude_allowlist import configure_worktree_hooks as configure_claude_hooks
-    from wade.config.copilot_hooks import configure_worktree_hooks as configure_copilot_hooks
-    from wade.config.cursor_hooks import configure_worktree_hooks as configure_cursor_hooks
-    from wade.config.gemini_hooks import configure_worktree_hooks as configure_gemini_hooks
+    from wade.config import claude_allowlist, copilot_hooks, cursor_hooks, gemini_hooks
 
-    configure_claude_hooks(worktree_path, worktree_path / ".claude" / "hooks" / "worktree_guard.py")
-    configure_cursor_hooks(worktree_path, worktree_path / ".cursor" / "hooks" / "worktree_guard.py")
-    configure_copilot_hooks(
-        worktree_path, worktree_path / ".copilot" / "hooks" / "worktree_guard.py"
-    )
-    configure_gemini_hooks(worktree_path, worktree_path / ".gemini" / "hooks" / "worktree_guard.py")
-    logger.info("implementation.worktree_guard_hooks_installed", path=str(worktree_path))
+    configure_fns = [
+        (claude_allowlist, ".claude"),
+        (cursor_hooks, ".cursor"),
+        (copilot_hooks, ".copilot"),
+        (gemini_hooks, ".gemini"),
+    ]
+    hook_fn_name = f"configure_{guard_type}_hooks"
+    for module, tool_dir_prefix in configure_fns:
+        fn = getattr(module, hook_fn_name)
+        fn(worktree_path, worktree_path / tool_dir_prefix / "hooks" / script_name)
 
-
-def _install_plan_guard_hooks(worktree_path: Path) -> None:
-    """Copy the guard script and configure all AI tool hooks for plan mode."""
-    from wade.hooks import get_guard_script_path
-
-    guard_src = get_guard_script_path()
-
-    # Copy guard script to each tool's hooks directory
-    tool_dirs = [".claude/hooks", ".cursor/hooks", ".copilot/hooks", ".gemini/hooks"]
-    for tool_dir in tool_dirs:
-        dest_dir = worktree_path / tool_dir
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / "plan_write_guard.py"
-        shutil.copy2(guard_src, dest)
-
-    # Configure each tool's hook config with its own guard script copy
-    from wade.config.claude_allowlist import configure_plan_hooks as configure_claude_hooks
-    from wade.config.copilot_hooks import configure_plan_hooks as configure_copilot_hooks
-    from wade.config.cursor_hooks import configure_plan_hooks as configure_cursor_hooks
-    from wade.config.gemini_hooks import configure_plan_hooks as configure_gemini_hooks
-
-    configure_claude_hooks(
-        worktree_path, worktree_path / ".claude" / "hooks" / "plan_write_guard.py"
-    )
-    configure_cursor_hooks(
-        worktree_path, worktree_path / ".cursor" / "hooks" / "plan_write_guard.py"
-    )
-    configure_copilot_hooks(
-        worktree_path, worktree_path / ".copilot" / "hooks" / "plan_write_guard.py"
-    )
-    configure_gemini_hooks(
-        worktree_path, worktree_path / ".gemini" / "hooks" / "plan_write_guard.py"
-    )
-    logger.info("implementation.plan_guard_hooks_installed", path=str(worktree_path))
+    logger.info(f"implementation.{guard_type}_guard_hooks_installed", path=str(worktree_path))
 
 
 def _effective_copy_files(config: ProjectConfig) -> list[str]:
@@ -707,10 +688,7 @@ def bootstrap_worktree(
 
     # Install file-write guard hooks last so post-create scripts cannot
     # overwrite the guarded config files.
-    if plan_mode:
-        _install_plan_guard_hooks(worktree_path)
-    else:
-        _install_worktree_guard_hooks(worktree_path)
+    _install_guard_hooks(worktree_path, guard_type="plan" if plan_mode else "worktree")
 
     # Write worktree gitignore block AFTER all file generation so the entry
     # list is complete (skills, hooks, settings, pointer are all in place).
@@ -924,6 +902,30 @@ def _resolve_usage_totals(
     )
 
 
+def _enrich_body_with_usage(
+    body: str,
+    ai_tool: str,
+    model: str | None,
+    usage: TokenUsage | None,
+    has_tokens: bool,
+    has_session: bool,
+) -> str:
+    """Append implementation usage and session entries to a markdown body."""
+    result = body
+    if has_tokens:
+        assert usage is not None
+        result = append_impl_usage_entry(result, ai_tool=ai_tool, model=model, token_usage=usage)
+    if has_session:
+        assert usage is not None and usage.session_id is not None
+        result = append_session_to_body(
+            result,
+            phase="Implement",
+            ai_tool=ai_tool,
+            session_id=usage.session_id,
+        )
+    return result
+
+
 def _capture_post_session_usage(
     transcript_path: Path | None,
     adapter: AbstractAITool,
@@ -950,7 +952,7 @@ def _capture_post_session_usage(
         return None
 
     has_tokens = _usage_has_token_metrics(usage)
-    has_session = usage and usage.session_id
+    has_session = bool(usage and usage.session_id)
     if not has_tokens and not has_session:
         logger.warning("implementation.no_token_usage", transcript=str(transcript_path))
         console.warn(f"No token usage found in transcript: {transcript_path}")
@@ -968,23 +970,14 @@ def _capture_post_session_usage(
         try:
             current_body = git_pr.get_pr_body(repo_root, pr_number)
             if current_body is not None:
-                new_body = current_body
-                if has_tokens:
-                    assert usage is not None
-                    new_body = append_impl_usage_entry(
-                        new_body,
-                        ai_tool=ai_tool,
-                        model=effective_model,
-                        token_usage=usage,
-                    )
-                if has_session:
-                    assert usage is not None and usage.session_id is not None
-                    new_body = append_session_to_body(
-                        new_body,
-                        phase="Implement",
-                        ai_tool=ai_tool,
-                        session_id=usage.session_id,
-                    )
+                new_body = _enrich_body_with_usage(
+                    current_body,
+                    ai_tool,
+                    effective_model,
+                    usage,
+                    has_tokens,
+                    has_session,
+                )
                 if git_pr.update_pr_body(repo_root, pr_number, new_body):
                     if has_tokens:
                         console.success("Updated PR with implementation usage stats.")
@@ -1002,23 +995,14 @@ def _capture_post_session_usage(
     if issue_number and provider:
         with contextlib.suppress(Exception):
             task = provider.read_task(str(issue_number))
-            new_body = task.body
-            if has_tokens:
-                assert usage is not None
-                new_body = append_impl_usage_entry(
-                    new_body,
-                    ai_tool=ai_tool,
-                    model=effective_model,
-                    token_usage=usage,
-                )
-            if has_session:
-                assert usage is not None and usage.session_id is not None
-                new_body = append_session_to_body(
-                    new_body,
-                    phase="Implement",
-                    ai_tool=ai_tool,
-                    session_id=usage.session_id,
-                )
+            new_body = _enrich_body_with_usage(
+                task.body,
+                ai_tool,
+                effective_model,
+                usage,
+                has_tokens,
+                has_session,
+            )
             provider.update_task(str(issue_number), body=new_body)
             if has_tokens:
                 console.success("Updated issue with implementation usage stats.")

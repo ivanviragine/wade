@@ -259,13 +259,7 @@ def implement_cmd(
     from wade.ui import prompts
     from wade.ui.console import console
 
-    # Resolve multiple --ai flags to a single value
-    selected_ai: str | None = None
-    if ai and len(ai) > 1:
-        idx = prompts.select("Select AI tool", ai)
-        selected_ai = ai[idx]
-    elif ai and len(ai) == 1:
-        selected_ai = ai[0]
+    selected_ai = prompts.resolve_ai_from_list(ai)
 
     # Parse chain into a list of remaining issue IDs
     chain_remaining = [s.strip() for s in chain.split(",") if s.strip()] if chain else []
@@ -444,15 +438,9 @@ def smart_start_cmd(
     available only on `wade implement` / `wade i`.
     """
     from wade.services.smart_start import smart_start
+    from wade.ui import prompts
 
-    selected_ai: str | None = None
-    if ai and len(ai) > 1:
-        from wade.ui import prompts
-
-        idx = prompts.select("Select AI tool", ai)
-        selected_ai = ai[idx]
-    elif ai and len(ai) == 1:
-        selected_ai = ai[0]
+    selected_ai = prompts.resolve_ai_from_list(ai)
 
     success = smart_start(
         target=target,
@@ -516,6 +504,9 @@ def implement_alias(
     chain: str | None = typer.Option(
         None, "--chain", hidden=True, help="Comma-separated issue IDs for sequential continuation."
     ),
+    base: str | None = typer.Option(
+        None, "--base", hidden=True, help="Base branch for stacked chain execution."
+    ),
 ) -> None:
     """Alias for implement."""
     implement_cmd(
@@ -527,6 +518,7 @@ def implement_alias(
         cd_only=cd_only,
         yolo=yolo,
         chain=chain,
+        base=base,
     )
 
 

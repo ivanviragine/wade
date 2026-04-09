@@ -294,6 +294,31 @@ class AbstractAITool(ABC):
         """
         return True
 
+    @staticmethod
+    def _copy_session_data_dir(src_dir: Path, dest_dir: Path) -> int:
+        """Copy files/dirs from *src_dir* to *dest_dir* without overwriting.
+
+        Shared by adapters that store path-bound session data (e.g. Claude, Cursor).
+        Returns the number of items copied.
+        """
+        import shutil as _shutil
+
+        if not src_dir.exists():
+            return 0
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        copied = 0
+        for item in src_dir.iterdir():
+            dest = dest_dir / item.name
+            if dest.exists():
+                continue
+            if item.is_file():
+                _shutil.copy2(item, dest)
+                copied += 1
+            elif item.is_dir():
+                _shutil.copytree(item, dest)
+                copied += 1
+        return copied
+
     def session_data_dirs(self) -> list[str]:
         """Return directory names that indicate this tool may have session data.
 

@@ -6,8 +6,6 @@ from pathlib import Path
 
 import typer
 
-from wade.models.session import SyncEventType
-
 review_pr_comments_session_app = typer.Typer(
     help="Review PR comments session commands (check, sync, done, fetch, resolve).",
 )
@@ -22,11 +20,9 @@ def check() -> None:
       1  NOT_IN_GIT_REPO   — not inside a git repository
       2  IN_MAIN_CHECKOUT  — unsafe for agent work
     """
-    from wade.services.check_service import check_worktree
+    from wade.cli.session_shared import run_check
 
-    result = check_worktree(Path.cwd())
-    typer.echo(result.format_output())
-    raise typer.Exit(result.exit_code)
+    run_check()
 
 
 @review_pr_comments_session_app.command()
@@ -38,6 +34,7 @@ def sync(
     ),
 ) -> None:
     """Sync current branch with main."""
+    from wade.cli.session_shared import handle_sync_result
     from wade.services.implementation_service import sync as do_sync
 
     result = do_sync(
@@ -46,36 +43,11 @@ def sync(
         json_output=json_output,
         session_type="review-pr-comments",
     )
-    if result.success:
-        if not json_output:
-            from wade.ui.console import console
-
-            console.info("Sync complete — proceed to wade review-pr-comments-session done.")
-        raise typer.Exit(0)
-    elif result.conflicts:
-        if not json_output:
-            from wade.ui.console import console
-
-            console.info(
-                "ACTION REQUIRED — resolve the conflicts listed above, "
-                "then re-run wade review-pr-comments-session sync."
-            )
-        raise typer.Exit(2)
-    elif any(
-        e.event == SyncEventType.ERROR
-        and e.data.get("reason")
-        in (
-            "not_git_repo",
-            "detached_head",
-            "no_main_branch",
-            "on_main_branch",
-            "dirty_worktree",
-        )
-        for e in result.events
-    ):
-        raise typer.Exit(4)
-    else:
-        raise typer.Exit(1)
+    handle_sync_result(
+        result,
+        json_output=json_output,
+        next_step_hint="wade review-pr-comments-session done",
+    )
 
 
 @review_pr_comments_session_app.command()

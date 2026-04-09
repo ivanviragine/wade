@@ -93,50 +93,13 @@ def configure_allowlist(
     Idempotent — each pattern is added at most once.  Non-destructive
     merge with existing config.
     """
-    config_file = _config_path(project_root)
+    from wade.config.allowlist_util import configure_json_allowlist
 
-    existing: dict[str, object] = {}
-    if config_file.is_file():
-        with contextlib.suppress(json.JSONDecodeError, OSError):
-            raw = json.loads(config_file.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                existing = raw
-
-    permissions = existing.setdefault("permissions", {})
-    if not isinstance(permissions, dict):
-        permissions = {}
-        existing["permissions"] = permissions
-
-    allow_list = permissions.setdefault("allow", [])
-    if not isinstance(allow_list, list):
-        allow_list = []
-        permissions["allow"] = allow_list
-
-    changed = False
-
-    # Migrate: remove legacy space-format pattern if present
-    if _WADE_ALLOW_PATTERN_LEGACY in allow_list:
-        allow_list.remove(_WADE_ALLOW_PATTERN_LEGACY)
-        changed = True
-
-    # Build the full set of patterns to ensure
-    all_patterns = [WADE_ALLOW_PATTERN]
-    for pat in extra_patterns or []:
-        cursor_pat = canonical_to_cursor(pat)
-        if cursor_pat not in all_patterns:
-            all_patterns.append(cursor_pat)
-
-    for pat in all_patterns:
-        if pat not in allow_list:
-            allow_list.append(pat)
-            changed = True
-
-    if not changed:
-        return  # All patterns already present
-
-    config_file.parent.mkdir(parents=True, exist_ok=True)
-    config_file.write_text(
-        json.dumps(existing, indent=2) + "\n",
-        encoding="utf-8",
+    configure_json_allowlist(
+        _config_path(project_root),
+        wade_pattern=WADE_ALLOW_PATTERN,
+        legacy_pattern=_WADE_ALLOW_PATTERN_LEGACY,
+        extra_patterns=extra_patterns,
+        pattern_converter=canonical_to_cursor,
+        log_event="cursor_allowlist.configured",
     )
-    logger.info("cursor_allowlist.configured", path=str(config_file))

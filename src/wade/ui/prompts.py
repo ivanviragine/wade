@@ -166,6 +166,20 @@ def menu(
     return select(title, items, default=default, hints=hints)
 
 
+def resolve_ai_from_list(ai: list[str] | None) -> str | None:
+    """Resolve a single AI tool from a potentially multi-valued ``--ai`` option.
+
+    When multiple values are given and stdin is a TTY, prompts the user to pick one.
+    Returns ``None`` when the list is empty or ``None``.
+    """
+    if not ai:
+        return None
+    if len(ai) == 1:
+        return ai[0]
+    idx = select("Select AI tool", ai)
+    return ai[idx]
+
+
 def multi_select(
     title: str,
     items: list[str],

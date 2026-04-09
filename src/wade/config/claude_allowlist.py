@@ -67,53 +67,16 @@ def configure_allowlist(
     Idempotent — each pattern is added at most once.  Non-destructive
     merge with existing settings.
     """
-    settings_path = project_root / ".claude" / "settings.json"
+    from wade.config.allowlist_util import configure_json_allowlist
 
-    existing: dict[str, object] = {}
-    if settings_path.is_file():
-        with contextlib.suppress(json.JSONDecodeError, OSError):
-            raw = json.loads(settings_path.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                existing = raw
-
-    permissions = existing.setdefault("permissions", {})
-    if not isinstance(permissions, dict):
-        permissions = {}
-        existing["permissions"] = permissions
-
-    allow_list = permissions.setdefault("allow", [])
-    if not isinstance(allow_list, list):
-        allow_list = []
-        permissions["allow"] = allow_list
-
-    changed = False
-
-    # Migrate: remove legacy space-format pattern if present
-    if _WADE_ALLOW_PATTERN_LEGACY in allow_list:
-        allow_list.remove(_WADE_ALLOW_PATTERN_LEGACY)
-        changed = True
-
-    # Build the full set of patterns to ensure
-    all_patterns = [WADE_ALLOW_PATTERN]
-    for pat in extra_patterns or []:
-        claude_pat = canonical_to_claude(pat)
-        if claude_pat not in all_patterns:
-            all_patterns.append(claude_pat)
-
-    for pat in all_patterns:
-        if pat not in allow_list:
-            allow_list.append(pat)
-            changed = True
-
-    if not changed:
-        return  # All patterns already present
-
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-    settings_path.write_text(
-        json.dumps(existing, indent=2) + "\n",
-        encoding="utf-8",
+    configure_json_allowlist(
+        project_root / ".claude" / "settings.json",
+        wade_pattern=WADE_ALLOW_PATTERN,
+        legacy_pattern=_WADE_ALLOW_PATTERN_LEGACY,
+        extra_patterns=extra_patterns,
+        pattern_converter=canonical_to_claude,
+        log_event="claude_allowlist.configured",
     )
-    logger.info("claude_allowlist.configured", path=str(settings_path))
 
 
 def configure_worktree_hooks(worktree_path: Path, guard_script: Path) -> None:

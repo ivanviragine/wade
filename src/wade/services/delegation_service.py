@@ -172,6 +172,16 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
             exit_code=1,
         )
 
+    try:
+        adapter = AbstractAITool.get(AIToolID(request.ai_tool))
+    except (ValueError, KeyError):
+        return DelegationResult(
+            success=False,
+            feedback=f"Unknown AI tool: {request.ai_tool}",
+            mode=DelegationMode.INTERACTIVE,
+            exit_code=1,
+        )
+
     # Set up output file for the AI to write results to
     output_file = request.output_file
     created_tmp = output_file is None
@@ -198,53 +208,35 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
         trusted.append(str(output_file.parent))
 
     try:
-        try:
-            adapter = AbstractAITool.get(AIToolID(request.ai_tool))
-        except (ValueError, KeyError):
-            return DelegationResult(
-                success=False,
-                feedback=f"Unknown AI tool: {request.ai_tool}",
-                mode=DelegationMode.INTERACTIVE,
-                exit_code=1,
-            )
+        # Write Gemini policy file before launch (replaces deprecated --allowed-tools flag)
+        if request.ai_tool == AIToolID.GEMINI and request.allowed_commands:
+            from wade.config.gemini_policy import write_gemini_policy
 
-        try:
-            # Write Gemini policy file before launch (replaces deprecated --allowed-tools flag)
-            if request.ai_tool == AIToolID.GEMINI and request.allowed_commands:
-                from wade.config.gemini_policy import write_gemini_policy
+            write_gemini_policy(session_cwd, request.allowed_commands)
 
-                write_gemini_policy(session_cwd, request.allowed_commands)
+        deliver_prompt_if_needed(adapter, interactive_prompt)
+        adapter.launch(
+            worktree_path=session_cwd,
+            model=request.model,
+            prompt=interactive_prompt,
+            trusted_dirs=trusted,
+            allowed_commands=request.allowed_commands or None,
+            effort=_parse_effort(request.effort),
+            yolo=request.yolo,
+        )
 
-            deliver_prompt_if_needed(adapter, interactive_prompt)
-            adapter.launch(
-                worktree_path=session_cwd,
-                model=request.model,
-                prompt=interactive_prompt,
-                trusted_dirs=trusted,
-                allowed_commands=request.allowed_commands or None,
-                effort=_parse_effort(request.effort),
-                yolo=request.yolo,
-            )
+        # Non-blocking tools return immediately — wait for user
+        if not adapter.capabilities().blocks_until_exit:
+            console.empty()
+            if not prompts.confirm("Have you finished the session?", default=True):
+                return DelegationResult(
+                    success=False,
+                    feedback="Interactive session cancelled by user",
+                    mode=DelegationMode.INTERACTIVE,
+                    exit_code=1,
+                )
 
-            # Non-blocking tools return immediately — wait for user
-            if not adapter.capabilities().blocks_until_exit:
-                console.empty()
-                if not prompts.confirm("Have you finished the session?", default=True):
-                    return DelegationResult(
-                        success=False,
-                        feedback="Interactive session cancelled by user",
-                        mode=DelegationMode.INTERACTIVE,
-                        exit_code=1,
-                    )
-        except (OSError, subprocess.SubprocessError) as e:
-            return DelegationResult(
-                success=False,
-                feedback=f"AI tool launch failed: {e}",
-                mode=DelegationMode.INTERACTIVE,
-                exit_code=1,
-            )
-
-        # Read output file after AI exits
+        # Read output file after AI exits (must happen before temp dir cleanup)
         if output_file.is_file():
             text = output_file.read_text(encoding="utf-8").strip()
             if text:
@@ -258,6 +250,13 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
         return DelegationResult(
             success=False,
             feedback="No output file found after interactive session",
+            mode=DelegationMode.INTERACTIVE,
+            exit_code=1,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        return DelegationResult(
+            success=False,
+            feedback=f"AI tool launch failed: {e}",
             mode=DelegationMode.INTERACTIVE,
             exit_code=1,
         )

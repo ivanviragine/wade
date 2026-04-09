@@ -42,7 +42,7 @@ def done(
         config = load_config()
         if config.ai.review_plan.enabled is not False:
             console.hint("P.s.: run `wade review plan <plan_file>` if you haven't already.")
-    except Exception:
+    except Exception:  # Advisory — must never break a successful validation
         pass
 
     console.info(
