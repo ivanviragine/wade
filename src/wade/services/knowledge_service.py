@@ -389,13 +389,9 @@ def enable_knowledge(project_root: Path, path: str | None = None) -> None:
 
     # Validate and set the path if provided
     if path is not None:
-        # Validate path: must be relative and not escape project root
-        if Path(path).is_absolute():
-            raise ValueError(f"Invalid knowledge path {path!r}: must be inside project root")
-        root = project_root.resolve()
-        resolved = (root / path).resolve()
-        if not resolved.is_relative_to(root):
-            raise ValueError(f"Invalid knowledge path {path!r}: must be inside project root {root}")
+        # Validate path using existing function
+        temp_config = KnowledgeConfig(enabled=True, path=path)
+        resolve_knowledge_path(project_root, temp_config)
 
     # Update knowledge section
     knowledge_dict = raw.get("knowledge", {}) or {}
@@ -412,7 +408,7 @@ def enable_knowledge(project_root: Path, path: str | None = None) -> None:
 
     # Write updated config
     config_path.write_text(
-        yaml.dump(raw, default_flow_style=False, sort_keys=False),
+        yaml.safe_dump(raw, default_flow_style=False, sort_keys=False),
         encoding="utf-8",
     )
 
@@ -461,6 +457,6 @@ def disable_knowledge(project_root: Path) -> None:
 
     # Write updated config
     config_path.write_text(
-        yaml.dump(raw, default_flow_style=False, sort_keys=False),
+        yaml.safe_dump(raw, default_flow_style=False, sort_keys=False),
         encoding="utf-8",
     )
