@@ -241,7 +241,7 @@ class TestSelectiveSkillInstallation:
             assert "task" in entry or "deps" in entry
 
     def test_selective_install_implement_skills(self, tmp_git_repo: Path) -> None:
-        """IMPLEMENT_SKILLS installs only implementation-session and task."""
+        """IMPLEMENT_SKILLS installs implementation-session, task, and knowledge."""
         from wade.skills.installer import IMPLEMENT_SKILLS, install_skills
 
         install_skills(tmp_git_repo, skills=IMPLEMENT_SKILLS)
@@ -249,12 +249,13 @@ class TestSelectiveSkillInstallation:
         skills_dir = tmp_git_repo / ".claude" / "skills"
         assert (skills_dir / "implementation-session").is_dir()
         assert (skills_dir / "task").is_dir()
+        assert (skills_dir / "knowledge").is_dir()
         assert not (skills_dir / "plan-session").exists()
         assert not (skills_dir / "deps").exists()
         assert not (skills_dir / "review-pr-comments-session").exists()
 
     def test_selective_install_review_skills(self, tmp_git_repo: Path) -> None:
-        """REVIEW_SKILLS installs only review-pr-comments-session and task."""
+        """REVIEW_SKILLS installs review-pr-comments-session, task, and knowledge."""
         from wade.skills.installer import REVIEW_SKILLS, install_skills
 
         install_skills(tmp_git_repo, skills=REVIEW_SKILLS)
@@ -262,12 +263,13 @@ class TestSelectiveSkillInstallation:
         skills_dir = tmp_git_repo / ".claude" / "skills"
         assert (skills_dir / "review-pr-comments-session").is_dir()
         assert (skills_dir / "task").is_dir()
+        assert (skills_dir / "knowledge").is_dir()
         assert not (skills_dir / "plan-session").exists()
         assert not (skills_dir / "deps").exists()
         assert not (skills_dir / "implementation-session").exists()
 
     def test_selective_install_plan_skills(self, tmp_git_repo: Path) -> None:
-        """PLAN_SKILLS installs plan-session, task, and deps."""
+        """PLAN_SKILLS installs plan-session, task, deps, and knowledge."""
         from wade.skills.installer import PLAN_SKILLS, install_skills
 
         install_skills(tmp_git_repo, skills=PLAN_SKILLS)
@@ -276,6 +278,7 @@ class TestSelectiveSkillInstallation:
         assert (skills_dir / "plan-session").is_dir()
         assert (skills_dir / "task").is_dir()
         assert (skills_dir / "deps").is_dir()
+        assert (skills_dir / "knowledge").is_dir()
         assert not (skills_dir / "implementation-session").exists()
         assert not (skills_dir / "review-pr-comments-session").exists()
 
