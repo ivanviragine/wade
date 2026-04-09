@@ -11,20 +11,27 @@ import yaml
 from wade.models.config import KnowledgeConfig
 from wade.services.knowledge_service import (
     KNOWLEDGE_TEMPLATE,
+    EntryRating,
     KnowledgeEntry,
+    ParsedEntry,
+    add_tag_to_entry,
     append_knowledge,
+    compute_auto_filter_threshold,
     disable_knowledge,
     enable_knowledge,
     ensure_knowledge_file,
     find_entry_id,
     get_annotated_knowledge,
+    list_tags,
     parse_entries,
     read_knowledge,
     read_ratings,
     record_rating,
     record_supersede,
+    remove_tag_from_entry,
     resolve_knowledge_path,
     resolve_ratings_path,
+    validate_tag,
 )
 
 
@@ -678,3 +685,425 @@ knowledge:
 
         config_content = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         assert config_content["knowledge"]["enabled"] is False
+
+
+# --- Tag validation ---
+
+
+class TestValidateTag:
+    def test_valid_simple(self) -> None:
+        assert validate_tag("git") is None
+
+    def test_valid_kebab(self) -> None:
+        assert validate_tag("worktree-safety") is None
+
+    def test_valid_with_numbers(self) -> None:
+        assert validate_tag("python3") is None
+
+    def test_empty(self) -> None:
+        assert validate_tag("") is not None
+
+    def test_too_long(self) -> None:
+        assert validate_tag("a" * 31) is not None
+
+    def test_max_length_ok(self) -> None:
+        assert validate_tag("a" * 30) is None
+
+    def test_uppercase_rejected(self) -> None:
+        assert validate_tag("Git") is not None
+
+    def test_spaces_rejected(self) -> None:
+        assert validate_tag("my tag") is not None
+
+    def test_underscores_rejected(self) -> None:
+        assert validate_tag("my_tag") is not None
+
+    def test_leading_hyphen_rejected(self) -> None:
+        assert validate_tag("-leading") is not None
+
+    def test_trailing_hyphen_rejected(self) -> None:
+        assert validate_tag("trailing-") is not None
+
+    def test_double_hyphen_rejected(self) -> None:
+        assert validate_tag("double--hyphen") is not None
+
+
+# --- Tag parsing from headings ---
+
+
+class TestTagParsing:
+    def test_no_tags(self) -> None:
+        text = "## abc12345 | 2026-03-24 | plan\n\nSome content\n\n---\n"
+        entries = parse_entries(text)
+        assert len(entries) == 1
+        assert entries[0].tags == []
+
+    def test_tags_no_issue(self) -> None:
+        text = "## abc12345 | 2026-03-24 | plan | tags: git, worktree\n\nContent\n\n---\n"
+        entries = parse_entries(text)
+        assert entries[0].tags == ["git", "worktree"]
+
+    def test_tags_and_issue(self) -> None:
+        text = (
+            "## abc12345 | 2026-03-24 | plan | tags: git, worktree | Issue #7\n\nContent\n\n---\n"
+        )
+        entries = parse_entries(text)
+        assert entries[0].tags == ["git", "worktree"]
+
+    def test_issue_no_tags(self) -> None:
+        text = "## abc12345 | 2026-03-24 | plan | Issue #7\n\nContent\n\n---\n"
+        entries = parse_entries(text)
+        assert entries[0].tags == []
+
+    def test_single_tag(self) -> None:
+        text = "## abc12345 | 2026-03-24 | plan | tags: git\n\nContent\n\n---\n"
+        entries = parse_entries(text)
+        assert entries[0].tags == ["git"]
+
+    def test_old_entries_no_tags(self) -> None:
+        text = "## 2026-03-24 | plan\n\nOld content\n\n---\n"
+        entries = parse_entries(text)
+        assert entries[0].tags == []
+
+
+# --- Append with tags ---
+
+
+class TestAppendWithTags:
+    def test_append_with_tags(self, project_root: Path, config: KnowledgeConfig) -> None:
+        append_knowledge(project_root, config, "content", "plan", tags=["git", "worktree"])
+        text = (project_root / "KNOWLEDGE.md").read_text(encoding="utf-8")
+        entries = parse_entries(text)
+        assert len(entries) == 1
+        assert entries[0].tags == ["git", "worktree"]
+        assert "tags: git, worktree" in entries[0].raw
+
+    def test_append_with_tags_and_issue(self, project_root: Path, config: KnowledgeConfig) -> None:
+        append_knowledge(project_root, config, "content", "plan", issue_ref="42", tags=["git"])
+        text = (project_root / "KNOWLEDGE.md").read_text(encoding="utf-8")
+        entries = parse_entries(text)
+        assert entries[0].tags == ["git"]
+        assert "tags: git" in entries[0].raw
+        assert "Issue #42" in entries[0].raw
+
+    def test_append_without_tags(self, project_root: Path, config: KnowledgeConfig) -> None:
+        append_knowledge(project_root, config, "content", "plan")
+        text = (project_root / "KNOWLEDGE.md").read_text(encoding="utf-8")
+        entries = parse_entries(text)
+        assert entries[0].tags == []
+        assert "tags:" not in entries[0].raw
+
+    def test_append_rejects_invalid_tags(self, project_root: Path, config: KnowledgeConfig) -> None:
+        with pytest.raises(ValueError, match="kebab-case"):
+            append_knowledge(project_root, config, "content", "plan", tags=["Invalid"])
+
+
+# --- Tag CRUD operations ---
+
+
+class TestAddTagToEntry:
+    def test_add_tag(self, project_root: Path, config: KnowledgeConfig) -> None:
+        result = append_knowledge(project_root, config, "content", "plan")
+        kpath = project_root / "KNOWLEDGE.md"
+        add_tag_to_entry(kpath, result.entry_id, "git")
+        entries = parse_entries(kpath.read_text(encoding="utf-8"))
+        assert "git" in entries[0].tags
+
+    def test_add_second_tag(self, project_root: Path, config: KnowledgeConfig) -> None:
+        result = append_knowledge(project_root, config, "content", "plan", tags=["git"])
+        kpath = project_root / "KNOWLEDGE.md"
+        add_tag_to_entry(kpath, result.entry_id, "worktree")
+        entries = parse_entries(kpath.read_text(encoding="utf-8"))
+        assert set(entries[0].tags) == {"git", "worktree"}
+
+    def test_add_duplicate_tag_is_noop(self, project_root: Path, config: KnowledgeConfig) -> None:
+        result = append_knowledge(project_root, config, "content", "plan", tags=["git"])
+        kpath = project_root / "KNOWLEDGE.md"
+        add_tag_to_entry(kpath, result.entry_id, "git")
+        entries = parse_entries(kpath.read_text(encoding="utf-8"))
+        assert entries[0].tags == ["git"]
+
+    def test_add_tag_invalid_entry(self, project_root: Path, config: KnowledgeConfig) -> None:
+        append_knowledge(project_root, config, "content", "plan")
+        kpath = project_root / "KNOWLEDGE.md"
+        with pytest.raises(ValueError, match="not found"):
+            add_tag_to_entry(kpath, "nonexist", "git")
+
+    def test_add_invalid_tag(self, project_root: Path, config: KnowledgeConfig) -> None:
+        result = append_knowledge(project_root, config, "content", "plan")
+        kpath = project_root / "KNOWLEDGE.md"
+        with pytest.raises(ValueError, match="kebab-case"):
+            add_tag_to_entry(kpath, result.entry_id, "Invalid")
+
+    def test_add_tag_preserves_issue(self, project_root: Path, config: KnowledgeConfig) -> None:
+        result = append_knowledge(project_root, config, "content", "plan", issue_ref="42")
+        kpath = project_root / "KNOWLEDGE.md"
+        add_tag_to_entry(kpath, result.entry_id, "git")
+        entries = parse_entries(kpath.read_text(encoding="utf-8"))
+        assert "git" in entries[0].tags
+        assert "Issue #42" in entries[0].heading_rest
+
+
+class TestRemoveTagFromEntry:
+    def test_remove_tag(self, project_root: Path, config: KnowledgeConfig) -> None:
+        result = append_knowledge(project_root, config, "content", "plan", tags=["git", "worktree"])
+        kpath = project_root / "KNOWLEDGE.md"
+        remove_tag_from_entry(kpath, result.entry_id, "git")
+        entries = parse_entries(kpath.read_text(encoding="utf-8"))
+        assert entries[0].tags == ["worktree"]
+
+    def test_remove_last_tag(self, project_root: Path, config: KnowledgeConfig) -> None:
+        result = append_knowledge(project_root, config, "content", "plan", tags=["git"])
+        kpath = project_root / "KNOWLEDGE.md"
+        remove_tag_from_entry(kpath, result.entry_id, "git")
+        entries = parse_entries(kpath.read_text(encoding="utf-8"))
+        assert entries[0].tags == []
+        assert "tags:" not in entries[0].raw
+
+    def test_remove_nonexistent_tag(self, project_root: Path, config: KnowledgeConfig) -> None:
+        result = append_knowledge(project_root, config, "content", "plan", tags=["git"])
+        kpath = project_root / "KNOWLEDGE.md"
+        with pytest.raises(ValueError, match="not found"):
+            remove_tag_from_entry(kpath, result.entry_id, "worktree")
+
+    def test_remove_from_nonexistent_entry(
+        self, project_root: Path, config: KnowledgeConfig
+    ) -> None:
+        append_knowledge(project_root, config, "content", "plan")
+        kpath = project_root / "KNOWLEDGE.md"
+        with pytest.raises(ValueError, match="not found"):
+            remove_tag_from_entry(kpath, "nonexist", "git")
+
+
+class TestListTags:
+    def test_list_all_tags(self, project_root: Path, config: KnowledgeConfig) -> None:
+        append_knowledge(project_root, config, "c1", "plan", tags=["git", "worktree"])
+        append_knowledge(project_root, config, "c2", "plan", tags=["testing", "git"])
+        kpath = project_root / "KNOWLEDGE.md"
+        result = list_tags(kpath)
+        assert result == ["git", "testing", "worktree"]
+
+    def test_list_entry_tags(self, project_root: Path, config: KnowledgeConfig) -> None:
+        r1 = append_knowledge(project_root, config, "c1", "plan", tags=["git", "worktree"])
+        kpath = project_root / "KNOWLEDGE.md"
+        result = list_tags(kpath, entry_id=r1.entry_id)
+        assert result == ["git", "worktree"]
+
+    def test_list_no_tags(self, project_root: Path, config: KnowledgeConfig) -> None:
+        append_knowledge(project_root, config, "c1", "plan")
+        kpath = project_root / "KNOWLEDGE.md"
+        result = list_tags(kpath)
+        assert result == []
+
+    def test_list_nonexistent_entry(self, project_root: Path, config: KnowledgeConfig) -> None:
+        append_knowledge(project_root, config, "c1", "plan")
+        kpath = project_root / "KNOWLEDGE.md"
+        with pytest.raises(ValueError, match="not found"):
+            list_tags(kpath, entry_id="nonexist")
+
+    def test_list_missing_file(self, project_root: Path) -> None:
+        result = list_tags(project_root / "KNOWLEDGE.md")
+        assert result == []
+
+
+# --- Statistical auto-filter ---
+
+
+class TestComputeAutoFilterThreshold:
+    def test_no_qualifying_entries(self) -> None:
+        entries = [
+            _make_parsed_entry("e1"),
+            _make_parsed_entry("e2"),
+        ]
+        ratings = {
+            "e1": EntryRating(up=1, down=0),  # 1 vote < 5
+            "e2": EntryRating(up=2, down=1),  # 3 votes < 5
+        }
+        assert compute_auto_filter_threshold(entries, ratings) is None
+
+    def test_fewer_than_3_qualifying(self) -> None:
+        entries = [_make_parsed_entry("e1"), _make_parsed_entry("e2")]
+        ratings = {
+            "e1": EntryRating(up=5, down=0),  # 5 votes, qualifies
+            "e2": EntryRating(up=3, down=3),  # 6 votes, qualifies
+        }
+        # Only 2 qualifying entries — not enough
+        assert compute_auto_filter_threshold(entries, ratings) is None
+
+    def test_exactly_3_qualifying(self) -> None:
+        entries = [_make_parsed_entry(f"e{i}") for i in range(3)]
+        ratings = {
+            "e0": EntryRating(up=10, down=0),  # net=10
+            "e1": EntryRating(up=8, down=2),  # net=6
+            "e2": EntryRating(up=2, down=5),  # net=-3
+        }
+        threshold = compute_auto_filter_threshold(entries, ratings)
+        assert threshold is not None
+        # Threshold should allow filtering of very negative entries
+        assert threshold <= 10  # sanity check
+
+    def test_all_same_score(self) -> None:
+        entries = [_make_parsed_entry(f"e{i}") for i in range(5)]
+        ratings = {f"e{i}": EntryRating(up=5, down=0) for i in range(5)}
+        threshold = compute_auto_filter_threshold(entries, ratings)
+        assert threshold is not None
+        # All scores are 5, stdev=0, so threshold = max(p10=5, 5 - 0) = 5
+        assert threshold == 5.0
+
+    def test_entries_without_ids_skipped(self) -> None:
+        entries = [
+            _make_parsed_entry(None),
+            _make_parsed_entry("e1"),
+            _make_parsed_entry("e2"),
+        ]
+        ratings = {
+            "e1": EntryRating(up=5, down=0),
+            "e2": EntryRating(up=3, down=3),
+        }
+        # Only 2 qualifying entries (ID-less one skipped)
+        assert compute_auto_filter_threshold(entries, ratings) is None
+
+    def test_entries_with_few_votes_not_counted(self) -> None:
+        entries = [_make_parsed_entry(f"e{i}") for i in range(5)]
+        ratings = {
+            "e0": EntryRating(up=10, down=0),  # 10 votes
+            "e1": EntryRating(up=8, down=2),  # 10 votes
+            "e2": EntryRating(up=3, down=5),  # 8 votes
+            "e3": EntryRating(up=1, down=0),  # 1 vote — not counted
+            "e4": EntryRating(up=2, down=1),  # 3 votes — not counted
+        }
+        threshold = compute_auto_filter_threshold(entries, ratings)
+        assert threshold is not None
+
+
+# --- Search + tag filtering in get_annotated_knowledge ---
+
+
+class TestGetAnnotatedKnowledgeSearch:
+    def test_search_filters_entries(self, project_root: Path, config: KnowledgeConfig) -> None:
+        append_knowledge(project_root, config, "Git worktree is useful", "plan")
+        append_knowledge(project_root, config, "Docker is also useful", "plan")
+        result = get_annotated_knowledge(
+            project_root, config, search_query="worktree", no_filter=True
+        )
+        assert result is not None
+        assert "worktree" in result
+        assert "Docker" not in result
+
+    def test_tag_filters_entries(self, project_root: Path, config: KnowledgeConfig) -> None:
+        append_knowledge(project_root, config, "Git stuff", "plan", tags=["git"])
+        append_knowledge(project_root, config, "Docker stuff", "plan", tags=["docker"])
+        result = get_annotated_knowledge(project_root, config, filter_tags=["git"], no_filter=True)
+        assert result is not None
+        assert "Git stuff" in result
+        assert "Docker stuff" not in result
+
+    def test_search_and_tag_or_semantics(self, project_root: Path, config: KnowledgeConfig) -> None:
+        append_knowledge(project_root, config, "Git worktree tips", "plan", tags=["git"])
+        append_knowledge(project_root, config, "Testing patterns", "plan", tags=["testing"])
+        append_knowledge(project_root, config, "Unrelated stuff", "plan")
+        result = get_annotated_knowledge(
+            project_root, config, search_query="worktree", filter_tags=["testing"], no_filter=True
+        )
+        assert result is not None
+        assert "worktree tips" in result  # matches search
+        assert "Testing patterns" in result  # matches tag
+        assert "Unrelated stuff" not in result  # matches neither
+
+    def test_no_filter_shows_everything(self, project_root: Path, config: KnowledgeConfig) -> None:
+        r = append_knowledge(project_root, config, "content", "plan")
+        kpath = resolve_knowledge_path(project_root, config)
+        ratings_path = resolve_ratings_path(kpath)
+        # Give it lots of downvotes
+        for _ in range(10):
+            record_rating(ratings_path, r.entry_id, "down")
+        result = get_annotated_knowledge(project_root, config, no_filter=True)
+        assert result is not None
+        assert "content" in result
+
+
+class TestGetAnnotatedKnowledgeAutoFilter:
+    def test_auto_filter_prunes_low_rated(
+        self, project_root: Path, config: KnowledgeConfig
+    ) -> None:
+        # Need >= 11 qualifying entries so p10_idx > 0 (p10 is 2nd smallest, not min)
+        kpath = resolve_knowledge_path(project_root, config)
+        ensure_knowledge_file(project_root, config)
+        ratings_path = resolve_ratings_path(kpath)
+
+        # 10 good entries with 5 upvotes each (net=5, total=5, qualifies)
+        good_ids = []
+        for i in range(10):
+            r = append_knowledge(project_root, config, f"Good entry {i}", "plan")
+            good_ids.append(r.entry_id)
+        # 1 bad entry with 5 downvotes (net=-5, total=5, qualifies)
+        bad = append_knowledge(project_root, config, "Bad entry", "plan")
+
+        for eid in good_ids:
+            for _ in range(5):
+                record_rating(ratings_path, eid, "up")
+        for _ in range(5):
+            record_rating(ratings_path, bad.entry_id, "down")
+
+        # With 11 qualifying entries, p10 = sorted[1] = 5
+        # Bad entry (net=-5) < 5 → filtered out
+        result = get_annotated_knowledge(project_root, config)
+        assert result is not None
+        assert "Good entry 0" in result
+        assert "Bad entry" not in result
+
+    def test_auto_filter_passes_low_vote_entries(
+        self, project_root: Path, config: KnowledgeConfig
+    ) -> None:
+        kpath = resolve_knowledge_path(project_root, config)
+        ensure_knowledge_file(project_root, config)
+        ratings_path = resolve_ratings_path(kpath)
+
+        r1 = append_knowledge(project_root, config, "Rated entry", "plan")
+        r2 = append_knowledge(project_root, config, "Rated entry 2", "plan")
+        r3 = append_knowledge(project_root, config, "Rated entry 3", "plan")
+        append_knowledge(project_root, config, "New unrated entry", "plan")
+
+        for _ in range(10):
+            record_rating(ratings_path, r1.entry_id, "up")
+        for _ in range(8):
+            record_rating(ratings_path, r2.entry_id, "up")
+        for _ in range(6):
+            record_rating(ratings_path, r3.entry_id, "up")
+        # r4 has no votes — should always pass through
+
+        result = get_annotated_knowledge(project_root, config)
+        assert result is not None
+        assert "New unrated entry" in result
+
+    def test_min_score_overrides_auto_filter(
+        self, project_root: Path, config: KnowledgeConfig
+    ) -> None:
+        kpath = resolve_knowledge_path(project_root, config)
+        ensure_knowledge_file(project_root, config)
+        ratings_path = resolve_ratings_path(kpath)
+
+        r1 = append_knowledge(project_root, config, "High entry", "plan")
+        r2 = append_knowledge(project_root, config, "Low entry", "plan")
+
+        for _ in range(10):
+            record_rating(ratings_path, r1.entry_id, "up")
+        record_rating(ratings_path, r2.entry_id, "up")
+
+        # min_score=5 is a hard cutoff
+        result = get_annotated_knowledge(project_root, config, min_score=5)
+        assert result is not None
+        assert "High entry" in result
+        assert "Low entry" not in result
+
+
+def _make_parsed_entry(entry_id: str | None, tags: list[str] | None = None) -> ParsedEntry:
+    """Helper to create a ParsedEntry for testing."""
+    return ParsedEntry(
+        entry_id=entry_id,
+        date="2026-01-01",
+        heading_rest="plan",
+        tags=tags or [],
+        content="content",
+        raw=f"## {entry_id or ''} | 2026-01-01 | plan\n\ncontent\n\n---\n",
+    )

@@ -45,30 +45,12 @@ dependency analysis hooks.
 
 ## Project Knowledge
 
-Run `wade knowledge get` at the start of this session to read project context
-from previous planning and implementation sessions.
-- If knowledge is disabled, it exits with code 1.
-- If the file doesn't exist, it exits with code 0 and prints an informational message to stderr.
+Read @.claude/skills/knowledge/SKILL.md for knowledge operations (search,
+tagging, rating, adding entries).
 
-After reading knowledge entries, rate entries that were useful or unhelpful:
-```bash
-wade knowledge rate <entry-id> up    # entry was useful
-wade knowledge rate <entry-id> down  # entry was outdated or misleading
-```
-
-Before writing `PR-SUMMARY.md`, if knowledge capture is enabled
-(check `.wade.yml` → `knowledge.enabled`) and you discovered important project
-patterns, conventions, or gotchas during this session, capture them:
-
-```bash
-echo "Your learnings here" | wade knowledge add --session implementation --issue <number>
-```
-
-If a new entry corrects or replaces an existing one, use `--supersedes`:
-```bash
-echo "Corrected info" | wade knowledge add --session implementation --issue <number> --supersedes <old-entry-id>
-```
-
+At the start of this session, search for knowledge relevant to your task
+(do not dump all entries). Before writing `PR-SUMMARY.md`, capture important
+learnings if knowledge is enabled (`.wade.yml` → `knowledge.enabled`).
 Then commit the updated knowledge file alongside your other changes.
 
 ## First action: check your context
@@ -307,7 +289,7 @@ create a GitHub Issue from it:
 
 The following skill directories under `.claude/skills/` are **managed by wade**
 and must not be modified, committed, or deleted:
-`plan-session`, `implementation-session`, `review-pr-comments-session`, `task`, `deps`.
+`plan-session`, `implementation-session`, `review-pr-comments-session`, `task`, `deps`, `knowledge`.
 
 Wade also installs cross-tool alias symlinks per-session in worktrees:
 `.github/skills`, `.agents/skills`, `.gemini/skills`, `.cursor/skills`.

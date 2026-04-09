@@ -79,6 +79,7 @@ SKILL_FILES: dict[str, list[str]] = {
     "implementation-session": ["SKILL.md"],
     "review-pr-comments-session": ["SKILL.md"],
     "deps": ["SKILL.md"],
+    "knowledge": ["SKILL.md"],
 }
 
 # Skills that should always be overwritten on update
