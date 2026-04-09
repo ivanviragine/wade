@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.16.0] — 2026-04-09
+
+### Features
+
+- add knowledge enable/disable CLI commands (#259) (c4601cb)
+
+## [v0.15.15] — 2026-04-08
+
+### Bug Fixes
+
+- detect committed session-specific files on `done` and `sync` (#257) (0170ec8)
+
 ## [v0.15.14] — 2026-04-02
 
 ### Refactoring
