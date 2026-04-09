@@ -590,7 +590,7 @@ def remove_tag_from_entry(
 def list_tags(
     knowledge_path: Path,
     entry_id: str | None = None,
-) -> list[str] | dict[str, list[str]]:
+) -> list[str]:
     """List tags for a specific entry, or all unique tags across the knowledge file."""
     if not knowledge_path.is_file():
         if entry_id:

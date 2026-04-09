@@ -335,12 +335,8 @@ def tag_list(
     try:
         knowledge_path = resolve_knowledge_path(project_root, config.knowledge)
         result = list_tags(knowledge_path, entry_id=entry_id)
-        if isinstance(result, list):
-            if not result:
-                print("No tags found.", file=sys.stderr)
-            else:
-                for t in result:
-                    print(t)
+        if not result:
+            print("No tags found.", file=sys.stderr)
         else:
             for t in result:
                 print(t)

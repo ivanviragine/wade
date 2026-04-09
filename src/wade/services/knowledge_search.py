@@ -14,7 +14,6 @@ Grammar (recursive descent):
 
 from __future__ import annotations
 
-import re
 from enum import StrEnum
 from typing import TypeAlias
 
@@ -78,9 +77,6 @@ QueryNode: TypeAlias = TermNode | PhraseNode | AndNode | OrNode | NotNode
 AndNode.model_rebuild()
 OrNode.model_rebuild()
 NotNode.model_rebuild()
-
-
-_KEYWORD_RE = re.compile(r"^(AND|OR|NOT)$", re.IGNORECASE)
 
 
 def _tokenize(query: str) -> list[Token]:
