@@ -2,6 +2,8 @@ Let's address the review comments on PR #{pr_number} for Issue #{issue_number}: 
 
 Follow @.claude/skills/review-pr-comments-session/SKILL.md for session rules.
 
+Use your tool's native task/todo tracking mechanism to populate a checklist with the workflow steps from the skill before starting work.
+
 # Review comments to address
 
 Run `wade review-pr-comments-session fetch {issue_number}` to get all unresolved review comments.

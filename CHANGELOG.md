@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.17.0] — 2026-04-09
+
+### Features
+
+- add TODO-based workflow tracking to session skills (#263) (40f3384)
+
 ## [v0.16.0] — 2026-04-09
 
 ### Features
