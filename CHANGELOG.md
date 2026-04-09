@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.19.1] — 2026-04-09
+
+### Refactoring
+
+- deduplicate code, fix bugs, and improve abstractions across codebase (34e9cc1)
+
 ## [v0.19.0] — 2026-04-09
 
 ### Features
