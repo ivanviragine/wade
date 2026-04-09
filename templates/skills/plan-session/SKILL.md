@@ -153,7 +153,7 @@ At the start of this session, use your tool's native task/todo tracking
 mechanism to populate a checklist with the workflow steps below. This ensures
 you complete every mandatory step and the user can track progress.
 
-- [ ] Read project knowledge (`wade knowledge get`)
+- [ ] Search relevant knowledge (`wade knowledge get --search <topic>` or `wade knowledge get --tag <tag>`)
 - [ ] Plan the feature with the user
 - [ ] Write plan file(s) to the temp directory
 - [ ] Run `wade review plan` for each plan file (if review is enabled)

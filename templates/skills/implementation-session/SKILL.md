@@ -292,7 +292,7 @@ mechanism to populate a checklist with the workflow steps below. This ensures
 you complete every mandatory step and the user can track progress.
 
 - [ ] Run `wade implementation-session check`
-- [ ] Read project knowledge (`wade knowledge get`)
+- [ ] Search relevant knowledge (`wade knowledge get --search <topic>` or `wade knowledge get --tag <tag>`)
 - [ ] Implementation tasks from PLAN.md (add each task as a separate item)
 - [ ] Run `wade review implementation` (if `review_implementation.enabled` is not `false`)
 - [ ] Capture knowledge (`wade knowledge add`) (if knowledge capture is enabled)
