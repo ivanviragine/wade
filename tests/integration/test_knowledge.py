@@ -234,21 +234,24 @@ class TestKnowledgeSearchWorkflow:
         monkeypatch.chdir(tmp_wade_project)
 
         # Add entries with different tags and content
-        runner.invoke(
+        result = runner.invoke(
             app,
             ["knowledge", "add", "--session", "plan", "--tag", "git"],
             input="Git worktree is useful for isolation.\n",
         )
-        runner.invoke(
+        assert result.exit_code == 0
+        result = runner.invoke(
             app,
             ["knowledge", "add", "--session", "plan", "--tag", "testing"],
             input="Always write tests for new features.\n",
         )
-        runner.invoke(
+        assert result.exit_code == 0
+        result = runner.invoke(
             app,
             ["knowledge", "add", "--session", "plan"],
             input="Docker is unrelated.\n",
         )
+        assert result.exit_code == 0
 
         # Search by text
         result = runner.invoke(app, ["knowledge", "get", "--search", "worktree", "--no-filter"])

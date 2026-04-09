@@ -1099,11 +1099,15 @@ class TestGetAnnotatedKnowledgeAutoFilter:
 
 def _make_parsed_entry(entry_id: str | None, tags: list[str] | None = None) -> ParsedEntry:
     """Helper to create a ParsedEntry for testing."""
+    if entry_id:
+        raw = f"## {entry_id} | 2026-01-01 | plan\n\ncontent\n\n---\n"
+    else:
+        raw = "## 2026-01-01 | plan\n\ncontent\n\n---\n"
     return ParsedEntry(
         entry_id=entry_id,
         date="2026-01-01",
         heading_rest="plan",
         tags=tags or [],
         content="content",
-        raw=f"## {entry_id or ''} | 2026-01-01 | plan\n\ncontent\n\n---\n",
+        raw=raw,
     )

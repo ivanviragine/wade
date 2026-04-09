@@ -332,7 +332,11 @@ def compute_auto_filter_threshold(
         return mean  # pragma: no cover — already checked >= 3
     stdev = statistics.stdev(qualifying_scores)
 
-    # p10: 10th percentile
+    # p10: 10th percentile.  math.ceil ensures we round up to the nearest
+    # integer index, then -1 converts to 0-based.  For small samples (<=10
+    # entries) this yields index 0 (the minimum) — intentionally conservative
+    # so we don't over-filter when data is scarce.  max(0, ...) guards against
+    # negative indices that could arise from floating-point edge cases.
     sorted_scores = sorted(qualifying_scores)
     p10_idx = math.ceil(len(sorted_scores) * 0.1) - 1
     p10_idx = max(0, p10_idx)
@@ -544,7 +548,15 @@ def add_tag_to_entry(
             )
 
             old_heading_line = target.raw.split("\n")[0]
-            content = content.replace(old_heading_line, new_heading, 1)
+            entry_start = content.find(target.raw)
+            if entry_start != -1:
+                content = (
+                    content[:entry_start]
+                    + new_heading
+                    + content[entry_start + len(old_heading_line) :]
+                )
+            else:
+                content = content.replace(old_heading_line, new_heading, 1)
 
             fd.seek(0)
             fd.truncate()
@@ -578,7 +590,15 @@ def remove_tag_from_entry(
             )
 
             old_heading_line = target.raw.split("\n")[0]
-            content = content.replace(old_heading_line, new_heading, 1)
+            entry_start = content.find(target.raw)
+            if entry_start != -1:
+                content = (
+                    content[:entry_start]
+                    + new_heading
+                    + content[entry_start + len(old_heading_line) :]
+                )
+            else:
+                content = content.replace(old_heading_line, new_heading, 1)
 
             fd.seek(0)
             fd.truncate()
