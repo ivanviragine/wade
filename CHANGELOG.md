@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.18.0] — 2026-04-09
+
+### Features
+
+- make review steps conditional in skill files based on wade.yml config (#265) (7a4e1c3)
+
 ## [v0.17.0] — 2026-04-09
 
 ### Features
