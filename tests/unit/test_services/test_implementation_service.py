@@ -290,9 +290,10 @@ class TestBootstrapWorktree:
             bootstrap_worktree(worktree, config, repo_root, skills=IMPLEMENT_SKILLS)
 
         skills_dir = worktree / ".claude" / "skills"
-        # IMPLEMENT_SKILLS = ["implementation-session", "task"]
+        # IMPLEMENT_SKILLS = ["implementation-session", "task", "knowledge"]
         assert (skills_dir / "implementation-session").is_dir()
         assert (skills_dir / "task").is_dir()
+        assert (skills_dir / "knowledge").is_dir()
         # Other skills should NOT be installed
         assert not (skills_dir / "plan-session").exists()
         assert not (skills_dir / "deps").exists()

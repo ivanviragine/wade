@@ -81,10 +81,16 @@ SKILL_FILES: dict[str, list[str]] = {
     "implementation-session": ["SKILL.md"],
     "review-pr-comments-session": ["SKILL.md"],
     "deps": ["SKILL.md"],
+    "knowledge": ["SKILL.md"],
 }
 
 # Skills that should always be overwritten on update
-ALWAYS_OVERWRITE = {"plan-session", "implementation-session", "review-pr-comments-session"}
+ALWAYS_OVERWRITE = {
+    "plan-session",
+    "implementation-session",
+    "review-pr-comments-session",
+    "knowledge",
+}
 
 # Skills whose SKILL.md files contain placeholder strings (see _SKILL_PARTIALS) that
 # must be expanded at install time.  These cannot be installed as plain directory
@@ -134,10 +140,10 @@ HOOK_CONFIG_FILES = [
 
 # --- Command-to-skill mapping: which skills each session type needs ---
 
-PLAN_SKILLS: list[str] = ["plan-session", "task", "deps"]
+PLAN_SKILLS: list[str] = ["plan-session", "task", "deps", "knowledge"]
 DEPS_SKILLS: list[str] = ["deps"]
-IMPLEMENT_SKILLS: list[str] = ["implementation-session", "task"]
-REVIEW_SKILLS: list[str] = ["review-pr-comments-session", "task"]
+IMPLEMENT_SKILLS: list[str] = ["implementation-session", "task", "knowledge"]
+REVIEW_SKILLS: list[str] = ["review-pr-comments-session", "task", "knowledge"]
 
 
 def get_worktree_gitignore_entries() -> list[str]:

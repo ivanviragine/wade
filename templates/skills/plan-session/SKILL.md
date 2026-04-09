@@ -46,31 +46,14 @@ dependency analysis hooks.
 
 ## Project Knowledge
 
-Run `wade knowledge get` at the start of this session to read project context
-from previous planning and implementation sessions.
-- If knowledge is disabled, it exits with code 1.
-- If the file doesn't exist, it exits with code 0 and prints an informational message to stderr.
+Read @.claude/skills/knowledge/SKILL.md for knowledge operations (search,
+tagging, rating, adding entries).
 
-After reading knowledge entries, rate entries that were useful or unhelpful:
-```bash
-wade knowledge rate <entry-id> up    # entry was useful
-wade knowledge rate <entry-id> down  # entry was outdated or misleading
-```
+At the start of this session, search for knowledge relevant to your task
+(do not dump all entries). Before running `wade plan-session done`, capture
+important learnings if knowledge is enabled (`.wade.yml` → `knowledge.enabled`).
 
-Before running `wade plan-session done`, if knowledge capture is enabled
-(check `.wade.yml` → `knowledge.enabled`) and you discovered important project
-patterns, conventions, or gotchas during this session, capture them:
-
-```bash
-echo "Your learnings here" | wade knowledge add --session plan
-```
-
-If a new entry corrects or replaces an existing one, use `--supersedes`:
-```bash
-echo "Corrected info" | wade knowledge add --session plan --supersedes <old-entry-id>
-```
-
-The `--issue` flag is optional (issue numbers may not exist yet during planning).
+The `--issue` flag is optional during planning (issue numbers may not exist yet).
 Running `wade knowledge add` is allowed even though this is a planning session.
 
 ## Your role
@@ -170,7 +153,7 @@ At the start of this session, use your tool's native task/todo tracking
 mechanism to populate a checklist with the workflow steps below. This ensures
 you complete every mandatory step and the user can track progress.
 
-- [ ] Read project knowledge (`wade knowledge get`)
+- [ ] Search relevant knowledge (`wade knowledge get --search <topic>` or `wade knowledge get --tag <tag>`)
 - [ ] Plan the feature with the user
 - [ ] Write plan file(s) to the temp directory
 - [ ] Run `wade review plan` for each plan file (if review is enabled)
