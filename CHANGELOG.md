@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.19.0] — 2026-04-09
+
+### Features
+
+- overhaul knowledge system with tagging, search, and contextual retrieval (#261) (f9b2fec)
+
 ## [v0.18.0] — 2026-04-09
 
 ### Features
