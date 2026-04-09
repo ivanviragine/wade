@@ -15,6 +15,8 @@ logger = structlog.get_logger()
 _SKILL_PARTIALS: dict[str, str] = {
     "{user_interaction_prompt}": "_partials/user-interaction.md",
     "{review_enforcement_rule}": "_partials/review-enforcement-rule.md",
+    "{review_plan_step}": "_partials/review-plan-step.md",
+    "{review_implementation_closing_step}": "_partials/review-implementation-closing-step.md",
 }
 
 

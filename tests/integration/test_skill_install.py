@@ -113,6 +113,99 @@ class TestSkillInstallation:
             "Rule must be absent when suppressed via config"
         )
 
+    def test_review_plan_step_expanded_by_default(self, tmp_git_repo: Path) -> None:
+        """review_plan_step partial is included by default (plan review enabled)."""
+        from wade.skills.installer import install_skills
+
+        install_skills(tmp_git_repo, skills=["plan-session"])
+
+        skill_md = tmp_git_repo / ".claude" / "skills" / "plan-session" / "SKILL.md"
+        content = skill_md.read_text(encoding="utf-8")
+        assert "{review_plan_step}" not in content, "Placeholder must be expanded"
+        assert "wade review plan <plan_file>" in content, "Full plan review step must be present"
+
+    def test_review_plan_step_suppressed_by_extra_partials(self, tmp_git_repo: Path) -> None:
+        """Passing disabled one-liner via extra_partials suppresses the plan review step."""
+        from wade.skills.installer import install_skills
+
+        disabled = "5. ~~**Review**~~ — skipped (`review_plan.enabled: false` in `.wade.yml`)."
+        install_skills(
+            tmp_git_repo,
+            skills=["plan-session"],
+            extra_partials={"{review_plan_step}": disabled},
+        )
+
+        skill_md = tmp_git_repo / ".claude" / "skills" / "plan-session" / "SKILL.md"
+        content = skill_md.read_text(encoding="utf-8")
+        assert "{review_plan_step}" not in content, "Placeholder must be removed"
+        assert "wade review plan <plan_file>" not in content, "Full step must be absent"
+        assert "~~**Review**~~" in content, "Disabled one-liner must be present"
+
+    def test_review_plan_step_suppressed_via_config(self, tmp_git_repo: Path) -> None:
+        """bootstrap_worktree with review_plan.enabled=False shows disabled one-liner."""
+        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
+        from wade.services.implementation_service import bootstrap_worktree
+
+        config = ProjectConfig(ai=AIConfig(review_plan=AICommandConfig(enabled=False)))
+        bootstrap_worktree(tmp_git_repo, config, tmp_git_repo, skills=["plan-session"])
+
+        skill_md = tmp_git_repo / ".claude" / "skills" / "plan-session" / "SKILL.md"
+        content = skill_md.read_text(encoding="utf-8")
+        assert "{review_plan_step}" not in content, "Placeholder must be removed"
+        assert "wade review plan <plan_file>" not in content, "Full step must be absent"
+        assert "~~**Review**~~" in content, "Disabled one-liner must appear"
+
+    def test_review_implementation_closing_step_expanded_by_default(
+        self, tmp_git_repo: Path
+    ) -> None:
+        """review_implementation_closing_step partial is included by default."""
+        from wade.skills.installer import install_skills
+
+        install_skills(tmp_git_repo, skills=["implementation-session"])
+
+        skill_md = tmp_git_repo / ".claude" / "skills" / "implementation-session" / "SKILL.md"
+        content = skill_md.read_text(encoding="utf-8")
+        assert "{review_implementation_closing_step}" not in content, "Placeholder must be expanded"
+        assert "Step 1 — Review [MANDATORY]" in content, "Full closing step must be present"
+
+    def test_review_implementation_closing_step_suppressed_by_extra_partials(
+        self, tmp_git_repo: Path
+    ) -> None:
+        """Passing disabled one-liner via extra_partials suppresses the closing review step."""
+        from wade.skills.installer import install_skills
+
+        disabled = (
+            "**Step 1 — ~~Review~~** — skipped"
+            " (`review_implementation.enabled: false` in `.wade.yml`)."
+        )
+        install_skills(
+            tmp_git_repo,
+            skills=["implementation-session"],
+            extra_partials={"{review_implementation_closing_step}": disabled},
+        )
+
+        skill_md = tmp_git_repo / ".claude" / "skills" / "implementation-session" / "SKILL.md"
+        content = skill_md.read_text(encoding="utf-8")
+        assert "{review_implementation_closing_step}" not in content, "Placeholder must be removed"
+        assert "Step 1 — Review [MANDATORY]" not in content, "Full step must be absent"
+        assert "~~Review~~" in content, "Disabled one-liner must be present"
+
+    def test_review_implementation_closing_step_suppressed_via_config(
+        self, tmp_git_repo: Path
+    ) -> None:
+        """bootstrap_worktree with review_implementation.enabled=False suppresses closing step."""
+        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
+        from wade.services.implementation_service import bootstrap_worktree
+
+        config = ProjectConfig(ai=AIConfig(review_implementation=AICommandConfig(enabled=False)))
+        bootstrap_worktree(tmp_git_repo, config, tmp_git_repo, skills=["implementation-session"])
+
+        skill_md = tmp_git_repo / ".claude" / "skills" / "implementation-session" / "SKILL.md"
+        content = skill_md.read_text(encoding="utf-8")
+        assert "{review_implementation_closing_step}" not in content, "Placeholder must be removed"
+        assert "Step 1 — Review [MANDATORY]" not in content, "Full step must be absent"
+        assert "~~Review~~" in content, "Disabled one-liner must appear"
+
     def test_self_init_inject_skills_are_not_symlinked(self, tmp_git_repo: Path) -> None:
         """In self-init mode, inject skills are processed copies — not directory symlinks."""
         from wade.skills.installer import install_skills

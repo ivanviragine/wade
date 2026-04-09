@@ -63,15 +63,7 @@ Running `wade knowledge add` is allowed even though this is a planning session.
 3. **Write plan file(s)** to the temp directory shown in your prompt.
 4. **Review with the user** — present a summary of every plan file you wrote
    (title, complexity, key tasks). Use your tool's native question component to ask: "Want any modifications?" If so, apply them and repeat; otherwise proceed to step 5.
-5. **Review** — after writing plan files, run `wade review plan <plan_file>` for
-   each plan file you created and check the exit code:
-   - **Exit 0**: Review completed externally or skipped. If there is output, it
-     is review feedback — read it and address any actionable findings before
-     proceeding to validation.
-   - **Exit 2**: Self-review mode. The output is a review prompt — you must act
-     as the reviewer: read the instructions, analyze the plan, identify issues,
-     and fix them before proceeding to validation.
-   - **Exit 1**: Error — debug and retry.
+{review_plan_step}
 6. **Validate** — run `wade plan-session done <plan_dir>` (the temp dir from your prompt).
    If it exits with errors, fix each reported issue and re-run until it passes.
    Warnings are informational and do not block proceeding.

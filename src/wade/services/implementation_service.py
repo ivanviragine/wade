@@ -609,12 +609,19 @@ def bootstrap_worktree(
 
     is_self = repo_root.resolve() == get_wade_repo_root().resolve()
 
-    # Suppress the review-enforcement rule when reviews are explicitly disabled.
-    # An empty string overrides the default file-based partial expansion.
-    skill_extra_partials: dict[str, str] | None = None
+    # Suppress review step placeholders when reviews are explicitly disabled.
+    # An empty string (or disabled one-liner) overrides the default file-based partial.
+    skill_extra_partials: dict[str, str] = {}
+    if config.ai.review_plan.enabled is False:
+        skill_extra_partials["{review_plan_step}"] = (
+            "5. ~~**Review**~~ — skipped (`review_plan.enabled: false` in `.wade.yml`)."
+        )
     if config.ai.review_implementation.enabled is False:
-        skill_extra_partials = {"{review_enforcement_rule}": ""}
-
+        skill_extra_partials["{review_enforcement_rule}"] = ""
+        skill_extra_partials["{review_implementation_closing_step}"] = (
+            "**Step 1 — ~~Review~~** — skipped"
+            " (`review_implementation.enabled: false` in `.wade.yml`)."
+        )
     if is_self:
         # Worktree has its own templates/ checkout — symlink to those
         wt_templates = worktree_path / "templates" / "skills"
@@ -624,7 +631,7 @@ def bootstrap_worktree(
             force=True,
             templates_dir=wt_templates,
             skills=skills,
-            extra_partials=skill_extra_partials,
+            extra_partials=skill_extra_partials or None,
         )
     else:
         install_skills(
@@ -632,7 +639,7 @@ def bootstrap_worktree(
             is_self_init=False,
             force=True,
             skills=skills,
-            extra_partials=skill_extra_partials,
+            extra_partials=skill_extra_partials or None,
         )
     logger.debug("implementation.bootstrap_skills", path=str(worktree_path))
 
