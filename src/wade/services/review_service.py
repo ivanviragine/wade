@@ -399,7 +399,9 @@ def poll_for_reviews(
 
             # No review signals, no bot blocking — apply quiet-timeout logic.
             if status.pending_reviewers:
-                names = ", ".join(f"@{r.name}" for r in status.pending_reviewers)
+                names = ", ".join(
+                    f"@{r.name}{' (team)' if r.is_team else ''}" for r in status.pending_reviewers
+                )
                 console.detail(f"Awaiting review from {names} — next check in {poll_interval}s...")
 
             if status.is_commit_fresh():

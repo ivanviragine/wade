@@ -509,6 +509,7 @@ def test_bot_completed_with_pending_reviewers_keeps_polling(
 
     # Should return QUIET_TIMEOUT (not REVIEW_COMPLETE) — polling continued until timeout
     assert result == PollOutcome.QUIET_TIMEOUT
+    assert mock_status.call_count >= 2
 
 
 @patch(_SLEEP)
