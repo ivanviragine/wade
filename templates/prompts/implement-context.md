@@ -1,12 +1,14 @@
-Let's implement @PLAN.md. Working on Issue #{issue_number}: {issue_title}
-
-If you cannot see the plan contents above, read the file `PLAN.md` in the root of your current directory.
-
 Follow @.claude/skills/implementation-session/SKILL.md for session rules.
 
 Use your tool's native task/todo tracking mechanism to populate a checklist with the workflow steps from the skill before starting work.
 
 If a project knowledge file is configured (see `.wade.yml` → `knowledge`), read it for project context.
+
+# Goal
+
+Let's implement @PLAN.md. Working on Issue #{issue_number}: {issue_title}
+
+If you cannot see the plan contents above, read the file `PLAN.md` in the root of your current directory.
 
 # Critical rules
 
