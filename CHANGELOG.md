@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.19.3] — 2026-04-10
+
+### Bug Fixes
+
+- continue polling when pending reviewers exist after review bot completes (#269) (c95e990)
+
 ## [v0.19.2] — 2026-04-10
 
 ### Bug Fixes
