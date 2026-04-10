@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from wade.models.review import (
+    PendingReviewer,
     PollOutcome,
     PRReviewStatus,
     ReviewBotStatus,
@@ -457,12 +458,58 @@ def test_bot_completed_no_signals_returns_review_complete(
         actionable_threads=[],
         all_unresolved_threads=[],
         bot_status=ReviewBotStatus.COMPLETED,
+        pending_reviewers=[],
     )
 
     result = poll_for_reviews(_provider(), tmp_path, 42, "feat/42-test")
 
     assert result == PollOutcome.REVIEW_COMPLETE
     mock_sleep.assert_not_called()
+
+
+@patch(_SLEEP)
+@patch(_TIME)
+@patch(_STATUS)
+@patch(_GET_PR)
+def test_bot_completed_with_pending_reviewers_keeps_polling(
+    mock_get_pr: MagicMock,
+    mock_status: MagicMock,
+    mock_time: MagicMock,
+    _mock_sleep: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """Bot completed but pending reviewers exist — loop continues, not REVIEW_COMPLETE.
+
+    Regression test for issue #268: polling should continue when CodeRabbit
+    completes with no actionable comments but other reviewers are still pending
+    (e.g. @copilot-pull-request-reviewer).
+    """
+    from datetime import datetime, timedelta
+
+    old_commit_time = datetime.now(UTC) - timedelta(minutes=30)
+    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    mock_status.return_value = PRReviewStatus(
+        actionable_threads=[],
+        all_unresolved_threads=[],
+        bot_status=ReviewBotStatus.COMPLETED,
+        pending_reviewers=[PendingReviewer(name="copilot-pull-request-reviewer", is_team=False)],
+        latest_commit_pushed_at=old_commit_time,
+    )
+    # Simulate quiet timeout trigger: first call sets quiet_start, second triggers timeout
+    mock_time.side_effect = [100.0, 800.0]  # elapsed = 700s > quiet_timeout=600
+
+    result = poll_for_reviews(
+        _provider(),
+        tmp_path,
+        42,
+        "feat/42-test",
+        poll_interval=60,
+        quiet_timeout=600,
+    )
+
+    # Should return QUIET_TIMEOUT (not REVIEW_COMPLETE) — polling continued until timeout
+    assert result == PollOutcome.QUIET_TIMEOUT
+    assert mock_status.call_count >= 2
 
 
 @patch(_SLEEP)
