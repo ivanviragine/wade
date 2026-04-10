@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.19.2] — 2026-04-10
+
+### Bug Fixes
+
+- reorder implementation session prompt to match plan session structure (#267) (53b83f8)
+
 ## [v0.19.1] — 2026-04-09
 
 ### Refactoring
