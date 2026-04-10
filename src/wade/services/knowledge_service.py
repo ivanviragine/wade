@@ -56,6 +56,13 @@ class ParsedEntry(BaseModel, frozen=True):
     raw: str
 
 
+class AnnotatedKnowledgeResult(BaseModel, frozen=True):
+    """Result of get_annotated_knowledge with match information."""
+
+    content: str | None
+    entries_count: int
+
+
 class EntryRating(BaseModel):
     """Rating data for a single knowledge entry."""
 
@@ -352,7 +359,7 @@ def get_annotated_knowledge(
     search_query: str | None = None,
     filter_tags: list[str] | None = None,
     no_filter: bool = False,
-) -> str | None:
+) -> AnnotatedKnowledgeResult:
     """Read knowledge file, annotate headings with scores, and optionally filter.
 
     Filtering modes (mutually exclusive, checked in order):
@@ -363,13 +370,14 @@ def get_annotated_knowledge(
     ``search_query`` and ``filter_tags`` combine with OR: an entry passes if it
     matches the search OR has any of the requested tags.
 
-    Returns None if the knowledge file does not exist.
+    Returns an AnnotatedKnowledgeResult with content=None if the knowledge file
+    does not exist, and entries_count=0 if filters returned no results.
     """
     from wade.services.knowledge_search import evaluate_query, parse_query
 
     path = resolve_knowledge_path(project_root, config)
     if not path.exists():
-        return None
+        return AnnotatedKnowledgeResult(content=None, entries_count=0)
     if path.is_dir():
         raise ValueError(f"Knowledge path {config.path!r} points to a directory, not a file")
 
@@ -377,7 +385,7 @@ def get_annotated_knowledge(
     entries = parse_entries(text)
 
     if not entries and search_query is None and not filter_tags:
-        return text
+        return AnnotatedKnowledgeResult(content=text, entries_count=0)
     # Fall through to return header only (when filters are specified but no entries)
 
     if entries:
@@ -402,6 +410,7 @@ def get_annotated_knowledge(
         header = text
 
     result_parts = [header]
+    filtered_entry_count = 0
     for entry in entries:
         entry_rating = ratings.get(entry.entry_id) if entry.entry_id else None
         up = entry_rating.up if entry_rating else 0
@@ -446,11 +455,12 @@ def get_annotated_knowledge(
             result_parts.append("\n".join(raw_lines))
         else:
             result_parts.append(entry.raw)
+        filtered_entry_count += 1
 
     output = "".join(result_parts)
     if not output.endswith("\n"):
         output += "\n"
-    return output
+    return AnnotatedKnowledgeResult(content=output, entries_count=filtered_entry_count)
 
 
 def append_knowledge(
