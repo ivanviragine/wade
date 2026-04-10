@@ -376,23 +376,30 @@ def get_annotated_knowledge(
     text = path.read_text(encoding="utf-8")
     entries = parse_entries(text)
 
-    if not entries:
+    if not entries and search_query is None and not filter_tags:
         return text
+    # Fall through to return header only (when filters are specified but no entries)
 
-    ratings_path = resolve_ratings_path(path)
-    ratings = read_ratings(ratings_path)
+    if entries:
+        ratings_path = resolve_ratings_path(path)
+        ratings = read_ratings(ratings_path)
+    else:
+        ratings = {}
 
     # Pre-parse search query
     parsed_query = parse_query(search_query) if search_query else None
 
     # Compute auto-filter threshold if using default filtering
     auto_threshold: float | None = None
-    if min_score is None and not no_filter:
+    if min_score is None and not no_filter and entries:
         auto_threshold = compute_auto_filter_threshold(entries, ratings)
 
     # Build the header (everything before the first entry)
-    first_entry_pos = text.find(entries[0].raw)
-    header = text[:first_entry_pos] if first_entry_pos > 0 else ""
+    if entries:
+        first_entry_pos = text.find(entries[0].raw)
+        header = text[:first_entry_pos] if first_entry_pos > 0 else ""
+    else:
+        header = text
 
     result_parts = [header]
     for entry in entries:

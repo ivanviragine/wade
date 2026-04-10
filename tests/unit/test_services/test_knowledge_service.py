@@ -1010,6 +1010,38 @@ class TestGetAnnotatedKnowledgeSearch:
         assert "Testing patterns" in result  # matches tag
         assert "Unrelated stuff" not in result  # matches neither
 
+    def test_search_on_empty_knowledge_file(
+        self, project_root: Path, config: KnowledgeConfig
+    ) -> None:
+        # Knowledge file with only template header (no entries)
+        ensure_knowledge_file(project_root, config)
+        result = get_annotated_knowledge(project_root, config, search_query="foo", no_filter=True)
+        assert result is not None
+        # Should return template header, but parse_entries should find no entries
+        entries = parse_entries(result)
+        assert len(entries) == 0
+
+    def test_tag_filter_on_empty_knowledge_file(
+        self, project_root: Path, config: KnowledgeConfig
+    ) -> None:
+        # Knowledge file with only template header (no entries)
+        ensure_knowledge_file(project_root, config)
+        result = get_annotated_knowledge(project_root, config, filter_tags=["foo"], no_filter=True)
+        assert result is not None
+        # Should return template header, but parse_entries should find no entries
+        entries = parse_entries(result)
+        assert len(entries) == 0
+
+    def test_no_filter_on_empty_knowledge_file(
+        self, project_root: Path, config: KnowledgeConfig
+    ) -> None:
+        # Knowledge file with only template header (no entries)
+        ensure_knowledge_file(project_root, config)
+        result = get_annotated_knowledge(project_root, config)
+        assert result is not None
+        # Should return the exact template since no filters were applied
+        assert result == KNOWLEDGE_TEMPLATE
+
     def test_no_filter_shows_everything(self, project_root: Path, config: KnowledgeConfig) -> None:
         r = append_knowledge(project_root, config, "content", "plan")
         kpath = resolve_knowledge_path(project_root, config)

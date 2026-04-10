@@ -122,6 +122,57 @@ class TestKnowledgeGetCommand:
         assert result.exit_code == 0
         assert "[+3/-1]" in result.output
 
+    def test_search_on_empty_file_prints_no_results(self, tmp_path: Path) -> None:
+        # Create knowledge file with only template header
+        (tmp_path / "KNOWLEDGE.md").write_text(KNOWLEDGE_TEMPLATE, encoding="utf-8")
+        config = ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
+        )
+        with patch("wade.config.loader.load_config", return_value=config):
+            result = runner.invoke(app, ["knowledge", "get", "--search", "foo"])
+        assert result.exit_code == 0
+        assert "No entries matched your search." in result.output
+
+    def test_tag_filter_on_empty_file_prints_no_results(self, tmp_path: Path) -> None:
+        # Create knowledge file with only template header
+        (tmp_path / "KNOWLEDGE.md").write_text(KNOWLEDGE_TEMPLATE, encoding="utf-8")
+        config = ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
+        )
+        with patch("wade.config.loader.load_config", return_value=config):
+            result = runner.invoke(app, ["knowledge", "get", "--tag", "foo"])
+        assert result.exit_code == 0
+        assert "No entries matched your search." in result.output
+
+    def test_search_with_no_matches_prints_no_results(self, tmp_path: Path) -> None:
+        content = KNOWLEDGE_TEMPLATE + "\n## a1b2c3d4 | 2026-03-24 | plan\n\nDocker stuff.\n\n---\n"
+        (tmp_path / "KNOWLEDGE.md").write_text(content, encoding="utf-8")
+        config = ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
+        )
+        with patch("wade.config.loader.load_config", return_value=config):
+            result = runner.invoke(app, ["knowledge", "get", "--search", "nonexistent"])
+        assert result.exit_code == 0
+        assert "No entries matched your search." in result.output
+
+    def test_tag_filter_with_no_matches_prints_no_results(self, tmp_path: Path) -> None:
+        content = (
+            KNOWLEDGE_TEMPLATE
+            + "\n## a1b2c3d4 | 2026-03-24 | plan | tags: git\n\nGit stuff.\n\n---\n"
+        )
+        (tmp_path / "KNOWLEDGE.md").write_text(content, encoding="utf-8")
+        config = ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
+        )
+        with patch("wade.config.loader.load_config", return_value=config):
+            result = runner.invoke(app, ["knowledge", "get", "--tag", "docker"])
+        assert result.exit_code == 0
+        assert "No entries matched your search." in result.output
+
 
 class TestKnowledgeRateCommand:
     def _setup_knowledge(self, tmp_path: Path) -> ProjectConfig:

@@ -119,7 +119,7 @@ def get(
     from pathlib import Path
 
     from wade.config.loader import load_config
-    from wade.services.knowledge_service import get_annotated_knowledge
+    from wade.services.knowledge_service import get_annotated_knowledge, parse_entries
     from wade.ui.console import console
 
     config = load_config()
@@ -143,6 +143,13 @@ def get(
     if content is None:
         print("No knowledge file found.", file=sys.stderr)
         raise typer.Exit(0)
+
+    # Check if search or tag filters returned no results
+    if (search or tag) and content is not None:
+        entries = parse_entries(content)
+        if not entries:
+            print("No entries matched your search.", file=sys.stderr)
+
     console.raw(content)
 
 
