@@ -11,10 +11,10 @@ from wade.models.session import SyncEventType
 class TestCatchupUpToDate:
     """Branch is already in sync with base — no merge needed."""
 
-    @patch("wade.services.implementation_service.git_sync")
-    @patch("wade.services.implementation_service.git_branch")
-    @patch("wade.services.implementation_service.git_repo")
-    @patch("wade.services.implementation_service.load_config")
+    @patch("wade.services.implementation_service.core.git_sync")
+    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.core.git_repo")
+    @patch("wade.services.implementation_service.core.load_config")
     def test_returns_success_when_up_to_date(
         self,
         mock_config: MagicMock,
@@ -47,10 +47,10 @@ class TestCatchupUpToDate:
 class TestCatchupCleanMerge:
     """Branch is behind — merge succeeds without conflicts."""
 
-    @patch("wade.services.implementation_service.git_sync")
-    @patch("wade.services.implementation_service.git_branch")
-    @patch("wade.services.implementation_service.git_repo")
-    @patch("wade.services.implementation_service.load_config")
+    @patch("wade.services.implementation_service.core.git_sync")
+    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.core.git_repo")
+    @patch("wade.services.implementation_service.core.load_config")
     def test_merges_when_behind(
         self,
         mock_config: MagicMock,
@@ -87,10 +87,10 @@ class TestCatchupCleanMerge:
 class TestCatchupConflict:
     """Merge has conflicts — catchup aborts and reports."""
 
-    @patch("wade.services.implementation_service.git_sync")
-    @patch("wade.services.implementation_service.git_branch")
-    @patch("wade.services.implementation_service.git_repo")
-    @patch("wade.services.implementation_service.load_config")
+    @patch("wade.services.implementation_service.core.git_sync")
+    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.core.git_repo")
+    @patch("wade.services.implementation_service.core.load_config")
     def test_aborts_merge_on_conflict(
         self,
         mock_config: MagicMock,
@@ -126,10 +126,10 @@ class TestCatchupConflict:
         conflict_events = [e for e in result.events if e.event == SyncEventType.CONFLICT]
         assert len(conflict_events) == 1
 
-    @patch("wade.services.implementation_service.git_sync")
-    @patch("wade.services.implementation_service.git_branch")
-    @patch("wade.services.implementation_service.git_repo")
-    @patch("wade.services.implementation_service.load_config")
+    @patch("wade.services.implementation_service.core.git_sync")
+    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.core.git_repo")
+    @patch("wade.services.implementation_service.core.load_config")
     def test_conflict_diff_not_emitted(
         self,
         mock_config: MagicMock,
@@ -166,10 +166,10 @@ class TestCatchupConflict:
 class TestCatchupStackedBranch:
     """Stacked branch: catchup uses .wade/base_branch instead of main."""
 
-    @patch("wade.services.implementation_service.git_sync")
-    @patch("wade.services.implementation_service.git_branch")
-    @patch("wade.services.implementation_service.git_repo")
-    @patch("wade.services.implementation_service.load_config")
+    @patch("wade.services.implementation_service.core.git_sync")
+    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.core.git_repo")
+    @patch("wade.services.implementation_service.core.load_config")
     def test_uses_stored_base_branch(
         self,
         mock_config: MagicMock,
@@ -204,14 +204,16 @@ class TestCatchupStackedBranch:
 class TestCatchupDirtyWorktree:
     """Dirty worktree: catchup reports pre-flight failure."""
 
-    @patch("wade.services.implementation_service.git_sync")
-    @patch("wade.services.implementation_service.git_branch")
-    @patch("wade.services.implementation_service.git_repo")
-    @patch("wade.services.implementation_service.load_config")
+    @patch("wade.services.implementation_service.core.git_sync")
+    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.bootstrap.git_repo")
+    @patch("wade.services.implementation_service.core.git_repo")
+    @patch("wade.services.implementation_service.core.load_config")
     def test_fails_on_dirty_worktree(
         self,
         mock_config: MagicMock,
         mock_repo: MagicMock,
+        _mock_bootstrap_repo: MagicMock,
         mock_branch: MagicMock,
         mock_sync: MagicMock,
         tmp_path: Path,
@@ -237,10 +239,10 @@ class TestCatchupDirtyWorktree:
 class TestCatchupDryRun:
     """Dry-run mode: preview without merging."""
 
-    @patch("wade.services.implementation_service.git_sync")
-    @patch("wade.services.implementation_service.git_branch")
-    @patch("wade.services.implementation_service.git_repo")
-    @patch("wade.services.implementation_service.load_config")
+    @patch("wade.services.implementation_service.core.git_sync")
+    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.core.git_repo")
+    @patch("wade.services.implementation_service.core.load_config")
     def test_dry_run_does_not_merge(
         self,
         mock_config: MagicMock,

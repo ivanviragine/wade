@@ -47,6 +47,12 @@ def _run_git(
         raise GitError(
             f"git {' '.join(args)} failed (exit {exc.returncode}): {exc.stderr.strip()}"
         ) from exc
+    except FileNotFoundError:
+        if check:
+            raise GitError(f"git {' '.join(args)} failed: git or cwd not found") from None
+        # When check=False, return a synthetic failed result (matching callers'
+        # expectations of a non-zero returncode rather than an exception).
+        return subprocess.CompletedProcess(cmd, returncode=1, stdout="", stderr="")
     return result
 
 
@@ -257,6 +263,55 @@ def get_dirty_status(path: Path) -> dict[str, int]:
             if worktree_status not in (" ", "?"):
                 unstaged += 1
     return {"staged": staged, "unstaged": unstaged, "untracked": untracked}
+
+
+def get_dirty_file_paths(cwd: Path) -> list[str]:
+    """Return file paths from ``git status --porcelain``.
+
+    Handles renames (``old -> new``) and quoted paths.
+    Returns an empty list on failure (git not available, not a repo, etc.).
+    """
+    result = _run_git("status", "--porcelain", cwd=cwd, check=False)
+    if result.returncode != 0:
+        return []
+    paths: list[str] = []
+    for line in result.stdout.splitlines():
+        if not line or len(line) < 4:
+            continue
+        path = line[3:]
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        if path.startswith('"') and path.endswith('"'):
+            path = path[1:-1]
+        paths.append(path)
+    return paths
+
+
+def list_tracked_files(cwd: Path) -> list[str]:
+    """Return all tracked file paths from the git index.
+
+    Returns an empty list on failure.
+    """
+    result = _run_git("ls-files", "--cached", cwd=cwd, check=False)
+    if result.returncode != 0:
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def is_file_tracked(cwd: Path, filename: str) -> bool:
+    """Return True if *filename* is tracked in the git index."""
+    result = _run_git("ls-files", "--error-unmatch", filename, cwd=cwd, check=False)
+    return result.returncode == 0
+
+
+def skip_worktree_file(cwd: Path, filename: str) -> None:
+    """Mark a tracked file with ``--skip-worktree`` to hide local changes from git status."""
+    _run_git("update-index", "--skip-worktree", filename, cwd=cwd, check=False)
+
+
+def unskip_worktree_file(cwd: Path, filename: str) -> None:
+    """Remove ``--skip-worktree`` from a file to restore visibility in git status."""
+    _run_git("update-index", "--no-skip-worktree", filename, cwd=cwd, check=False)
 
 
 def push_branch(

@@ -68,7 +68,7 @@ class TestImplementationLifecycle:
 
         # Sync
         with patch(
-            "wade.services.implementation_service.load_config",
+            "wade.services.implementation_service.core.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -120,7 +120,7 @@ class TestImplementationLifecycle:
 
         # Sync should detect conflict
         with patch(
-            "wade.services.implementation_service.load_config",
+            "wade.services.implementation_service.core.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -205,7 +205,7 @@ class TestImplementationLifecycle:
         create_worktree(tmp_git_repo, "feat/43-db", wt2, "main")
 
         with patch(
-            "wade.services.implementation_service.load_config",
+            "wade.services.implementation_service.core.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
