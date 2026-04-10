@@ -32,10 +32,10 @@ class TestPrSummaryPathResolution:
 
         # Mock git and provider operations
         with (
-            patch("wade.services.implementation_service.get_provider") as mock_get_provider,
-            patch("wade.services.implementation_service.git_repo._run_git"),
-            patch("wade.services.implementation_service.git_pr.create_pr") as mock_create_pr,
-            patch("wade.services.implementation_service.remove_in_progress_label"),
+            patch("wade.services.implementation_service.core.get_provider") as mock_get_provider,
+            patch("wade.services.implementation_service.core.git_repo._run_git"),
+            patch("wade.services.implementation_service.core.git_pr.create_pr") as mock_create_pr,
+            patch("wade.services.implementation_service.core.remove_in_progress_label"),
         ):
             mock_provider = MagicMock()
             mock_provider.read_task.return_value = task
@@ -78,10 +78,10 @@ class TestPrSummaryPathResolution:
         )
 
         with (
-            patch("wade.services.implementation_service.get_provider") as mock_get_provider,
-            patch("wade.services.implementation_service.git_repo._run_git"),
-            patch("wade.services.implementation_service.git_pr.create_pr") as mock_create_pr,
-            patch("wade.services.implementation_service.remove_in_progress_label"),
+            patch("wade.services.implementation_service.core.get_provider") as mock_get_provider,
+            patch("wade.services.implementation_service.core.git_repo._run_git"),
+            patch("wade.services.implementation_service.core.git_pr.create_pr") as mock_create_pr,
+            patch("wade.services.implementation_service.core.remove_in_progress_label"),
         ):
             mock_provider = MagicMock()
             mock_provider.read_task.return_value = task
