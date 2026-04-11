@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.19.6] — 2026-04-11
+
+### Bug Fixes
+
+- knowledge commands write/read worktree-local KNOWLEDGE.md instead of main repo (#273) (c56a201)
+
 ## [v0.19.5] — 2026-04-11
 
 ### Bug Fixes
