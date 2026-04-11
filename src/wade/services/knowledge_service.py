@@ -117,16 +117,18 @@ def resolve_knowledge_path(project_root: Path, config: KnowledgeConfig) -> Path:
 def _canonical_project_root(project_root: Path) -> Path:
     """Return main worktree path if project_root is inside a linked worktree.
 
-    Swallows all exceptions so non-git contexts and test environments without
-    git continue to work correctly.
+    Falls back to project_root on expected operational failures (ImportError,
+    GitError, OSError). Unexpected exceptions propagate to the caller.
     """
     try:
-        from wade.git.repo import get_main_worktree_path
-
+        from wade.git.repo import GitError, get_main_worktree_path
+    except ImportError:
+        return project_root
+    try:
         main = get_main_worktree_path(project_root)
         if main is not None and main != project_root:
             return main
-    except Exception:
+    except (GitError, OSError):
         pass
     return project_root
 

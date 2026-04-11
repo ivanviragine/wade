@@ -1135,14 +1135,33 @@ class TestCanonicalProjectRoot:
             result = _canonical_project_root(tmp_path)
             assert result == main_path
 
-    def test_swallows_exceptions_and_returns_original(self, tmp_path: Path) -> None:
+    def test_swallows_git_error_and_returns_original(self, tmp_path: Path) -> None:
+        from wade.git.repo import GitError
+
         with patch(
             "wade.git.repo.get_main_worktree_path",
-            side_effect=Exception("unexpected git failure"),
+            side_effect=GitError("git failure"),
         ):
-            # Even if the underlying git call fails, the function must not raise
             result = _canonical_project_root(tmp_path)
             assert result == tmp_path
+
+    def test_swallows_os_error_and_returns_original(self, tmp_path: Path) -> None:
+        with patch(
+            "wade.git.repo.get_main_worktree_path",
+            side_effect=OSError("path not found"),
+        ):
+            result = _canonical_project_root(tmp_path)
+            assert result == tmp_path
+
+    def test_unexpected_exception_propagates(self, tmp_path: Path) -> None:
+        with (
+            patch(
+                "wade.git.repo.get_main_worktree_path",
+                side_effect=RuntimeError("unexpected"),
+            ),
+            pytest.raises(RuntimeError, match="unexpected"),
+        ):
+            _canonical_project_root(tmp_path)
 
     def test_returns_original_when_main_equals_project_root(self, tmp_path: Path) -> None:
         with patch(
