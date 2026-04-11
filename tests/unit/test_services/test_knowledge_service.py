@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -14,6 +15,7 @@ from wade.services.knowledge_service import (
     EntryRating,
     KnowledgeEntry,
     ParsedEntry,
+    _canonical_project_root,
     add_tag_to_entry,
     append_knowledge,
     compute_auto_filter_threshold,
@@ -29,6 +31,7 @@ from wade.services.knowledge_service import (
     record_rating,
     record_supersede,
     remove_tag_from_entry,
+    resolve_canonical_knowledge_path,
     resolve_knowledge_path,
     resolve_ratings_path,
     validate_tag,
@@ -1148,3 +1151,109 @@ def _make_parsed_entry(entry_id: str | None, tags: list[str] | None = None) -> P
         content="content",
         raw=raw,
     )
+
+
+class TestCanonicalProjectRoot:
+    def test_returns_same_path_when_not_a_worktree(self, tmp_path: Path) -> None:
+        with patch(
+            "wade.git.repo.get_main_worktree_path",
+            return_value=None,
+        ):
+            result = _canonical_project_root(tmp_path)
+            assert result == tmp_path
+
+    def test_redirects_to_main_worktree_path(self, tmp_path: Path) -> None:
+        main_path = tmp_path / "main"
+        main_path.mkdir()
+        with patch(
+            "wade.git.repo.get_main_worktree_path",
+            return_value=main_path,
+        ):
+            result = _canonical_project_root(tmp_path)
+            assert result == main_path
+
+    def test_swallows_git_error_and_returns_original(self, tmp_path: Path) -> None:
+        from wade.git.repo import GitError
+
+        with patch(
+            "wade.git.repo.get_main_worktree_path",
+            side_effect=GitError("git failure"),
+        ):
+            result = _canonical_project_root(tmp_path)
+            assert result == tmp_path
+
+    def test_swallows_os_error_and_returns_original(self, tmp_path: Path) -> None:
+        with patch(
+            "wade.git.repo.get_main_worktree_path",
+            side_effect=OSError("path not found"),
+        ):
+            result = _canonical_project_root(tmp_path)
+            assert result == tmp_path
+
+    def test_unexpected_exception_propagates(self, tmp_path: Path) -> None:
+        with (
+            patch(
+                "wade.git.repo.get_main_worktree_path",
+                side_effect=RuntimeError("unexpected"),
+            ),
+            pytest.raises(RuntimeError, match="unexpected"),
+        ):
+            _canonical_project_root(tmp_path)
+
+    def test_returns_original_when_main_equals_project_root(self, tmp_path: Path) -> None:
+        with patch(
+            "wade.git.repo.get_main_worktree_path",
+            return_value=tmp_path,
+        ):
+            result = _canonical_project_root(tmp_path)
+            assert result == tmp_path
+
+
+class TestResolveCanonicalKnowledgePath:
+    def test_resolves_from_main_worktree_when_in_linked_worktree(self, tmp_path: Path) -> None:
+        main_path = tmp_path / "main"
+        main_path.mkdir()
+        worktree_path = tmp_path / "worktree"
+        worktree_path.mkdir()
+        config = KnowledgeConfig(enabled=True, path="KNOWLEDGE.md")
+        with patch(
+            "wade.git.repo.get_main_worktree_path",
+            return_value=main_path,
+        ):
+            result = resolve_canonical_knowledge_path(worktree_path, config)
+            assert result == (main_path / "KNOWLEDGE.md").resolve()
+
+    def test_resolves_from_project_root_when_not_in_worktree(self, tmp_path: Path) -> None:
+        config = KnowledgeConfig(enabled=True, path="KNOWLEDGE.md")
+        with patch(
+            "wade.git.repo.get_main_worktree_path",
+            return_value=None,
+        ):
+            result = resolve_canonical_knowledge_path(tmp_path, config)
+            assert result == (tmp_path / "KNOWLEDGE.md").resolve()
+
+
+class TestAppendKnowledgeWorktreeRedirect:
+    def test_writes_to_main_worktree_when_called_from_linked_worktree(self, tmp_path: Path) -> None:
+        main_root = tmp_path / "main"
+        main_root.mkdir()
+        worktree_root = tmp_path / "worktree"
+        worktree_root.mkdir()
+        config = KnowledgeConfig(enabled=True, path="KNOWLEDGE.md")
+
+        with patch(
+            "wade.git.repo.get_main_worktree_path",
+            return_value=main_root,
+        ):
+            result = append_knowledge(
+                project_root=worktree_root,
+                config=config,
+                content="Learned from worktree.",
+                session_type="implementation",
+            )
+
+        # Entry must be in the main repo, not the worktree
+        assert result.path == (main_root / "KNOWLEDGE.md").resolve()
+        assert not (worktree_root / "KNOWLEDGE.md").exists()
+        text = (main_root / "KNOWLEDGE.md").read_text(encoding="utf-8")
+        assert "Learned from worktree." in text
