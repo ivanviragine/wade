@@ -437,17 +437,19 @@ class TestGetAnnotatedKnowledge:
     def test_returns_none_when_file_missing(
         self, project_root: Path, config: KnowledgeConfig
     ) -> None:
-        assert get_annotated_knowledge(project_root, config) is None
+        result = get_annotated_knowledge(project_root, config)
+        assert result.content is None
+        assert result.entries_count == 0
 
     def test_annotates_id_backed_entries_with_zero_scores(
         self, project_root: Path, config: KnowledgeConfig
     ) -> None:
         self._make_knowledge_file(project_root)
         result = get_annotated_knowledge(project_root, config)
-        assert result is not None
-        assert result.count("[+0/-0]") == 2
-        assert "Useful content." in result
-        assert "Outdated content." in result
+        assert result.content is not None
+        assert result.content.count("[+0/-0]") == 2
+        assert "Useful content." in result.content
+        assert "Outdated content." in result.content
 
     def test_annotates_heading_with_scores(
         self, project_root: Path, config: KnowledgeConfig
@@ -460,9 +462,9 @@ class TestGetAnnotatedKnowledge:
         record_rating(ratings_path, "f5e6d7c8", "down")
 
         result = get_annotated_knowledge(project_root, config)
-        assert result is not None
-        assert "[+3/-0]" in result
-        assert "[+0/-1]" in result
+        assert result.content is not None
+        assert "[+3/-0]" in result.content
+        assert "[+0/-1]" in result.content
 
     def test_min_score_filters_entries(self, project_root: Path, config: KnowledgeConfig) -> None:
         self._make_knowledge_file(project_root)
@@ -472,9 +474,9 @@ class TestGetAnnotatedKnowledge:
         record_rating(ratings_path, "f5e6d7c8", "down")
 
         result = get_annotated_knowledge(project_root, config, min_score=0)
-        assert result is not None
-        assert "Useful content." in result
-        assert "Outdated content." not in result
+        assert result.content is not None
+        assert "Useful content." in result.content
+        assert "Outdated content." not in result.content
 
     def test_min_score_zero_includes_unrated(
         self, project_root: Path, config: KnowledgeConfig
@@ -482,24 +484,24 @@ class TestGetAnnotatedKnowledge:
         self._make_knowledge_file(project_root)
         # No ratings at all — implicit score 0
         result = get_annotated_knowledge(project_root, config, min_score=0)
-        assert result is not None
-        assert "Useful content." in result
-        assert "Outdated content." in result
+        assert result.content is not None
+        assert "Useful content." in result.content
+        assert "Outdated content." in result.content
 
     def test_min_score_one_excludes_unrated(
         self, project_root: Path, config: KnowledgeConfig
     ) -> None:
         self._make_knowledge_file(project_root)
         result = get_annotated_knowledge(project_root, config, min_score=1)
-        assert result is not None
-        assert "Useful content." not in result
-        assert "Outdated content." not in result
+        assert result.content is not None
+        assert "Useful content." not in result.content
+        assert "Outdated content." not in result.content
 
     def test_preserves_header(self, project_root: Path, config: KnowledgeConfig) -> None:
         self._make_knowledge_file(project_root)
         result = get_annotated_knowledge(project_root, config)
-        assert result is not None
-        assert "# Project Knowledge" in result
+        assert result.content is not None
+        assert "# Project Knowledge" in result.content
 
     def test_no_annotation_for_id_less_entries(
         self, project_root: Path, config: KnowledgeConfig
@@ -507,9 +509,9 @@ class TestGetAnnotatedKnowledge:
         content = KNOWLEDGE_TEMPLATE + "\n## 2026-03-24 | plan\n\nOld entry.\n\n---\n"
         (project_root / "KNOWLEDGE.md").write_text(content, encoding="utf-8")
         result = get_annotated_knowledge(project_root, config)
-        assert result is not None
-        assert "Old entry." in result
-        assert "[+" not in result
+        assert result.content is not None
+        assert "Old entry." in result.content
+        assert "[+" not in result.content
 
 
 class TestBackwardCompatibility:
@@ -523,9 +525,9 @@ class TestBackwardCompatibility:
         )
         (project_root / "KNOWLEDGE.md").write_text(content, encoding="utf-8")
         result = get_annotated_knowledge(project_root, config)
-        assert result is not None
-        assert "Old content without ID." in result
-        assert "New content with ID." in result
+        assert result.content is not None
+        assert "Old content without ID." in result.content
+        assert "New content with ID." in result.content
 
     def test_old_entries_cannot_be_rated(self, project_root: Path, config: KnowledgeConfig) -> None:
         content = KNOWLEDGE_TEMPLATE + "\n## 2026-03-20 | plan\n\nOld content.\n\n---\n"
@@ -989,17 +991,17 @@ class TestGetAnnotatedKnowledgeSearch:
         result = get_annotated_knowledge(
             project_root, config, search_query="worktree", no_filter=True
         )
-        assert result is not None
-        assert "worktree" in result
-        assert "Docker" not in result
+        assert result.content is not None
+        assert "worktree" in result.content
+        assert "Docker" not in result.content
 
     def test_tag_filters_entries(self, project_root: Path, config: KnowledgeConfig) -> None:
         append_knowledge(project_root, config, "Git stuff", "plan", tags=["git"])
         append_knowledge(project_root, config, "Docker stuff", "plan", tags=["docker"])
         result = get_annotated_knowledge(project_root, config, filter_tags=["git"], no_filter=True)
-        assert result is not None
-        assert "Git stuff" in result
-        assert "Docker stuff" not in result
+        assert result.content is not None
+        assert "Git stuff" in result.content
+        assert "Docker stuff" not in result.content
 
     def test_search_and_tag_or_semantics(self, project_root: Path, config: KnowledgeConfig) -> None:
         append_knowledge(project_root, config, "Git worktree tips", "plan", tags=["git"])
@@ -1009,9 +1011,44 @@ class TestGetAnnotatedKnowledgeSearch:
             project_root, config, search_query="worktree", filter_tags=["testing"], no_filter=True
         )
         assert result is not None
-        assert "worktree tips" in result  # matches search
-        assert "Testing patterns" in result  # matches tag
-        assert "Unrelated stuff" not in result  # matches neither
+        assert "worktree tips" in result.content  # matches search
+        assert "Testing patterns" in result.content  # matches tag
+        assert "Unrelated stuff" not in result.content  # matches neither
+
+    def test_search_on_empty_knowledge_file(
+        self, project_root: Path, config: KnowledgeConfig
+    ) -> None:
+        # Knowledge file with only template header (no entries)
+        ensure_knowledge_file(project_root, config)
+        result = get_annotated_knowledge(project_root, config, search_query="foo", no_filter=True)
+        assert result.content is not None
+        assert result.entries_count == 0
+        # Should return template header, but parse_entries should find no entries
+        entries = parse_entries(result.content)
+        assert len(entries) == 0
+
+    def test_tag_filter_on_empty_knowledge_file(
+        self, project_root: Path, config: KnowledgeConfig
+    ) -> None:
+        # Knowledge file with only template header (no entries)
+        ensure_knowledge_file(project_root, config)
+        result = get_annotated_knowledge(project_root, config, filter_tags=["foo"], no_filter=True)
+        assert result.content is not None
+        assert result.entries_count == 0
+        # Should return template header, but parse_entries should find no entries
+        entries = parse_entries(result.content)
+        assert len(entries) == 0
+
+    def test_no_filter_on_empty_knowledge_file(
+        self, project_root: Path, config: KnowledgeConfig
+    ) -> None:
+        # Knowledge file with only template header (no entries)
+        ensure_knowledge_file(project_root, config)
+        result = get_annotated_knowledge(project_root, config)
+        assert result.content is not None
+        assert result.entries_count == 0
+        # Should return the exact template since no filters were applied
+        assert result.content == KNOWLEDGE_TEMPLATE
 
     def test_no_filter_shows_everything(self, project_root: Path, config: KnowledgeConfig) -> None:
         r = append_knowledge(project_root, config, "content", "plan")
@@ -1021,8 +1058,8 @@ class TestGetAnnotatedKnowledgeSearch:
         for _ in range(10):
             record_rating(ratings_path, r.entry_id, "down")
         result = get_annotated_knowledge(project_root, config, no_filter=True)
-        assert result is not None
-        assert "content" in result
+        assert result.content is not None
+        assert "content" in result.content
 
 
 class TestGetAnnotatedKnowledgeAutoFilter:
@@ -1051,9 +1088,9 @@ class TestGetAnnotatedKnowledgeAutoFilter:
         # With 11 qualifying entries, p10 = sorted[1] = 5
         # Bad entry (net=-5) < 5 → filtered out
         result = get_annotated_knowledge(project_root, config)
-        assert result is not None
-        assert "Good entry 0" in result
-        assert "Bad entry" not in result
+        assert result.content is not None
+        assert "Good entry 0" in result.content
+        assert "Bad entry" not in result.content
 
     def test_auto_filter_passes_low_vote_entries(
         self, project_root: Path, config: KnowledgeConfig
@@ -1076,8 +1113,8 @@ class TestGetAnnotatedKnowledgeAutoFilter:
         # r4 has no votes — should always pass through
 
         result = get_annotated_knowledge(project_root, config)
-        assert result is not None
-        assert "New unrated entry" in result
+        assert result.content is not None
+        assert "New unrated entry" in result.content
 
     def test_min_score_overrides_auto_filter(
         self, project_root: Path, config: KnowledgeConfig
@@ -1095,9 +1132,9 @@ class TestGetAnnotatedKnowledgeAutoFilter:
 
         # min_score=5 is a hard cutoff
         result = get_annotated_knowledge(project_root, config, min_score=5)
-        assert result is not None
-        assert "High entry" in result
-        assert "Low entry" not in result
+        assert result.content is not None
+        assert "High entry" in result.content
+        assert "Low entry" not in result.content
 
 
 def _make_parsed_entry(entry_id: str | None, tags: list[str] | None = None) -> ParsedEntry:

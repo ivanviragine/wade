@@ -129,7 +129,7 @@ def get(
 
     project_root = Path(config.project_root) if config.project_root else Path.cwd()
     try:
-        content = get_annotated_knowledge(
+        result = get_annotated_knowledge(
             project_root,
             config.knowledge,
             min_score=min_score,
@@ -140,10 +140,15 @@ def get(
     except (ValueError, OSError) as exc:
         console.error(str(exc))
         raise typer.Exit(1) from exc
-    if content is None:
+    if result.content is None:
         print("No knowledge file found.", file=sys.stderr)
         raise typer.Exit(0)
-    console.raw(content)
+
+    # Check if search or tag filters returned no results
+    if (search or tag) and result.entries_count == 0:
+        print("No entries matched your search.", file=sys.stderr)
+
+    console.raw(result.content)
 
 
 @knowledge_app.command()

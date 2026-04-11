@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.19.5] — 2026-04-11
+
+### Bug Fixes
+
+- knowledge get --search silently ignores filters when knowledge file has no entries (#271) (8993657)
+
 ## [v0.19.4] — 2026-04-10
 
 ### Refactoring
