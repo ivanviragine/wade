@@ -996,7 +996,7 @@ class TestGetAnnotatedKnowledgeSearch:
         append_knowledge(project_root, config, "Git stuff", "plan", tags=["git"])
         append_knowledge(project_root, config, "Docker stuff", "plan", tags=["docker"])
         result = get_annotated_knowledge(project_root, config, filter_tags=["git"], no_filter=True)
-        assert result is not None
+        assert result.content is not None
         assert "Git stuff" in result.content
         assert "Docker stuff" not in result.content
 
@@ -1019,6 +1019,7 @@ class TestGetAnnotatedKnowledgeSearch:
         ensure_knowledge_file(project_root, config)
         result = get_annotated_knowledge(project_root, config, search_query="foo", no_filter=True)
         assert result.content is not None
+        assert result.entries_count == 0
         # Should return template header, but parse_entries should find no entries
         entries = parse_entries(result.content)
         assert len(entries) == 0
@@ -1030,6 +1031,7 @@ class TestGetAnnotatedKnowledgeSearch:
         ensure_knowledge_file(project_root, config)
         result = get_annotated_knowledge(project_root, config, filter_tags=["foo"], no_filter=True)
         assert result.content is not None
+        assert result.entries_count == 0
         # Should return template header, but parse_entries should find no entries
         entries = parse_entries(result.content)
         assert len(entries) == 0
@@ -1040,7 +1042,8 @@ class TestGetAnnotatedKnowledgeSearch:
         # Knowledge file with only template header (no entries)
         ensure_knowledge_file(project_root, config)
         result = get_annotated_knowledge(project_root, config)
-        assert result is not None
+        assert result.content is not None
+        assert result.entries_count == 0
         # Should return the exact template since no filters were applied
         assert result.content == KNOWLEDGE_TEMPLATE
 
