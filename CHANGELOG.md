@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.19.7] — 2026-04-11
+
+### Bug Fixes
+
+- prevent success messages from wrapping in narrow CI terminals (9870e95)
+
 ## [v0.19.6] — 2026-04-11
 
 ### Bug Fixes
