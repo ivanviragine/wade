@@ -1118,9 +1118,6 @@ def _make_parsed_entry(entry_id: str | None, tags: list[str] | None = None) -> P
 
 class TestCanonicalProjectRoot:
     def test_returns_same_path_when_not_a_worktree(self, tmp_path: Path) -> None:
-        with patch("wade.services.knowledge_service._canonical_project_root") as _:
-            # Use the actual function directly
-            pass
         with patch(
             "wade.git.repo.get_main_worktree_path",
             return_value=None,
