@@ -99,7 +99,9 @@ class Console:
 
     def success(self, message: str) -> None:
         """Green checkmark line to stdout."""
-        self.out.print(f"  [success]{self.OK}[/] {message}", no_wrap=True)
+        self.out.print(
+            f"  [success]{self.OK}[/] {message}", no_wrap=True, overflow="ignore", crop=False
+        )
 
     def error(self, message: str) -> None:
         """Red error line to stderr."""
