@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.19.8] — 2026-04-11
+
+### Tests
+
+- pin unit test console width to 80 to catch CI wrapping regressions (8e9b1de)
+
 ## [v0.19.7] — 2026-04-11
 
 ### Bug Fixes
