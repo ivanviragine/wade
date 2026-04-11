@@ -428,7 +428,9 @@ class TestBuildGraphFromIssues:
             ),
         ]
 
-        with patch("wade.services.implementation_service.get_provider", return_value=provider):
+        with patch(
+            "wade.services.implementation_service.batch.get_provider", return_value=provider
+        ):
             config = ProjectConfig()
             graph = _build_graph_from_issues(["1", "2"], config)
             assert graph is not None
@@ -443,7 +445,9 @@ class TestBuildGraphFromIssues:
             Task(id="2", title="B", body="Also no deps"),
         ]
 
-        with patch("wade.services.implementation_service.get_provider", return_value=provider):
+        with patch(
+            "wade.services.implementation_service.batch.get_provider", return_value=provider
+        ):
             config = ProjectConfig()
             graph = _build_graph_from_issues(["1", "2"], config)
             assert graph is None
@@ -628,22 +632,27 @@ class TestImplementationStart:
 
         with (
             patch(
-                "wade.services.implementation_service.load_config", return_value=self._make_config()
+                "wade.services.implementation_service.core.load_config",
+                return_value=self._make_config(),
             ),
-            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
+            patch(
+                "wade.services.implementation_service.core.get_provider", return_value=mock_provider
+            ),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
             patch("wade.git.worktree.list_worktrees", return_value=[]),
             patch("wade.git.worktree.create_worktree") as mock_create,
-            patch("wade.services.implementation_service.write_plan_md"),
-            patch("wade.services.implementation_service.bootstrap_worktree"),
+            patch("wade.services.implementation_service.core.write_plan_md"),
+            patch("wade.services.implementation_service.core.bootstrap_worktree"),
             patch("wade.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
-            patch("wade.services.implementation_service._detect_ai_cli_env", return_value=None),
+            patch(
+                "wade.services.implementation_service.core._detect_ai_cli_env", return_value=None
+            ),
             patch("wade.git.pr.get_pr_for_branch", return_value=None),
             patch(
-                "wade.services.implementation_service.bootstrap_draft_pr",
+                "wade.services.implementation_service.core.bootstrap_draft_pr",
                 return_value={"number": 1, "url": "http://test"},
             ),
-            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
         ):
             mock_prompts.is_tty.return_value = False
             result = start("42", project_root=tmp_path)
@@ -662,25 +671,30 @@ class TestImplementationStart:
 
         with (
             patch(
-                "wade.services.implementation_service.load_config", return_value=self._make_config()
+                "wade.services.implementation_service.core.load_config",
+                return_value=self._make_config(),
             ),
-            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
+            patch(
+                "wade.services.implementation_service.core.get_provider", return_value=mock_provider
+            ),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
             patch(
                 "wade.git.worktree.list_worktrees",
                 return_value=[{"path": str(existing_wt), "branch": branch_name}],
             ),
             patch("wade.git.worktree.create_worktree") as mock_create,
-            patch("wade.services.implementation_service.write_plan_md"),
-            patch("wade.services.implementation_service.bootstrap_worktree"),
+            patch("wade.services.implementation_service.core.write_plan_md"),
+            patch("wade.services.implementation_service.core.bootstrap_worktree"),
             patch("wade.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
-            patch("wade.services.implementation_service._detect_ai_cli_env", return_value=None),
+            patch(
+                "wade.services.implementation_service.core._detect_ai_cli_env", return_value=None
+            ),
             patch("wade.git.pr.get_pr_for_branch", return_value=None),
             patch(
-                "wade.services.implementation_service.bootstrap_draft_pr",
+                "wade.services.implementation_service.core.bootstrap_draft_pr",
                 return_value={"number": 1, "url": "http://test"},
             ),
-            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
         ):
             mock_prompts.is_tty.return_value = False
             result = start("42", project_root=tmp_path)
@@ -695,9 +709,12 @@ class TestImplementationStart:
 
         with (
             patch(
-                "wade.services.implementation_service.load_config", return_value=self._make_config()
+                "wade.services.implementation_service.core.load_config",
+                return_value=self._make_config(),
             ),
-            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
+            patch(
+                "wade.services.implementation_service.core.get_provider", return_value=mock_provider
+            ),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
             patch("wade.git.worktree.list_worktrees", return_value=[]),
             patch(
@@ -706,10 +723,10 @@ class TestImplementationStart:
             ),
             patch("wade.git.pr.get_pr_for_branch", return_value=None),
             patch(
-                "wade.services.implementation_service.bootstrap_draft_pr",
+                "wade.services.implementation_service.core.bootstrap_draft_pr",
                 return_value={"number": 1, "url": "http://test"},
             ),
-            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
         ):
             mock_prompts.is_tty.return_value = False
             result = start("42", project_root=tmp_path)
@@ -724,22 +741,27 @@ class TestImplementationStart:
 
         with (
             patch(
-                "wade.services.implementation_service.load_config", return_value=self._make_config()
+                "wade.services.implementation_service.core.load_config",
+                return_value=self._make_config(),
             ),
-            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
+            patch(
+                "wade.services.implementation_service.core.get_provider", return_value=mock_provider
+            ),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
             patch("wade.git.worktree.list_worktrees", return_value=[]),
             patch("wade.git.worktree.create_worktree"),
-            patch("wade.services.implementation_service.write_plan_md"),
-            patch("wade.services.implementation_service.bootstrap_worktree"),
-            patch("wade.services.implementation_service._detect_ai_cli_env", return_value=None),
+            patch("wade.services.implementation_service.core.write_plan_md"),
+            patch("wade.services.implementation_service.core.bootstrap_worktree"),
+            patch(
+                "wade.services.implementation_service.core._detect_ai_cli_env", return_value=None
+            ),
             patch("wade.ai_tools.base.AbstractAITool.get") as mock_get,
             patch("wade.git.pr.get_pr_for_branch", return_value=None),
             patch(
-                "wade.services.implementation_service.bootstrap_draft_pr",
+                "wade.services.implementation_service.core.bootstrap_draft_pr",
                 return_value={"number": 1, "url": "http://test"},
             ),
-            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
         ):
             mock_prompts.is_tty.return_value = False
             result = start("42", project_root=tmp_path, cd_only=True)
@@ -759,25 +781,28 @@ class TestImplementationStart:
 
         with (
             patch(
-                "wade.services.implementation_service.load_config", return_value=self._make_config()
+                "wade.services.implementation_service.core.load_config",
+                return_value=self._make_config(),
             ),
-            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
+            patch(
+                "wade.services.implementation_service.core.get_provider", return_value=mock_provider
+            ),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
             patch("wade.git.worktree.list_worktrees", return_value=[]),
             patch("wade.git.worktree.create_worktree"),
-            patch("wade.services.implementation_service.write_plan_md"),
-            patch("wade.services.implementation_service.bootstrap_worktree"),
+            patch("wade.services.implementation_service.core.write_plan_md"),
+            patch("wade.services.implementation_service.core.bootstrap_worktree"),
             patch(
-                "wade.services.implementation_service._detect_ai_cli_env",
+                "wade.services.implementation_service.core._detect_ai_cli_env",
                 return_value="CLAUDE_CODE",
             ),
             patch("wade.ai_tools.base.AbstractAITool.get") as mock_get,
             patch("wade.git.pr.get_pr_for_branch", return_value=None),
             patch(
-                "wade.services.implementation_service.bootstrap_draft_pr",
+                "wade.services.implementation_service.core.bootstrap_draft_pr",
                 return_value={"number": 1, "url": "http://test"},
             ),
-            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
         ):
             mock_prompts.is_tty.return_value = False
             result = start("42", project_root=tmp_path)
@@ -795,13 +820,16 @@ class TestImplementationStart:
 
         with (
             patch(
-                "wade.services.implementation_service.load_config", return_value=self._make_config()
+                "wade.services.implementation_service.core.load_config",
+                return_value=self._make_config(),
             ),
-            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
+            patch(
+                "wade.services.implementation_service.core.get_provider", return_value=mock_provider
+            ),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
             patch("wade.git.pr.get_pr_for_branch", return_value=None),
-            patch("wade.services.implementation_service.prompts") as mock_prompts,
-            patch("wade.services.implementation_service.confirm_ai_selection") as mock_confirm,
+            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.core.confirm_ai_selection") as mock_confirm,
             patch("wade.services.plan_service.plan", return_value=True) as mock_plan,
         ):
             mock_prompts.is_tty.return_value = True
@@ -821,26 +849,31 @@ class TestImplementationStart:
 
         with (
             patch(
-                "wade.services.implementation_service.load_config", return_value=self._make_config()
+                "wade.services.implementation_service.core.load_config",
+                return_value=self._make_config(),
             ),
-            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
+            patch(
+                "wade.services.implementation_service.core.get_provider", return_value=mock_provider
+            ),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
             patch("wade.git.worktree.list_worktrees", return_value=[]),
             patch("wade.git.worktree.create_worktree"),
-            patch("wade.services.implementation_service.write_plan_md"),
-            patch("wade.services.implementation_service.bootstrap_worktree"),
-            patch("wade.services.implementation_service._detect_ai_cli_env", return_value=None),
+            patch("wade.services.implementation_service.core.write_plan_md"),
+            patch("wade.services.implementation_service.core.bootstrap_worktree"),
+            patch(
+                "wade.services.implementation_service.core._detect_ai_cli_env", return_value=None
+            ),
             patch("wade.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
             patch("wade.git.pr.get_pr_for_branch", return_value=None),
             patch(
-                "wade.services.implementation_service.bootstrap_draft_pr",
+                "wade.services.implementation_service.core.bootstrap_draft_pr",
                 return_value={"number": 1, "url": "http://test"},
             ) as mock_bootstrap,
             patch(
-                "wade.services.implementation_service.confirm_ai_selection",
+                "wade.services.implementation_service.core.confirm_ai_selection",
                 return_value=("claude", "claude-sonnet-4-6", None, False),
             ) as mock_confirm,
-            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
         ):
             call_order: list[str] = []
 
@@ -878,12 +911,12 @@ class TestImplementationBatch:
         from contextlib import ExitStack
 
         defaults = {
-            "wade.services.implementation_service.load_config": ProjectConfig(),
+            "wade.services.implementation_service.core.load_config": ProjectConfig(),
             "wade.git.repo.get_repo_root": tmp_path,
-            "wade.services.implementation_service._build_graph_from_issues": None,
-            "wade.services.implementation_service.launch_batch_in_terminals": True,
-            "wade.services.implementation_service._find_tracking_issue": None,
-            "wade.services.implementation_service.poll_batch_completion": None,
+            "wade.services.implementation_service.batch._build_graph_from_issues": None,
+            "wade.services.implementation_service.batch.launch_batch_in_terminals": True,
+            "wade.services.implementation_service.batch._find_tracking_issue": None,
+            "wade.services.implementation_service.batch.poll_batch_completion": None,
         }
         defaults.update(overrides)
         stack = ExitStack()
@@ -912,7 +945,7 @@ class TestImplementationBatch:
 
         stack, mocks = self._batch_patches(
             tmp_path,
-            **{"wade.services.implementation_service._build_graph_from_issues": mock_graph},
+            **{"wade.services.implementation_service.batch._build_graph_from_issues": mock_graph},
         )
         with stack:
             result = batch(["1", "2", "3"], project_root=tmp_path)
@@ -926,7 +959,7 @@ class TestImplementationBatch:
         """Terminal launch failure is non-fatal — batch continues to polling."""
         stack, mocks = self._batch_patches(
             tmp_path,
-            **{"wade.services.implementation_service.launch_batch_in_terminals": False},
+            **{"wade.services.implementation_service.batch.launch_batch_in_terminals": False},
         )
         with stack:
             result = batch(["1", "2"], project_root=tmp_path)
@@ -990,7 +1023,7 @@ class TestImplementationBatch:
 
         stack, mocks = self._batch_patches(
             tmp_path,
-            **{"wade.services.implementation_service._build_graph_from_issues": mock_graph},
+            **{"wade.services.implementation_service.batch._build_graph_from_issues": mock_graph},
         )
         with stack:
             result = batch(["1", "2"], project_root=tmp_path)
@@ -1038,12 +1071,16 @@ class TestClassifyIssueStatus:
 
     def test_closed_pr_without_merge_is_not_done(self, tmp_path: Path) -> None:
         pr_by_issue = {"1": _make_pr(state="CLOSED")}
-        with patch("wade.services.implementation_service._is_merged_to_main", return_value=False):
+        with patch(
+            "wade.services.implementation_service.batch._is_merged_to_main", return_value=False
+        ):
             result = _classify_issue_status("1", pr_by_issue, set(), "main", tmp_path)
         assert result == _BATCH_STATUS_NOT_STARTED
 
     def test_no_pr_no_branch_is_not_started(self, tmp_path: Path) -> None:
-        with patch("wade.services.implementation_service._is_merged_to_main", return_value=False):
+        with patch(
+            "wade.services.implementation_service.batch._is_merged_to_main", return_value=False
+        ):
             result = _classify_issue_status("1", {}, set(), "main", tmp_path)
         assert result == _BATCH_STATUS_NOT_STARTED
 
@@ -1054,7 +1091,9 @@ class TestClassifyIssueStatus:
         assert result == _BATCH_STATUS_IN_PROGRESS
 
     def test_no_pr_no_branch_direct_merge_is_done(self, tmp_path: Path) -> None:
-        with patch("wade.services.implementation_service._is_merged_to_main", return_value=True):
+        with patch(
+            "wade.services.implementation_service.batch._is_merged_to_main", return_value=True
+        ):
             result = _classify_issue_status("1", {}, set(), "main", tmp_path)
         assert result == _BATCH_STATUS_DONE
 
@@ -1090,7 +1129,10 @@ class TestFindTrackingIssue:
         mock_provider.find_parent_issue.side_effect = [None, "100", None]
 
         with (
-            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
+            patch(
+                "wade.services.implementation_service.batch.get_provider",
+                return_value=mock_provider,
+            ),
         ):
             result = _find_tracking_issue(["1", "2", "3"], ProjectConfig())
 
@@ -1101,7 +1143,9 @@ class TestFindTrackingIssue:
         mock_provider = MagicMock()
         mock_provider.find_parent_issue.return_value = None
 
-        with patch("wade.services.implementation_service.get_provider", return_value=mock_provider):
+        with patch(
+            "wade.services.implementation_service.batch.get_provider", return_value=mock_provider
+        ):
             result = _find_tracking_issue(["1", "2"], ProjectConfig())
 
         assert result is None
@@ -1117,9 +1161,14 @@ class TestPollBatchCompletion:
             "2": _make_pr(number=2, url="http://pr/2"),
         }
         with (
-            patch("wade.services.implementation_service._build_pr_index", return_value=pr_index),
-            patch("wade.services.implementation_service._get_remote_branches", return_value=set()),
-            patch("wade.services.implementation_service.git_sync.fetch_origin"),
+            patch(
+                "wade.services.implementation_service.batch._build_pr_index", return_value=pr_index
+            ),
+            patch(
+                "wade.services.implementation_service.batch._get_remote_branches",
+                return_value=set(),
+            ),
+            patch("wade.services.implementation_service.batch.git_sync.fetch_origin"),
         ):
             poll_batch_completion(
                 issue_numbers=["1", "2"],
@@ -1136,9 +1185,14 @@ class TestPollBatchCompletion:
             "1": _make_pr(number=1, url="http://pr/1"),
         }
         with (
-            patch("wade.services.implementation_service._build_pr_index", return_value=pr_index),
-            patch("wade.services.implementation_service._get_remote_branches", return_value=set()),
-            patch("wade.services.implementation_service.git_sync.fetch_origin"),
+            patch(
+                "wade.services.implementation_service.batch._build_pr_index", return_value=pr_index
+            ),
+            patch(
+                "wade.services.implementation_service.batch._get_remote_branches",
+                return_value=set(),
+            ),
+            patch("wade.services.implementation_service.batch.git_sync.fetch_origin"),
             patch("wade.services.batch_review_service.review_batch") as mock_review,
         ):
             poll_batch_completion(
@@ -1194,7 +1248,7 @@ class TestPullMainAfterMerge:
         ok_result = MagicMock(returncode=0, stderr="")
 
         with patch(
-            "wade.services.implementation_service.subprocess.run",
+            "wade.services.implementation_service.core.git_repo.pull_ff_only",
             side_effect=[fail_result, ok_result],
         ):
             _pull_main_after_merge(tmp_path)
@@ -1215,14 +1269,14 @@ class TestPullMainAfterMerge:
 
         with (
             patch(
-                "wade.services.implementation_service.git_repo.pull_ff_only",
+                "wade.services.implementation_service.core.git_repo.pull_ff_only",
                 side_effect=[fail_result, pull_ok],
             ),
             patch(
-                "wade.services.implementation_service.git_repo.stash", return_value=stash_ok
+                "wade.services.implementation_service.core.git_repo.stash", return_value=stash_ok
             ) as mock_stash,
             patch(
-                "wade.services.implementation_service.git_repo.stash_pop", return_value=pop_ok
+                "wade.services.implementation_service.core.git_repo.stash_pop", return_value=pop_ok
             ) as mock_pop,
         ):
             _pull_main_after_merge(tmp_path)
@@ -1239,12 +1293,14 @@ class TestPullMainAfterMerge:
 
         with (
             patch(
-                "wade.services.implementation_service.git_repo.pull_ff_only",
+                "wade.services.implementation_service.core.git_repo.pull_ff_only",
                 return_value=fail_result,
             ),
-            patch("wade.services.implementation_service.git_repo.stash", return_value=stash_fail),
-            patch("wade.services.implementation_service.git_repo.stash_pop") as mock_pop,
-            patch("wade.services.implementation_service.console") as mock_console,
+            patch(
+                "wade.services.implementation_service.core.git_repo.stash", return_value=stash_fail
+            ),
+            patch("wade.services.implementation_service.core.git_repo.stash_pop") as mock_pop,
+            patch("wade.services.implementation_service.core.console") as mock_console,
         ):
             _pull_main_after_merge(tmp_path)
 
@@ -1261,14 +1317,16 @@ class TestPullMainAfterMerge:
 
         with (
             patch(
-                "wade.services.implementation_service.git_repo.pull_ff_only",
+                "wade.services.implementation_service.core.git_repo.pull_ff_only",
                 side_effect=[fail_result, pull_fail],
             ),
-            patch("wade.services.implementation_service.git_repo.stash", return_value=stash_ok),
             patch(
-                "wade.services.implementation_service.git_repo.stash_pop", return_value=pop_ok
+                "wade.services.implementation_service.core.git_repo.stash", return_value=stash_ok
+            ),
+            patch(
+                "wade.services.implementation_service.core.git_repo.stash_pop", return_value=pop_ok
             ) as mock_pop,
-            patch("wade.services.implementation_service.console") as mock_console,
+            patch("wade.services.implementation_service.core.console") as mock_console,
         ):
             _pull_main_after_merge(tmp_path)
 
@@ -1291,18 +1349,18 @@ class TestCapturePostSessionUsage:
 
         with (
             patch(
-                "wade.services.implementation_service.git_pr.get_pr_for_branch",
+                "wade.services.implementation_service.core.git_pr.get_pr_for_branch",
                 return_value={"number": 7},
             ),
             patch(
-                "wade.services.implementation_service.git_pr.get_pr_body",
+                "wade.services.implementation_service.core.git_pr.get_pr_body",
                 return_value="PR body\n",
             ),
             patch(
-                "wade.services.implementation_service.git_pr.update_pr_body",
+                "wade.services.implementation_service.core.git_pr.update_pr_body",
                 return_value=True,
             ) as mock_update_pr,
-            patch("wade.services.implementation_service.console") as mock_console,
+            patch("wade.services.implementation_service.core.console") as mock_console,
         ):
             model = _capture_post_session_usage(
                 transcript_path=transcript,
@@ -1351,18 +1409,18 @@ class TestCapturePostSessionUsage:
 
         with (
             patch(
-                "wade.services.implementation_service.git_pr.get_pr_for_branch",
+                "wade.services.implementation_service.core.git_pr.get_pr_for_branch",
                 return_value={"number": 7},
             ),
             patch(
-                "wade.services.implementation_service.git_pr.get_pr_body",
+                "wade.services.implementation_service.core.git_pr.get_pr_body",
                 return_value="PR body\n",
             ),
             patch(
-                "wade.services.implementation_service.git_pr.update_pr_body",
+                "wade.services.implementation_service.core.git_pr.update_pr_body",
                 return_value=True,
             ) as mock_update_pr,
-            patch("wade.services.implementation_service.console") as mock_console,
+            patch("wade.services.implementation_service.core.console") as mock_console,
         ):
             model = _capture_post_session_usage(
                 transcript_path=transcript,
@@ -1401,18 +1459,18 @@ class TestCapturePostSessionUsage:
 
         with (
             patch(
-                "wade.services.implementation_service.git_pr.get_pr_for_branch",
+                "wade.services.implementation_service.core.git_pr.get_pr_for_branch",
                 return_value={"number": 7},
             ),
             patch(
-                "wade.services.implementation_service.git_pr.get_pr_body",
+                "wade.services.implementation_service.core.git_pr.get_pr_body",
                 return_value="PR body\n",
             ),
             patch(
-                "wade.services.implementation_service.git_pr.update_pr_body",
+                "wade.services.implementation_service.core.git_pr.update_pr_body",
                 return_value=True,
             ) as mock_update_pr,
-            patch("wade.services.implementation_service.console") as mock_console,
+            patch("wade.services.implementation_service.core.console") as mock_console,
         ):
             model = _capture_post_session_usage(
                 transcript_path=transcript,
@@ -1465,13 +1523,17 @@ class TestStartTrackingDetection:
 
         with (
             patch(
-                "wade.services.implementation_service.load_config",
+                "wade.services.implementation_service.core.load_config",
                 return_value=self._make_config(),
             ),
-            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
+            patch(
+                "wade.services.implementation_service.core.get_provider", return_value=mock_provider
+            ),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
-            patch("wade.services.implementation_service.prompts") as mock_prompts,
-            patch("wade.services.implementation_service.batch") as mock_batch,
+            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
+            patch(
+                "wade.services.implementation_service.batch.check_tracking_issue_and_batch"
+            ) as mock_batch,
         ):
             mock_prompts.confirm.return_value = True
             mock_batch.return_value = True
@@ -1480,7 +1542,7 @@ class TestStartTrackingDetection:
         assert result.success is True
         mock_batch.assert_called_once()
         call_kwargs = mock_batch.call_args
-        assert call_kwargs.kwargs["issue_numbers"] == ["167", "169"]
+        assert call_kwargs.args[0].id == "173"  # task passed to check_tracking_issue_and_batch
 
     def test_tracking_issue_declined_returns_false(self, tmp_path: Path) -> None:
         """start() on a tracking issue with declined batch → returns False."""
@@ -1490,19 +1552,24 @@ class TestStartTrackingDetection:
 
         with (
             patch(
-                "wade.services.implementation_service.load_config",
+                "wade.services.implementation_service.core.load_config",
                 return_value=self._make_config(),
             ),
-            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
+            patch(
+                "wade.services.implementation_service.core.get_provider", return_value=mock_provider
+            ),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
-            patch("wade.services.implementation_service.prompts") as mock_prompts,
-            patch("wade.services.implementation_service.batch") as mock_batch,
+            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
+            patch(
+                "wade.services.implementation_service.batch.check_tracking_issue_and_batch"
+            ) as mock_batch,
         ):
+            mock_batch.return_value = False  # User declined batch
             mock_prompts.confirm.return_value = False
             result = start("173", project_root=tmp_path)
 
+        mock_batch.assert_called_once()
         assert result.success is False
-        mock_batch.assert_not_called()
 
     def test_tracking_issue_backticked_refs_redirects_to_batch(self, tmp_path: Path) -> None:
         """Checklist refs wrapped in backticks still trigger batch mode."""
@@ -1516,13 +1583,17 @@ class TestStartTrackingDetection:
 
         with (
             patch(
-                "wade.services.implementation_service.load_config",
+                "wade.services.implementation_service.core.load_config",
                 return_value=self._make_config(),
             ),
-            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
+            patch(
+                "wade.services.implementation_service.core.get_provider", return_value=mock_provider
+            ),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
-            patch("wade.services.implementation_service.prompts") as mock_prompts,
-            patch("wade.services.implementation_service.batch") as mock_batch,
+            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
+            patch(
+                "wade.services.implementation_service.batch.check_tracking_issue_and_batch"
+            ) as mock_batch,
         ):
             mock_prompts.confirm.return_value = True
             mock_batch.return_value = True
@@ -1530,7 +1601,9 @@ class TestStartTrackingDetection:
 
         assert result.success is True
         mock_batch.assert_called_once()
-        assert mock_batch.call_args.kwargs["issue_numbers"] == ["167", "169"]
+        assert (
+            mock_batch.call_args.args[0].id == "173"
+        )  # task passed to check_tracking_issue_and_batch
 
     def test_regular_issue_not_affected(self, tmp_path: Path) -> None:
         """start() on a non-tracking issue proceeds normally (no batch redirect)."""
@@ -1540,30 +1613,37 @@ class TestStartTrackingDetection:
 
         with (
             patch(
-                "wade.services.implementation_service.load_config",
+                "wade.services.implementation_service.core.load_config",
                 return_value=self._make_config(),
             ),
-            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
+            patch(
+                "wade.services.implementation_service.core.get_provider", return_value=mock_provider
+            ),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
             patch("wade.git.worktree.list_worktrees", return_value=[]),
             patch("wade.git.worktree.create_worktree") as mock_create,
-            patch("wade.services.implementation_service.write_plan_md"),
-            patch("wade.services.implementation_service.bootstrap_worktree"),
+            patch("wade.services.implementation_service.core.write_plan_md"),
+            patch("wade.services.implementation_service.core.bootstrap_worktree"),
             patch("wade.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
-            patch("wade.services.implementation_service._detect_ai_cli_env", return_value=None),
+            patch(
+                "wade.services.implementation_service.core._detect_ai_cli_env", return_value=None
+            ),
             patch("wade.git.pr.get_pr_for_branch", return_value=None),
             patch(
-                "wade.services.implementation_service.bootstrap_draft_pr",
+                "wade.services.implementation_service.core.bootstrap_draft_pr",
                 return_value={"number": 1, "url": "http://test"},
             ),
-            patch("wade.services.implementation_service.prompts") as mock_prompts,
-            patch("wade.services.implementation_service.batch") as mock_batch,
+            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
+            patch(
+                "wade.services.implementation_service.batch.check_tracking_issue_and_batch"
+            ) as mock_batch,
         ):
+            mock_batch.return_value = None  # Not a tracking issue
             mock_prompts.is_tty.return_value = False
             result = start("42", project_root=tmp_path)
 
         assert result.success is True
-        mock_batch.assert_not_called()
+        mock_batch.assert_called_once()
         mock_create.assert_called_once()
 
     def test_tracking_issue_forwards_ai_params(self, tmp_path: Path) -> None:
@@ -1574,13 +1654,17 @@ class TestStartTrackingDetection:
 
         with (
             patch(
-                "wade.services.implementation_service.load_config",
+                "wade.services.implementation_service.core.load_config",
                 return_value=self._make_config(),
             ),
-            patch("wade.services.implementation_service.get_provider", return_value=mock_provider),
+            patch(
+                "wade.services.implementation_service.core.get_provider", return_value=mock_provider
+            ),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
-            patch("wade.services.implementation_service.prompts") as mock_prompts,
-            patch("wade.services.implementation_service.batch") as mock_batch,
+            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
+            patch(
+                "wade.services.implementation_service.batch.check_tracking_issue_and_batch"
+            ) as mock_batch,
         ):
             mock_prompts.confirm.return_value = True
             mock_batch.return_value = True
@@ -1652,9 +1736,9 @@ class TestPostImplementationLifecyclePr:
                 "wade.git.pr.get_pr_for_branch",
                 return_value={"number": 10, "url": "http://test"},
             ),
-            patch("wade.services.implementation_service.prompts") as mock_prompts,
-            patch("wade.services.implementation_service.webbrowser.open") as mock_open,
-            patch("wade.services.implementation_service._merge_pr") as mock_merge,
+            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.core.webbrowser.open") as mock_open,
+            patch("wade.services.implementation_service.core._merge_pr") as mock_merge,
             patch("wade.services.review_service.poll_for_reviews") as mock_poll,
         ):
             mock_prompts.is_tty.return_value = False
@@ -1675,9 +1759,9 @@ class TestPostImplementationLifecyclePr:
                 "wade.git.pr.get_pr_for_branch",
                 return_value={"number": 10, "url": "http://test"},
             ),
-            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
             patch(
-                "wade.services.implementation_service._merge_pr",
+                "wade.services.implementation_service.core._merge_pr",
                 return_value=MergeStatus.MERGED,
             ),
         ):
@@ -1699,7 +1783,7 @@ class TestPostImplementationLifecyclePr:
                 "wade.git.pr.get_pr_for_branch",
                 return_value={"number": 10, "url": "http://test"},
             ),
-            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
             patch(
                 "wade.services.review_service.poll_for_reviews",
                 return_value=PollOutcome.INTERRUPTED,
@@ -1723,7 +1807,7 @@ class TestPostImplementationLifecyclePr:
                 "wade.git.pr.get_pr_for_branch",
                 return_value={"number": 10, "url": "http://test"},
             ),
-            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
             patch(
                 "wade.services.review_service.poll_for_reviews",
                 return_value=PollOutcome.COMMENTS_FOUND,
@@ -1770,7 +1854,7 @@ class TestPostImplementationLifecyclePr:
                 "wade.git.pr.get_pr_for_branch",
                 return_value={"number": 10, "url": "http://test"},
             ),
-            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
             patch(
                 "wade.services.review_service.poll_for_reviews",
                 return_value=PollOutcome.QUIET_TIMEOUT,
@@ -1832,11 +1916,11 @@ class TestPostImplementationLifecycleDirect:
         mock_provider = MagicMock()
         with (
             patch("wade.git.branch.commits_ahead", return_value=3),
-            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
             patch("wade.git.repo.merge_squash"),
             patch("wade.git.repo.commit_no_edit"),
             patch("wade.git.repo.push"),
-            patch("wade.services.implementation_service._cleanup_worktree"),
+            patch("wade.services.implementation_service.core._cleanup_worktree"),
         ):
             mock_prompts.select.return_value = 0  # "Merge into main"
             result = _post_implementation_lifecycle_direct(
@@ -1849,7 +1933,7 @@ class TestPostImplementationLifecycleDirect:
         mock_provider = MagicMock()
         with (
             patch("wade.git.branch.commits_ahead", return_value=3),
-            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
         ):
             mock_prompts.select.return_value = 2  # "Skip"
             result = _post_implementation_lifecycle_direct(
@@ -1862,7 +1946,7 @@ class TestPostImplementationLifecycleDirect:
         mock_provider = MagicMock()
         with (
             patch("wade.git.branch.commits_ahead", return_value=0),
-            patch("wade.services.implementation_service.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
         ):
             mock_prompts.confirm.return_value = False  # Don't delete worktree
             result = _post_implementation_lifecycle_direct(
@@ -1884,12 +1968,12 @@ class TestBatchChainFlag:
         from contextlib import ExitStack
 
         defaults = {
-            "wade.services.implementation_service.load_config": ProjectConfig(),
+            "wade.services.implementation_service.core.load_config": ProjectConfig(),
             "wade.git.repo.get_repo_root": tmp_path,
-            "wade.services.implementation_service._build_graph_from_issues": None,
-            "wade.services.implementation_service.launch_batch_in_terminals": True,
-            "wade.services.implementation_service._find_tracking_issue": None,
-            "wade.services.implementation_service.poll_batch_completion": None,
+            "wade.services.implementation_service.batch._build_graph_from_issues": None,
+            "wade.services.implementation_service.batch.launch_batch_in_terminals": True,
+            "wade.services.implementation_service.batch._find_tracking_issue": None,
+            "wade.services.implementation_service.batch.poll_batch_completion": None,
         }
         defaults.update(overrides)
         stack = ExitStack()
@@ -1907,7 +1991,7 @@ class TestBatchChainFlag:
 
         stack, mocks = self._chain_patches(
             tmp_path,
-            **{"wade.services.implementation_service._build_graph_from_issues": mock_graph},
+            **{"wade.services.implementation_service.batch._build_graph_from_issues": mock_graph},
         )
         with stack:
             batch(["1", "2", "3"], project_root=tmp_path)
@@ -1927,7 +2011,7 @@ class TestBatchChainFlag:
 
         stack, mocks = self._chain_patches(
             tmp_path,
-            **{"wade.services.implementation_service._build_graph_from_issues": mock_graph},
+            **{"wade.services.implementation_service.batch._build_graph_from_issues": mock_graph},
         )
         with stack:
             batch(["1"], project_root=tmp_path)

@@ -32,7 +32,7 @@ class TestBootstrapHookTimeout:
             hooks=HooksConfig(post_worktree_create="scripts/setup.sh"),
         )
 
-        with patch("subprocess.run") as mock_run:
+        with patch("wade.services.implementation_service.bootstrap.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired("cmd", 60)
 
             with pytest.raises(RuntimeError) as exc_info:
@@ -58,7 +58,7 @@ class TestBootstrapHookTimeout:
             hooks=HooksConfig(post_worktree_create="scripts/setup.sh"),
         )
 
-        with patch("subprocess.run") as mock_run:
+        with patch("wade.services.implementation_service.bootstrap.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
 
             # Should not raise
@@ -89,12 +89,15 @@ class TestBootstrapHookTimeout:
             hooks=HooksConfig(post_worktree_create="scripts/setup.sh"),
         )
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.side_effect = subprocess.CalledProcessError(1, "cmd", stderr=b"error")
+        def _hook_only_error(*args: object, **kwargs: object) -> MagicMock:
+            if kwargs.get("timeout") == 60:
+                raise subprocess.CalledProcessError(1, "cmd", stderr=b"error")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch("wade.services.implementation_service.bootstrap.subprocess.run") as mock_run:
+            mock_run.side_effect = _hook_only_error
 
             # Should not raise — CalledProcessError is suppressed and logged.
-            # bootstrap_worktree may make additional subprocess calls before the hook,
-            # so locate the hook call by timeout kwarg rather than asserting called_once.
             bootstrap_worktree(worktree_path, config, repo_root)
 
             hook_calls = [c for c in mock_run.call_args_list if c.kwargs.get("timeout") == 60]
@@ -117,7 +120,7 @@ class TestBootstrapHookTimeout:
             hooks=HooksConfig(post_worktree_create="custom/hook.sh"),
         )
 
-        with patch("subprocess.run") as mock_run:
+        with patch("wade.services.implementation_service.bootstrap.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired("cmd", 60)
 
             with pytest.raises(RuntimeError) as exc_info:

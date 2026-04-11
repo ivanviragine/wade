@@ -18,10 +18,11 @@ def test_resolve_plan_extracts_title(tmp_path: Path) -> None:
 
     with (
         patch(
-            "wade.services.implementation_service.find_worktree_path", return_value=expected_path
+            "wade.services.implementation_service.core.find_worktree_path",
+            return_value=expected_path,
         ),
         patch(
-            "wade.services.implementation_service.git_repo.get_current_branch",
+            "wade.services.implementation_service.core.git_repo.get_current_branch",
             return_value="feat/42-my-feature-plan",
         ),
     ):
@@ -45,10 +46,11 @@ def test_resolve_plan_finds_worktree_by_slug(tmp_path: Path) -> None:
 
     with (
         patch(
-            "wade.services.implementation_service.find_worktree_path", return_value=expected_path
+            "wade.services.implementation_service.core.find_worktree_path",
+            return_value=expected_path,
         ) as mock_find,
         patch(
-            "wade.services.implementation_service.git_repo.get_current_branch",
+            "wade.services.implementation_service.core.git_repo.get_current_branch",
             return_value="feat/99-my-feature-plan",
         ),
     ):
@@ -63,7 +65,7 @@ def test_resolve_plan_no_matching_worktree_errors(tmp_path: Path) -> None:
     plan_file.write_text("# My Feature Plan\n", encoding="utf-8")
 
     with (
-        patch("wade.services.implementation_service.find_worktree_path", return_value=None),
+        patch("wade.services.implementation_service.core.find_worktree_path", return_value=None),
         pytest.raises(ValueError, match="wade worktree list"),
     ):
         implementation_service._resolve_worktree_from_plan(plan_file)
@@ -82,27 +84,30 @@ def test_done_with_plan_flag_resolves_and_delegates() -> None:
     provider = MagicMock()
     with (
         patch(
-            "wade.services.implementation_service.load_config",
+            "wade.services.implementation_service.core.load_config",
             return_value=ProjectConfig(project=ProjectSettings(main_branch="main")),
         ),
-        patch("wade.services.implementation_service.get_provider", return_value=provider),
+        patch("wade.services.implementation_service.core.get_provider", return_value=provider),
         patch(
-            "wade.services.implementation_service.git_repo.get_repo_root",
+            "wade.services.implementation_service.core.git_repo.get_repo_root",
             return_value=Path("/tmp/repo"),
         ),
         patch(
-            "wade.services.implementation_service._resolve_worktree_from_plan",
+            "wade.services.implementation_service.core._resolve_worktree_from_plan",
             return_value=(Path("/tmp/wt"), "feat/42-my-plan", "42"),
         ) as mock_resolve,
         patch(
-            "wade.services.implementation_service.find_worktree_path", return_value=Path("/tmp/wt")
+            "wade.services.implementation_service.core.find_worktree_path",
+            return_value=Path("/tmp/wt"),
         ),
         patch(
-            "wade.services.implementation_service.git_repo.get_current_branch",
+            "wade.services.implementation_service.core.git_repo.get_current_branch",
             return_value="feat/42-my-plan",
         ),
-        patch("wade.services.implementation_service.git_repo.is_clean", return_value=True),
-        patch("wade.services.implementation_service._done_via_pr", return_value=True) as mock_done,
+        patch("wade.services.implementation_service.core.git_repo.is_clean", return_value=True),
+        patch(
+            "wade.services.implementation_service.core._done_via_pr", return_value=True
+        ) as mock_done,
     ):
         result = implementation_service.done(plan_file=Path("PLAN.md"))
 
@@ -115,14 +120,16 @@ def test_done_plan_flag_error_returns_false() -> None:
     from wade.models.config import ProjectConfig
 
     with (
-        patch("wade.services.implementation_service.load_config", return_value=ProjectConfig()),
-        patch("wade.services.implementation_service.get_provider", return_value=MagicMock()),
         patch(
-            "wade.services.implementation_service.git_repo.get_repo_root",
+            "wade.services.implementation_service.core.load_config", return_value=ProjectConfig()
+        ),
+        patch("wade.services.implementation_service.core.get_provider", return_value=MagicMock()),
+        patch(
+            "wade.services.implementation_service.core.git_repo.get_repo_root",
             return_value=Path("/tmp/repo"),
         ),
         patch(
-            "wade.services.implementation_service._resolve_worktree_from_plan",
+            "wade.services.implementation_service.core._resolve_worktree_from_plan",
             side_effect=ValueError("No worktree found"),
         ),
     ):

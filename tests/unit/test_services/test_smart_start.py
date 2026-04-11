@@ -341,7 +341,7 @@ class TestSmartStartDraftPR:
 class TestSmartStartTrackingDetection:
     """When a tracking issue is detected, smart_start redirects to batch."""
 
-    @patch("wade.services.implementation_service.batch", return_value=True)
+    @patch("wade.services.smart_start.check_tracking_issue_and_batch", return_value=True)
     @patch("wade.ui.prompts.confirm", return_value=True)
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")
@@ -368,7 +368,7 @@ class TestSmartStartTrackingDetection:
 
         assert result is True
         mock_batch.assert_called_once()
-        assert mock_batch.call_args.kwargs["issue_numbers"] == ["167", "169"]
+        assert mock_batch.call_args.args[0].id == "173"
 
     @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
     @patch("wade.ui.prompts.confirm", return_value=False)
@@ -423,7 +423,7 @@ class TestSmartStartTrackingDetection:
         assert result is True
         mock_implement.assert_called_once()
 
-    @patch("wade.services.implementation_service.batch", return_value=True)
+    @patch("wade.services.smart_start.check_tracking_issue_and_batch", return_value=True)
     @patch("wade.ui.prompts.confirm", return_value=True)
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")
@@ -463,7 +463,7 @@ class TestSmartStartTrackingDetection:
         assert call_kwargs["model_explicit"] is True
         assert call_kwargs["yolo"] is True
 
-    @patch("wade.services.implementation_service.batch", return_value=True)
+    @patch("wade.services.smart_start.check_tracking_issue_and_batch", return_value=True)
     @patch("wade.ui.prompts.confirm", return_value=True)
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")
@@ -490,7 +490,7 @@ class TestSmartStartTrackingDetection:
 
         assert result is True
         mock_batch.assert_called_once()
-        assert mock_batch.call_args.kwargs["issue_numbers"] == ["167", "169"]
+        assert mock_batch.call_args.args[0].id == "173"
 
     @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch", return_value=None)
@@ -556,7 +556,7 @@ class TestSmartStartTrackingDetection:
         assert result is True
         mock_implement.assert_called_once()
 
-    @patch("wade.services.implementation_service.batch", return_value=True)
+    @patch("wade.services.smart_start.check_tracking_issue_and_batch", return_value=True)
     @patch("wade.ui.prompts.confirm", return_value=True)
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")
@@ -583,7 +583,7 @@ class TestSmartStartTrackingDetection:
 
         assert result is True
         mock_batch.assert_called_once()
-        assert mock_batch.call_args.kwargs["issue_numbers"] == ["167", "169"]
+        assert mock_batch.call_args.args[0].id == "173"
 
     @patch("wade.services.implementation_service.start")
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch", return_value=None)

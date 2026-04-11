@@ -11,10 +11,10 @@ from wade.models.session import SyncEventType
 class TestSyncReadsBaseBranchMetadata:
     """Verify that sync() uses .wade/base_branch when present."""
 
-    @patch("wade.services.implementation_service.git_sync")
-    @patch("wade.services.implementation_service.git_branch")
-    @patch("wade.services.implementation_service.git_repo")
-    @patch("wade.services.implementation_service.load_config")
+    @patch("wade.services.implementation_service.core.git_sync")
+    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.core.git_repo")
+    @patch("wade.services.implementation_service.core.load_config")
     def test_sync_uses_stored_base_branch(
         self,
         mock_config: MagicMock,
@@ -50,10 +50,10 @@ class TestSyncReadsBaseBranchMetadata:
         assert len(preflight_events) == 1
         assert preflight_events[0].data.get("main_branch") == "feat/10-parent"
 
-    @patch("wade.services.implementation_service.git_sync")
-    @patch("wade.services.implementation_service.git_branch")
-    @patch("wade.services.implementation_service.git_repo")
-    @patch("wade.services.implementation_service.load_config")
+    @patch("wade.services.implementation_service.core.git_sync")
+    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.core.git_repo")
+    @patch("wade.services.implementation_service.core.load_config")
     def test_sync_ignores_missing_metadata(
         self,
         mock_config: MagicMock,
@@ -81,10 +81,10 @@ class TestSyncReadsBaseBranchMetadata:
         assert result.success is True
         assert result.main_branch == "main"
 
-    @patch("wade.services.implementation_service.git_sync")
-    @patch("wade.services.implementation_service.git_branch")
-    @patch("wade.services.implementation_service.git_repo")
-    @patch("wade.services.implementation_service.load_config")
+    @patch("wade.services.implementation_service.core.git_sync")
+    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.core.git_repo")
+    @patch("wade.services.implementation_service.core.load_config")
     def test_explicit_main_branch_overrides_metadata(
         self,
         mock_config: MagicMock,

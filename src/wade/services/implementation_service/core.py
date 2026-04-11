@@ -1,7 +1,7 @@
-"""Implementation service — session lifecycle: start, done, sync, list, batch, remove.
+"""Implementation service core — session lifecycle: start, done, sync, list, remove.
 
-Orchestrates: worktree creation, bootstrap, AI tool launch, PR/merge,
-sync, list, batch topology.
+Orchestrates: AI tool launch, PR/merge, sync, list.
+Bootstrap, usage tracking, and batch are in sibling modules.
 """
 
 from __future__ import annotations
@@ -10,8 +10,6 @@ import contextlib
 import json
 import os
 import re
-import shutil
-import subprocess
 import tempfile
 import webbrowser
 from pathlib import Path
@@ -27,9 +25,8 @@ from wade.git import repo as git_repo
 from wade.git import sync as git_sync
 from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
-from wade.models.ai import AIToolID, TokenUsage
-from wade.models.config import AI_COMMAND_NAMES, ProjectConfig
-from wade.models.deps import DependencyGraph
+from wade.models.ai import AIToolID  # TokenUsage used by _capture_post_session_usage
+from wade.models.config import ProjectConfig
 from wade.models.session import (
     ImplementResult,
     MergeStatus,
@@ -39,13 +36,7 @@ from wade.models.session import (
     SyncResult,
     WorktreeState,
 )
-from wade.models.task import (
-    Task,
-    has_checklist_items,
-    is_tracking_issue,
-    parse_all_issue_refs,
-    parse_tracking_child_ids,
-)
+from wade.models.task import Task
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.ai_resolution import (
@@ -55,6 +46,27 @@ from wade.services.ai_resolution import (
     resolve_model,
     resolve_yolo,
 )
+from wade.services.implementation_service.bootstrap import (
+    WORKTREE_GITIGNORE_MARKER_END,
+    WORKTREE_GITIGNORE_MARKER_START,
+    _check_tracked_managed_files,
+    _format_uncommitted_summary,
+    _get_dirty_file_paths,
+    _identify_session_dirty_files,
+    _resolve_worktrees_dir,
+    bootstrap_worktree,
+    strip_worktree_gitignore,
+    write_plan_md,
+)
+from wade.services.implementation_service.usage_tracking import (
+    IMPL_USAGE_MARKER_END,
+    IMPL_USAGE_MARKER_START,
+    REVIEW_USAGE_MARKER_END,
+    REVIEW_USAGE_MARKER_START,
+    _enrich_body_with_usage,
+    _usage_has_token_metrics,
+    append_impl_usage_entry,
+)
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import (
     add_implemented_by_labels,
@@ -63,654 +75,84 @@ from wade.services.task_service import (
 )
 from wade.ui import prompts
 from wade.ui.console import console
-from wade.utils.markdown import (
-    append_session_to_body,
-    has_marker_block,
-    remove_marker_block,
-)
 from wade.utils.terminal import (
     compose_implement_title,
-    launch_batch_in_terminals,
     launch_in_new_terminal,
     set_terminal_title,
     start_title_keeper,
     stop_title_keeper,
 )
-from wade.utils.token_usage_markdown import resolve_token_usage_totals
 
 logger = structlog.get_logger()
 
-# --- Worktree gitignore block markers ---
-WORKTREE_GITIGNORE_MARKER_START = "# wade:worktree:start"
-WORKTREE_GITIGNORE_MARKER_END = "# wade:worktree:end"
+# Private names that external modules import (tests, other services).
+# Listed in __all__ so ``from .core import *`` re-exports them.
+__all__ = [
+    "IMPL_USAGE_MARKER_END",
+    "IMPL_USAGE_MARKER_START",
+    "PLAN_MARKER_END",
+    # Constants
+    "PLAN_MARKER_START",
+    "REVIEW_USAGE_MARKER_END",
+    "REVIEW_USAGE_MARKER_START",
+    "WORKTREE_GITIGNORE_MARKER_END",
+    # Re-exported from sibling modules (so __init__.py's ``from .core import *`` picks them up)
+    "WORKTREE_GITIGNORE_MARKER_START",
+    # Re-exported types
+    "ImplementResult",
+    "_apply_pr_refs",
+    "_build_implementation_issue_context_header",
+    "_build_pr_body",
+    "_capture_post_session_usage",
+    "_check_tracked_managed_files",
+    "_cleanup_worktree",
+    # Private names imported externally (services + tests)
+    "_detect_ai_cli_env",
+    "_done_via_direct",
+    "_done_via_pr",
+    "_enrich_body_with_usage",
+    "_format_uncommitted_summary",
+    "_get_dirty_file_paths",
+    "_identify_session_dirty_files",
+    "_merge_base",
+    "_merge_pr",
+    "_parse_overwrite_paths",
+    "_post_implementation_lifecycle",
+    "_post_implementation_lifecycle_direct",
+    "_post_implementation_lifecycle_pr",
+    "_preserve_session_data",
+    "_pull_main_after_merge",
+    "_remove_stale",
+    "_remove_target",
+    "_resolve_task_target",
+    "_resolve_worktree_from_plan",
+    "_resolve_worktrees_dir",
+    "_strip_summary_section",
+    "_sync_preflight",
+    "_usage_has_token_metrics",
+    "_warn_pull_sync_failed",
+    "append_impl_usage_entry",
+    # Public helpers used by other services
+    "bootstrap_draft_pr",
+    "bootstrap_worktree",
+    "build_implementation_prompt",
+    "catchup",
+    "classify_staleness",
+    "done",
+    "extract_issue_from_branch",
+    "extract_plan_from_pr_body",
+    "find_worktree_path",
+    "list_sessions",
+    "remove",
+    # Public entry points
+    "start",
+    "strip_worktree_gitignore",
+    "sync",
+    "write_plan_md",
+]
 
-# --- Implementation usage block markers ---
-IMPL_USAGE_MARKER_START = "<!-- wade:impl-usage:start -->"
-IMPL_USAGE_MARKER_END = "<!-- wade:impl-usage:end -->"
-
-# --- Review usage block markers ---
-REVIEW_USAGE_MARKER_START = "<!-- wade:review-usage:start -->"
-REVIEW_USAGE_MARKER_END = "<!-- wade:review-usage:end -->"
 
 # ---------------------------------------------------------------------------
-# Tracking-issue detection
-# ---------------------------------------------------------------------------
-
-
-def check_tracking_issue_and_batch(
-    task: Task,
-    *,
-    ai_tool: str | None,
-    model: str | None,
-    project_root: Path | None,
-    ai_explicit: bool,
-    model_explicit: bool,
-    effort: str | None,
-    effort_explicit: bool,
-    yolo: bool | None,
-    cd_only: bool = False,
-) -> bool | None:
-    """Detect tracking issues and redirect to batch implementation.
-
-    Returns True/False if the tracking-issue path was taken, or None if
-    the task is not a tracking issue (caller should continue normally).
-    """
-    if not is_tracking_issue(task.title):
-        return None
-
-    child_ids = (
-        parse_tracking_child_ids(task.body)
-        if has_checklist_items(task.body)
-        else parse_all_issue_refs(task.body)
-    )
-    if not child_ids:
-        return None
-
-    if cd_only:
-        console.info("Tracking issue detected — batch redirect skipped for cd-only mode")
-        return None
-
-    refs = ", ".join(f"#{cid}" for cid in child_ids)
-    console.info(f"#{task.id} is a tracking issue for: {refs}")
-    if prompts.confirm("Start batch implementation?", default=True):
-        return batch(
-            issue_numbers=child_ids,
-            ai_tool=ai_tool,
-            model=model,
-            project_root=project_root,
-            ai_explicit=ai_explicit,
-            model_explicit=model_explicit,
-            effort=effort,
-            effort_explicit=effort_explicit,
-            yolo=yolo,
-        )
-    return False
-
-
-# ---------------------------------------------------------------------------
-# Bootstrap helpers
-# ---------------------------------------------------------------------------
-
-
-def _resolve_worktrees_dir(config: ProjectConfig, repo_root: Path) -> Path:
-    """Resolve the worktrees directory from config."""
-    wt_dir = config.project.worktrees_dir
-    if Path(wt_dir).is_absolute():
-        return Path(wt_dir)
-    return (repo_root / wt_dir).resolve()
-
-
-def _format_uncommitted_summary(cwd: Path) -> str:
-    """Build a human-readable summary of dirty working tree status."""
-    dirty = git_repo.get_dirty_status(cwd)
-    parts: list[str] = []
-    if dirty["staged"]:
-        parts.append(f"{dirty['staged']} staged")
-    if dirty["unstaged"]:
-        parts.append(f"{dirty['unstaged']} unstaged")
-    if dirty["untracked"]:
-        parts.append(f"{dirty['untracked']} untracked")
-    return ", ".join(parts) if parts else "dirty"
-
-
-def _get_dirty_file_paths(cwd: Path) -> list[str]:
-    """Return file paths from ``git status --porcelain``."""
-    try:
-        result = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return []
-
-    paths: list[str] = []
-    for line in result.stdout.splitlines():
-        if not line or len(line) < 4:
-            continue
-        path = line[3:]
-        if " -> " in path:
-            path = path.split(" -> ", 1)[1]
-        if path.startswith('"') and path.endswith('"'):
-            path = path[1:-1]
-        paths.append(path)
-    return paths
-
-
-def _identify_session_dirty_files(dirty_paths: list[str]) -> list[str]:
-    """Return dirty file paths that are wade session artifacts.
-
-    Matches against ``get_worktree_gitignore_entries()`` — the same set
-    of paths the worktree gitignore block hides.
-    """
-    from wade.skills.installer import get_worktree_gitignore_entries
-
-    entries = get_worktree_gitignore_entries()
-    dir_prefixes = [e for e in entries if e.endswith("/")]
-    exact_paths = set(e for e in entries if not e.endswith("/"))
-
-    matched: list[str] = []
-    for path in dirty_paths:
-        if path in exact_paths or any(path.startswith(prefix) for prefix in dir_prefixes):
-            matched.append(path)
-
-    return sorted(matched)
-
-
-def _check_tracked_managed_files(cwd: Path) -> list[str]:
-    """Return tracked wade-managed files that should not be committed.
-
-    Checks for:
-    - Skill directories from ``MANAGED_SKILL_NAMES``
-    - Cross-tool symlink directories
-    - Plan guard hook files
-    - Worktree guard hook files
-    - Session artifact exact paths (``PLAN.md``, ``PR-SUMMARY.md``, etc.)
-    """
-    from wade.skills.installer import (
-        CROSS_TOOL_DIRS,
-        MANAGED_SKILL_NAMES,
-        PLAN_GUARD_HOOK_FILES,
-        WORKTREE_GUARD_HOOK_FILES,
-    )
-
-    # Build path roots to check against git index (bare, no trailing slash).
-    # git ls-files --cached reports tracked symlinks without trailing slashes,
-    # so trailing-slash prefixes would miss them.
-    roots: list[str] = [f".claude/skills/{name}" for name in MANAGED_SKILL_NAMES]
-    for cross_dir in CROSS_TOOL_DIRS:
-        cross_path = cwd / cross_dir
-        if cross_path.is_symlink() or not cross_path.exists():
-            roots.append(cross_dir)
-    roots.extend(PLAN_GUARD_HOOK_FILES)
-    roots.extend(WORKTREE_GUARD_HOOK_FILES)
-    # Session artifact exact paths (never user content)
-    roots.extend(["PLAN.md", "PR-SUMMARY.md", ".commit-msg", ".wade", ".wade-managed"])
-
-    try:
-        result = subprocess.run(
-            ["git", "ls-files", "--cached"],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return []
-
-    tracked: list[str] = []
-    for line in result.stdout.splitlines():
-        path = line.strip()
-        if any(path == root or path.startswith(f"{root}/") for root in roots):
-            tracked.append(path)
-
-    return sorted(tracked)
-
-
-def write_plan_md(
-    worktree_path: Path,
-    task: Task,
-    plan_content: str | None = None,
-) -> Path:
-    """Write PLAN.md to the worktree.
-
-    Args:
-        worktree_path: Worktree directory.
-        task: Task with metadata (id, title, url).
-        plan_content: Optional plan content to use instead of task.body.
-            When provided (e.g. extracted from a draft PR), this takes priority.
-    """
-    plan_path = worktree_path / "PLAN.md"
-    lines = [
-        f"# Issue #{task.id}: {task.title}",
-        "",
-    ]
-    body = plan_content if plan_content is not None else task.body
-    if body:
-        lines.append(body)
-    if task.url:
-        lines.append("")
-        lines.append(f"URL: {task.url}")
-
-    plan_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    logger.info("implementation.plan_md_written", path=str(plan_path))
-    return plan_path
-
-
-def _install_guard_hooks(
-    worktree_path: Path,
-    *,
-    guard_type: str,
-) -> None:
-    """Copy a guard script and configure all AI tool hooks.
-
-    Args:
-        worktree_path: Worktree directory.
-        guard_type: ``"worktree"`` or ``"plan"`` — selects the guard script
-            and the matching configure function on each tool module.
-    """
-    from wade.hooks import get_guard_script_path, get_worktree_guard_script_path
-
-    if guard_type == "worktree":
-        guard_src = get_worktree_guard_script_path()
-        script_name = "worktree_guard.py"
-    else:
-        guard_src = get_guard_script_path()
-        script_name = "plan_write_guard.py"
-
-    tool_dirs = [".claude/hooks", ".cursor/hooks", ".copilot/hooks", ".gemini/hooks"]
-    for tool_dir in tool_dirs:
-        dest_dir = worktree_path / tool_dir
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(guard_src, dest_dir / script_name)
-
-    from wade.config import claude_allowlist, copilot_hooks, cursor_hooks, gemini_hooks
-
-    configure_fns = [
-        (claude_allowlist, ".claude"),
-        (cursor_hooks, ".cursor"),
-        (copilot_hooks, ".copilot"),
-        (gemini_hooks, ".gemini"),
-    ]
-    hook_fn_name = f"configure_{guard_type}_hooks"
-    for module, tool_dir_prefix in configure_fns:
-        fn = getattr(module, hook_fn_name)
-        fn(worktree_path, worktree_path / tool_dir_prefix / "hooks" / script_name)
-
-    logger.info(f"implementation.{guard_type}_guard_hooks_installed", path=str(worktree_path))
-
-
-def _effective_copy_files(config: ProjectConfig) -> list[str]:
-    """Compute the full list of files to copy into a new worktree.
-
-    Merges user-configured copy_to_worktree with internal wade files
-    that must always be present (.wade.yml, knowledge path + ratings when enabled).
-    """
-    from wade.services.knowledge_service import resolve_ratings_path
-
-    internal: list[str] = [".wade.yml"]
-    if config.knowledge.enabled:
-        kpath = config.knowledge.path
-        if not kpath.startswith("/") and ".." not in kpath.split("/"):
-            internal.append(kpath)
-            internal.append(str(resolve_ratings_path(Path(kpath))))
-
-    files: list[str] = list(config.hooks.copy_to_worktree)
-    for f in internal:
-        if f not in files:
-            files.append(f)
-    return files
-
-
-def _get_info_exclude_path(worktree_path: Path) -> Path | None:
-    """Return the ``info/exclude`` path for the given worktree.
-
-    In a linked worktree this resolves to the worktree-specific git dir
-    (e.g. ``<main>/.git/worktrees/<name>/info/exclude``).
-    """
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--git-dir"],
-            cwd=str(worktree_path),
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            return None
-        git_dir = Path(result.stdout.strip())
-        if not git_dir.is_absolute():
-            git_dir = worktree_path / git_dir
-        return git_dir / "info" / "exclude"
-    except (OSError, subprocess.SubprocessError):
-        return None
-
-
-def write_worktree_gitignore(worktree_path: Path) -> None:
-    """Append a ``# wade:worktree:start`` block to ``.gitignore`` in the worktree.
-
-    Lists **specific files** (never directories, except ``.wade/``) so that
-    user-owned files in the same parent directories are never hidden.
-
-    Also adds conditional entries for cross-tool symlinks (only when wade
-    created them) and untracked pointer files.
-    """
-    from wade.skills.installer import CROSS_TOOL_DIRS, get_worktree_gitignore_entries
-
-    entries = list(get_worktree_gitignore_entries())
-
-    # Conditional cross-tool symlinks (only if wade created them as symlinks)
-    for cross_dir in CROSS_TOOL_DIRS:
-        cross_path = worktree_path / cross_dir
-        if cross_path.is_symlink():
-            entries.append(cross_dir)
-
-    # Untracked pointer files (replacing broken info/exclude approach)
-    for name in ("AGENTS.md", "CLAUDE.md"):
-        target = worktree_path / name
-        if not (target.exists() or target.is_symlink()):
-            continue
-        try:
-            ls_result = subprocess.run(
-                ["git", "ls-files", "--error-unmatch", name],
-                cwd=str(worktree_path),
-                capture_output=True,
-            )
-            if ls_result.returncode != 0:
-                entries.append(name)
-        except (OSError, subprocess.SubprocessError):
-            # Git not available or worktree not valid — skip conditional entry
-            pass
-
-    block = (
-        f"\n{WORKTREE_GITIGNORE_MARKER_START}\n"
-        + "\n".join(entries)
-        + f"\n{WORKTREE_GITIGNORE_MARKER_END}\n"
-    )
-
-    gitignore = worktree_path / ".gitignore"
-    if gitignore.is_file():
-        existing = gitignore.read_text(encoding="utf-8")
-        # Remove existing worktree block if present (idempotent)
-        if has_marker_block(
-            existing, WORKTREE_GITIGNORE_MARKER_START, WORKTREE_GITIGNORE_MARKER_END
-        ):
-            existing = remove_marker_block(
-                existing, WORKTREE_GITIGNORE_MARKER_START, WORKTREE_GITIGNORE_MARKER_END
-            )
-        gitignore.write_text(existing.rstrip("\n") + "\n" + block, encoding="utf-8")
-    else:
-        # No .gitignore exists — write entries to info/exclude instead of
-        # creating an untracked file that would fail is_clean() checks.
-        exclude = _get_info_exclude_path(worktree_path)
-        if exclude is not None:
-            exclude.parent.mkdir(parents=True, exist_ok=True)
-            existing_exc = ""
-            if exclude.is_file():
-                existing_exc = exclude.read_text(encoding="utf-8")
-            if has_marker_block(
-                existing_exc,
-                WORKTREE_GITIGNORE_MARKER_START,
-                WORKTREE_GITIGNORE_MARKER_END,
-            ):
-                existing_exc = remove_marker_block(
-                    existing_exc,
-                    WORKTREE_GITIGNORE_MARKER_START,
-                    WORKTREE_GITIGNORE_MARKER_END,
-                )
-            new_content = (
-                existing_exc.rstrip("\n") + "\n" + block
-                if existing_exc.strip()
-                else block.lstrip("\n")
-            )
-            exclude.write_text(new_content, encoding="utf-8")
-        else:
-            # Fallback: create .gitignore anyway (best-effort)
-            gitignore.write_text(block.lstrip("\n"), encoding="utf-8")
-
-    logger.debug("implementation.worktree_gitignore_written", path=str(worktree_path))
-
-
-def strip_worktree_gitignore(worktree_path: Path) -> None:
-    """Remove the ``# wade:worktree:start`` block from ``.gitignore`` and ``info/exclude``.
-
-    Preserves any user content outside the block.  If ``.gitignore`` was
-    created solely for the worktree block (empty after stripping), the file
-    is deleted so no untracked residue remains.
-    """
-    # Clean .gitignore
-    gitignore = worktree_path / ".gitignore"
-    if gitignore.is_file():
-        existing = gitignore.read_text(encoding="utf-8")
-        if has_marker_block(
-            existing, WORKTREE_GITIGNORE_MARKER_START, WORKTREE_GITIGNORE_MARKER_END
-        ):
-            cleaned = remove_marker_block(
-                existing, WORKTREE_GITIGNORE_MARKER_START, WORKTREE_GITIGNORE_MARKER_END
-            )
-            if cleaned.strip():
-                gitignore.write_text(cleaned, encoding="utf-8")
-            else:
-                gitignore.unlink(missing_ok=True)
-            logger.debug("implementation.worktree_gitignore_stripped", path=str(worktree_path))
-
-    # Clean info/exclude (used when .gitignore was not tracked)
-    exclude = _get_info_exclude_path(worktree_path)
-    if exclude is not None and exclude.is_file():
-        exc_content = exclude.read_text(encoding="utf-8")
-        if has_marker_block(
-            exc_content, WORKTREE_GITIGNORE_MARKER_START, WORKTREE_GITIGNORE_MARKER_END
-        ):
-            cleaned_exc = remove_marker_block(
-                exc_content, WORKTREE_GITIGNORE_MARKER_START, WORKTREE_GITIGNORE_MARKER_END
-            )
-            exclude.write_text(cleaned_exc, encoding="utf-8")
-            logger.debug("implementation.info_exclude_stripped", path=str(worktree_path))
-
-
-def _suppress_pointer_artifacts(worktree_path: Path) -> None:
-    """Prevent pointer-injected files from appearing dirty in the worktree.
-
-    Called after ensure_pointer() so git status checks (is_clean) remain clean.
-    Tracked files (e.g. an existing AGENTS.md) are marked ``--skip-worktree``
-    so local modifications are invisible to git status.  Untracked pointer
-    files are handled by ``write_worktree_gitignore()`` instead.
-
-    Failures are silently swallowed — git commands may not be available in all
-    contexts (tests, unusual setups), and a failed suppression is not fatal.
-    """
-    try:
-        _do_suppress_pointer_artifacts(worktree_path)
-    except Exception:
-        logger.debug("implementation.suppress_pointer_skipped", path=str(worktree_path))
-
-
-def _do_suppress_pointer_artifacts(worktree_path: Path) -> None:
-    """Internal implementation of _suppress_pointer_artifacts.
-
-    Only handles **tracked** pointer files via ``--skip-worktree``.
-    Untracked pointer files are handled by ``write_worktree_gitignore()``
-    which includes them in the worktree gitignore block.
-    """
-    pointer_files = ("AGENTS.md", "CLAUDE.md")
-
-    for name in pointer_files:
-        target = worktree_path / name
-        if not (target.exists() or target.is_symlink()):
-            continue
-        # Check whether the file is tracked in the git index
-        ls_result = subprocess.run(
-            ["git", "ls-files", "--error-unmatch", name],
-            cwd=str(worktree_path),
-            capture_output=True,
-        )
-        if ls_result.returncode == 0:
-            # Tracked: --skip-worktree hides local modifications from git status
-            subprocess.run(
-                ["git", "update-index", "--skip-worktree", name],
-                cwd=str(worktree_path),
-                capture_output=True,
-            )
-            logger.debug("implementation.skip_worktree", file=name)
-
-
-def bootstrap_worktree(
-    worktree_path: Path,
-    config: ProjectConfig,
-    repo_root: Path,
-    skills: list[str] | None = None,
-    plan_mode: bool = False,
-    selected_ai_tool: str | None = None,
-) -> None:
-    """Run post-creation bootstrap: copy files, install skills, run hooks.
-
-    Args:
-        worktree_path: Path to the worktree directory.
-        config: Project configuration.
-        repo_root: Root of the main repository checkout.
-        skills: If provided, install only the listed skills instead of all.
-        plan_mode: If True, install file-write guard hooks for plan sessions.
-        selected_ai_tool: Effective AI tool for this session (e.g. ``"cursor"``).
-            When provided, takes precedence over persisted config when deciding
-            whether to configure tool-specific worktree settings.
-    """
-    # Copy configured files + internal wade files that must always be present
-    copy_files = _effective_copy_files(config)
-    for filename in copy_files:
-        src = repo_root / filename
-        dest = worktree_path / filename
-        if src.is_file():
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dest)
-            logger.debug("implementation.bootstrap_copy", file=filename)
-
-    # Install skill files — not tracked by git so worktrees don't inherit them
-    from wade.skills.installer import get_wade_repo_root, install_skills
-
-    is_self = repo_root.resolve() == get_wade_repo_root().resolve()
-
-    # Suppress review step placeholders when reviews are explicitly disabled.
-    # An empty string (or disabled one-liner) overrides the default file-based partial.
-    skill_extra_partials: dict[str, str] = {}
-    if config.ai.review_plan.enabled is False:
-        skill_extra_partials["{review_plan_step}"] = (
-            "5. ~~**Review**~~ — skipped (`review_plan.enabled: false` in `.wade.yml`)."
-        )
-    if config.ai.review_implementation.enabled is False:
-        skill_extra_partials["{review_enforcement_rule}"] = ""
-        skill_extra_partials["{review_implementation_closing_step}"] = (
-            "**Step 1 — ~~Review~~** — skipped"
-            " (`review_implementation.enabled: false` in `.wade.yml`)."
-        )
-    if is_self:
-        # Worktree has its own templates/ checkout — symlink to those
-        wt_templates = worktree_path / "templates" / "skills"
-        install_skills(
-            worktree_path,
-            is_self_init=True,
-            force=True,
-            templates_dir=wt_templates,
-            skills=skills,
-            extra_partials=skill_extra_partials or None,
-        )
-    else:
-        install_skills(
-            worktree_path,
-            is_self_init=False,
-            force=True,
-            skills=skills,
-            extra_partials=skill_extra_partials or None,
-        )
-    logger.debug("implementation.bootstrap_skills", path=str(worktree_path))
-
-    # Inject AGENTS.md pointer into worktree (after skills, which may add AGENTS.md content)
-    from wade.skills import pointer
-
-    pointer.ensure_pointer(worktree_path)
-    _suppress_pointer_artifacts(worktree_path)
-    logger.debug("implementation.bootstrap_pointer", path=str(worktree_path))
-
-    # Always propagate allowlist to worktree — configure_allowlist is idempotent
-    from wade.config.claude_allowlist import configure_allowlist
-
-    configure_allowlist(worktree_path, extra_patterns=config.permissions.allowed_commands)
-
-    # Propagate Cursor allowlist to worktree's per-project .cursor/cli.json.
-    # Check both global cursor config and whether cursor is the project's AI tool —
-    # the project-level .cursor/cli.json is no longer written to main (gitignored).
-    from wade.config.cursor_allowlist import configure_allowlist as configure_cursor_allowlist
-    from wade.config.cursor_allowlist import is_allowlist_configured as is_cursor_configured
-
-    cursor_in_config = any(config.get_ai_tool(cmd) == "cursor" for cmd in [None, *AI_COMMAND_NAMES])
-    if (
-        selected_ai_tool == "cursor"
-        or cursor_in_config
-        or is_cursor_configured()
-        or is_cursor_configured(repo_root)
-    ):
-        configure_cursor_allowlist(
-            worktree_path, extra_patterns=config.permissions.allowed_commands
-        )
-
-    # Propagate Gemini policy to worktree's .gemini/policies/wade.toml.
-    # Gemini CLI uses the Policy Engine (TOML files) instead of --allowed-tools.
-    gemini_in_config = any(config.get_ai_tool(cmd) == "gemini" for cmd in [None, *AI_COMMAND_NAMES])
-    if (selected_ai_tool == "gemini" or gemini_in_config) and config.permissions.allowed_commands:
-        from wade.config.gemini_policy import write_gemini_policy
-
-        write_gemini_policy(worktree_path, config.permissions.allowed_commands)
-
-    # Run post-create hook
-    if config.hooks.post_worktree_create:
-        hook_path = repo_root / config.hooks.post_worktree_create
-        if hook_path.is_file():
-            try:
-                subprocess.run(
-                    [str(hook_path)],
-                    cwd=str(worktree_path),
-                    check=True,
-                    capture_output=True,
-                    timeout=60,
-                )
-                logger.info("implementation.hook_ran", hook=config.hooks.post_worktree_create)
-            except subprocess.TimeoutExpired as e:
-                raise RuntimeError(f"Bootstrap hook timed out after 60 seconds: {hook_path}") from e
-            except subprocess.CalledProcessError as e:
-                hook_path_str = str(hook_path)
-                logger.warning(
-                    "implementation.hook_failed",
-                    hook=config.hooks.post_worktree_create,
-                    hook_path=hook_path_str,
-                    error=e.stderr.decode("utf-8", errors="replace") if e.stderr else "",
-                    msg=f"Hook script failed: {hook_path_str}. Check logs for details.",
-                )
-
-    # Install file-write guard hooks last so post-create scripts cannot
-    # overwrite the guarded config files.
-    _install_guard_hooks(worktree_path, guard_type="plan" if plan_mode else "worktree")
-
-    # Write worktree gitignore block AFTER all file generation so the entry
-    # list is complete (skills, hooks, settings, pointer are all in place).
-    write_worktree_gitignore(worktree_path)
-
-    # Apply --skip-worktree on .gitignore if it is tracked so modifications
-    # from the worktree block don't appear in git status.
-    try:
-        _skip_gitignore = subprocess.run(
-            ["git", "ls-files", "--error-unmatch", ".gitignore"],
-            cwd=str(worktree_path),
-            capture_output=True,
-        )
-        if _skip_gitignore.returncode == 0:
-            subprocess.run(
-                ["git", "update-index", "--skip-worktree", ".gitignore"],
-                cwd=str(worktree_path),
-                capture_output=True,
-            )
-            logger.debug("implementation.skip_worktree", file=".gitignore")
-    except (OSError, subprocess.SubprocessError):
-        pass  # Git not available — non-fatal
 
 
 def _detect_ai_cli_env() -> str | None:
@@ -869,61 +311,6 @@ def bootstrap_draft_pr(
     except Exception as e:
         console.error(f"Failed to create draft PR: {e}")
         return None
-
-
-def _usage_has_token_metrics(usage: TokenUsage | None) -> bool:
-    """Return True when usage contains aggregate or per-model token metrics."""
-    return bool(
-        usage
-        and (
-            usage.total_tokens is not None
-            or usage.input_tokens is not None
-            or usage.output_tokens is not None
-            or usage.cached_tokens is not None
-            or (usage.premium_requests or 0) > 0
-            or usage.model_breakdown
-        )
-    )
-
-
-def _resolve_usage_totals(
-    token_usage: TokenUsage | None,
-) -> tuple[int | None, int | None, int | None, int | None]:
-    """Resolve aggregate token counts, deriving them from breakdown rows when needed."""
-    if token_usage is None:
-        return None, None, None, None
-
-    return resolve_token_usage_totals(
-        total_tokens=token_usage.total_tokens,
-        input_tokens=token_usage.input_tokens,
-        output_tokens=token_usage.output_tokens,
-        cached_tokens=token_usage.cached_tokens,
-        model_breakdown=token_usage.model_breakdown,
-    )
-
-
-def _enrich_body_with_usage(
-    body: str,
-    ai_tool: str,
-    model: str | None,
-    usage: TokenUsage | None,
-    has_tokens: bool,
-    has_session: bool,
-) -> str:
-    """Append implementation usage and session entries to a markdown body."""
-    result = body
-    if has_tokens:
-        assert usage is not None
-        result = append_impl_usage_entry(result, ai_tool=ai_tool, model=model, token_usage=usage)
-    if has_session:
-        assert usage is not None and usage.session_id is not None
-        result = append_session_to_body(
-            result,
-            phase="Implement",
-            ai_tool=ai_tool,
-            session_id=usage.session_id,
-        )
-    return result
 
 
 def _capture_post_session_usage(
@@ -1385,7 +772,12 @@ def start(
             return ImplementResult(success=False)
 
         # Tracking issue detection — redirect to batch implementation
-        batch_result = check_tracking_issue_and_batch(
+        # NOTE: The submodule name "batch" collides with the batch() function
+        # re-exported by __init__.py, so we access the module via sys.modules.
+        import sys
+
+        _batch_mod = sys.modules["wade.services.implementation_service.batch"]
+        batch_result = _batch_mod.check_tracking_issue_and_batch(
             task,
             ai_tool=ai_tool,
             model=model,
@@ -1855,430 +1247,6 @@ def _resolve_task_target(
 # ---------------------------------------------------------------------------
 
 
-def batch(
-    issue_numbers: list[str],
-    ai_tool: str | None = None,
-    model: str | None = None,
-    project_root: Path | None = None,
-    *,
-    ai_explicit: bool = False,
-    model_explicit: bool = False,
-    effort: str | None = None,
-    effort_explicit: bool = False,
-    yolo: bool | None = None,
-) -> bool:
-    """Start parallel implementation sessions for multiple issues.
-
-    Independent issues launch in parallel terminals.
-    Dependent chains: only the first issue in each chain is launched; the
-    remaining chain members are printed in order for manual sequential
-    execution (one cannot work on a dependent issue before its blocker is done).
-    """
-    # Deduplicate while preserving order
-    issue_numbers = list(dict.fromkeys(issue_numbers))
-
-    config = load_config(project_root)
-    cwd = project_root or Path.cwd()
-
-    try:
-        repo_root = git_repo.get_repo_root(cwd)
-    except GitError:
-        console.error("Not inside a git repository")
-        return False
-
-    console.rule(f"implement-batch ({len(issue_numbers)} issues)")
-
-    # Resolve AI tool and model, then offer interactive confirmation.
-    resolved_tool = resolve_ai_tool(ai_tool, config, "implement")
-    resolved_model = resolve_model(model, config, "implement", tool=resolved_tool)
-    resolved_effort = resolve_effort(effort, config, "implement", tool=resolved_tool)
-    resolved_yolo = resolve_yolo(yolo, config, "implement", tool=resolved_tool)
-    _pre_model = resolved_model
-    resolved_tool, resolved_model, resolved_effort, resolved_yolo = confirm_ai_selection(
-        resolved_tool,
-        resolved_model,
-        tool_explicit=ai_explicit,
-        model_explicit=model_explicit,
-        resolved_effort=resolved_effort,
-        effort_explicit=effort_explicit,
-        resolved_yolo=resolved_yolo,
-        yolo_explicit=yolo is not None,
-    )
-    # If the user changed the model interactively, propagate it explicitly to child sessions
-    if not model_explicit and resolved_model != _pre_model:
-        model_explicit = True
-
-    if not model_explicit:
-        console.info("Model: auto (per-issue complexity)")
-
-    # Check for dependency ordering
-    # Try to load deps from issue bodies (look for "Depends on" references)
-    graph = _build_graph_from_issues(issue_numbers, config)
-
-    if graph and graph.edges:
-        try:
-            independent, chains = graph.partition(issue_numbers)
-        except ValueError:
-            console.error(
-                "Dependency cycle detected among the requested issues. "
-                "Remove or fix the circular 'Depends on' references and retry."
-            )
-            return False
-        console.info(f"Dependency analysis: {len(independent)} independent, {len(chains)} chain(s)")
-    else:
-        independent = issue_numbers
-        chains = []
-
-    def _build_cmd(issue_id: str, chain_ids: list[str] | None = None) -> list[str]:
-        """Build the wade implement command for a single issue.
-
-        Args:
-            issue_id: The issue number to implement.
-            chain_ids: Optional remaining issue IDs for --chain continuation.
-        """
-        cmd = ["wade", "implement", issue_id]
-        if resolved_tool:
-            cmd.extend(["--ai", resolved_tool])
-        if resolved_model and model_explicit:
-            cmd.extend(["--model", resolved_model])
-        if resolved_effort:
-            cmd.extend(["--effort", resolved_effort.value])
-        if resolved_yolo:
-            cmd.append("--yolo")
-        if chain_ids:
-            cmd.extend(["--chain", ",".join(chain_ids)])
-        return cmd
-
-    # Collect all items to launch in one batch
-    batch_items: list[tuple[list[str], str | None, str | None]] = []
-
-    for issue_id in independent:
-        console.step(f"Preparing #{issue_id} (independent)")
-        batch_items.append((_build_cmd(issue_id), str(repo_root), f"wade #{issue_id}"))
-
-    # Chains: launch only the first item with --chain for auto-continuation
-    for chain in chains:
-        console.info(f"Dependency chain: {' → '.join(f'#{n}' for n in chain)}")
-        chain_rest = chain[1:] if len(chain) > 1 else None
-        batch_items.append(
-            (_build_cmd(chain[0], chain_ids=chain_rest), str(repo_root), f"wade #{chain[0]}")
-        )
-
-    if not batch_items:
-        console.panel("  No issues to launch", title="Batch started")
-        return False
-
-    # Try to launch terminals (best-effort, non-fatal)
-    console.step(f"Launching {len(batch_items)} session(s) in new terminal window")
-    try:
-        launched = launch_batch_in_terminals(batch_items)
-    except Exception as exc:
-        logger.warning("batch.launch_failed", error=str(exc), exc_info=True)
-        launched = False
-
-    if launched:
-        console.panel(
-            f"  Launched {len(batch_items)} implementation session(s)",
-            title="Batch started",
-        )
-    else:
-        console.warn("Could not launch terminals — run these commands manually:")
-        for cmd, _cwd, _title in batch_items:
-            console.detail(f"  {' '.join(cmd)}")
-
-    # Find tracking issue by checking all batch issues (not just the first)
-    tracking_id = _find_tracking_issue(issue_numbers, config)
-
-    # Enter polling loop to monitor session progress
-    poll_batch_completion(
-        issue_numbers=issue_numbers,
-        repo_root=repo_root,
-        config=config,
-        tracking_id=tracking_id,
-    )
-
-    return True
-
-
-def _find_tracking_issue(
-    issue_numbers: list[str],
-    config: ProjectConfig,
-) -> str | None:
-    """Find a parent/tracking issue by checking all batch issue numbers."""
-    try:
-        provider = get_provider(config)
-    except Exception:
-        logger.debug("batch.find_parent_failed", exc_info=True)
-        return None
-    for num in issue_numbers:
-        try:
-            tracking_id = provider.find_parent_issue(num, label=config.project.issue_label)
-        except Exception:
-            logger.debug("batch.find_parent_failed", exc_info=True, issue=num)
-            continue
-        if tracking_id:
-            return tracking_id
-    return None
-
-
-# --- Batch session status ---
-
-_BATCH_STATUS_NOT_STARTED = "not_started"
-_BATCH_STATUS_IN_PROGRESS = "in_progress"
-_BATCH_STATUS_DONE = "done"
-_BATCH_STATUS_MERGED = "merged"
-
-_POLL_INTERVAL_SECONDS = 30
-_POLL_TIMEOUT_SECONDS = 4 * 60 * 60  # 4 hours
-
-
-def _is_merged_to_main(repo_root: Path, issue_num: str, main_branch: str) -> bool:
-    """Return True if a branch for this issue was merged directly into main.
-
-    Searches recent merge commits on ``origin/<main_branch>`` for the typical
-    branch-name pattern (e.g. "feat/227-..." or "fix/227-...").
-    """
-    try:
-        result = subprocess.run(
-            ["git", "log", f"origin/{main_branch}", "--oneline", "-100"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        pattern = rf"/0*{re.escape(issue_num)}(?:[^0-9]|$)"
-        return bool(re.search(pattern, result.stdout))
-    except FileNotFoundError:
-        return False
-
-
-def _classify_issue_status(
-    issue_num: str,
-    pr_by_issue: dict[str, git_pr.PRSummary],
-    branch_set: set[str],
-    main_branch: str,
-    repo_root: Path,
-) -> str:
-    """Classify the status of a single issue in a batch.
-
-    Returns one of the _BATCH_STATUS_* constants.
-    """
-    pr = pr_by_issue.get(issue_num)
-    if pr:
-        if pr.merged_at:
-            return _BATCH_STATUS_MERGED
-        if pr.is_draft:
-            return _BATCH_STATUS_IN_PROGRESS
-        if pr.state != "CLOSED":
-            # Open, non-draft → done (done marks PR ready)
-            return _BATCH_STATUS_DONE
-        # CLOSED without merged_at — PR was abandoned; fall through to branch check
-
-    # No PR (or abandoned PR) — check if branch exists
-    pattern = rf"/0*{re.escape(issue_num)}(?:-|$)"
-    matching_branches = [b for b in branch_set if re.search(pattern, b)]
-    if matching_branches:
-        # Branch exists — check for commits ahead of base
-        for branch in matching_branches:
-            try:
-                ahead = git_branch.commits_ahead(repo_root, branch, main_branch)
-                if ahead > 0:
-                    return _BATCH_STATUS_IN_PROGRESS
-            except GitError:
-                pass
-        return _BATCH_STATUS_IN_PROGRESS
-
-    # No PR, no branch — check for direct merge to main
-    if _is_merged_to_main(repo_root, issue_num, main_branch):
-        return _BATCH_STATUS_DONE
-
-    return _BATCH_STATUS_NOT_STARTED
-
-
-def _build_pr_index(
-    repo_root: Path,
-    issue_numbers: list[str],
-) -> dict[str, git_pr.PRSummary]:
-    """Build a mapping from issue number to PR data using a single gh pr list call."""
-    prs = git_pr.list_prs(repo_root, state="all", limit=200)
-    issue_set = set(issue_numbers)
-    result: dict[str, git_pr.PRSummary] = {}
-    for pr in prs:
-        extracted = extract_issue_from_branch(pr.head_ref_name)
-        if extracted and extracted in issue_set:
-            result[extracted] = pr
-    return result
-
-
-def _get_remote_branches(repo_root: Path) -> set[str]:
-    """Get the set of remote and local branch names."""
-    branches: set[str] = set()
-    for args in (
-        ["git", "branch", "-r", "--format=%(refname:short)"],
-        ["git", "branch", "--format=%(refname:short)"],
-    ):
-        try:
-            result = subprocess.run(
-                args,
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            branches.update(line.strip() for line in result.stdout.splitlines() if line.strip())
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            pass
-    return branches
-
-
-def poll_batch_completion(
-    issue_numbers: list[str],
-    repo_root: Path,
-    config: ProjectConfig,
-    tracking_id: str | None = None,
-    *,
-    poll_interval: int = _POLL_INTERVAL_SECONDS,
-    timeout: int = _POLL_TIMEOUT_SECONDS,
-) -> None:
-    """Poll for completion of all batch sessions, showing live progress.
-
-    Monitors PRs and branches until all sessions complete, then optionally
-    auto-triggers coherence review. Handles Ctrl+C gracefully.
-    """
-    import time
-
-    poll_interval = max(1, poll_interval)
-    main_branch = config.project.main_branch
-    if not main_branch:
-        try:
-            main_branch = git_repo.detect_main_branch(repo_root)
-        except GitError:
-            main_branch = "main"
-
-    console.info("Monitoring batch progress (Ctrl+C to exit)...")
-
-    interrupted = False
-    elapsed = 0
-    pr_index: dict[str, git_pr.PRSummary] = {}
-    branch_set: set[str] = set()
-
-    try:
-        while elapsed < timeout:
-            # Fetch latest remote state
-            with contextlib.suppress(GitError):
-                git_sync.fetch_origin(repo_root)
-
-            pr_index = _build_pr_index(repo_root, issue_numbers)
-            branch_set = _get_remote_branches(repo_root)
-
-            statuses: dict[str, str] = {}
-            for num in issue_numbers:
-                statuses[num] = _classify_issue_status(
-                    num, pr_index, branch_set, main_branch, repo_root
-                )
-
-            done_count = sum(
-                1 for s in statuses.values() if s in (_BATCH_STATUS_DONE, _BATCH_STATUS_MERGED)
-            )
-            in_progress = sum(1 for s in statuses.values() if s == _BATCH_STATUS_IN_PROGRESS)
-            not_started = sum(1 for s in statuses.values() if s == _BATCH_STATUS_NOT_STARTED)
-            total = len(issue_numbers)
-
-            console.step(
-                f"Waiting... ({done_count}/{total} done, "
-                f"{in_progress} in progress, {not_started} pending)"
-            )
-
-            if done_count == total:
-                break
-
-            time.sleep(poll_interval)
-            elapsed += poll_interval
-
-    except KeyboardInterrupt:
-        interrupted = True
-        console.info("")  # newline after ^C
-
-    # Print final summary
-    pr_index = _build_pr_index(repo_root, issue_numbers) if not interrupted else pr_index
-    branch_set = _get_remote_branches(repo_root) if not interrupted else branch_set
-    final_statuses: dict[str, str] = {}
-    for num in issue_numbers:
-        final_statuses[num] = _classify_issue_status(
-            num, pr_index, branch_set, main_branch, repo_root
-        )
-
-    done_count = sum(
-        1 for s in final_statuses.values() if s in (_BATCH_STATUS_DONE, _BATCH_STATUS_MERGED)
-    )
-    total = len(issue_numbers)
-    lines = []
-    for num in issue_numbers:
-        status = final_statuses[num]
-        label = {
-            _BATCH_STATUS_DONE: "completed",
-            _BATCH_STATUS_MERGED: "merged",
-            _BATCH_STATUS_IN_PROGRESS: "in progress",
-            _BATCH_STATUS_NOT_STARTED: "not started",
-        }.get(status, status)
-        pr = pr_index.get(num)
-        url = f" {pr.url}" if pr and pr.url else ""
-        lines.append(f"  #{num}: {label}{url}")
-
-    console.panel("\n".join(lines), title=f"Batch summary ({done_count}/{total} done)")
-
-    if interrupted:
-        console.hint(
-            "Interrupted. To resume monitoring, rerun `wade implement-batch` with the same issues."
-        )
-        return
-
-    if elapsed >= timeout:
-        console.warn("Polling timed out. Check session status manually.")
-        return
-
-    # All sessions complete — auto-trigger coherence review
-    if tracking_id and done_count == total:
-        console.info(f"All sessions complete. Running coherence review for #{tracking_id}...")
-        from wade.services.batch_review_service import review_batch
-
-        review_batch(tracking_id, project_root=repo_root)
-
-
-def _build_graph_from_issues(
-    issue_numbers: list[str],
-    config: ProjectConfig,
-) -> DependencyGraph | None:
-    """Try to build a dependency graph from issue body cross-references."""
-    from wade.models.deps import DependencyEdge, DependencyGraph
-    from wade.models.task import parse_dependency_refs
-
-    provider = get_provider(config)
-    edges: list[DependencyEdge] = []
-    valid_set = set(issue_numbers)
-
-    for num in issue_numbers:
-        try:
-            task = provider.read_task(num)
-        except Exception:
-            logger.debug("batch.issue_read_failed", issue_num=num, exc_info=True)
-            continue
-
-        refs = parse_dependency_refs(task.body)
-        for dep_id in refs["depends_on"]:
-            if dep_id in valid_set:
-                edges.append(DependencyEdge(from_task=dep_id, to_task=num))
-
-    if edges:
-        return DependencyGraph(edges=edges)
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Implementation cd
-# ---------------------------------------------------------------------------
-
-
 def find_worktree_path(
     target: str,
     project_root: Path | None = None,
@@ -2436,248 +1404,6 @@ def classify_staleness(
 # ---------------------------------------------------------------------------
 # Implementation usage block (for PR bodies)
 # ---------------------------------------------------------------------------
-
-
-def _build_session_usage_table(
-    ai_tool: str | None = None,
-    model: str | None = None,
-    token_usage: TokenUsage | None = None,
-) -> str:
-    """Build a single-session markdown usage table (no markers or headings).
-
-    Generates the table rows for one session, used by both impl and review
-    usage block builders.
-    """
-    from wade.ai_tools.transcript import format_count
-
-    breakdown = token_usage.model_breakdown if token_usage else []
-    multi = len(breakdown) > 1
-    total_tokens, input_tokens, output_tokens, cached_tokens = _resolve_usage_totals(token_usage)
-    has_tokens = _usage_has_token_metrics(token_usage)
-
-    lines: list[str] = []
-
-    if multi:
-        names = [row.model for row in breakdown]
-        n = len(names)
-        header = "| Metric | Total | " + " | ".join(f"`{m}`" for m in names) + " |"
-        sep = "| " + " | ".join(["---"] * (2 + n)) + " |"
-        empty = " |" * n
-
-        lines.extend([header, sep])
-
-        if ai_tool:
-            lines.append(f"| Tool | `{ai_tool}` |{empty}")
-
-        if has_tokens:
-
-            def per(attr: str) -> str:
-                return " | ".join(f"**{format_count(getattr(r, attr))}**" for r in breakdown)
-
-            per_total = " | ".join(
-                f"**{format_count((r.input_tokens or 0) + (r.output_tokens or 0) + (r.cached_tokens or 0))}**"  # noqa: E501
-                for r in breakdown
-            )
-            if total_tokens is not None:
-                lines.append(f"| Total tokens | **{format_count(total_tokens)}** | {per_total} |")
-            if input_tokens is not None:
-                inp_total = format_count(input_tokens)
-                lines.append(f"| Input tokens | **{inp_total}** | {per('input_tokens')} |")
-            if output_tokens is not None:
-                out_total = format_count(output_tokens)
-                lines.append(f"| Output tokens | **{out_total}** | {per('output_tokens')} |")
-            if cached_tokens is not None:
-                cac_total = format_count(cached_tokens)
-                lines.append(f"| Cached tokens | **{cac_total}** | {per('cached_tokens')} |")
-        else:
-            lines.append(f"| Total tokens | *unavailable* |{empty}")
-
-        if token_usage and token_usage.premium_requests and token_usage.premium_requests > 0:
-            per_prem = " | ".join(
-                f"**{r.premium_requests}**" if r.premium_requests else "" for r in breakdown
-            )
-            lines.append(
-                f"| Premium requests (est.) | **{token_usage.premium_requests}** | {per_prem} |"
-            )
-
-    else:
-        lines.extend(["| Metric | Value |", "| --- | --- |"])
-
-        if ai_tool:
-            lines.append(f"| Tool | `{ai_tool}` |")
-        if model:
-            lines.append(f"| Model | `{model}` |")
-
-        if has_tokens:
-            if total_tokens is not None:
-                lines.append(f"| Total tokens | **{format_count(total_tokens)}** |")
-            if input_tokens is not None:
-                lines.append(f"| Input tokens | **{format_count(input_tokens)}** |")
-            if output_tokens is not None:
-                lines.append(f"| Output tokens | **{format_count(output_tokens)}** |")
-            if cached_tokens is not None:
-                lines.append(f"| Cached tokens | **{format_count(cached_tokens)}** |")
-        else:
-            lines.append("| Total tokens | *unavailable* |")
-
-        if token_usage and token_usage.premium_requests and token_usage.premium_requests > 0:
-            lines.append(f"| Premium requests (est.) | **{token_usage.premium_requests}** |")
-
-    return "\n".join(lines)
-
-
-def _count_sessions(block_content: str) -> int:
-    """Count ``### Session N`` occurrences in a marker block's inner content."""
-    return len(re.findall(r"^### Session \d+", block_content, re.MULTILINE))
-
-
-def _append_usage_entry(
-    body: str,
-    ai_tool: str | None,
-    model: str | None,
-    token_usage: TokenUsage | None,
-    start_marker: str,
-    end_marker: str,
-    heading: str,
-) -> str:
-    """Append a new session entry to a usage marker block.
-
-    If the block doesn't exist, creates a fresh block with ``### Session 1``.
-    If the block exists with N sessions, appends ``### Session N+1``.
-    """
-    from wade.utils.markdown import extract_marker_block
-
-    existing = extract_marker_block(body, start_marker, end_marker)
-    table = _build_session_usage_table(ai_tool=ai_tool, model=model, token_usage=token_usage)
-
-    if existing is None:
-        # Fresh block
-        lines = [
-            start_marker,
-            "",
-            f"## {heading}",
-            "",
-            "### Session 1",
-            "",
-            table,
-            "",
-            end_marker,
-        ]
-        block = "\n".join(lines)
-        stripped = body.rstrip("\n")
-        return stripped + "\n\n" + block + "\n" if stripped else block + "\n"
-
-    # Existing block — count sessions and append
-    n = _count_sessions(existing)
-
-    if n == 0 and existing.strip():
-        # Old format (no ### Session headings) — wrap old content as Session 1
-        new_inner = f"### Session 1\n\n{existing.strip()}\n\n### Session 2\n\n{table}"
-    else:
-        new_session = f"### Session {n + 1}\n\n{table}"
-        new_inner = existing.rstrip("\n") + "\n\n" + new_session
-
-    # Rebuild: remove old block, construct new one with appended session
-    cleaned = remove_marker_block(body, start_marker, end_marker)
-    new_block = f"{start_marker}\n\n{new_inner}\n\n{end_marker}"
-    stripped = cleaned.rstrip("\n")
-    return stripped + "\n\n" + new_block + "\n" if stripped else new_block + "\n"
-
-
-def append_impl_usage_entry(
-    body: str,
-    ai_tool: str | None = None,
-    model: str | None = None,
-    token_usage: TokenUsage | None = None,
-) -> str:
-    """Append an implementation usage session entry to the body."""
-    return _append_usage_entry(
-        body,
-        ai_tool=ai_tool,
-        model=model,
-        token_usage=token_usage,
-        start_marker=IMPL_USAGE_MARKER_START,
-        end_marker=IMPL_USAGE_MARKER_END,
-        heading="Token Usage (Implementation)",
-    )
-
-
-def append_review_usage_entry(
-    body: str,
-    ai_tool: str | None = None,
-    model: str | None = None,
-    token_usage: TokenUsage | None = None,
-) -> str:
-    """Append a review usage session entry to the body."""
-    return _append_usage_entry(
-        body,
-        ai_tool=ai_tool,
-        model=model,
-        token_usage=token_usage,
-        start_marker=REVIEW_USAGE_MARKER_START,
-        end_marker=REVIEW_USAGE_MARKER_END,
-        heading="Token Usage (Review)",
-    )
-
-
-def build_impl_usage_block(
-    ai_tool: str | None = None,
-    model: str | None = None,
-    token_usage: TokenUsage | None = None,
-) -> str:
-    """Build the ## Token Usage (Implementation) section for PR body.
-
-    Wraps ``_build_session_usage_table`` with markers and a ``### Session 1``
-    header.
-    """
-    table = _build_session_usage_table(ai_tool=ai_tool, model=model, token_usage=token_usage)
-    lines = [
-        IMPL_USAGE_MARKER_START,
-        "",
-        "## Token Usage (Implementation)",
-        "",
-        "### Session 1",
-        "",
-        table,
-        "",
-        IMPL_USAGE_MARKER_END,
-    ]
-    return "\n".join(lines)
-
-
-def _strip_impl_usage_block(body: str) -> str:
-    """Remove existing implementation usage block from body (idempotent)."""
-    return remove_marker_block(body, IMPL_USAGE_MARKER_START, IMPL_USAGE_MARKER_END)
-
-
-def build_review_usage_block(
-    ai_tool: str | None = None,
-    model: str | None = None,
-    token_usage: TokenUsage | None = None,
-) -> str:
-    """Build the ## Token Usage (Review) section for PR/issue body.
-
-    Wraps ``_build_session_usage_table`` with review markers and a
-    ``### Session 1`` header.
-    """
-    table = _build_session_usage_table(ai_tool=ai_tool, model=model, token_usage=token_usage)
-    lines = [
-        REVIEW_USAGE_MARKER_START,
-        "",
-        "## Token Usage (Review)",
-        "",
-        "### Session 1",
-        "",
-        table,
-        "",
-        REVIEW_USAGE_MARKER_END,
-    ]
-    return "\n".join(lines)
-
-
-def _strip_review_usage_block(body: str) -> str:
-    """Remove existing review usage block from body (idempotent)."""
-    return remove_marker_block(body, REVIEW_USAGE_MARKER_START, REVIEW_USAGE_MARKER_END)
 
 
 def _strip_summary_section(body: str) -> str:
@@ -3277,12 +2003,8 @@ def done(
     # Clean gate passed — now strip the worktree gitignore block and
     # restore .gitignore visibility so downstream operations see the
     # true state.
-    with contextlib.suppress(OSError, subprocess.SubprocessError):
-        subprocess.run(
-            ["git", "update-index", "--no-skip-worktree", ".gitignore"],
-            cwd=str(cwd),
-            capture_output=True,
-        )
+    with contextlib.suppress(OSError):
+        git_repo.unskip_worktree_file(cwd, ".gitignore")
     strip_worktree_gitignore(cwd)
 
     # Check for tracked wade-managed files that should never be committed
