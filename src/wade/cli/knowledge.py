@@ -35,7 +35,7 @@ def add(
         append_knowledge,
         find_entry_id,
         record_supersede,
-        resolve_knowledge_path,
+        resolve_canonical_knowledge_path,
         resolve_ratings_path,
     )
     from wade.ui.console import console
@@ -63,7 +63,7 @@ def add(
 
     project_root = Path(config.project_root) if config.project_root else Path.cwd()
     try:
-        knowledge_path = resolve_knowledge_path(project_root, config.knowledge)
+        knowledge_path = resolve_canonical_knowledge_path(project_root, config.knowledge)
         if supersedes and not find_entry_id(knowledge_path, supersedes):
             console.error(f"Entry ID '{supersedes}' not found in knowledge file.")
             raise typer.Exit(1)
@@ -81,11 +81,11 @@ def add(
             ratings_path = resolve_ratings_path(knowledge_path)
             record_supersede(ratings_path, supersedes, result.entry_id)
             console.success(
-                f"Knowledge entry {result.entry_id} added to {result.path.name} "
+                f"Knowledge entry {result.entry_id} added to {result.path} "
                 f"(supersedes {supersedes})"
             )
         else:
-            console.success(f"Knowledge entry {result.entry_id} added to {result.path.name}")
+            console.success(f"Knowledge entry {result.entry_id} added to {result.path}")
     except typer.Exit:
         raise
     except ValueError as exc:
@@ -158,7 +158,7 @@ def rate(
     from wade.services.knowledge_service import (
         find_entry_id,
         record_rating,
-        resolve_knowledge_path,
+        resolve_canonical_knowledge_path,
         resolve_ratings_path,
     )
     from wade.ui.console import console
@@ -174,7 +174,7 @@ def rate(
 
     project_root = Path(config.project_root) if config.project_root else Path.cwd()
     try:
-        knowledge_path = resolve_knowledge_path(project_root, config.knowledge)
+        knowledge_path = resolve_canonical_knowledge_path(project_root, config.knowledge)
         if not find_entry_id(knowledge_path, entry_id):
             console.error(f"Entry ID '{entry_id}' not found in knowledge file.")
             raise typer.Exit(1)
@@ -260,7 +260,7 @@ def tag_add(
     from pathlib import Path
 
     from wade.config.loader import load_config
-    from wade.services.knowledge_service import add_tag_to_entry, resolve_knowledge_path
+    from wade.services.knowledge_service import add_tag_to_entry, resolve_canonical_knowledge_path
     from wade.ui.console import console
 
     config = load_config()
@@ -270,7 +270,7 @@ def tag_add(
 
     project_root = Path(config.project_root) if config.project_root else Path.cwd()
     try:
-        knowledge_path = resolve_knowledge_path(project_root, config.knowledge)
+        knowledge_path = resolve_canonical_knowledge_path(project_root, config.knowledge)
         add_tag_to_entry(knowledge_path, entry_id, tag)
         console.success(f"Tag '{tag}' added to entry {entry_id}")
     except typer.Exit:
@@ -292,7 +292,10 @@ def tag_remove(
     from pathlib import Path
 
     from wade.config.loader import load_config
-    from wade.services.knowledge_service import remove_tag_from_entry, resolve_knowledge_path
+    from wade.services.knowledge_service import (
+        remove_tag_from_entry,
+        resolve_canonical_knowledge_path,
+    )
     from wade.ui.console import console
 
     config = load_config()
@@ -302,7 +305,7 @@ def tag_remove(
 
     project_root = Path(config.project_root) if config.project_root else Path.cwd()
     try:
-        knowledge_path = resolve_knowledge_path(project_root, config.knowledge)
+        knowledge_path = resolve_canonical_knowledge_path(project_root, config.knowledge)
         remove_tag_from_entry(knowledge_path, entry_id, tag)
         console.success(f"Tag '{tag}' removed from entry {entry_id}")
     except typer.Exit:
@@ -323,7 +326,7 @@ def tag_list(
     from pathlib import Path
 
     from wade.config.loader import load_config
-    from wade.services.knowledge_service import list_tags, resolve_knowledge_path
+    from wade.services.knowledge_service import list_tags, resolve_canonical_knowledge_path
     from wade.ui.console import console
 
     config = load_config()
@@ -333,7 +336,7 @@ def tag_list(
 
     project_root = Path(config.project_root) if config.project_root else Path.cwd()
     try:
-        knowledge_path = resolve_knowledge_path(project_root, config.knowledge)
+        knowledge_path = resolve_canonical_knowledge_path(project_root, config.knowledge)
         result = list_tags(knowledge_path, entry_id=entry_id)
         if not result:
             print("No tags found.", file=sys.stderr)

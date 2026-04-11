@@ -40,7 +40,8 @@ class TestKnowledgeCommands:
 
         assert result.returncode == 0
         assert "Knowledge entry " in result.stdout
-        assert " added to KNOWLEDGE.md" in result.stdout
+        assert " added to " in result.stdout
+        assert "KNOWLEDGE.md" in result.stdout
         knowledge_path = e2e_repo / "docs" / "KNOWLEDGE.md"
         assert knowledge_path.exists()
         knowledge_text = knowledge_path.read_text(encoding="utf-8")

@@ -134,6 +134,23 @@ def is_worktree(path: Path) -> bool:
     return Path(common_dir).resolve() != Path(git_dir).resolve()
 
 
+def get_main_worktree_path(path: Path) -> Path | None:
+    """Return the main worktree path if path is inside a linked worktree.
+
+    Returns None if path is already the main checkout or not a git repo.
+    """
+    if not is_worktree(path):
+        return None
+    try:
+        result = _run_git("worktree", "list", "--porcelain", cwd=path)
+    except GitError:
+        return None
+    for line in result.stdout.splitlines():
+        if line.startswith("worktree "):
+            return Path(line[len("worktree ") :])
+    return None
+
+
 def get_repo_root(path: Path) -> Path:
     """Return the repository root (top-level working directory).
 

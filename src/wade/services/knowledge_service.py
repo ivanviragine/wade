@@ -114,6 +114,28 @@ def resolve_knowledge_path(project_root: Path, config: KnowledgeConfig) -> Path:
     return resolved
 
 
+def _canonical_project_root(project_root: Path) -> Path:
+    """Return main worktree path if project_root is inside a linked worktree.
+
+    Swallows all exceptions so non-git contexts and test environments without
+    git continue to work correctly.
+    """
+    try:
+        from wade.git.repo import get_main_worktree_path
+
+        main = get_main_worktree_path(project_root)
+        if main is not None and main != project_root:
+            return main
+    except Exception:
+        pass
+    return project_root
+
+
+def resolve_canonical_knowledge_path(project_root: Path, config: KnowledgeConfig) -> Path:
+    """Resolve knowledge path, redirecting to main worktree if in a linked worktree."""
+    return resolve_knowledge_path(_canonical_project_root(project_root), config)
+
+
 def resolve_ratings_path(knowledge_path: Path) -> Path:
     """Derive sidecar ratings file path from knowledge file path.
 
@@ -367,6 +389,7 @@ def get_annotated_knowledge(
     """
     from wade.services.knowledge_search import evaluate_query, parse_query
 
+    project_root = _canonical_project_root(project_root)
     path = resolve_knowledge_path(project_root, config)
     if not path.exists():
         return None
@@ -458,6 +481,7 @@ def append_knowledge(
 
     Returns a KnowledgeEntry with the path and generated entry ID.
     """
+    project_root = _canonical_project_root(project_root)
     if tags:
         for tag in tags:
             err = validate_tag(tag)
