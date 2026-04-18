@@ -1,0 +1,39 @@
+version: 2
+project:
+  main_branch: main
+  issue_label: feature-plan
+  worktrees_dir: ../.worktrees
+  branch_prefix: feat
+  merge_strategy: PR
+ai:
+  default_tool: claude
+  default_model: claude-sonnet-4.6
+  effort: max
+  plan:
+    tool: claude
+    model: claude-opus-4.7
+  deps:
+    tool: gemini
+    model: gemini-3-pro-preview
+    mode: headless
+  review_plan:
+    mode: prompt
+    enabled: true
+  review_implementation:
+    mode: prompt
+    enabled: true
+models:
+  claude:
+    easy: claude-haiku-4.5
+    medium: claude-sonnet-4.6
+    complex: claude-sonnet-4.6
+    very_complex: claude-opus-4.7
+provider:
+  name: github
+knowledge:
+  enabled: true
+hooks:
+  post_worktree_create: scripts/setup-worktree.sh
+  copy_to_worktree:
+  - .env
+  - .wade.yml
