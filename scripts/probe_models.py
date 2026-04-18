@@ -152,7 +152,7 @@ def probe_claude() -> set[str]:
             models = set()
             for line in res.stdout.splitlines():
                 if line.strip() and not line.startswith(("#", "-")):
-                    found = re.findall(r"`(claude-[a-z]+-[0-9][-0-9a-z]+)`", line)
+                    found = re.findall(rf"`({_SCRAPE_PATTERNS['claude']})`", line)
                     models.update(found)
             if models:
                 return models
@@ -560,12 +560,15 @@ def main() -> int:
     _providers = ["claude", "cursor", "copilot", "gemini", "codex", "opencode"]
     try:
         _parsed = json.loads(valid_json)
-        if not _parsed or not any(k in _parsed for k in _providers):
-            console.error("AI tool returned empty or provider-less JSON — refusing to overwrite.")
-            console.detail(f"Raw output was:\n{out}")
-            return 1
     except ValueError:
-        pass
+        console.error("AI tool returned invalid JSON after extraction — refusing to overwrite.")
+        console.detail(f"Raw output was:\n{out}")
+        return 1
+
+    if not isinstance(_parsed, dict) or not _parsed or not any(k in _parsed for k in _providers):
+        console.error("AI tool returned empty or provider-less JSON — refusing to overwrite.")
+        console.detail(f"Raw output was:\n{out}")
+        return 1
 
     out = valid_json
 
