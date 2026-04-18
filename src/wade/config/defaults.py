@@ -11,19 +11,19 @@ TOOL_DEFAULTS: dict[str, ComplexityModelMapping] = {
         easy="claude-haiku-4.5",
         medium="claude-sonnet-4.6",
         complex="claude-sonnet-4.6",
-        very_complex="claude-opus-4.6",
+        very_complex="claude-opus-4.7",
     ),
     AIToolID.COPILOT: ComplexityModelMapping(
         easy="claude-haiku-4.5",
         medium="claude-sonnet-4.6",
         complex="claude-sonnet-4.6",
-        very_complex="claude-opus-4.6",
+        very_complex="claude-opus-4.7",
     ),
     AIToolID.GEMINI: ComplexityModelMapping(
         easy="gemini-3-flash-preview",
-        medium="gemini-3.1-pro-preview",
-        complex="gemini-3.1-pro-preview",
-        very_complex="gemini-3.1-pro-preview",
+        medium="gemini-3-pro-preview",
+        complex="gemini-3-pro-preview",
+        very_complex="gemini-3-pro-preview",
     ),
     AIToolID.CODEX: ComplexityModelMapping(
         easy="gpt-5.4-mini",
@@ -33,15 +33,15 @@ TOOL_DEFAULTS: dict[str, ComplexityModelMapping] = {
     ),
     AIToolID.CURSOR: ComplexityModelMapping(
         easy="gemini-3-flash",
-        medium="sonnet-4.6",
-        complex="sonnet-4.6",
-        very_complex="opus-4.6",
+        medium="claude-4.6-sonnet-medium",
+        complex="claude-4.6-sonnet-medium",
+        very_complex="claude-opus-4-7-high",
     ),
     AIToolID.OPENCODE: ComplexityModelMapping(
         easy="anthropic/claude-haiku-4.5",
         medium="anthropic/claude-sonnet-4.6",
         complex="anthropic/claude-sonnet-4.6",
-        very_complex="anthropic/claude-opus-4.6",
+        very_complex="anthropic/claude-opus-4.7",
     ),
 }
 

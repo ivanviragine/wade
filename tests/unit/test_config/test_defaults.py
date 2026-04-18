@@ -33,7 +33,7 @@ class TestMediumTierDefaults:
 
     def test_cursor_medium_is_balanced(self) -> None:
         mapping = get_defaults(AIToolID.CURSOR)
-        assert mapping.medium == "sonnet-4.6"
+        assert mapping.medium == "claude-4.6-sonnet-medium"
 
 
 class TestWriteLoadRoundtrip:

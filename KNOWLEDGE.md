@@ -24,3 +24,9 @@ functions (append_knowledge, get_annotated_knowledge) and in CLI commands
 that resolve paths directly (resolve_canonical_knowledge_path wrapper).
 
 ---
+
+## 54326c98 | 2026-04-18 | plan | tags: model-registry, effort, claude
+
+claude-opus-4-7 is the current most-capable Claude model (dotted internal form: claude-opus-4.7). It introduces the xhigh effort level (between high and max). Cursor agent binary renamed short-form model IDs (opus-4.6 → claude-4.6-opus-high etc.) and embeds effort in names; thinking models are now claude-opus-4-7-thinking-{effort} not {model}-thinking. Codex renamed --yolo to --ask-for-approval (-a never for automation). probe_models.py had two bugs: claude parsing extracted prose words instead of model IDs, and opencode subcommand help check was wrong (should check 'opencode run --help' not top-level).
+
+---

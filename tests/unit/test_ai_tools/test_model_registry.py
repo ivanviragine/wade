@@ -22,6 +22,32 @@ class TestModelRegistry:
         for key in MODELS:
             assert not key.startswith("_")
 
+    def test_claude_opus_47_in_claude_registry(self) -> None:
+        assert "claude-opus-4.7" in get_models_for_tool("claude")
+
+    def test_claude_opus_47_xhigh_in_cursor_registry(self) -> None:
+        assert "claude-opus-4-7-xhigh" in get_models_for_tool("cursor")
+
+    def test_gemini_31_pro_preview_removed(self) -> None:
+        assert "gemini-3.1-pro-preview" not in get_models_for_tool("gemini")
+
+    def test_gpt5_removed_from_codex(self) -> None:
+        assert "gpt-5" not in get_models_for_tool("codex")
+
+    def test_gemini_defaults_use_known_models(self) -> None:
+        from wade.config.defaults import TOOL_DEFAULTS
+
+        gemini_defaults = TOOL_DEFAULTS[AIToolID.GEMINI]
+        known = set(get_models_for_tool("gemini"))
+        for model in [
+            gemini_defaults.easy,
+            gemini_defaults.medium,
+            gemini_defaults.complex,
+            gemini_defaults.very_complex,
+        ]:
+            if model:
+                assert model in known, f"Gemini default '{model}' not in registry"
+
 
 class TestRegistryGetModels:
     """Verify that adapters read correctly from the static registry."""

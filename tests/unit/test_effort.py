@@ -18,10 +18,12 @@ class TestEffortLevel:
         assert EffortLevel.LOW == "low"
         assert EffortLevel.MEDIUM == "medium"
         assert EffortLevel.HIGH == "high"
+        assert EffortLevel.XHIGH == "xhigh"
         assert EffortLevel.MAX == "max"
 
     def test_from_string(self) -> None:
         assert EffortLevel("low") is EffortLevel.LOW
+        assert EffortLevel("xhigh") is EffortLevel.XHIGH
         assert EffortLevel("max") is EffortLevel.MAX
 
     def test_invalid_raises(self) -> None:
@@ -33,6 +35,7 @@ class TestEffortLevel:
             EffortLevel.LOW,
             EffortLevel.MEDIUM,
             EffortLevel.HIGH,
+            EffortLevel.XHIGH,
             EffortLevel.MAX,
         ]
 
@@ -182,9 +185,17 @@ class TestCodexEffortArgs:
         result = self._get_adapter().effort_args(EffortLevel.HIGH)
         assert result == ["-c", 'model_reasoning_effort="high"']
 
+    def test_effort_xhigh_maps_to_xhigh(self) -> None:
+        result = self._get_adapter().effort_args(EffortLevel.XHIGH)
+        assert result == ["-c", 'model_reasoning_effort="xhigh"']
+
     def test_effort_max_maps_to_xhigh(self) -> None:
         result = self._get_adapter().effort_args(EffortLevel.MAX)
         assert result == ["-c", 'model_reasoning_effort="xhigh"']
+
+    def test_yolo_args(self) -> None:
+        result = self._get_adapter().yolo_args()
+        assert result == ["-a", "never"]
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +233,28 @@ class TestCursorEffort:
         result = self._get_adapter().resolve_effort_model(None, EffortLevel.HIGH)
         assert result is None
 
+    def test_xhigh_appends_thinking_old_style(self) -> None:
+        result = self._get_adapter().resolve_effort_model("sonnet-4.6", EffortLevel.XHIGH)
+        assert result == "sonnet-4.6-thinking"
+
+    def test_new_style_high_unchanged(self) -> None:
+        result = self._get_adapter().resolve_effort_model("claude-opus-4-7-high", EffortLevel.HIGH)
+        assert result == "claude-opus-4-7-high"
+
+    def test_new_style_xhigh_inserts_thinking(self) -> None:
+        result = self._get_adapter().resolve_effort_model("claude-opus-4-7-high", EffortLevel.XHIGH)
+        assert result == "claude-opus-4-7-thinking-high"
+
+    def test_new_style_max_inserts_thinking(self) -> None:
+        result = self._get_adapter().resolve_effort_model("claude-opus-4-7-high", EffortLevel.MAX)
+        assert result == "claude-opus-4-7-thinking-high"
+
+    def test_new_style_already_thinking_unchanged(self) -> None:
+        result = self._get_adapter().resolve_effort_model(
+            "claude-opus-4-7-thinking-high", EffortLevel.MAX
+        )
+        assert result == "claude-opus-4-7-thinking-high"
+
     def test_effort_args_empty(self) -> None:
         """Cursor uses model variants, not CLI args — effort_args returns []."""
         result = self._get_adapter().effort_args(EffortLevel.HIGH)
@@ -249,6 +282,10 @@ class TestOpenCodeEffortArgs:
 
     def test_effort_high(self) -> None:
         result = self._get_adapter().effort_args(EffortLevel.HIGH)
+        assert result == ["--variant", "high"]
+
+    def test_effort_xhigh_maps_to_high(self) -> None:
+        result = self._get_adapter().effort_args(EffortLevel.XHIGH)
         assert result == ["--variant", "high"]
 
     def test_effort_max_maps_to_high(self) -> None:

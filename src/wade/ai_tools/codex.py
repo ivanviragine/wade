@@ -18,6 +18,7 @@ _CODEX_EFFORT_MAP: dict[EffortLevel, str] = {
     EffortLevel.LOW: "low",
     EffortLevel.MEDIUM: "medium",
     EffortLevel.HIGH: "high",
+    EffortLevel.XHIGH: "xhigh",
     EffortLevel.MAX: "xhigh",
 }
 
@@ -74,5 +75,5 @@ class CodexAdapter(AbstractAITool):
         return ["-c", f'model_reasoning_effort="{mapped}"']
 
     def yolo_args(self) -> list[str]:
-        """Codex uses ``--yolo``."""
-        return ["--yolo"]
+        """Codex uses ``-a never`` (``--ask-for-approval never``)."""
+        return ["-a", "never"]

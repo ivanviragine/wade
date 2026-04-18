@@ -8,6 +8,7 @@ from typing import ClassVar
 import structlog
 
 from wade.ai_tools.base import AbstractAITool
+from wade.data import get_models_for_tool
 from wade.models.ai import (
     AIToolCapabilities,
     AIToolID,
@@ -16,6 +17,13 @@ from wade.models.ai import (
 )
 
 logger = structlog.get_logger()
+
+_EFFORT_SUFFIXES = ("-low", "-medium", "-high", "-xhigh", "-max", "-none")
+
+
+def _is_new_style_cursor_model(model: str) -> bool:
+    """New-style Cursor models embed effort in the ID (e.g. claude-opus-4-7-high)."""
+    return "-thinking" in model or any(model.endswith(s) for s in _EFFORT_SUFFIXES)
 
 
 class CursorAdapter(AbstractAITool):
@@ -63,11 +71,33 @@ class CursorAdapter(AbstractAITool):
         return ["--force"]
 
     def resolve_effort_model(self, model: str | None, effort: EffortLevel) -> str | None:
-        """For high/max effort, append ``-thinking`` to the model ID."""
-        if (
-            effort in (EffortLevel.HIGH, EffortLevel.MAX)
-            and model
-            and not model.endswith("-thinking")
+        """Select the appropriate model variant for the given effort level.
+
+        New-style models (effort embedded in ID, e.g. ``claude-opus-4-7-high``):
+          XHIGH/MAX → insert ``-thinking-`` before the effort suffix.
+          All other levels → use the model ID as-is.
+
+        Old-style models (short-name, e.g. ``sonnet-4.6``):
+          HIGH/XHIGH/MAX → append ``-thinking``.
+          All other levels → use the model ID as-is.
+        """
+        if not model:
+            return model
+        if _is_new_style_cursor_model(model):
+            if effort in (EffortLevel.XHIGH, EffortLevel.MAX) and "-thinking" not in model:
+                known_models = set(get_models_for_tool(AIToolID.CURSOR))
+                appended = f"{model}-thinking"
+                if appended in known_models:
+                    return appended
+                for suffix in _EFFORT_SUFFIXES:
+                    if model.endswith(suffix):
+                        base = model[: -len(suffix)]
+                        inserted = f"{base}-thinking{suffix}"
+                        if inserted in known_models:
+                            return inserted
+            return model
+        if effort in (EffortLevel.HIGH, EffortLevel.XHIGH, EffortLevel.MAX) and not model.endswith(
+            "-thinking"
         ):
             return f"{model}-thinking"
         return model

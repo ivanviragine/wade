@@ -112,7 +112,7 @@ class TestAdapterYoloArgs:
         from wade.ai_tools.codex import CodexAdapter
 
         result = CodexAdapter().yolo_args()
-        assert result == ["--yolo"]
+        assert result == ["-a", "never"]
 
     def test_copilot_yolo_args(self) -> None:
         from wade.ai_tools.copilot import CopilotAdapter
@@ -192,7 +192,8 @@ class TestBuildLaunchCommandYolo:
         from wade.ai_tools.codex import CodexAdapter
 
         cmd = CodexAdapter().build_launch_command(yolo=True)
-        assert "--yolo" in cmd
+        assert "-a" in cmd
+        assert "never" in cmd
 
     def test_copilot_yolo_includes_flag(self) -> None:
         from wade.ai_tools.copilot import CopilotAdapter
