@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.20.0] — 2026-04-18
+
+### Features
+
+- add Claude Opus 4.7, xhigh effort level, and refresh model registry (#275) (a8916d3)
+
 ## [v0.19.8] — 2026-04-11
 
 ### Tests
