@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.20.1] — 2026-04-18
+
+### Bug Fixes
+
+- search knowledge after learning feature topic in plan-session skill (#277) (dbfb0e1)
+
 ## [v0.20.0] — 2026-04-18
 
 ### Features
