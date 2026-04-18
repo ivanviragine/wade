@@ -34,6 +34,20 @@ class TestModelRegistry:
     def test_gpt5_removed_from_codex(self) -> None:
         assert "gpt-5" not in get_models_for_tool("codex")
 
+    def test_gemini_defaults_use_known_models(self) -> None:
+        from wade.config.defaults import TOOL_DEFAULTS
+
+        gemini_defaults = TOOL_DEFAULTS[AIToolID.GEMINI]
+        known = set(get_models_for_tool("gemini"))
+        for model in [
+            gemini_defaults.easy,
+            gemini_defaults.medium,
+            gemini_defaults.complex,
+            gemini_defaults.very_complex,
+        ]:
+            if model:
+                assert model in known, f"Gemini default '{model}' not in registry"
+
 
 class TestRegistryGetModels:
     """Verify that adapters read correctly from the static registry."""

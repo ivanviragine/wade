@@ -21,9 +21,9 @@ TOOL_DEFAULTS: dict[str, ComplexityModelMapping] = {
     ),
     AIToolID.GEMINI: ComplexityModelMapping(
         easy="gemini-3-flash-preview",
-        medium="gemini-3.1-pro-preview",
-        complex="gemini-3.1-pro-preview",
-        very_complex="gemini-3.1-pro-preview",
+        medium="gemini-3-pro-preview",
+        complex="gemini-3-pro-preview",
+        very_complex="gemini-3-pro-preview",
     ),
     AIToolID.CODEX: ComplexityModelMapping(
         easy="gpt-5.4-mini",
