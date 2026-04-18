@@ -37,8 +37,7 @@ _SCRAPE_PATTERNS: dict[str, str] = {
 # Values are substrings to search for in `--help` / `-h` output.
 _EXPECTED_FLAGS: dict[str, dict[str, str]] = {
     "codex": {
-        "yolo": "--approval-mode",
-        "ask_for_approval": "--ask-for-approval",
+        "yolo": "--ask-for-approval",
         "headless": "exec",
         "model_reasoning_effort": "model_reasoning_effort",
         "profile": "--profile",
@@ -76,6 +75,12 @@ _EXPECTED_FLAGS: dict[str, dict[str, str]] = {
         "resume": "-s",
         "effort": "--variant",
     },
+}
+
+# Extra help subcommands to run per tool when probing CLI flags.
+# Some flags (e.g. opencode's --variant) only appear in subcommand help.
+_EXTRA_HELP_COMMANDS: dict[str, list[list[str]]] = {
+    "opencode": [["run", "--help"]],
 }
 
 # Maps capability names in _EXPECTED_FLAGS to AIToolCapabilities boolean fields.
@@ -147,9 +152,8 @@ def probe_claude() -> set[str]:
             models = set()
             for line in res.stdout.splitlines():
                 if line.strip() and not line.startswith(("#", "-")):
-                    parts = line.split()
-                    if parts and parts[0].lower() not in ("model", "name", "id"):
-                        models.add(parts[0])
+                    found = re.findall(r"`(claude-[a-z]+-[0-9][-0-9a-z]+)`", line)
+                    models.update(found)
             if models:
                 return models
     except Exception:
@@ -272,6 +276,18 @@ def probe_cli_args(tool: str) -> dict[str, bool]:
         try:
             result = subprocess.run(
                 [binary, help_flag],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            combined += result.stdout + result.stderr
+        except Exception:
+            pass
+
+    for subcmd_args in _EXTRA_HELP_COMMANDS.get(tool, []):
+        try:
+            result = subprocess.run(
+                [binary, *subcmd_args],
                 capture_output=True,
                 text=True,
                 timeout=15,
@@ -540,6 +556,16 @@ def main() -> int:
         if res.stderr:
             console.detail(f"Raw stderr was:\n{res.stderr.strip()}")
         return 1
+
+    _providers = ["claude", "cursor", "copilot", "gemini", "codex", "opencode"]
+    try:
+        _parsed = json.loads(valid_json)
+        if not _parsed or not any(k in _parsed for k in _providers):
+            console.error("AI tool returned empty or provider-less JSON — refusing to overwrite.")
+            console.detail(f"Raw output was:\n{out}")
+            return 1
+    except ValueError:
+        pass
 
     out = valid_json
 

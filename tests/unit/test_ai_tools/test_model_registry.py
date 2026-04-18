@@ -22,6 +22,18 @@ class TestModelRegistry:
         for key in MODELS:
             assert not key.startswith("_")
 
+    def test_claude_opus_47_in_claude_registry(self) -> None:
+        assert "claude-opus-4.7" in get_models_for_tool("claude")
+
+    def test_claude_opus_47_xhigh_in_cursor_registry(self) -> None:
+        assert "claude-opus-4-7-xhigh" in get_models_for_tool("cursor")
+
+    def test_gemini_31_pro_preview_removed(self) -> None:
+        assert "gemini-3.1-pro-preview" not in get_models_for_tool("gemini")
+
+    def test_gpt5_removed_from_codex(self) -> None:
+        assert "gpt-5" not in get_models_for_tool("codex")
+
 
 class TestRegistryGetModels:
     """Verify that adapters read correctly from the static registry."""

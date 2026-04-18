@@ -140,7 +140,6 @@ class TestProbeCliArgs:
         assert result["model_reasoning_effort"] is True
         assert result["profile"] is True
         assert result["image"] is True
-        assert result["ask_for_approval"] is True
 
     def test_opencode_flags_detected(self) -> None:
         from probe_models import probe_cli_args
