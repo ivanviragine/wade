@@ -30,3 +30,9 @@ that resolve paths directly (resolve_canonical_knowledge_path wrapper).
 claude-opus-4-7 is the current most-capable Claude model (dotted internal form: claude-opus-4.7). It introduces the xhigh effort level (between high and max). Cursor agent binary renamed short-form model IDs (opus-4.6 → claude-4.6-opus-high etc.) and embeds effort in names; thinking models are now claude-opus-4-7-thinking-{effort} not {model}-thinking. Codex renamed --yolo to --ask-for-approval (-a never for automation). probe_models.py had two bugs: claude parsing extracted prose words instead of model IDs, and opencode subcommand help check was wrong (should check 'opencode run --help' not top-level).
 
 ---
+
+## b6a3a637 | 2026-04-19 | implementation | tags: plan-session, skills, templates | Issue #278
+
+When the plan-session 'Your role' step numbering changes, the _partials/review-plan-step.md partial also has a hardcoded step number that must be kept in sync. After adding 2 steps in #278, the partial moved from step 5 to step 7.
+
+---
