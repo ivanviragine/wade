@@ -67,10 +67,13 @@ Running `wade knowledge add` is allowed even though this is a planning session.
 6. **Review with the user** — present a summary of every plan file you wrote
    (title, complexity, key tasks). Use your tool's native question component to ask: "Want any modifications?" If so, apply them and repeat; otherwise proceed to step 7.
 {review_plan_step}
-8. **Validate** — run `wade plan-session done <plan_dir>` (the temp dir from your prompt).
+<!-- markdownlint-disable-next-line MD029 -->
+8. **Capture knowledge (if enabled)** — before validation, run `wade knowledge add` to store important learnings when `.wade.yml` has `knowledge.enabled: true`.
+<!-- markdownlint-disable-next-line MD029 -->
+9. **Validate** — run `wade plan-session done <plan_dir>` (the temp dir from your prompt).
    If it exits with errors, fix each reported issue and re-run until it passes.
    Warnings are informational and do not block proceeding.
-9. **Present results and suggest exit** — once validation passes, provide a
+10. **Present results and suggest exit** — once validation passes, provide a
    brief **workflow recap** and **what happens next**:
 
    Workflow recap (list only the steps you actually performed):
