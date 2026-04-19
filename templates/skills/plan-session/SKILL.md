@@ -59,16 +59,18 @@ Running `wade knowledge add` is allowed even though this is a planning session.
 
 ## Your role
 
-1. **Plan the feature** with the user — analyze, break down, propose.
-2. **Present the plan(s)** to the user. Use your tool's native question component to ask: "Ready to write the plan file(s)?" before writing any files.
-3. **Write plan file(s)** to the temp directory shown in your prompt.
-4. **Review with the user** — present a summary of every plan file you wrote
-   (title, complexity, key tasks). Use your tool's native question component to ask: "Want any modifications?" If so, apply them and repeat; otherwise proceed to step 5.
+1. **Ask the user** what they want to plan. If the session prompt does not already specify a feature or issue, ask before proceeding.
+2. **Search relevant knowledge** — once you know the topic, search for entries relevant to that feature using `wade knowledge get --search <topic>` or `wade knowledge get --tag <tag>` (see @.claude/skills/knowledge/SKILL.md and the **Project Knowledge** section above). Do not dump all entries.
+3. **Plan the feature** with the user — analyze, break down, propose.
+4. **Present the plan(s)** to the user. Use your tool's native question component to ask: "Ready to write the plan file(s)?" before writing any files.
+5. **Write plan file(s)** to the temp directory shown in your prompt.
+6. **Review with the user** — present a summary of every plan file you wrote
+   (title, complexity, key tasks). Use your tool's native question component to ask: "Want any modifications?" If so, apply them and repeat; otherwise proceed to step 7.
 {review_plan_step}
-6. **Validate** — run `wade plan-session done <plan_dir>` (the temp dir from your prompt).
+8. **Validate** — run `wade plan-session done <plan_dir>` (the temp dir from your prompt).
    If it exits with errors, fix each reported issue and re-run until it passes.
    Warnings are informational and do not block proceeding.
-7. **Present results and suggest exit** — once validation passes, provide a
+9. **Present results and suggest exit** — once validation passes, provide a
    brief **workflow recap** and **what happens next**:
 
    Workflow recap (list only the steps you actually performed):
