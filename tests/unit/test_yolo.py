@@ -112,7 +112,7 @@ class TestAdapterYoloArgs:
         from crossby.ai_tools.codex import CodexAdapter
 
         result = CodexAdapter().yolo_args()
-        assert result == ["-a", "never"]
+        assert result == ["--yolo"]
 
     def test_copilot_yolo_args(self) -> None:
         from crossby.ai_tools.copilot import CopilotAdapter
@@ -192,8 +192,7 @@ class TestBuildLaunchCommandYolo:
         from crossby.ai_tools.codex import CodexAdapter
 
         cmd = CodexAdapter().build_launch_command(yolo=True)
-        assert "-a" in cmd
-        assert "never" in cmd
+        assert "--yolo" in cmd
 
     def test_copilot_yolo_includes_flag(self) -> None:
         from crossby.ai_tools.copilot import CopilotAdapter

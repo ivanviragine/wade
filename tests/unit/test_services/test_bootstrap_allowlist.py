@@ -9,8 +9,8 @@ from unittest.mock import patch
 from wade.models.config import HooksConfig, PermissionsConfig, ProjectConfig, ProjectSettings
 from wade.services.implementation_service import bootstrap_worktree
 
-WADE_ALLOW_PATTERN = "Bash(wade:*)"
-CURSOR_WADE_ALLOW_PATTERN = "Shell(wade:*)"
+WADE_ALLOW_PATTERN = "Bash(wade *)"
+CURSOR_WADE_ALLOW_PATTERN = "Shell(wade *)"
 
 
 class TestBootstrapAllowlistPropagation:

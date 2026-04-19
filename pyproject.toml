@@ -24,7 +24,7 @@ classifiers = [
     "Topic :: Software Development :: Version Control :: Git",
 ]
 dependencies = [
-    "crossby>=0.2.0,<0.3.0",
+    "crossby>=0.2.3,<0.3.0",
     "typer>=0.12",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",

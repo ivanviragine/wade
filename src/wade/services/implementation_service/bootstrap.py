@@ -473,11 +473,12 @@ def bootstrap_worktree(
     from crossby.config.cursor_allowlist import is_allowlist_configured as is_cursor_configured
 
     cursor_in_config = any(config.get_ai_tool(cmd) == "cursor" for cmd in [None, *AI_COMMAND_NAMES])
+    cursor_marker = ["wade *"]
     if (
         selected_ai_tool == "cursor"
         or cursor_in_config
-        or is_cursor_configured()
-        or is_cursor_configured(repo_root)
+        or is_cursor_configured(patterns=cursor_marker)
+        or is_cursor_configured(repo_root, cursor_marker)
     ):
         configure_cursor_allowlist(worktree_path, config.permissions.allowed_commands)
 

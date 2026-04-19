@@ -437,8 +437,8 @@ def _migrate_ai_artifacts_off_main(project_root: Path) -> list[str]:
 
     from crossby.sync.permissions import canonical_to_claude, canonical_to_cursor
 
-    claude_wade_pattern = canonical_to_claude("wade:*")
-    cursor_wade_pattern = canonical_to_cursor("wade:*")
+    claude_wade_pattern = canonical_to_claude("wade *")
+    cursor_wade_pattern = canonical_to_cursor("wade *")
 
     removed: list[str] = []
 

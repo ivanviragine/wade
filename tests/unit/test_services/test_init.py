@@ -1283,8 +1283,8 @@ class TestUpdateExtended:
             configure_allowlist as configure_cursor_allowlist,
         )
 
-        configure_allowlist(tmp_git_repo, ["wade:*"])
-        configure_cursor_allowlist(tmp_git_repo, ["wade:*"])
+        configure_allowlist(tmp_git_repo, ["wade *"])
+        configure_cursor_allowlist(tmp_git_repo, ["wade *"])
         write_pointer(tmp_git_repo / "AGENTS.md")
         (tmp_git_repo / "CLAUDE.md").symlink_to("AGENTS.md")
 
