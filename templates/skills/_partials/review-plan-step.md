@@ -1,4 +1,4 @@
-5. **Review** — after writing plan files, run `wade review plan <plan_file>` for
+7. **Review** — after writing plan files, run `wade review plan <plan_file>` for
    each plan file you created and check the exit code:
    - **Exit 0**: Review completed externally or skipped. If there is output, it
      is review feedback — read it and address any actionable findings before

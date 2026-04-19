@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.20.2] — 2026-04-19
+
+### Bug Fixes
+
+- integrate knowledge search step into plan-session workflow (#279) (ac05154)
+
+## [v0.20.1] — 2026-04-18
+
+### Bug Fixes
+
+- search knowledge after learning feature topic in plan-session skill (#277) (dbfb0e1)
+
 ## [v0.20.0] — 2026-04-18
 
 ### Features
