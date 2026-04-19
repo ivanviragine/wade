@@ -5,6 +5,7 @@ from __future__ import annotations
 import shlex
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import structlog
@@ -29,6 +30,7 @@ def run(
     check: bool = True,
     capture: bool = True,
     input_text: str | None = None,
+    retries: int = 0,
 ) -> subprocess.CompletedProcess[str]:
     """Run a subprocess command with logging and error handling.
 
@@ -39,42 +41,57 @@ def run(
         check: If True, raise CommandError on non-zero exit.
         capture: If True, capture stdout/stderr.
         input_text: Optional stdin text.
+        retries: Number of times to retry on non-zero exit (default 0).
 
     Returns:
         CompletedProcess with text stdout/stderr.
 
     Raises:
-        CommandError: If check=True and the command returns non-zero.
+        CommandError: If check=True and the command returns non-zero after all retries.
     """
     logger.debug("subprocess.run", command=command, cwd=str(cwd) if cwd else None)
 
-    try:
-        result = subprocess.run(
-            command,
-            cwd=cwd,
-            timeout=timeout,
-            capture_output=capture,
-            text=True,
-            input=input_text,
-        )
-    except subprocess.TimeoutExpired:
-        logger.error("subprocess.timeout", command=command, timeout=timeout)
-        raise
-    except FileNotFoundError as err:
-        logger.error("subprocess.not_found", command=command[0])
-        raise CommandError(command, 127, f"Command not found: {command[0]}") from err
+    attempt = 0
+    while True:
+        try:
+            result = subprocess.run(
+                command,
+                cwd=cwd,
+                timeout=timeout,
+                capture_output=capture,
+                text=True,
+                input=input_text,
+            )
+        except subprocess.TimeoutExpired:
+            logger.error("subprocess.timeout", command=command, timeout=timeout)
+            raise
+        except FileNotFoundError as err:
+            logger.error("subprocess.not_found", command=command[0])
+            raise CommandError(command, 127, f"Command not found: {command[0]}") from err
 
-    if check and result.returncode != 0:
-        stderr = result.stderr.strip() if capture else ""
-        logger.error(
-            "subprocess.failed",
-            command=command,
-            returncode=result.returncode,
-            stderr=stderr[:200],
-        )
-        raise CommandError(command, result.returncode, stderr)
+        if check and result.returncode != 0:
+            stderr = result.stderr.strip() if capture else ""
+            if attempt < retries:
+                attempt += 1
+                logger.warning(
+                    "subprocess.retrying",
+                    command=command,
+                    returncode=result.returncode,
+                    attempt=attempt,
+                    retries=retries,
+                    stderr=stderr[:200],
+                )
+                time.sleep(attempt)
+                continue
+            logger.error(
+                "subprocess.failed",
+                command=command,
+                returncode=result.returncode,
+                stderr=stderr[:200],
+            )
+            raise CommandError(command, result.returncode, stderr)
 
-    return result
+        return result
 
 
 def run_with_transcript(

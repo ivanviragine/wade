@@ -143,12 +143,7 @@ def review_pr_comments_cmd(
     from wade.services.review_service import start as do_start
     from wade.ui import prompts
 
-    selected_ai: str | None = None
-    if ai and len(ai) > 1:
-        idx = prompts.select("Select AI tool", ai)
-        selected_ai = ai[idx]
-    elif ai and len(ai) == 1:
-        selected_ai = ai[0]
+    selected_ai = prompts.resolve_ai_from_list(ai)
 
     success = do_start(
         target=target,

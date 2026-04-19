@@ -2,6 +2,8 @@ Let's address the review comments on PR #{pr_number} for Issue #{issue_number}: 
 
 Follow @.claude/skills/review-pr-comments-session/SKILL.md for session rules.
 
+Use your tool's native task/todo tracking mechanism to populate a checklist with the workflow steps from the skill before starting work.
+
 # Review comments to address
 
 Run `wade review-pr-comments-session fetch {issue_number}` to get all unresolved review comments.
@@ -15,3 +17,6 @@ There are {comment_count} unresolved comment(s) across {file_count} file(s).
 4. **Resolve threads** with `wade review-pr-comments-session resolve <thread-id>` after addressing each comment.
 5. **Never** push branches or create PRs manually — use `wade review-pr-comments-session done`.
 6. **Before closing**: sync with main via `wade review-pr-comments-session sync --json`.
+7. **At session end**: always present a workflow recap (which wade commands you ran),
+   current state (PR status, threads resolved and remaining), and what happens next. Then suggest
+   the user exits.

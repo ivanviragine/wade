@@ -416,11 +416,11 @@ class TestSync:
 
         with (
             patch(
-                "wade.services.implementation_service.load_config",
+                "wade.services.implementation_service.core.load_config",
                 return_value=ProjectConfig(),
             ),
             patch(
-                "wade.services.implementation_service.git_repo.get_repo_root",
+                "wade.services.implementation_service.core.git_repo.get_repo_root",
                 side_effect=GitError("not a repo"),
             ),
         ):
@@ -432,7 +432,7 @@ class TestSync:
         from wade.services.implementation_service import sync
 
         with patch(
-            "wade.services.implementation_service.load_config",
+            "wade.services.implementation_service.core.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -461,7 +461,7 @@ class TestSync:
         )
 
         with patch(
-            "wade.services.implementation_service.load_config",
+            "wade.services.implementation_service.core.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -514,7 +514,7 @@ class TestSync:
         )
 
         with patch(
-            "wade.services.implementation_service.load_config",
+            "wade.services.implementation_service.core.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -567,7 +567,7 @@ class TestSync:
         )
 
         with patch(
-            "wade.services.implementation_service.load_config",
+            "wade.services.implementation_service.core.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -594,7 +594,7 @@ class TestSync:
         (tmp_git_repo / "dirty.txt").write_text("dirty\n")
 
         with patch(
-            "wade.services.implementation_service.load_config",
+            "wade.services.implementation_service.core.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -606,6 +606,42 @@ class TestSync:
                 for e in result.events
                 if e.event == "error"
             )
+
+    def test_dirty_worktree_with_session_files_in_event(self, tmp_git_repo: Path) -> None:
+        """session_files is included in the ERROR event payload for dirty session artifacts."""
+        import subprocess
+
+        from wade.services.implementation_service import sync
+
+        subprocess.run(
+            ["git", "checkout", "-b", "feat/42-test"],
+            cwd=tmp_git_repo,
+            capture_output=True,
+            check=True,
+        )
+
+        # Create a dirty session artifact
+        (tmp_git_repo / "PLAN.md").write_text("# Plan\n")
+
+        with patch(
+            "wade.services.implementation_service.core.load_config",
+            return_value=ProjectConfig(
+                project=ProjectSettings(main_branch="main"),
+            ),
+        ):
+            result = sync(project_root=tmp_git_repo)
+            assert not result.success
+            error_event = next(
+                (
+                    e
+                    for e in result.events
+                    if e.event == "error" and e.data.get("reason") == "dirty_worktree"
+                ),
+                None,
+            )
+            assert error_event is not None
+            assert "session_files" in error_event.data
+            assert "PLAN.md" in error_event.data["session_files"]
 
     def test_json_output(self, tmp_git_repo: Path) -> None:
         """JSON output mode emits structured events."""
@@ -621,7 +657,7 @@ class TestSync:
         )
 
         with patch(
-            "wade.services.implementation_service.load_config",
+            "wade.services.implementation_service.core.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -643,11 +679,11 @@ class TestDone:
 
         with (
             patch(
-                "wade.services.implementation_service.load_config",
+                "wade.services.implementation_service.core.load_config",
                 return_value=ProjectConfig(),
             ),
             patch(
-                "wade.services.implementation_service.git_repo.get_repo_root",
+                "wade.services.implementation_service.core.git_repo.get_repo_root",
                 side_effect=GitError("not a repo"),
             ),
         ):
@@ -660,13 +696,66 @@ class TestDone:
 
         # We're on 'main' which has no issue number
         with patch(
-            "wade.services.implementation_service.load_config",
+            "wade.services.implementation_service.core.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
         ):
             result = done(project_root=tmp_git_repo)
             assert not result
+
+    def test_done_reads_stacked_base_branch(self, tmp_git_repo: Path) -> None:
+        """done() reads .wade/base_branch and targets parent branch instead of main."""
+        # Create a parent branch
+        from wade.git import branch as git_branch
+        from wade.git.worktree import create_worktree
+        from wade.services.implementation_service import done
+
+        git_branch.create_branch(tmp_git_repo, "feat/1-parent", "main")
+
+        # Create worktree for child issue
+        wt_dir = tmp_git_repo.parent / "wt-2"
+        create_worktree(tmp_git_repo, "feat/2-child", wt_dir, "feat/1-parent")
+
+        # Gitignore .wade/ so it doesn't make the tree dirty
+        (wt_dir / ".gitignore").write_text(".wade/\n")
+
+        # Write base_branch file (as start() would for chains)
+        wade_dir = wt_dir / ".wade"
+        wade_dir.mkdir(parents=True, exist_ok=True)
+        (wade_dir / "base_branch").write_text("feat/1-parent\n")
+
+        # Commit test file and .gitignore so the tree is clean
+        (wt_dir / "test.txt").write_text("test")
+        import subprocess
+
+        subprocess.run(["git", "add", ".gitignore", "test.txt"], cwd=wt_dir, check=True)
+        subprocess.run(["git", "commit", "-m", "test"], cwd=wt_dir, check=True)
+
+        mock_provider = MagicMock()
+        mock_task = Task(id="2", title="Child", body="", state=TaskState.OPEN)
+        mock_provider.read_task.return_value = mock_task
+        mock_provider.find_parent_issue.return_value = None
+
+        with (
+            patch(
+                "wade.services.implementation_service.core.load_config",
+                return_value=ProjectConfig(
+                    project=ProjectSettings(main_branch="main"),
+                ),
+            ),
+            patch(
+                "wade.services.implementation_service.core.get_provider", return_value=mock_provider
+            ),
+            patch("wade.services.implementation_service.core._done_via_pr") as mock_pr,
+        ):
+            mock_pr.return_value = True
+            done(project_root=wt_dir)
+
+        # Verify _done_via_pr was called with parent branch, not main
+        assert mock_pr.called
+        call_kwargs = mock_pr.call_args
+        assert call_kwargs[1]["main_branch"] == "feat/1-parent"
 
 
 # ---------------------------------------------------------------------------
@@ -683,7 +772,7 @@ class TestListSessions:
         create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
 
         with patch(
-            "wade.services.implementation_service.load_config",
+            "wade.services.implementation_service.core.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -695,7 +784,7 @@ class TestListSessions:
 
     def test_empty_when_no_worktrees(self, tmp_git_repo: Path) -> None:
         with patch(
-            "wade.services.implementation_service.load_config",
+            "wade.services.implementation_service.core.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -710,7 +799,7 @@ class TestListSessions:
         create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
 
         with patch(
-            "wade.services.implementation_service.load_config",
+            "wade.services.implementation_service.core.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -729,12 +818,12 @@ class TestListSessions:
 
         with (
             patch(
-                "wade.services.implementation_service.load_config",
+                "wade.services.implementation_service.core.load_config",
                 return_value=ProjectConfig(
                     project=ProjectSettings(main_branch="main"),
                 ),
             ),
-            patch("wade.services.implementation_service.get_provider", return_value=provider),
+            patch("wade.services.implementation_service.core.get_provider", return_value=provider),
         ):
             sessions = list_sessions(json_output=True, project_root=tmp_git_repo)
 
@@ -747,7 +836,7 @@ class TestListSessions:
 
     def test_show_all_includes_main(self, tmp_git_repo: Path) -> None:
         with patch(
-            "wade.services.implementation_service.load_config",
+            "wade.services.implementation_service.core.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -771,7 +860,7 @@ class TestRemove:
         create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
 
         with patch(
-            "wade.services.implementation_service.load_config",
+            "wade.services.implementation_service.core.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -784,7 +873,7 @@ class TestRemove:
         from wade.services.implementation_service import remove
 
         with patch(
-            "wade.services.implementation_service.load_config",
+            "wade.services.implementation_service.core.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -801,7 +890,7 @@ class TestRemove:
         create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
 
         with patch(
-            "wade.services.implementation_service.load_config",
+            "wade.services.implementation_service.core.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -820,7 +909,7 @@ class TestRemove:
         create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
 
         with patch(
-            "wade.services.implementation_service.load_config",
+            "wade.services.implementation_service.core.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -833,7 +922,7 @@ class TestRemove:
         from wade.services.implementation_service import remove
 
         with patch(
-            "wade.services.implementation_service.load_config",
+            "wade.services.implementation_service.core.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),

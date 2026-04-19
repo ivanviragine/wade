@@ -65,7 +65,7 @@ class TestPreserveSessionData:
             patch(_PATCH_ENGINE, return_value=mock_engine),
             patch(_PATCH_SESSION_REPO, return_value=mock_session_repo),
             patch(
-                "wade.services.implementation_service.AbstractAITool.get",
+                "wade.services.implementation_service.core.AbstractAITool.get",
                 return_value=mock_adapter,
             ),
         ):
@@ -95,11 +95,11 @@ class TestPreserveSessionData:
             patch(_PATCH_ENGINE, return_value=mock_engine),
             patch(_PATCH_SESSION_REPO, return_value=mock_session_repo),
             patch(
-                "wade.services.implementation_service.AbstractAITool.available_tools",
+                "wade.services.implementation_service.core.AbstractAITool.available_tools",
                 return_value=[AIToolID.CLAUDE],
             ),
             patch(
-                "wade.services.implementation_service.AbstractAITool.get",
+                "wade.services.implementation_service.core.AbstractAITool.get",
                 return_value=mock_adapter,
             ),
         ):
@@ -114,7 +114,7 @@ class TestPreserveSessionData:
 
         with (
             patch(_PATCH_ENGINE, side_effect=RuntimeError("db exploded")),
-            patch("wade.services.implementation_service.logger") as mock_logger,
+            patch("wade.services.implementation_service.core.logger") as mock_logger,
         ):
             # Must not raise
             _preserve_session_data(repo_root, wt_path)
@@ -151,11 +151,11 @@ class TestPreserveSessionData:
             patch(_PATCH_ENGINE, return_value=mock_engine),
             patch(_PATCH_SESSION_REPO, return_value=mock_session_repo),
             patch(
-                "wade.services.implementation_service.AbstractAITool.get",
+                "wade.services.implementation_service.core.AbstractAITool.get",
                 side_effect=ValueError("Unknown AI tool"),
             ),
             patch(
-                "wade.services.implementation_service.AbstractAITool.available_tools",
+                "wade.services.implementation_service.core.AbstractAITool.available_tools",
                 return_value=[],
             ),
         ):
@@ -177,26 +177,26 @@ class TestCleanupWorktreeCallsPreservation:
         with ExitStack() as stack:
             stack.enter_context(
                 patch(
-                    "wade.services.implementation_service._preserve_session_data",
+                    "wade.services.implementation_service.core._preserve_session_data",
                     side_effect=record_preserve,
                 )
             )
             stack.enter_context(
                 patch(
-                    "wade.services.implementation_service.git_worktree.remove_worktree",
+                    "wade.services.implementation_service.core.git_worktree.remove_worktree",
                     side_effect=record_remove,
                 )
             )
             stack.enter_context(
                 patch(
-                    "wade.services.implementation_service.git_worktree.list_worktrees",
+                    "wade.services.implementation_service.core.git_worktree.list_worktrees",
                     return_value=[],
                 )
             )
             stack.enter_context(
-                patch("wade.services.implementation_service.git_worktree.prune_worktrees")
+                patch("wade.services.implementation_service.core.git_worktree.prune_worktrees")
             )
-            stack.enter_context(patch("wade.services.implementation_service.console"))
+            stack.enter_context(patch("wade.services.implementation_service.core.console"))
 
             _cleanup_worktree(_REPO, _WT_PATH, _MAIN_BRANCH)
 
@@ -216,19 +216,19 @@ class TestCleanupWorktreeCallsPreservation:
             # Let _preserve_session_data run but make the DB raise
             stack.enter_context(patch(_PATCH_ENGINE, side_effect=RuntimeError("db unavailable")))
             mock_remove = stack.enter_context(
-                patch("wade.services.implementation_service.git_worktree.remove_worktree")
+                patch("wade.services.implementation_service.core.git_worktree.remove_worktree")
             )
             stack.enter_context(
                 patch(
-                    "wade.services.implementation_service.git_worktree.list_worktrees",
+                    "wade.services.implementation_service.core.git_worktree.list_worktrees",
                     return_value=[],
                 )
             )
             stack.enter_context(
-                patch("wade.services.implementation_service.git_worktree.prune_worktrees")
+                patch("wade.services.implementation_service.core.git_worktree.prune_worktrees")
             )
-            stack.enter_context(patch("wade.services.implementation_service.console"))
-            stack.enter_context(patch("wade.services.implementation_service.logger"))
+            stack.enter_context(patch("wade.services.implementation_service.core.console"))
+            stack.enter_context(patch("wade.services.implementation_service.core.logger"))
 
             result = _cleanup_worktree(repo_root, wt_path, _MAIN_BRANCH)
 

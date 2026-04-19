@@ -7,7 +7,14 @@ from unittest.mock import patch
 
 import pytest
 
-from wade.git.repo import GitError, _run_git_with_retry, diff_between, stash, stash_pop
+from wade.git.repo import (
+    GitError,
+    _run_git_with_retry,
+    diff_between,
+    get_main_worktree_path,
+    stash,
+    stash_pop,
+)
 
 
 class TestDiffBetween:
@@ -104,3 +111,47 @@ class TestRunGitWithRetry:
             with pytest.raises(GitError, match=r"index\.lock"):
                 _run_git_with_retry("worktree", "add", cwd=tmp_path, retries=3)
             assert mock_run.call_count == 3
+
+
+class TestGetMainWorktreePath:
+    def test_returns_none_when_not_a_worktree(self, tmp_path: Path) -> None:
+        with patch("wade.git.repo.is_worktree", return_value=False):
+            result = get_main_worktree_path(tmp_path)
+            assert result is None
+
+    def test_returns_main_worktree_path(self, tmp_path: Path) -> None:
+        main_path = Path("/repo/main")
+        porcelain_output = (
+            f"worktree {main_path}\n"
+            "HEAD abc123\n"
+            "branch refs/heads/main\n"
+            "\n"
+            "worktree /repo/worktrees/feat-42\n"
+            "HEAD def456\n"
+            "branch refs/heads/feat/42\n"
+        )
+        with (
+            patch("wade.git.repo.is_worktree", return_value=True),
+            patch("wade.git.repo._run_git") as mock_run,
+        ):
+            mock_run.return_value.stdout = porcelain_output
+            result = get_main_worktree_path(tmp_path)
+            mock_run.assert_called_once_with("worktree", "list", "--porcelain", cwd=tmp_path)
+            assert result == main_path
+
+    def test_returns_none_on_git_error(self, tmp_path: Path) -> None:
+        with (
+            patch("wade.git.repo.is_worktree", return_value=True),
+            patch("wade.git.repo._run_git", side_effect=GitError("git failed")),
+        ):
+            result = get_main_worktree_path(tmp_path)
+            assert result is None
+
+    def test_returns_none_when_no_worktree_line(self, tmp_path: Path) -> None:
+        with (
+            patch("wade.git.repo.is_worktree", return_value=True),
+            patch("wade.git.repo._run_git") as mock_run,
+        ):
+            mock_run.return_value.stdout = "HEAD abc123\nbranch refs/heads/main\n"
+            result = get_main_worktree_path(tmp_path)
+            assert result is None

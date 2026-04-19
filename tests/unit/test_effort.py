@@ -17,10 +17,12 @@ class TestEffortLevel:
         assert EffortLevel.LOW == "low"
         assert EffortLevel.MEDIUM == "medium"
         assert EffortLevel.HIGH == "high"
+        assert EffortLevel.XHIGH == "xhigh"
         assert EffortLevel.MAX == "max"
 
     def test_from_string(self) -> None:
         assert EffortLevel("low") is EffortLevel.LOW
+        assert EffortLevel("xhigh") is EffortLevel.XHIGH
         assert EffortLevel("max") is EffortLevel.MAX
 
     def test_invalid_raises(self) -> None:
@@ -32,6 +34,7 @@ class TestEffortLevel:
             EffortLevel.LOW,
             EffortLevel.MEDIUM,
             EffortLevel.HIGH,
+            EffortLevel.XHIGH,
             EffortLevel.MAX,
         ]
 

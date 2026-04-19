@@ -11,7 +11,7 @@ Allowed basenames / patterns:
   - .transcript
   - .commit-msg
   - PR-SUMMARY.md
-  - Anything under .claude/plans/
+  - Anything under .claude/plans/ or .wade/plans/
 
 Exit codes:
   0 — allow (or fail-open on parse error)
@@ -38,6 +38,8 @@ ALLOWED_BASENAMES = [
 ALLOWED_DIR_PREFIXES = [
     ".claude/plans/",
     ".claude/plans\\",  # Windows paths
+    ".wade/plans/",
+    ".wade/plans\\",  # Windows paths
 ]
 
 
@@ -123,7 +125,7 @@ def _deny(file_path: str) -> None:
     msg = (
         f"BLOCKED by plan-session guard: cannot write to '{file_path}'. "
         "In plan mode, only plan artifacts (PLAN.md, PLAN-*.md, prompt.txt, "
-        ".transcript, .commit-msg, PR-SUMMARY.md, .claude/plans/*) may be written. "
+        ".transcript, .commit-msg, PR-SUMMARY.md, .claude/plans/*, .wade/plans/*) may be written. "
         "Do NOT modify source code files."
     )
     # stderr for human-readable output
@@ -136,26 +138,49 @@ def _deny(file_path: str) -> None:
     result = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
+            "permissionDecision": "block",
             "permissionDecisionReason": msg,
         },
         "permission": "deny",
         "permissionDecision": "deny",
-        "decision": "deny",
+        "decision": "block",
         "reason": msg,
     }
     print(json.dumps(result))
     sys.exit(2)
 
 
+def _fail_closed(e: Exception) -> None:
+    """Fail-closed: any unhandled exception blocks the edit."""
+    error_msg = f"Guard error: {type(e).__name__}: {e}"
+    print(error_msg, file=sys.stderr)
+    # Output JSON in all tool formats to ensure the block is respected
+    result = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "block",
+            "permissionDecisionReason": error_msg,
+        },
+        "permission": "deny",
+        "permissionDecision": "deny",
+        "decision": "block",
+        "reason": error_msg,
+    }
+    print(json.dumps(result))
+    sys.exit(2)
+
+
 def main() -> None:
-    """Read tool call JSON from stdin, check file path, allow or deny."""
+    """Read tool call JSON from stdin, check file path, allow or deny.
+
+    Wrapped by try/except in _main_with_wrapper to ensure fail-closed on exceptions.
+    """
+    raw = sys.stdin.read()
+    if not raw.strip():
+        sys.exit(0)  # No input — fail open
     try:
-        raw = sys.stdin.read()
-        if not raw.strip():
-            sys.exit(0)  # No input — fail open
         data = json.loads(raw)
-    except (json.JSONDecodeError, ValueError, OSError):
+    except json.JSONDecodeError:
         sys.exit(0)  # Malformed input — fail open
 
     if not isinstance(data, dict):
@@ -175,5 +200,13 @@ def main() -> None:
     _deny(file_path)
 
 
+def _main_with_wrapper() -> None:
+    """Wrapper that enforces fail-closed behavior on any unhandled exception."""
+    try:
+        main()
+    except Exception as e:
+        _fail_closed(e)
+
+
 if __name__ == "__main__":
-    main()
+    _main_with_wrapper()

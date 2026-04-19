@@ -171,3 +171,106 @@ class TestKnowledgeRate:
 
         assert result.exit_code == 1
         assert "must be inside project root" in result.output
+
+
+class TestKnowledgeTagWorkflow:
+    """Integration test for the full tag workflow."""
+
+    def test_add_with_tags_then_tag_crud(
+        self, tmp_wade_project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _write_knowledge_config(tmp_wade_project)
+        monkeypatch.chdir(tmp_wade_project)
+
+        # Add entry with tags
+        result = runner.invoke(
+            app,
+            ["knowledge", "add", "--session", "plan", "--tag", "git", "--tag", "worktree"],
+            input="Worktree safety matters.\n",
+        )
+        assert result.exit_code == 0
+        # Extract entry ID from output (format: "Knowledge entry XXXXXXXX added to ...")
+        entry_id = result.output.split("entry ")[1].split(" ")[0]
+
+        # Verify tags in file
+        text = (tmp_wade_project / "KNOWLEDGE.md").read_text(encoding="utf-8")
+        assert "tags: git, worktree" in text
+
+        # Add another tag
+        result = runner.invoke(app, ["knowledge", "tag", "add", entry_id, "safety"])
+        assert result.exit_code == 0
+
+        # List tags for entry
+        result = runner.invoke(app, ["knowledge", "tag", "list", entry_id])
+        assert result.exit_code == 0
+        assert "git" in result.output
+        assert "worktree" in result.output
+        assert "safety" in result.output
+
+        # Remove a tag
+        result = runner.invoke(app, ["knowledge", "tag", "remove", entry_id, "git"])
+        assert result.exit_code == 0
+
+        # Verify removal
+        result = runner.invoke(app, ["knowledge", "tag", "list", entry_id])
+        assert "git" not in result.output
+        assert "worktree" in result.output
+        assert "safety" in result.output
+
+        # List all tags
+        result = runner.invoke(app, ["knowledge", "tag", "list"])
+        assert result.exit_code == 0
+        assert "safety" in result.output
+        assert "worktree" in result.output
+
+
+class TestKnowledgeSearchWorkflow:
+    """Integration test for search + tag filtering."""
+
+    def test_search_and_tag_filter(
+        self, tmp_wade_project: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _write_knowledge_config(tmp_wade_project)
+        monkeypatch.chdir(tmp_wade_project)
+
+        # Add entries with different tags and content
+        result = runner.invoke(
+            app,
+            ["knowledge", "add", "--session", "plan", "--tag", "git"],
+            input="Git worktree is useful for isolation.\n",
+        )
+        assert result.exit_code == 0
+        result = runner.invoke(
+            app,
+            ["knowledge", "add", "--session", "plan", "--tag", "testing"],
+            input="Always write tests for new features.\n",
+        )
+        assert result.exit_code == 0
+        result = runner.invoke(
+            app,
+            ["knowledge", "add", "--session", "plan"],
+            input="Docker is unrelated.\n",
+        )
+        assert result.exit_code == 0
+
+        # Search by text
+        result = runner.invoke(app, ["knowledge", "get", "--search", "worktree", "--no-filter"])
+        assert result.exit_code == 0
+        assert "worktree" in result.output
+        assert "Docker" not in result.output
+
+        # Filter by tag
+        result = runner.invoke(app, ["knowledge", "get", "--tag", "testing", "--no-filter"])
+        assert result.exit_code == 0
+        assert "tests" in result.output
+        assert "Docker" not in result.output
+
+        # Combined search + tag (OR semantics)
+        result = runner.invoke(
+            app,
+            ["knowledge", "get", "--search", "worktree", "--tag", "testing", "--no-filter"],
+        )
+        assert result.exit_code == 0
+        assert "worktree" in result.output
+        assert "tests" in result.output
+        assert "Docker" not in result.output

@@ -4,6 +4,205 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.20.0] — 2026-04-18
+
+### Features
+
+- add Claude Opus 4.7, xhigh effort level, and refresh model registry (#275) (a8916d3)
+
+## [v0.19.8] — 2026-04-11
+
+### Tests
+
+- pin unit test console width to 80 to catch CI wrapping regressions (8e9b1de)
+
+## [v0.19.7] — 2026-04-11
+
+### Bug Fixes
+
+- prevent success messages from wrapping in narrow CI terminals (9870e95)
+
+## [v0.19.6] — 2026-04-11
+
+### Bug Fixes
+
+- knowledge commands write/read worktree-local KNOWLEDGE.md instead of main repo (#273) (c56a201)
+
+## [v0.19.5] — 2026-04-11
+
+### Bug Fixes
+
+- knowledge get --search silently ignores filters when knowledge file has no entries (#271) (8993657)
+
+## [v0.19.4] — 2026-04-10
+
+### Refactoring
+
+- split implementation_service.py into package + add git layer wrappers (43e43ce)
+
+## [v0.19.3] — 2026-04-10
+
+### Bug Fixes
+
+- continue polling when pending reviewers exist after review bot completes (#269) (c95e990)
+
+## [v0.19.2] — 2026-04-10
+
+### Bug Fixes
+
+- reorder implementation session prompt to match plan session structure (#267) (53b83f8)
+
+## [v0.19.1] — 2026-04-09
+
+### Refactoring
+
+- deduplicate code, fix bugs, and improve abstractions across codebase (34e9cc1)
+
+## [v0.19.0] — 2026-04-09
+
+### Features
+
+- overhaul knowledge system with tagging, search, and contextual retrieval (#261) (f9b2fec)
+
+## [v0.18.0] — 2026-04-09
+
+### Features
+
+- make review steps conditional in skill files based on wade.yml config (#265) (7a4e1c3)
+
+## [v0.17.0] — 2026-04-09
+
+### Features
+
+- add TODO-based workflow tracking to session skills (#263) (40f3384)
+
+## [v0.16.0] — 2026-04-09
+
+### Features
+
+- add knowledge enable/disable CLI commands (#259) (c4601cb)
+
+## [v0.15.15] — 2026-04-08
+
+### Bug Fixes
+
+- detect committed session-specific files on `done` and `sync` (#257) (0170ec8)
+
+## [v0.15.14] — 2026-04-02
+
+### Refactoring
+
+- remove commit prompt from `wade init` (#255) (3c87092)
+
+## [v0.15.13] — 2026-04-02
+
+### Bug Fixes
+
+- update test to check manifest at .wade/.wade-managed after #251 move (39712fd)
+
+## [v0.15.12] — 2026-04-02
+
+### Bug Fixes
+
+- plan-session write guard fails open on hook execution errors (#253) (5f5ccb8)
+
+## [v0.15.11] — 2026-04-02
+
+### Refactoring
+
+- eliminate committed .gitignore block — move all wade artifacts to worktree-only (#251) (d1e12e9)
+
+## [v0.15.10] — 2026-04-01
+
+### Bug Fixes
+
+- Gemini CLI integration errors — hooks format, deprecated allowed-tools, and positional args (#249) (71fde4b)
+
+## [v0.15.9] — 2026-03-31
+
+### Bug Fixes
+
+- relax knowledge entry ID regex to allow descriptive IDs (#247) (51d85ae)
+
+## [v0.15.8] — 2026-03-31
+
+### Bug Fixes
+
+- PR comment polling misses outdated threads and PR-level reviews (#245) (82c03ec)
+
+## [v0.15.7] — 2026-03-30
+
+### Bug Fixes
+
+- strengthen review enforcement in implementation-session done command (#239) (1f1043e)
+- detect completed bot reviews in PR comment polling (#243) (c7589e0)
+
+## [v0.15.6] — 2026-03-30
+
+### Bug Fixes
+
+- plan-session and worktree guard hooks not blocking writes in Claude Code (#241) (dadaf82)
+
+## [v0.15.5] — 2026-03-28
+
+### Chores
+
+- audit and fix gitignore patterns for wade-managed artifacts (#237) (be2661d)
+
+## [v0.15.4] — 2026-03-27
+
+### Chores
+
+- add worktree_guard.py to gitignore for all AI tool dirs (639a7d1)
+
+## [v0.15.3] — 2026-03-28
+
+### Bug Fixes
+
+- batch mode bugs and orchestrator improvements (#228) (0314b75)
+
+## [v0.15.2] — 2026-03-28
+
+### Bug Fixes
+
+- add inline dialog reminders at key decision points in session skills (#236) (34ca81b)
+
+## [v0.15.1] — 2026-03-28
+
+### Refactoring
+
+- move AGENTS.md pointer and AI tool settings from main to worktree-only (#234) (27007f0)
+
+## [v0.15.0] — 2026-03-27
+
+### Features
+
+- add catchup step to sync worktree with base branch at implementation startup (#232) (947b5ce)
+
+## [v0.14.0] — 2026-03-27
+
+### Features
+
+- add worktree file-write guard hook for implementation sessions (#230) (39f2543)
+
+## [v0.13.1] — 2026-03-27
+
+### Bug Fixes
+
+- add retry logic for transient gh CLI network failures (976a83f)
+
+## [v0.13.0] — 2026-03-27
+
+### Features
+
+- add workflow recap and state summary to all session skills (#223) (5171e7b)
+
+## [v0.12.0] — 2026-03-27
+
+### Features
+
+- instruct AI agents to use native confirmation and question components (#225) (2ce2785)
+
 ## [v0.11.3] — 2026-03-26
 
 ### Bug Fixes

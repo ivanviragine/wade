@@ -17,11 +17,10 @@ from wade.services.init_service import (
     MANIFEST_FILENAME,
     _check_gh_auth,
     _clean_gitignore,
-    _commit_wade_files,
-    _ensure_gitignore,
+    _ensure_wade_dir_self_ignoring,
+    _migrate_gitignore_block,
     _patch_config,
     _prompt_command_overrides,
-    _prompt_commit_or_local,
     _prompt_hooks_setup,
     _prompt_model_mapping,
     _prompt_project_settings,
@@ -33,7 +32,6 @@ from wade.services.init_service import (
     _validate_clickup_token,
     _write_config,
     deinit,
-    get_gitignore_entries,
     init,
     update,
 )
@@ -176,70 +174,16 @@ class TestSkillInstaller:
 
 
 class TestGitignoreBlock:
-    """Unit tests for _ensure_gitignore and _clean_gitignore."""
+    """Unit tests for _clean_gitignore (backward compat) and migration helpers."""
 
-    # --- _ensure_gitignore ---
-
-    def test_creates_file_when_missing(self, tmp_path: Path) -> None:
-        _ensure_gitignore(tmp_path)
-        gitignore = tmp_path / ".gitignore"
-        assert gitignore.is_file()
-        content = gitignore.read_text()
-        assert GITIGNORE_MARKER_START in content
-        assert GITIGNORE_MARKER_END in content
-        for entry in GITIGNORE_ENTRIES:
-            assert entry in content
-
-    def test_appends_block_to_existing_file(self, tmp_path: Path) -> None:
-        gitignore = tmp_path / ".gitignore"
-        gitignore.write_text("__pycache__/\n*.py[cod]\n")
-        _ensure_gitignore(tmp_path)
-        content = gitignore.read_text()
-        assert "__pycache__/" in content  # original preserved
-        assert GITIGNORE_MARKER_START in content
-
-    def test_idempotent_when_already_current(self, tmp_path: Path) -> None:
-        _ensure_gitignore(tmp_path)
-        mtime_after_first = (tmp_path / ".gitignore").stat().st_mtime
-        _ensure_gitignore(tmp_path)
-        mtime_after_second = (tmp_path / ".gitignore").stat().st_mtime
-        assert mtime_after_first == mtime_after_second  # file not touched
-
-    def test_replaces_stale_block(self, tmp_path: Path) -> None:
-        gitignore = tmp_path / ".gitignore"
-        gitignore.write_text(
-            f"__pycache__/\n\n{GITIGNORE_MARKER_START}\nold-entry.txt\n{GITIGNORE_MARKER_END}\n"
-        )
-        _ensure_gitignore(tmp_path)
-        content = gitignore.read_text()
-        assert "old-entry.txt" not in content
-        assert "__pycache__/" in content  # user content preserved
-        for entry in GITIGNORE_ENTRIES:
-            assert entry in content
-        # Block appears exactly once
-        assert content.count(GITIGNORE_MARKER_START) == 1
-
-    def test_migrates_old_style_entries(self, tmp_path: Path) -> None:
-        """Old-style entries (no markers) are cleaned up and replaced with block."""
-        gitignore = tmp_path / ".gitignore"
-        gitignore.write_text(
-            "__pycache__/\n# wade managed files\n.wade-managed\n.issue-context.md\nPLAN.md\n"
-        )
-        _ensure_gitignore(tmp_path)
-        content = gitignore.read_text()
-        assert GITIGNORE_MARKER_START in content
-        assert "__pycache__/" in content
-        # Old comment removed; entries now inside the block
-        assert content.count("PLAN.md") == 1
-        assert ".issue-context.md" not in content
-        assert "# wade managed files" not in content
-
-    # --- _clean_gitignore ---
+    # --- _clean_gitignore (backward compat for deinit) ---
 
     def test_removes_marker_block(self, tmp_path: Path) -> None:
-        _ensure_gitignore(tmp_path)
+        gitignore = tmp_path / ".gitignore"
+        inner = "\n".join(GITIGNORE_ENTRIES)
+        gitignore.write_text(f"{GITIGNORE_MARKER_START}\n{inner}\n{GITIGNORE_MARKER_END}\n")
         _clean_gitignore(tmp_path)
-        content = (tmp_path / ".gitignore").read_text()
+        content = gitignore.read_text()
         assert GITIGNORE_MARKER_START not in content
         assert GITIGNORE_MARKER_END not in content
         for entry in GITIGNORE_ENTRIES:
@@ -247,12 +191,15 @@ class TestGitignoreBlock:
 
     def test_preserves_user_content_on_clean(self, tmp_path: Path) -> None:
         gitignore = tmp_path / ".gitignore"
-        gitignore.write_text("__pycache__/\n*.py[cod]\n")
-        _ensure_gitignore(tmp_path)
+        inner = "\n".join(GITIGNORE_ENTRIES)
+        gitignore.write_text(
+            f"__pycache__/\n*.py[cod]\n\n{GITIGNORE_MARKER_START}\n{inner}\n{GITIGNORE_MARKER_END}\n"
+        )
         _clean_gitignore(tmp_path)
-        content = (tmp_path / ".gitignore").read_text()
+        content = gitignore.read_text()
         assert "__pycache__/" in content
         assert "*.py[cod]" in content
+        assert GITIGNORE_MARKER_START not in content
 
     def test_backward_compat_removes_old_style_entries(self, tmp_path: Path) -> None:
         """Deinit on a project inited before markers were introduced."""
@@ -270,6 +217,43 @@ class TestGitignoreBlock:
 
     def test_clean_no_op_when_no_file(self, tmp_path: Path) -> None:
         _clean_gitignore(tmp_path)  # must not raise
+
+    # --- _migrate_gitignore_block ---
+
+    def test_migrate_removes_stale_block(self, tmp_path: Path) -> None:
+        gitignore = tmp_path / ".gitignore"
+        inner = "\n".join(GITIGNORE_ENTRIES)
+        gitignore.write_text(
+            f"__pycache__/\n\n{GITIGNORE_MARKER_START}\n{inner}\n{GITIGNORE_MARKER_END}\n"
+        )
+        _migrate_gitignore_block(tmp_path)
+        content = gitignore.read_text()
+        assert GITIGNORE_MARKER_START not in content
+        assert "__pycache__/" in content
+
+    def test_migrate_no_op_when_no_block(self, tmp_path: Path) -> None:
+        gitignore = tmp_path / ".gitignore"
+        gitignore.write_text("__pycache__/\n")
+        _migrate_gitignore_block(tmp_path)
+        content = gitignore.read_text()
+        assert "__pycache__/" in content
+
+    def test_migrate_no_op_when_no_file(self, tmp_path: Path) -> None:
+        _migrate_gitignore_block(tmp_path)  # must not raise
+
+    # --- _ensure_wade_dir_self_ignoring ---
+
+    def test_creates_wade_dir_with_gitignore(self, tmp_path: Path) -> None:
+        _ensure_wade_dir_self_ignoring(tmp_path)
+        gi = tmp_path / ".wade" / ".gitignore"
+        assert gi.is_file()
+        assert gi.read_text().strip() == "*"
+
+    def test_idempotent(self, tmp_path: Path) -> None:
+        _ensure_wade_dir_self_ignoring(tmp_path)
+        _ensure_wade_dir_self_ignoring(tmp_path)
+        gi = tmp_path / ".wade" / ".gitignore"
+        assert gi.read_text().strip() == "*"
 
 
 # ---------------------------------------------------------------------------
@@ -292,26 +276,30 @@ class TestInit:
 
     def test_init_creates_manifest(self, tmp_git_repo: Path) -> None:
         init(project_root=tmp_git_repo, non_interactive=True)
-        manifest = tmp_git_repo / MANIFEST_FILENAME
+        manifest = tmp_git_repo / ".wade" / MANIFEST_FILENAME
         assert manifest.is_file()
         content = manifest.read_text()
         assert ".wade.yml" in content
 
-    def test_init_creates_gitignore_block(self, tmp_git_repo: Path) -> None:
+    def test_init_does_not_create_gitignore_block(self, tmp_git_repo: Path) -> None:
+        """init() no longer writes a committed gitignore block."""
         init(project_root=tmp_git_repo, non_interactive=True)
         gitignore = tmp_git_repo / ".gitignore"
-        assert gitignore.is_file()
-        content = gitignore.read_text()
-        assert GITIGNORE_MARKER_START in content
-        assert GITIGNORE_MARKER_END in content
-        for entry in GITIGNORE_ENTRIES:
-            assert entry in content
+        if gitignore.is_file():
+            content = gitignore.read_text()
+            assert GITIGNORE_MARKER_START not in content
 
-    def test_init_creates_agents_pointer(self, tmp_git_repo: Path) -> None:
+    def test_init_creates_wade_dir_self_ignoring(self, tmp_git_repo: Path) -> None:
         init(project_root=tmp_git_repo, non_interactive=True)
-        assert (tmp_git_repo / "AGENTS.md").is_file()
-        content = (tmp_git_repo / "AGENTS.md").read_text()
-        assert "Git Workflow" in content
+        gi = tmp_git_repo / ".wade" / ".gitignore"
+        assert gi.is_file()
+        assert gi.read_text().strip() == "*"
+
+    def test_init_does_not_write_agents_pointer_to_main(self, tmp_git_repo: Path) -> None:
+        """init() no longer writes the AGENTS.md pointer to main — only worktrees get it."""
+        init(project_root=tmp_git_repo, non_interactive=True)
+        assert not (tmp_git_repo / "AGENTS.md").is_file()
+        assert not (tmp_git_repo / "CLAUDE.md").exists()
 
     def test_init_with_ai_tool(self, tmp_git_repo: Path) -> None:
         init(project_root=tmp_git_repo, ai_tool="claude", non_interactive=True)
@@ -1171,6 +1159,8 @@ class TestDeinit:
 
     def test_deinit_removes_pointer(self, tmp_git_repo: Path) -> None:
         init(project_root=tmp_git_repo, non_interactive=True)
+        # Simulate an older-style main-checkout pointer (pointer now lives in worktrees)
+        write_pointer(tmp_git_repo / "AGENTS.md")
         assert (tmp_git_repo / "AGENTS.md").is_file()
 
         deinit(project_root=tmp_git_repo, force=True)
@@ -1217,8 +1207,9 @@ class TestDeinit:
         # Init
         assert init(project_root=tmp_git_repo, ai_tool="claude", non_interactive=True)
         assert (tmp_git_repo / ".wade.yml").is_file()
-        assert (tmp_git_repo / MANIFEST_FILENAME).is_file()
-        assert (tmp_git_repo / "AGENTS.md").is_file()
+        assert (tmp_git_repo / ".wade" / MANIFEST_FILENAME).is_file()
+        # AGENTS.md pointer is not written to main during init
+        assert not (tmp_git_repo / "AGENTS.md").is_file()
 
         # Update
         assert update(project_root=tmp_git_repo)
@@ -1226,7 +1217,7 @@ class TestDeinit:
         # Deinit
         assert deinit(project_root=tmp_git_repo, force=True)
         assert not (tmp_git_repo / ".wade.yml").is_file()
-        assert not (tmp_git_repo / MANIFEST_FILENAME).is_file()
+        assert not (tmp_git_repo / ".wade" / MANIFEST_FILENAME).is_file()
 
 
 # ---------------------------------------------------------------------------
@@ -1269,8 +1260,8 @@ class TestUpdateExtended:
             update(project_root=tmp_git_repo, skip_self_upgrade=True)
             mock_mig.assert_called_once()
 
-    def test_update_configures_allowlist(self, tmp_git_repo: Path) -> None:
-        """update() should call configure_allowlist when Claude is the configured tool."""
+    def test_update_does_not_configure_allowlist_on_main(self, tmp_git_repo: Path) -> None:
+        """update() must NOT write project-level allowlist to main — only worktrees get it."""
         with patch(
             "wade.services.init_service.AbstractAITool.detect_installed",
             return_value=[AIToolID.CLAUDE],
@@ -1279,30 +1270,36 @@ class TestUpdateExtended:
 
         with patch("crossby.config.claude_allowlist.configure_allowlist") as mock_allow:
             update(project_root=tmp_git_repo, skip_self_upgrade=True)
-            mock_allow.assert_called_once()
+            mock_allow.assert_not_called()
+        # .claude/settings.json must NOT be created on main during update
+        assert not (tmp_git_repo / ".claude" / "settings.json").is_file()
 
-    def test_update_configures_allowlist_for_review_batch_tool(self, tmp_git_repo: Path) -> None:
-        """review_batch-only config should still count as Claude usage for allowlists."""
+    def test_update_migrates_ai_artifacts_off_main(self, tmp_git_repo: Path) -> None:
+        """update() should remove AI tool artifacts from main (migration for older installs)."""
         init(project_root=tmp_git_repo, non_interactive=True)
-        (tmp_git_repo / ".wade.yml").write_text(
-            "version: 2\n"
-            "ai:\n"
-            "  review_batch:\n"
-            "    tool: claude\n"
-            "    mode: headless\n"
-            "permissions:\n"
-            "  allowed_commands:\n"
-            "    - wade *\n"
-            "    - ./scripts/check.sh *\n",
-            encoding="utf-8",
+        # Simulate artifacts left by an older wade version
+        from crossby.config.claude_allowlist import configure_allowlist
+        from crossby.config.cursor_allowlist import (
+            configure_allowlist as configure_cursor_allowlist,
         )
 
-        with patch("crossby.config.claude_allowlist.configure_allowlist") as mock_allow:
-            update(project_root=tmp_git_repo, skip_self_upgrade=True)
-            mock_allow.assert_called_once_with(
-                tmp_git_repo,
-                ["wade:*", "wade *", "./scripts/check.sh *"],
-            )
+        configure_allowlist(tmp_git_repo, ["wade:*"])
+        configure_cursor_allowlist(tmp_git_repo, ["wade:*"])
+        write_pointer(tmp_git_repo / "AGENTS.md")
+        (tmp_git_repo / "CLAUDE.md").symlink_to("AGENTS.md")
+
+        assert (tmp_git_repo / ".claude" / "settings.json").is_file()
+        assert (tmp_git_repo / ".cursor" / "cli.json").is_file()
+        assert (tmp_git_repo / "AGENTS.md").is_file()
+        assert (tmp_git_repo / "CLAUDE.md").is_symlink()
+
+        update(project_root=tmp_git_repo, skip_self_upgrade=True)
+
+        # All AI artifacts should be cleaned up from main (both Claude and Cursor)
+        assert not (tmp_git_repo / ".claude" / "settings.json").is_file()
+        assert not (tmp_git_repo / ".cursor" / "cli.json").is_file()
+        assert not (tmp_git_repo / "AGENTS.md").is_file()
+        assert not (tmp_git_repo / "CLAUDE.md").exists()
 
     def test_skip_self_upgrade_flag(self, tmp_git_repo: Path) -> None:
         """skip_self_upgrade=True should not call _maybe_self_upgrade."""
@@ -1330,58 +1327,15 @@ class TestUpdateExtended:
 
 
 class TestGitignoreEntries:
-    """Verify GITIGNORE_ENTRIES (static base) includes all wade-managed paths."""
+    """Verify GITIGNORE_ENTRIES constants are kept for backward compat (_clean_gitignore)."""
 
-    def test_contains_wade_config(self) -> None:
+    def test_constants_still_exist(self) -> None:
+        """Constants needed by _clean_gitignore for backward compat."""
         assert ".wade.yml" in GITIGNORE_ENTRIES
-
-    def test_base_no_blanket_dirs(self) -> None:
-        """Base entries should not blanket-ignore .claude/ or .claude/hooks/."""
-        assert ".claude/" not in GITIGNORE_ENTRIES
-        assert ".claude/hooks/" not in GITIGNORE_ENTRIES
-
-    def test_contains_internal_files(self) -> None:
         assert ".wade/" in GITIGNORE_ENTRIES
         assert ".wade-managed" in GITIGNORE_ENTRIES
-        assert "PLAN.md" in GITIGNORE_ENTRIES
-        assert "PR-SUMMARY.md" in GITIGNORE_ENTRIES
-
-    def test_computed_entries_include_skill_dirs(self, tmp_path: Path) -> None:
-        """get_gitignore_entries includes managed skill directories."""
-        from wade.skills.installer import MANAGED_SKILL_NAMES
-
-        entries = get_gitignore_entries(tmp_path)
-        for name in MANAGED_SKILL_NAMES:
-            assert f".claude/skills/{name}/" in entries
-
-    def test_computed_entries_include_plan_guard_hooks(self, tmp_path: Path) -> None:
-        """get_gitignore_entries includes specific wade-managed hook files."""
-        from wade.skills.installer import PLAN_GUARD_HOOK_FILES
-
-        entries = get_gitignore_entries(tmp_path)
-        for hook_file in PLAN_GUARD_HOOK_FILES:
-            assert hook_file in entries
-
-    def test_computed_entries_include_cross_tool_dirs(self, tmp_path: Path) -> None:
-        """get_gitignore_entries includes cross-tool dirs when absent."""
-        from wade.skills.installer import CROSS_TOOL_DIRS
-
-        entries = get_gitignore_entries(tmp_path)
-        for cross_dir in CROSS_TOOL_DIRS:
-            assert cross_dir in entries
-
-    def test_computed_entries_skip_real_cross_tool_dirs(self, tmp_path: Path) -> None:
-        """get_gitignore_entries skips cross-tool dirs that are real directories."""
-        from wade.skills.installer import CROSS_TOOL_DIRS
-
-        for cross_dir in CROSS_TOOL_DIRS:
-            real_dir = tmp_path / cross_dir
-            real_dir.mkdir(parents=True, exist_ok=True)
-            (real_dir / "user-file.md").write_text("user content")
-
-        entries = get_gitignore_entries(tmp_path)
-        for cross_dir in CROSS_TOOL_DIRS:
-            assert cross_dir not in entries
+        assert GITIGNORE_MARKER_START.startswith("# wade:start")
+        assert GITIGNORE_MARKER_END == "# wade:end"
 
 
 # ---------------------------------------------------------------------------
@@ -1470,105 +1424,7 @@ class TestPatchConfigHooks:
         assert config["hooks"]["post_worktree_create"] == "scripts/setup.sh"
         assert ".env" in config["hooks"]["copy_to_worktree"]
 
-
-# ---------------------------------------------------------------------------
-# _commit_wade_files tests
-# ---------------------------------------------------------------------------
-
-
-class TestCommitWadeFiles:
-    def test_commits_files(self, tmp_git_repo: Path) -> None:
-        """git add --force + git commit should succeed on a real repo."""
-        config_path = tmp_git_repo / ".wade.yml"
-        config_path.write_text("version: 2\n")
-        gitignore = tmp_git_repo / ".gitignore"
-        gitignore.write_text(".wade/\n")
-        manifest = tmp_git_repo / MANIFEST_FILENAME
-        manifest.write_text(".wade.yml\n")
-        agents = tmp_git_repo / "AGENTS.md"
-        agents.write_text("# Agents\n")
-
-        _commit_wade_files(tmp_git_repo, [])
-
-        # Verify commit was created
-        import subprocess
-
-        result = subprocess.run(
-            ["git", "log", "--oneline", "-1"],
-            cwd=tmp_git_repo,
-            capture_output=True,
-            text=True,
-        )
-        assert "chore: initialize wade" in result.stdout
-
-    def test_handles_commit_failure(self, tmp_path: Path) -> None:
-        """When not in a git repo, should warn instead of crashing."""
-        # tmp_path is not a git repo — git add will fail
-        _commit_wade_files(tmp_path, [])
-        # Should not raise — just logs a warning
-
-
-# ---------------------------------------------------------------------------
-# _prompt_commit_or_local tests
-# ---------------------------------------------------------------------------
-
-
-class TestPromptCommitOrLocal:
-    def test_non_interactive_does_not_modify_config(self, tmp_path: Path) -> None:
-        """Non-interactive mode should not modify config (hooks handled by _write_config)."""
-        config_path = tmp_path / ".wade.yml"
-        config_path.write_text(yaml.dump({"version": 2}), encoding="utf-8")
-        original = config_path.read_text()
-
-        _prompt_commit_or_local(tmp_path, config_path, [], non_interactive=True)
-
-        assert config_path.read_text() == original
-
-    @patch("wade.ui.prompts.is_tty", return_value=False)
-    def test_no_tty_does_not_modify_config(self, _mock_tty: MagicMock, tmp_path: Path) -> None:
-        """When not a TTY, should not modify config."""
-        config_path = tmp_path / ".wade.yml"
-        config_path.write_text(yaml.dump({"version": 2}), encoding="utf-8")
-        original = config_path.read_text()
-
-        _prompt_commit_or_local(tmp_path, config_path, [], non_interactive=False)
-
-        assert config_path.read_text() == original
-
-    @patch("wade.ui.prompts.is_tty", return_value=True)
-    @patch("wade.ui.prompts.confirm", return_value=True)
-    @patch("wade.services.init_service._commit_wade_files")
-    def test_interactive_commit_yes(
-        self,
-        mock_commit: MagicMock,
-        _mock_confirm: MagicMock,
-        _mock_tty: MagicMock,
-        tmp_path: Path,
-    ) -> None:
-        """When user says yes, should call _commit_wade_files."""
-        config_path = tmp_path / ".wade.yml"
-        config_path.write_text(yaml.dump({"version": 2}), encoding="utf-8")
-
-        _prompt_commit_or_local(tmp_path, config_path, ["a.md"], non_interactive=False)
-
-        mock_commit.assert_called_once_with(tmp_path, ["a.md"])
-
-    @patch("wade.ui.prompts.is_tty", return_value=True)
-    @patch("wade.ui.prompts.confirm", return_value=False)
-    def test_interactive_commit_no_does_not_modify_config(
-        self,
-        _mock_confirm: MagicMock,
-        _mock_tty: MagicMock,
-        tmp_path: Path,
-    ) -> None:
-        """When user says no, should not modify config."""
-        config_path = tmp_path / ".wade.yml"
-        config_path.write_text(yaml.dump({"version": 2}), encoding="utf-8")
-        original = config_path.read_text()
-
-        _prompt_commit_or_local(tmp_path, config_path, [], non_interactive=False)
-
-        assert config_path.read_text() == original
+    # ---------------------------------------------------------------------------
 
     def test_init_non_interactive_creates_config(self, tmp_git_repo: Path) -> None:
         """Full init in non-interactive mode should create a valid config."""

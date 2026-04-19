@@ -28,6 +28,7 @@ class TestUpdatePrBase:
             "feat/10-parent",
             cwd=Path("/repo"),
             check=False,
+            retries=3,
         )
 
     @patch("wade.git.pr._run_gh")

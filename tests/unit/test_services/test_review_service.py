@@ -548,19 +548,12 @@ class TestReviewServiceStart:
         """start() should proceed to AI launch when actionable comments exist."""
         from wade.models.review import PRReviewStatus
 
+        thread = ReviewThread(
+            comments=[ReviewComment(author="alice", body="Fix this", path="main.py", line=10)]
+        )
         mock_setup["get_comprehensive_review_status"].return_value = PRReviewStatus(
-            actionable_threads=[
-                ReviewThread(
-                    comments=[
-                        ReviewComment(
-                            author="alice",
-                            body="Fix this",
-                            path="main.py",
-                            line=10,
-                        )
-                    ]
-                ),
-            ]
+            actionable_threads=[thread],
+            all_unresolved_threads=[thread],
         )
 
         result = start(target="42")
@@ -571,6 +564,44 @@ class TestReviewServiceStart:
         assert len(wt_paths) == 1
         review_file = wt_paths[0] / "REVIEW-COMMENTS.md"
         assert not review_file.exists()
+
+    def test_outdated_threads_proceed_to_session(
+        self, tmp_path: Path, mock_setup: dict[str, MagicMock], mock_provider: MagicMock
+    ) -> None:
+        """start() should proceed to session when only outdated threads exist (not quiet-exit)."""
+        from wade.models.review import PRReviewStatus
+
+        outdated = ReviewThread(
+            id="t1",
+            is_outdated=True,
+            comments=[ReviewComment(author="alice", body="Fix this", path="old.py", line=5)],
+        )
+        mock_setup["get_comprehensive_review_status"].return_value = PRReviewStatus(
+            actionable_threads=[],
+            all_unresolved_threads=[outdated],
+        )
+
+        result = start(target="42")
+        assert result is True
+        # quiet-exit menu should NOT be invoked when outdated threads exist
+        mock_setup["_quiet_next_steps_prompt"].assert_not_called()
+
+    def test_changes_requested_only_proceeds_to_session(
+        self, tmp_path: Path, mock_setup: dict[str, MagicMock], mock_provider: MagicMock
+    ) -> None:
+        """start() should proceed to session on CHANGES_REQUESTED even with no inline threads."""
+        from wade.models.review import PRReview, PRReviewStatus, ReviewState
+
+        mock_setup["get_comprehensive_review_status"].return_value = PRReviewStatus(
+            actionable_threads=[],
+            all_unresolved_threads=[],
+            reviews=[PRReview(author="bob", state=ReviewState.CHANGES_REQUESTED)],
+        )
+
+        result = start(target="42")
+        assert result is True
+        # quiet-exit menu should NOT be invoked for changes_requested
+        mock_setup["_quiet_next_steps_prompt"].assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -705,7 +736,9 @@ class TestFetchReviews:
                 comments=[ReviewComment(author="alice", body="Fix this", path="a.py", line=1)],
             )
         ]
-        mock_status.return_value = PRReviewStatus(actionable_threads=threads)
+        mock_status.return_value = PRReviewStatus(
+            actionable_threads=threads, all_unresolved_threads=threads
+        )
 
         result = fetch_reviews("42", project_root=tmp_path)
 
@@ -975,6 +1008,106 @@ class TestFetchReviews:
         captured = capsys.readouterr()
         assert "@charlie" in captured.out
         assert "Awaiting review" in captured.out
+
+    @patch("wade.services.review_service.get_comprehensive_review_status")
+    @patch("wade.services.review_service.git_pr.get_pr_for_branch")
+    @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch(
+        "wade.services.review_service.git_repo.get_current_branch",
+        side_effect=GitError("detached"),
+    )
+    @patch("wade.services.review_service.git_repo.get_repo_root")
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_outdated_threads_included_in_output(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_get_current_branch: MagicMock,
+        mock_branch: MagicMock,
+        mock_pr: MagicMock,
+        mock_status: MagicMock,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Outdated threads should be included in fetch output, annotated as [OUTDATED]."""
+        from wade.models.review import PRReviewStatus
+
+        mock_repo_root.return_value = tmp_path
+        provider = mock_get_provider.return_value
+        provider.read_task.return_value = self._make_task()
+        mock_pr.return_value = {"number": 99, "state": "OPEN"}
+        outdated = ReviewThread(
+            id="t_outdated",
+            is_outdated=True,
+            comments=[ReviewComment(author="alice", body="Old feedback", path="old.py", line=5)],
+        )
+        mock_status.return_value = PRReviewStatus(
+            actionable_threads=[],
+            all_unresolved_threads=[outdated],
+        )
+
+        result = fetch_reviews("42", project_root=tmp_path)
+
+        assert result is True
+        captured = capsys.readouterr()
+        assert "Old feedback" in captured.out
+        assert "[OUTDATED]" in captured.out
+        assert "outdated" in captured.out.lower()
+
+    @patch("wade.services.review_service.get_comprehensive_review_status")
+    @patch("wade.services.review_service.git_pr.get_pr_for_branch")
+    @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch(
+        "wade.services.review_service.git_repo.get_current_branch",
+        side_effect=GitError("detached"),
+    )
+    @patch("wade.services.review_service.git_repo.get_repo_root")
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_changes_requested_review_body_included(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_get_current_branch: MagicMock,
+        mock_branch: MagicMock,
+        mock_pr: MagicMock,
+        mock_status: MagicMock,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """PR-level CHANGES_REQUESTED review body should appear in fetch output."""
+        from wade.models.review import PRReview, PRReviewStatus, ReviewState
+
+        mock_repo_root.return_value = tmp_path
+        provider = mock_get_provider.return_value
+        provider.read_task.return_value = self._make_task()
+        mock_pr.return_value = {"number": 99, "state": "OPEN"}
+        thread = ReviewThread(
+            id="t1",
+            comments=[ReviewComment(author="alice", body="Fix this", path="a.py", line=1)],
+        )
+        mock_status.return_value = PRReviewStatus(
+            actionable_threads=[thread],
+            all_unresolved_threads=[thread],
+            reviews=[
+                PRReview(
+                    author="bob",
+                    state=ReviewState.CHANGES_REQUESTED,
+                    body="Please refactor the whole module.",
+                    is_bot=False,
+                )
+            ],
+        )
+
+        result = fetch_reviews("42", project_root=tmp_path)
+
+        assert result is True
+        captured = capsys.readouterr()
+        assert "Fix this" in captured.out
+        assert "Please refactor the whole module." in captured.out
 
 
 # ---------------------------------------------------------------------------
@@ -1569,6 +1702,32 @@ class TestQuietNextStepsPrompt:
         assert first_options == ["Keep polling", "Exit without merging"]
         assert second_options == ["Keep polling", "Merge PR", "Exit without merging"]
 
+    @patch("wade.services.review_service.get_comprehensive_review_status")
+    @patch("wade.services.review_service.poll_for_reviews")
+    @patch("wade.ui.prompts.select")
+    @patch("wade.ui.prompts.is_tty", return_value=True)
+    def test_review_complete_reshows_menu(
+        self,
+        mock_is_tty: MagicMock,
+        mock_select: MagicMock,
+        mock_poll: MagicMock,
+        mock_status: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """REVIEW_COMPLETE from poll should re-show the quiet next-steps menu."""
+        from wade.models.review import PollOutcome, PRReviewStatus
+
+        mock_status.return_value = PRReviewStatus()
+        mock_poll.return_value = PollOutcome.REVIEW_COMPLETE
+        # First iteration: keep polling -> REVIEW_COMPLETE -> second iteration: exit
+        mock_select.side_effect = [0, 2]
+        provider = MagicMock()
+
+        _quiet_next_steps_prompt(tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider)
+
+        assert mock_select.call_count == 2
+        assert mock_poll.call_count == 1
+
 
 # ---------------------------------------------------------------------------
 # _post_review_lifecycle()
@@ -1743,3 +1902,89 @@ class TestPostReviewLifecycle:
             yolo=True,
             yolo_explicit=False,
         )
+
+    @patch("wade.services.review_service._quiet_next_steps_prompt")
+    @patch("wade.services.review_service.poll_for_reviews")
+    @patch("wade.services.review_service._merge_pr")
+    @patch("wade.ui.prompts.select", return_value=1)
+    @patch("wade.ui.prompts.is_tty", return_value=True)
+    def test_wait_review_complete_routes_to_quiet_prompt(
+        self,
+        mock_is_tty: MagicMock,
+        mock_select: MagicMock,
+        mock_merge: MagicMock,
+        mock_poll: MagicMock,
+        mock_quiet: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """When poll returns REVIEW_COMPLETE, the quiet next-steps prompt is shown."""
+        from wade.models.review import PollOutcome
+
+        mock_poll.return_value = PollOutcome.REVIEW_COMPLETE
+        provider = MagicMock()
+        _post_review_lifecycle(tmp_path, "feat/42", "42", tmp_path / "wt", 99, provider)
+        mock_merge.assert_not_called()
+        mock_poll.assert_called_once()
+        mock_quiet.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# poll_for_reviews()
+# ---------------------------------------------------------------------------
+
+
+class TestPollForReviews:
+    """Tests for the poll_for_reviews() function."""
+
+    @patch("wade.services.review_service.time.sleep")
+    @patch("wade.services.review_service.get_comprehensive_review_status")
+    @patch("wade.services.review_service.git_pr.get_pr_for_branch")
+    def test_returns_review_complete_when_bot_finished_no_threads(
+        self,
+        mock_pr: MagicMock,
+        mock_status: MagicMock,
+        mock_sleep: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """poll_for_reviews returns REVIEW_COMPLETE when bot is done and no threads exist."""
+        from wade.models.review import PollOutcome, PRReviewStatus, ReviewBotStatus
+        from wade.services.review_service import poll_for_reviews
+
+        mock_pr.return_value = {"state": "OPEN", "number": 99}
+        mock_status.return_value = PRReviewStatus(
+            bot_status=ReviewBotStatus.COMPLETED,
+            actionable_threads=[],
+        )
+        provider = MagicMock()
+
+        result = poll_for_reviews(provider, tmp_path, 99, "feat/42")
+
+        assert result == PollOutcome.REVIEW_COMPLETE
+        mock_sleep.assert_not_called()
+
+    @patch("wade.services.review_service.time.sleep")
+    @patch("wade.services.review_service.get_comprehensive_review_status")
+    @patch("wade.services.review_service.git_pr.get_pr_for_branch")
+    def test_completed_bot_with_threads_still_returns_comments_found(
+        self,
+        mock_pr: MagicMock,
+        mock_status: MagicMock,
+        mock_sleep: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """When bot is COMPLETED but actionable threads exist, COMMENTS_FOUND is returned."""
+        from wade.models.review import PollOutcome, PRReviewStatus, ReviewBotStatus
+        from wade.services.review_service import poll_for_reviews
+
+        mock_pr.return_value = {"state": "OPEN", "number": 99}
+        thread = ReviewThread(comments=[ReviewComment(author="coderabbitai[bot]", body="Fix this")])
+        mock_status.return_value = PRReviewStatus(
+            bot_status=ReviewBotStatus.COMPLETED,
+            actionable_threads=[thread],
+            all_unresolved_threads=[thread],
+        )
+        provider = MagicMock()
+
+        result = poll_for_reviews(provider, tmp_path, 99, "feat/42", bot_settle=0)
+
+        assert result == PollOutcome.COMMENTS_FOUND

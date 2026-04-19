@@ -142,17 +142,3 @@ Read these on-demand when working in a specific area:
 | Writing or running tests | `docs/dev/testing.md` |
 | Working on skills, pointer system, or `wade init` | `docs/dev/skills-system.md` |
 | Updating documentation policies | `docs/dev/documentation-policies.md` |
-
-<!-- wade:pointer:start -->
-## Git Workflow
-
-**First action every session** — read the skill referenced in your clipboard
-prompt for full session rules.
-
-Critical rules you must always follow:
-
-1. Never create GitHub Issues via `gh issue create` — use `wade task create`
-2. Never create PRs manually (`gh pr create`) or push branches directly — use
-   the session's `done` command (`wade implementation-session done` or
-   `wade review-pr-comments-session done`)
-<!-- wade:pointer:end -->

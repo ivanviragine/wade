@@ -23,6 +23,17 @@ Always inform the user before running `wade` commands, reviews, or
 session lifecycle operations. Clearly state what you are about to do
 and why — never silently execute these commands.
 
+When starting a workflow step, announce it:
+  "I'm now syncing your branch with main..."
+
+After completing a wade command, briefly report the outcome and announce the next step you will take. The next step depends on where you are in the workflow — for example:
+  "Sync complete — your branch is up to date with main. Now running `wade implementation-session done`..."
+  "Review done — no issues found. Now writing PR-SUMMARY.md..."
+
+{user_interaction_prompt}
+- After presenting the workflow recap and state: "Want any further changes, or is the session complete?"
+- If review findings need user input: "Should I address this review finding?"
+
 ## Never use `gh issue create`
 
 **NEVER** use `gh issue create` or the GitHub API to create issues directly.
@@ -30,32 +41,16 @@ Always use `wade task create` for interactive issue creation.
 Using `gh` directly bypasses label enforcement, snapshot/diff detection, and
 dependency analysis hooks.
 
+{review_enforcement_rule}
+
 ## Project Knowledge
 
-Run `wade knowledge get` at the start of this session to read project context
-from previous planning and implementation sessions.
-- If knowledge is disabled, it exits with code 1.
-- If the file doesn't exist, it exits with code 0 and prints an informational message to stderr.
+Read @.claude/skills/knowledge/SKILL.md for knowledge operations (search,
+tagging, rating, adding entries).
 
-After reading knowledge entries, rate entries that were useful or unhelpful:
-```bash
-wade knowledge rate <entry-id> up    # entry was useful
-wade knowledge rate <entry-id> down  # entry was outdated or misleading
-```
-
-Before writing `PR-SUMMARY.md`, if knowledge capture is enabled
-(check `.wade.yml` → `knowledge.enabled`) and you discovered important project
-patterns, conventions, or gotchas during this session, capture them:
-
-```bash
-echo "Your learnings here" | wade knowledge add --session implementation --issue <number>
-```
-
-If a new entry corrects or replaces an existing one, use `--supersedes`:
-```bash
-echo "Corrected info" | wade knowledge add --session implementation --issue <number> --supersedes <old-entry-id>
-```
-
+At the start of this session, search for knowledge relevant to your task
+(do not dump all entries). Before writing `PR-SUMMARY.md`, capture important
+learnings if knowledge is enabled (`.wade.yml` → `knowledge.enabled`).
 Then commit the updated knowledge file alongside your other changes.
 
 ## First action: check your context
@@ -67,6 +62,35 @@ Run `wade implementation-session check` as your **first action**:
   committing**. Tell the human to create a worktree first via
   `wade implement`.
 - `NOT_IN_GIT_REPO` — you are not inside a git repository.
+
+## Catchup: startup sync with base branch
+
+`wade implement` automatically syncs your worktree branch with the base branch
+at startup (before this session begins). The catchup output appears in the
+startup log.
+
+**If the startup output reports a merge conflict**, note that the catchup
+command always aborts the merge and leaves the worktree clean — there are no
+conflict markers to resolve. `wade implementation-session catchup --json` is
+inspection-only: it re-runs the same aborted catchup to report which files
+conflict, but the merge will be aborted again.
+
+To produce resolvable conflicts, run the merge manually:
+
+```bash
+git fetch origin
+git merge origin/<main-branch>   # use the actual base branch name
+```
+
+Then resolve using the standard flow:
+1. Run `git diff --name-only --diff-filter=U` to list conflicted files
+2. Read each conflicted file — understand both sides of the conflict
+3. Resolve the conflict markers in each file
+4. Stage only the resolved files: `git add <file1> <file2> ...`
+5. Complete the merge: `git commit --no-edit`
+
+The closing `sync` step remains necessary for changes that land on the base
+branch *during* your implementation session.
 
 ## Worktree safety
 
@@ -167,21 +191,7 @@ directly.
 
 To finalize your work, follow these steps in order:
 
-**Step 1 — Review (if you haven't already):**
-
-Run `wade review implementation` to review your changes and check the exit code:
-- **Exit 0**: Review completed externally or skipped. If there is output, it is
-  review feedback — read it and address any actionable findings, then commit
-  before proceeding.
-- **Exit 2**: Self-review mode. The output is a review prompt — you must act as
-  the reviewer: read the instructions, analyze the diff, identify issues, and
-  fix them. Commit fixes before proceeding.
-- **Exit 1**: Error — debug and retry.
-
-For staged-only review: `wade review implementation --staged`.
-
-**Do not proceed to Step 2 until this step is complete and any actionable
-findings are addressed and committed.**
+{review_implementation_closing_step}
 
 **Step 2 — Write PR summary:**
 
@@ -207,11 +217,28 @@ it is cleaned up automatically by `implement` after the human merges the PR.
 This is a **mandatory** final step. If `wade implementation-session done` fails, debug and
 fix the error — do NOT bypass it.
 
-**Step 5 — Review with the user:**
+**Step 5 — Present results to the user:**
 
-Present the PR link and a brief recap of what was implemented. Ask if they'd
-like any further changes — apply them and repeat Steps 1–5 if so, or confirm
-the session is complete if not.
+Provide a brief **workflow recap** and **current state summary**, then suggest
+the user exits the session.
+
+Workflow recap (list only the steps you actually performed):
+- Ran self-review (`wade review implementation`)
+- Wrote PR-SUMMARY.md
+- Synced with main (`wade implementation-session sync`)
+- Pushed and opened/updated PR (`wade implementation-session done`)
+
+Current state:
+- PR #{number} is open and ready for review at {url}
+- Issue #{number} will close automatically when the PR is merged
+- Branch: {branch_name}
+
+What happens next:
+- After you exit, wade will monitor the PR for review comments
+- To address review feedback later: `wade review pr-comments <issue>`
+- To check PR status: `wade status <issue>`
+
+Use your tool's native question component to ask: "Want any further changes, or is the session complete?" Apply them and repeat Steps 1–5 if so. Otherwise, suggest the user exits so wade can continue the workflow.
 
 ### Working on a child issue (sub-issue of a tracking/epic)
 
@@ -247,7 +274,7 @@ create a GitHub Issue from it:
 
 The following skill directories under `.claude/skills/` are **managed by wade**
 and must not be modified, committed, or deleted:
-`plan-session`, `implementation-session`, `review-pr-comments-session`, `task`, `deps`.
+`plan-session`, `implementation-session`, `review-pr-comments-session`, `task`, `deps`, `knowledge`.
 
 Wade also installs cross-tool alias symlinks per-session in worktrees:
 `.github/skills`, `.agents/skills`, `.gemini/skills`, `.cursor/skills`.
@@ -257,6 +284,22 @@ locations can cause surprising `done()` failures.
 
 All of the above are installed per-session in worktrees by wade and are already gitignored.
 User-created custom skills under `.claude/skills/` are not affected.
+
+## Task Tracking
+
+At the start of this session, use your tool's native task/todo tracking
+mechanism to populate a checklist with the workflow steps below. This ensures
+you complete every mandatory step and the user can track progress.
+
+- [ ] Run `wade implementation-session check`
+- [ ] Search relevant knowledge (`wade knowledge get --search <topic>` or `wade knowledge get --tag <tag>`)
+- [ ] Implementation tasks from PLAN.md (add each task as a separate item)
+- [ ] Run `wade review implementation` (if `review_implementation.enabled` is not `false`)
+- [ ] Capture knowledge (`wade knowledge add`) (if knowledge capture is enabled)
+- [ ] Write PR-SUMMARY.md
+- [ ] Sync with main (`wade implementation-session sync --json`)
+- [ ] Close session (`wade implementation-session done`)
+- [ ] Present results and suggest exit
 
 ## Skills reference
 

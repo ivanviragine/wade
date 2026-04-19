@@ -34,13 +34,19 @@ class TestInit:
         assert config["models"]["claude"]["medium"] != config["models"]["claude"]["easy"]
         assert "permissions" not in config
 
-        assert (tmp_git_repo / ".wade-managed").is_file()
-        assert (tmp_git_repo / "AGENTS.md").is_file()
-        assert (tmp_git_repo / "CLAUDE.md").exists()
+        assert (tmp_git_repo / ".wade" / ".wade-managed").is_file()
+        # AGENTS.md pointer is now written per-session in worktrees, not during init
+        assert not (tmp_git_repo / "AGENTS.md").is_file()
+        assert not (tmp_git_repo / "CLAUDE.md").exists()
 
-        gitignore = (tmp_git_repo / ".gitignore").read_text()
-        assert "# wade:start" in gitignore
-        assert "# wade:end" in gitignore
+        # init no longer writes a committed gitignore block
+        gitignore_path = tmp_git_repo / ".gitignore"
+        if gitignore_path.is_file():
+            gitignore = gitignore_path.read_text()
+            assert "# wade:start" not in gitignore
+
+        # .wade/ should be self-ignoring
+        assert (tmp_git_repo / ".wade" / ".gitignore").is_file()
 
 
 class TestDeinit:

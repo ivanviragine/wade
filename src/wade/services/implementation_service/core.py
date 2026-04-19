@@ -1,7 +1,7 @@
-"""Implementation service — session lifecycle: start, done, sync, list, batch, remove.
+"""Implementation service core — session lifecycle: start, done, sync, list, remove.
 
-Orchestrates: worktree creation, bootstrap, AI tool launch, PR/merge,
-sync, list, batch topology.
+Orchestrates: AI tool launch, PR/merge, sync, list.
+Bootstrap, usage tracking, and batch are in sibling modules.
 """
 
 from __future__ import annotations
@@ -10,8 +10,6 @@ import contextlib
 import json
 import os
 import re
-import shutil
-import subprocess
 import tempfile
 import webbrowser
 from pathlib import Path
@@ -19,7 +17,7 @@ from typing import Any
 
 import structlog
 from crossby.ai_tools import AbstractAITool
-from crossby.models.ai import AIToolID, TokenUsage
+from crossby.models.ai import AIToolID
 
 from wade.config.loader import load_config
 from wade.git import branch as git_branch
@@ -29,7 +27,6 @@ from wade.git import sync as git_sync
 from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
-from wade.models.deps import DependencyGraph
 from wade.models.session import (
     ImplementResult,
     MergeStatus,
@@ -39,13 +36,7 @@ from wade.models.session import (
     SyncResult,
     WorktreeState,
 )
-from wade.models.task import (
-    Task,
-    has_checklist_items,
-    is_tracking_issue,
-    parse_all_issue_refs,
-    parse_tracking_child_ids,
-)
+from wade.models.task import Task
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.ai_resolution import (
@@ -55,6 +46,27 @@ from wade.services.ai_resolution import (
     resolve_model,
     resolve_yolo,
 )
+from wade.services.implementation_service.bootstrap import (
+    WORKTREE_GITIGNORE_MARKER_END,
+    WORKTREE_GITIGNORE_MARKER_START,
+    _check_tracked_managed_files,
+    _format_uncommitted_summary,
+    _get_dirty_file_paths,
+    _identify_session_dirty_files,
+    _resolve_worktrees_dir,
+    bootstrap_worktree,
+    strip_worktree_gitignore,
+    write_plan_md,
+)
+from wade.services.implementation_service.usage_tracking import (
+    IMPL_USAGE_MARKER_END,
+    IMPL_USAGE_MARKER_START,
+    REVIEW_USAGE_MARKER_END,
+    REVIEW_USAGE_MARKER_START,
+    _enrich_body_with_usage,
+    _usage_has_token_metrics,
+    append_impl_usage_entry,
+)
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.task_service import (
     add_implemented_by_labels,
@@ -63,321 +75,84 @@ from wade.services.task_service import (
 )
 from wade.ui import prompts
 from wade.ui.console import console
-from wade.utils.markdown import append_session_to_body, remove_marker_block
 from wade.utils.terminal import (
     compose_implement_title,
-    launch_batch_in_terminals,
     launch_in_new_terminal,
     set_terminal_title,
     start_title_keeper,
     stop_title_keeper,
 )
-from wade.utils.token_usage_markdown import resolve_token_usage_totals
 
 logger = structlog.get_logger()
 
-# --- Implementation usage block markers ---
-IMPL_USAGE_MARKER_START = "<!-- wade:impl-usage:start -->"
-IMPL_USAGE_MARKER_END = "<!-- wade:impl-usage:end -->"
+# Private names that external modules import (tests, other services).
+# Listed in __all__ so ``from .core import *`` re-exports them.
+__all__ = [
+    "IMPL_USAGE_MARKER_END",
+    "IMPL_USAGE_MARKER_START",
+    "PLAN_MARKER_END",
+    # Constants
+    "PLAN_MARKER_START",
+    "REVIEW_USAGE_MARKER_END",
+    "REVIEW_USAGE_MARKER_START",
+    "WORKTREE_GITIGNORE_MARKER_END",
+    # Re-exported from sibling modules (so __init__.py's ``from .core import *`` picks them up)
+    "WORKTREE_GITIGNORE_MARKER_START",
+    # Re-exported types
+    "ImplementResult",
+    "_apply_pr_refs",
+    "_build_implementation_issue_context_header",
+    "_build_pr_body",
+    "_capture_post_session_usage",
+    "_check_tracked_managed_files",
+    "_cleanup_worktree",
+    # Private names imported externally (services + tests)
+    "_detect_ai_cli_env",
+    "_done_via_direct",
+    "_done_via_pr",
+    "_enrich_body_with_usage",
+    "_format_uncommitted_summary",
+    "_get_dirty_file_paths",
+    "_identify_session_dirty_files",
+    "_merge_base",
+    "_merge_pr",
+    "_parse_overwrite_paths",
+    "_post_implementation_lifecycle",
+    "_post_implementation_lifecycle_direct",
+    "_post_implementation_lifecycle_pr",
+    "_preserve_session_data",
+    "_pull_main_after_merge",
+    "_remove_stale",
+    "_remove_target",
+    "_resolve_task_target",
+    "_resolve_worktree_from_plan",
+    "_resolve_worktrees_dir",
+    "_strip_summary_section",
+    "_sync_preflight",
+    "_usage_has_token_metrics",
+    "_warn_pull_sync_failed",
+    "append_impl_usage_entry",
+    # Public helpers used by other services
+    "bootstrap_draft_pr",
+    "bootstrap_worktree",
+    "build_implementation_prompt",
+    "catchup",
+    "classify_staleness",
+    "done",
+    "extract_issue_from_branch",
+    "extract_plan_from_pr_body",
+    "find_worktree_path",
+    "list_sessions",
+    "remove",
+    # Public entry points
+    "start",
+    "strip_worktree_gitignore",
+    "sync",
+    "write_plan_md",
+]
 
-# --- Review usage block markers ---
-REVIEW_USAGE_MARKER_START = "<!-- wade:review-usage:start -->"
-REVIEW_USAGE_MARKER_END = "<!-- wade:review-usage:end -->"
 
 # ---------------------------------------------------------------------------
-# Tracking-issue detection
-# ---------------------------------------------------------------------------
-
-
-def check_tracking_issue_and_batch(
-    task: Task,
-    *,
-    ai_tool: str | None,
-    model: str | None,
-    project_root: Path | None,
-    ai_explicit: bool,
-    model_explicit: bool,
-    effort: str | None,
-    effort_explicit: bool,
-    yolo: bool | None,
-    cd_only: bool = False,
-) -> bool | None:
-    """Detect tracking issues and redirect to batch implementation.
-
-    Returns True/False if the tracking-issue path was taken, or None if
-    the task is not a tracking issue (caller should continue normally).
-    """
-    if not is_tracking_issue(task.title):
-        return None
-
-    child_ids = (
-        parse_tracking_child_ids(task.body)
-        if has_checklist_items(task.body)
-        else parse_all_issue_refs(task.body)
-    )
-    if not child_ids:
-        return None
-
-    if cd_only:
-        console.info("Tracking issue detected — batch redirect skipped for cd-only mode")
-        return None
-
-    refs = ", ".join(f"#{cid}" for cid in child_ids)
-    console.info(f"#{task.id} is a tracking issue for: {refs}")
-    if prompts.confirm("Start batch implementation?", default=True):
-        return batch(
-            issue_numbers=child_ids,
-            ai_tool=ai_tool,
-            model=model,
-            project_root=project_root,
-            ai_explicit=ai_explicit,
-            model_explicit=model_explicit,
-            effort=effort,
-            effort_explicit=effort_explicit,
-            yolo=yolo,
-        )
-    return False
-
-
-# ---------------------------------------------------------------------------
-# Bootstrap helpers
-# ---------------------------------------------------------------------------
-
-
-def _resolve_worktrees_dir(config: ProjectConfig, repo_root: Path) -> Path:
-    """Resolve the worktrees directory from config."""
-    wt_dir = config.project.worktrees_dir
-    if Path(wt_dir).is_absolute():
-        return Path(wt_dir)
-    return (repo_root / wt_dir).resolve()
-
-
-def _format_uncommitted_summary(cwd: Path) -> str:
-    """Build a human-readable summary of dirty working tree status."""
-    dirty = git_repo.get_dirty_status(cwd)
-    parts: list[str] = []
-    if dirty["staged"]:
-        parts.append(f"{dirty['staged']} staged")
-    if dirty["unstaged"]:
-        parts.append(f"{dirty['unstaged']} unstaged")
-    if dirty["untracked"]:
-        parts.append(f"{dirty['untracked']} untracked")
-    return ", ".join(parts) if parts else "dirty"
-
-
-def _check_tracked_managed_files(cwd: Path) -> list[str]:
-    """Return tracked wade-managed files that should not be committed.
-
-    Checks for:
-    - Skill directories from ``MANAGED_SKILL_NAMES``
-    - Cross-tool symlink directories
-    - The wade-generated plan_write_guard.py hook
-    """
-    from wade.skills.installer import CROSS_TOOL_DIRS, MANAGED_SKILL_NAMES, PLAN_GUARD_HOOK_FILES
-
-    # Build path roots to check against git index (bare, no trailing slash).
-    # git ls-files --cached reports tracked symlinks without trailing slashes,
-    # so trailing-slash prefixes would miss them.
-    roots: list[str] = [f".claude/skills/{name}" for name in MANAGED_SKILL_NAMES]
-    for cross_dir in CROSS_TOOL_DIRS:
-        cross_path = cwd / cross_dir
-        if cross_path.is_symlink() or not cross_path.exists():
-            roots.append(cross_dir)
-    roots.extend(PLAN_GUARD_HOOK_FILES)
-
-    try:
-        result = subprocess.run(
-            ["git", "ls-files", "--cached"],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return []
-
-    tracked: list[str] = []
-    for line in result.stdout.splitlines():
-        path = line.strip()
-        if any(path == root or path.startswith(f"{root}/") for root in roots):
-            tracked.append(path)
-
-    return sorted(tracked)
-
-
-def write_plan_md(
-    worktree_path: Path,
-    task: Task,
-    plan_content: str | None = None,
-) -> Path:
-    """Write PLAN.md to the worktree.
-
-    Args:
-        worktree_path: Worktree directory.
-        task: Task with metadata (id, title, url).
-        plan_content: Optional plan content to use instead of task.body.
-            When provided (e.g. extracted from a draft PR), this takes priority.
-    """
-    plan_path = worktree_path / "PLAN.md"
-    lines = [
-        f"# Issue #{task.id}: {task.title}",
-        "",
-    ]
-    body = plan_content if plan_content is not None else task.body
-    if body:
-        lines.append(body)
-    if task.url:
-        lines.append("")
-        lines.append(f"URL: {task.url}")
-
-    plan_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    logger.info("implementation.plan_md_written", path=str(plan_path))
-    return plan_path
-
-
-def _install_plan_guard_hooks(worktree_path: Path) -> None:
-    """Copy the guard script and configure all AI tool hooks for plan mode."""
-    from wade.hooks import get_guard_script_path
-
-    guard_src = get_guard_script_path()
-
-    # Copy guard script to each tool's hooks directory
-    tool_dirs = [".claude/hooks", ".cursor/hooks", ".copilot/hooks", ".gemini/hooks"]
-    for tool_dir in tool_dirs:
-        dest_dir = worktree_path / tool_dir
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / "plan_write_guard.py"
-        shutil.copy2(guard_src, dest)
-
-    # Configure each tool's hook config with its own guard script copy
-    from crossby.config.claude_allowlist import configure_plan_hooks as configure_claude_hooks
-    from crossby.config.copilot_hooks import configure_plan_hooks as configure_copilot_hooks
-    from crossby.config.cursor_hooks import configure_plan_hooks as configure_cursor_hooks
-    from crossby.config.gemini_hooks import configure_plan_hooks as configure_gemini_hooks
-
-    configure_claude_hooks(
-        worktree_path, worktree_path / ".claude" / "hooks" / "plan_write_guard.py"
-    )
-    configure_cursor_hooks(
-        worktree_path, worktree_path / ".cursor" / "hooks" / "plan_write_guard.py"
-    )
-    configure_copilot_hooks(
-        worktree_path, worktree_path / ".copilot" / "hooks" / "plan_write_guard.py"
-    )
-    configure_gemini_hooks(
-        worktree_path, worktree_path / ".gemini" / "hooks" / "plan_write_guard.py"
-    )
-    logger.info("implementation.plan_guard_hooks_installed", path=str(worktree_path))
-
-
-def _effective_copy_files(config: ProjectConfig) -> list[str]:
-    """Compute the full list of files to copy into a new worktree.
-
-    Merges user-configured copy_to_worktree with internal wade files
-    that must always be present (.wade.yml, knowledge path + ratings when enabled).
-    """
-    from wade.services.knowledge_service import resolve_ratings_path
-
-    internal: list[str] = [".wade.yml"]
-    if config.knowledge.enabled:
-        kpath = config.knowledge.path
-        if not kpath.startswith("/") and ".." not in kpath.split("/"):
-            internal.append(kpath)
-            internal.append(str(resolve_ratings_path(Path(kpath))))
-
-    files: list[str] = list(config.hooks.copy_to_worktree)
-    for f in internal:
-        if f not in files:
-            files.append(f)
-    return files
-
-
-def bootstrap_worktree(
-    worktree_path: Path,
-    config: ProjectConfig,
-    repo_root: Path,
-    skills: list[str] | None = None,
-    plan_mode: bool = False,
-) -> None:
-    """Run post-creation bootstrap: copy files, install skills, run hooks.
-
-    Args:
-        worktree_path: Path to the worktree directory.
-        config: Project configuration.
-        repo_root: Root of the main repository checkout.
-        skills: If provided, install only the listed skills instead of all.
-        plan_mode: If True, install file-write guard hooks for plan sessions.
-    """
-    # Copy configured files + internal wade files that must always be present
-    copy_files = _effective_copy_files(config)
-    for filename in copy_files:
-        src = repo_root / filename
-        dest = worktree_path / filename
-        if src.is_file():
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dest)
-            logger.debug("implementation.bootstrap_copy", file=filename)
-
-    # Install skill files — not tracked by git so worktrees don't inherit them
-    from wade.skills.installer import get_wade_repo_root, install_skills
-
-    is_self = repo_root.resolve() == get_wade_repo_root().resolve()
-    if is_self:
-        # Worktree has its own templates/ checkout — symlink to those
-        wt_templates = worktree_path / "templates" / "skills"
-        install_skills(
-            worktree_path,
-            is_self_init=True,
-            force=True,
-            templates_dir=wt_templates,
-            skills=skills,
-        )
-    else:
-        install_skills(worktree_path, is_self_init=False, force=True, skills=skills)
-    logger.debug("implementation.bootstrap_skills", path=str(worktree_path))
-
-    # Always propagate allowlist to worktree — configure_allowlist is idempotent
-    from crossby.config.claude_allowlist import configure_allowlist
-
-    configure_allowlist(worktree_path, ["wade:*", *config.permissions.allowed_commands])
-
-    # Propagate Cursor allowlist to worktree's per-project .cursor/cli.json
-    from crossby.config.cursor_allowlist import configure_allowlist as configure_cursor_allowlist
-    from crossby.config.cursor_allowlist import is_allowlist_configured as is_cursor_configured
-
-    wp = ["wade:*"]
-    if is_cursor_configured(patterns=wp) or is_cursor_configured(repo_root, patterns=wp):
-        configure_cursor_allowlist(worktree_path, ["wade:*", *config.permissions.allowed_commands])
-
-    # Run post-create hook
-    if config.hooks.post_worktree_create:
-        hook_path = repo_root / config.hooks.post_worktree_create
-        if hook_path.is_file():
-            try:
-                subprocess.run(
-                    [str(hook_path)],
-                    cwd=str(worktree_path),
-                    check=True,
-                    capture_output=True,
-                    timeout=60,
-                )
-                logger.info("implementation.hook_ran", hook=config.hooks.post_worktree_create)
-            except subprocess.TimeoutExpired as e:
-                raise RuntimeError(f"Bootstrap hook timed out after 60 seconds: {hook_path}") from e
-            except subprocess.CalledProcessError as e:
-                hook_path_str = str(hook_path)
-                logger.warning(
-                    "implementation.hook_failed",
-                    hook=config.hooks.post_worktree_create,
-                    hook_path=hook_path_str,
-                    error=e.stderr.decode("utf-8", errors="replace") if e.stderr else "",
-                    msg=f"Hook script failed: {hook_path_str}. Check logs for details.",
-                )
-
-    # Install plan-mode file-write guard hooks last so post-create scripts
-    # cannot overwrite the guarded config files.
-    if plan_mode:
-        _install_plan_guard_hooks(worktree_path)
 
 
 def _detect_ai_cli_env() -> str | None:
@@ -538,37 +313,6 @@ def bootstrap_draft_pr(
         return None
 
 
-def _usage_has_token_metrics(usage: TokenUsage | None) -> bool:
-    """Return True when usage contains aggregate or per-model token metrics."""
-    return bool(
-        usage
-        and (
-            usage.total_tokens is not None
-            or usage.input_tokens is not None
-            or usage.output_tokens is not None
-            or usage.cached_tokens is not None
-            or (usage.premium_requests or 0) > 0
-            or usage.model_breakdown
-        )
-    )
-
-
-def _resolve_usage_totals(
-    token_usage: TokenUsage | None,
-) -> tuple[int | None, int | None, int | None, int | None]:
-    """Resolve aggregate token counts, deriving them from breakdown rows when needed."""
-    if token_usage is None:
-        return None, None, None, None
-
-    return resolve_token_usage_totals(
-        total_tokens=token_usage.total_tokens,
-        input_tokens=token_usage.input_tokens,
-        output_tokens=token_usage.output_tokens,
-        cached_tokens=token_usage.cached_tokens,
-        model_breakdown=token_usage.model_breakdown,
-    )
-
-
 def _capture_post_session_usage(
     transcript_path: Path | None,
     adapter: AbstractAITool,
@@ -595,7 +339,7 @@ def _capture_post_session_usage(
         return None
 
     has_tokens = _usage_has_token_metrics(usage)
-    has_session = usage and usage.session_id
+    has_session = bool(usage and usage.session_id)
     if not has_tokens and not has_session:
         logger.warning("implementation.no_token_usage", transcript=str(transcript_path))
         console.warn(f"No token usage found in transcript: {transcript_path}")
@@ -613,23 +357,14 @@ def _capture_post_session_usage(
         try:
             current_body = git_pr.get_pr_body(repo_root, pr_number)
             if current_body is not None:
-                new_body = current_body
-                if has_tokens:
-                    assert usage is not None
-                    new_body = append_impl_usage_entry(
-                        new_body,
-                        ai_tool=ai_tool,
-                        model=effective_model,
-                        token_usage=usage,
-                    )
-                if has_session:
-                    assert usage is not None and usage.session_id is not None
-                    new_body = append_session_to_body(
-                        new_body,
-                        phase="Implement",
-                        ai_tool=ai_tool,
-                        session_id=usage.session_id,
-                    )
+                new_body = _enrich_body_with_usage(
+                    current_body,
+                    ai_tool,
+                    effective_model,
+                    usage,
+                    has_tokens,
+                    has_session,
+                )
                 if git_pr.update_pr_body(repo_root, pr_number, new_body):
                     if has_tokens:
                         console.success("Updated PR with implementation usage stats.")
@@ -647,23 +382,14 @@ def _capture_post_session_usage(
     if issue_number and provider:
         with contextlib.suppress(Exception):
             task = provider.read_task(str(issue_number))
-            new_body = task.body
-            if has_tokens:
-                assert usage is not None
-                new_body = append_impl_usage_entry(
-                    new_body,
-                    ai_tool=ai_tool,
-                    model=effective_model,
-                    token_usage=usage,
-                )
-            if has_session:
-                assert usage is not None and usage.session_id is not None
-                new_body = append_session_to_body(
-                    new_body,
-                    phase="Implement",
-                    ai_tool=ai_tool,
-                    session_id=usage.session_id,
-                )
+            new_body = _enrich_body_with_usage(
+                task.body,
+                ai_tool,
+                effective_model,
+                usage,
+                has_tokens,
+                has_session,
+            )
             provider.update_task(str(issue_number), body=new_body)
             if has_tokens:
                 console.success("Updated issue with implementation usage stats.")
@@ -859,7 +585,7 @@ def _post_implementation_lifecycle_pr(
                 yolo=yolo,
                 yolo_explicit=yolo_explicit,
             )
-        elif outcome == PollOutcome.QUIET_TIMEOUT:
+        elif outcome in (PollOutcome.QUIET_TIMEOUT, PollOutcome.REVIEW_COMPLETE):
             review_service._quiet_next_steps_prompt(
                 repo_root,
                 branch,
@@ -1046,7 +772,12 @@ def start(
             return ImplementResult(success=False)
 
         # Tracking issue detection — redirect to batch implementation
-        batch_result = check_tracking_issue_and_batch(
+        # NOTE: The submodule name "batch" collides with the batch() function
+        # re-exported by __init__.py, so we access the module via sys.modules.
+        import sys
+
+        _batch_mod = sys.modules["wade.services.implementation_service.batch"]
+        batch_result = _batch_mod.check_tracking_issue_and_batch(
             task,
             ai_tool=ai_tool,
             model=model,
@@ -1227,7 +958,13 @@ def start(
         from wade.skills.installer import IMPLEMENT_SKILLS
 
         write_plan_md(worktree_path, task, plan_content=plan_content)
-        bootstrap_worktree(worktree_path, config, repo_root, skills=IMPLEMENT_SKILLS)
+        bootstrap_worktree(
+            worktree_path,
+            config,
+            repo_root,
+            skills=IMPLEMENT_SKILLS,
+            selected_ai_tool=resolved_tool,
+        )
 
         # Store stacked base branch metadata so sync can use it instead of main
         if base_branch:
@@ -1235,6 +972,22 @@ def start(
             wade_dir.mkdir(exist_ok=True)
             (wade_dir / "base_branch").write_text(base_branch + "\n")
             console.detail(f"Stacked on {base_branch}")
+
+        # Catchup: sync worktree with base branch before AI launch (non-blocking)
+        try:
+            catchup_result = catchup(project_root=worktree_path)
+            if not catchup_result.success:
+                if catchup_result.conflicts:
+                    console.warn(
+                        "Startup catchup: merge conflict — "
+                        "run `git merge origin/<base>` manually to resolve, then "
+                        "re-run `wade implementation-session catchup --json` for inspection."
+                    )
+                else:
+                    console.warn("Startup catchup failed — proceeding anyway.")
+        except Exception:
+            logger.debug("start.catchup_failed", exc_info=True)
+            console.warn("Startup catchup failed — proceeding anyway.")
 
         # Add in-progress label and move to in-progress on project board (both non-critical)
         with contextlib.suppress(Exception):
@@ -1494,169 +1247,6 @@ def _resolve_task_target(
 # ---------------------------------------------------------------------------
 
 
-def batch(
-    issue_numbers: list[str],
-    ai_tool: str | None = None,
-    model: str | None = None,
-    project_root: Path | None = None,
-    *,
-    ai_explicit: bool = False,
-    model_explicit: bool = False,
-    effort: str | None = None,
-    effort_explicit: bool = False,
-    yolo: bool | None = None,
-) -> bool:
-    """Start parallel implementation sessions for multiple issues.
-
-    Independent issues launch in parallel terminals.
-    Dependent chains: only the first issue in each chain is launched; the
-    remaining chain members are printed in order for manual sequential
-    execution (one cannot work on a dependent issue before its blocker is done).
-    """
-    # Deduplicate while preserving order
-    issue_numbers = list(dict.fromkeys(issue_numbers))
-
-    config = load_config(project_root)
-    cwd = project_root or Path.cwd()
-
-    try:
-        repo_root = git_repo.get_repo_root(cwd)
-    except GitError:
-        console.error("Not inside a git repository")
-        return False
-
-    console.rule(f"implement-batch ({len(issue_numbers)} issues)")
-
-    # Resolve AI tool and model, then offer interactive confirmation.
-    resolved_tool = resolve_ai_tool(ai_tool, config, "implement")
-    resolved_model = resolve_model(model, config, "implement", tool=resolved_tool)
-    resolved_effort = resolve_effort(effort, config, "implement", tool=resolved_tool)
-    resolved_yolo = resolve_yolo(yolo, config, "implement", tool=resolved_tool)
-    resolved_tool, resolved_model, resolved_effort, resolved_yolo = confirm_ai_selection(
-        resolved_tool,
-        resolved_model,
-        tool_explicit=ai_explicit,
-        model_explicit=model_explicit,
-        resolved_effort=resolved_effort,
-        effort_explicit=effort_explicit,
-        resolved_yolo=resolved_yolo,
-        yolo_explicit=yolo is not None,
-    )
-
-    # Check for dependency ordering
-    # Try to load deps from issue bodies (look for "Depends on" references)
-    graph = _build_graph_from_issues(issue_numbers, config)
-
-    if graph and graph.edges:
-        independent, chains = graph.partition(issue_numbers)
-        console.info(f"Dependency analysis: {len(independent)} independent, {len(chains)} chain(s)")
-    else:
-        independent = issue_numbers
-        chains = []
-
-    def _build_cmd(issue_id: str, chain_ids: list[str] | None = None) -> list[str]:
-        """Build the wade implement command for a single issue.
-
-        Args:
-            issue_id: The issue number to implement.
-            chain_ids: Optional remaining issue IDs for --chain continuation.
-        """
-        cmd = ["wade", "implement", issue_id]
-        if resolved_tool:
-            cmd.extend(["--ai", resolved_tool])
-        if resolved_model:
-            cmd.extend(["--model", resolved_model])
-        if resolved_effort:
-            cmd.extend(["--effort", resolved_effort.value])
-        if resolved_yolo:
-            cmd.append("--yolo")
-        if chain_ids:
-            cmd.extend(["--chain", ",".join(chain_ids)])
-        return cmd
-
-    # Collect all items to launch in one batch
-    batch_items: list[tuple[list[str], str | None, str | None]] = []
-
-    for issue_id in independent:
-        console.step(f"Preparing #{issue_id} (independent)")
-        batch_items.append((_build_cmd(issue_id), str(repo_root), f"wade #{issue_id}"))
-
-    # Chains: launch only the first item with --chain for auto-continuation
-    for chain in chains:
-        console.info(f"Dependency chain: {' → '.join(f'#{n}' for n in chain)}")
-        chain_rest = chain[1:] if len(chain) > 1 else None
-        batch_items.append(
-            (_build_cmd(chain[0], chain_ids=chain_rest), str(repo_root), f"wade #{chain[0]}")
-        )
-
-    if not batch_items:
-        console.panel("  No issues to launch", title="Batch started")
-        return False
-
-    console.step(f"Launching {len(batch_items)} session(s) in new terminal window")
-    launched = launch_batch_in_terminals(batch_items)
-
-    if not launched:
-        console.warn("Could not launch terminals for batch")
-        return False
-
-    console.panel(f"  Launched {len(batch_items)} implementation session(s)", title="Batch started")
-
-    # Post-batch coherence review prompt
-    tracking_id = None
-    try:
-        provider = get_provider(config)
-        tracking_id = provider.find_parent_issue(issue_numbers[0], label=config.project.issue_label)
-    except Exception:
-        logger.debug("batch.find_parent_failed", exc_info=True)
-
-    if prompts.is_tty() and tracking_id:
-        choice = prompts.select(
-            "Coherence review (run after all sessions complete)",
-            ["Run later", "Skip"],
-        )
-        if choice == 0:  # Run later
-            console.hint(f"Run when ready: wade review batch {tracking_id}")
-    elif tracking_id:
-        console.hint(f"After all sessions complete: wade review batch {tracking_id}")
-
-    return True
-
-
-def _build_graph_from_issues(
-    issue_numbers: list[str],
-    config: ProjectConfig,
-) -> DependencyGraph | None:
-    """Try to build a dependency graph from issue body cross-references."""
-    from wade.models.deps import DependencyEdge, DependencyGraph
-    from wade.models.task import parse_dependency_refs
-
-    provider = get_provider(config)
-    edges: list[DependencyEdge] = []
-    valid_set = set(issue_numbers)
-
-    for num in issue_numbers:
-        try:
-            task = provider.read_task(num)
-        except Exception:
-            logger.debug("batch.issue_read_failed", issue_num=num, exc_info=True)
-            continue
-
-        refs = parse_dependency_refs(task.body)
-        for dep_id in refs["depends_on"]:
-            if dep_id in valid_set:
-                edges.append(DependencyEdge(from_task=dep_id, to_task=num))
-
-    if edges:
-        return DependencyGraph(edges=edges)
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Implementation cd
-# ---------------------------------------------------------------------------
-
-
 def find_worktree_path(
     target: str,
     project_root: Path | None = None,
@@ -1816,248 +1406,6 @@ def classify_staleness(
 # ---------------------------------------------------------------------------
 
 
-def _build_session_usage_table(
-    ai_tool: str | None = None,
-    model: str | None = None,
-    token_usage: TokenUsage | None = None,
-) -> str:
-    """Build a single-session markdown usage table (no markers or headings).
-
-    Generates the table rows for one session, used by both impl and review
-    usage block builders.
-    """
-    from crossby.ai_tools.transcript import format_count
-
-    breakdown = token_usage.model_breakdown if token_usage else []
-    multi = len(breakdown) > 1
-    total_tokens, input_tokens, output_tokens, cached_tokens = _resolve_usage_totals(token_usage)
-    has_tokens = _usage_has_token_metrics(token_usage)
-
-    lines: list[str] = []
-
-    if multi:
-        names = [row.model for row in breakdown]
-        n = len(names)
-        header = "| Metric | Total | " + " | ".join(f"`{m}`" for m in names) + " |"
-        sep = "| " + " | ".join(["---"] * (2 + n)) + " |"
-        empty = " |" * n
-
-        lines.extend([header, sep])
-
-        if ai_tool:
-            lines.append(f"| Tool | `{ai_tool}` |{empty}")
-
-        if has_tokens:
-
-            def per(attr: str) -> str:
-                return " | ".join(f"**{format_count(getattr(r, attr))}**" for r in breakdown)
-
-            per_total = " | ".join(
-                f"**{format_count((r.input_tokens or 0) + (r.output_tokens or 0) + (r.cached_tokens or 0))}**"  # noqa: E501
-                for r in breakdown
-            )
-            if total_tokens is not None:
-                lines.append(f"| Total tokens | **{format_count(total_tokens)}** | {per_total} |")
-            if input_tokens is not None:
-                inp_total = format_count(input_tokens)
-                lines.append(f"| Input tokens | **{inp_total}** | {per('input_tokens')} |")
-            if output_tokens is not None:
-                out_total = format_count(output_tokens)
-                lines.append(f"| Output tokens | **{out_total}** | {per('output_tokens')} |")
-            if cached_tokens is not None:
-                cac_total = format_count(cached_tokens)
-                lines.append(f"| Cached tokens | **{cac_total}** | {per('cached_tokens')} |")
-        else:
-            lines.append(f"| Total tokens | *unavailable* |{empty}")
-
-        if token_usage and token_usage.premium_requests and token_usage.premium_requests > 0:
-            per_prem = " | ".join(
-                f"**{r.premium_requests}**" if r.premium_requests else "" for r in breakdown
-            )
-            lines.append(
-                f"| Premium requests (est.) | **{token_usage.premium_requests}** | {per_prem} |"
-            )
-
-    else:
-        lines.extend(["| Metric | Value |", "| --- | --- |"])
-
-        if ai_tool:
-            lines.append(f"| Tool | `{ai_tool}` |")
-        if model:
-            lines.append(f"| Model | `{model}` |")
-
-        if has_tokens:
-            if total_tokens is not None:
-                lines.append(f"| Total tokens | **{format_count(total_tokens)}** |")
-            if input_tokens is not None:
-                lines.append(f"| Input tokens | **{format_count(input_tokens)}** |")
-            if output_tokens is not None:
-                lines.append(f"| Output tokens | **{format_count(output_tokens)}** |")
-            if cached_tokens is not None:
-                lines.append(f"| Cached tokens | **{format_count(cached_tokens)}** |")
-        else:
-            lines.append("| Total tokens | *unavailable* |")
-
-        if token_usage and token_usage.premium_requests and token_usage.premium_requests > 0:
-            lines.append(f"| Premium requests (est.) | **{token_usage.premium_requests}** |")
-
-    return "\n".join(lines)
-
-
-def _count_sessions(block_content: str) -> int:
-    """Count ``### Session N`` occurrences in a marker block's inner content."""
-    return len(re.findall(r"^### Session \d+", block_content, re.MULTILINE))
-
-
-def _append_usage_entry(
-    body: str,
-    ai_tool: str | None,
-    model: str | None,
-    token_usage: TokenUsage | None,
-    start_marker: str,
-    end_marker: str,
-    heading: str,
-) -> str:
-    """Append a new session entry to a usage marker block.
-
-    If the block doesn't exist, creates a fresh block with ``### Session 1``.
-    If the block exists with N sessions, appends ``### Session N+1``.
-    """
-    from wade.utils.markdown import extract_marker_block
-
-    existing = extract_marker_block(body, start_marker, end_marker)
-    table = _build_session_usage_table(ai_tool=ai_tool, model=model, token_usage=token_usage)
-
-    if existing is None:
-        # Fresh block
-        lines = [
-            start_marker,
-            "",
-            f"## {heading}",
-            "",
-            "### Session 1",
-            "",
-            table,
-            "",
-            end_marker,
-        ]
-        block = "\n".join(lines)
-        stripped = body.rstrip("\n")
-        return stripped + "\n\n" + block + "\n" if stripped else block + "\n"
-
-    # Existing block — count sessions and append
-    n = _count_sessions(existing)
-
-    if n == 0 and existing.strip():
-        # Old format (no ### Session headings) — wrap old content as Session 1
-        new_inner = f"### Session 1\n\n{existing.strip()}\n\n### Session 2\n\n{table}"
-    else:
-        new_session = f"### Session {n + 1}\n\n{table}"
-        new_inner = existing.rstrip("\n") + "\n\n" + new_session
-
-    # Rebuild: remove old block, construct new one with appended session
-    cleaned = remove_marker_block(body, start_marker, end_marker)
-    new_block = f"{start_marker}\n\n{new_inner}\n\n{end_marker}"
-    stripped = cleaned.rstrip("\n")
-    return stripped + "\n\n" + new_block + "\n" if stripped else new_block + "\n"
-
-
-def append_impl_usage_entry(
-    body: str,
-    ai_tool: str | None = None,
-    model: str | None = None,
-    token_usage: TokenUsage | None = None,
-) -> str:
-    """Append an implementation usage session entry to the body."""
-    return _append_usage_entry(
-        body,
-        ai_tool=ai_tool,
-        model=model,
-        token_usage=token_usage,
-        start_marker=IMPL_USAGE_MARKER_START,
-        end_marker=IMPL_USAGE_MARKER_END,
-        heading="Token Usage (Implementation)",
-    )
-
-
-def append_review_usage_entry(
-    body: str,
-    ai_tool: str | None = None,
-    model: str | None = None,
-    token_usage: TokenUsage | None = None,
-) -> str:
-    """Append a review usage session entry to the body."""
-    return _append_usage_entry(
-        body,
-        ai_tool=ai_tool,
-        model=model,
-        token_usage=token_usage,
-        start_marker=REVIEW_USAGE_MARKER_START,
-        end_marker=REVIEW_USAGE_MARKER_END,
-        heading="Token Usage (Review)",
-    )
-
-
-def build_impl_usage_block(
-    ai_tool: str | None = None,
-    model: str | None = None,
-    token_usage: TokenUsage | None = None,
-) -> str:
-    """Build the ## Token Usage (Implementation) section for PR body.
-
-    Wraps ``_build_session_usage_table`` with markers and a ``### Session 1``
-    header.
-    """
-    table = _build_session_usage_table(ai_tool=ai_tool, model=model, token_usage=token_usage)
-    lines = [
-        IMPL_USAGE_MARKER_START,
-        "",
-        "## Token Usage (Implementation)",
-        "",
-        "### Session 1",
-        "",
-        table,
-        "",
-        IMPL_USAGE_MARKER_END,
-    ]
-    return "\n".join(lines)
-
-
-def _strip_impl_usage_block(body: str) -> str:
-    """Remove existing implementation usage block from body (idempotent)."""
-    return remove_marker_block(body, IMPL_USAGE_MARKER_START, IMPL_USAGE_MARKER_END)
-
-
-def build_review_usage_block(
-    ai_tool: str | None = None,
-    model: str | None = None,
-    token_usage: TokenUsage | None = None,
-) -> str:
-    """Build the ## Token Usage (Review) section for PR/issue body.
-
-    Wraps ``_build_session_usage_table`` with review markers and a
-    ``### Session 1`` header.
-    """
-    table = _build_session_usage_table(ai_tool=ai_tool, model=model, token_usage=token_usage)
-    lines = [
-        REVIEW_USAGE_MARKER_START,
-        "",
-        "## Token Usage (Review)",
-        "",
-        "### Session 1",
-        "",
-        table,
-        "",
-        REVIEW_USAGE_MARKER_END,
-    ]
-    return "\n".join(lines)
-
-
-def _strip_review_usage_block(body: str) -> str:
-    """Remove existing review usage block from body (idempotent)."""
-    return remove_marker_block(body, REVIEW_USAGE_MARKER_START, REVIEW_USAGE_MARKER_END)
-
-
 def _strip_summary_section(body: str) -> str:
     """Remove an existing ``## Summary`` section from a PR body.
 
@@ -2172,61 +1520,41 @@ def _build_pr_body(
 
 
 # ---------------------------------------------------------------------------
-# Implementation sync
+# Implementation sync / catchup
 # ---------------------------------------------------------------------------
 
 
-def sync(
-    dry_run: bool = False,
-    main_branch: str | None = None,
+def _sync_preflight(
+    cwd: Path,
+    main_branch_override: str | None,
+    config: Any,
+    emit: Any,
+    *,
     json_output: bool = False,
-    project_root: Path | None = None,
-    session_type: str = "implementation",
-) -> SyncResult:
-    """Sync current branch with main.
+) -> tuple[Path, str, str] | SyncResult:
+    """Run pre-flight checks shared by sync() and catchup().
 
-    Flow:
-    1. Pre-flight checks (in git repo, not on main, clean worktree)
-    2. Fetch origin
-    3. Count commits behind
-    4. Merge (unless dry-run or up-to-date)
-    5. Emit structured events
+    Resolves the repo root, current branch, and base branch. Emits ERROR
+    events via ``emit`` on failure (which populates the caller's events list).
+
+    Returns:
+        (repo_root, current_branch, resolved_main) on success.
+        SyncResult(events=[]) on failure — caller must add its events list.
     """
-    config = load_config(project_root)
-    cwd = project_root or Path.cwd()
-    events: list[SyncEvent] = []
-
-    def emit(event: SyncEventType, **data: str | int) -> None:
-        ev = SyncEvent(event=event, data=data)
-        events.append(ev)
-        if json_output:
-            console.raw(json.dumps({"event": event, **data}) + "\n")
-
-    # Pre-flight checks
     try:
         repo_root = git_repo.get_repo_root(cwd)
     except GitError:
         emit(SyncEventType.ERROR, reason="not_git_repo")
-        return SyncResult(
-            success=False,
-            current_branch="",
-            main_branch=main_branch or "",
-            events=events,
-        )
+        return SyncResult(success=False, current_branch="", main_branch=main_branch_override or "")
 
     try:
         current = git_repo.get_current_branch(cwd)
     except GitError:
         emit(SyncEventType.ERROR, reason="detached_head")
-        return SyncResult(
-            success=False,
-            current_branch="",
-            main_branch=main_branch or "",
-            events=events,
-        )
+        return SyncResult(success=False, current_branch="", main_branch=main_branch_override or "")
 
-    # Check for stacked base branch metadata (written by start() for chain execution).
-    # When present, sync against the parent branch instead of main.
+    # Stacked branch: prefer the stored parent branch over main.
+    main_branch = main_branch_override
     if not main_branch:
         base_branch_file = cwd / ".wade" / "base_branch"
         if base_branch_file.is_file():
@@ -2240,43 +1568,78 @@ def sync(
             resolved_main = git_repo.detect_main_branch(repo_root)
         except GitError:
             emit(SyncEventType.ERROR, reason="no_main_branch")
-            return SyncResult(
-                success=False,
-                current_branch=current,
-                main_branch="",
-                events=events,
-            )
+            return SyncResult(success=False, current_branch=current, main_branch="")
 
     if current == resolved_main:
         emit(SyncEventType.ERROR, reason="on_main_branch")
-        return SyncResult(
-            success=False,
-            current_branch=current,
-            main_branch=resolved_main,
-            events=events,
-        )
+        return SyncResult(success=False, current_branch=current, main_branch=resolved_main)
 
-    # Check clean — with detailed diagnostics
     if not git_repo.is_clean(cwd):
         detail_str = _format_uncommitted_summary(cwd)
-        emit(SyncEventType.ERROR, reason="dirty_worktree", details=detail_str)
-        if not json_output:
-            console.error_with_fix(
-                f"Working tree is dirty ({detail_str})",
-                "Commit or stash your changes first",
-                "git stash",
+        dirty_paths = _get_dirty_file_paths(cwd)
+        session_files = _identify_session_dirty_files(dirty_paths)
+        if session_files:
+            emit(
+                SyncEventType.ERROR,
+                reason="dirty_worktree",
+                details=detail_str,
+                session_files=session_files,
             )
-        return SyncResult(
-            success=False,
-            current_branch=current,
-            main_branch=resolved_main,
-            events=events,
-        )
+        else:
+            emit(SyncEventType.ERROR, reason="dirty_worktree", details=detail_str)
+        if not json_output:
+            console.error(f"Working tree is dirty ({detail_str})")
+            if session_files:
+                console.warn(
+                    "The following dirty files are wade session artifacts"
+                    " \N{EM DASH} do NOT commit them."
+                )
+                console.hint("Restore with: git checkout -- <file>")
+                for sf in session_files:
+                    console.detail(sf)
+                console.empty()
+            console.hint(
+                "Commit or stash your non-session changes first"
+                if session_files
+                else "Commit or stash your changes first"
+            )
+        return SyncResult(success=False, current_branch=current, main_branch=resolved_main)
 
-    emit(SyncEventType.PREFLIGHT_OK, current_branch=current, main_branch=resolved_main)
-    if not json_output:
-        console.step(f"Syncing {current} with {resolved_main}")
+    return (repo_root, current, resolved_main)
 
+
+def _merge_base(
+    repo_root: Path,
+    current: str,
+    resolved_main: str,
+    emit: Any,
+    *,
+    dry_run: bool = False,
+    json_output: bool = False,
+    abort_on_conflict: bool = False,
+    session_type: str = "implementation",
+) -> SyncResult:
+    """Fetch, count commits behind, and merge base branch into current branch.
+
+    Shared by both sync() and catchup(). Pre-flight checks are the caller's
+    responsibility. Emits events via the provided ``emit`` callable (which
+    also populates the caller's events list).
+
+    Args:
+        repo_root: Repository root.
+        current: Current branch name.
+        resolved_main: The resolved base/main branch name.
+        emit: Callable(event, **data) that records events.
+        dry_run: Preview without merging.
+        json_output: Suppress console output (JSON mode).
+        abort_on_conflict: When True, abort the merge on conflict (catchup
+            path) so the worktree stays clean. When False (sync path), leave
+            the merge in progress for the AI to resolve manually.
+        session_type: Used in the conflict hint message.
+
+    Returns:
+        SyncResult with success/conflicts/commits_merged (events=[]).
+    """
     # Fetch
     merge_ref = resolved_main
     try:
@@ -2305,24 +1668,14 @@ def sync(
         if not json_output:
             console.success("Already up to date.")
         emit(SyncEventType.DONE, branch=current, main=resolved_main)
-        return SyncResult(
-            success=True,
-            current_branch=current,
-            main_branch=resolved_main,
-            events=events,
-        )
+        return SyncResult(success=True, current_branch=current, main_branch=resolved_main)
 
     if dry_run:
         emit(SyncEventType.DRY_RUN, action="merge_main_into_feature", behind=behind)
         if not json_output:
             console.info(f"Dry run: {behind} commit(s) would be merged.")
         emit(SyncEventType.DONE, branch=current, main=resolved_main)
-        return SyncResult(
-            success=True,
-            current_branch=current,
-            main_branch=resolved_main,
-            events=events,
-        )
+        return SyncResult(success=True, current_branch=current, main_branch=resolved_main)
 
     # Merge
     if not json_output:
@@ -2340,33 +1693,183 @@ def sync(
             current_branch=current,
             main_branch=resolved_main,
             commits_merged=behind,
-            events=events,
         )
 
     # Conflicts
     conflicts = merge_result.conflicts
+
+    if abort_on_conflict:
+        try:
+            git_sync.abort_merge(repo_root)
+        except GitError:
+            logger.error("catchup.abort_merge_failed", exc_info=True)
+            emit(SyncEventType.ERROR, reason="abort_merge_failed")
+            return SyncResult(
+                success=False,
+                current_branch=current,
+                main_branch=resolved_main,
+            )
+
     emit(SyncEventType.CONFLICT, source=resolved_main, target=current, files="\n".join(conflicts))
     if not json_output:
         console.error(f"Merge conflict in {len(conflicts)} file(s):")
         for f in conflicts:
             console.detail(f)
         console.empty()
-        console.hint("Resolve conflicts, then run:")
-        console.out.print(f"      [prompt.dimmed]$ wade {session_type}-session sync[/]")
+        if not abort_on_conflict:
+            console.hint("Resolve conflicts, then run:")
+            console.out.print(f"      [prompt.dimmed]$ wade {session_type}-session sync[/]")
 
-    # Get conflict diff
-    try:
-        diff_output = git_repo.diff_stat(repo_root)
-        if diff_output.strip():
-            emit(SyncEventType.CONFLICT_DIFF, diff=diff_output)
-    except GitError:
-        logger.debug("sync.conflict_diff_read_failed", exc_info=True)
+    if not abort_on_conflict:
+        try:
+            diff_output = git_repo.diff_stat(repo_root)
+            if diff_output.strip():
+                emit(SyncEventType.CONFLICT_DIFF, diff=diff_output)
+        except GitError:
+            logger.debug("sync.conflict_diff_read_failed", exc_info=True)
 
     return SyncResult(
         success=False,
         current_branch=current,
         main_branch=resolved_main,
         conflicts=conflicts,
+    )
+
+
+def sync(
+    dry_run: bool = False,
+    main_branch: str | None = None,
+    json_output: bool = False,
+    project_root: Path | None = None,
+    session_type: str = "implementation",
+) -> SyncResult:
+    """Sync current branch with main.
+
+    Flow:
+    1. Pre-flight checks (in git repo, not on main, clean worktree)
+    2. Fetch origin
+    3. Count commits behind
+    4. Merge (unless dry-run or up-to-date)
+    5. Emit structured events
+    """
+    config = load_config(project_root)
+    cwd = project_root or Path.cwd()
+    events: list[SyncEvent] = []
+
+    def emit(event: SyncEventType, **data: str | int | list[str]) -> None:
+        ev = SyncEvent(event=event, data=data)
+        events.append(ev)
+        if json_output:
+            console.raw(json.dumps({"event": event, **data}) + "\n")
+
+    preflight = _sync_preflight(cwd, main_branch, config, emit, json_output=json_output)
+    if isinstance(preflight, SyncResult):
+        return SyncResult(
+            success=preflight.success,
+            current_branch=preflight.current_branch,
+            main_branch=preflight.main_branch,
+            events=events,
+        )
+    repo_root, current, resolved_main = preflight
+
+    # Non-blocking: warn if wade-only session files are tracked in git
+    tracked_managed = _check_tracked_managed_files(cwd)
+    if tracked_managed:
+        if json_output:
+            console.raw(
+                json.dumps(
+                    {"event": "tracked_session_files_warning", "tracked_files": tracked_managed}
+                )
+                + "\n"
+            )
+        else:
+            console.warn(
+                "Wade-managed files are tracked in git \N{EM DASH} these should not be committed"
+            )
+            for path in tracked_managed:
+                console.detail(path)
+            console.hint("Untrack with: git rm --cached <file>")
+
+    emit(SyncEventType.PREFLIGHT_OK, current_branch=current, main_branch=resolved_main)
+    if not json_output:
+        console.step(f"Syncing {current} with {resolved_main}")
+
+    result = _merge_base(
+        repo_root,
+        current,
+        resolved_main,
+        emit,
+        dry_run=dry_run,
+        json_output=json_output,
+        abort_on_conflict=False,
+        session_type=session_type,
+    )
+    return SyncResult(
+        success=result.success,
+        current_branch=result.current_branch,
+        main_branch=result.main_branch,
+        conflicts=result.conflicts,
+        commits_merged=result.commits_merged,
+        events=events,
+    )
+
+
+def catchup(
+    dry_run: bool = False,
+    main_branch: str | None = None,
+    json_output: bool = False,
+    project_root: Path | None = None,
+) -> SyncResult:
+    """Sync the worktree branch with its base branch at session startup.
+
+    Similar to sync() but aborts the merge on conflict so the worktree
+    stays clean for the AI. Called automatically from start() before AI
+    launch, and also available as a CLI command for manual retries.
+
+    Does not push after merge — that is done()'s job.
+
+    Returns:
+        SyncResult with up_to_date/merged/conflict/error status.
+    """
+    config = load_config(project_root)
+    cwd = project_root or Path.cwd()
+    events: list[SyncEvent] = []
+
+    def emit(event: SyncEventType, **data: str | int | list[str]) -> None:
+        ev = SyncEvent(event=event, data=data)
+        events.append(ev)
+        if json_output:
+            console.raw(json.dumps({"event": event, **data}) + "\n")
+
+    preflight = _sync_preflight(cwd, main_branch, config, emit, json_output=json_output)
+    if isinstance(preflight, SyncResult):
+        return SyncResult(
+            success=preflight.success,
+            current_branch=preflight.current_branch,
+            main_branch=preflight.main_branch,
+            events=events,
+        )
+    repo_root, current, resolved_main = preflight
+
+    emit(SyncEventType.PREFLIGHT_OK, current_branch=current, main_branch=resolved_main)
+    if not json_output:
+        console.step(f"Catching up {current} with {resolved_main}")
+
+    result = _merge_base(
+        repo_root,
+        current,
+        resolved_main,
+        emit,
+        dry_run=dry_run,
+        json_output=json_output,
+        abort_on_conflict=True,
+    )
+    return SyncResult(
+        success=result.success,
+        current_branch=result.current_branch,
+        main_branch=result.main_branch,
+        conflicts=result.conflicts,
+        commits_merged=result.commits_merged,
         events=events,
     )
 
@@ -2473,15 +1976,36 @@ def done(
         console.error(f"Cannot extract issue number from branch: {branch}")
         return False
 
-    # Check clean
+    # Check clean — keep the worktree gitignore block in place so wade
+    # artifacts (PLAN.md, .wade/, etc.) stay hidden from git status.
+    # Strip it only after the gate passes.
     if not git_repo.is_clean(cwd):
         detail_str = _format_uncommitted_summary(cwd)
-        console.error_with_fix(
-            f"Working tree is dirty ({detail_str})",
-            "Commit or stash your changes first",
-            "git stash",
+        dirty_paths = _get_dirty_file_paths(cwd)
+        session_files = _identify_session_dirty_files(dirty_paths)
+        console.error(f"Working tree is dirty ({detail_str})")
+        if session_files:
+            console.warn(
+                "The following dirty files are wade session artifacts"
+                " \N{EM DASH} do NOT commit them."
+            )
+            console.hint("Restore with: git checkout -- <file>")
+            for sf in session_files:
+                console.detail(sf)
+            console.empty()
+        console.hint(
+            "Commit or stash your non-session changes first"
+            if session_files
+            else "Commit or stash your changes first"
         )
         return False
+
+    # Clean gate passed — now strip the worktree gitignore block and
+    # restore .gitignore visibility so downstream operations see the
+    # true state.
+    with contextlib.suppress(OSError):
+        git_repo.unskip_worktree_file(cwd, ".gitignore")
+    strip_worktree_gitignore(cwd)
 
     # Check for tracked wade-managed files that should never be committed
     tracked_managed = _check_tracked_managed_files(cwd)
@@ -2502,6 +2026,15 @@ def done(
         except GitError:
             console.error("Cannot detect main branch")
             return False
+
+    # Check for stacked base branch metadata (written by start() for chain execution).
+    # When present, target the parent branch instead of main — same as sync().
+    if wt_path:
+        base_branch_file = wt_path / ".wade" / "base_branch"
+        if base_branch_file.is_file():
+            stored_base = base_branch_file.read_text().strip()
+            if stored_base and git_branch.branch_exists(repo_root, stored_base):
+                main_branch = stored_base
 
     console.rule(f"done #{issue_number}")
 

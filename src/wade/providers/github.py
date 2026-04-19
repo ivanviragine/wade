@@ -26,6 +26,7 @@ from wade.models.review import (
     ReviewThread,
     detect_coderabbit_review_status,
     filter_actionable_threads,
+    filter_unresolved_threads,
 )
 from wade.models.task import (
     Label,
@@ -118,7 +119,7 @@ class GitHubProvider(AbstractTaskProvider):
             ]
         )
 
-        result = run(cmd, check=True)
+        result = run(cmd, check=True, retries=3)
         raw_list = json.loads(result.stdout)
         return [_parse_gh_task(item) for item in raw_list]
 
@@ -172,6 +173,7 @@ class GitHubProvider(AbstractTaskProvider):
                 "number,title,body,state,labels,url,createdAt,updatedAt",
             ],
             check=True,
+            retries=3,
         )
 
         raw = json.loads(result.stdout)
@@ -250,6 +252,7 @@ class GitHubProvider(AbstractTaskProvider):
                 run(
                     ["gh", "issue", "edit", task_id, "--body-file", body_file],
                     check=True,
+                    retries=3,
                 )
             finally:
                 Path(body_file).unlink(missing_ok=True)
@@ -258,13 +261,14 @@ class GitHubProvider(AbstractTaskProvider):
             run(
                 ["gh", "issue", "edit", task_id, "--title", title],
                 check=True,
+                retries=3,
             )
 
         return self.read_task(task_id)
 
     def close_task(self, task_id: str) -> Task:
         """Close an issue."""
-        run(["gh", "issue", "close", task_id], check=True)
+        run(["gh", "issue", "close", task_id], check=True, retries=3)
         logger.info("github.issue_closed", number=task_id)
         return self.read_task(task_id)
 
@@ -288,6 +292,7 @@ class GitHubProvider(AbstractTaskProvider):
             result = run(
                 ["gh", "label", "list", "--search", label.name, "--json", "name", "-q", ".[].name"],
                 check=True,
+                retries=3,
             )
             existing = result.stdout.strip().splitlines()
             if label.name in existing:
@@ -308,7 +313,7 @@ class GitHubProvider(AbstractTaskProvider):
             cmd.extend(["--description", label.description])
 
         try:
-            run(cmd, check=True)
+            run(cmd, check=True, retries=3)
             logger.info("github.label_created", name=label.name)
         except CommandError as e:
             # "already exists" is fine — race condition with concurrent creation
@@ -322,6 +327,7 @@ class GitHubProvider(AbstractTaskProvider):
             run(
                 ["gh", "issue", "edit", task_id, "--add-label", label_name],
                 check=True,
+                retries=3,
             )
         except CommandError:
             logger.warning(
@@ -336,6 +342,7 @@ class GitHubProvider(AbstractTaskProvider):
             run(
                 ["gh", "issue", "edit", task_id, "--remove-label", label_name],
                 check=True,
+                retries=3,
             )
         except CommandError:
             logger.warning(
@@ -456,7 +463,7 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
         if cursor:
             cmd.extend(["-f", f"after={cursor}"])
 
-        result = run(cmd, check=True)
+        result = run(cmd, check=True, retries=3)
         data = json.loads(result.stdout)
 
         pr_data = data.get("data", {}).get("repository", {}).get("pullRequest") or {}
@@ -494,6 +501,7 @@ mutation($threadId: ID!) {
                     f"query={query}",
                 ],
                 check=True,
+                retries=3,
             )
             data = json.loads(result.stdout)
             thread_data = data.get("data", {}).get("resolveReviewThread", {}).get("thread", {})
@@ -530,6 +538,7 @@ mutation($threadId: ID!) {
                     "[.[] | {login: .user.login, body: .body}]",
                 ],
                 check=True,
+                retries=3,
             )
             return json.loads(result.stdout)  # type: ignore[no-any-return]
         except (CommandError, json.JSONDecodeError) as e:
@@ -601,6 +610,7 @@ mutation($threadId: ID!) {
 
         return PRReviewStatus(
             actionable_threads=filter_actionable_threads(threads),
+            all_unresolved_threads=filter_unresolved_threads(threads),
             reviews=reviews,
             pending_reviewers=pending_reviewers,
             bot_status=bot_status,
@@ -691,7 +701,7 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
         if cursor:
             cmd.extend(["-f", f"after={cursor}"])
 
-        result = run(cmd, check=True)
+        result = run(cmd, check=True, retries=3)
         data = json.loads(result.stdout)
 
         pr_data = data.get("data", {}).get("repository", {}).get("pullRequest") or {}
@@ -789,6 +799,7 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
         result = run(
             ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
             check=True,
+            retries=3,
         )
         return result.stdout.strip()
 
@@ -806,7 +817,7 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
         cmd.extend(["--json", "number,body"])
 
         try:
-            result = run(cmd, check=True)
+            result = run(cmd, check=True, retries=3)
             issues = json.loads(result.stdout)
         except (CommandError, json.JSONDecodeError):
             return None
@@ -881,6 +892,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
                     f"query={query}",
                 ],
                 check=True,
+                retries=3,
             )
 
             data = json.loads(result.stdout)
@@ -946,6 +958,7 @@ mutation($project_id: ID!, $item_id: ID!, $field_id: ID!, $option_id: String!) {
                         f"query={mutation}",
                     ],
                     check=True,
+                    retries=3,
                 )
                 logger.info(
                     "github.moved_to_in_progress",

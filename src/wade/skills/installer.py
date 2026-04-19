@@ -10,6 +10,15 @@ import structlog
 
 logger = structlog.get_logger()
 
+# Placeholder substitutions applied when skill files are copied to a project.
+# Maps placeholder string → relative path inside templates/skills/_partials/.
+_SKILL_PARTIALS: dict[str, str] = {
+    "{user_interaction_prompt}": "_partials/user-interaction.md",
+    "{review_enforcement_rule}": "_partials/review-enforcement-rule.md",
+    "{review_plan_step}": "_partials/review-plan-step.md",
+    "{review_implementation_closing_step}": "_partials/review-implementation-closing-step.md",
+}
+
 
 def get_wade_repo_root() -> Path:
     """Get the wade package repository root (for self-init detection).
@@ -72,10 +81,23 @@ SKILL_FILES: dict[str, list[str]] = {
     "implementation-session": ["SKILL.md"],
     "review-pr-comments-session": ["SKILL.md"],
     "deps": ["SKILL.md"],
+    "knowledge": ["SKILL.md"],
 }
 
 # Skills that should always be overwritten on update
-ALWAYS_OVERWRITE = {"plan-session", "implementation-session", "review-pr-comments-session"}
+ALWAYS_OVERWRITE = {
+    "plan-session",
+    "implementation-session",
+    "review-pr-comments-session",
+    "knowledge",
+}
+
+# Skills whose SKILL.md files contain placeholder strings (see _SKILL_PARTIALS) that
+# must be expanded at install time.  These cannot be installed as plain directory
+# symlinks in self-init mode because the agent would see unexpanded placeholders.
+# Currently the same set as ALWAYS_OVERWRITE — kept separate because the concerns
+# are distinct and may diverge if new skills are added.
+INJECT_SKILLS = {"plan-session", "implementation-session", "review-pr-comments-session"}
 
 # Old skill names removed in the phase-skill refactor — cleaned up during update
 _LEGACY_SKILLS = {
@@ -101,39 +123,69 @@ PLAN_GUARD_HOOK_FILES = [
     ".gemini/hooks/plan_write_guard.py",
 ]
 
+# Wade-managed worktree guard hook files that should never be committed.
+WORKTREE_GUARD_HOOK_FILES = [
+    ".claude/hooks/worktree_guard.py",
+    ".cursor/hooks/worktree_guard.py",
+    ".copilot/hooks/worktree_guard.py",
+    ".gemini/hooks/worktree_guard.py",
+]
+
+# Wade-managed hook config files written alongside hook scripts — never committed.
+HOOK_CONFIG_FILES = [
+    ".cursor/hooks.json",
+    ".gemini/settings.json",
+    ".github/hooks/hooks.json",
+]
+
 # --- Command-to-skill mapping: which skills each session type needs ---
 
-PLAN_SKILLS: list[str] = ["plan-session", "task", "deps"]
+PLAN_SKILLS: list[str] = ["plan-session", "task", "deps", "knowledge"]
 DEPS_SKILLS: list[str] = ["deps"]
-IMPLEMENT_SKILLS: list[str] = ["implementation-session", "task"]
-REVIEW_SKILLS: list[str] = ["review-pr-comments-session", "task"]
+IMPLEMENT_SKILLS: list[str] = ["implementation-session", "task", "knowledge"]
+REVIEW_SKILLS: list[str] = ["review-pr-comments-session", "task", "knowledge"]
 
 
-def get_managed_gitignore_patterns(project_root: Path) -> list[str]:
-    """Compute gitignore patterns for wade-managed skill directories and cross-tool dirs.
+def get_worktree_gitignore_entries() -> list[str]:
+    """Compute gitignore entries for wade artifacts in worktrees.
 
-    Returns patterns that should be added to the managed gitignore block:
-    - ``.claude/skills/<name>/`` for every name in ``MANAGED_SKILL_NAMES``
-    - Each plan guard hook file in ``PLAN_GUARD_HOOK_FILES``
-    - Each ``CROSS_TOOL_DIRS`` entry, but only if it is a symlink or does not
-      exist yet (real user directories are left alone).
+    Returns **specific file paths** (never directories, except ``.wade/``)
+    to ensure user-owned files in the same parent directories are never hidden.
+
+    Cross-tool symlinks and untracked pointer files are not included here —
+    they are added conditionally by ``write_worktree_gitignore()``.
     """
-    patterns: list[str] = []
+    entries: list[str] = []
 
-    # All managed skill directories (current + legacy)
-    for name in sorted(MANAGED_SKILL_NAMES):
-        patterns.append(f".claude/skills/{name}/")
+    # Skill files (specific files, not directories — user may have their own skills)
+    for name, files in sorted(SKILL_FILES.items()):
+        for filename in files:
+            entries.append(f".claude/skills/{name}/{filename}")
 
-    for hook_file in PLAN_GUARD_HOOK_FILES:
-        patterns.append(hook_file)
+    # Guard hook scripts
+    entries.extend(PLAN_GUARD_HOOK_FILES)
+    entries.extend(WORKTREE_GUARD_HOOK_FILES)
 
-    # Cross-tool symlink dirs — only if symlink or absent
-    for cross_dir in CROSS_TOOL_DIRS:
-        cross_path = project_root / cross_dir
-        if cross_path.is_symlink() or not cross_path.exists():
-            patterns.append(cross_dir)
+    # Hook config files
+    entries.extend(HOOK_CONFIG_FILES)
 
-    return patterns
+    # AI tool settings (written per-session to worktrees only)
+    entries.append(".claude/settings.json")
+    entries.append(".cursor/cli.json")
+    entries.append(".gemini/policies/wade.toml")
+
+    # Session artifacts
+    entries.extend(
+        [
+            "PLAN.md",
+            "PR-SUMMARY.md",
+            ".commit-msg",
+            ".wade/",
+            ".wade-managed",
+        ]
+    )
+
+    return entries
 
 
 def install_skills(
@@ -142,12 +194,15 @@ def install_skills(
     force: bool = False,
     templates_dir: Path | None = None,
     skills: list[str] | None = None,
+    extra_partials: dict[str, str] | None = None,
 ) -> list[str]:
     """Install skill files to a project.
 
     Args:
         project_root: Root of the target project.
-        is_self_init: If True, create symlinks instead of copies.
+        is_self_init: If True, symlink skill directories instead of copying files.
+            Skills in ``INJECT_SKILLS`` are always processed copies even in this mode,
+            because their templates contain placeholders that must be expanded.
         force: If True, overwrite existing files.
         templates_dir: Override the skills templates directory.
             Useful for worktrees where templates live in the worktree itself.
@@ -155,7 +210,8 @@ def install_skills(
             ``SKILL_FILES``.  When ``None`` (default), all skills are installed.
 
     Returns:
-        List of installed file paths (relative to project root).
+        List of installed paths (relative to project root).  Symlinked skill
+        directories are reported at directory level; copied skills at file level.
     """
     installed: list[str] = []
     if templates_dir is None:
@@ -200,19 +256,34 @@ def install_skills(
         skill_items = SKILL_FILES
 
     for skill_name, files in skill_items.items():
-        if is_self_init:
-            # Symlink the whole directory
+        if is_self_init and skill_name not in INJECT_SKILLS:
+            # Symlink the whole directory (no partials expansion needed)
             _link_skill_dir(project_root, skill_name, templates_dir)
             installed.append(f".claude/skills/{skill_name}")
         else:
-            # Copy individual files
-            overwrite = force or skill_name in ALWAYS_OVERWRITE
+            # Copy individual files, expanding partials if present.
+            # In self-init mode, INJECT_SKILLS must be processed copies so agents
+            # see expanded content rather than raw placeholder strings.
+            overwrite = is_self_init or force or skill_name in ALWAYS_OVERWRITE
+
+            # Remove existing symlink for inject skills in self-init before creating dir
+            if is_self_init and skill_name in INJECT_SKILLS:
+                link = primary_skills_dir / skill_name
+                if link.is_symlink():
+                    link.unlink()
+
             for filename in files:
                 src = templates_dir / skill_name / filename
                 if not src.is_file():
                     continue
                 dest = primary_skills_dir / skill_name / filename
-                if _copy_skill_file(src, dest, overwrite=overwrite):
+                if _copy_skill_file(
+                    src,
+                    dest,
+                    overwrite=overwrite,
+                    skills_templates_dir=templates_dir,
+                    extra_partials=extra_partials,
+                ):
                     installed.append(f".claude/skills/{skill_name}/{filename}")
 
     # Ensure primary skills dir exists before cross-tool symlinks
@@ -271,8 +342,45 @@ def remove_skills(project_root: Path) -> list[str]:
     return removed
 
 
-def _copy_skill_file(src: Path, dest: Path, overwrite: bool = False) -> bool:
+def _expand_partials(
+    content: str,
+    skills_templates_dir: Path,
+    extra_partials: dict[str, str] | None = None,
+) -> str:
+    """Expand placeholder strings in *content* using partial template files.
+
+    ``extra_partials`` (placeholder → replacement string) are applied first, so
+    callers can override or suppress any entry in ``_SKILL_PARTIALS`` by passing
+    an empty string.  File-based partials in ``_SKILL_PARTIALS`` are applied
+    afterwards for any placeholders still present.  Unknown partial paths are
+    left unchanged with a warning.
+    """
+    if extra_partials:
+        for placeholder, replacement in extra_partials.items():
+            content = content.replace(placeholder, replacement)
+    for placeholder, rel_path in _SKILL_PARTIALS.items():
+        if placeholder not in content:
+            continue
+        partial = skills_templates_dir / rel_path
+        if not partial.is_file():
+            logger.warning("skills.partial_not_found", path=str(partial))
+            continue
+        content = content.replace(placeholder, partial.read_text(encoding="utf-8").rstrip())
+    return content
+
+
+def _copy_skill_file(
+    src: Path,
+    dest: Path,
+    overwrite: bool = False,
+    skills_templates_dir: Path | None = None,
+    extra_partials: dict[str, str] | None = None,
+) -> bool:
     """Copy a single skill file, creating parent dirs as needed.
+
+    If ``skills_templates_dir`` is provided, placeholder strings in the file
+    content (see ``_SKILL_PARTIALS``) are expanded before writing.  Any
+    ``extra_partials`` overrides are applied first (see ``_expand_partials``).
 
     Returns True if file was installed, False if skipped.
     """
@@ -280,7 +388,18 @@ def _copy_skill_file(src: Path, dest: Path, overwrite: bool = False) -> bool:
         return False
 
     dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, dest)
+    content = src.read_text(encoding="utf-8")
+    needs_expansion = skills_templates_dir is not None and any(
+        p in content for p in _SKILL_PARTIALS
+    )
+    if needs_expansion or extra_partials:
+        base_templates_dir = skills_templates_dir or src.parent.parent
+        content = _expand_partials(
+            content,
+            base_templates_dir,
+            extra_partials=extra_partials,
+        )
+    dest.write_text(content, encoding="utf-8")
     logger.debug("skills.copied", src=str(src), dest=str(dest))
     return True
 

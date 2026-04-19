@@ -46,11 +46,16 @@ class TestInitCommand:
         assert config["models"]["claude"]["complex"] == "claude-sonnet-4.6"
         assert config["models"]["claude"]["medium"] != config["models"]["claude"]["easy"]
         assert "permissions" not in config
-        assert (repo / ".wade-managed").is_file()
-        assert (repo / "AGENTS.md").is_file()
-        assert (repo / "CLAUDE.md").is_symlink()
+        assert (repo / ".wade" / ".wade-managed").is_file()
+        # AGENTS.md pointer is no longer written to main during init — only to worktrees
+        assert not (repo / "AGENTS.md").is_file()
+        assert not (repo / "CLAUDE.md").exists()
 
-        gitignore = (repo / ".gitignore").read_text(encoding="utf-8")
-        assert "# wade:start" in gitignore
-        assert "# wade:end" in gitignore
-        assert ".wade-managed" in gitignore
+        # init no longer writes a committed gitignore block
+        gitignore_path = repo / ".gitignore"
+        if gitignore_path.is_file():
+            gitignore = gitignore_path.read_text(encoding="utf-8")
+            assert "# wade:start" not in gitignore
+
+        # .wade/ should be self-ignoring
+        assert (repo / ".wade" / ".gitignore").is_file()

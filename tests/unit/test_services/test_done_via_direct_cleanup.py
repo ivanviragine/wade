@@ -23,12 +23,12 @@ _SYNC_OK = SyncResult(success=True, current_branch=_BRANCH, main_branch=_MAIN)
 # Targets for the common "happy path" dependencies that must be mocked so the
 # function reaches the cleanup block without failing for unrelated reasons.
 _BASE_PATCH_TARGETS: dict[str, dict] = {
-    "wade.services.implementation_service.get_provider": {},
-    "wade.services.implementation_service.git_sync.fetch_origin": {},
-    "wade.services.implementation_service.git_sync.merge_branch": {"return_value": _SYNC_OK},
-    "wade.services.implementation_service.git_repo._run_git": {},
-    "wade.services.implementation_service.remove_in_progress_label": {},
-    "wade.services.implementation_service.console": {},
+    "wade.services.implementation_service.core.get_provider": {},
+    "wade.services.implementation_service.core.git_sync.fetch_origin": {},
+    "wade.services.implementation_service.core.git_sync.merge_branch": {"return_value": _SYNC_OK},
+    "wade.services.implementation_service.core.git_repo._run_git": {},
+    "wade.services.implementation_service.core.remove_in_progress_label": {},
+    "wade.services.implementation_service.core.console": {},
 }
 
 
@@ -67,13 +67,13 @@ class TestDoneViaDirectCleanup:
         with ExitStack() as stack:
             _enter_base_patches(stack)
             stack.enter_context(
-                patch("wade.services.implementation_service.git_branch.delete_branch")
+                patch("wade.services.implementation_service.core.git_branch.delete_branch")
             )
             stack.enter_context(
-                patch("wade.services.implementation_service.git_worktree.prune_worktrees")
+                patch("wade.services.implementation_service.core.git_worktree.prune_worktrees")
             )
             mock_select = stack.enter_context(
-                patch("wade.services.implementation_service.prompts.select")
+                patch("wade.services.implementation_service.core.prompts.select")
             )
 
             result = _done_via_direct(
@@ -95,21 +95,21 @@ class TestDoneViaDirectCleanup:
             _enter_base_patches(stack)
             stack.enter_context(
                 patch(
-                    "wade.services.implementation_service.git_branch.delete_branch",
+                    "wade.services.implementation_service.core.git_branch.delete_branch",
                     side_effect=error,
                 )
             )
             stack.enter_context(
-                patch("wade.services.implementation_service.git_worktree.prune_worktrees")
+                patch("wade.services.implementation_service.core.git_worktree.prune_worktrees")
             )
             # User picks "Skip" so function can continue
             mock_select = stack.enter_context(
                 patch(
-                    "wade.services.implementation_service.prompts.select",
+                    "wade.services.implementation_service.core.prompts.select",
                     return_value=1,
                 )
             )
-            stack.enter_context(patch("wade.services.implementation_service.logger"))
+            stack.enter_context(patch("wade.services.implementation_service.core.logger"))
 
             result = _done_via_direct(
                 repo_root=_REPO,
@@ -141,21 +141,23 @@ class TestDoneViaDirectCleanup:
             _enter_base_patches(stack)
             mock_delete = stack.enter_context(
                 patch(
-                    "wade.services.implementation_service.git_branch.delete_branch",
+                    "wade.services.implementation_service.core.git_branch.delete_branch",
                     side_effect=delete_side_effect,
                 )
             )
             stack.enter_context(
-                patch("wade.services.implementation_service.git_worktree.prune_worktrees")
+                patch("wade.services.implementation_service.core.git_worktree.prune_worktrees")
             )
             # User picks "Retry" (index 0)
             stack.enter_context(
                 patch(
-                    "wade.services.implementation_service.prompts.select",
+                    "wade.services.implementation_service.core.prompts.select",
                     return_value=0,
                 )
             )
-            mock_logger = stack.enter_context(patch("wade.services.implementation_service.logger"))
+            mock_logger = stack.enter_context(
+                patch("wade.services.implementation_service.core.logger")
+            )
 
             result = _done_via_direct(
                 repo_root=_REPO,
@@ -176,21 +178,23 @@ class TestDoneViaDirectCleanup:
             _enter_base_patches(stack)
             stack.enter_context(
                 patch(
-                    "wade.services.implementation_service.git_branch.delete_branch",
+                    "wade.services.implementation_service.core.git_branch.delete_branch",
                     side_effect=RuntimeError("cannot delete"),
                 )
             )
             stack.enter_context(
-                patch("wade.services.implementation_service.git_worktree.prune_worktrees")
+                patch("wade.services.implementation_service.core.git_worktree.prune_worktrees")
             )
             # User picks "Skip" (index 1)
             stack.enter_context(
                 patch(
-                    "wade.services.implementation_service.prompts.select",
+                    "wade.services.implementation_service.core.prompts.select",
                     return_value=1,
                 )
             )
-            mock_logger = stack.enter_context(patch("wade.services.implementation_service.logger"))
+            mock_logger = stack.enter_context(
+                patch("wade.services.implementation_service.core.logger")
+            )
 
             result = _done_via_direct(
                 repo_root=_REPO,
@@ -215,21 +219,23 @@ class TestDoneViaDirectCleanup:
             _enter_base_patches(stack)
             mock_delete = stack.enter_context(
                 patch(
-                    "wade.services.implementation_service.git_branch.delete_branch",
+                    "wade.services.implementation_service.core.git_branch.delete_branch",
                     side_effect=RuntimeError("always fails"),
                 )
             )
             stack.enter_context(
-                patch("wade.services.implementation_service.git_worktree.prune_worktrees")
+                patch("wade.services.implementation_service.core.git_worktree.prune_worktrees")
             )
             # User picks "Retry" (index 0)
             stack.enter_context(
                 patch(
-                    "wade.services.implementation_service.prompts.select",
+                    "wade.services.implementation_service.core.prompts.select",
                     return_value=0,
                 )
             )
-            mock_logger = stack.enter_context(patch("wade.services.implementation_service.logger"))
+            mock_logger = stack.enter_context(
+                patch("wade.services.implementation_service.core.logger")
+            )
 
             result = _done_via_direct(
                 repo_root=_REPO,
@@ -252,10 +258,10 @@ class TestDoneViaDirectCleanup:
         with ExitStack() as stack:
             _enter_base_patches(stack)
             mock_cleanup = stack.enter_context(
-                patch("wade.services.implementation_service._cleanup_worktree")
+                patch("wade.services.implementation_service.core._cleanup_worktree")
             )
             mock_delete = stack.enter_context(
-                patch("wade.services.implementation_service.git_branch.delete_branch")
+                patch("wade.services.implementation_service.core.git_branch.delete_branch")
             )
 
             result = _done_via_direct(

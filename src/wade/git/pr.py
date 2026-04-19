@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from pathlib import Path
 
 import structlog
+from pydantic import BaseModel, Field
 
 from wade.git.repo import GitError
 
@@ -17,10 +19,24 @@ class GhCliError(GitError):
     """Raised when a ``gh`` CLI command fails."""
 
 
+class PRSummary(BaseModel):
+    """Summary of a pull request as returned by ``gh pr list``."""
+
+    model_config = {"populate_by_name": True}
+
+    number: int
+    url: str
+    head_ref_name: str = Field(alias="headRefName")
+    state: str
+    is_draft: bool = Field(alias="isDraft")
+    merged_at: str | None = Field(default=None, alias="mergedAt")
+
+
 def _run_gh(
     *args: str,
     cwd: Path,
     check: bool = True,
+    retries: int = 0,
 ) -> subprocess.CompletedProcess[str]:
     """Run a ``gh`` CLI command and return the result.
 
@@ -28,30 +44,46 @@ def _run_gh(
         *args: gh subcommand and arguments.
         cwd: Working directory for the command.
         check: If True, raise GhCliError on non-zero exit.
+        retries: Number of times to retry on non-zero exit (default 0).
 
     Returns:
         CompletedProcess with captured stdout/stderr.
 
     Raises:
-        GhCliError: If check is True and the command fails.
+        GhCliError: If check is True and the command fails after all retries.
     """
     cmd = ["gh", *args]
     log.debug("gh.run", cmd=cmd, cwd=str(cwd))
-    try:
-        result = subprocess.run(
-            cmd,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=check,
-        )
-    except subprocess.CalledProcessError as exc:
-        raise GhCliError(
-            f"gh {' '.join(args)} failed (exit {exc.returncode}): {exc.stderr.strip()}"
-        ) from exc
-    except FileNotFoundError as exc:
-        raise GhCliError("gh CLI not found — install it from https://cli.github.com/") from exc
-    return result
+    attempt = 0
+    while True:
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError as exc:
+            raise GhCliError("gh CLI not found — install it from https://cli.github.com/") from exc
+
+        if result.returncode != 0 and attempt < retries:
+            attempt += 1
+            log.warning(
+                "gh.retrying",
+                cmd=cmd,
+                returncode=result.returncode,
+                attempt=attempt,
+                retries=retries,
+                stderr=result.stderr.strip()[:200],
+            )
+            time.sleep(attempt)
+            continue
+
+        if check and result.returncode != 0:
+            raise GhCliError(
+                f"gh {' '.join(args)} failed (exit {result.returncode}): {result.stderr.strip()}"
+            )
+        return result
 
 
 def create_pr(
@@ -184,6 +216,7 @@ def update_pr_body(repo_root: Path, pr_number: int, body: str) -> bool:
         body,
         cwd=repo_root,
         check=False,
+        retries=3,
     )
     return result.returncode == 0
 
@@ -221,6 +254,50 @@ def get_pr_for_branch(repo_root: Path, branch: str) -> dict[str, str | int | boo
         }
     except (json.JSONDecodeError, KeyError):
         return None
+
+
+def list_prs(
+    repo_root: Path,
+    *,
+    state: str = "all",
+    limit: int = 100,
+) -> list[PRSummary]:
+    """List PRs for the repository.
+
+    Returns a list of PRSummary objects with number, url, headRefName, state,
+    isDraft, mergedAt fields.  Uses a single ``gh pr list`` call to avoid
+    per-branch API requests.  Returns an empty list on any failure (missing
+    ``gh`` binary, non-zero exit, or bad JSON).
+    """
+    try:
+        result = _run_gh(
+            "pr",
+            "list",
+            "--state",
+            state,
+            "--limit",
+            str(limit),
+            "--json",
+            "number,url,headRefName,state,isDraft,mergedAt",
+            cwd=repo_root,
+            check=False,
+        )
+    except GhCliError:
+        return []
+    if result.returncode != 0:
+        return []
+    try:
+        rows = json.loads(result.stdout)
+        if not isinstance(rows, list):
+            return []
+        prs: list[PRSummary] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                return []
+            prs.append(PRSummary(**row))
+        return prs
+    except (json.JSONDecodeError, TypeError, KeyError, ValueError):
+        return []
 
 
 def get_pr_body(repo_root: Path, pr_number: int) -> str | None:
@@ -269,6 +346,7 @@ def mark_pr_ready(repo_root: Path, pr_number: int) -> bool:
         str(pr_number),
         cwd=repo_root,
         check=False,
+        retries=3,
     )
     return result.returncode == 0
 
@@ -322,6 +400,7 @@ def update_pr_base(repo_root: Path, pr_number: int, new_base: str) -> bool:
         new_base,
         cwd=repo_root,
         check=False,
+        retries=3,
     )
     return result.returncode == 0
 

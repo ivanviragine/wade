@@ -41,6 +41,7 @@ GITIGNORE_ENTRIES: Final = [
     ".wade.yml",
     "PLAN.md",
     "PR-SUMMARY.md",
+    ".commit-msg",
 ]
 
 # Entries added by older versions without markers — used for backward-compat cleanup
@@ -79,10 +80,9 @@ def init(
     2. Detect/select AI tool
     3. Collect project settings
     4. Generate .wade.yml config
-    5. Install skill files
-    6. Update .gitignore
-    7. Write AGENTS.md pointer
-    8. Write .wade-managed manifest
+    5. Write .wade-managed manifest
+    6. Make .wade/ self-ignoring
+    7. Commit .wade.yml
 
     Returns True on success.
     """
@@ -160,9 +160,7 @@ def init(
             tools_in_use.add(cmd_cfg["tool"])
 
     if "claude" in tools_in_use:
-        _prompt_claude_code_settings(root, non_interactive)
-    if "cursor" in tools_in_use:
-        _prompt_cursor_settings(root, non_interactive)
+        _prompt_claude_code_settings(non_interactive)
     if "gemini" in tools_in_use:
         _prompt_configure_gemini_experimental(non_interactive)
     _prompt_configure_shell_integration(non_interactive)
@@ -233,17 +231,12 @@ def init(
         else:
             console.success(f"Created {kpath.name}")
 
-    # 5. Update .gitignore
-    _ensure_gitignore(root)
-
-    # 6. AGENTS.md pointer
-    pointer_path = pointer.ensure_pointer(root)
-    if pointer_path:
-        console.success(f"Workflow pointer in {Path(pointer_path).name}")
-
-    # 7. Write manifest (no skills on main — skills are installed per-session in worktrees)
+    # 5. Write manifest (no skills on main — skills are installed per-session in worktrees)
     _write_manifest(root, [])
-    console.success("Wrote .wade-managed manifest")
+    console.success("Wrote .wade/.wade-managed manifest")
+
+    # 6. Make .wade/ self-ignoring so it doesn't appear as untracked on main
+    _ensure_wade_dir_self_ignoring(root)
 
     # Validate the config we just wrote
     from wade.services.check_service import validate_config
@@ -256,8 +249,9 @@ def init(
         for err in check_result.errors:
             console.detail(err)
 
-    # 8. Commit or configure for local-only use
-    _prompt_commit_or_local(root, config_path, [], non_interactive)
+    # 8. Final hint for committing .wade.yml
+    console.hint("Commit .wade.yml to your repo:")
+    console.detail('git add .wade.yml && git commit -m "chore: initialize wade"')
 
     console.panel(
         "  Project initialized. Run [bold]wade plan[/] to get started.",
@@ -285,15 +279,15 @@ def update(
     5.  Run config migration pipeline
     6.  Reload config + backfill probed models
     7.  Refresh skill files (force overwrite)
-    8.  Configure AI tool allowlists (Claude, Cursor)
-    9.  Configure Gemini experimental (if applicable)
-    10. Refresh .gitignore + AGENTS.md pointer
-    11. Rebuild manifest with version
+    8.  Configure Gemini experimental (if applicable)
+    9.  Migrate — remove stale committed gitignore block
+    10. Make .wade/ self-ignoring
+    11. Clean up AI tool artifacts from main checkout (migration)
+    12. Rebuild manifest with version
 
     Never overwrites .wade.yml user values — only patches missing keys
     and refreshes skill files.
     """
-    from crossby.config.claude_allowlist import configure_allowlist
 
     from wade import __version__
     from wade.config.migrations import run_all_migrations
@@ -355,24 +349,22 @@ def update(
         if t:
             tools_in_use.add(t)
 
-    # Step 8-9: Silently configure tool-specific settings (idempotent)
-    if "claude" in tools_in_use:
-        extra = config.permissions.allowed_commands
-        configure_allowlist(root, ["wade:*", *extra])
-    if "cursor" in tools_in_use:
-        from crossby.config.cursor_allowlist import (
-            configure_allowlist as configure_cursor_allowlist,
-        )
-
-        configure_cursor_allowlist(root, ["wade:*", *config.permissions.allowed_commands])
+    # Step 8: Configure Gemini experimental (if applicable)
     if "gemini" in tools_in_use:
         _configure_gemini_experimental()
 
-    # Step 10: Refresh .gitignore + AGENTS.md pointer
-    _ensure_gitignore(root)
-    pointer.ensure_pointer(root)
+    # Step 9: Migrate — remove stale committed gitignore block (if present)
+    _migrate_gitignore_block(root)
 
-    # Step 11: Rebuild manifest with version (no skills on main)
+    # Step 10: Make .wade/ self-ignoring (idempotent)
+    _ensure_wade_dir_self_ignoring(root)
+
+    # Step 11: Clean up AI tool artifacts from main checkout (migration)
+    removed_artifacts = _migrate_ai_artifacts_off_main(root)
+    if removed_artifacts:
+        console.info(f"Removed {len(removed_artifacts)} AI tool artifact(s) from main checkout")
+
+    # Step 12: Rebuild manifest with version (no skills on main)
     _write_manifest(root, [])
 
     console.panel("  All managed files are up to date.", title="WADE updated")
@@ -427,6 +419,90 @@ def _migrate_skills_off_main(project_root: Path) -> list[str]:
     return removed
 
 
+def _migrate_ai_artifacts_off_main(project_root: Path) -> list[str]:
+    """Remove AI-tool artifacts written to main by older wade versions.
+
+    These files are now written only to worktrees during bootstrap.  This
+    cleans them up from the main checkout so they no longer appear as diffs.
+
+    Removed (when only wade-managed content is present):
+    - CLAUDE.md symlink (if wade-created, pointing to AGENTS.md)
+    - AGENTS.md pointer block
+    - .claude/settings.json (project-level allowlist only)
+    - .cursor/cli.json (project-level allowlist only)
+
+    Returns list of removed paths (relative to project root).
+    """
+    import json as _json
+
+    from crossby.sync.permissions import canonical_to_claude, canonical_to_cursor
+
+    claude_wade_pattern = canonical_to_claude("wade:*")
+    cursor_wade_pattern = canonical_to_cursor("wade:*")
+
+    removed: list[str] = []
+
+    # Remove CLAUDE.md symlink only if wade created it (points to AGENTS.md)
+    claude_md = project_root / "CLAUDE.md"
+    if claude_md.is_symlink():
+        link_target = claude_md.resolve()
+        if link_target == (project_root / "AGENTS.md").resolve():
+            claude_md.unlink()
+            removed.append("CLAUDE.md")
+
+    # Remove pointer block from AGENTS.md (or CLAUDE.md if it exists as a file)
+    for name in ("AGENTS.md", "CLAUDE.md"):
+        target = project_root / name
+        if target.is_file() and pointer.remove_pointer(target):
+            removed.append(name)
+
+    # Remove .claude/settings.json only when it contains exclusively wade-managed
+    # content.  Require the exact top-level key set {"permissions"} (not a subset)
+    # and verify the wade allow-pattern is present so user-only allowlists and
+    # files extended with hook keys are never removed.
+    claude_settings = project_root / ".claude" / "settings.json"
+    if claude_settings.is_file():
+        try:
+            raw = _json.loads(claude_settings.read_text(encoding="utf-8"))
+            allow = raw.get("permissions", {}).get("allow", []) if isinstance(raw, dict) else []
+            if (
+                isinstance(raw, dict)
+                and set(raw.keys()) == {"permissions"}
+                and isinstance(allow, list)
+                and claude_wade_pattern in allow
+            ):
+                claude_settings.unlink()
+                removed.append(".claude/settings.json")
+                claude_dir = project_root / ".claude"
+                if claude_dir.is_dir() and not any(claude_dir.iterdir()):
+                    claude_dir.rmdir()
+        except (_json.JSONDecodeError, OSError):
+            pass
+
+    # Remove .cursor/cli.json only when it contains exclusively wade-managed
+    # content (same exact-match logic as for .claude/settings.json above).
+    cursor_cli = project_root / ".cursor" / "cli.json"
+    if cursor_cli.is_file():
+        try:
+            raw = _json.loads(cursor_cli.read_text(encoding="utf-8"))
+            allow = raw.get("permissions", {}).get("allow", []) if isinstance(raw, dict) else []
+            if (
+                isinstance(raw, dict)
+                and set(raw.keys()) == {"permissions"}
+                and isinstance(allow, list)
+                and cursor_wade_pattern in allow
+            ):
+                cursor_cli.unlink()
+                removed.append(".cursor/cli.json")
+                cursor_dir = project_root / ".cursor"
+                if cursor_dir.is_dir() and not any(cursor_dir.iterdir()):
+                    cursor_dir.rmdir()
+        except (_json.JSONDecodeError, OSError):
+            pass
+
+    return removed
+
+
 def _maybe_self_upgrade() -> bool:
     """Upgrade WADE using the detected package manager, then re-exec.
 
@@ -463,10 +539,15 @@ def _read_manifest_version(root: Path) -> str | None:
     """Read the WADE version from the .wade-managed manifest.
 
     Looks for a line like: # Managed by wade 0.1.0
+    Checks ``.wade/.wade-managed`` first, then falls back to the legacy
+    root-level location for backward compatibility.
     """
     import re
 
-    manifest = root / MANIFEST_FILENAME
+    manifest = root / ".wade" / MANIFEST_FILENAME
+    if not manifest.is_file():
+        # Fallback to legacy root-level location
+        manifest = root / MANIFEST_FILENAME
     if not manifest.is_file():
         return None
 
@@ -483,7 +564,9 @@ def _read_manifest_version(root: Path) -> str | None:
 def deinit(project_root: Path | None = None, force: bool = False) -> bool:
     """Remove WADE from a project.
 
-    Removes: skills, config, manifest, .gitignore entries, AGENTS.md pointer.
+    Removes: skills, config, manifest, AGENTS.md pointer (if present).
+    Also cleans stale ``.gitignore`` block for backward compat with projects
+    that still have the old ``# wade:start`` committed block.
     """
     cwd = project_root or Path.cwd()
 
@@ -506,7 +589,9 @@ def deinit(project_root: Path | None = None, force: bool = False) -> bool:
     removed = installer.remove_skills(root)
     console.info(f"Removed {len(removed)} skill entries")
 
-    # Remove AGENTS.md pointer
+    # Remove AGENTS.md pointer and wade-created CLAUDE.md symlink.
+    # Also cleans up .claude/settings.json and .cursor/cli.json (handles repos
+    # that reach deinit without ever running wade update).
     for name in ("AGENTS.md", "CLAUDE.md"):
         target = root / name
         if target.is_symlink() and name == "CLAUDE.md":
@@ -518,17 +603,22 @@ def deinit(project_root: Path | None = None, force: bool = False) -> bool:
         elif target.is_file() and pointer.remove_pointer(target):
             console.info(f"Removed workflow pointer from {name}")
 
+    removed_ai = _migrate_ai_artifacts_off_main(root)
+    for artifact in removed_ai:
+        if artifact not in ("AGENTS.md", "CLAUDE.md"):
+            console.info(f"Removed {artifact}")
+
     # Remove config
     config_path = root / ".wade.yml"
     if config_path.is_file():
         config_path.unlink()
         console.info("Removed .wade.yml")
 
-    # Remove manifest
-    manifest = root / MANIFEST_FILENAME
-    if manifest.is_file():
-        manifest.unlink()
-        console.info("Removed .wade-managed")
+    # Remove manifest (check both new .wade/ and legacy root locations)
+    for manifest in (root / ".wade" / MANIFEST_FILENAME, root / MANIFEST_FILENAME):
+        if manifest.is_file():
+            manifest.unlink()
+            console.info(f"Removed {manifest.relative_to(root)}")
 
     # Clean .gitignore
     _clean_gitignore(root)
@@ -614,49 +704,6 @@ def _prompt_configure_gemini_experimental(non_interactive: bool) -> None:
     ):
         _configure_gemini_experimental()
         console.success("Enabled experimental.plan in ~/.gemini/settings.json")
-
-
-def _prompt_configure_allowlist(root: Path, non_interactive: bool) -> None:
-    """Prompt user to configure the Claude Code allowlist, skipping if already set."""
-    from crossby.config.claude_allowlist import configure_allowlist, is_allowlist_configured
-
-    from wade.ui import prompts
-
-    if is_allowlist_configured(root, ["wade:*"]):
-        return
-
-    if non_interactive:
-        return
-
-    if prompts.confirm(
-        "Auto-approve wade commands in Claude Code?"
-        " (skips Bash approval in implementation sessions)",
-        default=True,
-    ):
-        configure_allowlist(root, ["wade:*"])
-        console.success("Added Bash([step]wade:*[/]) to .claude/settings.json allowlist")
-
-
-def _prompt_cursor_settings(root: Path, non_interactive: bool) -> None:
-    """Prompt for Cursor CLI-specific settings: command allowlist."""
-    from crossby.config.cursor_allowlist import configure_allowlist, is_allowlist_configured
-
-    from wade.ui import prompts
-
-    if is_allowlist_configured(root, ["wade:*"]):
-        return
-
-    if non_interactive:
-        return
-
-    console.rule("Cursor CLI")
-    if prompts.confirm(
-        "Auto-approve wade commands in Cursor CLI?"
-        " (skips Shell approval in implementation sessions)",
-        default=True,
-    ):
-        configure_allowlist(root, ["wade:*"])
-        console.success("Added Shell([step]wade[/] *) to .cursor/cli.json allowlist")
 
 
 def _configure_statusline() -> None:
@@ -842,28 +889,23 @@ def _prompt_configure_completions(non_interactive: bool) -> None:
             console.warn("Could not install CLI autocompletion")
 
 
-def _prompt_claude_code_settings(root: Path, non_interactive: bool) -> None:
-    """Prompt for Claude Code-specific settings: allowlist and statusline."""
+def _prompt_claude_code_settings(non_interactive: bool) -> None:
+    """Prompt for Claude Code-specific settings: statusline."""
     import contextlib
     import json
 
-    from crossby.config.claude_allowlist import is_allowlist_configured
-
-    # Pre-check: skip entire section if everything is already configured
-    allowlist_done = is_allowlist_configured(root, ["wade:*"])
-    statusline_done = False
     settings_path = Path.home() / ".claude" / "settings.json"
+    statusline_done = False
     if settings_path.is_file():
         with contextlib.suppress(json.JSONDecodeError, OSError):
             raw = json.loads(settings_path.read_text(encoding="utf-8"))
             if isinstance(raw, dict) and "statusLine" in raw:
                 statusline_done = True
-    if allowlist_done and statusline_done:
+    if statusline_done:
         return
 
     if not non_interactive:
         console.rule("Claude Code")
-    _prompt_configure_allowlist(root, non_interactive)
     _prompt_configure_statusline(non_interactive)
 
 
@@ -2024,69 +2066,39 @@ def _patch_config(
         logger.info("config.patched", path=str(config_path))
 
 
-def get_gitignore_entries(project_root: Path) -> list[str]:
-    """Compute the full list of gitignore entries for a project.
+def _migrate_gitignore_block(project_root: Path) -> None:
+    """Remove the stale committed ``# wade:start`` block from ``.gitignore``.
 
-    Combines the static base entries with dynamic patterns from the skill
-    registry (managed skill dirs + cross-tool symlink dirs).
+    Called during ``update()`` to migrate existing projects.  New projects
+    created after this change will never have the committed block.
     """
-    from wade.skills.installer import get_managed_gitignore_patterns
-
-    return GITIGNORE_ENTRIES + get_managed_gitignore_patterns(project_root)
-
-
-def _gitignore_block(project_root: Path) -> str:
-    """Build the full managed block (markers + entries)."""
-    inner = "\n".join(get_gitignore_entries(project_root))
-    return f"{GITIGNORE_MARKER_START}\n{inner}\n{GITIGNORE_MARKER_END}\n"
-
-
-def _ensure_gitignore(project_root: Path) -> None:
-    """Add or refresh the wade-managed block in .gitignore.
-
-    Uses start/end markers so the block can be reliably located on every
-    subsequent init or update.  Existing user content is always preserved.
-
-    Migration: if the file already has old-style entries (no markers), they
-    are removed and replaced with the marker-wrapped block.
-    """
-    from wade.utils.markdown import extract_marker_block, has_marker_block, remove_marker_block
+    from wade.utils.markdown import has_marker_block
 
     gitignore = project_root / ".gitignore"
-    entries = get_gitignore_entries(project_root)
-    block = _gitignore_block(project_root)
-
     if not gitignore.is_file():
-        gitignore.write_text(block, encoding="utf-8")
         return
 
     existing = gitignore.read_text(encoding="utf-8")
+    has_markers = has_marker_block(existing, GITIGNORE_MARKER_START, GITIGNORE_MARKER_END)
+    has_legacy = any(entry in existing for entry in _GITIGNORE_LEGACY_ENTRIES)
+    if has_markers or has_legacy:
+        _clean_gitignore(project_root)
+        console.info("Removed stale wade gitignore block — commit the change:")
+        console.detail(
+            'git add .gitignore && git commit -m "chore: remove wade managed gitignore block"'
+        )
 
-    if has_marker_block(existing, GITIGNORE_MARKER_START, GITIGNORE_MARKER_END):
-        # Staleness check — skip file write if content is already current
-        inner = extract_marker_block(existing, GITIGNORE_MARKER_START, GITIGNORE_MARKER_END)
-        if inner == "\n".join(entries):
-            return
-        # Stale — replace the block in place
-        cleaned = remove_marker_block(existing, GITIGNORE_MARKER_START, GITIGNORE_MARKER_END)
-        base = cleaned.rstrip("\n")
-        gitignore.write_text((base + "\n\n" + block) if base else block, encoding="utf-8")
-        return
 
-    # No markers yet — migrate: strip old-style stray entries, then append block
-    all_legacy = set(_GITIGNORE_LEGACY_ENTRIES) | set(GITIGNORE_ENTRIES)
-    lines = existing.splitlines()
-    filtered = [line for line in lines if line not in all_legacy]
+def _ensure_wade_dir_self_ignoring(project_root: Path) -> None:
+    """Create ``.wade/.gitignore`` with ``*`` so ``.wade/`` doesn't appear untracked.
 
-    # Collapse consecutive blank lines left behind by removed entries
-    deduped: list[str] = []
-    for line in filtered:
-        if line.strip() == "" and deduped and deduped[-1].strip() == "":
-            continue
-        deduped.append(line)
-
-    base = "\n".join(deduped).rstrip("\n")
-    gitignore.write_text((base + "\n\n" + block) if base else block, encoding="utf-8")
+    Idempotent — safe to call on every init/update.
+    """
+    wade_dir = project_root / ".wade"
+    wade_dir.mkdir(exist_ok=True)
+    gi = wade_dir / ".gitignore"
+    if not gi.is_file() or gi.read_text(encoding="utf-8").strip() != "*":
+        gi.write_text("*\n", encoding="utf-8")
 
 
 def _clean_gitignore(project_root: Path) -> None:
@@ -2126,66 +2138,22 @@ def _clean_gitignore(project_root: Path) -> None:
 
 
 def _write_manifest(project_root: Path, installed_files: list[str]) -> None:
-    """Write the .wade-managed manifest listing all managed files."""
+    """Write the .wade-managed manifest under ``.wade/``.
+
+    The manifest lives inside ``.wade/`` so it is auto-ignored by
+    ``.wade/.gitignore`` (which contains ``*``) and never appears as
+    an untracked file on main.
+    """
     from wade import __version__
 
-    manifest = project_root / MANIFEST_FILENAME
+    wade_dir = project_root / ".wade"
+    wade_dir.mkdir(exist_ok=True)
+    manifest = wade_dir / MANIFEST_FILENAME
     lines = [".wade.yml", *installed_files]
     lines.append(f"# Managed by wade {__version__}")
     manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-
-def _prompt_commit_or_local(
-    root: Path,
-    config_path: Path,
-    installed: list[str],
-    non_interactive: bool,
-) -> None:
-    """Ask whether to commit wade files or keep them local.
-
-    If the user commits, all wade files are added and committed.
-    Otherwise the user is reminded to commit ``.gitignore``.
-    ``.wade.yml`` is always in ``copy_to_worktree`` (handled during config write).
-    """
-    from wade.ui import prompts
-
-    if non_interactive or not prompts.is_tty():
-        console.hint("Commit at least .gitignore so worktrees stay clean:")
-        console.detail('git add .gitignore && git commit -m "chore: add wade gitignore entries"')
-        return
-
-    commit = prompts.confirm("Commit wade files now?", default=True)
-
-    if commit:
-        _commit_wade_files(root, installed)
-    else:
-        console.hint("Commit at least .gitignore so worktrees stay clean:")
-        console.detail('git add .gitignore && git commit -m "chore: add wade gitignore entries"')
-
-
-def _commit_wade_files(root: Path, installed: list[str]) -> None:
-    """Stage and commit all wade-managed files."""
-    import subprocess
-
-    files_to_add = [".wade.yml", ".gitignore", MANIFEST_FILENAME]
-    files_to_add.extend(installed)
-    if (root / "AGENTS.md").exists():
-        files_to_add.append("AGENTS.md")
-
-    try:
-        subprocess.run(
-            ["git", "add", "--force", "--", *files_to_add],
-            cwd=root,
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["git", "commit", "-m", "chore: initialize wade"],
-            cwd=root,
-            check=True,
-            capture_output=True,
-        )
-        console.success("Committed wade files")
-    except subprocess.CalledProcessError as exc:
-        logger.warning("init.commit_failed", error=exc.stderr)
-        console.warn("Could not commit wade files — commit them manually")
+    # Migration: remove legacy root-level manifest if it exists
+    legacy_manifest = project_root / MANIFEST_FILENAME
+    if legacy_manifest.is_file():
+        legacy_manifest.unlink()

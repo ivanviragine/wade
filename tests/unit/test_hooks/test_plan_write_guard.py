@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import subprocess
 import sys
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -33,6 +36,36 @@ def _run_guard(stdin_data: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _run_guard_with_mock_stdin(
+    mock_exception: Exception,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[int | str | None, str, str]:
+    """Run guard with mocked stdin that raises the given exception.
+
+    Returns (exit_code, stderr_text, stdout_text).
+    """
+    spec = importlib.util.spec_from_file_location("test_guard", GUARD_SCRIPT)
+    assert spec and spec.loader
+    guard_module = importlib.util.module_from_spec(spec)
+
+    mock_stdin = Mock()
+    mock_stdin.read.side_effect = mock_exception
+    monkeypatch.setattr("sys.stdin", mock_stdin, raising=False)
+    spec.loader.exec_module(guard_module)
+
+    stderr_capture = io.StringIO()
+    stdout_capture = io.StringIO()
+
+    with (
+        redirect_stderr(stderr_capture),
+        redirect_stdout(stdout_capture),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        guard_module._main_with_wrapper()
+
+    return exc_info.value.code, stderr_capture.getvalue(), stdout_capture.getvalue()
+
+
 class TestAllowedFiles:
     """Files that should be allowed (exit 0)."""
 
@@ -52,6 +85,9 @@ class TestAllowedFiles:
             ".claude/plans/some-plan.md",
             "/tmp/worktree/.claude/plans/design.md",
             ".claude\\plans\\windows-path.md",
+            ".wade/plans/some-plan.md",
+            "/tmp/worktree/.wade/plans/design.md",
+            ".wade\\plans\\windows-path.md",
         ],
     )
     def test_allowed_basenames(self, file_path: str) -> None:
@@ -91,14 +127,14 @@ class TestBlockedFiles:
         stdout_json = json.loads(result.stdout)
         # Claude Code format (nested hookSpecificOutput)
         hook_output = stdout_json["hookSpecificOutput"]
-        assert hook_output["permissionDecision"] == "deny"
+        assert hook_output["permissionDecision"] == "block"
         assert hook_output["hookEventName"] == "PreToolUse"
         assert "BLOCKED" in hook_output["permissionDecisionReason"]
         # Copilot/Cursor format (top-level)
         assert stdout_json["permission"] == "deny"
         assert stdout_json["permissionDecision"] == "deny"
-        # Gemini format (top-level)
-        assert stdout_json["decision"] == "deny"
+        # Gemini/Claude Code top-level decision
+        assert stdout_json["decision"] == "block"
         assert "BLOCKED" in stdout_json["reason"]
 
 
@@ -207,3 +243,44 @@ class TestFailOpen:
     def test_empty_dict(self) -> None:
         result = _run_guard(json.dumps({}))
         assert result.returncode == 0
+
+
+class TestFailClosed:
+    """Unhandled exceptions and guard errors should fail closed (exit 2, not exit 0 or 1)."""
+
+    def test_exception_in_main_exits_2_not_1(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If sys.stdin.read() raises an exception, the outer wrapper should catch it and exit 2."""
+        exit_code, stderr_text, stdout_text = _run_guard_with_mock_stdin(
+            OSError("Simulated stdin I/O failure"), monkeypatch
+        )
+        assert exit_code == 2, "Should exit 2 (fail-closed) on stdin I/O error"
+        assert "Guard error" in stderr_text or "OSError" in stderr_text
+        output_json = json.loads(stdout_text)
+        assert output_json["hookSpecificOutput"]["permissionDecision"] == "block"
+        assert output_json["permission"] == "deny"
+
+    def test_guard_error_outputs_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Guard errors should output JSON in all tool formats when an exception occurs."""
+        exit_code, _stderr_text, stdout_text = _run_guard_with_mock_stdin(
+            RuntimeError("Unexpected guard processing error"), monkeypatch
+        )
+        assert exit_code == 2
+        stdout_json = json.loads(stdout_text)
+
+        # Verify stdout is valid JSON with deny fields for all tool formats
+        assert stdout_json["hookSpecificOutput"]["permissionDecision"] == "block"
+        assert stdout_json["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
+        assert stdout_json["permission"] == "deny"
+        assert stdout_json["permissionDecision"] == "deny"
+        assert stdout_json["decision"] == "block"
+
+    def test_closed_stdin_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When stdin is closed, ValueError from sys.stdin.read() should cause exit 2."""
+        exit_code, stderr_text, stdout_text = _run_guard_with_mock_stdin(
+            ValueError("I/O operation on closed file"), monkeypatch
+        )
+        assert exit_code == 2, "Closed stdin should exit 2 (fail-closed), not 0 (fail-open)"
+        assert "Guard error" in stderr_text or "ValueError" in stderr_text
+        stdout_json = json.loads(stdout_text)
+        assert stdout_json["hookSpecificOutput"]["permissionDecision"] == "block"
+        assert stdout_json["permission"] == "deny"

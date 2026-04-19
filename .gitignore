@@ -25,10 +25,13 @@ env/
 htmlcov/
 .mypy_cache/
 
-# wade runtime (per-project, gitignored)
-
-# Claude Code local settings (not covered by managed block)
+# AI tool directories (wade-managed — never committed in this repo)
+.agents/
 .claude/
+.copilot/
+.cursor/
+.gemini/
+.github/hooks/
 
 # OS
 .DS_Store
@@ -37,35 +40,5 @@ Thumbs.db
 # uv
 uv.lock
 
-# Temporary commit message file (agents use this to avoid rewriting on hook retries)
-.commit-msg
-
 # Local archive (pre-reset export)
 archive/
-
-# wade:start — managed by wade (do not edit — run `wade update` to refresh)
-.wade/
-.wade-managed
-.wade.yml
-PLAN.md
-PR-SUMMARY.md
-.claude/skills/address-reviews-session/
-.claude/skills/deps/
-.claude/skills/implementation-session/
-.claude/skills/plan-session/
-.claude/skills/pr-summary/
-.claude/skills/review-pr-comments-session/
-.claude/skills/review-session/
-.claude/skills/sync/
-.claude/skills/task/
-.claude/skills/work-session/
-.claude/skills/workflow/
-.claude/hooks/plan_write_guard.py
-.copilot/hooks/plan_write_guard.py
-.cursor/hooks/plan_write_guard.py
-.gemini/hooks/plan_write_guard.py
-.github/skills
-.agents/skills
-.gemini/skills
-.cursor/skills
-# wade:end
