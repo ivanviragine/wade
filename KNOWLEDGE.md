@@ -36,3 +36,9 @@ claude-opus-4-7 is the current most-capable Claude model (dotted internal form: 
 When the plan-session 'Your role' step numbering changes, the _partials/review-plan-step.md partial also has a hardcoded step number that must be kept in sync. After adding 2 steps in #278, the partial moved from step 5 to step 7.
 
 ---
+
+## 164c355e | 2026-04-23 | plan | tags: knowledge, bug
+
+parse_entries only handles dated entries ('## YYYY-MM-DD | Title' format). Plain '## Title' headings return [] from parse_entries, causing search to silently find nothing and dump the full file (header=text fallback bug). Fix: add fallback plain-heading regex, make ParsedEntry.date optional, fix header fallback when entries==[], and early-exit CLI get() when entries_count==0 after filtering.
+
+---
