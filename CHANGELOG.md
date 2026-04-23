@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.20.3] — 2026-04-23
+
+### Bug Fixes
+
+- knowledge search fails for plain ## Title entries and dumps full file (#283) (240c09d)
+
 ## [v0.20.2] — 2026-04-19
 
 ### Bug Fixes
