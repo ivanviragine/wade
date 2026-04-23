@@ -1257,3 +1257,117 @@ class TestAppendKnowledgeWorktreeRedirect:
         assert not (worktree_root / "KNOWLEDGE.md").exists()
         text = (main_root / "KNOWLEDGE.md").read_text(encoding="utf-8")
         assert "Learned from worktree." in text
+
+
+# --- Plain ## Title entry support ---
+
+
+class TestPlainEntryParsing:
+    def test_parses_plain_heading(self) -> None:
+        text = "## My Plain Entry\n\nSome plain content.\n\n---\n"
+        entries = parse_entries(text)
+        assert len(entries) == 1
+        assert entries[0].entry_id is None
+        assert entries[0].date is None
+        assert entries[0].heading_rest == "My Plain Entry"
+        assert entries[0].content == "Some plain content."
+
+    def test_parses_multiple_plain_entries(self) -> None:
+        text = (
+            "## First Entry\n\nFirst content.\n\n---\n\n## Second Entry\n\nSecond content.\n\n---\n"
+        )
+        entries = parse_entries(text)
+        assert len(entries) == 2
+        assert entries[0].heading_rest == "First Entry"
+        assert entries[1].heading_rest == "Second Entry"
+
+    def test_plain_entries_mixed_with_dated_entries(self) -> None:
+        text = (
+            KNOWLEDGE_TEMPLATE
+            + "\n## My Plain Entry\n\nPlain content.\n\n---\n\n"
+            + "## a1b2c3d4 | 2026-03-24 | plan\n\nDated content.\n\n---\n"
+        )
+        entries = parse_entries(text)
+        assert len(entries) == 2
+        assert entries[0].entry_id is None
+        assert entries[0].date is None
+        assert entries[1].entry_id == "a1b2c3d4"
+        assert entries[1].date == "2026-03-24"
+
+    def test_plain_entry_not_score_annotated(
+        self, project_root: Path, config: KnowledgeConfig
+    ) -> None:
+        content = KNOWLEDGE_TEMPLATE + "\n## My Plain Entry\n\nPlain content.\n\n---\n"
+        (project_root / "KNOWLEDGE.md").write_text(content, encoding="utf-8")
+        result = get_annotated_knowledge(project_root, config)
+        assert result.content is not None
+        assert "Plain content." in result.content
+        assert "[+" not in result.content
+
+    def test_search_finds_plain_entry_by_content(
+        self, project_root: Path, config: KnowledgeConfig
+    ) -> None:
+        content = (
+            KNOWLEDGE_TEMPLATE
+            + "\n## My Plain Entry\n\nWorktree isolation tip.\n\n---\n\n"
+            + "## Another Entry\n\nUnrelated stuff.\n\n---\n"
+        )
+        (project_root / "KNOWLEDGE.md").write_text(content, encoding="utf-8")
+        result = get_annotated_knowledge(
+            project_root, config, search_query="worktree", no_filter=True
+        )
+        assert result.content is not None
+        assert "Worktree isolation tip." in result.content
+        assert "Unrelated stuff." not in result.content
+        assert result.entries_count == 1
+
+    def test_search_finds_plain_entry_by_heading(
+        self, project_root: Path, config: KnowledgeConfig
+    ) -> None:
+        content = (
+            KNOWLEDGE_TEMPLATE
+            + "\n## Git Worktree Tips\n\nSome content here.\n\n---\n\n"
+            + "## Docker Tips\n\nOther content.\n\n---\n"
+        )
+        (project_root / "KNOWLEDGE.md").write_text(content, encoding="utf-8")
+        result = get_annotated_knowledge(
+            project_root, config, search_query="worktree", no_filter=True
+        )
+        assert result.content is not None
+        assert "Git Worktree Tips" in result.content
+        assert "Docker Tips" not in result.content
+
+    def test_plain_entries_not_excluded_by_score_filter(
+        self, project_root: Path, config: KnowledgeConfig
+    ) -> None:
+        content = KNOWLEDGE_TEMPLATE + "\n## My Plain Entry\n\nPlain content.\n\n---\n"
+        (project_root / "KNOWLEDGE.md").write_text(content, encoding="utf-8")
+        result = get_annotated_knowledge(project_root, config, min_score=0)
+        assert result.content is not None
+        assert "Plain content." in result.content
+
+
+class TestNoMatchHeaderOnlyOutput:
+    def test_no_match_returns_header_not_full_file(
+        self, project_root: Path, config: KnowledgeConfig
+    ) -> None:
+        content = KNOWLEDGE_TEMPLATE + "\n## a1b2c3d4 | 2026-03-24 | plan\n\nDocker tips.\n\n---\n"
+        (project_root / "KNOWLEDGE.md").write_text(content, encoding="utf-8")
+        result = get_annotated_knowledge(
+            project_root, config, search_query="nonexistent", no_filter=True
+        )
+        assert result.entries_count == 0
+        assert result.content is not None
+        assert "Docker tips." not in result.content
+
+    def test_no_match_with_plain_entries_returns_header_not_full_file(
+        self, project_root: Path, config: KnowledgeConfig
+    ) -> None:
+        content = KNOWLEDGE_TEMPLATE + "\n## My Plain Entry\n\nPlain content.\n\n---\n"
+        (project_root / "KNOWLEDGE.md").write_text(content, encoding="utf-8")
+        result = get_annotated_knowledge(
+            project_root, config, search_query="nonexistent", no_filter=True
+        )
+        assert result.entries_count == 0
+        assert result.content is not None
+        assert "Plain content." not in result.content

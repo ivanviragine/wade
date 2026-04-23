@@ -147,6 +147,7 @@ def get(
     # Check if search or tag filters returned no results
     if (search or tag) and result.entries_count == 0:
         print("No entries matched your search.", file=sys.stderr)
+        raise typer.Exit(0)
 
     console.raw(result.content)
 
