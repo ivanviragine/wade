@@ -1371,3 +1371,16 @@ class TestNoMatchHeaderOnlyOutput:
         assert result.entries_count == 0
         assert result.content is not None
         assert "Plain content." not in result.content
+
+
+class TestPlainEntrySubheadingBehavior:
+    def test_dated_entry_body_with_hash_hash_subheading(self) -> None:
+        # Document current behavior: ## subheading inside a dated entry body is
+        # treated as a boundary and becomes a second plain entry.
+        text = (
+            "## a1b2c3d4 | 2026-03-24 | plan\n\nIntro.\n\n## Background\n\nMore content.\n\n---\n"
+        )
+        entries = parse_entries(text)
+        assert len(entries) == 2
+        assert entries[0].entry_id == "a1b2c3d4"
+        assert entries[1].heading_rest == "Background"

@@ -34,7 +34,8 @@ _ENTRY_HEADING_RE = re.compile(
 )
 
 # Fallback regex for hand-authored plain headings with no date or ID: ## Title
-_PLAIN_ENTRY_HEADING_RE = re.compile(r"^## (.+?)(?:\s+\[.*\])?\s*$")
+# Title must start with alphanumeric to avoid matching `## ---` separators.
+_PLAIN_ENTRY_HEADING_RE = re.compile(r"^## ([A-Za-z0-9].*?)(?:\s+\[.*\])?\s*$")
 
 # Tag validation: lowercase kebab-case, max 30 chars
 _TAG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
