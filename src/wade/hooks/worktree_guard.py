@@ -117,21 +117,14 @@ def _deny(file_path: str, worktree_root: Path) -> None:
     )
     # stderr for human-readable output
     print(msg, file=sys.stderr)
-    # stdout JSON — multi-tool compatible:
-    # - Claude Code: reads hookSpecificOutput.permissionDecision
-    # - Cursor: reads top-level permission
-    # - Copilot: reads top-level permissionDecision
-    # - Gemini: reads top-level decision (also uses exit code 2 as emergency brake)
+    # stdout JSON — Claude Code strict schema: only hookSpecificOutput at root
+    # Gemini uses exit code 2 as its block signal regardless of JSON
     result = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "permissionDecision": "block",
+            "permissionDecision": "deny",
             "permissionDecisionReason": msg,
         },
-        "permission": "deny",
-        "permissionDecision": "deny",
-        "decision": "block",
-        "reason": msg,
     }
     print(json.dumps(result))
     sys.exit(2)
@@ -144,13 +137,9 @@ def _fail_closed(e: Exception) -> None:
     result = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "permissionDecision": "block",
+            "permissionDecision": "deny",
             "permissionDecisionReason": error_msg,
         },
-        "permission": "deny",
-        "permissionDecision": "deny",
-        "decision": "block",
-        "reason": error_msg,
     }
     print(json.dumps(result))
     sys.exit(2)
