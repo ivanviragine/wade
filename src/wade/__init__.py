@@ -1,3 +1,3 @@
 """WADE (Workflow for AI-Driven Engineering) — AI-agent-driven git workflow management CLI."""
 
-__version__ = "0.20.4"
+__version__ = "0.20.5"
