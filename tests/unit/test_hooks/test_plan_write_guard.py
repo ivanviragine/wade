@@ -123,19 +123,13 @@ class TestBlockedFiles:
         result = _run_guard(data)
         assert result.returncode == 2
         assert "BLOCKED" in result.stderr
-        # Verify stdout JSON has deny fields for all supported tools
+        # Verify stdout JSON matches Claude Code strict schema
         stdout_json = json.loads(result.stdout)
-        # Claude Code format (nested hookSpecificOutput)
         hook_output = stdout_json["hookSpecificOutput"]
-        assert hook_output["permissionDecision"] == "block"
+        assert hook_output["permissionDecision"] == "deny"
         assert hook_output["hookEventName"] == "PreToolUse"
         assert "BLOCKED" in hook_output["permissionDecisionReason"]
-        # Copilot/Cursor format (top-level)
-        assert stdout_json["permission"] == "deny"
-        assert stdout_json["permissionDecision"] == "deny"
-        # Gemini/Claude Code top-level decision
-        assert stdout_json["decision"] == "block"
-        assert "BLOCKED" in stdout_json["reason"]
+        assert list(stdout_json.keys()) == ["hookSpecificOutput"]
 
 
 class TestToolStdinFormats:
@@ -256,8 +250,7 @@ class TestFailClosed:
         assert exit_code == 2, "Should exit 2 (fail-closed) on stdin I/O error"
         assert "Guard error" in stderr_text or "OSError" in stderr_text
         output_json = json.loads(stdout_text)
-        assert output_json["hookSpecificOutput"]["permissionDecision"] == "block"
-        assert output_json["permission"] == "deny"
+        assert output_json["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_guard_error_outputs_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Guard errors should output JSON in all tool formats when an exception occurs."""
@@ -267,12 +260,10 @@ class TestFailClosed:
         assert exit_code == 2
         stdout_json = json.loads(stdout_text)
 
-        # Verify stdout is valid JSON with deny fields for all tool formats
-        assert stdout_json["hookSpecificOutput"]["permissionDecision"] == "block"
+        # Verify stdout matches Claude Code strict schema
+        assert stdout_json["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert stdout_json["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
-        assert stdout_json["permission"] == "deny"
-        assert stdout_json["permissionDecision"] == "deny"
-        assert stdout_json["decision"] == "block"
+        assert list(stdout_json.keys()) == ["hookSpecificOutput"]
 
     def test_closed_stdin_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """When stdin is closed, ValueError from sys.stdin.read() should cause exit 2."""
@@ -282,5 +273,4 @@ class TestFailClosed:
         assert exit_code == 2, "Closed stdin should exit 2 (fail-closed), not 0 (fail-open)"
         assert "Guard error" in stderr_text or "ValueError" in stderr_text
         stdout_json = json.loads(stdout_text)
-        assert stdout_json["hookSpecificOutput"]["permissionDecision"] == "block"
-        assert stdout_json["permission"] == "deny"
+        assert stdout_json["hookSpecificOutput"]["permissionDecision"] == "deny"
