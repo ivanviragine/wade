@@ -17,7 +17,7 @@ For staged-only review: `wade review implementation --staged`.
 - If findings are **major** (logic errors, architectural issues): Address them
   and re-run once. Always proceed to Step 2 after the 2nd run, regardless of
   new findings.
-- Never re-run more than twice.
+- Do not run a third time.
 
 **This step is mandatory when `review_implementation.enabled` is not `false`.
 Do NOT proceed to Step 2 until this step is complete and any actionable

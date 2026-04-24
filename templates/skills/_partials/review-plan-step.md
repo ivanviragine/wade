@@ -14,4 +14,4 @@
    - If findings are **major** (structural issues, unclear requirements): Fix and
      re-run once. Always proceed to validation after the 2nd run, regardless of
      new findings.
-   - Never re-run more than twice.
+   - Do not run a third time.
