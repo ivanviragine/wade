@@ -93,16 +93,13 @@ class TestOutsideWorktree:
         data = json.dumps({"tool_input": {"file_path": outside}})
         result = _run_guard(guard, data)
         assert result.returncode == 2
-        # Verify structured JSON output
+        # Verify structured JSON output matches Claude Code strict schema
         stdout_json = json.loads(result.stdout)
         hook_output = stdout_json["hookSpecificOutput"]
-        assert hook_output["permissionDecision"] == "block"
+        assert hook_output["permissionDecision"] == "deny"
         assert hook_output["hookEventName"] == "PreToolUse"
         assert "BLOCKED" in hook_output["permissionDecisionReason"]
-        assert stdout_json["permission"] == "deny"
-        assert stdout_json["permissionDecision"] == "deny"
-        assert stdout_json["decision"] == "block"
-        assert "BLOCKED" in stdout_json["reason"]
+        assert list(stdout_json.keys()) == ["hookSpecificOutput"]
 
     def test_deny_message_contains_worktree_root(self, tmp_path: Path) -> None:
         guard = _install_guard(tmp_path)
