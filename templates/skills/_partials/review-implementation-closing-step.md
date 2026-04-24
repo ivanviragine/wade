@@ -11,6 +11,14 @@ Run `wade review implementation` to review your changes and check the exit code:
 
 For staged-only review: `wade review implementation --staged`.
 
+**Run at most 2 times total**:
+- If findings are **minor** (style, small fixes): Address them and proceed to
+  Step 2; no re-review needed.
+- If findings are **major** (logic errors, architectural issues): Address them
+  and re-run once. Always proceed to Step 2 after the 2nd run, regardless of
+  new findings.
+- Never re-run more than twice.
+
 **This step is mandatory when `review_implementation.enabled` is not `false`.
 Do NOT proceed to Step 2 until this step is complete and any actionable
 findings are addressed and committed.**
