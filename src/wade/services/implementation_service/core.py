@@ -2561,8 +2561,8 @@ def _preserve_session_data(repo_root: Path, wt_path: Path) -> None:
         adapter: AbstractAITool | None = None
         if sessions:
             latest = max(sessions, key=lambda s: s.started_at)
-            with contextlib.suppress(ValueError):
-                adapter = AbstractAITool.get(latest.ai_tool)
+            with contextlib.suppress(ValueError, KeyError):
+                adapter = AbstractAITool.get(AIToolID(latest.ai_tool))
 
         # Fallback: detect via session_data_dirs
         if adapter is None:

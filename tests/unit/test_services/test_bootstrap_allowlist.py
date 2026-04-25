@@ -6,11 +6,22 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from wade.models.config import HooksConfig, PermissionsConfig, ProjectConfig, ProjectSettings
 from wade.services.implementation_service import bootstrap_worktree
 
 WADE_ALLOW_PATTERN = "Bash(wade *)"
 CURSOR_WADE_ALLOW_PATTERN = "Shell(wade *)"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_cursor_global_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """Redirect crossby's global Cursor config to a tmp path so tests don't see ~/.cursor."""
+    fake_global = tmp_path_factory.mktemp("cursor-home") / "cli-config.json"
+    monkeypatch.setattr("crossby.config.cursor_allowlist._GLOBAL_CONFIG_PATH", fake_global)
 
 
 class TestBootstrapAllowlistPropagation:
