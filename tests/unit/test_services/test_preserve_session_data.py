@@ -89,7 +89,7 @@ class TestPreserveSessionData:
         mock_adapter.session_data_dirs.return_value = [".claude"]
         mock_adapter.preserve_session_data.return_value = True
 
-        from wade.models.ai import AIToolID
+        from crossby.models.ai import AIToolID
 
         with (
             patch(_PATCH_ENGINE, return_value=mock_engine),

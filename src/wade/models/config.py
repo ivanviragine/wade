@@ -32,6 +32,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+from crossby.models.config import ComplexityModelMapping as ComplexityModelMapping
 from pydantic import BaseModel, Field
 
 from wade.models.session import MergeStrategy
@@ -42,19 +43,6 @@ class ProviderID(StrEnum):
 
     GITHUB = "github"
     CLICKUP = "clickup"
-
-
-class ComplexityModelMapping(BaseModel):
-    """Model IDs for each complexity tier.
-
-    Values are exact model IDs as returned by the tool's get_models().
-    Defaults are None — populated at init time by querying the tool.
-    """
-
-    easy: str | None = None
-    medium: str | None = None
-    complex: str | None = None
-    very_complex: str | None = None
 
 
 class ProviderConfig(BaseModel):

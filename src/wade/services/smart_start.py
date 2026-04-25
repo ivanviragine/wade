@@ -15,15 +15,15 @@ from pathlib import Path
 from typing import Any
 
 import structlog
+from crossby.ai_tools import AbstractAITool
+from crossby.models.ai import AIToolID
 from pydantic import BaseModel
 
-from wade.ai_tools.base import AbstractAITool
 from wade.config.loader import load_config
 from wade.git import branch as git_branch
 from wade.git import pr as git_pr
 from wade.git import repo as git_repo
 from wade.git.repo import GitError
-from wade.models.ai import AIToolID
 from wade.models.session import MergeStatus, SessionRecord
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider

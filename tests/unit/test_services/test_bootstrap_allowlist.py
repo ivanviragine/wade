@@ -6,10 +6,22 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from wade.config.claude_allowlist import WADE_ALLOW_PATTERN
-from wade.config.cursor_allowlist import WADE_ALLOW_PATTERN as CURSOR_WADE_ALLOW_PATTERN
+import pytest
+
 from wade.models.config import HooksConfig, PermissionsConfig, ProjectConfig, ProjectSettings
 from wade.services.implementation_service import bootstrap_worktree
+
+WADE_ALLOW_PATTERN = "Bash(wade *)"
+CURSOR_WADE_ALLOW_PATTERN = "Shell(wade *)"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_cursor_global_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """Redirect crossby's global Cursor config to a tmp path so tests don't see ~/.cursor."""
+    fake_global = tmp_path_factory.mktemp("cursor-home") / "cli-config.json"
+    monkeypatch.setattr("crossby.config.cursor_allowlist._GLOBAL_CONFIG_PATH", fake_global)
 
 
 class TestBootstrapAllowlistPropagation:
@@ -89,13 +101,13 @@ class TestBootstrapCursorAllowlistPropagation:
             permissions=PermissionsConfig(allowed_commands=["wade *", "./scripts/check.sh *"]),
         )
 
-        # Set up global Cursor config with wade pattern
-        global_config = Path.home() / ".cursor" / "cli-config.json"
+        # Autouse fixture already redirects _GLOBAL_CONFIG_PATH to a tmp path.
+        # is_allowlist_configured is mocked to report the global config as configured
+        # (root is None) so propagation flows through.
         with (
-            patch("wade.config.cursor_allowlist._GLOBAL_CONFIG_PATH", global_config),
             patch(
-                "wade.config.cursor_allowlist.is_allowlist_configured",
-                side_effect=lambda root=None: root is None,
+                "crossby.config.cursor_allowlist.is_allowlist_configured",
+                side_effect=lambda root=None, patterns=None: root is None,
             ),
             patch("subprocess.run"),
         ):

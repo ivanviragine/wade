@@ -24,6 +24,7 @@ classifiers = [
     "Topic :: Software Development :: Version Control :: Git",
 ]
 dependencies = [
+    "crossby>=0.2.3,<0.3.0",
     "typer>=0.12",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
@@ -39,7 +40,7 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
-    "mypy>=1.10",
+    "mypy>=1.14",
     "ruff>=0.4",
     "pre-commit>=3.7",
     "types-PyYAML>=6.0",
@@ -87,6 +88,10 @@ plugins = ["pydantic.mypy"]
 module = ["questionary.*", "prompt_toolkit.*"]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = ["crossby.*"]
+follow_untyped_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "scripts"]
@@ -100,6 +105,9 @@ markers = [
 filterwarnings = [
     "error::ResourceWarning",
 ]
+
+[tool.uv.sources]
+crossby = { git = "https://github.com/ivanviragine/crossby.git", branch = "main" }
 
 [tool.coverage.run]
 source = ["wade"]

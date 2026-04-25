@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import re
 
-from wade.models.ai import TokenUsage
+from crossby.models.ai import TokenUsage
+
 from wade.utils.markdown import (
     append_session_to_body,
     extract_marker_block,
@@ -105,7 +106,7 @@ def _build_session_usage_table(
     Generates the table rows for one session, used by both impl and review
     usage block builders.
     """
-    from wade.ai_tools.transcript import format_count
+    from crossby.ai_tools.transcript import format_count
 
     breakdown = token_usage.model_breakdown if token_usage else []
     multi = len(breakdown) > 1

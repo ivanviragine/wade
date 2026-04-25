@@ -7,9 +7,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from crossby.models.ai import AIToolID, TokenUsage
 from pydantic import BaseModel, Field
-
-from wade.models.ai import AIToolID, TokenUsage
 
 
 class MergeStrategy(StrEnum):

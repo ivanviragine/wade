@@ -8,6 +8,7 @@ from typing import Any
 
 import structlog
 import yaml
+from crossby.models.ai import AIToolID, EffortLevel
 
 from wade.config.loader import (
     ConfigError,
@@ -17,7 +18,6 @@ from wade.config.loader import (
 )
 from wade.git import repo
 from wade.git.repo import GitError
-from wade.models.ai import AIToolID, EffortLevel
 from wade.models.config import AI_COMMAND_NAMES, LEGACY_AI_COMMAND_ALIASES
 from wade.models.delegation import DelegationMode
 from wade.models.session import MergeStrategy

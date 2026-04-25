@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from wade.ai_tools.claude import ClaudeAdapter
-from wade.ai_tools.cursor import CursorAdapter
+from crossby.ai_tools.claude import ClaudeAdapter
+from crossby.ai_tools.cursor import CursorAdapter
 
 
 class TestImplementationServiceResumeLaunch:

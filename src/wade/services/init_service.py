@@ -13,18 +13,15 @@ from typing import Any, Final
 
 import structlog
 import yaml
+from crossby.ai_tools import AbstractAITool
+from crossby.config.defaults import get_defaults
+from crossby.models.ai import AIToolID
+from crossby.models.config import ComplexityModelMapping
 
-from wade.ai_tools.base import AbstractAITool
-from wade.config.defaults import get_defaults
 from wade.config.loader import ConfigError, ensure_yaml_mapping, find_config_file, load_config
 from wade.git import repo
 from wade.git.repo import GitError
-from wade.models.ai import AIToolID
-from wade.models.config import (
-    AI_COMMAND_NAMES,
-    ComplexityModelMapping,
-    KnowledgeConfig,
-)
+from wade.models.config import AI_COMMAND_NAMES, KnowledgeConfig
 from wade.skills import installer, pointer
 from wade.skills.installer import get_wade_repo_root
 from wade.ui.console import console
@@ -291,6 +288,7 @@ def update(
     Never overwrites .wade.yml user values — only patches missing keys
     and refreshes skill files.
     """
+
     from wade import __version__
     from wade.config.migrations import run_all_migrations
 
@@ -437,8 +435,10 @@ def _migrate_ai_artifacts_off_main(project_root: Path) -> list[str]:
     """
     import json as _json
 
-    from wade.config.claude_allowlist import WADE_ALLOW_PATTERN as _CLAUDE_WADE_PATTERN
-    from wade.config.cursor_allowlist import WADE_ALLOW_PATTERN as _CURSOR_WADE_PATTERN
+    from crossby.sync.permissions import canonical_to_claude, canonical_to_cursor
+
+    claude_wade_pattern = canonical_to_claude("wade *")
+    cursor_wade_pattern = canonical_to_cursor("wade *")
 
     removed: list[str] = []
 
@@ -469,7 +469,7 @@ def _migrate_ai_artifacts_off_main(project_root: Path) -> list[str]:
                 isinstance(raw, dict)
                 and set(raw.keys()) == {"permissions"}
                 and isinstance(allow, list)
-                and _CLAUDE_WADE_PATTERN in allow
+                and claude_wade_pattern in allow
             ):
                 claude_settings.unlink()
                 removed.append(".claude/settings.json")
@@ -490,7 +490,7 @@ def _migrate_ai_artifacts_off_main(project_root: Path) -> list[str]:
                 isinstance(raw, dict)
                 and set(raw.keys()) == {"permissions"}
                 and isinstance(allow, list)
-                and _CURSOR_WADE_PATTERN in allow
+                and cursor_wade_pattern in allow
             ):
                 cursor_cli.unlink()
                 removed.append(".cursor/cli.json")
@@ -978,7 +978,8 @@ def _prompt_ai_section(
     try:
         adapter = AbstractAITool.get(selected_tool)
         if adapter.capabilities().supports_effort:
-            from wade.models.ai import EffortLevel
+            from crossby.models.ai import EffortLevel
+
             from wade.ui import prompts as ui_prompts
 
             effort_choices = ["(none — use tool default)", *[e.value for e in EffortLevel]]
@@ -1474,7 +1475,7 @@ def _collect_model_options(
     """Return the full flat model list from the registry for the select menu."""
     if not tool:
         return []
-    from wade.data import get_models_for_tool
+    from crossby.data import get_models_for_tool
 
     return get_models_for_tool(tool)
 

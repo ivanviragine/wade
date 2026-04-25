@@ -5,9 +5,9 @@ from __future__ import annotations
 import os
 
 import structlog
+from crossby.ai_tools import AbstractAITool
+from crossby.models.ai import AIToolID, EffortLevel
 
-from wade.ai_tools.base import AbstractAITool
-from wade.models.ai import AIToolID, EffortLevel
 from wade.models.config import AICommandConfig, ProjectConfig
 
 logger = structlog.get_logger()
@@ -295,7 +295,8 @@ def confirm_ai_selection(
 
 def _prompt_model_selection(tool: str) -> str | None:
     """Show a model picker for *tool* and return the chosen model (or None)."""
-    from wade.data import get_models_for_tool
+    from crossby.data import get_models_for_tool
+
     from wade.ui import prompts
 
     models = get_models_for_tool(tool)

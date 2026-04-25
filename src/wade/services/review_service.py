@@ -12,15 +12,15 @@ import time
 from pathlib import Path
 
 import structlog
+from crossby.ai_tools import AbstractAITool
+from crossby.models.ai import AIToolID
 
-from wade.ai_tools.base import AbstractAITool
 from wade.config.loader import load_config
 from wade.git import branch as git_branch
 from wade.git import pr as git_pr
 from wade.git import repo as git_repo
 from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
-from wade.models.ai import AIToolID
 from wade.models.config import ProjectConfig
 from wade.models.review import (
     PollOutcome,
@@ -702,7 +702,7 @@ def start(
 
             deliver_prompt_if_needed(adapter, prompt)
             exit_code = adapter.launch(
-                worktree_path=worktree_path,
+                working_dir=worktree_path,
                 model=resolved_model,
                 prompt=prompt,
                 transcript_path=transcript_path,

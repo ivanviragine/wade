@@ -97,37 +97,37 @@ class TestConfigLoaderYolo:
 
 class TestAdapterYoloArgs:
     def test_claude_yolo_args(self) -> None:
-        from wade.ai_tools.claude import ClaudeAdapter
+        from crossby.ai_tools.claude import ClaudeAdapter
 
         result = ClaudeAdapter().yolo_args()
         assert result == ["--dangerously-skip-permissions"]
 
     def test_gemini_yolo_args(self) -> None:
-        from wade.ai_tools.gemini import GeminiAdapter
+        from crossby.ai_tools.gemini import GeminiAdapter
 
         result = GeminiAdapter().yolo_args()
         assert result == ["--yolo"]
 
     def test_codex_yolo_args(self) -> None:
-        from wade.ai_tools.codex import CodexAdapter
+        from crossby.ai_tools.codex import CodexAdapter
 
         result = CodexAdapter().yolo_args()
-        assert result == ["-a", "never"]
+        assert result == ["--yolo"]
 
     def test_copilot_yolo_args(self) -> None:
-        from wade.ai_tools.copilot import CopilotAdapter
+        from crossby.ai_tools.copilot import CopilotAdapter
 
         result = CopilotAdapter().yolo_args()
         assert result == ["--yolo"]
 
     def test_cursor_yolo_args(self) -> None:
-        from wade.ai_tools.cursor import CursorAdapter
+        from crossby.ai_tools.cursor import CursorAdapter
 
         result = CursorAdapter().yolo_args()
         assert result == ["--force"]
 
     def test_opencode_yolo_args_empty(self) -> None:
-        from wade.ai_tools.opencode import OpenCodeAdapter
+        from crossby.ai_tools.opencode import OpenCodeAdapter
 
         result = OpenCodeAdapter().yolo_args()
         assert result == []
@@ -140,32 +140,32 @@ class TestAdapterYoloArgs:
 
 class TestAdapterSupportsYolo:
     def test_claude_supports_yolo(self) -> None:
-        from wade.ai_tools.claude import ClaudeAdapter
+        from crossby.ai_tools.claude import ClaudeAdapter
 
         assert ClaudeAdapter().capabilities().supports_yolo is True
 
     def test_gemini_supports_yolo(self) -> None:
-        from wade.ai_tools.gemini import GeminiAdapter
+        from crossby.ai_tools.gemini import GeminiAdapter
 
         assert GeminiAdapter().capabilities().supports_yolo is True
 
     def test_codex_supports_yolo(self) -> None:
-        from wade.ai_tools.codex import CodexAdapter
+        from crossby.ai_tools.codex import CodexAdapter
 
         assert CodexAdapter().capabilities().supports_yolo is True
 
     def test_copilot_supports_yolo(self) -> None:
-        from wade.ai_tools.copilot import CopilotAdapter
+        from crossby.ai_tools.copilot import CopilotAdapter
 
         assert CopilotAdapter().capabilities().supports_yolo is True
 
     def test_cursor_supports_yolo(self) -> None:
-        from wade.ai_tools.cursor import CursorAdapter
+        from crossby.ai_tools.cursor import CursorAdapter
 
         assert CursorAdapter().capabilities().supports_yolo is True
 
     def test_opencode_does_not_support_yolo(self) -> None:
-        from wade.ai_tools.opencode import OpenCodeAdapter
+        from crossby.ai_tools.opencode import OpenCodeAdapter
 
         assert OpenCodeAdapter().capabilities().supports_yolo is False
 
@@ -177,38 +177,37 @@ class TestAdapterSupportsYolo:
 
 class TestBuildLaunchCommandYolo:
     def test_claude_yolo_includes_flag(self) -> None:
-        from wade.ai_tools.claude import ClaudeAdapter
+        from crossby.ai_tools.claude import ClaudeAdapter
 
         cmd = ClaudeAdapter().build_launch_command(yolo=True)
         assert "--dangerously-skip-permissions" in cmd
 
     def test_gemini_yolo_includes_flag(self) -> None:
-        from wade.ai_tools.gemini import GeminiAdapter
+        from crossby.ai_tools.gemini import GeminiAdapter
 
         cmd = GeminiAdapter().build_launch_command(yolo=True)
         assert "--yolo" in cmd
 
     def test_codex_yolo_includes_flag(self) -> None:
-        from wade.ai_tools.codex import CodexAdapter
+        from crossby.ai_tools.codex import CodexAdapter
 
         cmd = CodexAdapter().build_launch_command(yolo=True)
-        assert "-a" in cmd
-        assert "never" in cmd
+        assert "--yolo" in cmd
 
     def test_copilot_yolo_includes_flag(self) -> None:
-        from wade.ai_tools.copilot import CopilotAdapter
+        from crossby.ai_tools.copilot import CopilotAdapter
 
         cmd = CopilotAdapter().build_launch_command(yolo=True)
         assert "--yolo" in cmd
 
     def test_cursor_yolo_includes_flag(self) -> None:
-        from wade.ai_tools.cursor import CursorAdapter
+        from crossby.ai_tools.cursor import CursorAdapter
 
         cmd = CursorAdapter().build_launch_command(yolo=True)
         assert "--force" in cmd
 
     def test_yolo_false_excludes_flag(self) -> None:
-        from wade.ai_tools.claude import ClaudeAdapter
+        from crossby.ai_tools.claude import ClaudeAdapter
 
         cmd = ClaudeAdapter().build_launch_command(yolo=False)
         assert "--dangerously-skip-permissions" not in cmd
@@ -216,7 +215,7 @@ class TestBuildLaunchCommandYolo:
     def test_yolo_supersedes_plan_mode(self) -> None:
         """When yolo=True and plan_mode=True, YOLO flags should be used
         instead of plan_mode flags (for tools that support yolo)."""
-        from wade.ai_tools.claude import ClaudeAdapter
+        from crossby.ai_tools.claude import ClaudeAdapter
 
         cmd = ClaudeAdapter().build_launch_command(plan_mode=True, yolo=True)
         assert "--dangerously-skip-permissions" in cmd
@@ -225,7 +224,7 @@ class TestBuildLaunchCommandYolo:
     def test_yolo_unsupported_falls_back_to_plan_mode(self) -> None:
         """When yolo=True but tool doesn't support it, plan_mode_args should
         still be used."""
-        from wade.ai_tools.opencode import OpenCodeAdapter
+        from crossby.ai_tools.opencode import OpenCodeAdapter
 
         with pytest.warns(
             UserWarning,
@@ -328,7 +327,7 @@ _CONSOLE_KV = "wade.ui.console.console.kv"
 
 
 def _make_installed(*names: str) -> list:
-    from wade.models.ai import AIToolID
+    from crossby.models.ai import AIToolID
 
     return [AIToolID(n) for n in names]
 
@@ -531,7 +530,7 @@ class TestConfirmYolo:
             patch(_IS_TTY, return_value=True),
             patch(_SELECT, side_effect=fake_select),
             patch(_DETECT, return_value=_make_installed("claude", "opencode")),
-            patch("wade.data.get_models_for_tool", return_value=["gpt-4o"]),
+            patch("crossby.data.get_models_for_tool", return_value=["gpt-4o"]),
             patch(_CONSOLE_KV),
         ):
             _, _, _, yolo = confirm_ai_selection(
@@ -552,17 +551,17 @@ class TestConfirmYolo:
 
 class TestGeminiHeadless:
     def test_gemini_supports_headless_capability(self) -> None:
-        from wade.ai_tools.gemini import GeminiAdapter
+        from crossby.ai_tools.gemini import GeminiAdapter
 
         assert GeminiAdapter().capabilities().supports_headless is True
 
     def test_gemini_headless_flag_is_dash_p(self) -> None:
-        from wade.ai_tools.gemini import GeminiAdapter
+        from crossby.ai_tools.gemini import GeminiAdapter
 
         assert GeminiAdapter().capabilities().headless_flag == "-p"
 
     def test_gemini_build_launch_command_headless_includes_prompt(self) -> None:
-        from wade.ai_tools.gemini import GeminiAdapter
+        from crossby.ai_tools.gemini import GeminiAdapter
 
         cmd = GeminiAdapter().build_launch_command(prompt="test prompt")
         assert "-p" in cmd
@@ -572,13 +571,13 @@ class TestGeminiHeadless:
 
 class TestGeminiStructuredOutput:
     def test_gemini_structured_output_args(self) -> None:
-        from wade.ai_tools.gemini import GeminiAdapter
+        from crossby.ai_tools.gemini import GeminiAdapter
 
         result = GeminiAdapter().structured_output_args({"type": "object"})
         assert result == ["--output-format", "json"]
 
     def test_gemini_build_launch_command_with_json_schema(self) -> None:
-        from wade.ai_tools.gemini import GeminiAdapter
+        from crossby.ai_tools.gemini import GeminiAdapter
 
         cmd = GeminiAdapter().build_launch_command(json_schema={"type": "object"})
         assert "--output-format" in cmd

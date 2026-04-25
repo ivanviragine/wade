@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from wade.models.ai import ModelBreakdown
+from crossby.models.ai import ModelBreakdown
 
 
 def _format_count(n: int | None) -> str:

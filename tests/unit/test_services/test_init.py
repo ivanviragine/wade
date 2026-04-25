@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
+from crossby.models.ai import AIToolID
 
-from wade.models.ai import AIToolID
 from wade.models.config import ComplexityModelMapping
 from wade.services.init_service import (
     GITIGNORE_ENTRIES,
@@ -1268,7 +1268,7 @@ class TestUpdateExtended:
         ):
             init(project_root=tmp_git_repo, non_interactive=True)
 
-        with patch("wade.config.claude_allowlist.configure_allowlist") as mock_allow:
+        with patch("crossby.config.claude_allowlist.configure_allowlist") as mock_allow:
             update(project_root=tmp_git_repo, skip_self_upgrade=True)
             mock_allow.assert_not_called()
         # .claude/settings.json must NOT be created on main during update
@@ -1278,11 +1278,13 @@ class TestUpdateExtended:
         """update() should remove AI tool artifacts from main (migration for older installs)."""
         init(project_root=tmp_git_repo, non_interactive=True)
         # Simulate artifacts left by an older wade version
-        from wade.config.claude_allowlist import configure_allowlist
-        from wade.config.cursor_allowlist import configure_allowlist as configure_cursor_allowlist
+        from crossby.config.claude_allowlist import configure_allowlist
+        from crossby.config.cursor_allowlist import (
+            configure_allowlist as configure_cursor_allowlist,
+        )
 
-        configure_allowlist(tmp_git_repo)
-        configure_cursor_allowlist(tmp_git_repo)
+        configure_allowlist(tmp_git_repo, ["wade *"])
+        configure_cursor_allowlist(tmp_git_repo, ["wade *"])
         write_pointer(tmp_git_repo / "AGENTS.md")
         (tmp_git_repo / "CLAUDE.md").symlink_to("AGENTS.md")
 

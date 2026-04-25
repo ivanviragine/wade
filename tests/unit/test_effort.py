@@ -5,8 +5,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
-
-from wade.models.ai import AIToolID, EffortLevel
+from crossby.models.ai import AIToolID, EffortLevel
 
 # ---------------------------------------------------------------------------
 # EffortLevel enum
@@ -119,7 +118,7 @@ class TestAdapterSupportsEffort:
         [AIToolID.CLAUDE, AIToolID.CODEX, AIToolID.CURSOR, AIToolID.OPENCODE],
     )
     def test_supports_effort_true(self, tool_id: AIToolID) -> None:
-        from wade.ai_tools.base import AbstractAITool
+        from crossby.ai_tools import AbstractAITool
 
         adapter = AbstractAITool.get(tool_id)
         assert adapter.capabilities().supports_effort is True
@@ -129,216 +128,10 @@ class TestAdapterSupportsEffort:
         [AIToolID.COPILOT, AIToolID.GEMINI, AIToolID.ANTIGRAVITY, AIToolID.VSCODE],
     )
     def test_supports_effort_false(self, tool_id: AIToolID) -> None:
-        from wade.ai_tools.base import AbstractAITool
+        from crossby.ai_tools import AbstractAITool
 
         adapter = AbstractAITool.get(tool_id)
         assert adapter.capabilities().supports_effort is False
-
-
-# ---------------------------------------------------------------------------
-# Claude adapter — effort_args
-# ---------------------------------------------------------------------------
-
-
-class TestClaudeEffortArgs:
-    def _get_adapter(self):
-        from wade.ai_tools.claude import ClaudeAdapter
-
-        return ClaudeAdapter()
-
-    def test_effort_low(self) -> None:
-        result = self._get_adapter().effort_args(EffortLevel.LOW)
-        assert result == ["--effort", "low"]
-
-    def test_effort_max(self) -> None:
-        result = self._get_adapter().effort_args(EffortLevel.MAX)
-        assert result == ["--effort", "max"]
-
-    def test_resolve_effort_model_unchanged(self) -> None:
-        adapter = self._get_adapter()
-        assert (
-            adapter.resolve_effort_model("claude-sonnet-4-6", EffortLevel.HIGH)
-            == "claude-sonnet-4-6"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Codex adapter — effort_args with mapping
-# ---------------------------------------------------------------------------
-
-
-class TestCodexEffortArgs:
-    def _get_adapter(self):
-        from wade.ai_tools.codex import CodexAdapter
-
-        return CodexAdapter()
-
-    def test_effort_low(self) -> None:
-        result = self._get_adapter().effort_args(EffortLevel.LOW)
-        assert result == ["-c", 'model_reasoning_effort="low"']
-
-    def test_effort_medium(self) -> None:
-        result = self._get_adapter().effort_args(EffortLevel.MEDIUM)
-        assert result == ["-c", 'model_reasoning_effort="medium"']
-
-    def test_effort_high(self) -> None:
-        result = self._get_adapter().effort_args(EffortLevel.HIGH)
-        assert result == ["-c", 'model_reasoning_effort="high"']
-
-    def test_effort_xhigh_maps_to_xhigh(self) -> None:
-        result = self._get_adapter().effort_args(EffortLevel.XHIGH)
-        assert result == ["-c", 'model_reasoning_effort="xhigh"']
-
-    def test_effort_max_maps_to_xhigh(self) -> None:
-        result = self._get_adapter().effort_args(EffortLevel.MAX)
-        assert result == ["-c", 'model_reasoning_effort="xhigh"']
-
-    def test_yolo_args(self) -> None:
-        result = self._get_adapter().yolo_args()
-        assert result == ["-a", "never"]
-
-
-# ---------------------------------------------------------------------------
-# Cursor adapter — resolve_effort_model
-# ---------------------------------------------------------------------------
-
-
-class TestCursorEffort:
-    def _get_adapter(self):
-        from wade.ai_tools.cursor import CursorAdapter
-
-        return CursorAdapter()
-
-    def test_high_appends_thinking(self) -> None:
-        result = self._get_adapter().resolve_effort_model("sonnet-4.6", EffortLevel.HIGH)
-        assert result == "sonnet-4.6-thinking"
-
-    def test_max_appends_thinking(self) -> None:
-        result = self._get_adapter().resolve_effort_model("gpt-5.3-codex", EffortLevel.MAX)
-        assert result == "gpt-5.3-codex-thinking"
-
-    def test_low_unchanged(self) -> None:
-        result = self._get_adapter().resolve_effort_model("sonnet-4.6", EffortLevel.LOW)
-        assert result == "sonnet-4.6"
-
-    def test_medium_unchanged(self) -> None:
-        result = self._get_adapter().resolve_effort_model("opus-4.6", EffortLevel.MEDIUM)
-        assert result == "opus-4.6"
-
-    def test_already_thinking_not_doubled(self) -> None:
-        result = self._get_adapter().resolve_effort_model("sonnet-4.6-thinking", EffortLevel.HIGH)
-        assert result == "sonnet-4.6-thinking"
-
-    def test_none_model(self) -> None:
-        result = self._get_adapter().resolve_effort_model(None, EffortLevel.HIGH)
-        assert result is None
-
-    def test_xhigh_appends_thinking_old_style(self) -> None:
-        result = self._get_adapter().resolve_effort_model("sonnet-4.6", EffortLevel.XHIGH)
-        assert result == "sonnet-4.6-thinking"
-
-    def test_new_style_high_unchanged(self) -> None:
-        result = self._get_adapter().resolve_effort_model("claude-opus-4-7-high", EffortLevel.HIGH)
-        assert result == "claude-opus-4-7-high"
-
-    def test_new_style_xhigh_inserts_thinking(self) -> None:
-        result = self._get_adapter().resolve_effort_model("claude-opus-4-7-high", EffortLevel.XHIGH)
-        assert result == "claude-opus-4-7-thinking-high"
-
-    def test_new_style_max_inserts_thinking(self) -> None:
-        result = self._get_adapter().resolve_effort_model("claude-opus-4-7-high", EffortLevel.MAX)
-        assert result == "claude-opus-4-7-thinking-high"
-
-    def test_new_style_already_thinking_unchanged(self) -> None:
-        result = self._get_adapter().resolve_effort_model(
-            "claude-opus-4-7-thinking-high", EffortLevel.MAX
-        )
-        assert result == "claude-opus-4-7-thinking-high"
-
-    def test_effort_args_empty(self) -> None:
-        """Cursor uses model variants, not CLI args — effort_args returns []."""
-        result = self._get_adapter().effort_args(EffortLevel.HIGH)
-        assert result == []
-
-
-# ---------------------------------------------------------------------------
-# OpenCode adapter — effort_args with --variant
-# ---------------------------------------------------------------------------
-
-
-class TestOpenCodeEffortArgs:
-    def _get_adapter(self):
-        from wade.ai_tools.opencode import OpenCodeAdapter
-
-        return OpenCodeAdapter()
-
-    def test_effort_low(self) -> None:
-        result = self._get_adapter().effort_args(EffortLevel.LOW)
-        assert result == ["--variant", "low"]
-
-    def test_effort_medium(self) -> None:
-        result = self._get_adapter().effort_args(EffortLevel.MEDIUM)
-        assert result == ["--variant", "medium"]
-
-    def test_effort_high(self) -> None:
-        result = self._get_adapter().effort_args(EffortLevel.HIGH)
-        assert result == ["--variant", "high"]
-
-    def test_effort_xhigh_maps_to_high(self) -> None:
-        result = self._get_adapter().effort_args(EffortLevel.XHIGH)
-        assert result == ["--variant", "high"]
-
-    def test_effort_max_maps_to_high(self) -> None:
-        result = self._get_adapter().effort_args(EffortLevel.MAX)
-        assert result == ["--variant", "high"]
-
-
-# ---------------------------------------------------------------------------
-# Base adapter — build_launch_command effort integration
-# ---------------------------------------------------------------------------
-
-
-class TestBuildLaunchCommandEffort:
-    """Test that build_launch_command threads effort correctly."""
-
-    def test_effort_args_appended_for_supported_tool(self) -> None:
-        from wade.ai_tools.claude import ClaudeAdapter
-
-        adapter = ClaudeAdapter()
-        cmd = adapter.build_launch_command(model="claude-sonnet-4-6", effort=EffortLevel.HIGH)
-        assert "--effort" in cmd
-        idx = cmd.index("--effort")
-        assert cmd[idx + 1] == "high"
-
-    def test_effort_none_no_extra_args(self) -> None:
-        from wade.ai_tools.claude import ClaudeAdapter
-
-        adapter = ClaudeAdapter()
-        cmd = adapter.build_launch_command(model="claude-sonnet-4-6", effort=None)
-        assert "--effort" not in cmd
-
-    def test_cursor_effort_changes_model(self) -> None:
-        from wade.ai_tools.cursor import CursorAdapter
-
-        adapter = CursorAdapter()
-        cmd = adapter.build_launch_command(model="sonnet-4.6", effort=EffortLevel.HIGH)
-        assert "sonnet-4.6-thinking" in cmd
-
-    def test_cursor_low_effort_keeps_model(self) -> None:
-        from wade.ai_tools.cursor import CursorAdapter
-
-        adapter = CursorAdapter()
-        cmd = adapter.build_launch_command(model="sonnet-4.6", effort=EffortLevel.LOW)
-        assert "sonnet-4.6" in cmd
-        assert "sonnet-4.6-thinking" not in cmd
-
-    def test_unsupported_tool_ignores_effort(self) -> None:
-        from wade.ai_tools.copilot import CopilotAdapter
-
-        adapter = CopilotAdapter()
-        cmd_without = adapter.build_launch_command()
-        cmd_with = adapter.build_launch_command(effort=EffortLevel.MAX)
-        assert cmd_without == cmd_with
 
 
 # ---------------------------------------------------------------------------
@@ -453,7 +246,7 @@ _CONSOLE_KV = "wade.ui.console.console.kv"
 
 
 def _make_installed(*names: str):
-    from wade.models.ai import AIToolID
+    from crossby.models.ai import AIToolID
 
     return [AIToolID(n) for n in names]
 

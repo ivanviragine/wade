@@ -7,9 +7,9 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from crossby.models.ai import ModelBreakdown, TokenUsage
 
 from wade.git.repo import GitError
-from wade.models.ai import ModelBreakdown, TokenUsage
 from wade.models.review import ReviewComment, ReviewThread
 from wade.models.task import Task, TaskState
 from wade.services.implementation_service import (
