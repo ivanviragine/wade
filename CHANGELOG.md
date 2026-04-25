@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.20.6] — 2026-04-25
+
+### Bug Fixes
+
+- plan and implementation session prompts instruct agent to read full KNOWLEDGE.md before topic is known (#287) (11779cc)
+
+## [v0.20.5] — 2026-04-24
+
+### Bug Fixes
+
+- guard hooks fail open due to Claude Code JSON schema validation rejecting extra fields (#285) (c10e5e2)
+
+## [v0.20.4] — 2026-04-24
+
+### Documentation
+
+- limit review cycles to at most 2 runs in skill partials (#289) (a165a5a)
+
+## [v0.20.3] — 2026-04-23
+
+### Bug Fixes
+
+- knowledge search fails for plain ## Title entries and dumps full file (#283) (240c09d)
+
 ## [v0.20.2] — 2026-04-19
 
 ### Bug Fixes

@@ -157,6 +157,7 @@ class TestKnowledgeGetCommand:
             result = runner.invoke(app, ["knowledge", "get", "--search", "nonexistent"])
         assert result.exit_code == 0
         assert "No entries matched your search." in result.output
+        assert "Docker stuff." not in result.output
 
     def test_tag_filter_with_no_matches_prints_no_results(self, tmp_path: Path) -> None:
         content = (
@@ -172,6 +173,37 @@ class TestKnowledgeGetCommand:
             result = runner.invoke(app, ["knowledge", "get", "--tag", "docker"])
         assert result.exit_code == 0
         assert "No entries matched your search." in result.output
+        assert "Git stuff." not in result.output
+
+    def test_search_finds_plain_entries(self, tmp_path: Path) -> None:
+        content = (
+            KNOWLEDGE_TEMPLATE
+            + "\n## Git Worktree Tips\n\nAlways isolate work in worktrees.\n\n---\n\n"
+            + "## Docker Tips\n\nUnrelated.\n\n---\n"
+        )
+        (tmp_path / "KNOWLEDGE.md").write_text(content, encoding="utf-8")
+        config = ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
+        )
+        with patch("wade.config.loader.load_config", return_value=config):
+            result = runner.invoke(app, ["knowledge", "get", "--search", "worktree", "--no-filter"])
+        assert result.exit_code == 0
+        assert "Worktree" in result.output
+        assert "Unrelated." not in result.output
+
+    def test_plain_entry_not_score_annotated(self, tmp_path: Path) -> None:
+        content = KNOWLEDGE_TEMPLATE + "\n## My Plain Entry\n\nPlain content.\n\n---\n"
+        (tmp_path / "KNOWLEDGE.md").write_text(content, encoding="utf-8")
+        config = ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
+        )
+        with patch("wade.config.loader.load_config", return_value=config):
+            result = runner.invoke(app, ["knowledge", "get"])
+        assert result.exit_code == 0
+        assert "Plain content." in result.output
+        assert "[+" not in result.output
 
 
 class TestKnowledgeRateCommand:

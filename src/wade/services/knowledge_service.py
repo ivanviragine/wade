@@ -33,6 +33,10 @@ _ENTRY_HEADING_RE = re.compile(
     r"^## (?:([a-zA-Z0-9_-]+) \| )?(\d{4}-\d{2}-\d{2}) \| (.+?)(?:\s+\[.*\])?\s*$"
 )
 
+# Fallback regex for hand-authored plain headings with no date or ID: ## Title
+# Title must start with alphanumeric to avoid matching `## ---` separators.
+_PLAIN_ENTRY_HEADING_RE = re.compile(r"^## ([A-Za-z0-9].*?)(?:\s+\[.*\])?\s*$")
+
 # Tag validation: lowercase kebab-case, max 30 chars
 _TAG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 _TAG_MAX_LEN = 30
@@ -49,7 +53,7 @@ class ParsedEntry(BaseModel, frozen=True):
     """A parsed knowledge entry from the knowledge file."""
 
     entry_id: str | None
-    date: str
+    date: str | None
     heading_rest: str
     tags: list[str] = []
     content: str
@@ -185,23 +189,32 @@ def parse_entries(text: str) -> list[ParsedEntry]:
     """Parse knowledge file text into individual entries.
 
     Handles entries with and without IDs. Skips the template header.
+    Also handles plain ## Title headings with no date or ID.
     """
     entries: list[ParsedEntry] = []
     lines = text.split("\n")
     i = 0
     while i < len(lines):
         match = _ENTRY_HEADING_RE.match(lines[i])
-        if match:
-            entry_id = match.group(1)  # None for old-style entries
-            date = match.group(2)
-            heading_rest = match.group(3)
+        plain_match = _PLAIN_ENTRY_HEADING_RE.match(lines[i]) if not match else None
+
+        if match or plain_match:
+            if match:
+                entry_id: str | None = match.group(1)
+                date: str | None = match.group(2)
+                heading_rest = match.group(3)
+            else:
+                assert plain_match is not None
+                entry_id = None
+                date = None
+                heading_rest = plain_match.group(1)
             heading_line = lines[i]
 
             # Collect content lines until next heading or end
             content_lines: list[str] = []
             i += 1
             while i < len(lines):
-                if _ENTRY_HEADING_RE.match(lines[i]):
+                if _ENTRY_HEADING_RE.match(lines[i]) or _PLAIN_ENTRY_HEADING_RE.match(lines[i]):
                     break
                 content_lines.append(lines[i])
                 i += 1
@@ -432,7 +445,8 @@ def get_annotated_knowledge(
         first_entry_pos = text.find(entries[0].raw)
         header = text[:first_entry_pos] if first_entry_pos > 0 else ""
     else:
-        header = text
+        m = re.search(r"^##\s", text, re.MULTILINE)
+        header = text[: m.start()] if m else text
 
     result_parts = [header]
     filtered_entry_count = 0
@@ -474,6 +488,7 @@ def get_annotated_knowledge(
         heading_match = _ENTRY_HEADING_RE.match(entry.raw.split("\n")[0])
         if heading_match and should_annotate:
             id_part = f"{entry.entry_id} | " if entry.entry_id else ""
+            assert entry.date is not None  # entry_id is always accompanied by a date
             heading = f"## {id_part}{entry.date} | {entry.heading_rest} [+{up}/-{down}]"
             raw_lines = entry.raw.split("\n")
             raw_lines[0] = heading
@@ -584,6 +599,7 @@ def add_tag_to_entry(
             if tag in target.tags:
                 return  # Already has the tag
 
+            assert target.date is not None  # entries with entry_id always have a date
             session_type, tags, issue_part = _decompose_heading_rest(target.heading_rest)
             tags.append(tag)
             new_heading = _rebuild_heading_line(
@@ -626,6 +642,7 @@ def remove_tag_from_entry(
             if tag not in target.tags:
                 raise ValueError(f"Tag '{tag}' not found on entry {entry_id}")
 
+            assert target.date is not None  # entries with entry_id always have a date
             session_type, tags, issue_part = _decompose_heading_rest(target.heading_rest)
             tags.remove(tag)
             new_heading = _rebuild_heading_line(

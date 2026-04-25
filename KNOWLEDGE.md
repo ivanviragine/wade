@@ -36,3 +36,27 @@ claude-opus-4-7 is the current most-capable Claude model (dotted internal form: 
 When the plan-session 'Your role' step numbering changes, the _partials/review-plan-step.md partial also has a hardcoded step number that must be kept in sync. After adding 2 steps in #278, the partial moved from step 5 to step 7.
 
 ---
+
+## 164c355e | 2026-04-23 | plan | tags: knowledge, bug
+
+parse_entries only handles dated entries ('## YYYY-MM-DD | Title' format). Plain '## Title' headings return [] from parse_entries, causing search to silently find nothing and dump the full file (header=text fallback bug). Fix: add fallback plain-heading regex, make ParsedEntry.date optional, fix header fallback when entries==[], and early-exit CLI get() when entries_count==0 after filtering.
+
+---
+
+## cae0f47a | 2026-04-24 | plan | tags: hooks, claude-code
+
+Claude Code's PreToolUse hook JSON schema only allows 'hookSpecificOutput' at the root level. Extra root-level fields ('permission', 'permissionDecision', 'decision', 'reason') cause strict schema validation failure: 'Hook JSON output validation failed — (root): Invalid input', which makes the hook fail open (write is allowed). The correct deny output is: {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "..."}}
+
+---
+
+## b61e247e | 2026-04-24 | plan | tags: skills, prompts, architecture
+
+Session prompt templates (templates/prompts/) are NOT symlinked — they are read directly by service code (plan_service.py, implementation_service/core.py). Skill files (templates/skills/) ARE symlinked into .claude/skills/. When fixing agent instructions, check BOTH the skill files AND the prompt templates, as they can contradict each other.
+
+---
+
+## cedeaad0 | 2026-04-24 | plan | tags: plan-session, implementation-session, skills, review
+
+Review cycles should be capped at 2 total runs: 1 run if findings are minor (fix and proceed without re-review); 2 runs if findings are major (fix and re-run once, then always proceed). This prevents agents from looping indefinitely. The cap is enforced via text in _partials/review-plan-step.md and _partials/review-implementation-closing-step.md.
+
+---
