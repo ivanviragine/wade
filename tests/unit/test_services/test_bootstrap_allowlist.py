@@ -101,10 +101,10 @@ class TestBootstrapCursorAllowlistPropagation:
             permissions=PermissionsConfig(allowed_commands=["wade *", "./scripts/check.sh *"]),
         )
 
-        # Set up global Cursor config with wade pattern
-        global_config = Path.home() / ".cursor" / "cli-config.json"
+        # Autouse fixture already redirects _GLOBAL_CONFIG_PATH to a tmp path.
+        # is_allowlist_configured is mocked to report the global config as configured
+        # (root is None) so propagation flows through.
         with (
-            patch("crossby.config.cursor_allowlist._GLOBAL_CONFIG_PATH", global_config),
             patch(
                 "crossby.config.cursor_allowlist.is_allowlist_configured",
                 side_effect=lambda root=None, patterns=None: root is None,
