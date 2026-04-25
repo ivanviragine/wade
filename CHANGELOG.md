@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.20.6] — 2026-04-25
+
+### Bug Fixes
+
+- plan and implementation session prompts instruct agent to read full KNOWLEDGE.md before topic is known (#287) (11779cc)
+
 ## [v0.20.5] — 2026-04-24
 
 ### Bug Fixes
