@@ -50,8 +50,9 @@ Read @.claude/skills/knowledge/SKILL.md for knowledge operations (search,
 tagging, rating, adding entries).
 
 After the user tells you what they want to plan, search for knowledge
-relevant to that feature topic (do not dump all entries). Before running
-`wade plan-session done`, capture
+relevant to that feature topic (do not dump all entries). Rate entries you
+retrieve: `wade knowledge rate <id> up` (useful) or `wade knowledge rate <id> down`
+(outdated/misleading). Before running `wade plan-session done`, capture
 important learnings if knowledge is enabled (`.wade.yml` → `knowledge.enabled`).
 
 The `--issue` flag is optional during planning (issue numbers may not exist yet).

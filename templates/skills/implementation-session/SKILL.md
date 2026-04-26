@@ -49,8 +49,10 @@ Read @.claude/skills/knowledge/SKILL.md for knowledge operations (search,
 tagging, rating, adding entries).
 
 At the start of this session, search for knowledge relevant to your task
-(do not dump all entries). Before writing `PR-SUMMARY.md`, capture important
-learnings if knowledge is enabled (`.wade.yml` → `knowledge.enabled`).
+(do not dump all entries). Rate entries you retrieve: `wade knowledge rate <id> up`
+(useful) or `wade knowledge rate <id> down` (outdated/misleading). Before writing
+`PR-SUMMARY.md`, capture important learnings if knowledge is enabled
+(`.wade.yml` → `knowledge.enabled`).
 Then commit the updated knowledge file alongside your other changes.
 
 ## First action: check your context
