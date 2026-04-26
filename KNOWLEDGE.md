@@ -61,8 +61,8 @@ Review cycles should be capped at 2 total runs: 1 run if findings are minor (fix
 
 ---
 
-## e2a49ac1 | 2026-04-26 | plan | tags: knowledge
+## e2a49ac1 | 2026-04-26 | implementation | tags: knowledge
 
-knowledge/SKILL.md teaches entry mechanics but not entry quality. Planned feat to add an '## Entry style' section with directives (one insight per entry, lead with key fact, ≤3 sentences, no preamble) and a before/after example, placed before '## Adding entries'.
+templates/skills/knowledge/SKILL.md now includes an `## Entry style` section before `## Adding entries`, defining entry-quality rules (one insight per entry, lead with key fact, ≤3 sentences, no preamble/hedging) plus a before/after example.
 
 ---
