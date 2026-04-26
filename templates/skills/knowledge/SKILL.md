@@ -95,7 +95,16 @@ Write entries that are easy to scan and reuse across sessions:
 
 ## Adding entries
 
-Capture important patterns, conventions, or gotchas discovered during a session:
+Knowledge is **not a changelog** — it is a searchable store of facts, gotchas, and limitations that help future agents avoid scanning the codebase. Only capture what is non-obvious or hard to derive from the code or git history:
+
+- Non-obvious constraints, gotchas, and footguns
+- Known limitations and their workarounds
+- Patterns with a WHY that code alone can't explain
+- Pointers to where a rule or config lives when the location isn't obvious
+
+Do **not** capture: "we added X feature", implementation logs, or anything directly readable from git history.
+
+Entry dates (shown in search results) indicate freshness — rate an entry down if it no longer applies.
 
 ```bash
 echo "Your learnings here" | wade knowledge add --session <type> --issue <number> --tag <topic>
