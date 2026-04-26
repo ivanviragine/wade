@@ -32,6 +32,8 @@ htmlcov/
 .cursor/
 .gemini/
 .github/hooks/
+.github/skills
+CLAUDE.md
 
 # OS
 .DS_Store
