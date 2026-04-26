@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.21.0] — 2026-04-26
+
+### Features
+
+- add entry-writing style guide to knowledge skill (#291) (9cced4d)
+
 ## [v0.20.6] — 2026-04-25
 
 ### Bug Fixes
