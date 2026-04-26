@@ -77,6 +77,22 @@ wade knowledge rate <entry-id> up    # entry was useful
 wade knowledge rate <entry-id> down  # entry was outdated or misleading
 ```
 
+## Entry style
+
+Write entries that are easy to scan and reuse across sessions:
+
+- **One insight per entry** — no multi-topic dumps; split if needed
+- **Lead with the key fact** — state the finding first, context second
+- **≤3 sentences** — if longer, split into separate entries
+- **No preamble or hedging** — omit "I noticed that…", "It turned out that…"
+- **Active voice, present tense** — "Use X when Y", not "It was found that X should be used"
+
+**Before (verbose, hedged):**
+> I noticed during testing that it turned out the sync command needs to be run after all commits are staged, otherwise it may fail with a dirty-tree error in some cases.
+
+**After (concise, direct):**
+> Run `wade implementation-session sync` only after all changes are committed — a dirty worktree causes exit code 4.
+
 ## Adding entries
 
 Capture important patterns, conventions, or gotchas discovered during a session:

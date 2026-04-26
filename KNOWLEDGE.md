@@ -60,3 +60,9 @@ Session prompt templates (templates/prompts/) are NOT symlinked — they are rea
 Review cycles should be capped at 2 total runs: 1 run if findings are minor (fix and proceed without re-review); 2 runs if findings are major (fix and re-run once, then always proceed). This prevents agents from looping indefinitely. The cap is enforced via text in _partials/review-plan-step.md and _partials/review-implementation-closing-step.md.
 
 ---
+
+## e2a49ac1 | 2026-04-26 | plan | tags: knowledge
+
+knowledge/SKILL.md teaches entry mechanics but not entry quality. Planned feat to add an '## Entry style' section with directives (one insight per entry, lead with key fact, ≤3 sentences, no preamble) and a before/after example, placed before '## Adding entries'.
+
+---
