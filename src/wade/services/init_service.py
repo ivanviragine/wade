@@ -193,19 +193,21 @@ def init(
     # 3. Parse existing config for re-init pre-fill
     config_path = root / ".wade.yml"
     existing_config = None
+    parse_failed = False
     if config_path.exists():
         try:
             from wade.config.loader import parse_config_file
 
             existing_config = parse_config_file(config_path)
         except Exception as exc:
+            parse_failed = True
             logger.warning(
                 "init.existing_config_parse_failed",
                 path=str(config_path),
                 error=str(exc),
             )
             console.warn(
-                f"Could not parse existing {config_path.name} — continuing with fresh defaults"
+                f"Could not parse existing {config_path.name} — will overwrite after confirmation"
             )
 
     # --- Interactive wizard (loop supports Modify) ---
@@ -225,6 +227,12 @@ def init(
     # then updated from in-memory selections before each "Modify" iteration so
     # the second pass shows the values chosen in the first pass, not stale disk state.
     _cur_provider: str | None = existing_config.provider.name.value if existing_config else None
+    _cur_provider_api_token_env: str | None = (
+        existing_config.provider.api_token_env if existing_config else None
+    )
+    _cur_provider_settings: dict[str, str] = (
+        dict(existing_config.provider.settings) if existing_config else {}
+    )
     _cur_main_branch: str | None = existing_config.project.main_branch if existing_config else None
     _cur_merge_strategy: str | None = (
         existing_config.project.merge_strategy.value if existing_config else None
@@ -246,6 +254,7 @@ def init(
         if existing_config
         else None
     )
+    _cur_effective_tool: str | None = _cur_impl_tool or _cur_ai_tool
     _cur_cmd_overrides: dict[str, dict[str, Any]] = {}
     if existing_config:
         for _cmd in _COMMAND_OVERRIDE_NAMES:
@@ -278,7 +287,11 @@ def init(
     while True:
         # 4a. Provider
         provider_setup = _prompt_provider_setup(
-            root, non_interactive, current_provider=_cur_provider
+            root,
+            non_interactive,
+            current_provider=_cur_provider,
+            current_api_token_env=_cur_provider_api_token_env,
+            current_settings=_cur_provider_settings,
         )
 
         # 4b. Project settings
@@ -313,6 +326,7 @@ def init(
             non_interactive,
             current_implement_tool=_cur_impl_tool,
             current_model_mapping=_cur_model_mapping,
+            current_effective_tool=_cur_effective_tool,
         )
 
         # 4e. Per-command overrides (tool, model, effort, yolo)
@@ -379,6 +393,8 @@ def init(
             # Update current values from this iteration so the next pass pre-fills
             # with the choices just made rather than the stale on-disk state.
             _cur_provider = provider_setup.get("name")
+            _cur_provider_api_token_env = provider_setup.get("api_token_env")
+            _cur_provider_settings = dict(provider_setup.get("settings") or {})
             _cur_main_branch = project_settings.get("main_branch")
             _cur_merge_strategy = project_settings.get("merge_strategy")
             _cur_branch_prefix = project_settings.get("branch_prefix")
@@ -390,6 +406,7 @@ def init(
             _cur_ai_yolo = default_yolo
             _cur_impl_tool = implementation_setup.get("tool")
             _cur_model_mapping = implementation_setup.get("model_mapping")
+            _cur_effective_tool = _cur_impl_tool or selected_tool
             _cur_cmd_overrides = command_overrides
             _cur_hooks_post = hooks_setup.get("post_worktree_create")
             _cur_hooks_copy = hooks_setup.get("copy_to_worktree")
@@ -434,37 +451,42 @@ def init(
     if not non_interactive:
         console.rule("Initing")
 
-    if config_path.exists():
+    _write_config_kwargs: dict[str, Any] = dict(
+        project_settings=project_settings,
+        implement_tool=implementation_setup["tool"],
+        default_model=default_model,
+        default_effort=default_effort,
+        default_yolo=default_yolo,
+        command_overrides=command_overrides,
+        hooks_setup=hooks_setup,
+        provider_setup=provider_setup,
+        knowledge_setup=knowledge_setup,
+    )
+    if config_path.exists() and not parse_failed:
         console.info("Config .wade.yml already exists — updating with selected values")
         _patch_config(
             config_path,
             selected_tool,
             implementation_setup["model_mapping"],
-            default_model=default_model,
-            default_effort=default_effort,
-            default_yolo=default_yolo,
-            project_settings=project_settings,
-            implement_tool=implementation_setup["tool"],
-            command_overrides=command_overrides,
-            hooks_setup=hooks_setup,
             force=not non_interactive,
-            provider_setup=provider_setup,
-            knowledge_setup=knowledge_setup,
+            **_write_config_kwargs,
         )
     else:
+        if parse_failed:
+            from wade.ui import prompts as _prompts
+
+            if not non_interactive and not _prompts.confirm(
+                f"{config_path.name} could not be parsed — overwrite with new config?",
+                default=True,
+            ):
+                console.error("Aborting — cannot patch a corrupted config file")
+                return False
+            console.warn(f"Overwriting corrupted {config_path.name}")
         _write_config(
             config_path,
             selected_tool,
             implementation_setup["model_mapping"],
-            project_settings=project_settings,
-            implement_tool=implementation_setup["tool"],
-            default_model=default_model,
-            default_effort=default_effort,
-            default_yolo=default_yolo,
-            command_overrides=command_overrides,
-            hooks_setup=hooks_setup,
-            provider_setup=provider_setup,
-            knowledge_setup=knowledge_setup,
+            **_write_config_kwargs,
         )
         console.success(f"Created {config_path.name}")
 
@@ -1421,6 +1443,8 @@ def _prompt_provider_setup(
     project_root: Path,
     non_interactive: bool,
     current_provider: str | None = None,
+    current_api_token_env: str | None = None,
+    current_settings: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Collect task provider selection and authentication setup.
 
@@ -1480,6 +1504,8 @@ def _prompt_provider_setup(
     if prompts.confirm("Open ClickUp settings in browser?", default=True):
         webbrowser.open("https://app.clickup.com/settings/apps")
 
+    _cur_settings = current_settings or {}
+
     # Prompt for token with validation
     token = ""
     token_validated = False
@@ -1508,7 +1534,8 @@ def _prompt_provider_setup(
     env_var = ""
     while not env_var:
         candidate = prompts.input_prompt(
-            "Environment variable name for the token", default="CLICKUP_API_TOKEN"
+            "Environment variable name for the token",
+            default=current_api_token_env or "CLICKUP_API_TOKEN",
         )
         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", candidate):
             env_var = candidate
@@ -1527,19 +1554,23 @@ def _prompt_provider_setup(
     # Required IDs — re-prompt until non-empty
     team_id = ""
     while not team_id:
-        team_id = prompts.input_prompt("ClickUp team/workspace ID").strip()
+        team_id = prompts.input_prompt(
+            "ClickUp team/workspace ID", default=_cur_settings.get("team_id", "")
+        ).strip()
         if not team_id:
             console.warn("Team/workspace ID is required")
     list_id = ""
     while not list_id:
-        list_id = prompts.input_prompt("ClickUp list ID").strip()
+        list_id = prompts.input_prompt(
+            "ClickUp list ID", default=_cur_settings.get("list_id", "")
+        ).strip()
         if not list_id:
             console.warn("List ID is required")
 
     # Optional space ID
     space_id = prompts.input_prompt(
         "ClickUp space ID",
-        default="",
+        default=_cur_settings.get("space_id", ""),
         allow_empty=True,
     ).strip()
 
@@ -1805,7 +1836,7 @@ def _prompt_model_mapping(
         if tool_supports_effort:
             from wade.models.ai import EffortLevel
 
-            effort_choices = ["(none — use tool default)", *[e.value for e in EffortLevel]]
+            effort_choices = ["Skip (inherit defaults)", *[e.value for e in EffortLevel]]
             effort_default_idx = 0
             if current_tier_effort and current_tier_effort in effort_choices:
                 effort_default_idx = effort_choices.index(current_tier_effort)
@@ -1906,6 +1937,7 @@ def _prompt_implementation_setup(
     *,
     current_implement_tool: str | None = None,
     current_model_mapping: ComplexityModelMapping | None = None,
+    current_effective_tool: str | None = None,
 ) -> dict[str, Any]:
     """Prompt for implementation tool and per-complexity model overrides.
 
@@ -1928,7 +1960,9 @@ def _prompt_implementation_setup(
     )
 
     current_effective = implement_tool or default_tool
-    mapping = current_model_mapping or _resolve_models(current_effective)
+    # Discard stale mapping when the effective tool has changed since last pass.
+    cached = current_model_mapping if current_effective == current_effective_tool else None
+    mapping = cached or _resolve_models(current_effective)
     mapping = _prompt_model_mapping(current_effective, mapping, non_interactive=False)
 
     return {"tool": implement_tool, "model_mapping": mapping}
@@ -1994,7 +2028,7 @@ def _prompt_command_overrides(
         if caps.supports_effort:
             from wade.models.ai import EffortLevel
 
-            effort_choices = ["(none — use tool default)", *[e.value for e in EffortLevel]]
+            effort_choices = ["Skip (inherit defaults)", *[e.value for e in EffortLevel]]
             current_effort = current_cmd.get("effort")
             effort_default_idx = 0
             if current_effort and current_effort in effort_choices:
@@ -2081,9 +2115,10 @@ def _prompt_command_overrides(
             if chosen and chosen != skip_model_label:
                 result[cmd_name]["model"] = chosen
 
-        # Effort + yolo — only when user explicitly selected a tool for this command
-        if tool_for_cmd[cmd_idx] is not None:
-            _ask_effort_and_yolo(cmd_name, tool_for_cmd[cmd_idx])
+        # Effort + yolo — use effective tool (explicit override or inherited default_tool)
+        effective_tool = tool_for_cmd[cmd_idx] or default_tool
+        if effective_tool:
+            _ask_effort_and_yolo(cmd_name, effective_tool)
 
     for cmd_idx, (cmd_name, prompt_label, section) in enumerate(cmd_triples):
         console.rule(section)

@@ -648,25 +648,24 @@ class TestPromptCommandOverrides:
     @patch("wade.ui.prompts.select")
     def test_deps_with_default_tool_shows_mode(self, mock_select: MagicMock) -> None:
         """When default_tool is set, deps should show headless/interactive mode prompt."""
-        # plan: Skip (idx=1)
-        # deps: Skip tool (idx=1), effective_tool=default_tool → mode prompt appears
-        #   mode=headless (idx=0 in [headless, interactive])
-        # review_plan/review_implementation/review_batch: Enable=No (idx=1)
-        mock_select.side_effect = [1, 1, 0, 1, 1, 1]
+        # plan: Skip tool (1), effort=Skip (0), yolo=Skip (0) — inherits default_tool
+        # deps: Skip tool (1), effort=Skip (0), yolo=Skip (0), mode=headless (0)
+        # review_plan/review_implementation/review_batch: Enable=No (1)
+        mock_select.side_effect = [1, 0, 0, 1, 0, 0, 0, 1, 1, 1]
         result = _prompt_command_overrides(["claude"], non_interactive=False, default_tool="claude")
         assert result["deps"] == {"mode": "headless"}
 
     @patch("wade.ui.prompts.select")
     def test_deps_mode_excludes_self_review(self, mock_select: MagicMock) -> None:
         """Deps mode prompt must not include 'prompt (self-review)' as an option."""
-        # plan: Skip (idx=1)
-        # deps: Skip tool (idx=1), effective_tool=default_tool → mode prompt
-        #   select mode=headless (idx=0)
-        # review_plan/review_implementation/review_batch: Enable=No (idx=1)
-        mock_select.side_effect = [1, 1, 0, 1, 1, 1]
+        # plan: Skip tool (1), effort=Skip (0), yolo=Skip (0) — inherits default_tool
+        # deps: Skip tool (1), effort=Skip (0), yolo=Skip (0), mode=headless (0)
+        # review_plan/review_implementation/review_batch: Enable=No (1)
+        mock_select.side_effect = [1, 0, 0, 1, 0, 0, 0, 1, 1, 1]
         _prompt_command_overrides(["claude"], non_interactive=False, default_tool="claude")
-        # The deps mode call is the 3rd select call (index 2)
-        deps_mode_call = mock_select.call_args_list[2]
+        # The deps mode call is the 7th select call (index 6):
+        # 0=plan-tool 1=plan-effort 2=plan-yolo 3=deps-tool 4=deps-effort 5=deps-yolo 6=deps-mode
+        deps_mode_call = mock_select.call_args_list[6]
         mode_options_arg = deps_mode_call.args[1]
         assert "prompt (self-review)" not in mode_options_arg
         assert "headless (AI one-shot)" in mode_options_arg
