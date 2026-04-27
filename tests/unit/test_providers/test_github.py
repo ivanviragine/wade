@@ -413,6 +413,26 @@ class TestEnsureLabel:
         probe_cmd = mock_run.call_args[0][0]
         assert probe_cmd == ["gh", "api", "repos/owner/repo/labels/review-addressed-by%3Aclaude"]
 
+    @patch("wade.providers.github.run")
+    def test_probe_unexpected_error_falls_through_to_create(
+        self, mock_run: MagicMock, provider: GitHubProvider
+    ) -> None:
+        """Non-404 probe failure (e.g. auth error) still attempts creation."""
+        provider._repo_nwo = "owner/repo"
+        mock_run.side_effect = [
+            subprocess.CompletedProcess(
+                args=["gh"], returncode=1, stdout="", stderr="authentication required"
+            ),
+            _make_completed(""),
+        ]
+
+        label = Label(name="new-label", color="FBCA04")
+        provider.ensure_label(label)
+
+        assert mock_run.call_count == 2
+        create_cmd = mock_run.call_args_list[1][0][0]
+        assert "create" in create_cmd
+
 
 class TestAddLabel:
     @patch("wade.providers.github.run")
