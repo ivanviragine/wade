@@ -6,7 +6,8 @@ from unittest.mock import patch
 
 import wade.ai_tools  # noqa: F401 — registers all adapters via __init_subclass__
 from wade.models.ai import EffortLevel
-from wade.services.ai_resolution import confirm_ai_selection
+from wade.models.config import AICommandConfig, AIConfig, ComplexityModelMapping, ProjectConfig
+from wade.services.ai_resolution import confirm_ai_selection, resolve_effort
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -415,3 +416,62 @@ class TestChangeEffort:
         assert tool == _COPILOT
         assert model == _MODEL_B
         assert effort is None  # stale effort cleared when copilot doesn't support it
+
+
+# ---------------------------------------------------------------------------
+# resolve_effort — per-tier priority chain
+# ---------------------------------------------------------------------------
+
+
+def _make_config(
+    *,
+    global_effort: str | None = None,
+    plan_effort: str | None = None,
+    claude_complex_effort: str | None = None,
+) -> ProjectConfig:
+    """Build a minimal ProjectConfig for testing resolve_effort."""
+    mapping = ComplexityModelMapping(complex_effort=claude_complex_effort)
+    ai = AIConfig(effort=global_effort, plan=AICommandConfig(effort=plan_effort))
+    return ProjectConfig(ai=ai, models={"claude": mapping})
+
+
+class TestResolveEffortPerTier:
+    """resolve_effort honours: CLI → env → command-config → tier → global."""
+
+    def test_explicit_effort_arg_wins(self) -> None:
+        config = _make_config(global_effort="low", plan_effort="medium")
+        result = resolve_effort("high", config, "plan")
+        assert result == EffortLevel.HIGH
+
+    def test_command_specific_effort_beats_global(self) -> None:
+        config = _make_config(global_effort="low", plan_effort="medium")
+        result = resolve_effort(None, config, "plan")
+        assert result == EffortLevel.MEDIUM
+
+    def test_tier_effort_used_when_no_command_config(self) -> None:
+        """When command has no effort override, per-complexity-tier effort is used."""
+        config = _make_config(global_effort="low", claude_complex_effort="high")
+        result = resolve_effort(None, config, "plan", tool="claude", complexity="complex")
+        assert result == EffortLevel.HIGH
+
+    def test_command_effort_beats_tier_effort(self) -> None:
+        """Command-specific config takes priority over per-tier effort."""
+        config = _make_config(plan_effort="medium", claude_complex_effort="high")
+        result = resolve_effort(None, config, "plan", tool="claude", complexity="complex")
+        assert result == EffortLevel.MEDIUM
+
+    def test_global_effort_is_fallback(self) -> None:
+        """When neither command nor tier has effort, global ai.effort is used."""
+        config = _make_config(global_effort="low")
+        result = resolve_effort(None, config, "plan", tool="claude", complexity="complex")
+        assert result == EffortLevel.LOW
+
+    def test_returns_none_when_no_effort_anywhere(self) -> None:
+        config = _make_config()
+        result = resolve_effort(None, config, "plan")
+        assert result is None
+
+    def test_invalid_effort_string_returns_none(self) -> None:
+        config = _make_config()
+        result = resolve_effort("not-a-valid-level", config, "plan")
+        assert result is None

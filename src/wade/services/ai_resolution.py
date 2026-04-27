@@ -103,6 +103,7 @@ def resolve_effort(
     command: str = "plan",
     *,
     tool: str | None = None,
+    complexity: str | None = None,
 ) -> EffortLevel | None:
     """Resolve effort level from args -> env var -> config -> None.
 
@@ -110,7 +111,8 @@ def resolve_effort(
       1. Explicit *effort* arg (e.g. ``--effort`` CLI flag)
       2. ``WADE_EFFORT`` environment variable
       3. Command-specific config (``ai.<command>.effort``)
-      4. Global config (``ai.effort``)
+      4. Per-complexity-tier config (``models.<tool>.<tier>.effort``)
+      5. Global config (``ai.effort``)
 
     When *tool* is provided and the tool does not support effort, a warning
     is logged and ``None`` is returned.
@@ -120,8 +122,19 @@ def resolve_effort(
     if not resolved:
         resolved = os.environ.get("WADE_EFFORT")
 
+    # Command-specific config (ai.<command>.effort)
     if not resolved:
-        resolved = config.get_effort(command)
+        cmd_config = getattr(config.ai, command, None)
+        if isinstance(cmd_config, AICommandConfig) and cmd_config.effort:
+            resolved = cmd_config.effort
+
+    # Per-complexity-tier config (models.<tool>.<tier>.effort)
+    if not resolved and tool and complexity:
+        resolved = config.get_complexity_effort(tool, complexity)
+
+    # Global config (ai.effort)
+    if not resolved:
+        resolved = config.ai.effort
 
     if not resolved:
         return None

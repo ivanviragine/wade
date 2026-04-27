@@ -45,16 +45,24 @@ class ProviderID(StrEnum):
 
 
 class ComplexityModelMapping(BaseModel):
-    """Model IDs for each complexity tier.
+    """Model IDs and optional effort levels for each complexity tier.
 
     Values are exact model IDs as returned by the tool's get_models().
     Defaults are None — populated at init time by querying the tool.
+    Effort values mirror ``EffortLevel`` but are stored as plain strings to
+    avoid a circular import (``models.ai`` is not importable here).
     """
 
     easy: str | None = None
     medium: str | None = None
     complex: str | None = None
     very_complex: str | None = None
+
+    # Per-tier effort overrides — optional, parallel to the model fields.
+    easy_effort: str | None = None
+    medium_effort: str | None = None
+    complex_effort: str | None = None
+    very_complex_effort: str | None = None
 
 
 class ProviderConfig(BaseModel):
@@ -190,6 +198,13 @@ class ProjectConfig(BaseModel):
         mapping = self.models.get(tool)
         if mapping:
             return getattr(mapping, complexity, None)
+        return None
+
+    def get_complexity_effort(self, tool: str, complexity: str) -> str | None:
+        """Get effort level for a tool + complexity combination."""
+        mapping = self.models.get(tool)
+        if mapping:
+            return getattr(mapping, f"{complexity}_effort", None)
         return None
 
     def get_effort(self, command: str | None = None) -> str | None:
