@@ -66,3 +66,9 @@ Review cycles should be capped at 2 total runs: 1 run if findings are minor (fix
 Entry quality rules live in the `## Entry style` section of `templates/skills/knowledge/SKILL.md` (positioned before `## Adding entries`): one insight per entry, lead with key fact, ≤3 sentences, no preamble/hedging — a before/after example is included. Knowledge is not a changelog; `## Adding entries` explains what to capture vs. skip.
 
 ---
+
+## ddc10718 | 2026-04-27 | implementation | tags: plan-session, prompts, ai-behavior | Issue #281
+
+When writing instructions for AI tools, "ask the user X" is not sufficient to prevent the tool from using native UI components (e.g. AskUserQuestion with pre-defined options). You must explicitly say "output a plain text question" and "do NOT use a native selection/question component or present pre-defined categories."
+
+---
