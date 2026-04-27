@@ -47,9 +47,9 @@ class TestWriteLoadRoundtrip:
         config = yaml.safe_load(config_path.read_text())
         models = config["models"]["claude"]
 
-        assert models["easy"] == defaults.easy
-        assert models["medium"] == defaults.medium
-        assert models["complex"] == defaults.complex
-        assert models["very_complex"] == defaults.very_complex
+        assert models["easy"] == {"model": defaults.easy, "effort": None}
+        assert models["medium"] == {"model": defaults.medium, "effort": None}
+        assert models["complex"] == {"model": defaults.complex, "effort": None}
+        assert models["very_complex"] == {"model": defaults.very_complex, "effort": None}
         # medium must not equal easy
         assert models["medium"] != models["easy"]

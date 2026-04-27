@@ -198,8 +198,15 @@ def init(
             from wade.config.loader import parse_config_file
 
             existing_config = parse_config_file(config_path)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "init.existing_config_parse_failed",
+                path=str(config_path),
+                error=str(exc),
+            )
+            console.warn(
+                f"Could not parse existing {config_path.name} — continuing with fresh defaults"
+            )
 
     # --- Interactive wizard (loop supports Modify) ---
     provider_setup: dict[str, Any] = {}
@@ -212,24 +219,77 @@ def init(
     command_overrides: dict[str, dict[str, Any]] = {}
     hooks_setup: dict[str, Any] = {}
     knowledge_setup: dict[str, Any] = {}
+    tools_in_use: set[str] = set()
+
+    # Current values for pre-fill — derived from existing config on first pass,
+    # then updated from in-memory selections before each "Modify" iteration so
+    # the second pass shows the values chosen in the first pass, not stale disk state.
+    _cur_provider: str | None = existing_config.provider.name.value if existing_config else None
+    _cur_main_branch: str | None = existing_config.project.main_branch if existing_config else None
+    _cur_merge_strategy: str | None = (
+        existing_config.project.merge_strategy.value if existing_config else None
+    )
+    _cur_branch_prefix: str | None = (
+        existing_config.project.branch_prefix if existing_config else None
+    )
+    _cur_issue_label: str | None = existing_config.project.issue_label if existing_config else None
+    _cur_worktrees_dir: str | None = (
+        existing_config.project.worktrees_dir if existing_config else None
+    )
+    _cur_ai_tool: str | None = existing_config.ai.default_tool if existing_config else None
+    _cur_ai_model: str | None = existing_config.ai.default_model if existing_config else None
+    _cur_ai_effort: str | None = existing_config.ai.effort if existing_config else None
+    _cur_ai_yolo: bool | None = existing_config.ai.yolo if existing_config else None
+    _cur_impl_tool: str | None = existing_config.ai.implement.tool if existing_config else None
+    _cur_model_mapping: ComplexityModelMapping | None = (
+        existing_config.models.get(_cur_impl_tool or _cur_ai_tool or "")
+        if existing_config
+        else None
+    )
+    _cur_cmd_overrides: dict[str, dict[str, Any]] = {}
+    if existing_config:
+        for _cmd in _COMMAND_OVERRIDE_NAMES:
+            _cfg = getattr(existing_config.ai, _cmd, None)
+            if isinstance(_cfg, AICommandConfig):
+                _entry: dict[str, Any] = {}
+                if _cfg.tool:
+                    _entry["tool"] = _cfg.tool
+                if _cfg.model:
+                    _entry["model"] = _cfg.model
+                if _cfg.mode:
+                    _entry["mode"] = _cfg.mode
+                if _cfg.effort:
+                    _entry["effort"] = _cfg.effort
+                if _cfg.enabled is not None:
+                    _entry["enabled"] = "true" if _cfg.enabled else "false"
+                if _cfg.yolo is not None:
+                    _entry["yolo"] = "true" if _cfg.yolo else "false"
+                if _entry:
+                    _cur_cmd_overrides[_cmd] = _entry
+    _cur_hooks_post: str | None = (
+        existing_config.hooks.post_worktree_create if existing_config else None
+    )
+    _cur_hooks_copy: list[str] | None = (
+        list(existing_config.hooks.copy_to_worktree) if existing_config else None
+    )
+    _cur_knowledge_enabled: bool = existing_config.knowledge.enabled if existing_config else False
+    _cur_knowledge_path: str = existing_config.knowledge.path if existing_config else "KNOWLEDGE.md"
 
     while True:
         # 4a. Provider
-        current_provider = existing_config.provider.name.value if existing_config else None
         provider_setup = _prompt_provider_setup(
-            root, non_interactive, current_provider=current_provider
+            root, non_interactive, current_provider=_cur_provider
         )
 
         # 4b. Project settings
-        ps = existing_config.project if existing_config else None
         project_settings = _prompt_project_settings(
             root,
             non_interactive,
-            current_main_branch=ps.main_branch if ps else None,
-            current_merge_strategy=ps.merge_strategy.value if ps else None,
-            current_branch_prefix=ps.branch_prefix if ps else None,
-            current_issue_label=ps.issue_label if ps else None,
-            current_worktrees_dir=ps.worktrees_dir if ps else None,
+            current_main_branch=_cur_main_branch,
+            current_merge_strategy=_cur_merge_strategy,
+            current_branch_prefix=_cur_branch_prefix,
+            current_issue_label=_cur_issue_label,
+            current_worktrees_dir=_cur_worktrees_dir,
         )
 
         # 4c. AI (tool, model, effort, yolo)
@@ -237,61 +297,35 @@ def init(
             selected_tool, default_model, default_effort, default_yolo = _prompt_ai_section(
                 ai_tool,
                 non_interactive,
-                current_tool=existing_config.ai.default_tool if existing_config else None,
-                current_model=existing_config.ai.default_model if existing_config else None,
-                current_effort=existing_config.ai.effort if existing_config else None,
-                current_yolo=existing_config.ai.yolo if existing_config else None,
+                current_tool=_cur_ai_tool,
+                current_model=_cur_ai_model,
+                current_effort=_cur_ai_effort,
+                current_yolo=_cur_ai_yolo,
             )
         except ValueError as exc:
             console.error(str(exc))
             return False
 
         # 4d. Implementation (per-tier models + effort)
-        current_impl_tool = existing_config.ai.implement.tool if existing_config else None
-        current_mm = (
-            existing_config.models.get(current_impl_tool or selected_tool or "")
-            if existing_config
-            else None
-        )
         implementation_setup = _prompt_implementation_setup(
             selected_tool,
             installed_tools,
             non_interactive,
-            current_implement_tool=current_impl_tool,
-            current_model_mapping=current_mm,
+            current_implement_tool=_cur_impl_tool,
+            current_model_mapping=_cur_model_mapping,
         )
 
         # 4e. Per-command overrides (tool, model, effort, yolo)
-        current_cmd_overrides: dict[str, dict[str, Any]] = {}
-        if existing_config:
-            for cmd in _COMMAND_OVERRIDE_NAMES:
-                cfg = getattr(existing_config.ai, cmd, None)
-                if isinstance(cfg, AICommandConfig):
-                    entry: dict[str, Any] = {}
-                    if cfg.tool:
-                        entry["tool"] = cfg.tool
-                    if cfg.model:
-                        entry["model"] = cfg.model
-                    if cfg.mode:
-                        entry["mode"] = cfg.mode
-                    if cfg.effort:
-                        entry["effort"] = cfg.effort
-                    if cfg.enabled is not None:
-                        entry["enabled"] = "true" if cfg.enabled else "false"
-                    if cfg.yolo is not None:
-                        entry["yolo"] = "true" if cfg.yolo else "false"
-                    if entry:
-                        current_cmd_overrides[cmd] = entry
         command_overrides = _prompt_command_overrides(
             installed_tools,
             non_interactive,
             default_model=default_model,
             default_tool=selected_tool,
-            current_overrides=current_cmd_overrides,
+            current_overrides=_cur_cmd_overrides,
         )
 
-        # 4f. Tool-specific settings (after per-command so tools_in_use is known)
-        tools_in_use: set[str] = set()
+        # 4f. Compute tools_in_use (needed to gate tool-specific side effects)
+        tools_in_use = set()
         if selected_tool:
             tools_in_use.add(selected_tool)
         if implementation_setup.get("tool"):
@@ -300,32 +334,21 @@ def init(
             if cmd_cfg.get("tool"):
                 tools_in_use.add(cmd_cfg["tool"])
 
-        if "claude" in tools_in_use:
-            _prompt_claude_code_settings(non_interactive)
-        if "gemini" in tools_in_use:
-            _prompt_configure_gemini_experimental(non_interactive)
-
         # 4g. Worktree hooks
-        hk = existing_config.hooks if existing_config else None
         hooks_setup = _prompt_hooks_setup(
             non_interactive,
-            current_post_worktree_create=hk.post_worktree_create if hk else None,
-            current_copy_to_worktree=list(hk.copy_to_worktree) if hk else None,
+            current_post_worktree_create=_cur_hooks_post,
+            current_copy_to_worktree=_cur_hooks_copy,
         )
 
         # 4h. Project knowledge
-        kn = existing_config.knowledge if existing_config else None
         knowledge_setup = _prompt_knowledge_setup(
             non_interactive,
-            current_enabled=kn.enabled if kn else False,
-            current_path=kn.path if kn else "KNOWLEDGE.md",
+            current_enabled=_cur_knowledge_enabled,
+            current_path=_cur_knowledge_path,
         )
 
-        # 4i. Shell integration + completions
-        _prompt_configure_shell_integration(non_interactive)
-        _prompt_configure_completions(non_interactive)
-
-        # 4j. Summary + Yes / Modify / Cancel
+        # 4i. Summary + Yes / Modify / Cancel
         if non_interactive:
             break  # Skip summary in non-interactive mode
 
@@ -353,8 +376,36 @@ def init(
             console.info("Initialization cancelled — no files written.")
             return False
         if chosen == "Modify (re-run wizard)":
-            continue  # Restart wizard from the top
+            # Update current values from this iteration so the next pass pre-fills
+            # with the choices just made rather than the stale on-disk state.
+            _cur_provider = provider_setup.get("name")
+            _cur_main_branch = project_settings.get("main_branch")
+            _cur_merge_strategy = project_settings.get("merge_strategy")
+            _cur_branch_prefix = project_settings.get("branch_prefix")
+            _cur_issue_label = project_settings.get("issue_label")
+            _cur_worktrees_dir = project_settings.get("worktrees_dir")
+            _cur_ai_tool = selected_tool
+            _cur_ai_model = default_model
+            _cur_ai_effort = default_effort if default_effort != "" else None
+            _cur_ai_yolo = default_yolo
+            _cur_impl_tool = implementation_setup.get("tool")
+            _cur_model_mapping = implementation_setup.get("model_mapping")
+            _cur_cmd_overrides = command_overrides
+            _cur_hooks_post = hooks_setup.get("post_worktree_create")
+            _cur_hooks_copy = hooks_setup.get("copy_to_worktree")
+            _cur_knowledge_enabled = bool(knowledge_setup.get("enabled"))
+            _cur_knowledge_path = str(knowledge_setup.get("path", "KNOWLEDGE.md"))
+            continue
         break  # "Write .wade.yml" — proceed to write phase
+
+    # 4j. Tool-specific settings + shell integration — deferred to here so that
+    # choosing "Cancel" or iterating through "Modify" never triggers side effects.
+    if "claude" in tools_in_use:
+        _prompt_claude_code_settings(non_interactive)
+    if "gemini" in tools_in_use:
+        _prompt_configure_gemini_experimental(non_interactive)
+    _prompt_configure_shell_integration(non_interactive)
+    _prompt_configure_completions(non_interactive)
 
     # Post-wizard injections (idempotent — safe regardless of loop iterations)
     if provider_setup.get("add_env_to_copy"):
@@ -1131,6 +1182,8 @@ def _select_or_skip(
 def _select_ai_tool(
     requested: str | None,
     non_interactive: bool,
+    *,
+    current_tool: str | None = None,
 ) -> str | None:
     """Select an AI tool — from argument, detection, or interactive prompt."""
     from wade.ui import prompts
@@ -1163,7 +1216,12 @@ def _select_ai_tool(
     # Interactive: show menu with Skip option (rule shown by _prompt_ai_section)
     skip_label = "Skip (configure later)"
     items = [str(t) for t in installed] + [skip_label]
-    idx = prompts.select("Select default AI tool", items)
+
+    default_idx = len(items) - 1  # default to Skip
+    if current_tool and current_tool in items:
+        default_idx = items.index(current_tool)
+
+    idx = prompts.select("Select default AI tool", items, default=default_idx)
 
     if items[idx] == skip_label:
         return None
@@ -1191,11 +1249,13 @@ def _prompt_ai_section(
     """
     if not non_interactive:
         console.rule("AI")
-    selected_tool = _select_ai_tool(ai_tool, non_interactive)
+    selected_tool = _select_ai_tool(ai_tool, non_interactive, current_tool=current_tool)
     if non_interactive or not selected_tool:
         return selected_tool, None, None, None
     mapping = _resolve_models(selected_tool)
-    default_model = _prompt_default_model(selected_tool, mapping, non_interactive=False)
+    default_model = _prompt_default_model(
+        selected_tool, mapping, non_interactive=False, current_model=current_model
+    )
 
     default_effort: str | None = None
     default_yolo: bool | None = None
@@ -1782,6 +1842,8 @@ def _prompt_default_model(
     tool: str | None,
     model_mapping: ComplexityModelMapping,
     non_interactive: bool,
+    *,
+    current_model: str | None = None,
 ) -> str | None:
     """Prompt the user to select a default model for the AI tool.
 
@@ -1806,9 +1868,11 @@ def _prompt_default_model(
     skip_label = "Skip (configure per-complexity)"
     options = [*available, skip_label]
 
-    # Pre-select the "complex" tier model as a sensible starting default
+    # Pre-select existing model when re-initializing; fall back to "complex" tier
     default_idx = 0
-    if model_mapping.complex and model_mapping.complex in options:
+    if current_model and current_model in options:
+        default_idx = options.index(current_model)
+    elif model_mapping.complex and model_mapping.complex in options:
         default_idx = options.index(model_mapping.complex)
 
     idx = prompts.select(f"Select default model for {tool}", options, default=default_idx)
@@ -1856,22 +1920,12 @@ def _prompt_implementation_setup(
         mapping = current_model_mapping or _resolve_models(default_tool)
         return {"tool": None, "model_mapping": mapping}
 
-    from wade.ui import prompts
-
     console.rule("Implementation")
 
-    skip_label = "Skip (use default)"
-    tool_options = (installed_tools if installed_tools else ["claude", "copilot", "gemini"]) + [
-        skip_label
-    ]
-
-    # Pre-select current implement tool if present
-    tool_default_idx = len(tool_options) - 1  # default: Skip
-    if current_implement_tool and current_implement_tool in tool_options:
-        tool_default_idx = tool_options.index(current_implement_tool)
-
-    idx = prompts.select("AI tool for implementation work", tool_options, default=tool_default_idx)
-    implement_tool = None if tool_options[idx] == skip_label else tool_options[idx]
+    base_tools = installed_tools if installed_tools else ["claude", "copilot", "gemini"]
+    implement_tool = _select_or_skip(
+        "AI tool for implementation work", base_tools, current_implement_tool
+    )
 
     current_effective = implement_tool or default_tool
     mapping = current_model_mapping or _resolve_models(current_effective)
@@ -1953,11 +2007,20 @@ def _prompt_command_overrides(
 
         if caps.supports_yolo:
             current_yolo_val = current_cmd.get("yolo")
-            current_yolo_bool = current_yolo_val is True or current_yolo_val == "true"
-            yolo_on = prompts.confirm(
-                "  Enable YOLO mode for this command?", default=current_yolo_bool
+            yolo_choices = ["Skip (use default)", "Yes", "No"]
+            yolo_default = 0  # default to Skip (inherit global ai.yolo)
+            if current_yolo_val == "true" or current_yolo_val is True:
+                yolo_default = 1
+            elif current_yolo_val == "false" or current_yolo_val is False:
+                yolo_default = 2
+            yolo_idx = prompts.select(
+                "  Enable YOLO mode for this command?", yolo_choices, default=yolo_default
             )
-            result[cmd_name]["yolo"] = "true" if yolo_on else "false"
+            if yolo_idx == 1:
+                result[cmd_name]["yolo"] = "true"
+            elif yolo_idx == 2:
+                result[cmd_name]["yolo"] = "false"
+            # idx == 0 means Skip — omit yolo to inherit the global ai.yolo setting
 
     def _ask_tool_and_model(
         cmd_idx: int,
@@ -2106,17 +2169,15 @@ def _prompt_command_overrides(
     return result
 
 
-def _tier_yaml_value(model: str | None, effort: str | None) -> str | dict[str, Any] | None:
+def _tier_yaml_value(model: str | None, effort: str | None) -> dict[str, Any] | None:
     """Return the YAML representation for a complexity tier.
 
-    Uses the compact string form when no effort is configured, otherwise the
-    structured ``{model, effort}`` form.
+    Always uses the structured ``{model, effort}`` form so the format is stable
+    after migration from the legacy plain-string form.
     """
     if not model:
         return None
-    if effort:
-        return {"model": model, "effort": effort}
-    return model
+    return {"model": model, "effort": effort or None}
 
 
 def _write_config(

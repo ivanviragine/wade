@@ -591,10 +591,11 @@ class TestPromptCommandOverrides:
         mock_suggest.return_value = "gemini-2.5-pro"
         # installed_tools=["claude", "gemini"], tool_options=["claude", "gemini", "Skip"]
         # plan: idx 1 = gemini; model for plan: idx 1 = "gemini-2.5-pro" (2nd in gemini list)
+        # plan YOLO: idx 0 = Skip (gemini supports_yolo=True; Skip means inherit global)
         # deps: idx 2 = Skip, no effective tool (no default_tool) → mode skipped
         # review_plan/review_implementation/review_batch:
         #   Enable=Yes (idx 0), mode=prompt (idx 0) → skip tool/model
-        mock_select.side_effect = [1, 1, 2, 0, 0, 0, 0, 0, 0]
+        mock_select.side_effect = [1, 1, 0, 2, 0, 0, 0, 0, 0, 0]
         result = _prompt_command_overrides(["claude", "gemini"], non_interactive=False)
         assert result["plan"]["tool"] == "gemini"
         assert result["plan"]["model"] == "gemini-2.5-pro"
@@ -753,10 +754,10 @@ class TestWriteConfig:
         )
         _write_config(config_path, "claude", mapping)
         config = yaml.safe_load(config_path.read_text())
-        assert config["models"]["claude"]["easy"] == "haiku"
-        assert config["models"]["claude"]["medium"] == "sonnet"
-        assert config["models"]["claude"]["complex"] == "sonnet"
-        assert config["models"]["claude"]["very_complex"] == "opus"
+        assert config["models"]["claude"]["easy"] == {"model": "haiku", "effort": None}
+        assert config["models"]["claude"]["medium"] == {"model": "sonnet", "effort": None}
+        assert config["models"]["claude"]["complex"] == {"model": "sonnet", "effort": None}
+        assert config["models"]["claude"]["very_complex"] == {"model": "opus", "effort": None}
 
     def test_write_config_with_only_medium_and_very_complex(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
@@ -764,8 +765,8 @@ class TestWriteConfig:
         _write_config(config_path, "claude", mapping)
         config = yaml.safe_load(config_path.read_text())
         assert "models" in config
-        assert config["models"]["claude"]["medium"] == "sonnet"
-        assert config["models"]["claude"]["very_complex"] == "opus"
+        assert config["models"]["claude"]["medium"] == {"model": "sonnet", "effort": None}
+        assert config["models"]["claude"]["very_complex"] == {"model": "opus", "effort": None}
 
     def test_no_tool_omits_ai_and_models(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
@@ -907,8 +908,8 @@ class TestPatchConfig:
         mapping = ComplexityModelMapping(easy="new-haiku", complex="sonnet")
         _patch_config(config_path, "claude", mapping, force=True)
         config = yaml.safe_load(config_path.read_text())
-        assert config["models"]["claude"]["easy"] == "new-haiku"
-        assert config["models"]["claude"]["complex"] == "sonnet"
+        assert config["models"]["claude"]["easy"] == {"model": "new-haiku", "effort": None}
+        assert config["models"]["claude"]["complex"] == {"model": "sonnet", "effort": None}
 
     def test_patch_config_writes_all_four_tiers(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
@@ -918,10 +919,10 @@ class TestPatchConfig:
         )
         _patch_config(config_path, "claude", mapping, force=True)
         config = yaml.safe_load(config_path.read_text())
-        assert config["models"]["claude"]["easy"] == "haiku"
-        assert config["models"]["claude"]["medium"] == "sonnet"
-        assert config["models"]["claude"]["complex"] == "sonnet"
-        assert config["models"]["claude"]["very_complex"] == "opus"
+        assert config["models"]["claude"]["easy"] == {"model": "haiku", "effort": None}
+        assert config["models"]["claude"]["medium"] == {"model": "sonnet", "effort": None}
+        assert config["models"]["claude"]["complex"] == {"model": "sonnet", "effort": None}
+        assert config["models"]["claude"]["very_complex"] == {"model": "opus", "effort": None}
 
     def test_no_force_preserves_existing_models(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
@@ -933,7 +934,7 @@ class TestPatchConfig:
         _patch_config(config_path, "claude", mapping, force=False)
         config = yaml.safe_load(config_path.read_text())
         assert config["models"]["claude"]["easy"] == "existing-haiku"
-        assert config["models"]["claude"]["complex"] == "sonnet"
+        assert config["models"]["claude"]["complex"] == {"model": "sonnet", "effort": None}
 
     def test_models_keyed_by_implement_tool_when_provided(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
@@ -2267,23 +2268,29 @@ class TestPromptModelMappingPerTierEffort:
 
 class TestShowInitSummary:
     def test_renders_without_error_minimal(self) -> None:
-        _show_init_summary(
-            provider_setup={"name": "github"},
-            project_settings={
-                "main_branch": "main",
-                "merge_strategy": "PR",
-                "branch_prefix": "feat",
-                "worktrees_dir": "../.worktrees",
-            },
-            selected_tool=None,
-            default_model=None,
-            default_effort=None,
-            default_yolo=None,
-            implementation_setup={},
-            command_overrides={},
-            hooks_setup={},
-            knowledge_setup={},
-        )
+        with patch("wade.services.init_service.console") as mock_console:
+            _show_init_summary(
+                provider_setup={"name": "github"},
+                project_settings={
+                    "main_branch": "main",
+                    "merge_strategy": "PR",
+                    "branch_prefix": "feat",
+                    "worktrees_dir": "../.worktrees",
+                },
+                selected_tool=None,
+                default_model=None,
+                default_effort=None,
+                default_yolo=None,
+                implementation_setup={},
+                command_overrides={},
+                hooks_setup={},
+                knowledge_setup={},
+            )
+        kv_calls = {call.args[0]: call.args[1] for call in mock_console.kv.call_args_list}
+        assert kv_calls.get("Provider") == "github"
+        assert kv_calls.get("Main branch") == "main"
+        assert kv_calls.get("AI tool") == "(not set)"
+        assert "Default YOLO" not in kv_calls
 
     def test_renders_with_full_data(self) -> None:
         mapping = ComplexityModelMapping(
@@ -2293,30 +2300,41 @@ class TestShowInitSummary:
             very_complex="opus",
             complex_effort="high",
         )
-        _show_init_summary(
-            provider_setup={"name": "github"},
-            project_settings={
-                "main_branch": "main",
-                "merge_strategy": "direct",
-                "branch_prefix": "fix",
-                "worktrees_dir": "../trees",
-            },
-            selected_tool="claude",
-            default_model="claude-sonnet-4-6",
-            default_effort="medium",
-            default_yolo=True,
-            implementation_setup={"tool": "claude", "model_mapping": mapping},
-            command_overrides={
-                "plan": {"tool": "gemini", "model": "gemini-2.5-pro"},
-                "deps": {"mode": "headless"},
-                "review_plan": {"enabled": "true", "mode": "prompt"},
-            },
-            hooks_setup={
-                "post_worktree_create": "scripts/setup.sh",
-                "copy_to_worktree": [".env"],
-            },
-            knowledge_setup={"enabled": True, "path": "docs/KNOWLEDGE.md"},
-        )
+        with patch("wade.services.init_service.console") as mock_console:
+            _show_init_summary(
+                provider_setup={"name": "github"},
+                project_settings={
+                    "main_branch": "main",
+                    "merge_strategy": "direct",
+                    "branch_prefix": "fix",
+                    "worktrees_dir": "../trees",
+                },
+                selected_tool="claude",
+                default_model="claude-sonnet-4-6",
+                default_effort="medium",
+                default_yolo=True,
+                implementation_setup={"tool": "claude", "model_mapping": mapping},
+                command_overrides={
+                    "plan": {"tool": "gemini", "model": "gemini-2.5-pro"},
+                    "deps": {"mode": "headless"},
+                    "review_plan": {"enabled": "true", "mode": "prompt"},
+                },
+                hooks_setup={
+                    "post_worktree_create": "scripts/setup.sh",
+                    "copy_to_worktree": [".env"],
+                },
+                knowledge_setup={"enabled": True, "path": "docs/KNOWLEDGE.md"},
+            )
+        kv_calls = {call.args[0]: call.args[1] for call in mock_console.kv.call_args_list}
+        assert kv_calls.get("AI tool") == "claude"
+        assert kv_calls.get("Default YOLO") == "true"
+        assert kv_calls.get("Default effort") == "medium"
+        assert kv_calls.get("Knowledge file") == "docs/KNOWLEDGE.md"
+        # Verify per-tier effort shows up in implementation mapping output
+        assert any("high" in str(v) for v in kv_calls.values())
+        # Verify per-command overrides are shown
+        plan_entry = kv_calls.get("  plan")
+        assert plan_entry is not None and "gemini" in plan_entry
 
 
 # ---------------------------------------------------------------------------
