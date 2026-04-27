@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.24.0] — 2026-04-27
+
+### Features
+
+- rework wade init wizard — order, skippability, effort/yolo defaults (#294) (0b098a0)
+
 ## [v0.23.0] — 2026-04-27
 
 ### Features
