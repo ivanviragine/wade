@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.22.0] — 2026-04-27
+
+### Features
+
+- plan-session prompt should ask open-ended question, not suggest options (#292) (79cab7c)
+
 ## [v0.21.0] — 2026-04-26
 
 ### Features
