@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.24.1] — 2026-04-27
+
+### Bug Fixes
+
+- ensure_label produces spurious subprocess.failed error when label exists (#299) (bb557e7)
+
 ## [v0.24.0] — 2026-04-27
 
 ### Features
