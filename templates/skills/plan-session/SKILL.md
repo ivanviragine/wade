@@ -60,7 +60,7 @@ Running `wade knowledge add` is allowed even though this is a planning session.
 
 ## Your role
 
-1. **Ask the user** what they want to plan. If the session prompt does not already specify a feature or issue, ask before proceeding.
+1. **Ask the user** what they want to plan. If the session prompt does not already specify a feature or issue, ask before proceeding. Output a plain text question (e.g. "What would you like to plan?") — do NOT use a native selection/question component or present pre-defined categories as options at this step.
 2. **Search relevant knowledge** — once you know the topic, search for entries relevant to that feature using `wade knowledge get --search <topic>` or `wade knowledge get --tag <tag>` (see @.claude/skills/knowledge/SKILL.md and the **Project Knowledge** section above). Do not dump all entries.
 3. **Plan the feature** with the user — analyze, break down, propose.
 4. **Present the plan(s)** to the user. Use your tool's native question component to ask: "Ready to write the plan file(s)?" before writing any files.
