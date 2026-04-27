@@ -12,6 +12,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import structlog
 
@@ -89,6 +90,7 @@ class GitHubProvider(AbstractTaskProvider):
 
     def __init__(self, config: ProviderConfig | None = None) -> None:
         super().__init__(config)
+        self._repo_nwo: str | None = None
 
     def list_tasks(
         self,
@@ -284,21 +286,25 @@ class GitHubProvider(AbstractTaskProvider):
     def ensure_label(self, label: Label) -> None:
         """Ensure a label exists, creating it if needed.
 
-        1. Search for the label name
+        1. Probe existence via GitHub API (reliable, unlike gh label list --search)
         2. If not found, create it (handling "already exists" race condition)
         """
-        # Check if label already exists
-        try:
-            result = run(
-                ["gh", "label", "list", "--search", label.name, "--json", "name", "-q", ".[].name"],
-                check=True,
-                retries=3,
+        nwo = self.get_repo_nwo()
+        encoded_name = quote(label.name, safe="")
+        probe = run(
+            ["gh", "api", f"repos/{nwo}/labels/{encoded_name}"],
+            check=False,
+        )
+        if probe.returncode == 0:
+            return  # Label already exists
+        stderr_lower = (probe.stderr or "").lower()
+        if "not found" not in stderr_lower and "404" not in stderr_lower:
+            logger.warning(
+                "github.label_probe_failed",
+                name=label.name,
+                returncode=probe.returncode,
+                stderr=probe.stderr,
             )
-            existing = result.stdout.strip().splitlines()
-            if label.name in existing:
-                return
-        except CommandError:
-            pass  # Search failed — try creating anyway
 
         # Create the label
         cmd = [
@@ -796,12 +802,14 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
 
     def get_repo_nwo(self) -> str:
         """Get the repo name-with-owner via gh repo view."""
-        result = run(
-            ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
-            check=True,
-            retries=3,
-        )
-        return result.stdout.strip()
+        if self._repo_nwo is None:
+            result = run(
+                ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+                check=True,
+                retries=3,
+            )
+            self._repo_nwo = result.stdout.strip()
+        return self._repo_nwo
 
     # --- Parent issue detection ---
 
