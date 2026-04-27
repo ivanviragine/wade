@@ -33,14 +33,10 @@ ai:
     enabled: true
 models:
   claude:
-    easy:
-      model: claude-sonnet-4.6
-    medium:
-      model: claude-sonnet-4.6
-    complex:
-      model: claude-opus-4.7
-    very_complex:
-      model: claude-opus-4.7
+    easy: claude-sonnet-4.6
+    medium: claude-sonnet-4.6
+    complex: claude-opus-4.7
+    very_complex: claude-opus-4.7
 provider:
   name: github
 knowledge:
