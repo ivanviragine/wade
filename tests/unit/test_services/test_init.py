@@ -20,6 +20,7 @@ from wade.services.init_service import (
     _ensure_wade_dir_self_ignoring,
     _migrate_gitignore_block,
     _patch_config,
+    _prompt_ai_section,
     _prompt_command_overrides,
     _prompt_hooks_setup,
     _prompt_model_mapping,
@@ -29,6 +30,8 @@ from wade.services.init_service import (
     _resolve_models,
     _save_token_to_env,
     _select_ai_tool,
+    _select_or_skip,
+    _show_init_summary,
     _validate_clickup_token,
     _write_config,
     deinit,
@@ -588,10 +591,11 @@ class TestPromptCommandOverrides:
         mock_suggest.return_value = "gemini-2.5-pro"
         # installed_tools=["claude", "gemini"], tool_options=["claude", "gemini", "Skip"]
         # plan: idx 1 = gemini; model for plan: idx 1 = "gemini-2.5-pro" (2nd in gemini list)
+        # plan YOLO: idx 0 = Skip (gemini supports_yolo=True; Skip means inherit global)
         # deps: idx 2 = Skip, no effective tool (no default_tool) → mode skipped
         # review_plan/review_implementation/review_batch:
         #   Enable=Yes (idx 0), mode=prompt (idx 0) → skip tool/model
-        mock_select.side_effect = [1, 1, 2, 0, 0, 0, 0, 0, 0]
+        mock_select.side_effect = [1, 1, 0, 2, 0, 0, 0, 0, 0, 0]
         result = _prompt_command_overrides(["claude", "gemini"], non_interactive=False)
         assert result["plan"]["tool"] == "gemini"
         assert result["plan"]["model"] == "gemini-2.5-pro"
@@ -600,6 +604,7 @@ class TestPromptCommandOverrides:
         assert result["review_implementation"] == {"enabled": "true", "mode": "prompt"}
         assert result["review_batch"] == {"enabled": "true", "mode": "prompt"}
 
+    @patch("wade.services.init_service.AbstractAITool.get")
     @patch("wade.services.init_service._collect_model_options")
     @patch("wade.services.init_service._suggest_model_for_tool")
     @patch("wade.ui.prompts.select")
@@ -608,10 +613,16 @@ class TestPromptCommandOverrides:
         mock_select: MagicMock,
         mock_suggest: MagicMock,
         mock_collect: MagicMock,
+        mock_get_tool: MagicMock,
     ) -> None:
         """Selecting headless/interactive for review should trigger tool and model prompts."""
         mock_suggest.return_value = "claude-sonnet"
         mock_collect.return_value = ["claude-haiku", "claude-sonnet"]
+        # Patch capability to disable effort/yolo so this test stays focused on tool/model
+        mock_caps = MagicMock()
+        mock_caps.supports_effort = False
+        mock_caps.supports_yolo = False
+        mock_get_tool.return_value.capabilities.return_value = mock_caps
         # tool_options=["claude", "Skip"]
         # model_options=["claude-haiku", "claude-sonnet", "Custom...", "Skip"]
         # plan: Skip (idx=1)
@@ -637,25 +648,24 @@ class TestPromptCommandOverrides:
     @patch("wade.ui.prompts.select")
     def test_deps_with_default_tool_shows_mode(self, mock_select: MagicMock) -> None:
         """When default_tool is set, deps should show headless/interactive mode prompt."""
-        # plan: Skip (idx=1)
-        # deps: Skip tool (idx=1), effective_tool=default_tool → mode prompt appears
-        #   mode=headless (idx=0 in [headless, interactive])
-        # review_plan/review_implementation/review_batch: Enable=No (idx=1)
-        mock_select.side_effect = [1, 1, 0, 1, 1, 1]
+        # plan: Skip tool (1), effort=Skip (0), yolo=Skip (0) — inherits default_tool
+        # deps: Skip tool (1), effort=Skip (0), yolo=Skip (0), mode=headless (0)
+        # review_plan/review_implementation/review_batch: Enable=No (1)
+        mock_select.side_effect = [1, 0, 0, 1, 0, 0, 0, 1, 1, 1]
         result = _prompt_command_overrides(["claude"], non_interactive=False, default_tool="claude")
         assert result["deps"] == {"mode": "headless"}
 
     @patch("wade.ui.prompts.select")
     def test_deps_mode_excludes_self_review(self, mock_select: MagicMock) -> None:
         """Deps mode prompt must not include 'prompt (self-review)' as an option."""
-        # plan: Skip (idx=1)
-        # deps: Skip tool (idx=1), effective_tool=default_tool → mode prompt
-        #   select mode=headless (idx=0)
-        # review_plan/review_implementation/review_batch: Enable=No (idx=1)
-        mock_select.side_effect = [1, 1, 0, 1, 1, 1]
+        # plan: Skip tool (1), effort=Skip (0), yolo=Skip (0) — inherits default_tool
+        # deps: Skip tool (1), effort=Skip (0), yolo=Skip (0), mode=headless (0)
+        # review_plan/review_implementation/review_batch: Enable=No (1)
+        mock_select.side_effect = [1, 0, 0, 1, 0, 0, 0, 1, 1, 1]
         _prompt_command_overrides(["claude"], non_interactive=False, default_tool="claude")
-        # The deps mode call is the 3rd select call (index 2)
-        deps_mode_call = mock_select.call_args_list[2]
+        # The deps mode call is the 7th select call (index 6):
+        # 0=plan-tool 1=plan-effort 2=plan-yolo 3=deps-tool 4=deps-effort 5=deps-yolo 6=deps-mode
+        deps_mode_call = mock_select.call_args_list[6]
         mode_options_arg = deps_mode_call.args[1]
         assert "prompt (self-review)" not in mode_options_arg
         assert "headless (AI one-shot)" in mode_options_arg
@@ -743,10 +753,10 @@ class TestWriteConfig:
         )
         _write_config(config_path, "claude", mapping)
         config = yaml.safe_load(config_path.read_text())
-        assert config["models"]["claude"]["easy"] == "haiku"
-        assert config["models"]["claude"]["medium"] == "sonnet"
-        assert config["models"]["claude"]["complex"] == "sonnet"
-        assert config["models"]["claude"]["very_complex"] == "opus"
+        assert config["models"]["claude"]["easy"] == {"model": "haiku", "effort": None}
+        assert config["models"]["claude"]["medium"] == {"model": "sonnet", "effort": None}
+        assert config["models"]["claude"]["complex"] == {"model": "sonnet", "effort": None}
+        assert config["models"]["claude"]["very_complex"] == {"model": "opus", "effort": None}
 
     def test_write_config_with_only_medium_and_very_complex(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
@@ -754,8 +764,8 @@ class TestWriteConfig:
         _write_config(config_path, "claude", mapping)
         config = yaml.safe_load(config_path.read_text())
         assert "models" in config
-        assert config["models"]["claude"]["medium"] == "sonnet"
-        assert config["models"]["claude"]["very_complex"] == "opus"
+        assert config["models"]["claude"]["medium"] == {"model": "sonnet", "effort": None}
+        assert config["models"]["claude"]["very_complex"] == {"model": "opus", "effort": None}
 
     def test_no_tool_omits_ai_and_models(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
@@ -897,8 +907,8 @@ class TestPatchConfig:
         mapping = ComplexityModelMapping(easy="new-haiku", complex="sonnet")
         _patch_config(config_path, "claude", mapping, force=True)
         config = yaml.safe_load(config_path.read_text())
-        assert config["models"]["claude"]["easy"] == "new-haiku"
-        assert config["models"]["claude"]["complex"] == "sonnet"
+        assert config["models"]["claude"]["easy"] == {"model": "new-haiku", "effort": None}
+        assert config["models"]["claude"]["complex"] == {"model": "sonnet", "effort": None}
 
     def test_patch_config_writes_all_four_tiers(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
@@ -908,10 +918,10 @@ class TestPatchConfig:
         )
         _patch_config(config_path, "claude", mapping, force=True)
         config = yaml.safe_load(config_path.read_text())
-        assert config["models"]["claude"]["easy"] == "haiku"
-        assert config["models"]["claude"]["medium"] == "sonnet"
-        assert config["models"]["claude"]["complex"] == "sonnet"
-        assert config["models"]["claude"]["very_complex"] == "opus"
+        assert config["models"]["claude"]["easy"] == {"model": "haiku", "effort": None}
+        assert config["models"]["claude"]["medium"] == {"model": "sonnet", "effort": None}
+        assert config["models"]["claude"]["complex"] == {"model": "sonnet", "effort": None}
+        assert config["models"]["claude"]["very_complex"] == {"model": "opus", "effort": None}
 
     def test_no_force_preserves_existing_models(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
@@ -923,7 +933,7 @@ class TestPatchConfig:
         _patch_config(config_path, "claude", mapping, force=False)
         config = yaml.safe_load(config_path.read_text())
         assert config["models"]["claude"]["easy"] == "existing-haiku"
-        assert config["models"]["claude"]["complex"] == "sonnet"
+        assert config["models"]["claude"]["complex"] == {"model": "sonnet", "effort": None}
 
     def test_models_keyed_by_implement_tool_when_provided(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
@@ -2057,3 +2067,345 @@ class TestInitProvider:
         init(project_root=tmp_git_repo, non_interactive=True)
         config = yaml.safe_load((tmp_git_repo / ".wade.yml").read_text())
         assert config["provider"]["name"] == "github"
+
+
+# ---------------------------------------------------------------------------
+# _select_or_skip tests
+# ---------------------------------------------------------------------------
+
+
+class TestSelectOrSkip:
+    @patch("wade.ui.prompts.select")
+    def test_returns_none_when_skip_chosen(self, mock_select: MagicMock) -> None:
+        mock_select.return_value = 2  # index of "Skip (use default)" in ["a", "b", "Skip..."]
+        result = _select_or_skip("Pick one", ["a", "b"])
+        assert result is None
+
+    @patch("wade.ui.prompts.select")
+    def test_returns_option_when_chosen(self, mock_select: MagicMock) -> None:
+        mock_select.return_value = 1  # "b"
+        result = _select_or_skip("Pick one", ["a", "b"])
+        assert result == "b"
+
+    @patch("wade.ui.prompts.select")
+    def test_current_value_is_pre_selected(self, mock_select: MagicMock) -> None:
+        mock_select.return_value = 0  # consume the call
+        _select_or_skip("Pick one", ["a", "b", "c"], current="b")
+        _, kwargs = mock_select.call_args
+        assert kwargs.get("default") == 1  # "b" is index 1 in ["a","b","c","Skip..."]
+
+    @patch("wade.ui.prompts.select")
+    def test_skip_is_default_when_no_current(self, mock_select: MagicMock) -> None:
+        mock_select.return_value = 2
+        _select_or_skip("Pick one", ["a", "b"])
+        _, kwargs = mock_select.call_args
+        assert kwargs.get("default") == 2  # last index = Skip
+
+    @patch("wade.ui.prompts.select")
+    def test_unrecognized_current_defaults_to_skip(self, mock_select: MagicMock) -> None:
+        mock_select.return_value = 2
+        _select_or_skip("Pick one", ["a", "b"], current="unknown")
+        _, kwargs = mock_select.call_args
+        assert kwargs.get("default") == 2  # Skip is the fallback
+
+
+# ---------------------------------------------------------------------------
+# _prompt_ai_section yolo + effort tests
+# ---------------------------------------------------------------------------
+
+
+class TestPromptAiSectionYoloEffort:
+    @patch("wade.services.init_service._prompt_default_model", return_value=None)
+    @patch("wade.services.init_service._select_ai_tool", return_value="claude")
+    def test_non_interactive_returns_none_extras(
+        self, _mock_tool: MagicMock, _mock_model: MagicMock
+    ) -> None:
+        tool, model, effort, yolo = _prompt_ai_section(None, non_interactive=True)
+        assert tool == "claude"
+        assert model is None
+        assert effort is None
+        assert yolo is None
+
+    @patch("wade.ui.prompts.confirm")
+    @patch("wade.ui.prompts.select")
+    @patch("wade.services.init_service._prompt_default_model", return_value=None)
+    @patch("wade.services.init_service._select_ai_tool", return_value="claude")
+    @patch("wade.services.init_service.AbstractAITool.get")
+    def test_effort_and_yolo_prompted_when_supported(
+        self,
+        mock_get_tool: MagicMock,
+        _mock_tool: MagicMock,
+        _mock_model: MagicMock,
+        mock_select: MagicMock,
+        mock_confirm: MagicMock,
+    ) -> None:
+        mock_caps = MagicMock()
+        mock_caps.supports_effort = True
+        mock_caps.supports_yolo = True
+        mock_get_tool.return_value.capabilities.return_value = mock_caps
+        mock_select.return_value = 2  # "medium" effort (index 2 = medium in [none, low, medium...])
+        mock_confirm.return_value = True  # yolo = True
+
+        tool, _model, effort, yolo = _prompt_ai_section(None, non_interactive=False)
+        assert tool == "claude"
+        assert effort is not None  # some effort selected
+        assert yolo is True
+
+    @patch("wade.ui.prompts.confirm")
+    @patch("wade.ui.prompts.select")
+    @patch("wade.services.init_service._prompt_default_model", return_value=None)
+    @patch("wade.services.init_service._select_ai_tool", return_value="claude")
+    @patch("wade.services.init_service.AbstractAITool.get")
+    def test_no_effort_or_yolo_when_unsupported(
+        self,
+        mock_get_tool: MagicMock,
+        _mock_tool: MagicMock,
+        _mock_model: MagicMock,
+        mock_select: MagicMock,
+        mock_confirm: MagicMock,
+    ) -> None:
+        mock_caps = MagicMock()
+        mock_caps.supports_effort = False
+        mock_caps.supports_yolo = False
+        mock_get_tool.return_value.capabilities.return_value = mock_caps
+
+        _prompt_ai_section(None, non_interactive=False)
+        mock_select.assert_not_called()
+        mock_confirm.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _prompt_model_mapping per-tier effort tests
+# ---------------------------------------------------------------------------
+
+
+class TestPromptModelMappingPerTierEffort:
+    @patch("wade.services.init_service.AbstractAITool.get")
+    @patch("wade.ui.prompts.select")
+    def test_effort_prompts_shown_when_tool_supports_effort(
+        self, mock_select: MagicMock, mock_get_tool: MagicMock
+    ) -> None:
+        mock_caps = MagicMock()
+        mock_caps.supports_effort = True
+        mock_get_tool.return_value.capabilities.return_value = mock_caps
+
+        mapping = ComplexityModelMapping(
+            easy="haiku", medium="haiku", complex="sonnet", very_complex="opus"
+        )
+        # Always return default index (accept current selection)
+        mock_select.side_effect = lambda title, items, default=0, **kw: default
+
+        result = _prompt_model_mapping("claude", mapping, non_interactive=False)
+
+        # 4 model selects + 4 effort selects = 8 calls
+        assert mock_select.call_count == 8
+        assert result.easy == "haiku"
+
+    @patch("wade.services.init_service.AbstractAITool.get")
+    @patch("wade.ui.prompts.select")
+    def test_no_effort_prompts_when_tool_does_not_support(
+        self, mock_select: MagicMock, mock_get_tool: MagicMock
+    ) -> None:
+        mock_caps = MagicMock()
+        mock_caps.supports_effort = False
+        mock_get_tool.return_value.capabilities.return_value = mock_caps
+
+        mapping = ComplexityModelMapping(
+            easy="haiku", medium="haiku", complex="sonnet", very_complex="opus"
+        )
+        mock_select.side_effect = lambda title, items, default=0, **kw: default
+
+        _prompt_model_mapping("claude", mapping, non_interactive=False)
+
+        # Only 4 model selects — no effort prompts
+        assert mock_select.call_count == 4
+
+    @patch("wade.services.init_service.AbstractAITool.get")
+    @patch("wade.ui.prompts.select")
+    def test_effort_value_stored_in_mapping(
+        self, mock_select: MagicMock, mock_get_tool: MagicMock
+    ) -> None:
+        mock_caps = MagicMock()
+        mock_caps.supports_effort = True
+        mock_get_tool.return_value.capabilities.return_value = mock_caps
+
+        mapping = ComplexityModelMapping(
+            easy="haiku", medium="haiku", complex="sonnet", very_complex="opus"
+        )
+
+        from wade.models.ai import EffortLevel
+
+        effort_values = [e.value for e in EffortLevel]
+        call_count = 0
+
+        def fake_select(title: str, items: list[str], default: int = 0, **kw: object) -> int:
+            nonlocal call_count
+            call_count += 1
+            if call_count % 2 == 0 and "Effort" in title:
+                # Return index 1 = first real effort level (e.g. "low")
+                return 1
+            return default
+
+        mock_select.side_effect = fake_select
+
+        result = _prompt_model_mapping("claude", mapping, non_interactive=False)
+        # At least one tier should have an effort set
+        tier_efforts = [
+            result.easy_effort,
+            result.medium_effort,
+            result.complex_effort,
+            result.very_complex_effort,
+        ]
+        assert any(e is not None for e in tier_efforts)
+        assert all(e in effort_values or e is None for e in tier_efforts)
+
+
+# ---------------------------------------------------------------------------
+# _show_init_summary tests
+# ---------------------------------------------------------------------------
+
+
+class TestShowInitSummary:
+    def test_renders_without_error_minimal(self) -> None:
+        with patch("wade.services.init_service.console") as mock_console:
+            _show_init_summary(
+                provider_setup={"name": "github"},
+                project_settings={
+                    "main_branch": "main",
+                    "merge_strategy": "PR",
+                    "branch_prefix": "feat",
+                    "worktrees_dir": "../.worktrees",
+                },
+                selected_tool=None,
+                default_model=None,
+                default_effort=None,
+                default_yolo=None,
+                implementation_setup={},
+                command_overrides={},
+                hooks_setup={},
+                knowledge_setup={},
+            )
+        kv_calls = {call.args[0]: call.args[1] for call in mock_console.kv.call_args_list}
+        assert kv_calls.get("Provider") == "github"
+        assert kv_calls.get("Main branch") == "main"
+        assert kv_calls.get("AI tool") == "(not set)"
+        assert "Default YOLO" not in kv_calls
+
+    def test_renders_with_full_data(self) -> None:
+        mapping = ComplexityModelMapping(
+            easy="haiku",
+            medium="sonnet",
+            complex="sonnet",
+            very_complex="opus",
+            complex_effort="high",
+        )
+        with patch("wade.services.init_service.console") as mock_console:
+            _show_init_summary(
+                provider_setup={"name": "github"},
+                project_settings={
+                    "main_branch": "main",
+                    "merge_strategy": "direct",
+                    "branch_prefix": "fix",
+                    "worktrees_dir": "../trees",
+                },
+                selected_tool="claude",
+                default_model="claude-sonnet-4-6",
+                default_effort="medium",
+                default_yolo=True,
+                implementation_setup={"tool": "claude", "model_mapping": mapping},
+                command_overrides={
+                    "plan": {"tool": "gemini", "model": "gemini-2.5-pro"},
+                    "deps": {"mode": "headless"},
+                    "review_plan": {"enabled": "true", "mode": "prompt"},
+                },
+                hooks_setup={
+                    "post_worktree_create": "scripts/setup.sh",
+                    "copy_to_worktree": [".env"],
+                },
+                knowledge_setup={"enabled": True, "path": "docs/KNOWLEDGE.md"},
+            )
+        kv_calls = {call.args[0]: call.args[1] for call in mock_console.kv.call_args_list}
+        assert kv_calls.get("AI tool") == "claude"
+        assert kv_calls.get("Default YOLO") == "true"
+        assert kv_calls.get("Default effort") == "medium"
+        assert kv_calls.get("Knowledge file") == "docs/KNOWLEDGE.md"
+        # Verify per-tier effort shows up in implementation mapping output
+        assert any("high" in str(v) for v in kv_calls.values())
+        # Verify per-command overrides are shown
+        plan_entry = kv_calls.get("  plan")
+        assert plan_entry is not None and "gemini" in plan_entry
+
+
+# ---------------------------------------------------------------------------
+# _write_config default_yolo tests
+# ---------------------------------------------------------------------------
+
+
+class TestWriteConfigYolo:
+    def test_default_yolo_true_written_to_ai_section(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        _write_config(config_path, "claude", ComplexityModelMapping(), default_yolo=True)
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["yolo"] is True
+
+    def test_default_yolo_false_written_to_ai_section(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        _write_config(config_path, "claude", ComplexityModelMapping(), default_yolo=False)
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["yolo"] is False
+
+    def test_default_yolo_none_omitted_from_ai_section(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        _write_config(config_path, "claude", ComplexityModelMapping(), default_yolo=None)
+        config = yaml.safe_load(config_path.read_text())
+        assert "yolo" not in config["ai"]
+
+    def test_per_command_yolo_in_overrides(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        overrides = {"plan": {"tool": "claude", "yolo": "true"}, "deps": {}}
+        _write_config(config_path, "claude", ComplexityModelMapping(), command_overrides=overrides)
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["plan"]["yolo"] is True
+
+
+# ---------------------------------------------------------------------------
+# _patch_config default_yolo tests
+# ---------------------------------------------------------------------------
+
+
+class TestPatchConfigYolo:
+    def test_force_writes_yolo_true(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), default_yolo=True, force=True
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["yolo"] is True
+
+    def test_force_overwrites_existing_yolo(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  default_tool: claude\n  yolo: true\n")
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), default_yolo=False, force=True
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["yolo"] is False
+
+    def test_no_force_preserves_existing_yolo(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  default_tool: claude\n  yolo: true\n")
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), default_yolo=False, force=False
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["yolo"] is True  # preserved
+
+    def test_no_force_writes_yolo_when_absent(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), default_yolo=True, force=False
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["yolo"] is True

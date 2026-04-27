@@ -41,9 +41,15 @@ class TestInitCommand:
         assert result.returncode == 0
         config = yaml.safe_load((repo / ".wade.yml").read_text(encoding="utf-8"))
         assert config["ai"]["default_tool"] == "claude"
-        assert config["models"]["claude"]["easy"] == "claude-haiku-4.5"
-        assert config["models"]["claude"]["medium"] == "claude-sonnet-4.6"
-        assert config["models"]["claude"]["complex"] == "claude-sonnet-4.6"
+        assert config["models"]["claude"]["easy"] == {"model": "claude-haiku-4.5", "effort": None}
+        assert config["models"]["claude"]["medium"] == {
+            "model": "claude-sonnet-4.6",
+            "effort": None,
+        }
+        assert config["models"]["claude"]["complex"] == {
+            "model": "claude-sonnet-4.6",
+            "effort": None,
+        }
         assert config["models"]["claude"]["medium"] != config["models"]["claude"]["easy"]
         assert "permissions" not in config
         assert (repo / ".wade" / ".wade-managed").is_file()

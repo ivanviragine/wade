@@ -25,6 +25,34 @@ def ensure_version(raw: dict[str, Any]) -> bool:
     return False
 
 
+_TIER_KEYS = ("easy", "medium", "complex", "very_complex")
+
+
+def migrate_string_tiers_to_tier_config(raw: dict[str, Any]) -> bool:
+    """Upgrade legacy string-valued complexity tiers to ``{model, effort}`` form.
+
+    Converts ``easy: claude-haiku-4.5`` → ``easy: {model: claude-haiku-4.5, effort: null}``.
+    Already-structured values are left untouched. Idempotent.
+    """
+    models = raw.get("models")
+    if not isinstance(models, dict):
+        return False
+
+    changed = False
+    for tool_mapping in models.values():
+        if not isinstance(tool_mapping, dict):
+            continue
+        for tier in _TIER_KEYS:
+            val = tool_mapping.get(tier)
+            if val is None:
+                continue
+            if isinstance(val, str):
+                tool_mapping[tier] = {"model": val, "effort": None}
+                changed = True
+            # dict form already canonical — leave alone
+    return changed
+
+
 def run_all_migrations(config_path: Path) -> bool:
     """Run all migrations on a .wade.yml file.
 
@@ -48,6 +76,7 @@ def run_all_migrations(config_path: Path) -> bool:
 
     try:
         changed = ensure_version(raw)
+        changed = migrate_string_tiers_to_tier_config(raw) or changed
 
         if changed:
             config_path.write_text(

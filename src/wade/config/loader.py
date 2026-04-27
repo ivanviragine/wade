@@ -105,6 +105,22 @@ def _section_mapping(raw: dict[str, Any], key: str) -> dict[str, Any]:
     return section
 
 
+def _parse_tier_value(v: Any) -> tuple[str | None, str | None]:
+    """Parse a complexity-tier value into (model, effort).
+
+    Accepts both the legacy string form and the new ``{model, effort}`` dict form.
+    """
+    if v is None:
+        return None, None
+    if isinstance(v, str):
+        return v or None, None
+    if isinstance(v, dict):
+        model = v.get("model") or None
+        effort = v.get("effort") or None
+        return model, effort
+    return None, None
+
+
 def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
     """Build a ProjectConfig from raw YAML dict."""
     version = raw.get("version", 2)
@@ -134,16 +150,24 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
         **command_configs,
     )
 
-    # Parse models section (nested: tool → complexity → model)
+    # Parse models section (nested: tool → complexity → model/effort)
     models_raw = _section_mapping(raw, "models")
     models: dict[str, ComplexityModelMapping] = {}
     for tool_name, mapping_raw in models_raw.items():
         if isinstance(mapping_raw, dict):
+            em, ee = _parse_tier_value(mapping_raw.get("easy"))
+            mm, me = _parse_tier_value(mapping_raw.get("medium"))
+            cm, ce = _parse_tier_value(mapping_raw.get("complex"))
+            vm, ve = _parse_tier_value(mapping_raw.get("very_complex"))
             models[tool_name] = ComplexityModelMapping(
-                easy=mapping_raw.get("easy"),
-                medium=mapping_raw.get("medium"),
-                complex=mapping_raw.get("complex"),
-                very_complex=mapping_raw.get("very_complex"),
+                easy=em,
+                easy_effort=ee,
+                medium=mm,
+                medium_effort=me,
+                complex=cm,
+                complex_effort=ce,
+                very_complex=vm,
+                very_complex_effort=ve,
             )
 
     # Parse provider section
