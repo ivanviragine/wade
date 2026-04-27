@@ -49,10 +49,11 @@ Read @.claude/skills/knowledge/SKILL.md for knowledge operations (search,
 tagging, rating, adding entries).
 
 At the start of this session, search for knowledge relevant to your task
-(do not dump all entries). Rate entries you retrieve: `wade knowledge rate <id> up`
-(useful) or `wade knowledge rate <id> down` (outdated/misleading). Before writing
-`PR-SUMMARY.md`, capture important learnings if knowledge is enabled
-(`.wade.yml` → `knowledge.enabled`).
+(do not dump all entries). **Rating is required for each entry you open and
+evaluate** — not per search call. See the decision tree in
+@.claude/skills/knowledge/SKILL.md for how to decide between up, down, or no
+rating. Before writing `PR-SUMMARY.md`, capture important learnings if knowledge
+is enabled (`.wade.yml` → `knowledge.enabled`).
 Then commit the updated knowledge file alongside your other changes.
 
 ## First action: check your context
@@ -295,6 +296,7 @@ you complete every mandatory step and the user can track progress.
 
 - [ ] Run `wade implementation-session check`
 - [ ] Search relevant knowledge (`wade knowledge get --search <topic>` or `wade knowledge get --tag <tag>`)
+- [ ] Rate evaluated knowledge entries (`wade knowledge rate <id> up/down` per the decision tree in knowledge skill)
 - [ ] Implementation tasks from PLAN.md (add each task as a separate item)
 - [ ] Run `wade review implementation` (if `review_implementation.enabled` is not `false`)
 - [ ] Capture knowledge (`wade knowledge add`) (if knowledge capture is enabled)

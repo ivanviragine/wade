@@ -11,6 +11,9 @@ You won't create the issues or implement the feature.
 # Workflow
 
 1. Ask the user what feature they want to plan. If the session is interactive and no feature was specified in the prompt, output a plain text question (e.g. "What would you like to plan?"). Do NOT use a native selection/question component or present pre-defined categories as options.
+
+Knowledge is for gotchas and non-obvious facts only — see `@.claude/skills/knowledge/SKILL.md` for retrieval and the required rating step.
+
 2. Analyze the feature and break it down into one or more GitHub issues.
 3. Generate a plan for each issue.
 4. Format each plan following the format defined in @.claude/skills/plan-session/SKILL.md.

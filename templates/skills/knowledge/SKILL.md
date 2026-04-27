@@ -2,10 +2,14 @@
 name: knowledge
 description: >
   Instructions for contextual knowledge retrieval, tagging, search, and rating.
-  Referenced by plan-session and implementation-session skills.
+  Referenced by plan-session, implementation-session, and review-pr-comments-session skills.
 ---
 
 # Knowledge Operations
+
+## Purpose
+
+Knowledge captures **gotchas, buried constraints, hidden invariants, and facts not in `AGENTS.md`/`CLAUDE.md`** — things a future agent would otherwise waste time rediscovering. It is not a work log, a changelog, or a duplicate of documentation that already exists. If the fact is in `AGENTS.md`, `CLAUDE.md`, or derivable from `git log`/`git blame`, do not add it.
 
 ## Contextual retrieval
 
@@ -69,13 +73,25 @@ wade knowledge tag list <entry-id>   # tags for one entry
 
 ## Rating
 
-Rate entries you read — this feeds the auto-filter that prunes low-quality
-entries over time:
+**Rating is required for each entry you open and evaluate** — not per search call. A broad search returning many results does not force you to rate all of them; rate only the entries you actually read and assessed.
 
 ```bash
 wade knowledge rate <entry-id> up    # entry was useful
 wade knowledge rate <entry-id> down  # entry was outdated or misleading
 ```
+
+**How to decide:**
+
+1. **Was your search appropriate (correct tags/text)?**
+   - **No** → do not rate. The issue is your search, not the entry.
+
+2. Search was appropriate; entry came back legitimately:
+   - **Useful for your task** → rate **up**.
+   - **Correct content but not applicable to your task** → do **not** rate (entry is fine; refine future searches).
+   - **Content is outdated or incorrect** → rate **down**.
+   - **Tags or terminology are wrong/missing (content itself is correct)** → do **not** rate down — fix tags via `wade knowledge tag add/remove <id> <tag>`. Downvoting good content for tag problems mis-signals the auto-pruner.
+
+3. **Entry surfaced due to a known parser/search bug** → do not rate; flag as a system issue.
 
 ## Entry style
 
@@ -102,7 +118,12 @@ Knowledge is **not a changelog** — it is a searchable store of facts, gotchas,
 - Patterns with a WHY that code alone can't explain
 - Pointers to where a rule or config lives when the location isn't obvious
 
-Do **not** capture: "we added X feature", implementation logs, or anything directly readable from git history.
+**DO NOT capture:**
+
+- Completed-work summaries: "We added X feature in this session", "Implemented Y in PR #N" — this duplicates `git log`.
+- Refactor or fix histories: "Fixed bug Z by doing W" — derivable from `git blame` / `git log`.
+- Content already in `AGENTS.md` or `CLAUDE.md`: anything that is documented there does not need a knowledge entry.
+- Anything reconstructable from `git log`, `git blame`, or reading the current source — if a future agent can find it in 10 seconds, it doesn't belong here.
 
 Entry dates (shown in search results) indicate freshness — rate an entry down if it no longer applies.
 

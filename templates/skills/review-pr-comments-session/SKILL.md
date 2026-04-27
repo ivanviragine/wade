@@ -39,6 +39,18 @@ After completing a wade command, briefly report the outcome and announce the nex
 **NEVER** use `gh issue create` or the GitHub API to create issues directly.
 Always use `wade task create` for interactive issue creation.
 
+## Project Knowledge
+
+Read @.claude/skills/knowledge/SKILL.md for knowledge operations (search,
+tagging, rating, adding entries).
+
+Before addressing review comments, search for knowledge relevant to the files
+and topics being reviewed (do not dump all entries). Past gotchas about the
+files you're editing matter most here. **Rating is required for each entry you
+open and evaluate** — not per search call. See the decision tree in
+@.claude/skills/knowledge/SKILL.md for how to decide between up, down, or no
+rating.
+
 ## First action: check your context
 
 Run `wade review-pr-comments-session check` as your **first action**:
@@ -222,6 +234,8 @@ you complete every mandatory step and the user can track progress.
 
 - [ ] Run `wade review-pr-comments-session check`
 - [ ] Fetch review comments (`wade review-pr-comments-session fetch`)
+- [ ] Search relevant knowledge (`wade knowledge get --search <topic>` or `wade knowledge get --tag <tag>`)
+- [ ] Rate evaluated knowledge entries (`wade knowledge rate <id> up/down` per the decision tree in knowledge skill)
 - [ ] Address each review comment (add each as a separate item)
 - [ ] Write PR-SUMMARY.md
 - [ ] Sync with main (`wade review-pr-comments-session sync --json`)
