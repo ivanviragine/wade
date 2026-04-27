@@ -163,7 +163,7 @@ you complete every mandatory step and the user can track progress.
 
 - [ ] Ask the user what they want to plan
 - [ ] Search relevant knowledge (`wade knowledge get --search <topic>` or `wade knowledge get --tag <tag>`)
-- [ ] Rate evaluated knowledge entries (`wade knowledge rate <id> up/down` per the decision tree in knowledge skill)
+- [ ] For evaluated knowledge entries, decide per the knowledge-skill decision tree whether to rate with `wade knowledge rate <id> up/down` or intentionally leave the entry unrated
 - [ ] Plan the feature with the user (analyze, break down, propose)
 - [ ] Write plan file(s) to the temp directory
 - [ ] Run `wade review plan` for each plan file (if review is enabled)

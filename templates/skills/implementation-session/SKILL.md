@@ -296,7 +296,7 @@ you complete every mandatory step and the user can track progress.
 
 - [ ] Run `wade implementation-session check`
 - [ ] Search relevant knowledge (`wade knowledge get --search <topic>` or `wade knowledge get --tag <tag>`)
-- [ ] Rate evaluated knowledge entries (`wade knowledge rate <id> up/down` per the decision tree in knowledge skill)
+- [ ] Follow the knowledge skill decision tree for evaluated knowledge entries (rate with `wade knowledge rate <id> up/down` when appropriate; otherwise leave the entry unrated)
 - [ ] Implementation tasks from PLAN.md (add each task as a separate item)
 - [ ] Run `wade review implementation` (if `review_implementation.enabled` is not `false`)
 - [ ] Capture knowledge (`wade knowledge add`) (if knowledge capture is enabled)

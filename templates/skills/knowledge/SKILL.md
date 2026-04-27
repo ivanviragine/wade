@@ -73,7 +73,7 @@ wade knowledge tag list <entry-id>   # tags for one entry
 
 ## Rating
 
-**Rating is required for each entry you open and evaluate** — not per search call. A broad search returning many results does not force you to rate all of them; rate only the entries you actually read and assessed.
+**For each entry you open and evaluate, make an explicit decision per the decision tree below** — not per search call. A broad search returning many results does not force you to rate all of them; only entries you actually read and assessed require a decision. Rate up/down when appropriate; otherwise intentionally leave the entry unrated.
 
 ```bash
 wade knowledge rate <entry-id> up    # entry was useful

@@ -235,7 +235,7 @@ you complete every mandatory step and the user can track progress.
 - [ ] Run `wade review-pr-comments-session check`
 - [ ] Fetch review comments (`wade review-pr-comments-session fetch`)
 - [ ] Search relevant knowledge (`wade knowledge get --search <topic>` or `wade knowledge get --tag <tag>`)
-- [ ] Rate evaluated knowledge entries (`wade knowledge rate <id> up/down` per the decision tree in knowledge skill)
+- [ ] Rate evaluated knowledge entries `up/down` when appropriate (`wade knowledge rate <id> up/down` per the decision tree in knowledge skill); otherwise intentionally leave them unrated
 - [ ] Address each review comment (add each as a separate item)
 - [ ] Write PR-SUMMARY.md
 - [ ] Sync with main (`wade review-pr-comments-session sync --json`)
