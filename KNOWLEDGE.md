@@ -72,3 +72,9 @@ Entry quality rules live in the `## Entry style` section of `templates/skills/kn
 When writing instructions for AI tools, "ask the user X" is not sufficient to prevent the tool from using native UI components (e.g. AskUserQuestion with pre-defined options). You must explicitly say "output a plain text question" and "do NOT use a native selection/question component or present pre-defined categories."
 
 ---
+
+## 3463fbd4 | 2026-04-27 | implementation | tags: skills, prompts, architecture | Issue #295
+
+When editing agent session rules, check BOTH templates/skills/<name>/SKILL.md AND templates/prompts/<name>.md — skills are symlinked into .claude/skills/ while prompts are read directly by service code. Changes to one without the other can leave contradictory instructions.
+
+---
