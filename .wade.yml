@@ -13,27 +13,39 @@ ai:
     tool: claude
     model: claude-opus-4.7
   deps:
-    tool: gemini
-    model: gemini-3-pro-preview
+    tool: copilot
+    model: claude-sonnet-4.6
     mode: headless
   review_plan:
-    mode: prompt
+    tool: copilot
+    model: claude-sonnet-4.6
+    mode: headless
     enabled: true
   review_implementation:
-    mode: prompt
+    tool: copilot
+    model: claude-sonnet-4.6
+    mode: headless
+    enabled: true
+  review_batch:
+    tool: copilot
+    model: claude-sonnet-4.6
+    mode: interactive
     enabled: true
 models:
   claude:
-    easy: claude-haiku-4.5
+    easy: claude-sonnet-4.6
     medium: claude-sonnet-4.6
-    complex: claude-sonnet-4.6
+    complex: claude-opus-4.7
     very_complex: claude-opus-4.7
 provider:
   name: github
 knowledge:
   enabled: true
+  path: KNOWLEDGE.md
 hooks:
   post_worktree_create: scripts/setup-worktree.sh
   copy_to_worktree:
   - .env
   - .wade.yml
+  - KNOWLEDGE.md
+  - KNOWLEDGE.ratings.yml
