@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.23.0] — 2026-04-27
+
+### Features
+
+- require knowledge rating after retrieval and reinforce entry quality rules (#296) (01b70de)
+
 ## [v0.22.0] — 2026-04-27
 
 ### Features
