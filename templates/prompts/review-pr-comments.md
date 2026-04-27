@@ -20,3 +20,4 @@ There are {comment_count} unresolved comment(s) across {file_count} file(s).
 7. **At session end**: always present a workflow recap (which wade commands you ran),
    current state (PR status, threads resolved and remaining), and what happens next. Then suggest
    the user exits.
+8. Search and rate knowledge per `@.claude/skills/knowledge/SKILL.md` — past gotchas about the file you're editing matter; rating evaluated entries is required.
