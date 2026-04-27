@@ -78,3 +78,9 @@ When writing instructions for AI tools, "ask the user X" is not sufficient to pr
 When editing agent session rules, check BOTH templates/skills/<name>/SKILL.md AND templates/prompts/<name>.md — skills are symlinked into .claude/skills/ while prompts are read directly by service code. Changes to one without the other can leave contradictory instructions.
 
 ---
+
+## 6264c1a6 | 2026-04-27 | plan | tags: github, gh-cli, labels
+
+`gh label list --search <name>` is unreliable for label-existence checks — it returns empty for label names that exist (verified for `bug`, `complexity:medium`, `review-addressed-by:claude`). Use `gh api repos/{slug}/labels/{url-encoded-name}` with `check=False` instead; it returns 200 if the label exists and 404 if not.
+
+---
