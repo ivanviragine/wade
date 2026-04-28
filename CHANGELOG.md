@@ -4,11 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
-## [Unreleased]
+## [v0.24.2] — 2026-04-28
 
 ### Refactoring
 
-- stop applying yolo to headless AI delegation (#300): headless commands (deps, review_*) no longer pass yolo flags to the subprocess; the init wizard skips the yolo prompt for commands configured as mode: headless
+- stop applying yolo to headless AI delegation (#301) (86b3245)
 
 ## [v0.24.1] — 2026-04-27
 
