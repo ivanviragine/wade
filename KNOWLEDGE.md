@@ -106,3 +106,9 @@ Implication for any "is the review burst over?" heuristic in
 and keep `bot_status` as a secondary input only.
 
 ---
+
+## 08f59f5c | 2026-04-28 | implementation | tags: testing, mocking, datetime, mypy | Issue #302
+
+When a service does 'from datetime import UTC, datetime' and calls datetime.now(UTC), patch the module-level class reference (e.g. wade.services.review_service.datetime). Set mock_datetime.now.return_value = fixed_now. Avoid naming local variables 'now' as datetime when the same function later uses 'now = time.time()' (float) — mypy strict mode flags the type mismatch even across mutually-exclusive code paths (use a distinct name like 'settle_now').
+
+---
