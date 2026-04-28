@@ -2013,8 +2013,14 @@ def _prompt_command_overrides(
     result: dict[str, dict[str, Any]] = {cmd_name: {} for cmd_name in _COMMAND_OVERRIDE_NAMES}
     tool_for_cmd: list[str | None] = [None] * len(cmd_triples)
 
-    def _ask_effort_and_yolo(cmd_name: str, effective_tool: str | None) -> None:
-        """Prompt for per-command effort and yolo overrides (capability-gated)."""
+    def _ask_effort_and_yolo(
+        cmd_name: str, effective_tool: str | None, *, skip_yolo: bool = False
+    ) -> None:
+        """Prompt for per-command effort and yolo overrides (capability-gated).
+
+        skip_yolo suppresses the yolo prompt for headless commands, which don't
+        need write permissions.
+        """
         if not effective_tool:
             return
         try:
@@ -2039,7 +2045,7 @@ def _prompt_command_overrides(
             if effort_idx > 0:
                 result[cmd_name]["effort"] = effort_choices[effort_idx]
 
-        if caps.supports_yolo:
+        if not skip_yolo and caps.supports_yolo:
             current_yolo_val = current_cmd.get("yolo")
             yolo_choices = ["Skip (use default)", "Yes", "No"]
             yolo_default = 0  # default to Skip (inherit global ai.yolo)
@@ -2115,11 +2121,6 @@ def _prompt_command_overrides(
             if chosen and chosen != skip_model_label:
                 result[cmd_name]["model"] = chosen
 
-        # Effort + yolo — use effective tool (explicit override or inherited default_tool)
-        effective_tool = tool_for_cmd[cmd_idx] or default_tool
-        if effective_tool:
-            _ask_effort_and_yolo(cmd_name, effective_tool)
-
     for cmd_idx, (cmd_name, prompt_label, section) in enumerate(cmd_triples):
         console.rule(section)
         current_cmd = current.get(cmd_name, {})
@@ -2127,6 +2128,9 @@ def _prompt_command_overrides(
         if cmd_name == "plan":
             result[cmd_name] = {}
             _ask_tool_and_model(cmd_idx, cmd_name, prompt_label, section)
+            effective_tool = tool_for_cmd[cmd_idx] or default_tool
+            if effective_tool:
+                _ask_effort_and_yolo(cmd_name, effective_tool)
 
         elif cmd_name.startswith("review_"):
             # 1. Enable?
@@ -2162,7 +2166,7 @@ def _prompt_command_overrides(
             mode = mode_values[mode_idx]
             result[cmd_name]["mode"] = mode
 
-            # 3. Tool and model only needed for AI-backed modes.
+            # 3. Tool, model, effort, and (for interactive) yolo — only for AI-backed modes.
             # When no default_tool is configured, skip is not a valid choice —
             # a concrete tool must be selected or the resulting config would have
             # no resolvable AI tool for headless/interactive execution.
@@ -2174,17 +2178,19 @@ def _prompt_command_overrides(
                     section,
                     allow_skip=default_tool is not None,
                 )
+                effective_tool = tool_for_cmd[cmd_idx] or default_tool
+                if effective_tool:
+                    _ask_effort_and_yolo(cmd_name, effective_tool, skip_yolo=(mode == "headless"))
 
         elif cmd_name == "deps":
             result[cmd_name] = {}
 
-            # 1. Tool (unchanged position)
+            # 1. Tool and model
             _ask_tool_and_model(cmd_idx, cmd_name, prompt_label, section)
 
-            # 2. Mode — headless/interactive only (no self-review for deps)
-            # Skip mode entirely if no effective tool is available
             effective_tool = tool_for_cmd[cmd_idx] or default_tool
             if effective_tool:
+                # 2. Mode — ask before yolo so yolo can be gated (headless skips yolo)
                 deps_mode_options = [
                     "headless (AI one-shot)",
                     "interactive (AI session)",
@@ -2199,7 +2205,11 @@ def _prompt_command_overrides(
                     deps_mode_options,
                     default=deps_mode_default,
                 )
-                result[cmd_name]["mode"] = deps_mode_values[mode_idx]
+                deps_mode = deps_mode_values[mode_idx]
+                result[cmd_name]["mode"] = deps_mode
+
+                # 3. Effort + yolo (yolo skipped when mode=headless)
+                _ask_effort_and_yolo(cmd_name, effective_tool, skip_yolo=(deps_mode == "headless"))
 
     return result
 
