@@ -4,6 +4,9 @@
 3463fbd4:
   down: 0
   up: 1
+54326c98:
+  down: 1
+  up: 0
 b61e247e:
   down: 0
   up: 2
@@ -11,7 +14,7 @@ b6a3a637:
   down: 0
   up: 1
 cedeaad0:
-  down: 0
+  down: 1
   up: 1
 e2a49ac1:
   down: 0

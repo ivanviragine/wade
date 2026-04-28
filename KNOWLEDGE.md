@@ -84,3 +84,9 @@ When editing agent session rules, check BOTH templates/skills/<name>/SKILL.md AN
 `gh label list --search <name>` is unreliable for label-existence checks — it returns empty for label names that exist (verified for `bug`, `complexity:medium`, `review-addressed-by:claude`). Use `gh api repos/{slug}/labels/{url-encoded-name}` with `check=False` instead; it returns 200 if the label exists and 404 if not.
 
 ---
+
+## 1c18f1d4 | 2026-04-28 | plan | tags: delegation, yolo, headless, ai-tools
+
+wade's headless AI delegation (mode: headless for deps and review_*) should rely on permissions.allowed_commands, not yolo. Why: (1) codex exec auto-defaults approval_policy=never, making yolo args (-a never) redundant. (2) For Claude/Copilot/Gemini/Cursor, headless analytical tasks (read repo, emit output) don't need write permissions, so yolo over-grants. (3) Headless yolo passthrough was added in PR #146 (commit 26771d3) but worked fine before that. The init wizard prompting "Enable YOLO mode for plan review?" on a headless subprocess is confusing UX.
+
+---
