@@ -710,7 +710,8 @@ class TestPromptCommandOverrides:
 
         mock_select.side_effect = capturing_select
         _prompt_command_overrides(["claude"], non_interactive=False, default_tool="claude")
-        assert any("YOLO" in p for p in prompts_asked)
+        yolo_count = sum(1 for p in prompts_asked if "YOLO" in p)
+        assert yolo_count == 2  # plan asks yolo; interactive deps also asks yolo
 
     @patch("wade.services.init_service.AbstractAITool.get")
     @patch("wade.services.init_service._collect_model_options")
@@ -755,27 +756,18 @@ class TestPromptCommandOverrides:
         """Plan (always interactive) must always get the yolo prompt when tool supports it."""
         prompts_asked: list[str] = []
 
-        def capturing_select(title: str, _items: object, **_kw: object) -> int:
-            prompts_asked.append(title)
-            return 0  # always pick first/default
-
-        mock_select.side_effect = capturing_select
-        # Use non_interactive=False with default_tool="claude" (supports yolo)
-        # plan: Skip tool → inherits claude → effort + yolo prompts should appear
-        # All reviews: disabled
-        call_count_ref = [0]
-
         def gated_select(title: str, items: list[str], default: int = 0, **_kw: object) -> int:
             prompts_asked.append(title)
-            call_count_ref[0] += 1
             # plan-tool=Skip(1), plan-effort=Skip(0), plan-yolo=Skip(0)
             # deps: no tool (no default_tool) → skip
             # reviews: Enable=No(1)
             seq = [1, 0, 0, 1, 1, 1, 1]
-            idx = call_count_ref[0] - 1
+            idx = len(prompts_asked) - 1
             return seq[idx] if idx < len(seq) else default
 
         mock_select.side_effect = gated_select
+        # Use non_interactive=False with default_tool="claude" (supports yolo)
+        # plan: Skip tool → inherits claude → effort + yolo prompts should appear
         _prompt_command_overrides(["claude"], non_interactive=False, default_tool="claude")
 
         assert any("YOLO" in p for p in prompts_asked)
