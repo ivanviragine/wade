@@ -90,3 +90,19 @@ When editing agent session rules, check BOTH templates/skills/<name>/SKILL.md AN
 wade's headless AI delegation (mode: headless for deps and review_*) should rely on permissions.allowed_commands, not yolo. Why: (1) codex exec auto-defaults approval_policy=never, making yolo args (-a never) redundant. (2) For Claude/Copilot/Gemini/Cursor, headless analytical tasks (read repo, emit output) don't need write permissions, so yolo over-grants. (3) Headless yolo passthrough was added in PR #146 (commit 26771d3) but worked fine before that. The init wizard prompting "Enable YOLO mode for plan review?" on a headless subprocess is confusing UX.
 
 ---
+
+## cc91cd11 | 2026-04-28 | plan | tags: review, review-polling, coderabbit
+
+CodeRabbit's `COMPLETED` bot status (the default returned by `detect_coderabbit_review_status`
+at `models/review.py:68-99` when no PAUSED/IN_PROGRESS marker is present in the latest
+CodeRabbit comment) does NOT guarantee the inline-review-comment stream is finished.
+Individual inline comments can keep arriving for a few seconds after the status resolves.
+
+Implication for any "is the review burst over?" heuristic in
+`review_service.py`: do not treat `bot_status == COMPLETED` alone as
+"reviewer is done posting." Use the freshness of the inline comments themselves
+(`ReviewComment.created_at` — populated by the GraphQL provider in
+`providers/github.py:405`) and/or `PRReview.submitted_at` as the direct signal,
+and keep `bot_status` as a secondary input only.
+
+---
