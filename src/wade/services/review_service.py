@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import tempfile
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
@@ -27,10 +28,12 @@ from wade.models.review import (
     PRReviewStatus,
     ReviewBotStatus,
     ReviewState,
+    compute_effective_settle,
     detect_coderabbit_review_status,
     filter_actionable_threads,
     filter_unresolved_threads,
     format_review_threads_markdown,
+    latest_signal_ts,
 )
 from wade.models.task import Task
 from wade.providers.base import AbstractTaskProvider
@@ -383,18 +386,51 @@ def poll_for_reviews(
                 is_bot = status.bot_status is not None
                 settle = bot_settle if is_bot else human_settle
                 reviewer_type = "bot" if is_bot else "reviewer"
+
+                settle_now = datetime.now(UTC)
+                eff_settle = compute_effective_settle(status, settle, poll_interval, settle_now)
+                latest = latest_signal_ts(status)
+
                 if eff_threads:
-                    console.info(
-                        f"Found {count} new review comment(s)."
-                        f" Waiting {settle}s for {reviewer_type} to finish..."
-                    )
+                    if latest is None:
+                        console.info(
+                            f"Found {count} new review comment(s)."
+                            f" Waiting {settle}s for {reviewer_type} to finish..."
+                        )
+                    elif eff_settle == 0:
+                        age = int((settle_now - latest).total_seconds())
+                        console.info(
+                            f"Found {count} review comment(s) (newest {age}s old)"
+                            f" — proceeding without settle wait."
+                        )
+                    else:
+                        age = int((settle_now - latest).total_seconds())
+                        console.info(
+                            f"Found {count} review comment(s) (newest {age}s old)."
+                            f" Waiting {eff_settle}s for {reviewer_type} to finish..."
+                        )
                 else:
                     names = ", ".join(f"@{a}" for a in status.changes_requested_by)
-                    console.info(
-                        f"Changes requested by {names}."
-                        f" Waiting {settle}s for {reviewer_type} to finish..."
-                    )
-                time.sleep(settle)
+                    if latest is None:
+                        console.info(
+                            f"Changes requested by {names}."
+                            f" Waiting {settle}s for {reviewer_type} to finish..."
+                        )
+                    elif eff_settle == 0:
+                        age = int((settle_now - latest).total_seconds())
+                        console.info(
+                            f"Changes requested by {names} (newest {age}s old)"
+                            f" — proceeding without settle wait."
+                        )
+                    else:
+                        age = int((settle_now - latest).total_seconds())
+                        console.info(
+                            f"Changes requested by {names} (newest {age}s old)."
+                            f" Waiting {eff_settle}s for {reviewer_type} to finish..."
+                        )
+
+                if eff_settle > 0:
+                    time.sleep(eff_settle)
                 return PollOutcome.COMMENTS_FOUND
 
             # No review signals, no bot blocking — apply quiet-timeout logic.
