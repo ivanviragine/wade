@@ -179,11 +179,12 @@ class TestDelegateHeadless:
         assert "Review code" in cmd
 
     @patch("wade.services.delegation_service.run")
-    def test_headless_yolo_is_forwarded(self, mock_run: MagicMock) -> None:
+    def test_headless_yolo_is_not_forwarded(self, mock_run: MagicMock) -> None:
+        """yolo=True in config is silently ignored for headless delegation."""
         mock_run.return_value = MagicMock(returncode=0, stdout="done\n")
         req = DelegationRequest(
             mode=DelegationMode.HEADLESS,
-            prompt="Implement change",
+            prompt="Review code",
             ai_tool="claude",
             yolo=True,
         )
@@ -191,7 +192,7 @@ class TestDelegateHeadless:
         assert result.success is True
 
         cmd = mock_run.call_args[0][0]
-        assert "--dangerously-skip-permissions" in cmd
+        assert "--dangerously-skip-permissions" not in cmd
 
 
 # ---------------------------------------------------------------------------

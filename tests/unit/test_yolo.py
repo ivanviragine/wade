@@ -584,3 +584,55 @@ class TestGeminiStructuredOutput:
         assert "--output-format" in cmd
         idx = cmd.index("--output-format")
         assert cmd[idx + 1] == "json"
+
+
+# ---------------------------------------------------------------------------
+# Headless delegation — yolo is never forwarded
+# ---------------------------------------------------------------------------
+
+
+class TestHeadlessYoloBehavior:
+    """Verify _delegate_headless ignores yolo regardless of config value."""
+
+    def test_headless_does_not_propagate_yolo_true(self) -> None:
+        """yolo=True in DelegationRequest must not produce yolo flags in the subprocess command."""
+        from unittest.mock import MagicMock, patch
+
+        from wade.models.delegation import DelegationMode, DelegationRequest
+        from wade.services.delegation_service import _delegate_headless
+
+        with patch("wade.services.delegation_service.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="ok\n")
+            req = DelegationRequest(
+                mode=DelegationMode.HEADLESS,
+                prompt="Review code",
+                ai_tool="claude",
+                yolo=True,
+            )
+            result = _delegate_headless(req)
+
+        assert result.success is True
+        cmd = mock_run.call_args[0][0]
+        assert "--dangerously-skip-permissions" not in cmd
+        assert "--yolo" not in cmd
+
+    def test_headless_yolo_false_also_excluded(self) -> None:
+        """yolo=False produces no yolo flags (baseline sanity check)."""
+        from unittest.mock import MagicMock, patch
+
+        from wade.models.delegation import DelegationMode, DelegationRequest
+        from wade.services.delegation_service import _delegate_headless
+
+        with patch("wade.services.delegation_service.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="ok\n")
+            req = DelegationRequest(
+                mode=DelegationMode.HEADLESS,
+                prompt="Review code",
+                ai_tool="claude",
+                yolo=False,
+            )
+            result = _delegate_headless(req)
+
+        assert result.success is True
+        cmd = mock_run.call_args[0][0]
+        assert "--dangerously-skip-permissions" not in cmd

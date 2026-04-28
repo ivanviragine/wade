@@ -649,9 +649,9 @@ class TestPromptCommandOverrides:
     def test_deps_with_default_tool_shows_mode(self, mock_select: MagicMock) -> None:
         """When default_tool is set, deps should show headless/interactive mode prompt."""
         # plan: Skip tool (1), effort=Skip (0), yolo=Skip (0) — inherits default_tool
-        # deps: Skip tool (1), effort=Skip (0), yolo=Skip (0), mode=headless (0)
+        # deps: Skip tool (1), mode=headless (0), effort=Skip (0) — no yolo for headless
         # review_plan/review_implementation/review_batch: Enable=No (1)
-        mock_select.side_effect = [1, 0, 0, 1, 0, 0, 0, 1, 1, 1]
+        mock_select.side_effect = [1, 0, 0, 1, 0, 0, 1, 1, 1]
         result = _prompt_command_overrides(["claude"], non_interactive=False, default_tool="claude")
         assert result["deps"] == {"mode": "headless"}
 
@@ -659,17 +659,118 @@ class TestPromptCommandOverrides:
     def test_deps_mode_excludes_self_review(self, mock_select: MagicMock) -> None:
         """Deps mode prompt must not include 'prompt (self-review)' as an option."""
         # plan: Skip tool (1), effort=Skip (0), yolo=Skip (0) — inherits default_tool
-        # deps: Skip tool (1), effort=Skip (0), yolo=Skip (0), mode=headless (0)
+        # deps: Skip tool (1), mode=headless (0), effort=Skip (0) — no yolo for headless
         # review_plan/review_implementation/review_batch: Enable=No (1)
-        mock_select.side_effect = [1, 0, 0, 1, 0, 0, 0, 1, 1, 1]
+        mock_select.side_effect = [1, 0, 0, 1, 0, 0, 1, 1, 1]
         _prompt_command_overrides(["claude"], non_interactive=False, default_tool="claude")
-        # The deps mode call is the 7th select call (index 6):
-        # 0=plan-tool 1=plan-effort 2=plan-yolo 3=deps-tool 4=deps-effort 5=deps-yolo 6=deps-mode
-        deps_mode_call = mock_select.call_args_list[6]
+        # The deps mode call is the 5th select call (index 4):
+        # 0=plan-tool 1=plan-effort 2=plan-yolo 3=deps-tool 4=deps-mode 5=deps-effort
+        deps_mode_call = mock_select.call_args_list[4]
         mode_options_arg = deps_mode_call.args[1]
         assert "prompt (self-review)" not in mode_options_arg
         assert "headless (AI one-shot)" in mode_options_arg
         assert "interactive (AI session)" in mode_options_arg
+
+    @patch("wade.ui.prompts.select")
+    def test_wizard_skips_yolo_for_headless_deps(self, mock_select: MagicMock) -> None:
+        """Yolo prompt must not appear when deps mode is headless."""
+        prompts_asked: list[str] = []
+        call_count = [0]
+
+        def tracking(title: str, _items: object, default: int = 0, **_kw: object) -> int:
+            prompts_asked.append(title)
+            call_count[0] += 1
+            # plan=Skip(1), plan-effort=Skip(0), plan-yolo=Skip(0)
+            # deps=Skip(1), deps-mode=headless(0), deps-effort=Skip(0) — no yolo
+            # reviews all No(1)
+            seq = [1, 0, 0, 1, 0, 0, 1, 1, 1]
+            idx = call_count[0] - 1
+            return seq[idx] if idx < len(seq) else default
+
+        mock_select.side_effect = tracking
+        _prompt_command_overrides(["claude"], non_interactive=False, default_tool="claude")
+        yolo_count = sum(1 for p in prompts_asked if "YOLO" in p)
+        assert yolo_count == 1  # plan asks yolo; headless deps does not
+
+    @patch("wade.ui.prompts.select")
+    def test_wizard_asks_yolo_for_interactive_deps(self, mock_select: MagicMock) -> None:
+        """Yolo prompt appears when deps mode is interactive."""
+        prompts_asked: list[str] = []
+        call_count = 0
+
+        def capturing_select(title: str, items: list[str], **kw: object) -> int:
+            nonlocal call_count
+            prompts_asked.append(title)
+            call_count += 1
+            # plan-tool=Skip(1), plan-effort=Skip(0), plan-yolo=Skip(0)
+            # deps-tool=Skip(1), deps-mode=interactive(1), deps-effort=Skip(0), deps-yolo=Skip(0)
+            # reviews: Enable=No(1) x3
+            sequence = [1, 0, 0, 1, 1, 0, 0, 1, 1, 1]
+            return sequence[call_count - 1] if call_count <= len(sequence) else 0
+
+        mock_select.side_effect = capturing_select
+        _prompt_command_overrides(["claude"], non_interactive=False, default_tool="claude")
+        yolo_count = sum(1 for p in prompts_asked if "YOLO" in p)
+        assert yolo_count == 2  # plan asks yolo; interactive deps also asks yolo
+
+    @patch("wade.services.init_service.AbstractAITool.get")
+    @patch("wade.services.init_service._collect_model_options")
+    @patch("wade.services.init_service._suggest_model_for_tool")
+    @patch("wade.ui.prompts.select")
+    def test_wizard_skips_yolo_for_headless_review(
+        self,
+        mock_select: MagicMock,
+        mock_suggest: MagicMock,
+        mock_collect: MagicMock,
+        mock_get_tool: MagicMock,
+    ) -> None:
+        """Yolo prompt must not appear for a review command configured as headless."""
+        mock_suggest.return_value = "claude-test"
+        mock_collect.return_value = ["claude-test"]
+        mock_caps = MagicMock()
+        mock_caps.supports_effort = False
+        mock_caps.supports_yolo = True  # would appear if not for headless gating
+        mock_get_tool.return_value.capabilities.return_value = mock_caps
+
+        prompts_asked: list[str] = []
+        call_count = [0]
+
+        def tracking(title: str, _items: object, default: int = 0, **_kw: object) -> int:
+            prompts_asked.append(title)
+            call_count[0] += 1
+            # plan=Skip(1), deps=Skip(1) — no default_tool so no effective_tool
+            # review_plan=Yes(0), mode=headless(1), tool=claude(0), model=first(0)
+            # review_impl=No(1), review_batch=No(1)
+            seq = [1, 1, 0, 1, 0, 0, 1, 1]
+            idx = call_count[0] - 1
+            return seq[idx] if idx < len(seq) else default
+
+        mock_select.side_effect = tracking
+        _prompt_command_overrides(["claude"], non_interactive=False)
+
+        yolo_prompts = [p for p in prompts_asked if "YOLO" in p]
+        assert not yolo_prompts
+
+    @patch("wade.ui.prompts.select")
+    def test_wizard_always_asks_yolo_for_plan(self, mock_select: MagicMock) -> None:
+        """Plan (always interactive) must always get the yolo prompt when tool supports it."""
+        prompts_asked: list[str] = []
+
+        def gated_select(title: str, items: list[str], default: int = 0, **_kw: object) -> int:
+            prompts_asked.append(title)
+            # plan-tool=Skip(1), plan-effort=Skip(0), plan-yolo=Skip(0)
+            # deps: no tool (no default_tool) → skip
+            # reviews: Enable=No(1)
+            seq = [1, 0, 0, 1, 1, 1, 1]
+            idx = len(prompts_asked) - 1
+            return seq[idx] if idx < len(seq) else default
+
+        mock_select.side_effect = gated_select
+        # Use non_interactive=False with default_tool="claude" (supports yolo)
+        # plan: Skip tool → inherits claude → effort + yolo prompts should appear
+        _prompt_command_overrides(["claude"], non_interactive=False, default_tool="claude")
+
+        assert any("YOLO" in p for p in prompts_asked)
 
 
 # ---------------------------------------------------------------------------
