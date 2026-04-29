@@ -11,13 +11,12 @@ from wade.models.review import (
     ReviewBotStatus,
     ReviewComment,
     ReviewThread,
-    compute_effective_settle,
     detect_coderabbit_review_status,
     extract_coderabbit_ai_prompt,
     filter_actionable_threads,
     format_review_threads_markdown,
-    latest_signal_ts,
 )
+from wade.services.review_settle import compute_effective_settle, latest_signal_ts
 
 # ---------------------------------------------------------------------------
 # Model basics
@@ -872,6 +871,13 @@ class TestComputeEffectiveSettle:
         # age=70 would normally trigger "nobody is coming" (70 >= 2*30=60 and < 120)
         # but PAUSED bot forces full settle
         status = self._status(age_seconds=70, bot_status=ReviewBotStatus.PAUSED)
+        assert (
+            compute_effective_settle(status, settle=120, poll_interval=30, now=self._now()) == 120
+        )
+
+    def test_paused_bot_age_gte_settle_still_returns_full(self) -> None:
+        # age=130 >= settle=120 would normally return 0, but PAUSED must take priority
+        status = self._status(age_seconds=130, bot_status=ReviewBotStatus.PAUSED)
         assert (
             compute_effective_settle(status, settle=120, poll_interval=30, now=self._now()) == 120
         )

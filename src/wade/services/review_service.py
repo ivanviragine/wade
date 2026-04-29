@@ -28,12 +28,10 @@ from wade.models.review import (
     PRReviewStatus,
     ReviewBotStatus,
     ReviewState,
-    compute_effective_settle,
     detect_coderabbit_review_status,
     filter_actionable_threads,
     filter_unresolved_threads,
     format_review_threads_markdown,
-    latest_signal_ts,
 )
 from wade.models.task import Task
 from wade.providers.base import AbstractTaskProvider
@@ -53,6 +51,7 @@ from wade.services.implementation_service import (
     extract_issue_from_branch,
 )
 from wade.services.prompt_delivery import deliver_prompt_if_needed
+from wade.services.review_settle import compute_effective_settle, latest_signal_ts
 from wade.services.task_service import add_review_addressed_by_labels
 from wade.ui.console import console
 from wade.utils.markdown import append_session_to_body
