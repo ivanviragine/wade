@@ -42,6 +42,7 @@ def compute_effective_settle(
     settle: int,
     poll_interval: int,
     now: datetime,
+    latest: datetime | None,
 ) -> int:
     """Compute the effective settle wait in seconds based on signal age.
 
@@ -53,14 +54,16 @@ def compute_effective_settle(
     - Otherwise → ``max(0, settle - age)``
 
     ``now`` must be a UTC-aware datetime; the call site uses
-    ``datetime.now(UTC)``.  This function is pure — no clock or I/O.
+    ``datetime.now(UTC)``.  ``latest`` is the pre-computed result of
+    ``latest_signal_ts(status)`` — passed in to avoid a second iteration and
+    to keep logging values at the call site consistent with the decision.
+    This function is pure — no clock or I/O.
     """
-    latest = latest_signal_ts(status)
     if latest is None:
         return settle
 
     now_aware = now if now.tzinfo is not None else now.replace(tzinfo=UTC)
-    age = int((now_aware - latest).total_seconds())
+    age = max(0, int((now_aware - latest).total_seconds()))
 
     if status.bot_status == ReviewBotStatus.PAUSED:
         return settle
@@ -75,4 +78,4 @@ def compute_effective_settle(
     ):
         return 0
 
-    return max(0, settle - age)
+    return settle - age

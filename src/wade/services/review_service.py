@@ -387,8 +387,10 @@ def poll_for_reviews(
                 reviewer_type = "bot" if is_bot else "reviewer"
 
                 settle_now = datetime.now(UTC)
-                eff_settle = compute_effective_settle(status, settle, poll_interval, settle_now)
                 latest = latest_signal_ts(status)
+                eff_settle = compute_effective_settle(
+                    status, settle, poll_interval, settle_now, latest
+                )
 
                 if eff_threads:
                     if latest is None:

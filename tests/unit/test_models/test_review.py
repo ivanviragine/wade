@@ -855,54 +855,53 @@ class TestComputeEffectiveSettle:
             return PRReviewStatus(all_unresolved_threads=[thread], **kwargs)
         return PRReviewStatus(**kwargs)
 
+    def _compute(self, status: PRReviewStatus, settle: int, poll_interval: int) -> int:
+        return compute_effective_settle(
+            status, settle, poll_interval, now=self._now(), latest=latest_signal_ts(status)
+        )
+
     def test_no_timestamps_returns_full_settle(self) -> None:
         status = self._status()
-        assert compute_effective_settle(status, settle=60, poll_interval=30, now=self._now()) == 60
+        assert self._compute(status, settle=60, poll_interval=30) == 60
 
     def test_age_gte_settle_returns_zero(self) -> None:
         status = self._status(age_seconds=120)  # 120 >= 60
-        assert compute_effective_settle(status, settle=60, poll_interval=30, now=self._now()) == 0
+        assert self._compute(status, settle=60, poll_interval=30) == 0
 
     def test_age_exactly_settle_returns_zero(self) -> None:
         status = self._status(age_seconds=60)
-        assert compute_effective_settle(status, settle=60, poll_interval=30, now=self._now()) == 0
+        assert self._compute(status, settle=60, poll_interval=30) == 0
 
     def test_paused_bot_age_lt_settle_returns_full(self) -> None:
         # age=70 would normally trigger "nobody is coming" (70 >= 2*30=60 and < 120)
         # but PAUSED bot forces full settle
         status = self._status(age_seconds=70, bot_status=ReviewBotStatus.PAUSED)
-        assert (
-            compute_effective_settle(status, settle=120, poll_interval=30, now=self._now()) == 120
-        )
+        assert self._compute(status, settle=120, poll_interval=30) == 120
 
     def test_paused_bot_age_gte_settle_still_returns_full(self) -> None:
         # age=130 >= settle=120 would normally return 0, but PAUSED must take priority
         status = self._status(age_seconds=130, bot_status=ReviewBotStatus.PAUSED)
-        assert (
-            compute_effective_settle(status, settle=120, poll_interval=30, now=self._now()) == 120
-        )
+        assert self._compute(status, settle=120, poll_interval=30) == 120
 
     def test_pending_reviewers_with_old_comment_returns_partial(self) -> None:
         pending = [PendingReviewer(name="alice")]
         # age=70 >= 2*30=60 but pending_reviewers is non-empty → no "nobody is coming"
         status = self._status(age_seconds=70, pending_reviewers=pending)
-        assert compute_effective_settle(status, settle=120, poll_interval=30, now=self._now()) == 50
+        assert self._compute(status, settle=120, poll_interval=30) == 50
 
     def test_nobody_coming_skips_when_old_enough(self) -> None:
         # bot=None, no pending, age=70 >= 2*30=60 and 70 < 120 → skip
         status = self._status(age_seconds=70, bot_status=None)
-        assert compute_effective_settle(status, settle=120, poll_interval=30, now=self._now()) == 0
+        assert self._compute(status, settle=120, poll_interval=30) == 0
 
     def test_nobody_coming_completed_bot_skips(self) -> None:
         status = self._status(age_seconds=70, bot_status=ReviewBotStatus.COMPLETED)
-        assert compute_effective_settle(status, settle=120, poll_interval=30, now=self._now()) == 0
+        assert self._compute(status, settle=120, poll_interval=30) == 0
 
     def test_fresh_comment_no_pending_returns_partial(self) -> None:
         # age=10 < 2*30=60 → not old enough for "nobody is coming" → partial
         status = self._status(age_seconds=10, bot_status=None)
-        assert (
-            compute_effective_settle(status, settle=120, poll_interval=30, now=self._now()) == 110
-        )
+        assert self._compute(status, settle=120, poll_interval=30) == 110
 
     def test_review_submitted_at_drives_latest_ts(self) -> None:
         from wade.models.review import PRReview, ReviewState
@@ -910,9 +909,7 @@ class TestComputeEffectiveSettle:
         new_ts = self._now() - timedelta(seconds=10)
         review = PRReview(author="alice", state=ReviewState.CHANGES_REQUESTED, submitted_at=new_ts)
         status = PRReviewStatus(reviews=[review], bot_status=None)
-        assert (
-            compute_effective_settle(status, settle=120, poll_interval=30, now=self._now()) == 110
-        )
+        assert self._compute(status, settle=120, poll_interval=30) == 110
 
     def test_newest_timestamp_wins_across_sources(self) -> None:
         from wade.models.review import PRReview
@@ -923,6 +920,11 @@ class TestComputeEffectiveSettle:
         review = PRReview(submitted_at=new_ts)
         # newest = 10s old, 10 < 2*30=60 → partial (escape hatch does not apply)
         status = PRReviewStatus(all_unresolved_threads=[thread], reviews=[review])
-        assert (
-            compute_effective_settle(status, settle=120, poll_interval=30, now=self._now()) == 110
-        )
+        assert self._compute(status, settle=120, poll_interval=30) == 110
+
+    def test_future_timestamp_clamps_age_to_zero(self) -> None:
+        # latest is 5s in the future (clock skew): age clamps to 0, settle - 0 = settle
+        future_ts = self._now() + timedelta(seconds=5)
+        thread = ReviewThread(comments=[ReviewComment(created_at=future_ts)])
+        status = PRReviewStatus(all_unresolved_threads=[thread])
+        assert self._compute(status, settle=60, poll_interval=30) == 60
