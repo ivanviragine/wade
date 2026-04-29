@@ -93,10 +93,11 @@ wade's headless AI delegation (mode: headless for deps and review_*) should rely
 
 ## cc91cd11 | 2026-04-28 | plan | tags: review, review-polling, coderabbit
 
-CodeRabbit's `COMPLETED` bot status (the default returned by `detect_coderabbit_review_status`
-at `models/review.py:68-99` when no PAUSED/IN_PROGRESS marker is present in the latest
-CodeRabbit comment) does NOT guarantee the inline-review-comment stream is finished.
-Individual inline comments can keep arriving for a few seconds after the status resolves.
+CodeRabbit's `COMPLETED` bot status (detected from the summary comment marker
+in `detect_coderabbit_review_status` — `models/review.py:68-99`) does NOT
+guarantee the inline-review-comment stream is finished. The marker flips when
+CodeRabbit edits its summary comment, but individual inline comments can keep
+arriving for a few seconds afterward.
 
 Implication for any "is the review burst over?" heuristic in
 `review_service.py`: do not treat `bot_status == COMPLETED` alone as
