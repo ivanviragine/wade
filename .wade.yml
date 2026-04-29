@@ -18,19 +18,19 @@ ai:
     tool: copilot
     model: claude-sonnet-4.6
     mode: headless
-    yolo: true
+    yolo: false
   review_plan:
     tool: copilot
     model: claude-sonnet-4.6
     mode: headless
     enabled: true
-    yolo: true
+    yolo: false
   review_implementation:
     tool: copilot
     model: claude-sonnet-4.6
     mode: headless
     enabled: true
-    yolo: true
+    yolo: false
   review_batch:
     tool: copilot
     model: claude-sonnet-4.6
