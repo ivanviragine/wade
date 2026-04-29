@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from datetime import UTC
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -20,6 +21,7 @@ _SLEEP = "wade.services.review_service.time.sleep"
 _TIME = "wade.services.review_service.time.time"
 _STATUS = "wade.services.review_service.get_comprehensive_review_status"
 _GET_PR = "wade.services.review_service.git_pr.get_pr_for_branch"
+_DATETIME = "wade.services.review_service.datetime"
 
 
 def _make_thread() -> ReviewThread:
@@ -547,3 +549,274 @@ def test_actionable_only_no_all_unresolved_threads(
 
     assert result == PollOutcome.COMMENTS_FOUND
     mock_sleep.assert_called_once_with(120)
+
+
+# ---------------------------------------------------------------------------
+# Settle-window heuristic tests
+# ---------------------------------------------------------------------------
+
+_FIXED_NOW = dt.datetime(2026, 4, 1, 12, 0, 0, tzinfo=UTC)
+
+
+def _thread_with_ts(age_seconds: int) -> ReviewThread:
+    ts = _FIXED_NOW - dt.timedelta(seconds=age_seconds)
+    return ReviewThread(
+        id="t1",
+        is_resolved=False,
+        comments=[ReviewComment(author="alice", body="fix", created_at=ts)],
+    )
+
+
+@patch(_SLEEP)
+@patch(_DATETIME)
+@patch(_STATUS)
+@patch(_GET_PR)
+def test_settle_skip_when_comment_older_than_settle(
+    mock_get_pr: MagicMock,
+    mock_status: MagicMock,
+    mock_datetime: MagicMock,
+    mock_sleep: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """Newest comment age ≥ settle → COMMENTS_FOUND without any sleep."""
+    mock_datetime.now.return_value = _FIXED_NOW
+    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    thread = _thread_with_ts(age_seconds=300)  # 300 >> 120 (human_settle)
+    mock_status.return_value = PRReviewStatus(
+        all_unresolved_threads=[thread],
+        bot_status=None,
+    )
+
+    result = poll_for_reviews(
+        _provider(),
+        tmp_path,
+        42,
+        "feat/42-test",
+        poll_interval=60,
+        bot_settle=60,
+        human_settle=120,
+    )
+
+    assert result == PollOutcome.COMMENTS_FOUND
+    mock_sleep.assert_not_called()
+
+
+@patch(_SLEEP)
+@patch(_DATETIME)
+@patch(_STATUS)
+@patch(_GET_PR)
+def test_settle_partial_when_comment_mid_age(
+    mock_get_pr: MagicMock,
+    mock_status: MagicMock,
+    mock_datetime: MagicMock,
+    mock_sleep: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """Newest comment age < 2*poll_interval → partial sleep of settle - age."""
+    mock_datetime.now.return_value = _FIXED_NOW
+    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    thread = _thread_with_ts(age_seconds=20)  # 20s old; human_settle=120 → sleep 100
+    mock_status.return_value = PRReviewStatus(
+        all_unresolved_threads=[thread],
+        bot_status=None,
+    )
+
+    result = poll_for_reviews(
+        _provider(),
+        tmp_path,
+        42,
+        "feat/42-test",
+        poll_interval=30,
+        bot_settle=60,
+        human_settle=120,
+    )
+
+    assert result == PollOutcome.COMMENTS_FOUND
+    mock_sleep.assert_called_once_with(100)  # 120 - 20
+
+
+@patch(_SLEEP)
+@patch(_DATETIME)
+@patch(_STATUS)
+@patch(_GET_PR)
+def test_settle_full_for_paused_bot_with_old_comments(
+    mock_get_pr: MagicMock,
+    mock_status: MagicMock,
+    mock_datetime: MagicMock,
+    mock_sleep: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """PAUSED bot forces full settle even when comment age is in [2*poll, settle)."""
+    mock_datetime.now.return_value = _FIXED_NOW
+    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    thread = _thread_with_ts(age_seconds=70)  # 70 >= 2*30=60 → would skip, but PAUSED overrides
+    mock_status.return_value = PRReviewStatus(
+        all_unresolved_threads=[thread],
+        bot_status=ReviewBotStatus.PAUSED,
+    )
+
+    result = poll_for_reviews(
+        _provider(),
+        tmp_path,
+        42,
+        "feat/42-test",
+        poll_interval=30,
+        bot_settle=120,
+        human_settle=120,
+    )
+
+    assert result == PollOutcome.COMMENTS_FOUND
+    mock_sleep.assert_called_once_with(120)  # full bot_settle
+
+
+@patch(_SLEEP)
+@patch(_DATETIME)
+@patch(_STATUS)
+@patch(_GET_PR)
+def test_nobody_coming_skip_no_pending_bot_none(
+    mock_get_pr: MagicMock,
+    mock_status: MagicMock,
+    mock_datetime: MagicMock,
+    mock_sleep: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """No pending reviewers + bot None + age in [2*poll, settle) → skip sleep."""
+    mock_datetime.now.return_value = _FIXED_NOW
+    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    thread = _thread_with_ts(age_seconds=70)  # 70 >= 2*30=60, 70 < 120
+    mock_status.return_value = PRReviewStatus(
+        all_unresolved_threads=[thread],
+        bot_status=None,
+        pending_reviewers=[],
+    )
+
+    result = poll_for_reviews(
+        _provider(),
+        tmp_path,
+        42,
+        "feat/42-test",
+        poll_interval=30,
+        bot_settle=60,
+        human_settle=120,
+    )
+
+    assert result == PollOutcome.COMMENTS_FOUND
+    mock_sleep.assert_not_called()
+
+
+@patch(_SLEEP)
+@patch(_DATETIME)
+@patch(_STATUS)
+@patch(_GET_PR)
+def test_nobody_coming_partial_when_comment_too_fresh(
+    mock_get_pr: MagicMock,
+    mock_status: MagicMock,
+    mock_datetime: MagicMock,
+    mock_sleep: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """No pending reviewers + bot None + age < 2*poll_interval → partial sleep."""
+    mock_datetime.now.return_value = _FIXED_NOW
+    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    thread = _thread_with_ts(age_seconds=10)  # 10 < 2*30=60 → escape hatch doesn't apply
+    mock_status.return_value = PRReviewStatus(
+        all_unresolved_threads=[thread],
+        bot_status=None,
+        pending_reviewers=[],
+    )
+
+    result = poll_for_reviews(
+        _provider(),
+        tmp_path,
+        42,
+        "feat/42-test",
+        poll_interval=30,
+        bot_settle=60,
+        human_settle=120,
+    )
+
+    assert result == PollOutcome.COMMENTS_FOUND
+    mock_sleep.assert_called_once_with(110)  # 120 - 10
+
+
+@patch(_SLEEP)
+@patch(_DATETIME)
+@patch(_STATUS)
+@patch(_GET_PR)
+def test_newest_timestamp_wins_across_thread_and_review(
+    mock_get_pr: MagicMock,
+    mock_status: MagicMock,
+    mock_datetime: MagicMock,
+    mock_sleep: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """Newer review submitted_at overrides older thread created_at as the signal age."""
+    from wade.models.review import PRReview, ReviewState
+
+    mock_datetime.now.return_value = _FIXED_NOW
+    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    old_ts = _FIXED_NOW - dt.timedelta(seconds=80)
+    new_ts = _FIXED_NOW - dt.timedelta(seconds=10)
+    thread = ReviewThread(
+        id="t1",
+        is_resolved=False,
+        comments=[ReviewComment(author="alice", body="fix", created_at=old_ts)],
+    )
+    review = PRReview(author="alice", state=ReviewState.APPROVED, submitted_at=new_ts)
+    mock_status.return_value = PRReviewStatus(
+        all_unresolved_threads=[thread],
+        reviews=[review],
+        bot_status=None,
+    )
+
+    result = poll_for_reviews(
+        _provider(),
+        tmp_path,
+        42,
+        "feat/42-test",
+        poll_interval=30,
+        bot_settle=60,
+        human_settle=120,
+    )
+
+    assert result == PollOutcome.COMMENTS_FOUND
+    # newest is 10s old, 10 < 2*30=60 → partial: 120 - 10 = 110
+    mock_sleep.assert_called_once_with(110)
+
+
+@patch(_SLEEP)
+@patch(_DATETIME)
+@patch(_STATUS)
+@patch(_GET_PR)
+def test_changes_requested_settle_driven_by_submitted_at(
+    mock_get_pr: MagicMock,
+    mock_status: MagicMock,
+    mock_datetime: MagicMock,
+    mock_sleep: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """has_changes_requested branch: old submitted_at triggers skip (no sleep)."""
+    from wade.models.review import PRReview, ReviewState
+
+    mock_datetime.now.return_value = _FIXED_NOW
+    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    old_ts = _FIXED_NOW - dt.timedelta(seconds=300)  # 300 > 120 = human_settle
+    review = PRReview(author="alice", state=ReviewState.CHANGES_REQUESTED, submitted_at=old_ts)
+    mock_status.return_value = PRReviewStatus(
+        all_unresolved_threads=[],
+        reviews=[review],
+        bot_status=None,
+    )
+
+    result = poll_for_reviews(
+        _provider(),
+        tmp_path,
+        42,
+        "feat/42-test",
+        poll_interval=60,
+        bot_settle=60,
+        human_settle=120,
+    )
+
+    assert result == PollOutcome.COMMENTS_FOUND
+    mock_sleep.assert_not_called()

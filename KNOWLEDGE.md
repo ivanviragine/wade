@@ -90,3 +90,26 @@ When editing agent session rules, check BOTH templates/skills/<name>/SKILL.md AN
 wade's headless AI delegation (mode: headless for deps and review_*) should rely on permissions.allowed_commands, not yolo. Why: (1) codex exec auto-defaults approval_policy=never, making yolo args (-a never) redundant. (2) For Claude/Copilot/Gemini/Cursor, headless analytical tasks (read repo, emit output) don't need write permissions, so yolo over-grants. (3) Headless yolo passthrough was added in PR #146 (commit 26771d3) but worked fine before that. The init wizard prompting "Enable YOLO mode for plan review?" on a headless subprocess is confusing UX.
 
 ---
+
+## cc91cd11 | 2026-04-28 | plan | tags: review, review-polling, coderabbit
+
+CodeRabbit's `COMPLETED` bot status (detected from the summary comment marker
+in `detect_coderabbit_review_status` — `models/review.py:68-99`) does NOT
+guarantee the inline-review-comment stream is finished. The marker flips when
+CodeRabbit edits its summary comment, but individual inline comments can keep
+arriving for a few seconds afterward.
+
+Implication for any "is the review burst over?" heuristic in
+`review_service.py`: do not treat `bot_status == COMPLETED` alone as
+"reviewer is done posting." Use the freshness of the inline comments themselves
+(`ReviewComment.created_at` — populated by the GraphQL provider in
+`providers/github.py:405`) and/or `PRReview.submitted_at` as the direct signal,
+and keep `bot_status` as a secondary input only.
+
+---
+
+## 08f59f5c | 2026-04-28 | implementation | tags: testing, mocking, datetime, mypy | Issue #302
+
+When a service does 'from datetime import UTC, datetime' and calls datetime.now(UTC), patch the module-level class reference (e.g. wade.services.review_service.datetime). Set mock_datetime.now.return_value = fixed_now. Avoid naming local variables 'now' as datetime when the same function later uses 'now = time.time()' (float) — mypy strict mode flags the type mismatch even across mutually-exclusive code paths (use a distinct name like 'settle_now').
+
+---

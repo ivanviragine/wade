@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import UTC
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from wade.models.review import (
+    PendingReviewer,
+    PRReviewStatus,
     ReviewBotStatus,
     ReviewComment,
     ReviewThread,
@@ -13,6 +16,7 @@ from wade.models.review import (
     filter_actionable_threads,
     format_review_threads_markdown,
 )
+from wade.services.review_settle import compute_effective_settle, latest_signal_ts
 
 # ---------------------------------------------------------------------------
 # Model basics
@@ -765,3 +769,162 @@ class TestFormatReviewStatusSummary:
         status = PRReviewStatus(reviews=[PRReview(author="alice", state=ReviewState.APPROVED)])
         messages = format_review_status_summary(status)
         assert any("SESSION COMPLETE" in m[1] for m in messages)
+
+
+# ---------------------------------------------------------------------------
+# latest_signal_ts
+# ---------------------------------------------------------------------------
+
+
+class TestLatestSignalTs:
+    def _now(self) -> datetime:
+        return datetime(2026, 4, 1, 12, 0, 0, tzinfo=UTC)
+
+    def _ts(self, age_seconds: int) -> datetime:
+        return self._now() - timedelta(seconds=age_seconds)
+
+    def test_returns_none_when_no_data(self) -> None:
+        assert latest_signal_ts(PRReviewStatus()) is None
+
+    def test_returns_none_when_all_timestamps_none(self) -> None:
+        thread = ReviewThread(comments=[ReviewComment(body="x")])
+        status = PRReviewStatus(all_unresolved_threads=[thread])
+        assert latest_signal_ts(status) is None
+
+    def test_returns_comment_created_at(self) -> None:
+        ts = self._ts(100)
+        thread = ReviewThread(comments=[ReviewComment(created_at=ts)])
+        status = PRReviewStatus(all_unresolved_threads=[thread])
+        assert latest_signal_ts(status) == ts
+
+    def test_returns_review_submitted_at(self) -> None:
+        from wade.models.review import PRReview, ReviewState
+
+        ts = self._ts(100)
+        review = PRReview(author="alice", state=ReviewState.APPROVED, submitted_at=ts)
+        status = PRReviewStatus(reviews=[review])
+        assert latest_signal_ts(status) == ts
+
+    def test_returns_newest_across_threads_and_reviews(self) -> None:
+        from wade.models.review import PRReview
+
+        old_ts = self._ts(200)
+        new_ts = self._ts(50)
+        thread = ReviewThread(comments=[ReviewComment(created_at=old_ts)])
+        review = PRReview(submitted_at=new_ts)
+        status = PRReviewStatus(all_unresolved_threads=[thread], reviews=[review])
+        assert latest_signal_ts(status) == new_ts
+
+    def test_returns_newest_among_multiple_comments(self) -> None:
+        old_ts = self._ts(200)
+        new_ts = self._ts(50)
+        thread = ReviewThread(
+            comments=[ReviewComment(created_at=old_ts), ReviewComment(created_at=new_ts)]
+        )
+        status = PRReviewStatus(all_unresolved_threads=[thread])
+        assert latest_signal_ts(status) == new_ts
+
+    def test_naive_datetime_treated_as_utc(self) -> None:
+        naive_ts = self._ts(100).replace(tzinfo=None)
+        thread = ReviewThread(comments=[ReviewComment(created_at=naive_ts)])
+        status = PRReviewStatus(all_unresolved_threads=[thread])
+        result = latest_signal_ts(status)
+        assert result is not None
+        assert result.tzinfo == UTC
+
+    def test_falls_back_to_actionable_threads(self) -> None:
+        ts = self._ts(100)
+        thread = ReviewThread(comments=[ReviewComment(created_at=ts)])
+        status = PRReviewStatus(actionable_threads=[thread])  # all_unresolved_threads empty
+        assert latest_signal_ts(status) == ts
+
+
+# ---------------------------------------------------------------------------
+# compute_effective_settle
+# ---------------------------------------------------------------------------
+
+
+class TestComputeEffectiveSettle:
+    def _now(self) -> datetime:
+        return datetime(2026, 4, 1, 12, 0, 0, tzinfo=UTC)
+
+    def _status(self, age_seconds: int | None = None, **kwargs: Any) -> PRReviewStatus:
+        if age_seconds is not None:
+            ts = self._now() - timedelta(seconds=age_seconds)
+            thread = ReviewThread(comments=[ReviewComment(created_at=ts)])
+            return PRReviewStatus(all_unresolved_threads=[thread], **kwargs)
+        return PRReviewStatus(**kwargs)
+
+    def _compute(self, status: PRReviewStatus, settle: int, poll_interval: int) -> int:
+        return compute_effective_settle(
+            status, settle, poll_interval, now=self._now(), latest=latest_signal_ts(status)
+        )
+
+    def test_no_timestamps_returns_full_settle(self) -> None:
+        status = self._status()
+        assert self._compute(status, settle=60, poll_interval=30) == 60
+
+    def test_age_gte_settle_returns_zero(self) -> None:
+        status = self._status(age_seconds=120)  # 120 >= 60
+        assert self._compute(status, settle=60, poll_interval=30) == 0
+
+    def test_age_exactly_settle_returns_zero(self) -> None:
+        status = self._status(age_seconds=60)
+        assert self._compute(status, settle=60, poll_interval=30) == 0
+
+    def test_paused_bot_age_lt_settle_returns_full(self) -> None:
+        # age=70 would normally trigger "nobody is coming" (70 >= 2*30=60 and < 120)
+        # but PAUSED bot forces full settle
+        status = self._status(age_seconds=70, bot_status=ReviewBotStatus.PAUSED)
+        assert self._compute(status, settle=120, poll_interval=30) == 120
+
+    def test_paused_bot_age_gte_settle_still_returns_full(self) -> None:
+        # age=130 >= settle=120 would normally return 0, but PAUSED must take priority
+        status = self._status(age_seconds=130, bot_status=ReviewBotStatus.PAUSED)
+        assert self._compute(status, settle=120, poll_interval=30) == 120
+
+    def test_pending_reviewers_with_old_comment_returns_partial(self) -> None:
+        pending = [PendingReviewer(name="alice")]
+        # age=70 >= 2*30=60 but pending_reviewers is non-empty → no "nobody is coming"
+        status = self._status(age_seconds=70, pending_reviewers=pending)
+        assert self._compute(status, settle=120, poll_interval=30) == 50
+
+    def test_nobody_coming_skips_when_old_enough(self) -> None:
+        # bot=None, no pending, age=70 >= 2*30=60 and 70 < 120 → skip
+        status = self._status(age_seconds=70, bot_status=None)
+        assert self._compute(status, settle=120, poll_interval=30) == 0
+
+    def test_nobody_coming_completed_bot_skips(self) -> None:
+        status = self._status(age_seconds=70, bot_status=ReviewBotStatus.COMPLETED)
+        assert self._compute(status, settle=120, poll_interval=30) == 0
+
+    def test_fresh_comment_no_pending_returns_partial(self) -> None:
+        # age=10 < 2*30=60 → not old enough for "nobody is coming" → partial
+        status = self._status(age_seconds=10, bot_status=None)
+        assert self._compute(status, settle=120, poll_interval=30) == 110
+
+    def test_review_submitted_at_drives_latest_ts(self) -> None:
+        from wade.models.review import PRReview, ReviewState
+
+        new_ts = self._now() - timedelta(seconds=10)
+        review = PRReview(author="alice", state=ReviewState.CHANGES_REQUESTED, submitted_at=new_ts)
+        status = PRReviewStatus(reviews=[review], bot_status=None)
+        assert self._compute(status, settle=120, poll_interval=30) == 110
+
+    def test_newest_timestamp_wins_across_sources(self) -> None:
+        from wade.models.review import PRReview
+
+        old_ts = self._now() - timedelta(seconds=80)
+        new_ts = self._now() - timedelta(seconds=10)
+        thread = ReviewThread(comments=[ReviewComment(created_at=old_ts)])
+        review = PRReview(submitted_at=new_ts)
+        # newest = 10s old, 10 < 2*30=60 → partial (escape hatch does not apply)
+        status = PRReviewStatus(all_unresolved_threads=[thread], reviews=[review])
+        assert self._compute(status, settle=120, poll_interval=30) == 110
+
+    def test_future_timestamp_clamps_age_to_zero(self) -> None:
+        # latest is 5s in the future (clock skew): age clamps to 0, settle - 0 = settle
+        future_ts = self._now() + timedelta(seconds=5)
+        thread = ReviewThread(comments=[ReviewComment(created_at=future_ts)])
+        status = PRReviewStatus(all_unresolved_threads=[thread])
+        assert self._compute(status, settle=60, poll_interval=30) == 60
