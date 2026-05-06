@@ -20,6 +20,7 @@ from wade.models.task import (
     parse_complexity_from_body,
     parse_complexity_from_labels,
 )
+from wade.providers._pr_delegate import GitHubPRDelegateMixin
 from wade.providers.base import AbstractTaskProvider
 from wade.utils.http import APIError, HTTPClient
 
@@ -65,10 +66,18 @@ def _parse_clickup_task(raw: dict[str, Any]) -> Task:
     )
 
 
-class ClickUpProvider(AbstractTaskProvider):
-    """ClickUp tasks + tags via REST API v2."""
+class ClickUpProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
+    """ClickUp tasks + tags via REST API v2.
 
-    def __init__(self, config: ProviderConfig | None = None) -> None:
+    PRs continue to flow through GitHub, so PR-review thread / comment APIs
+    are delegated to an inner GitHubProvider via :class:`GitHubPRDelegateMixin`.
+    """
+
+    def __init__(
+        self,
+        config: ProviderConfig | None = None,
+        github_provider: AbstractTaskProvider | None = None,
+    ) -> None:
         super().__init__(config)
 
         token_env = self._config.api_token_env or "CLICKUP_API_TOKEN"
@@ -93,6 +102,7 @@ class ClickUpProvider(AbstractTaskProvider):
             },
         )
         self._space_id: str | None = None
+        self._init_pr_delegate(github_provider)
 
     # --- Issue CRUD ---
 

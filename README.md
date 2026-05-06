@@ -157,6 +157,55 @@ Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level
 | [VS Code](https://github.com/features/copilot/ai-code-editor) | `code` |
 | [Antigravity](https://antigravity.google/) | `antigravity` |
 
+## Task Providers
+
+WADE can pull tasks from three backends — pick one when you run `wade init`:
+
+| Provider | Where issues live | Auth |
+|----------|-------------------|------|
+| `github` *(default)* | GitHub Issues | `gh` CLI |
+| `clickup` | ClickUp list | API token in env var |
+| `markdown` | A single committed `ISSUES.md` | None |
+
+PRs always flow through GitHub regardless of choice — `wade fetch-reviews`,
+the auto-poll loop, and review-thread resolution work identically across
+providers.
+
+### Markdown provider
+
+Useful when you want issues versioned alongside the code, with no external
+service. Each issue is one `## ` heading in the file:
+
+```markdown
+# Wade Issues
+
+## #47239185 Add login feature
+
+<!-- wade
+state: open
+labels: feature, complexity:medium
+-->
+
+Description body here. Sub-headings, code blocks, anything markdown.
+```
+
+- The file is resolved against the **main worktree**, so every linked
+  worktree reads/writes the same physical file. No textual merge conflicts
+  on `ISSUES.md`.
+- IDs are random 8-digit decimal so two parallel `wade implement` sessions
+  in different worktrees can't collide. They stay numeric so existing
+  `#NN` checklist refs in tracking-issue bodies still work.
+- Configure via `.wade.yml`:
+  ```yaml
+  provider:
+    name: markdown
+    settings:
+      path: ISSUES.md   # relative to repo root, or absolute
+  ```
+- After a PR merges, `provider.close_task` flips the section's `state` to
+  `closed` in `ISSUES.md`. Commit that change manually (or wire up an
+  `auto_commit` follow-up).
+
 ## Agent Skills
 
 `wade init` installs Skills that teach your AI agent the workflow — issue format, planning rules, implementation session rules, and dependency analysis. Skills, the `AGENTS.md` workflow pointer, and any tool-specific configuration are set up automatically for every supported tool. Nothing to configure manually.
