@@ -20,6 +20,17 @@ def _load_clickup():  # type: ignore[no-untyped-def]
 
 register_provider(ProviderID.CLICKUP, _load_clickup)
 
+
+# Markdown provider — lazy import so users who don't use it pay no cost
+# even on minimal installs.
+def _load_markdown():  # type: ignore[no-untyped-def]
+    from wade.providers.markdown import MarkdownIssueProvider
+
+    return MarkdownIssueProvider
+
+
+register_provider(ProviderID.MARKDOWN, _load_markdown)
+
 __all__ = [
     "AbstractTaskProvider",
     "get_provider",
