@@ -105,6 +105,22 @@ class TestFormatMetaBlock:
         block = _format_meta_block({"state": "open", "labels": "a, b"})
         assert "labels: a, b" in block
 
+    def test_custom_keys_passed_through(self) -> None:
+        block = _format_meta_block(
+            {"state": "open", "labels": "x", "priority": "high", "owner": "alice"}
+        )
+        assert "priority: high" in block
+        assert "owner: alice" in block
+
+    def test_custom_keys_emitted_after_canonical_keys(self) -> None:
+        block = _format_meta_block({"state": "open", "priority": "high", "labels": "x"})
+        # Canonical (state, labels) come before pass-through keys.
+        assert block.index("state:") < block.index("labels:") < block.index("priority:")
+
+    def test_empty_custom_value_is_skipped(self) -> None:
+        block = _format_meta_block({"state": "open", "priority": ""})
+        assert "priority" not in block
+
 
 class TestParseSections:
     def test_basic_sections(self) -> None:
@@ -417,6 +433,26 @@ class TestRoundTrip:
         assert provider.read_task("2").state == TaskState.CLOSED
         assert provider.read_task("1").complexity == Complexity.COMPLEX
         assert provider.read_task("2").body == "Updated body for B"
+
+    def test_custom_metadata_keys_survive_writes(self, config_factory) -> None:
+        # User has hand-added metadata keys wade doesn't manage.
+        content = (
+            "## #1 Title\n\n"
+            "<!-- wade\nstate: open\npriority: high\nowner: alice\n-->\n\n"
+            "body\n"
+        )
+        provider = config_factory(content)
+        # Trigger writes that don't touch the custom keys.
+        provider.add_label("1", "feature")
+        provider.move_to_in_progress("1")
+        provider.update_task("1", body="updated body")
+
+        text = provider._path.read_text(encoding="utf-8")
+        assert "priority: high" in text
+        assert "owner: alice" in text
+        # And the wade-managed fields still work.
+        assert provider.read_task("1").state == TaskState.IN_PROGRESS
+        assert {lbl.name for lbl in provider.read_task("1").labels} == {"feature"}
 
 
 # ---------------------------------------------------------------------------
