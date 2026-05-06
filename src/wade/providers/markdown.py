@@ -106,15 +106,25 @@ def _parse_meta_block(text: str) -> dict[str, str]:
 
 
 def _format_meta_block(meta: dict[str, str]) -> str:
-    """Format a metadata dict as a ``<!-- wade ... -->`` HTML comment."""
+    """Format a metadata dict as a ``<!-- wade ... -->`` HTML comment.
+
+    Wade-managed keys (``state``, ``labels``) are emitted first in canonical
+    order. Any additional keys present in ``meta`` are passed through after
+    them, preserving user-added metadata like ``priority`` or ``owner`` that
+    wade doesn't interpret but shouldn't silently drop on write.
+    """
     lines = ["<!-- wade"]
-    for key in ("state", "labels"):
-        value = meta.get(key, "")
-        # Always emit ``state`` (default "open"); only emit ``labels`` if non-empty.
-        if key == "state":
-            lines.append(f"state: {value or TaskState.OPEN.value}")
-        elif value:
-            lines.append(f"labels: {value}")
+    # Always emit state with a sensible default.
+    lines.append(f"state: {meta.get('state') or TaskState.OPEN.value}")
+    labels = meta.get("labels", "")
+    if labels:
+        lines.append(f"labels: {labels}")
+    # Pass through anything else the user added.
+    for key, value in meta.items():
+        if key in ("state", "labels"):
+            continue
+        if value:
+            lines.append(f"{key}: {value}")
     lines.append("-->")
     return "\n".join(lines)
 
