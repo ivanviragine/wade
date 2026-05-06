@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable
-from typing import cast
+from pathlib import Path
+from typing import Any, cast
 
 from wade.models.config import ProjectConfig, ProviderID
 from wade.providers.base import AbstractTaskProvider
@@ -56,4 +58,13 @@ def get_provider(config: ProjectConfig | None = None) -> AbstractTaskProvider:
         raise ValueError(f"Unknown provider: {provider_id}. Supported: {supported}")
 
     cls = _resolve(_PROVIDER_FACTORIES[provider_id])
-    return cls(config.provider)
+
+    # Some providers (e.g. markdown) want the project root to resolve
+    # relative paths. Pass it iff the constructor accepts the kwarg —
+    # keeping older providers untouched.
+    kwargs: dict[str, Any] = {}
+    sig = inspect.signature(cls.__init__)
+    if "project_root" in sig.parameters and config.project_root:
+        kwargs["project_root"] = Path(config.project_root)
+
+    return cls(config.provider, **kwargs)

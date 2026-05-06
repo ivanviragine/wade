@@ -1463,13 +1463,27 @@ def _prompt_provider_setup(
 
     console.rule("Provider")
 
-    providers = ["GitHub Issues", "ClickUp"]
-    hints = ["gh CLI", "API token"]
+    providers = ["GitHub Issues", "ClickUp", "Markdown file"]
+    hints = ["gh CLI", "API token", "Local .md file"]
     default_idx = 0
     if current_provider == "clickup":
         default_idx = 1
+    elif current_provider == "markdown":
+        default_idx = 2
 
     idx = prompts.select("Task management provider", providers, default=default_idx, hints=hints)
+
+    # --- Markdown path ---
+    if idx == 2:
+        current_settings = current_settings or {}
+        path = (
+            prompts.input_prompt(
+                "Path to issues markdown file",
+                default=current_settings.get("path", "ISSUES.md"),
+            ).strip()
+            or "ISSUES.md"
+        )
+        return {"name": "markdown", "settings": {"path": path}}
 
     # --- GitHub path ---
     if idx == 0:
