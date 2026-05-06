@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -180,6 +181,41 @@ class TestPathResolution:
         provider = MarkdownIssueProvider(cfg, project_root=tmp_path)
         assert provider._path.name == "ISSUES.md"
 
+    def test_resolves_to_main_worktree_from_linked_worktree(self, tmp_path: Path) -> None:
+        """Issuing wade from a linked worktree must read/write main's ISSUES.md.
+
+        Creates a real git repo + a linked worktree. The provider must
+        resolve the relative path against main's checkout, not the worktree.
+        """
+        import subprocess
+
+        main = tmp_path / "main"
+        main.mkdir()
+        env = {
+            "GIT_AUTHOR_NAME": "test",
+            "GIT_AUTHOR_EMAIL": "t@t",
+            "GIT_COMMITTER_NAME": "test",
+            "GIT_COMMITTER_EMAIL": "t@t",
+            "PATH": __import__("os").environ.get("PATH", ""),
+        }
+        subprocess.run(["git", "init", "-b", "main"], cwd=main, check=True, env=env)
+        (main / "README").write_text("seed")
+        subprocess.run(["git", "add", "."], cwd=main, check=True, env=env)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=main, check=True, env=env)
+        wt = tmp_path / "wt"
+        subprocess.run(
+            ["git", "worktree", "add", str(wt), "-b", "feat/x"],
+            cwd=main,
+            check=True,
+            env=env,
+        )
+
+        cfg = ProviderConfig(name=ProviderID.MARKDOWN, settings={"path": "ISSUES.md"})
+        # Construct from inside the linked worktree.
+        provider = MarkdownIssueProvider(cfg, project_root=wt)
+        # Path must point at MAIN's ISSUES.md, not wt's.
+        assert provider._path == (main / "ISSUES.md").resolve()
+
 
 # ---------------------------------------------------------------------------
 # CRUD tests
@@ -241,21 +277,32 @@ class TestCreateTask:
     def test_creates_first_task(self, config_factory) -> None:
         provider = config_factory(None)
         task = provider.create_task("New task", "Body here", labels=["feature"])
-        assert task.id == "1"
+        # IDs are random 8-hex-char strings.
+        assert re.fullmatch(r"[0-9a-f]{8}", task.id)
         assert task.title == "New task"
         assert task.state == TaskState.OPEN
         assert any(lbl.name == "feature" for lbl in task.labels)
-        # Round-trip: read it back.
-        reread = provider.read_task("1")
+        # Round-trip: read it back via the returned id.
+        reread = provider.read_task(task.id)
         assert reread.title == "New task"
 
     def test_appends_to_existing_file(self, config_factory) -> None:
         provider = config_factory(SAMPLE_FILE)
         task = provider.create_task("Another", "Body", labels=["x"])
-        assert task.id == "4"
+        assert re.fullmatch(r"[0-9a-f]{8}", task.id)
+        assert task.id not in {"1", "2", "3"}  # Distinct from existing IDs.
         # Original tasks still readable.
         assert provider.read_task("1").title == "Add login feature"
-        assert provider.read_task("4").title == "Another"
+        assert provider.read_task(task.id).title == "Another"
+
+    def test_id_does_not_collide_with_existing(self, config_factory) -> None:
+        provider = config_factory(SAMPLE_FILE)
+        ids_seen: set[str] = {"1", "2", "3"}
+        # Create a handful and confirm uniqueness within the file.
+        for _ in range(10):
+            t = provider.create_task("X", "body")
+            assert t.id not in ids_seen
+            ids_seen.add(t.id)
 
     def test_no_labels(self, config_factory) -> None:
         provider = config_factory(None)
@@ -418,21 +465,19 @@ class TestRoundTrip:
         provider = config_factory(None)
         a = provider.create_task("Task A", "Body A", labels=["feature"])
         b = provider.create_task("Task B", "Body B")
-        assert a.id == "1"
-        assert b.id == "2"
+        assert a.id != b.id
+        assert re.fullmatch(r"[0-9a-f]{8}", a.id)
 
-        provider.add_label("1", "complexity:complex")
-        provider.update_task("2", body="Updated body for B")
-        provider.move_to_in_progress("1")
-        provider.close_task("2")
+        provider.add_label(a.id, "complexity:complex")
+        provider.update_task(b.id, body="Updated body for B")
+        provider.move_to_in_progress(a.id)
+        provider.close_task(b.id)
 
-        # Re-read the whole file via a fresh provider instance.
-        fresh = config_factory.__self__ if hasattr(config_factory, "__self__") else None  # noqa
-        # Same provider instance; reload from disk.
-        assert provider.read_task("1").state == TaskState.IN_PROGRESS
-        assert provider.read_task("2").state == TaskState.CLOSED
-        assert provider.read_task("1").complexity == Complexity.COMPLEX
-        assert provider.read_task("2").body == "Updated body for B"
+        # Reload from disk via the same provider instance.
+        assert provider.read_task(a.id).state == TaskState.IN_PROGRESS
+        assert provider.read_task(b.id).state == TaskState.CLOSED
+        assert provider.read_task(a.id).complexity == Complexity.COMPLEX
+        assert provider.read_task(b.id).body == "Updated body for B"
 
     def test_custom_metadata_keys_survive_writes(self, config_factory) -> None:
         # User has hand-added metadata keys wade doesn't manage.

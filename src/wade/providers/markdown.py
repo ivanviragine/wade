@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import os
 import re
+import secrets
 import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -50,6 +51,7 @@ from wade.models.task import (
 )
 from wade.providers._pr_delegate import GitHubPRDelegateMixin
 from wade.providers.base import AbstractTaskProvider
+from wade.utils.process import run
 
 logger = structlog.get_logger()
 
@@ -207,6 +209,29 @@ def _section_to_task(section: _Section) -> Task:
     )
 
 
+def _resolve_main_worktree(start: Path) -> Path | None:
+    """Return the main worktree path for the git repo containing ``start``.
+
+    From a linked worktree, returns the primary checkout (so all worktrees
+    point to the same ``ISSUES.md``). From the main checkout, returns its
+    own root. Returns ``None`` if ``start`` isn't in a git repo (rare:
+    user is running wade outside a checkout) — callers fall back to
+    ``project_root``.
+    """
+    common = run(
+        ["git", "rev-parse", "--git-common-dir"],
+        cwd=start,
+        check=False,
+    )
+    if common.returncode != 0:
+        return None
+    common_dir = Path(common.stdout.strip())
+    if not common_dir.is_absolute():
+        common_dir = (start / common_dir).resolve()
+    # The main worktree is the parent of the canonical .git directory.
+    return common_dir.parent
+
+
 def _atomic_write(path: Path, content: str) -> None:
     """Write ``content`` to ``path`` atomically (write tmp + rename)."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -229,9 +254,16 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
 
     Configuration (``provider.settings`` in ``.wade.yml``):
         path: Relative or absolute path to the markdown file.
-              Relative paths resolve against ``project_root`` (the directory
-              containing ``.wade.yml``) or CWD if no project root is set.
-              Defaults to ``ISSUES.md``.
+              Relative paths resolve against the **main worktree** (the
+              repo's primary checkout) — not whatever worktree wade was
+              invoked from. This gives every worktree a single source of
+              truth for issues, so parallel ``create_task`` calls from
+              different branches can't produce ID collisions or merge
+              conflicts on ``ISSUES.md``. Defaults to ``ISSUES.md``.
+
+    Task IDs are random 8-character hex strings (e.g. ``a3f2b8e1``)
+    rather than sequential integers, again to avoid collisions when
+    multiple worktrees create issues independently.
     """
 
     def __init__(
@@ -252,7 +284,8 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
         candidate = Path(raw).expanduser()
         if candidate.is_absolute():
             return candidate
-        return (self._project_root / candidate).resolve()
+        anchor = _resolve_main_worktree(self._project_root) or self._project_root
+        return (anchor / candidate).resolve()
 
     # --- File I/O ---
 
@@ -301,14 +334,20 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
                 return section
         raise TaskNotFoundError(f"Task #{task_id} not found in {self._path}")
 
-    def _next_id(self, sections: list[_Section]) -> str:
-        existing = []
-        for section in sections:
-            try:
-                existing.append(int(section.id))
-            except ValueError:
-                continue
-        return str(max(existing) + 1) if existing else "1"
+    def _generate_id(self, sections: list[_Section]) -> str:
+        """Generate a fresh random 8-hex-char ID, avoiding existing ones.
+
+        Random IDs (vs. sequential integers) prevent collisions when
+        multiple worktrees create issues in parallel. With 4 random bytes
+        the ID space is ~4 billion; collisions inside a single project are
+        astronomically unlikely, but we retry on the off chance.
+        """
+        existing = {section.id for section in sections}
+        for _ in range(50):
+            candidate = secrets.token_hex(4)
+            if candidate not in existing:
+                return candidate
+        raise RuntimeError("Could not generate a unique markdown task ID")
 
     # --- Issue CRUD ---
 
@@ -350,7 +389,7 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
     ) -> Task:
         """Append a new task as a ``## `` section to the file."""
         prelude, sections = self._load_sections()
-        new_id = self._next_id(sections)
+        new_id = self._generate_id(sections)
         meta: dict[str, str] = {"state": TaskState.OPEN.value}
         if labels:
             meta["labels"] = _join_labels(labels)
