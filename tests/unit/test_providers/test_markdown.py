@@ -491,9 +491,9 @@ class TestPRReviewDelegation:
             ProviderConfig(name=ProviderID.MARKDOWN),
             project_root=tmp_path,
         )
-        assert provider._github is None
-        # Calling _gh() should construct one lazily.
-        gh = provider._gh()
+        assert provider._pr_github is None
+        # Calling _pr_gh() should construct one lazily.
+        gh = provider._pr_gh()
         assert gh is not None
         # And cache it.
-        assert provider._gh() is gh
+        assert provider._pr_gh() is gh
