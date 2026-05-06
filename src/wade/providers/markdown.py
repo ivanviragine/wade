@@ -3,7 +3,9 @@
 The provider treats one markdown file as the source of truth for issues.
 Each issue is a ``## #<id> <title>`` heading followed by an optional metadata
 HTML comment and a body. PRs continue to be managed by the regular GitHub
-flow (``git/pr.py``) — this provider only owns the issue lifecycle.
+flow (``git/pr.py``); PR-review thread / comment APIs are delegated to an
+internal :class:`GitHubProvider` so review automation works the same as it
+does for the GitHub Issues provider.
 
 File format::
 
@@ -39,6 +41,7 @@ from pathlib import Path
 import structlog
 
 from wade.models.config import ProviderConfig
+from wade.models.review import PRReviewStatus, ReviewThread
 from wade.models.task import (
     Label,
     Task,
@@ -225,10 +228,23 @@ class MarkdownIssueProvider(AbstractTaskProvider):
         self,
         config: ProviderConfig | None = None,
         project_root: Path | None = None,
+        github_provider: AbstractTaskProvider | None = None,
     ) -> None:
         super().__init__(config)
         self._project_root = project_root or Path.cwd()
         self._path = self._resolve_path()
+        # PRs are still managed via GitHub even when issues live in markdown,
+        # so delegate review-thread / PR-comment ops to a GitHubProvider.
+        # Lazily constructed on first use to avoid loading gh wiring when
+        # the user only ever lists/closes issues.
+        self._github: AbstractTaskProvider | None = github_provider
+
+    def _gh(self) -> AbstractTaskProvider:
+        if self._github is None:
+            from wade.providers.github import GitHubProvider
+
+            self._github = GitHubProvider()
+        return self._github
 
     # --- Path resolution ---
 
@@ -443,3 +459,24 @@ class MarkdownIssueProvider(AbstractTaskProvider):
             return True
         except TaskNotFoundError:
             return False
+
+    # --- PR review operations (delegated to GitHub) ---
+    #
+    # The markdown file lives in a GitHub repo and PRs continue to flow
+    # through `gh`, so review-thread and PR-comment APIs delegate to an
+    # internal GitHubProvider rather than raising NotImplementedError.
+
+    def get_pr_review_threads(self, pr_number: int) -> list[ReviewThread]:
+        return self._gh().get_pr_review_threads(pr_number)
+
+    def resolve_review_thread(self, thread_id: str) -> bool:
+        return self._gh().resolve_review_thread(thread_id)
+
+    def get_pr_issue_comments(self, pr_number: int) -> list[dict[str, str]]:
+        return self._gh().get_pr_issue_comments(pr_number)
+
+    def get_pr_review_status(self, pr_number: int) -> PRReviewStatus:
+        return self._gh().get_pr_review_status(pr_number)
+
+    def get_repo_nwo(self) -> str:
+        return self._gh().get_repo_nwo()

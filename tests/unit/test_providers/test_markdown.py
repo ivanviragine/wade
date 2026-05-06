@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
 from wade.models.config import ProjectConfig, ProviderConfig, ProviderID
+from wade.models.review import PRReviewStatus
 from wade.models.task import Complexity, TaskState
 from wade.providers.markdown import (
     DEFAULT_FILE_HEADER,
@@ -434,3 +436,64 @@ class TestRegistryIntegration:
         provider = get_provider(config)
         assert isinstance(provider, MarkdownIssueProvider)
         assert provider._path == (tmp_path / "ISSUES.md").resolve()
+
+
+# ---------------------------------------------------------------------------
+# PR-review delegation to GitHub
+# ---------------------------------------------------------------------------
+
+
+class TestPRReviewDelegation:
+    """Markdown issues live in a GitHub repo; PR-review ops delegate to gh."""
+
+    def _build(self, tmp_path: Path) -> tuple[MarkdownIssueProvider, MagicMock]:
+        gh = MagicMock()
+        provider = MarkdownIssueProvider(
+            ProviderConfig(name=ProviderID.MARKDOWN),
+            project_root=tmp_path,
+            github_provider=gh,
+        )
+        return provider, gh
+
+    def test_get_pr_review_threads_delegates(self, tmp_path: Path) -> None:
+        provider, gh = self._build(tmp_path)
+        gh.get_pr_review_threads.return_value = ["t1", "t2"]
+        assert provider.get_pr_review_threads(42) == ["t1", "t2"]
+        gh.get_pr_review_threads.assert_called_once_with(42)
+
+    def test_resolve_review_thread_delegates(self, tmp_path: Path) -> None:
+        provider, gh = self._build(tmp_path)
+        gh.resolve_review_thread.return_value = True
+        assert provider.resolve_review_thread("THREAD_ID") is True
+        gh.resolve_review_thread.assert_called_once_with("THREAD_ID")
+
+    def test_get_pr_issue_comments_delegates(self, tmp_path: Path) -> None:
+        provider, gh = self._build(tmp_path)
+        gh.get_pr_issue_comments.return_value = [{"login": "u", "body": "hi"}]
+        assert provider.get_pr_issue_comments(7) == [{"login": "u", "body": "hi"}]
+        gh.get_pr_issue_comments.assert_called_once_with(7)
+
+    def test_get_pr_review_status_delegates(self, tmp_path: Path) -> None:
+        provider, gh = self._build(tmp_path)
+        status = PRReviewStatus()
+        gh.get_pr_review_status.return_value = status
+        assert provider.get_pr_review_status(99) is status
+        gh.get_pr_review_status.assert_called_once_with(99)
+
+    def test_get_repo_nwo_delegates(self, tmp_path: Path) -> None:
+        provider, gh = self._build(tmp_path)
+        gh.get_repo_nwo.return_value = "owner/repo"
+        assert provider.get_repo_nwo() == "owner/repo"
+
+    def test_inner_github_provider_lazy_init(self, tmp_path: Path) -> None:
+        # No github_provider injected — should not construct one until needed.
+        provider = MarkdownIssueProvider(
+            ProviderConfig(name=ProviderID.MARKDOWN),
+            project_root=tmp_path,
+        )
+        assert provider._github is None
+        # Calling _gh() should construct one lazily.
+        gh = provider._gh()
+        assert gh is not None
+        # And cache it.
+        assert provider._gh() is gh
