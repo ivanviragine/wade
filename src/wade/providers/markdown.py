@@ -261,9 +261,11 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
               different branches can't produce ID collisions or merge
               conflicts on ``ISSUES.md``. Defaults to ``ISSUES.md``.
 
-    Task IDs are random 8-character hex strings (e.g. ``a3f2b8e1``)
-    rather than sequential integers, again to avoid collisions when
-    multiple worktrees create issues independently.
+    Task IDs are random 8-digit decimal strings (e.g. ``47239185``)
+    rather than sequential integers, to avoid collisions when multiple
+    worktrees create issues independently. They stay numeric (not hex)
+    so wade's existing ``#\\d+`` parsing — checklist refs, dependency
+    sections, branch names — keeps working unchanged.
     """
 
     def __init__(
@@ -335,16 +337,20 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
         raise TaskNotFoundError(f"Task #{task_id} not found in {self._path}")
 
     def _generate_id(self, sections: list[_Section]) -> str:
-        """Generate a fresh random 8-hex-char ID, avoiding existing ones.
+        """Generate a fresh random 8-digit decimal ID, avoiding existing ones.
 
         Random IDs (vs. sequential integers) prevent collisions when
-        multiple worktrees create issues in parallel. With 4 random bytes
-        the ID space is ~4 billion; collisions inside a single project are
-        astronomically unlikely, but we retry on the off chance.
+        multiple worktrees create issues in parallel. We use decimal
+        rather than hex so wade's ``#\\d+`` parsing — checklist child
+        refs, dependency sections, ``int(issue_number)`` casts in the
+        merge flow — keeps working unchanged. The ID space is ~90M
+        (10^7 .. 10^8 - 1, always exactly 8 digits); collisions inside
+        a single project are astronomically unlikely, but we retry on
+        the off chance.
         """
         existing = {section.id for section in sections}
         for _ in range(50):
-            candidate = secrets.token_hex(4)
+            candidate = str(secrets.randbelow(9 * 10**7) + 10**7)
             if candidate not in existing:
                 return candidate
         raise RuntimeError("Could not generate a unique markdown task ID")

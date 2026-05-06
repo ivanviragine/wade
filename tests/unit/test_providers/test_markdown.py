@@ -278,7 +278,7 @@ class TestCreateTask:
         provider = config_factory(None)
         task = provider.create_task("New task", "Body here", labels=["feature"])
         # IDs are random 8-hex-char strings.
-        assert re.fullmatch(r"[0-9a-f]{8}", task.id)
+        assert re.fullmatch(r"[1-9][0-9]{7}", task.id)
         assert task.title == "New task"
         assert task.state == TaskState.OPEN
         assert any(lbl.name == "feature" for lbl in task.labels)
@@ -289,7 +289,7 @@ class TestCreateTask:
     def test_appends_to_existing_file(self, config_factory) -> None:
         provider = config_factory(SAMPLE_FILE)
         task = provider.create_task("Another", "Body", labels=["x"])
-        assert re.fullmatch(r"[0-9a-f]{8}", task.id)
+        assert re.fullmatch(r"[1-9][0-9]{7}", task.id)
         assert task.id not in {"1", "2", "3"}  # Distinct from existing IDs.
         # Original tasks still readable.
         assert provider.read_task("1").title == "Add login feature"
@@ -466,7 +466,10 @@ class TestRoundTrip:
         a = provider.create_task("Task A", "Body A", labels=["feature"])
         b = provider.create_task("Task B", "Body B")
         assert a.id != b.id
-        assert re.fullmatch(r"[0-9a-f]{8}", a.id)
+        assert re.fullmatch(r"[1-9][0-9]{7}", a.id)
+        # Decimal IDs survive int() — needed by wade's branch naming and
+        # merge-flow paths that cast issue_number to int.
+        assert str(int(a.id)) == a.id
 
         provider.add_label(a.id, "complexity:complex")
         provider.update_task(b.id, body="Updated body for B")
