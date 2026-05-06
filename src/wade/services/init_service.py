@@ -1483,6 +1483,23 @@ def _prompt_provider_setup(
             ).strip()
             or "ISSUES.md"
         )
+        # Pre-create the file with the default header so the user can see
+        # where it lives and `wade list` doesn't silently report an empty
+        # phantom file. Anchored at project_root because init runs in
+        # the main checkout (worktree-aware resolution kicks in later
+        # at runtime).
+        path_obj = Path(path).expanduser()
+        md_path = path_obj if path_obj.is_absolute() else project_root / path_obj
+        if not md_path.exists():
+            from wade.providers.markdown import DEFAULT_FILE_HEADER
+
+            md_path.parent.mkdir(parents=True, exist_ok=True)
+            md_path.write_text(DEFAULT_FILE_HEADER, encoding="utf-8")
+            try:
+                shown = md_path.relative_to(project_root)
+            except ValueError:
+                shown = md_path
+            console.success(f"Created {shown}")
         return {"name": "markdown", "settings": {"path": path}}
 
     # --- GitHub path ---
