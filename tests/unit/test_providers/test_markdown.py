@@ -158,6 +158,14 @@ class TestParseSections:
     def test_no_sections_returns_empty(self) -> None:
         assert _parse_sections("# No issues here yet\n") == []
 
+    def test_non_numeric_id_is_not_parsed_as_section(self) -> None:
+        # A regular markdown anchor heading shouldn't accidentally become
+        # an issue section just because it starts with "## #".
+        text = "## #disclaimer Some text\n\nbody\n\n## #42 Real issue\n\nreal body"
+        sections = _parse_sections(text)
+        assert [s.id for s in sections] == ["42"]
+        assert sections[0].title == "Real issue"
+
 
 # ---------------------------------------------------------------------------
 # Constructor / path resolution
@@ -383,6 +391,15 @@ class TestCloseTask:
         provider = config_factory(SAMPLE_FILE)
         with pytest.raises(TaskNotFoundError):
             provider.close_task("999")
+
+    def test_preserves_existing_file_mode(self, config_factory) -> None:
+        # Atomic write must not silently strip group/other perms.
+        provider = config_factory(SAMPLE_FILE)
+        import os as _os
+
+        _os.chmod(provider._path, 0o644)
+        provider.close_task("1")
+        assert _os.stat(provider._path).st_mode & 0o777 == 0o644
 
 
 class TestCommentOnTask:

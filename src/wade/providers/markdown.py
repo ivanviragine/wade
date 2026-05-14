@@ -31,6 +31,7 @@ File format::
 
 from __future__ import annotations
 
+import functools
 import os
 import re
 import secrets
@@ -59,9 +60,12 @@ DEFAULT_FILE_NAME = "ISSUES.md"
 DEFAULT_FILE_HEADER = "# Wade Issues\n\n<!-- Managed by the Wade markdown issue provider. -->\n"
 
 # Heading like "## #42 Title", "## #42: Title", or "## #42 - Title".
-# Em (U+2014) and en (U+2013) dashes are accepted via explicit escapes.
+# The ID is restricted to digits so the regex doesn't accidentally match
+# regular markdown anchor headings like ``## #disclaimer Some text``, and
+# so IDs round-trip through ``int()`` / wade's ``#\d+`` parsing.
+# Em (U+2014) and en (U+2013) dashes are accepted as title separators.
 _HEADING_RE = re.compile(
-    "^##\\s+#(?P<id>[A-Za-z0-9_-]+)\\s*(?:[:\\-–—]\\s*)?(?P<title>.*?)\\s*$",  # noqa: RUF001
+    "^##\\s+#(?P<id>\\d+)\\s*(?:[:\\-–—]\\s*)?(?P<title>.*?)\\s*$",  # noqa: RUF001
     re.MULTILINE,
 )
 
@@ -209,14 +213,19 @@ def _section_to_task(section: _Section) -> Task:
     )
 
 
+@functools.cache
 def _resolve_main_worktree(start: Path) -> Path | None:
     """Return the main worktree path for the git repo containing ``start``.
 
     From a linked worktree, returns the primary checkout (so all worktrees
     point to the same ``ISSUES.md``). From the main checkout, returns its
-    own root. Returns ``None`` if ``start`` isn't in a git repo (rare:
-    user is running wade outside a checkout) — callers fall back to
-    ``project_root``.
+    own root. Returns ``None`` if ``start`` isn't in a working-tree git repo
+    (not in a repo, in a bare repo, or in a submodule's .git/modules tree)
+    — callers fall back to ``project_root``.
+
+    Cached because the result is stable per-path within a process and
+    ``get_provider(config)`` is hot. The cache is keyed by the absolute,
+    resolved ``start`` path; callers should pass already-resolved paths.
     """
     common = run(
         ["git", "rev-parse", "--git-common-dir"],
@@ -228,13 +237,27 @@ def _resolve_main_worktree(start: Path) -> Path | None:
     common_dir = Path(common.stdout.strip())
     if not common_dir.is_absolute():
         common_dir = (start / common_dir).resolve()
-    # The main worktree is the parent of the canonical .git directory.
-    return common_dir.parent
+    candidate = common_dir.parent
+    # Submodules report `.git/modules/<sub>` as the common dir, whose parent
+    # is `.git/modules/` — not a working tree. Heuristic: only accept the
+    # candidate if it looks like a checkout (has a .git entry of its own).
+    if not (candidate / ".git").exists():
+        return None
+    return candidate
 
 
 def _atomic_write(path: Path, content: str) -> None:
-    """Write ``content`` to ``path`` atomically (write tmp + rename)."""
+    """Write ``content`` to ``path`` atomically (write tmp + rename).
+
+    Preserves the destination's existing permission bits across writes —
+    ``tempfile.mkstemp`` defaults to ``0600``, which would otherwise leak
+    through ``os.replace`` and silently strip group/other read on every
+    ``ISSUES.md`` mutation (showing up as spurious permission churn in
+    ``git status``). For brand-new files we use ``0644`` to match the
+    convention for tracked text files.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
+    target_mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
     fd, tmp_name = tempfile.mkstemp(
         prefix=f".{path.name}.",
         suffix=".tmp",
@@ -243,6 +266,7 @@ def _atomic_write(path: Path, content: str) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(content)
+        os.chmod(tmp_name, target_mode)
         os.replace(tmp_name, path)
     except Exception:
         Path(tmp_name).unlink(missing_ok=True)

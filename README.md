@@ -203,8 +203,9 @@ Description body here. Sub-headings, code blocks, anything markdown.
       path: ISSUES.md   # relative to repo root, or absolute
   ```
 - After a PR merges, `provider.close_task` flips the section's `state` to
-  `closed` in `ISSUES.md`. Commit that change manually (or wire up an
-  `auto_commit` follow-up).
+  `closed` in `ISSUES.md`. The file is left modified in your working tree —
+  commit it yourself, or add a hook to do it for you. (Auto-commit isn't
+  built in today.)
 
 ## Agent Skills
 
