@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from wade.models.review import PRReviewStatus, ReviewThread
+from wade.models.review import PRComment, PRReviewStatus, ReviewThread
 
 if TYPE_CHECKING:
     from wade.providers.github import GitHubProvider
@@ -59,7 +59,7 @@ class GitHubPRDelegateMixin:
     def resolve_review_thread(self, thread_id: str) -> bool:
         return self._pr_gh().resolve_review_thread(thread_id)
 
-    def get_pr_issue_comments(self, pr_number: int) -> list[dict[str, str]]:
+    def get_pr_issue_comments(self, pr_number: int) -> list[PRComment]:
         return self._pr_gh().get_pr_issue_comments(pr_number)
 
     def get_pr_review_status(self, pr_number: int) -> PRReviewStatus:

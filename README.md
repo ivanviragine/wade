@@ -201,13 +201,19 @@ Description body here. Sub-headings, code blocks, anything markdown.
   provider:
     name: markdown
     settings:
-      path: ISSUES.md   # relative to repo root, or absolute
+      path: ISSUES.md      # relative to repo root, or absolute
+      auto_commit: false   # if true, close_task auto-commits the change
   ```
 
 - After a PR merges, `provider.close_task` flips the section's `state` to
-  `closed` in `ISSUES.md`. The file is left modified in your working tree —
-  commit it yourself, or add a hook to do it for you. (Auto-commit isn't
-  built in today.)
+  `closed` in `ISSUES.md`. By default the file is left modified in your
+  working tree — commit it yourself. Set `auto_commit: true` to have
+  wade commit the change with a `chore: close #N` message; failures
+  (not a git repo, hook rejection, signing required) are logged and
+  swallowed so the close itself never blocks.
+- Tracking issues with `- [ ] #N` checklist bodies work the same as with
+  GitHub Issues — markdown's `find_parent_issue` scans every section's
+  body for child refs.
 
 ## Agent Skills
 

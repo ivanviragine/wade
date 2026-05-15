@@ -48,7 +48,11 @@ from pydantic import BaseModel, ConfigDict
 
 if sys.platform != "win32":
     import fcntl
+
+    msvcrt = None
 else:  # pragma: no cover -- exercised only on Windows
+    import msvcrt
+
     fcntl = None  # type: ignore[assignment]
 
 from wade.models.config import ProviderConfig
@@ -58,6 +62,7 @@ from wade.models.task import (
     TaskState,
     parse_complexity_from_body,
     parse_complexity_from_labels,
+    parse_tracking_child_ids,
 )
 from wade.providers._pr_delegate import GitHubPRDelegateMixin
 from wade.providers.base import AbstractTaskProvider
@@ -313,14 +318,26 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
         project_root: Path | None = None,
         github_provider: GitHubProvider | None = None,
     ) -> None:
+        """Build a provider rooted at ``project_root`` with PR delegation wired."""
         super().__init__(config)
         self._project_root = project_root or Path.cwd()
         self._path = self._resolve_path()
+        self._auto_commit = self._config.settings.get("auto_commit", "").lower() in (
+            "true",
+            "1",
+            "yes",
+        )
         self._init_pr_delegate(github_provider)
 
     # --- Path resolution ---
 
     def _resolve_path(self) -> Path:
+        """Resolve the configured ``path`` setting to an absolute file path.
+
+        Relative paths anchor at the main worktree (so every linked
+        worktree converges on the same physical ``ISSUES.md``); absolute
+        paths are honored verbatim.
+        """
         raw = self._config.settings.get("path", DEFAULT_FILE_NAME)
         candidate = Path(raw).expanduser()
         if candidate.is_absolute():
@@ -331,11 +348,13 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
     # --- File I/O ---
 
     def _read_text(self) -> str:
+        """Read the markdown file, returning ``""`` if it doesn't exist yet."""
         if not self._path.exists():
             return ""
         return self._path.read_text(encoding="utf-8")
 
     def _write_text(self, content: str) -> None:
+        """Atomically write ``content`` to the markdown file with a trailing newline."""
         if not content.endswith("\n"):
             content += "\n"
         _atomic_write(self._path, content)
@@ -360,22 +379,32 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
         updates). We block on a sibling ``.lock`` file so the load and
         persist are observed as one atomic unit.
 
-        On Windows ``fcntl`` is unavailable, so this is a no-op there —
-        wade's primary platform is POSIX and locking gracefully degrades.
+        Implementation differs by platform but the contract is identical:
+        ``fcntl.flock`` (POSIX) blocks on the open file description;
+        ``msvcrt.locking`` (Windows) byte-locks the first byte of the
+        lock file in blocking-exclusive mode.
         """
-        if fcntl is None:  # pragma: no cover -- Windows path
-            yield
-            return
         self._path.parent.mkdir(parents=True, exist_ok=True)
         lock_path = self._path.with_name(f".{self._path.name}.lock")
         # Open with O_RDWR | O_CREAT so we can both create and lock the file.
         fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            if fcntl is not None:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            else:  # pragma: no cover -- Windows path
+                # msvcrt locks a byte range; ensure the file has at least 1 byte.
+                if os.fstat(fd).st_size == 0:
+                    os.write(fd, b"\0")
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
             yield
         finally:
             with contextlib.suppress(OSError):
-                fcntl.flock(fd, fcntl.LOCK_UN)
+                if fcntl is not None:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                else:  # pragma: no cover -- Windows path
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
             os.close(fd)
 
     def _persist(self, prelude: str, sections: list[_Section]) -> None:
@@ -399,6 +428,7 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
     # --- Section helpers ---
 
     def _find_section(self, sections: list[_Section], task_id: str) -> _Section:
+        """Return the section matching ``task_id`` or raise ``TaskNotFoundError``."""
         for section in sections:
             if section.id == task_id:
                 return section
@@ -483,10 +513,12 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
         return _section_to_task(section)
 
     def read_task(self, task_id: str) -> Task:
+        """Return the task with the given ID. Raises ``TaskNotFoundError`` if absent."""
         _, sections = self._load_sections()
         return _section_to_task(self._find_section(sections, task_id))
 
     def _is_not_found_error(self, error: Exception) -> bool:
+        """Tell ``read_task_or_none`` that ``TaskNotFoundError`` means "not found"."""
         return isinstance(error, TaskNotFoundError)
 
     def update_task(
@@ -495,6 +527,7 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
         body: str | None = None,
         title: str | None = None,
     ) -> Task:
+        """Rewrite the section's title and/or body, preserving everything else."""
         with self._lock():
             prelude, sections = self._load_sections()
             section = self._find_section(sections, task_id)
@@ -506,6 +539,11 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
         return _section_to_task(section)
 
     def close_task(self, task_id: str) -> Task:
+        """Mark a task ``closed`` and strip the in-progress label.
+
+        If ``auto_commit`` is set in provider settings, commits the change
+        to git so the merge flow doesn't leave the working tree dirty.
+        """
         with self._lock():
             prelude, sections = self._load_sections()
             section = self._find_section(sections, task_id)
@@ -519,9 +557,53 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
                 section.meta.pop("labels", None)
             self._persist(prelude, sections)
         logger.info("markdown.task_closed", task_id=task_id, path=str(self._path))
+        if self._auto_commit:
+            self._git_commit_close(task_id)
         return _section_to_task(section)
 
+    def _git_commit_close(self, task_id: str) -> None:
+        """Stage and commit the ISSUES.md change announcing a task close.
+
+        Non-fatal: any failure (not a git repo, file untracked, hook
+        rejection, signing failure) is logged at WARNING and swallowed —
+        the close itself already succeeded on disk.
+        """
+        repo_root = self._path.parent
+        try:
+            add = run(
+                ["git", "add", str(self._path)],
+                cwd=repo_root,
+                check=False,
+            )
+            if add.returncode != 0:
+                logger.warning(
+                    "markdown.auto_commit_add_failed",
+                    task_id=task_id,
+                    stderr=add.stderr.strip() if add.stderr else "",
+                )
+                return
+            commit = run(
+                ["git", "commit", "-m", f"chore: close #{task_id}"],
+                cwd=repo_root,
+                check=False,
+            )
+            if commit.returncode != 0:
+                logger.warning(
+                    "markdown.auto_commit_failed",
+                    task_id=task_id,
+                    stderr=commit.stderr.strip() if commit.stderr else "",
+                )
+                return
+            logger.info("markdown.auto_committed", task_id=task_id)
+        except Exception as exc:  # log + continue; close already succeeded on disk
+            logger.warning(
+                "markdown.auto_commit_exception",
+                task_id=task_id,
+                error=str(exc),
+            )
+
     def comment_on_task(self, task_id: str, body: str) -> None:
+        """Append a timestamped ``### Comment`` block to the task body."""
         with self._lock():
             prelude, sections = self._load_sections()
             section = self._find_section(sections, task_id)
@@ -537,6 +619,7 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
         return None
 
     def add_label(self, task_id: str, label_name: str) -> None:
+        """Add ``label_name`` to the task's labels list. Idempotent; non-fatal on missing task."""
         try:
             with self._lock():
                 prelude, sections = self._load_sections()
@@ -550,6 +633,7 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
             logger.warning("markdown.label_add_failed", task_id=task_id, label=label_name)
 
     def remove_label(self, task_id: str, label_name: str) -> None:
+        """Remove ``label_name`` from the task's labels list. Non-fatal on missing task."""
         try:
             with self._lock():
                 prelude, sections = self._load_sections()
@@ -565,9 +649,34 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
         except TaskNotFoundError:
             logger.warning("markdown.label_remove_failed", task_id=task_id, label=label_name)
 
+    # --- Parent / tracking-issue detection ---
+
+    def find_parent_issue(self, task_id: str, label: str | None = None) -> str | None:
+        """Locate the tracking issue that lists ``task_id`` as a child.
+
+        Scans every section's body for checklist refs of the form
+        ``- [ ] #<id>`` (checked or unchecked) and returns the first
+        matching section's id. Optionally filter to sections carrying
+        ``label`` (e.g., ``feature-plan``) to avoid spurious matches
+        from unrelated issues that happen to reference ``task_id``.
+        """
+        _, sections = self._load_sections()
+        for section in sections:
+            if label:
+                labels = _split_labels(section.meta.get("labels", ""))
+                if label not in labels:
+                    continue
+            if section.id == task_id:
+                continue
+            children = parse_tracking_child_ids(section.body, include_checked=True)
+            if task_id in children:
+                return section.id
+        return None
+
     # --- Project board operations ---
 
     def move_to_in_progress(self, task_id: str) -> bool:
+        """Flip the task's state to ``in_progress``. Returns ``False`` if missing."""
         try:
             with self._lock():
                 prelude, sections = self._load_sections()

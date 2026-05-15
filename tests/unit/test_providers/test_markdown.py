@@ -411,6 +411,84 @@ class TestCommentOnTask:
 
 
 # ---------------------------------------------------------------------------
+# Tracking-issue / parent detection
+# ---------------------------------------------------------------------------
+
+
+class TestFindParentIssue:
+    def test_finds_parent_with_checked_or_unchecked_ref(self, config_factory) -> None:
+        content = (
+            "## #100 Tracking: feature umbrella\n\n"
+            "<!-- wade\nstate: open\nlabels: feature-plan\n-->\n\n"
+            "- [ ] #1 sub one\n"
+            "- [x] #2 sub two (done)\n\n"
+            "## #1 Sub one\n\n<!-- wade\nstate: open\n-->\n\nbody\n\n"
+            "## #2 Sub two\n\n<!-- wade\nstate: closed\n-->\n\nbody\n"
+        )
+        provider = config_factory(content)
+        assert provider.find_parent_issue("1") == "100"
+        assert provider.find_parent_issue("2") == "100"
+
+    def test_returns_none_when_no_parent(self, config_factory) -> None:
+        provider = config_factory(SAMPLE_FILE)
+        assert provider.find_parent_issue("1") is None
+
+    def test_label_filter_excludes_non_matching_parents(self, config_factory) -> None:
+        content = (
+            "## #100 Tracking umbrella\n\n<!-- wade\nstate: open\nlabels: other\n-->\n\n"
+            "- [ ] #5 child\n\n"
+            "## #5 Child\n\n<!-- wade\nstate: open\n-->\n\nbody\n"
+        )
+        provider = config_factory(content)
+        assert provider.find_parent_issue("5", label="feature-plan") is None
+        assert provider.find_parent_issue("5") == "100"
+
+
+# ---------------------------------------------------------------------------
+# Auto-commit setting
+# ---------------------------------------------------------------------------
+
+
+class TestAutoCommit:
+    def test_disabled_by_default(self, config_factory) -> None:
+        provider = config_factory(SAMPLE_FILE)
+        assert provider._auto_commit is False
+
+    def test_enabled_via_settings(self, tmp_path: Path) -> None:
+        cfg = ProviderConfig(
+            name=ProviderID.MARKDOWN,
+            settings={"path": "ISSUES.md", "auto_commit": "true"},
+        )
+        provider = MarkdownIssueProvider(cfg, project_root=tmp_path)
+        assert provider._auto_commit is True
+
+    def test_close_invokes_git_commit_when_enabled(self, tmp_path: Path) -> None:
+        from unittest.mock import patch
+
+        cfg = ProviderConfig(
+            name=ProviderID.MARKDOWN,
+            settings={"path": "ISSUES.md", "auto_commit": "yes"},
+        )
+        (tmp_path / "ISSUES.md").write_text(SAMPLE_FILE, encoding="utf-8")
+        provider = MarkdownIssueProvider(cfg, project_root=tmp_path)
+
+        with patch.object(provider, "_git_commit_close") as mock_commit:
+            provider.close_task("1")
+            mock_commit.assert_called_once_with("1")
+
+    def test_close_skips_git_commit_when_disabled(self, tmp_path: Path) -> None:
+        from unittest.mock import patch
+
+        (tmp_path / "ISSUES.md").write_text(SAMPLE_FILE, encoding="utf-8")
+        cfg = ProviderConfig(name=ProviderID.MARKDOWN, settings={"path": "ISSUES.md"})
+        provider = MarkdownIssueProvider(cfg, project_root=tmp_path)
+
+        with patch.object(provider, "_git_commit_close") as mock_commit:
+            provider.close_task("1")
+            mock_commit.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # Label management
 # ---------------------------------------------------------------------------
 
