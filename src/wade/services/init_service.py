@@ -1748,15 +1748,32 @@ def _prompt_knowledge_setup(
 def _ensure_markdown_file(project_root: Path, settings: dict[str, Any]) -> None:
     """Create the markdown issues file with the default header if missing.
 
+    Resolves the path through the same main-worktree resolver the provider
+    uses at runtime, so running ``wade init`` from a linked worktree writes
+    the file at the location the provider will later read from. Rejects
+    paths that already exist as directories.
+
     Called from the init write phase (alongside the config write) so the
     wizard's "Modify" / "Cancel" paths don't leave stray files behind.
     """
-    raw = settings.get("path") or "ISSUES.md"
+    from wade.providers.markdown import (
+        DEFAULT_FILE_HEADER,
+        DEFAULT_FILE_NAME,
+        _resolve_main_worktree,
+    )
+
+    raw = settings.get("path") or DEFAULT_FILE_NAME
     path_obj = Path(str(raw)).expanduser()
-    md_path = path_obj if path_obj.is_absolute() else project_root / path_obj
+    if path_obj.is_absolute():
+        md_path = path_obj
+    else:
+        anchor = _resolve_main_worktree(project_root) or project_root
+        md_path = (anchor / path_obj).resolve()
+
     if md_path.exists():
+        if not md_path.is_file():
+            raise ValueError(f"Markdown issues path is not a regular file: {md_path}")
         return
-    from wade.providers.markdown import DEFAULT_FILE_HEADER
 
     md_path.parent.mkdir(parents=True, exist_ok=True)
     md_path.write_text(DEFAULT_FILE_HEADER, encoding="utf-8")

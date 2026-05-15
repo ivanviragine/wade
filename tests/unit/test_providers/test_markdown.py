@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from wade.models.config import ProjectConfig, ProviderConfig, ProviderID
-from wade.models.review import PRReviewStatus
+from wade.models.review import PRComment, PRReviewStatus
 from wade.models.task import Complexity, TaskState
 from wade.providers.markdown import (
     DEFAULT_FILE_HEADER,
@@ -462,6 +462,21 @@ class TestAutoCommit:
         provider = MarkdownIssueProvider(cfg, project_root=tmp_path)
         assert provider._auto_commit is True
 
+    def test_enabled_with_native_bool_value(self, tmp_path: Path) -> None:
+        # ProviderConfig.settings is typed dict[str, str] but bool values
+        # can leak in via programmatic config or non-strict YAML loaders.
+        # The coercion helper must not crash on .lower().
+        cfg = ProviderConfig(name=ProviderID.MARKDOWN, settings={"path": "ISSUES.md"})
+        cfg.settings = {"path": "ISSUES.md", "auto_commit": True}  # type: ignore[dict-item]
+        provider = MarkdownIssueProvider(cfg, project_root=tmp_path)
+        assert provider._auto_commit is True
+
+    def test_disabled_with_native_bool_false(self, tmp_path: Path) -> None:
+        cfg = ProviderConfig(name=ProviderID.MARKDOWN, settings={"path": "ISSUES.md"})
+        cfg.settings = {"path": "ISSUES.md", "auto_commit": False}  # type: ignore[dict-item]
+        provider = MarkdownIssueProvider(cfg, project_root=tmp_path)
+        assert provider._auto_commit is False
+
     def test_close_invokes_git_commit_when_enabled(self, tmp_path: Path) -> None:
         from unittest.mock import patch
 
@@ -645,8 +660,9 @@ class TestPRReviewDelegation:
 
     def test_get_pr_issue_comments_delegates(self, tmp_path: Path) -> None:
         provider, gh = self._build(tmp_path)
-        gh.get_pr_issue_comments.return_value = [{"login": "u", "body": "hi"}]
-        assert provider.get_pr_issue_comments(7) == [{"login": "u", "body": "hi"}]
+        expected = [PRComment(login="u", body="hi")]
+        gh.get_pr_issue_comments.return_value = expected
+        assert provider.get_pr_issue_comments(7) == expected
         gh.get_pr_issue_comments.assert_called_once_with(7)
 
     def test_get_pr_review_status_delegates(self, tmp_path: Path) -> None:

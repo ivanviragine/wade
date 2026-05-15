@@ -155,6 +155,20 @@ def _format_meta_block(meta: dict[str, str]) -> str:
     return "\n".join(lines)
 
 
+def _coerce_bool(value: object) -> bool:
+    """Coerce a settings value (string or bool) to a Python bool.
+
+    ``ProviderConfig.settings`` is typed ``dict[str, str]``, so YAML
+    booleans usually arrive as strings like ``"true"`` after Pydantic
+    coercion. But upstream callers (tests, programmatic config) may pass
+    real ``bool``s — accept either form to avoid an ``AttributeError`` on
+    ``.lower()``.
+    """
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("true", "1", "yes", "on")
+
+
 def _split_labels(value: str) -> list[str]:
     """Split a comma-separated labels string into a clean list."""
     return [name.strip() for name in value.split(",") if name.strip()]
@@ -322,11 +336,7 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
         super().__init__(config)
         self._project_root = project_root or Path.cwd()
         self._path = self._resolve_path()
-        self._auto_commit = self._config.settings.get("auto_commit", "").lower() in (
-            "true",
-            "1",
-            "yes",
-        )
+        self._auto_commit = _coerce_bool(self._config.settings.get("auto_commit", False))
         self._init_pr_delegate(github_provider)
 
     # --- Path resolution ---

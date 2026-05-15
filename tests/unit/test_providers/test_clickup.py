@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from wade.models.config import ProviderConfig, ProviderID
-from wade.models.review import PRReviewStatus
+from wade.models.review import PRComment, PRReviewStatus
 from wade.models.task import Complexity, Label, TaskState
 from wade.providers.clickup import ClickUpProvider, _parse_clickup_task
 from wade.utils.http import APIError
@@ -515,8 +515,9 @@ class TestPRReviewDelegation:
 
     def test_get_pr_issue_comments_delegates(self) -> None:
         provider, gh = self._build()
-        gh.get_pr_issue_comments.return_value = [{"login": "u", "body": "hi"}]
-        assert provider.get_pr_issue_comments(7) == [{"login": "u", "body": "hi"}]
+        expected = [PRComment(login="u", body="hi")]
+        gh.get_pr_issue_comments.return_value = expected
+        assert provider.get_pr_issue_comments(7) == expected
         gh.get_pr_issue_comments.assert_called_once_with(7)
 
     def test_get_pr_review_status_delegates(self) -> None:

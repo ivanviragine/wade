@@ -2474,6 +2474,33 @@ class TestWriteConfigYolo:
 # ---------------------------------------------------------------------------
 
 
+class TestEnsureMarkdownFile:
+    """Init's markdown-file write phase."""
+
+    def test_creates_default_when_missing(self, tmp_path: Path) -> None:
+        from wade.services.init_service import _ensure_markdown_file
+
+        _ensure_markdown_file(tmp_path, {"path": "ISSUES.md"})
+        assert (tmp_path / "ISSUES.md").is_file()
+        assert "# Wade Issues" in (tmp_path / "ISSUES.md").read_text(encoding="utf-8")
+
+    def test_no_op_when_file_already_exists(self, tmp_path: Path) -> None:
+        from wade.services.init_service import _ensure_markdown_file
+
+        existing = tmp_path / "ISSUES.md"
+        existing.write_text("existing content\n", encoding="utf-8")
+        _ensure_markdown_file(tmp_path, {"path": "ISSUES.md"})
+        assert existing.read_text(encoding="utf-8") == "existing content\n"
+
+    def test_rejects_directory_at_path(self, tmp_path: Path) -> None:
+        from wade.services.init_service import _ensure_markdown_file
+
+        # A directory exists where the file should go.
+        (tmp_path / "ISSUES.md").mkdir()
+        with pytest.raises(ValueError, match="not a regular file"):
+            _ensure_markdown_file(tmp_path, {"path": "ISSUES.md"})
+
+
 class TestPatchConfigYolo:
     def test_force_writes_yolo_true(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
