@@ -7,6 +7,7 @@ from typing import Any
 
 from wade.models.review import (
     PendingReviewer,
+    PRComment,
     PRReviewStatus,
     ReviewBotStatus,
     ReviewComment,
@@ -82,44 +83,44 @@ class TestReviewThread:
 class TestDetectCoderabbitReviewStatus:
     def test_paused_review(self) -> None:
         comments = [
-            {
-                "login": "coderabbitai[bot]",
-                "body": (
+            PRComment(
+                login="coderabbitai[bot]",
+                body=(
                     "<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n"
                     "<!-- This is an auto-generated comment: review paused by coderabbit.ai -->\n"
                     "\n> [!NOTE]\n> ## Reviews paused\n"
                 ),
-            }
+            )
         ]
         assert detect_coderabbit_review_status(comments) == ReviewBotStatus.PAUSED
 
     def test_in_progress_review(self) -> None:
         comments = [
-            {
-                "login": "coderabbitai[bot]",
-                "body": (
+            PRComment(
+                login="coderabbitai[bot]",
+                body=(
                     "<!-- This is an auto-generated comment:"
                     " review in progress by coderabbit.ai -->"
                 ),
-            }
+            )
         ]
         assert detect_coderabbit_review_status(comments) == ReviewBotStatus.IN_PROGRESS
 
     def test_completed_review_returns_completed(self) -> None:
         comments = [
-            {
-                "login": "coderabbitai[bot]",
-                "body": (
+            PRComment(
+                login="coderabbitai[bot]",
+                body=(
                     "<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n"
                     "## Walkthrough\nSome summary here."
                 ),
-            }
+            )
         ]
         assert detect_coderabbit_review_status(comments) == ReviewBotStatus.COMPLETED
 
     def test_no_coderabbit_comments(self) -> None:
         comments = [
-            {"login": "octocat", "body": "Looks good to me!"},
+            PRComment(login="octocat", body="Looks good to me!"),
         ]
         assert detect_coderabbit_review_status(comments) is None
 
@@ -129,18 +130,16 @@ class TestDetectCoderabbitReviewStatus:
     def test_uses_latest_comment(self) -> None:
         """When multiple CodeRabbit comments exist, the latest (last) wins."""
         comments = [
-            {
-                "login": "coderabbitai[bot]",
-                "body": (
-                    "<!-- This is an auto-generated comment: review paused by coderabbit.ai -->"
-                ),
-            },
-            {
-                "login": "coderabbitai[bot]",
-                "body": (
+            PRComment(
+                login="coderabbitai[bot]",
+                body=("<!-- This is an auto-generated comment: review paused by coderabbit.ai -->"),
+            ),
+            PRComment(
+                login="coderabbitai[bot]",
+                body=(
                     "<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\nDone."
                 ),
-            },
+            ),
         ]
         # Latest comment has no paused/in-progress marker -> COMPLETED
         assert detect_coderabbit_review_status(comments) == ReviewBotStatus.COMPLETED
@@ -148,30 +147,28 @@ class TestDetectCoderabbitReviewStatus:
     def test_paused_overrides_earlier_completed(self) -> None:
         """A newer paused comment takes precedence over an older completed one."""
         comments = [
-            {
-                "login": "coderabbitai[bot]",
-                "body": (
+            PRComment(
+                login="coderabbitai[bot]",
+                body=(
                     "<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\nDone."
                 ),
-            },
-            {
-                "login": "coderabbitai[bot]",
-                "body": (
-                    "<!-- This is an auto-generated comment: review paused by coderabbit.ai -->"
-                ),
-            },
+            ),
+            PRComment(
+                login="coderabbitai[bot]",
+                body=("<!-- This is an auto-generated comment: review paused by coderabbit.ai -->"),
+            ),
         ]
         assert detect_coderabbit_review_status(comments) == ReviewBotStatus.PAUSED
 
     def test_detection_is_case_insensitive(self) -> None:
         comments = [
-            {
-                "login": "coderabbitai[bot]",
-                "body": (
+            PRComment(
+                login="coderabbitai[bot]",
+                body=(
                     "<!-- This is an auto-generated comment:"
                     " Review In Progress by CodeRabbit.ai -->"
                 ),
-            }
+            )
         ]
         assert detect_coderabbit_review_status(comments) == ReviewBotStatus.IN_PROGRESS
 

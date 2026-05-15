@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.27.0] — 2026-05-15
+
+### Features
+
+- add Markdown file-backed task provider (#304) (a234bda)
+
 ## [v0.26.0] — 2026-05-15
 
 ### Features

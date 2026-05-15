@@ -43,6 +43,17 @@ class ReviewThread(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class PRComment(BaseModel):
+    """A PR-level issue comment (not a code-review thread comment).
+
+    Used by review-bot status detection. Providers that surface PR comments
+    return these via :meth:`AbstractTaskProvider.get_pr_issue_comments`.
+    """
+
+    login: str
+    body: str
+
+
 class ReviewBotStatus(StrEnum):
     """Status of a review bot's review on a PR."""
 
@@ -66,7 +77,7 @@ RECENT_COMMIT_GRACE_SECONDS = 120
 
 
 def detect_coderabbit_review_status(
-    comments: list[dict[str, str]],
+    comments: list[PRComment],
 ) -> ReviewBotStatus | None:
     """Detect CodeRabbit review status from PR issue comments.
 
@@ -74,7 +85,7 @@ def detect_coderabbit_review_status(
     status markers embedded as HTML comments.
 
     Args:
-        comments: List of dicts with ``login`` and ``body`` keys.
+        comments: List of PR-level comments.
 
     Returns:
         A :class:`ReviewBotStatus` if CodeRabbit is mid-review, else ``None``.
@@ -82,8 +93,8 @@ def detect_coderabbit_review_status(
     # Find the latest CodeRabbit comment (last in the list = most recent)
     latest_body: str | None = None
     for c in reversed(comments):
-        if "coderabbit" in c.get("login", "").lower():
-            latest_body = c.get("body", "")
+        if "coderabbit" in c.login.lower():
+            latest_body = c.body
             break
 
     if latest_body is None:

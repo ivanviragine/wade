@@ -758,7 +758,7 @@ class TestSyncAutoStash:
         }
         mock_bootstrap_repo.get_dirty_file_paths.return_value = dirty_paths
         mock_stash.detect_untracked_collisions.return_value = []
-        mock_stash.create_named_stash.return_value = (stash_ref, f"wade-{stash_ref}")
+        mock_stash.create_named_stash.return_value = (stash_ref, "wade-autostash/test")
         mock_stash.pop_stash.return_value = MagicMock(returncode=0)
         mock_branch.commits_ahead.return_value = behind
         if behind > 0:
@@ -1129,7 +1129,7 @@ class TestCatchupAutoStash:
         mock_repo.get_dirty_status.return_value = {"staged": 1, "unstaged": 0, "untracked": 0}
         mock_bootstrap_repo.get_dirty_file_paths.return_value = ["src/app.py"]
         mock_stash.detect_untracked_collisions.return_value = []
-        mock_stash.create_named_stash.return_value = ("stash@{0}", "wade-stash@{0}")
+        mock_stash.create_named_stash.return_value = ("stash@{0}", "wade-autostash/test")
         mock_stash.pop_stash.return_value = MagicMock(returncode=0)
         mock_branch.commits_ahead.return_value = 1
         mock_sync_mod.merge_branch.return_value = SyncResult(

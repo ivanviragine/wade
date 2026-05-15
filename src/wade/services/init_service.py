@@ -490,6 +490,20 @@ def init(
         )
         console.success(f"Created {config_path.name}")
 
+    # Create the markdown issues file if that's the chosen provider.
+    # Failures (existing dir at path, write permission, etc.) shouldn't
+    # take down the whole init — surface a fix hint and return False.
+    if provider_setup.get("name") == "markdown":
+        try:
+            _ensure_markdown_file(root, provider_setup.get("settings") or {})
+        except (ValueError, OSError) as exc:
+            console.error_with_fix(
+                str(exc),
+                "Set provider.settings.path to a writable file path "
+                "(default: ISSUES.md at the repo root).",
+            )
+            return False
+
     # Create knowledge file if enabled
     if knowledge_setup.get("enabled"):
         from wade.services.knowledge_service import ensure_knowledge_file
@@ -1476,13 +1490,30 @@ def _prompt_provider_setup(
 
     console.rule("Provider")
 
-    providers = ["GitHub Issues", "ClickUp"]
-    hints = ["gh CLI", "API token"]
+    providers = ["GitHub Issues", "ClickUp", "Markdown file"]
+    hints = ["gh CLI", "API token", "Local .md file"]
     default_idx = 0
     if current_provider == "clickup":
         default_idx = 1
+    elif current_provider == "markdown":
+        default_idx = 2
 
     idx = prompts.select("Task management provider", providers, default=default_idx, hints=hints)
+
+    # --- Markdown path ---
+    if idx == 2:
+        current_settings = current_settings or {}
+        path = (
+            prompts.input_prompt(
+                "Path to issues markdown file",
+                default=current_settings.get("path", "ISSUES.md"),
+            ).strip()
+            or "ISSUES.md"
+        )
+        # File creation is deferred to the post-wizard write phase so
+        # "Modify" / "Cancel" doesn't leave stray files behind. See
+        # _ensure_markdown_file() invoked alongside the config write.
+        return {"name": "markdown", "settings": {"path": path}}
 
     # --- GitHub path ---
     if idx == 0:
@@ -1735,6 +1766,45 @@ def _prompt_knowledge_setup(
         defaults["path"] = path.strip()
 
     return defaults
+
+
+def _ensure_markdown_file(project_root: Path, settings: dict[str, Any]) -> None:
+    """Create the markdown issues file with the default header if missing.
+
+    Resolves the path through the same main-worktree resolver the provider
+    uses at runtime, so running ``wade init`` from a linked worktree writes
+    the file at the location the provider will later read from. Rejects
+    paths that already exist as directories.
+
+    Called from the init write phase (alongside the config write) so the
+    wizard's "Modify" / "Cancel" paths don't leave stray files behind.
+    """
+    from wade.providers.markdown import (
+        DEFAULT_FILE_HEADER,
+        DEFAULT_FILE_NAME,
+        _resolve_main_worktree,
+    )
+
+    raw = settings.get("path") or DEFAULT_FILE_NAME
+    path_obj = Path(str(raw)).expanduser()
+    if path_obj.is_absolute():
+        md_path = path_obj
+    else:
+        anchor = _resolve_main_worktree(project_root) or project_root
+        md_path = (anchor / path_obj).resolve()
+
+    if md_path.exists():
+        if not md_path.is_file():
+            raise ValueError(f"Markdown issues path is not a regular file: {md_path}")
+        return
+
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    md_path.write_text(DEFAULT_FILE_HEADER, encoding="utf-8")
+    try:
+        shown: Path | str = md_path.relative_to(project_root)
+    except ValueError:
+        shown = md_path
+    console.success(f"Created {shown}")
 
 
 def _normalize_knowledge_setup(
