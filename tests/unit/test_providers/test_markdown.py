@@ -501,9 +501,7 @@ class TestRoundTrip:
     def test_custom_metadata_keys_survive_writes(self, config_factory) -> None:
         # User has hand-added metadata keys wade doesn't manage.
         content = (
-            "## #1 Title\n\n"
-            "<!-- wade\nstate: open\npriority: high\nowner: alice\n-->\n\n"
-            "body\n"
+            "## #1 Title\n\n<!-- wade\nstate: open\npriority: high\nowner: alice\n-->\n\nbody\n"
         )
         provider = config_factory(content)
         # Trigger writes that don't touch the custom keys.
