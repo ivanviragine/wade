@@ -61,9 +61,11 @@ def get_provider(config: ProjectConfig | None = None) -> AbstractTaskProvider:
 
     # Some providers (e.g. markdown) want the project root to resolve
     # relative paths. Pass it iff the constructor accepts the kwarg —
-    # keeping older providers untouched.
+    # keeping older providers untouched. ``inspect.signature(cls)``
+    # returns the user-facing constructor signature (self stripped,
+    # respects ``__init_subclass__`` / ``__new__``).
     kwargs: dict[str, Any] = {}
-    sig = inspect.signature(cls.__init__)
+    sig = inspect.signature(cls)
     if "project_root" in sig.parameters and config.project_root:
         kwargs["project_root"] = Path(config.project_root)
 

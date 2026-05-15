@@ -31,16 +31,25 @@ File format::
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import os
 import re
 import secrets
+import sys
 import tempfile
-from dataclasses import dataclass
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import structlog
+from pydantic import BaseModel, ConfigDict
+
+if sys.platform != "win32":
+    import fcntl
+else:  # pragma: no cover -- exercised only on Windows
+    fcntl = None  # type: ignore[assignment]
 
 from wade.models.config import ProviderConfig
 from wade.models.task import (
@@ -53,6 +62,9 @@ from wade.models.task import (
 from wade.providers._pr_delegate import GitHubPRDelegateMixin
 from wade.providers.base import AbstractTaskProvider
 from wade.utils.process import run
+
+if TYPE_CHECKING:
+    from wade.providers.github import GitHubProvider
 
 logger = structlog.get_logger()
 
@@ -83,13 +95,16 @@ class TaskNotFoundError(MarkdownProviderError):
     """Raised when a task ID does not exist in the markdown file."""
 
 
-@dataclass
-class _Section:
+class _Section(BaseModel):
     """A parsed issue section from the markdown file.
 
     ``meta`` and ``body`` are kept separate so we can rewrite metadata
     without touching the user-authored body.
     """
+
+    # Section is mutated in place during read-modify-write (title, body,
+    # meta), and the schema is internal — keep validation light.
+    model_config = ConfigDict(validate_assignment=False, frozen=False)
 
     id: str
     title: str
@@ -296,7 +311,7 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
         self,
         config: ProviderConfig | None = None,
         project_root: Path | None = None,
-        github_provider: AbstractTaskProvider | None = None,
+        github_provider: GitHubProvider | None = None,
     ) -> None:
         super().__init__(config)
         self._project_root = project_root or Path.cwd()
@@ -333,6 +348,35 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
         sections = _parse_sections(text)
         prelude = text[: sections[0].span[0]] if sections else text
         return prelude, sections
+
+    @contextlib.contextmanager
+    def _lock(self) -> Iterator[None]:
+        """Acquire an exclusive cross-process lock for the duration of a
+        read-modify-write cycle.
+
+        Two worktrees writing concurrently to the same ``ISSUES.md`` could
+        each load a snapshot, mutate in memory, and have the second writer
+        clobber the first (atomic write protects torn writes, not lost
+        updates). We block on a sibling ``.lock`` file so the load and
+        persist are observed as one atomic unit.
+
+        On Windows ``fcntl`` is unavailable, so this is a no-op there —
+        wade's primary platform is POSIX and locking gracefully degrades.
+        """
+        if fcntl is None:  # pragma: no cover -- Windows path
+            yield
+            return
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = self._path.with_name(f".{self._path.name}.lock")
+        # Open with O_RDWR | O_CREAT so we can both create and lock the file.
+        fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
     def _persist(self, prelude: str, sections: list[_Section]) -> None:
         """Reassemble the file from prelude + sections and write atomically."""
@@ -418,21 +462,22 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
         labels: list[str] | None = None,
     ) -> Task:
         """Append a new task as a ``## `` section to the file."""
-        prelude, sections = self._load_sections()
-        new_id = self._generate_id(sections)
-        meta: dict[str, str] = {"state": TaskState.OPEN.value}
-        if labels:
-            meta["labels"] = _join_labels(labels)
+        with self._lock():
+            prelude, sections = self._load_sections()
+            new_id = self._generate_id(sections)
+            meta: dict[str, str] = {"state": TaskState.OPEN.value}
+            if labels:
+                meta["labels"] = _join_labels(labels)
 
-        section = _Section(
-            id=new_id,
-            title=title.strip(),
-            meta=meta,
-            body=body.rstrip(),
-            span=(0, 0),
-        )
-        sections.append(section)
-        self._persist(prelude, sections)
+            section = _Section(
+                id=new_id,
+                title=title.strip(),
+                meta=meta,
+                body=body.rstrip(),
+                span=(0, 0),
+            )
+            sections.append(section)
+            self._persist(prelude, sections)
 
         logger.info("markdown.task_created", task_id=new_id, title=title, path=str(self._path))
         return _section_to_task(section)
@@ -450,37 +495,40 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
         body: str | None = None,
         title: str | None = None,
     ) -> Task:
-        prelude, sections = self._load_sections()
-        section = self._find_section(sections, task_id)
-        if title is not None:
-            section.title = title.strip()
-        if body is not None:
-            section.body = body.rstrip()
-        self._persist(prelude, sections)
+        with self._lock():
+            prelude, sections = self._load_sections()
+            section = self._find_section(sections, task_id)
+            if title is not None:
+                section.title = title.strip()
+            if body is not None:
+                section.body = body.rstrip()
+            self._persist(prelude, sections)
         return _section_to_task(section)
 
     def close_task(self, task_id: str) -> Task:
-        prelude, sections = self._load_sections()
-        section = self._find_section(sections, task_id)
-        section.meta["state"] = TaskState.CLOSED.value
-        # Closing implies leaving in-progress.
-        labels = _split_labels(section.meta.get("labels", ""))
-        labels = [name for name in labels if name != "in-progress"]
-        if labels:
-            section.meta["labels"] = _join_labels(labels)
-        else:
-            section.meta.pop("labels", None)
-        self._persist(prelude, sections)
+        with self._lock():
+            prelude, sections = self._load_sections()
+            section = self._find_section(sections, task_id)
+            section.meta["state"] = TaskState.CLOSED.value
+            # Closing implies leaving in-progress.
+            labels = _split_labels(section.meta.get("labels", ""))
+            labels = [name for name in labels if name != "in-progress"]
+            if labels:
+                section.meta["labels"] = _join_labels(labels)
+            else:
+                section.meta.pop("labels", None)
+            self._persist(prelude, sections)
         logger.info("markdown.task_closed", task_id=task_id, path=str(self._path))
         return _section_to_task(section)
 
     def comment_on_task(self, task_id: str, body: str) -> None:
-        prelude, sections = self._load_sections()
-        section = self._find_section(sections, task_id)
-        timestamp = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
-        comment_block = f"\n\n### Comment — {timestamp}\n\n{body.rstrip()}"
-        section.body = (section.body.rstrip() + comment_block).strip()
-        self._persist(prelude, sections)
+        with self._lock():
+            prelude, sections = self._load_sections()
+            section = self._find_section(sections, task_id)
+            timestamp = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
+            comment_block = f"\n\n### Comment — {timestamp}\n\n{body.rstrip()}"
+            section.body = (section.body.rstrip() + comment_block).strip()
+            self._persist(prelude, sections)
 
     # --- Label management ---
 
@@ -490,28 +538,30 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
 
     def add_label(self, task_id: str, label_name: str) -> None:
         try:
-            prelude, sections = self._load_sections()
-            section = self._find_section(sections, task_id)
-            labels = _split_labels(section.meta.get("labels", ""))
-            if label_name not in labels:
-                labels.append(label_name)
-                section.meta["labels"] = _join_labels(labels)
-                self._persist(prelude, sections)
+            with self._lock():
+                prelude, sections = self._load_sections()
+                section = self._find_section(sections, task_id)
+                labels = _split_labels(section.meta.get("labels", ""))
+                if label_name not in labels:
+                    labels.append(label_name)
+                    section.meta["labels"] = _join_labels(labels)
+                    self._persist(prelude, sections)
         except TaskNotFoundError:
             logger.warning("markdown.label_add_failed", task_id=task_id, label=label_name)
 
     def remove_label(self, task_id: str, label_name: str) -> None:
         try:
-            prelude, sections = self._load_sections()
-            section = self._find_section(sections, task_id)
-            labels = _split_labels(section.meta.get("labels", ""))
-            if label_name in labels:
-                labels = [name for name in labels if name != label_name]
-                if labels:
-                    section.meta["labels"] = _join_labels(labels)
-                else:
-                    section.meta.pop("labels", None)
-                self._persist(prelude, sections)
+            with self._lock():
+                prelude, sections = self._load_sections()
+                section = self._find_section(sections, task_id)
+                labels = _split_labels(section.meta.get("labels", ""))
+                if label_name in labels:
+                    labels = [name for name in labels if name != label_name]
+                    if labels:
+                        section.meta["labels"] = _join_labels(labels)
+                    else:
+                        section.meta.pop("labels", None)
+                    self._persist(prelude, sections)
         except TaskNotFoundError:
             logger.warning("markdown.label_remove_failed", task_id=task_id, label=label_name)
 
@@ -519,10 +569,11 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
 
     def move_to_in_progress(self, task_id: str) -> bool:
         try:
-            prelude, sections = self._load_sections()
-            section = self._find_section(sections, task_id)
-            section.meta["state"] = TaskState.IN_PROGRESS.value
-            self._persist(prelude, sections)
+            with self._lock():
+                prelude, sections = self._load_sections()
+                section = self._find_section(sections, task_id)
+                section.meta["state"] = TaskState.IN_PROGRESS.value
+                self._persist(prelude, sections)
             logger.info("markdown.moved_to_in_progress", task_id=task_id)
             return True
         except TaskNotFoundError:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -204,7 +205,7 @@ class TestPathResolution:
             "GIT_AUTHOR_EMAIL": "t@t",
             "GIT_COMMITTER_NAME": "test",
             "GIT_COMMITTER_EMAIL": "t@t",
-            "PATH": __import__("os").environ.get("PATH", ""),
+            "PATH": os.environ.get("PATH", ""),
         }
         subprocess.run(["git", "init", "-b", "main"], cwd=main, check=True, env=env)
         (main / "README").write_text("seed")
@@ -285,7 +286,7 @@ class TestCreateTask:
     def test_creates_first_task(self, config_factory) -> None:
         provider = config_factory(None)
         task = provider.create_task("New task", "Body here", labels=["feature"])
-        # IDs are random 8-hex-char strings.
+        # IDs are random 8-digit decimal strings (no leading zero).
         assert re.fullmatch(r"[1-9][0-9]{7}", task.id)
         assert task.title == "New task"
         assert task.state == TaskState.OPEN
@@ -395,11 +396,9 @@ class TestCloseTask:
     def test_preserves_existing_file_mode(self, config_factory) -> None:
         # Atomic write must not silently strip group/other perms.
         provider = config_factory(SAMPLE_FILE)
-        import os as _os
-
-        _os.chmod(provider._path, 0o644)
+        os.chmod(provider._path, 0o644)
         provider.close_task("1")
-        assert _os.stat(provider._path).st_mode & 0o777 == 0o644
+        assert os.stat(provider._path).st_mode & 0o777 == 0o644
 
 
 class TestCommentOnTask:

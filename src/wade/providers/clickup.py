@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -23,6 +23,9 @@ from wade.models.task import (
 from wade.providers._pr_delegate import GitHubPRDelegateMixin
 from wade.providers.base import AbstractTaskProvider
 from wade.utils.http import APIError, HTTPClient
+
+if TYPE_CHECKING:
+    from wade.providers.github import GitHubProvider
 
 logger = structlog.get_logger()
 
@@ -76,7 +79,7 @@ class ClickUpProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
     def __init__(
         self,
         config: ProviderConfig | None = None,
-        github_provider: AbstractTaskProvider | None = None,
+        github_provider: GitHubProvider | None = None,
     ) -> None:
         super().__init__(config)
 

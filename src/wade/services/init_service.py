@@ -490,6 +490,10 @@ def init(
         )
         console.success(f"Created {config_path.name}")
 
+    # Create the markdown issues file if that's the chosen provider.
+    if provider_setup.get("name") == "markdown":
+        _ensure_markdown_file(root, provider_setup.get("settings") or {})
+
     # Create knowledge file if enabled
     if knowledge_setup.get("enabled"):
         from wade.services.knowledge_service import ensure_knowledge_file
@@ -1483,23 +1487,9 @@ def _prompt_provider_setup(
             ).strip()
             or "ISSUES.md"
         )
-        # Pre-create the file with the default header so the user can see
-        # where it lives and `wade list` doesn't silently report an empty
-        # phantom file. Anchored at project_root because init runs in
-        # the main checkout (worktree-aware resolution kicks in later
-        # at runtime).
-        path_obj = Path(path).expanduser()
-        md_path = path_obj if path_obj.is_absolute() else project_root / path_obj
-        if not md_path.exists():
-            from wade.providers.markdown import DEFAULT_FILE_HEADER
-
-            md_path.parent.mkdir(parents=True, exist_ok=True)
-            md_path.write_text(DEFAULT_FILE_HEADER, encoding="utf-8")
-            try:
-                shown = md_path.relative_to(project_root)
-            except ValueError:
-                shown = md_path
-            console.success(f"Created {shown}")
+        # File creation is deferred to the post-wizard write phase so
+        # "Modify" / "Cancel" doesn't leave stray files behind. See
+        # _ensure_markdown_file() invoked alongside the config write.
         return {"name": "markdown", "settings": {"path": path}}
 
     # --- GitHub path ---
@@ -1753,6 +1743,28 @@ def _prompt_knowledge_setup(
         defaults["path"] = path.strip()
 
     return defaults
+
+
+def _ensure_markdown_file(project_root: Path, settings: dict[str, Any]) -> None:
+    """Create the markdown issues file with the default header if missing.
+
+    Called from the init write phase (alongside the config write) so the
+    wizard's "Modify" / "Cancel" paths don't leave stray files behind.
+    """
+    raw = settings.get("path") or "ISSUES.md"
+    path_obj = Path(str(raw)).expanduser()
+    md_path = path_obj if path_obj.is_absolute() else project_root / path_obj
+    if md_path.exists():
+        return
+    from wade.providers.markdown import DEFAULT_FILE_HEADER
+
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    md_path.write_text(DEFAULT_FILE_HEADER, encoding="utf-8")
+    try:
+        shown: Path | str = md_path.relative_to(project_root)
+    except ValueError:
+        shown = md_path
+    console.success(f"Created {shown}")
 
 
 def _normalize_knowledge_setup(

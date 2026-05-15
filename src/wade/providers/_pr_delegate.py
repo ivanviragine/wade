@@ -17,8 +17,12 @@ Usage::
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from wade.models.review import PRReviewStatus, ReviewThread
-from wade.providers.base import AbstractTaskProvider
+
+if TYPE_CHECKING:
+    from wade.providers.github import GitHubProvider
 
 
 class GitHubPRDelegateMixin:
@@ -30,21 +34,21 @@ class GitHubPRDelegateMixin:
     tests.
     """
 
-    _pr_github: AbstractTaskProvider | None = None
+    _pr_github: GitHubProvider | None = None
 
     def _init_pr_delegate(
         self,
-        github_provider: AbstractTaskProvider | None = None,
+        github_provider: GitHubProvider | None = None,
     ) -> None:
         """Wire the inner GitHub provider used for PR-review delegation."""
         self._pr_github = github_provider
 
-    def _pr_gh(self) -> AbstractTaskProvider:
+    def _pr_gh(self) -> GitHubProvider:
         """Return the inner GitHub provider, constructing it on first use."""
         if self._pr_github is None:
-            from wade.providers.github import GitHubProvider
+            from wade.providers.github import GitHubProvider as _GitHubProvider
 
-            self._pr_github = GitHubProvider()
+            self._pr_github = _GitHubProvider()
         return self._pr_github
 
     # --- Delegated PR-review operations ---

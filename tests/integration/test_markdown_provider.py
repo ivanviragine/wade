@@ -129,23 +129,62 @@ class TestMergeFlowEndsClosed:
         assert "state: closed" in text
 
     def test_parallel_creates_from_two_worktrees_do_not_collide(self, md_repo) -> None:
-        """Two providers (one rooted in main, one in worktree) both create
-        tasks. Because they target the same file, IDs are distinct and the
-        file is internally consistent — no duplicate sections.
+        """Two providers (one rooted in main, one in worktree) create tasks
+        concurrently. The cross-process file lock must serialize the
+        read-modify-write cycles so neither create is lost and both IDs
+        are distinct.
         """
+        from concurrent.futures import ThreadPoolExecutor
+
         main, wt = md_repo
         p_main = get_provider(parse_config_file(main / ".wade.yml"))
         p_wt = get_provider(parse_config_file(wt / ".wade.yml"))
 
-        a = p_main.create_task("From main", "body A")
-        b = p_wt.create_task("From worktree", "body B")
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            fa = ex.submit(p_main.create_task, "From main", "body A")
+            fb = ex.submit(p_wt.create_task, "From worktree", "body B")
+            a = fa.result()
+            b = fb.result()
 
         assert a.id != b.id
 
-        # Both providers see all three tasks (#42 seed + 2 new).
+        # Both providers see all three tasks (#42 seed + 2 new), and the
+        # underlying file has exactly one section per id (no clobbered writes).
+        text = (main / "ISSUES.md").read_text(encoding="utf-8")
+        assert text.count(f"## #{a.id} ") == 1
+        assert text.count(f"## #{b.id} ") == 1
         for provider in (p_main, p_wt):
             ids = {t.id for t in provider.list_tasks(state=None)}
             assert {"42", a.id, b.id}.issubset(ids)
+
+    def test_many_concurrent_creates_all_persist(self, md_repo) -> None:
+        """Sanity: hammer the lock with N concurrent creates. Every task
+        must survive the read-modify-write cycle (no lost updates) and
+        every ID must be distinct.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        main, wt = md_repo
+        providers = [
+            get_provider(parse_config_file(main / ".wade.yml")),
+            get_provider(parse_config_file(wt / ".wade.yml")),
+        ]
+        n = 12
+
+        def _create(i: int):
+            return providers[i % 2].create_task(f"Task {i}", f"body {i}")
+
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            futures = [ex.submit(_create, i) for i in range(n)]
+            tasks = [f.result() for f in as_completed(futures)]
+
+        ids = [t.id for t in tasks]
+        assert len(ids) == n
+        assert len(set(ids)) == n  # All distinct.
+
+        text = (main / "ISSUES.md").read_text(encoding="utf-8")
+        for task_id in ids:
+            assert text.count(f"## #{task_id} ") == 1
 
 
 class TestFilePermissionsArePreserved:

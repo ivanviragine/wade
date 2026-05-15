@@ -174,7 +174,7 @@ providers.
 ### Markdown provider
 
 Useful when you want issues versioned alongside the code, with no external
-service. Each issue is one `## ` heading in the file:
+service. Each issue is one `##` heading in the file:
 
 ```markdown
 # Wade Issues
@@ -196,12 +196,14 @@ Description body here. Sub-headings, code blocks, anything markdown.
   in different worktrees can't collide. They stay numeric so existing
   `#NN` checklist refs in tracking-issue bodies still work.
 - Configure via `.wade.yml`:
+
   ```yaml
   provider:
     name: markdown
     settings:
       path: ISSUES.md   # relative to repo root, or absolute
   ```
+
 - After a PR merges, `provider.close_task` flips the section's `state` to
   `closed` in `ISSUES.md`. The file is left modified in your working tree —
   commit it yourself, or add a hook to do it for you. (Auto-commit isn't
