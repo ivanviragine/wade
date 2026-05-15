@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 import yaml
 from typer.testing import CliRunner
 
@@ -380,7 +381,9 @@ class TestKnowledgeEnableCommand:
         updated_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         assert updated_config["knowledge"]["enabled"] is True
 
-    def test_enables_knowledge_with_custom_path(self, tmp_path: Path) -> None:
+    def test_enables_knowledge_with_custom_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text("version: 2\n", encoding="utf-8")
 
@@ -389,6 +392,9 @@ class TestKnowledgeEnableCommand:
             knowledge=KnowledgeConfig(enabled=False, path="KNOWLEDGE.md"),
             config_path=str(config_path),
         )
+        # The CLI handler reads Path.cwd() to derive project_root, so chdir
+        # into tmp_path to keep the created knowledge file out of the real repo.
+        monkeypatch.chdir(tmp_path)
         with (
             patch("wade.config.loader.load_config", return_value=config),
             patch("wade.config.loader.find_config_file", return_value=config_path),
