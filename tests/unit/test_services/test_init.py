@@ -2336,7 +2336,7 @@ class TestPromptModelMappingPerTierEffort:
             easy="haiku", medium="haiku", complex="sonnet", very_complex="opus"
         )
 
-        from wade.models.ai import EffortLevel
+        from crossby.models.ai import EffortLevel
 
         effort_values = [e.value for e in EffortLevel]
         call_count = 0
