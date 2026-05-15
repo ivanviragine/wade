@@ -12,13 +12,12 @@ import os
 import re
 import tempfile
 import webbrowser
-from dataclasses import dataclass
-from dataclasses import field as _field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 import structlog
+from pydantic import BaseModel, Field
 
 from wade.ai_tools.base import AbstractAITool
 from wade.config.loader import load_config
@@ -1542,16 +1541,16 @@ class _DirtyCategory(StrEnum):
     USER_DIRTY = "user_dirty"
 
 
-@dataclass
-class _PreflightOK:
+class _PreflightOK(BaseModel):
     """Successful pre-flight result — git repo and branch checks passed."""
 
     repo_root: Path
+    cwd: Path
     current_branch: str
     resolved_main: str
     dirty_category: _DirtyCategory
-    session_files: list[str] = _field(default_factory=list)
-    dirty_paths: list[str] = _field(default_factory=list)
+    session_files: list[str] = Field(default_factory=list)
+    dirty_paths: list[str] = Field(default_factory=list)
     has_tracked_changes: bool = False
 
 
@@ -1611,6 +1610,7 @@ def _sync_preflight(
     if git_repo.is_clean(cwd):
         return _PreflightOK(
             repo_root=repo_root,
+            cwd=cwd,
             current_branch=current,
             resolved_main=resolved_main,
             dirty_category=_DirtyCategory.CLEAN,
@@ -1623,6 +1623,7 @@ def _sync_preflight(
     if not non_session_paths:
         return _PreflightOK(
             repo_root=repo_root,
+            cwd=cwd,
             current_branch=current,
             resolved_main=resolved_main,
             dirty_category=_DirtyCategory.ARTIFACTS_ONLY,
@@ -1635,6 +1636,7 @@ def _sync_preflight(
     has_tracked_changes = dirty_status["staged"] > 0 or dirty_status["unstaged"] > 0
     return _PreflightOK(
         repo_root=repo_root,
+        cwd=cwd,
         current_branch=current,
         resolved_main=resolved_main,
         dirty_category=_DirtyCategory.USER_DIRTY,
@@ -1650,7 +1652,7 @@ def _emit_dirty_worktree_error(
     json_output: bool,
 ) -> None:
     """Emit ERROR dirty_worktree event and console output (--no-stash path)."""
-    detail_str = _format_uncommitted_summary(preflight.repo_root)
+    detail_str = _format_uncommitted_summary(preflight.cwd)
     if preflight.session_files:
         emit(
             SyncEventType.ERROR,
@@ -1915,8 +1917,8 @@ def sync(
 
         if preflight.has_tracked_changes:
             try:
-                stash_ref = git_stash.create_named_stash(session_type, current, cwd)
-                emit(SyncEventType.AUTOSTASHED, stash_ref=stash_ref)
+                stash_ref, stash_name = git_stash.create_named_stash(session_type, current, cwd)
+                emit(SyncEventType.AUTOSTASHED, stash_ref=stash_ref, stash_name=stash_name)
                 if not json_output:
                     console.info(f"Stashed local changes: {stash_ref}")
             except GitError as exc:
@@ -2062,8 +2064,8 @@ def catchup(
 
         if preflight.has_tracked_changes:
             try:
-                stash_ref = git_stash.create_named_stash("catchup", current, cwd)
-                emit(SyncEventType.AUTOSTASHED, stash_ref=stash_ref)
+                stash_ref, stash_name = git_stash.create_named_stash("catchup", current, cwd)
+                emit(SyncEventType.AUTOSTASHED, stash_ref=stash_ref, stash_name=stash_name)
                 if not json_output:
                     console.info(f"Stashed local changes: {stash_ref}")
             except GitError as exc:
@@ -2093,12 +2095,15 @@ def catchup(
         abort_on_conflict=True,
     )
 
+    stash_restored = True
     if stash_ref is not None:
         # Merge aborted on conflict or succeeded — restore stash either way.
-        _handle_stash_restoration(stash_ref, cwd, result.success, emit, json_output)
+        stash_restored = _handle_stash_restoration(
+            stash_ref, cwd, result.success, emit, json_output
+        )
 
     return SyncResult(
-        success=result.success,
+        success=result.success and stash_restored,
         current_branch=result.current_branch,
         main_branch=result.main_branch,
         conflicts=result.conflicts,

@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
+from pydantic import BaseModel
 
 from wade.git.repo import GitError, _run_git
 
@@ -15,14 +16,21 @@ log = structlog.get_logger(__name__)
 AUTOSTASH_PREFIX = "wade-autostash"
 
 
+class AutoStashEntry(BaseModel):
+    """A single wade autostash entry from the git stash list."""
+
+    ref: str
+    message: str
+
+
 def _stash_message(session_type: str, branch: str) -> str:
     ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     safe_branch = branch.replace("/", "_")
     return f"{AUTOSTASH_PREFIX}/{session_type}/{safe_branch}/{ts}"
 
 
-def create_named_stash(session_type: str, branch: str, cwd: Path) -> str:
-    """Stash staged+unstaged tracked-file changes and return the stash ref.
+def create_named_stash(session_type: str, branch: str, cwd: Path) -> tuple[str, str]:
+    """Stash staged+unstaged tracked-file changes and return (ref, message).
 
     Untracked files are intentionally left in place — call
     detect_untracked_collisions() before this to ensure they won't conflict.
@@ -33,7 +41,7 @@ def create_named_stash(session_type: str, branch: str, cwd: Path) -> str:
         cwd: Working directory inside the git repo.
 
     Returns:
-        The stash ref string (e.g. ``stash@{0}``).
+        Tuple of (stash_ref, stash_message), e.g. (``stash@{0}``, ``wade-autostash/...``).
 
     Raises:
         GitError: If the stash command fails or nothing was stashed.
@@ -49,7 +57,7 @@ def create_named_stash(session_type: str, branch: str, cwd: Path) -> str:
     if ref is None:
         raise GitError(f"Stash created but ref not found for: {message!r}")
     log.debug("git.stash.created", ref=ref, message=message)
-    return ref
+    return ref, message
 
 
 def _find_stash_ref(message: str, cwd: Path) -> str | None:
@@ -84,12 +92,12 @@ def drop_stash(stash_ref: str, cwd: Path) -> subprocess.CompletedProcess[str]:
     return _run_git("stash", "drop", stash_ref, cwd=cwd, check=False)
 
 
-def list_wade_autostashes(cwd: Path) -> list[dict[str, str]]:
-    """Return all wade autostash entries as ``{'ref': ..., 'message': ...}`` dicts."""
+def list_wade_autostashes(cwd: Path) -> list[AutoStashEntry]:
+    """Return all wade autostash entries."""
     result = _run_git("stash", "list", "--format=%gd %gs", cwd=cwd, check=False)
     if result.returncode != 0:
         return []
-    entries: list[dict[str, str]] = []
+    entries: list[AutoStashEntry] = []
     for line in result.stdout.splitlines():
         if not line.strip():
             continue
@@ -98,7 +106,7 @@ def list_wade_autostashes(cwd: Path) -> list[dict[str, str]]:
             continue
         ref, subject = parts[0], parts[1]
         if AUTOSTASH_PREFIX in subject:
-            entries.append({"ref": ref, "message": subject})
+            entries.append(AutoStashEntry(ref=ref, message=subject))
     return entries
 
 

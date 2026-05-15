@@ -68,7 +68,8 @@ class TestAutoStashHappyPath:
         assert (repo / "user-work.txt").read_text() == "my work\n"
         # user-work.txt should still be staged after pop
         status = _git(repo, "status", "--porcelain")
-        assert "user-work.txt" in status
+        staged_line = next((ln for ln in status.splitlines() if ln.endswith("user-work.txt")), "")
+        assert staged_line.startswith("A "), f"expected staged add, got: {staged_line!r}"
 
     def test_unstaged_changes_survive_sync(self, tmp_git_repo: Path) -> None:
         """Unstaged modifications to tracked files survive the sync."""
@@ -127,6 +128,7 @@ class TestAutoStashHappyPath:
         # After successful pop, the stash is gone from the list — but during sync
         # the ref should have been 'stash@{0}'
         assert "stash@{" in stash_ev.data["stash_ref"]
+        assert stash_ev.data["stash_name"].startswith("wade-autostash/")
 
 
 # ===========================================================================
