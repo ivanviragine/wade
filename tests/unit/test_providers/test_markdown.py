@@ -268,6 +268,14 @@ class TestListTasks:
         tasks = provider.list_tasks(state=None, limit=2)
         assert len(tasks) == 2
 
+    def test_zero_limit_returns_empty(self, config_factory) -> None:
+        provider = config_factory(SAMPLE_FILE)
+        assert provider.list_tasks(state=None, limit=0) == []
+
+    def test_negative_limit_returns_empty(self, config_factory) -> None:
+        provider = config_factory(SAMPLE_FILE)
+        assert provider.list_tasks(state=None, limit=-3) == []
+
     def test_complexity_parsed_from_label(self, config_factory) -> None:
         provider = config_factory(SAMPLE_FILE)
         task = next(t for t in provider.list_tasks() if t.id == "1")
@@ -676,6 +684,7 @@ class TestPRReviewDelegation:
         provider, gh = self._build(tmp_path)
         gh.get_repo_nwo.return_value = "owner/repo"
         assert provider.get_repo_nwo() == "owner/repo"
+        gh.get_repo_nwo.assert_called_once_with()
 
     def test_inner_github_provider_lazy_init(self, tmp_path: Path) -> None:
         # No github_provider injected — should not construct one until needed.

@@ -531,6 +531,7 @@ class TestPRReviewDelegation:
         provider, gh = self._build()
         gh.get_repo_nwo.return_value = "owner/repo"
         assert provider.get_repo_nwo() == "owner/repo"
+        gh.get_repo_nwo.assert_called_once_with()
 
     def test_inner_github_provider_lazy_init(self) -> None:
         with patch.dict("os.environ", {"CLICKUP_API_TOKEN": "pk_test"}):

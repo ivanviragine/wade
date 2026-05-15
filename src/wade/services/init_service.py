@@ -491,8 +491,18 @@ def init(
         console.success(f"Created {config_path.name}")
 
     # Create the markdown issues file if that's the chosen provider.
+    # Failures (existing dir at path, write permission, etc.) shouldn't
+    # take down the whole init — surface a fix hint and return False.
     if provider_setup.get("name") == "markdown":
-        _ensure_markdown_file(root, provider_setup.get("settings") or {})
+        try:
+            _ensure_markdown_file(root, provider_setup.get("settings") or {})
+        except (ValueError, OSError) as exc:
+            console.error_with_fix(
+                str(exc),
+                "Set provider.settings.path to a writable file path "
+                "(default: ISSUES.md at the repo root).",
+            )
+            return False
 
     # Create knowledge file if enabled
     if knowledge_setup.get("enabled"):

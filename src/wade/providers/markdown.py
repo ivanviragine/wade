@@ -473,6 +473,8 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
         exclude_labels: list[str] | None = None,
     ) -> list[Task]:
         """List tasks from the markdown file with optional filtering."""
+        if limit <= 0:
+            return []
         _, sections = self._load_sections()
         tasks: list[Task] = []
         exclude_set = set(exclude_labels or [])
