@@ -184,14 +184,14 @@ class TestBootstrapWorktree:
         ) == "a1b2c3d4:\n  up: 1\n"
 
     def test_propagates_allowlist_when_configured(self, tmp_path: Path) -> None:
-        """Allowlist is written to worktree using wade's default Bash(wade:*) pattern.
+        """Allowlist is written to worktree using wade's default Bash(wade *) pattern.
 
         With an empty ProjectConfig(), PermissionsConfig.allowed_commands defaults
-        to ["wade:*"] which canonical_to_claude translates to "Bash(wade:*)".
+        to ["wade *"] which canonical_to_claude translates to "Bash(wade *)".
         """
         import json
 
-        wade_allow_pattern = "Bash(wade:*)"
+        wade_allow_pattern = "Bash(wade *)"
 
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
@@ -217,7 +217,7 @@ class TestBootstrapWorktree:
         self, tmp_path: Path
     ) -> None:
         """Allowlist is always written to worktree regardless of repo root state."""
-        wade_allow_pattern = "Bash(wade:*)"
+        wade_allow_pattern = "Bash(wade *)"
 
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
