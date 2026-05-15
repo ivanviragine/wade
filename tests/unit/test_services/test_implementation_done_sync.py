@@ -576,13 +576,12 @@ class TestSync:
             assert result.success
             assert any(e.event == "merged" for e in result.events)
 
-    def test_dirty_worktree(self, tmp_git_repo: Path) -> None:
-        """Sync fails with dirty worktree."""
+    def test_dirty_worktree_no_stash(self, tmp_git_repo: Path) -> None:
+        """--no-stash preserves strict behavior: sync fails immediately on dirty worktree."""
         import subprocess
 
         from wade.services.implementation_service import sync
 
-        # Create and checkout feature branch
         subprocess.run(
             ["git", "checkout", "-b", "feat/42-test"],
             cwd=tmp_git_repo,
@@ -590,7 +589,7 @@ class TestSync:
             check=True,
         )
 
-        # Create dirty state
+        # Create dirty state (untracked file)
         (tmp_git_repo / "dirty.txt").write_text("dirty\n")
 
         with patch(
@@ -599,7 +598,7 @@ class TestSync:
                 project=ProjectSettings(main_branch="main"),
             ),
         ):
-            result = sync(project_root=tmp_git_repo)
+            result = sync(project_root=tmp_git_repo, no_stash=True)
             assert not result.success
             assert any(
                 e.data.get("reason") == "dirty_worktree"
@@ -607,8 +606,8 @@ class TestSync:
                 if e.event == "error"
             )
 
-    def test_dirty_worktree_with_session_files_in_event(self, tmp_git_repo: Path) -> None:
-        """session_files is included in the ERROR event payload for dirty session artifacts."""
+    def test_dirty_worktree_untracked_passes_without_collision(self, tmp_git_repo: Path) -> None:
+        """Untracked files that don't collide with the merge proceed without stashing."""
         import subprocess
 
         from wade.services.implementation_service import sync
@@ -620,7 +619,32 @@ class TestSync:
             check=True,
         )
 
-        # Create a dirty session artifact
+        # Untracked file that main does NOT introduce
+        (tmp_git_repo / "my-notes.txt").write_text("work in progress\n")
+
+        with patch(
+            "wade.services.implementation_service.core.load_config",
+            return_value=ProjectConfig(
+                project=ProjectSettings(main_branch="main"),
+            ),
+        ):
+            result = sync(project_root=tmp_git_repo)
+            assert result.success
+
+    def test_dirty_worktree_session_artifacts_only_proceeds(self, tmp_git_repo: Path) -> None:
+        """Only session artifacts dirty: sync proceeds without stashing."""
+        import subprocess
+
+        from wade.services.implementation_service import sync
+
+        subprocess.run(
+            ["git", "checkout", "-b", "feat/42-test"],
+            cwd=tmp_git_repo,
+            capture_output=True,
+            check=True,
+        )
+
+        # Session artifact — not a user change, sync should proceed
         (tmp_git_repo / "PLAN.md").write_text("# Plan\n")
 
         with patch(
@@ -630,6 +654,31 @@ class TestSync:
             ),
         ):
             result = sync(project_root=tmp_git_repo)
+            assert result.success
+
+    def test_dirty_worktree_session_artifacts_no_stash_fails(self, tmp_git_repo: Path) -> None:
+        """With --no-stash, even session artifacts cause dirty_worktree error."""
+        import subprocess
+
+        from wade.services.implementation_service import sync
+
+        subprocess.run(
+            ["git", "checkout", "-b", "feat/42-test"],
+            cwd=tmp_git_repo,
+            capture_output=True,
+            check=True,
+        )
+
+        # Session artifact
+        (tmp_git_repo / "PLAN.md").write_text("# Plan\n")
+
+        with patch(
+            "wade.services.implementation_service.core.load_config",
+            return_value=ProjectConfig(
+                project=ProjectSettings(main_branch="main"),
+            ),
+        ):
+            result = sync(project_root=tmp_git_repo, no_stash=True)
             assert not result.success
             error_event = next(
                 (
@@ -666,6 +715,472 @@ class TestSync:
             assert result.success
             # Events should include preflight_ok
             assert any(e.event == "preflight_ok" for e in result.events)
+
+
+# ---------------------------------------------------------------------------
+# Auto-stash unit tests (mocked git)
+# ---------------------------------------------------------------------------
+
+
+class TestSyncAutoStash:
+    """Unit tests for sync() auto-stash flow — all git mocked."""
+
+    def _make_sync_mocks(
+        self,
+        mock_config: MagicMock,
+        mock_repo: MagicMock,
+        mock_bootstrap_repo: MagicMock,
+        mock_branch: MagicMock,
+        mock_sync_mod: MagicMock,
+        mock_stash: MagicMock,
+        tmp_path: Path,
+        *,
+        dirty_paths: list[str],
+        staged: int = 0,
+        unstaged: int = 0,
+        untracked: int = 0,
+        stash_ref: str = "stash@{0}",
+        behind: int = 0,
+    ) -> None:
+        from wade.models.config import ProjectConfig
+        from wade.models.session import SyncResult
+
+        mock_config.return_value = ProjectConfig()
+        mock_repo.get_repo_root.return_value = tmp_path
+        mock_repo.get_current_branch.return_value = "feat/1-feature"
+        mock_repo.is_clean.return_value = False
+        mock_repo.has_remote.return_value = False
+        mock_repo.detect_main_branch.return_value = "main"
+        mock_repo.get_dirty_status.return_value = {
+            "staged": staged,
+            "unstaged": unstaged,
+            "untracked": untracked,
+        }
+        mock_bootstrap_repo.get_dirty_file_paths.return_value = dirty_paths
+        mock_stash.detect_untracked_collisions.return_value = []
+        mock_stash.create_named_stash.return_value = (stash_ref, f"wade-{stash_ref}")
+        mock_stash.pop_stash.return_value = MagicMock(returncode=0)
+        mock_branch.commits_ahead.return_value = behind
+        if behind > 0:
+            mock_sync_mod.merge_branch.return_value = SyncResult(
+                success=True,
+                current_branch="feat/1-feature",
+                main_branch="main",
+                commits_merged=behind,
+            )
+
+    @patch("wade.services.implementation_service.core.git_stash")
+    @patch("wade.services.implementation_service.core.git_sync")
+    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.bootstrap.git_repo")
+    @patch("wade.services.implementation_service.core.git_repo")
+    @patch("wade.services.implementation_service.core.load_config")
+    def test_staged_changes_auto_stash_and_restore(
+        self,
+        mock_config: MagicMock,
+        mock_repo: MagicMock,
+        mock_bootstrap_repo: MagicMock,
+        mock_branch: MagicMock,
+        mock_sync_mod: MagicMock,
+        mock_stash: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Staged user changes: stash → merge → pop — all events emitted."""
+        from wade.models.session import SyncEventType
+        from wade.services.implementation_service import sync
+
+        self._make_sync_mocks(
+            mock_config,
+            mock_repo,
+            mock_bootstrap_repo,
+            mock_branch,
+            mock_sync_mod,
+            mock_stash,
+            tmp_path,
+            dirty_paths=["src/app.py"],
+            staged=1,
+        )
+
+        result = sync(project_root=tmp_path)
+
+        assert result.success
+        mock_stash.create_named_stash.assert_called_once()
+        mock_stash.pop_stash.assert_called_once_with("stash@{0}", tmp_path)
+        assert any(e.event == SyncEventType.AUTOSTASHED for e in result.events)
+        assert any(e.event == SyncEventType.STASH_RESTORED for e in result.events)
+
+    @patch("wade.services.implementation_service.core.git_stash")
+    @patch("wade.services.implementation_service.core.git_sync")
+    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.bootstrap.git_repo")
+    @patch("wade.services.implementation_service.core.git_repo")
+    @patch("wade.services.implementation_service.core.load_config")
+    def test_unstaged_changes_auto_stash(
+        self,
+        mock_config: MagicMock,
+        mock_repo: MagicMock,
+        mock_bootstrap_repo: MagicMock,
+        mock_branch: MagicMock,
+        mock_sync_mod: MagicMock,
+        mock_stash: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Unstaged user changes trigger auto-stash."""
+        from wade.services.implementation_service import sync
+
+        self._make_sync_mocks(
+            mock_config,
+            mock_repo,
+            mock_bootstrap_repo,
+            mock_branch,
+            mock_sync_mod,
+            mock_stash,
+            tmp_path,
+            dirty_paths=["src/app.py"],
+            unstaged=1,
+        )
+
+        result = sync(project_root=tmp_path)
+
+        assert result.success
+        mock_stash.create_named_stash.assert_called_once()
+
+    @patch("wade.services.implementation_service.core.git_stash")
+    @patch("wade.services.implementation_service.core.git_sync")
+    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.bootstrap.git_repo")
+    @patch("wade.services.implementation_service.core.git_repo")
+    @patch("wade.services.implementation_service.core.load_config")
+    def test_untracked_only_no_stash_needed(
+        self,
+        mock_config: MagicMock,
+        mock_repo: MagicMock,
+        mock_bootstrap_repo: MagicMock,
+        mock_branch: MagicMock,
+        mock_sync_mod: MagicMock,
+        mock_stash: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Untracked-only dirty state: no stash created, merge proceeds."""
+        from wade.models.session import SyncEventType
+        from wade.services.implementation_service import sync
+
+        self._make_sync_mocks(
+            mock_config,
+            mock_repo,
+            mock_bootstrap_repo,
+            mock_branch,
+            mock_sync_mod,
+            mock_stash,
+            tmp_path,
+            dirty_paths=["notes.txt"],
+            untracked=1,
+        )
+
+        result = sync(project_root=tmp_path)
+
+        assert result.success
+        mock_stash.create_named_stash.assert_not_called()
+        assert not any(e.event == SyncEventType.AUTOSTASHED for e in result.events)
+
+    @patch("wade.services.implementation_service.core.git_stash")
+    @patch("wade.services.implementation_service.core.git_sync")
+    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.bootstrap.git_repo")
+    @patch("wade.services.implementation_service.core.git_repo")
+    @patch("wade.services.implementation_service.core.load_config")
+    def test_untracked_collision_fails_before_mutation(
+        self,
+        mock_config: MagicMock,
+        mock_repo: MagicMock,
+        mock_bootstrap_repo: MagicMock,
+        mock_branch: MagicMock,
+        mock_sync_mod: MagicMock,
+        mock_stash: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Untracked collision detected before any mutation — no stash, no merge."""
+        from wade.models.session import SyncEventType
+        from wade.services.implementation_service import sync
+
+        self._make_sync_mocks(
+            mock_config,
+            mock_repo,
+            mock_bootstrap_repo,
+            mock_branch,
+            mock_sync_mod,
+            mock_stash,
+            tmp_path,
+            dirty_paths=["new-feature.py"],
+            untracked=1,
+        )
+        mock_stash.detect_untracked_collisions.return_value = ["new-feature.py"]
+
+        result = sync(project_root=tmp_path)
+
+        assert not result.success
+        mock_stash.create_named_stash.assert_not_called()
+        mock_sync_mod.merge_branch.assert_not_called()
+        assert any(e.event == SyncEventType.UNTRACKED_CONFLICT for e in result.events)
+        conflict_ev = next(e for e in result.events if e.event == SyncEventType.UNTRACKED_CONFLICT)
+        assert "new-feature.py" in conflict_ev.data["paths"]
+
+    @patch("wade.services.implementation_service.core.git_stash")
+    @patch("wade.services.implementation_service.core.git_sync")
+    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.bootstrap.git_repo")
+    @patch("wade.services.implementation_service.core.git_repo")
+    @patch("wade.services.implementation_service.core.load_config")
+    def test_stash_pop_conflict_leaves_stash_behind(
+        self,
+        mock_config: MagicMock,
+        mock_repo: MagicMock,
+        mock_bootstrap_repo: MagicMock,
+        mock_branch: MagicMock,
+        mock_sync_mod: MagicMock,
+        mock_stash: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Stash pop conflict: named stash left, STASH_LEFT_BEHIND emitted, sync fails."""
+        from wade.models.session import SyncEventType, SyncResult
+        from wade.services.implementation_service import sync
+
+        self._make_sync_mocks(
+            mock_config,
+            mock_repo,
+            mock_bootstrap_repo,
+            mock_branch,
+            mock_sync_mod,
+            mock_stash,
+            tmp_path,
+            dirty_paths=["src/app.py"],
+            staged=1,
+            behind=1,
+        )
+        mock_sync_mod.merge_branch.return_value = SyncResult(
+            success=True, current_branch="feat/1-feature", main_branch="main", commits_merged=1
+        )
+        mock_stash.pop_stash.return_value = MagicMock(returncode=1)
+
+        result = sync(project_root=tmp_path)
+
+        assert not result.success
+        assert any(e.event == SyncEventType.STASH_LEFT_BEHIND for e in result.events)
+        ev = next(e for e in result.events if e.event == SyncEventType.STASH_LEFT_BEHIND)
+        assert "stash@{0}" in ev.data["stash_ref"]
+        assert "recovery_hint" in ev.data
+
+    @patch("wade.services.implementation_service.core.git_stash")
+    @patch("wade.services.implementation_service.core.git_sync")
+    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.bootstrap.git_repo")
+    @patch("wade.services.implementation_service.core.git_repo")
+    @patch("wade.services.implementation_service.core.load_config")
+    def test_merge_conflict_with_stash_aborts_and_restores(
+        self,
+        mock_config: MagicMock,
+        mock_repo: MagicMock,
+        mock_bootstrap_repo: MagicMock,
+        mock_branch: MagicMock,
+        mock_sync_mod: MagicMock,
+        mock_stash: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Merge conflict when stashed: merge aborted, stash restored, error returned."""
+        from wade.models.session import SyncEventType, SyncResult
+        from wade.services.implementation_service import sync
+
+        self._make_sync_mocks(
+            mock_config,
+            mock_repo,
+            mock_bootstrap_repo,
+            mock_branch,
+            mock_sync_mod,
+            mock_stash,
+            tmp_path,
+            dirty_paths=["src/app.py"],
+            staged=1,
+            behind=1,
+        )
+        mock_sync_mod.merge_branch.return_value = SyncResult(
+            success=False,
+            current_branch="feat/1-feature",
+            main_branch="main",
+            conflicts=["src/app.py"],
+        )
+
+        result = sync(project_root=tmp_path)
+
+        assert not result.success
+        # abort_on_conflict=True when stash_ref is set, so abort_merge is called
+        mock_sync_mod.abort_merge.assert_called_once()
+        # Stash should be restored after abort
+        mock_stash.pop_stash.assert_called_once_with("stash@{0}", tmp_path)
+        assert any(e.event == SyncEventType.STASH_RESTORED for e in result.events)
+
+    @patch("wade.services.implementation_service.core.git_stash")
+    @patch("wade.services.implementation_service.core.git_sync")
+    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.bootstrap.git_repo")
+    @patch("wade.services.implementation_service.core.git_repo")
+    @patch("wade.services.implementation_service.core.load_config")
+    def test_no_stash_with_user_dirty_fails(
+        self,
+        mock_config: MagicMock,
+        mock_repo: MagicMock,
+        mock_bootstrap_repo: MagicMock,
+        mock_branch: MagicMock,
+        mock_sync_mod: MagicMock,
+        mock_stash: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """--no-stash: USER_DIRTY causes immediate failure, no merge attempted."""
+        from wade.models.session import SyncEventType
+        from wade.services.implementation_service import sync
+
+        self._make_sync_mocks(
+            mock_config,
+            mock_repo,
+            mock_bootstrap_repo,
+            mock_branch,
+            mock_sync_mod,
+            mock_stash,
+            tmp_path,
+            dirty_paths=["src/app.py"],
+            staged=1,
+        )
+
+        result = sync(project_root=tmp_path, no_stash=True)
+
+        assert not result.success
+        mock_stash.create_named_stash.assert_not_called()
+        mock_sync_mod.merge_branch.assert_not_called()
+        error_events = [e for e in result.events if e.event == SyncEventType.ERROR]
+        assert any(e.data.get("reason") == "dirty_worktree" for e in error_events)
+
+    @patch("wade.services.implementation_service.core.git_stash")
+    @patch("wade.services.implementation_service.core.git_sync")
+    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.bootstrap.git_repo")
+    @patch("wade.services.implementation_service.core.git_repo")
+    @patch("wade.services.implementation_service.core.load_config")
+    def test_artifacts_only_proceeds_without_stash(
+        self,
+        mock_config: MagicMock,
+        mock_repo: MagicMock,
+        mock_bootstrap_repo: MagicMock,
+        mock_branch: MagicMock,
+        mock_sync_mod: MagicMock,
+        mock_stash: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Only session artifacts dirty: proceeds without stash."""
+        from wade.models.session import SyncEventType
+        from wade.services.implementation_service import sync
+
+        mock_config.return_value = __import__(
+            "wade.models.config", fromlist=["ProjectConfig"]
+        ).ProjectConfig()
+        mock_repo.get_repo_root.return_value = tmp_path
+        mock_repo.get_current_branch.return_value = "feat/1-feature"
+        mock_repo.is_clean.return_value = False
+        mock_repo.has_remote.return_value = False
+        mock_repo.detect_main_branch.return_value = "main"
+        mock_bootstrap_repo.get_dirty_file_paths.return_value = ["PLAN.md"]
+        mock_branch.commits_ahead.return_value = 0
+
+        result = sync(project_root=tmp_path)
+
+        assert result.success
+        mock_stash.create_named_stash.assert_not_called()
+        assert not any(e.event == SyncEventType.AUTOSTASHED for e in result.events)
+
+
+class TestCatchupAutoStash:
+    """Unit tests for catchup() auto-stash flow — all git mocked."""
+
+    @patch("wade.services.implementation_service.core.git_stash")
+    @patch("wade.services.implementation_service.core.git_sync")
+    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.bootstrap.git_repo")
+    @patch("wade.services.implementation_service.core.git_repo")
+    @patch("wade.services.implementation_service.core.load_config")
+    def test_staged_changes_auto_stash_and_restore(
+        self,
+        mock_config: MagicMock,
+        mock_repo: MagicMock,
+        mock_bootstrap_repo: MagicMock,
+        mock_branch: MagicMock,
+        mock_sync_mod: MagicMock,
+        mock_stash: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Staged user changes: catchup stashes → merges → restores stash."""
+        from wade.models.config import ProjectConfig
+        from wade.models.session import SyncEventType, SyncResult
+        from wade.services.implementation_service import catchup
+
+        mock_config.return_value = ProjectConfig()
+        mock_repo.get_repo_root.return_value = tmp_path
+        mock_repo.get_current_branch.return_value = "feat/1-feature"
+        mock_repo.is_clean.return_value = False
+        mock_repo.has_remote.return_value = False
+        mock_repo.detect_main_branch.return_value = "main"
+        mock_repo.get_dirty_status.return_value = {"staged": 1, "unstaged": 0, "untracked": 0}
+        mock_bootstrap_repo.get_dirty_file_paths.return_value = ["src/app.py"]
+        mock_stash.detect_untracked_collisions.return_value = []
+        mock_stash.create_named_stash.return_value = ("stash@{0}", "wade-stash@{0}")
+        mock_stash.pop_stash.return_value = MagicMock(returncode=0)
+        mock_branch.commits_ahead.return_value = 1
+        mock_sync_mod.merge_branch.return_value = SyncResult(
+            success=True, current_branch="feat/1-feature", main_branch="main", commits_merged=1
+        )
+
+        result = catchup(project_root=tmp_path)
+
+        assert result.success
+        mock_stash.create_named_stash.assert_called_once()
+        mock_stash.pop_stash.assert_called_once()
+        assert any(e.event == SyncEventType.AUTOSTASHED for e in result.events)
+        assert any(e.event == SyncEventType.STASH_RESTORED for e in result.events)
+
+    @patch("wade.services.implementation_service.core.git_stash")
+    @patch("wade.services.implementation_service.core.git_sync")
+    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.bootstrap.git_repo")
+    @patch("wade.services.implementation_service.core.git_repo")
+    @patch("wade.services.implementation_service.core.load_config")
+    def test_no_stash_preserves_strict_behavior(
+        self,
+        mock_config: MagicMock,
+        mock_repo: MagicMock,
+        mock_bootstrap_repo: MagicMock,
+        mock_branch: MagicMock,
+        mock_sync_mod: MagicMock,
+        mock_stash: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """--no-stash: catchup fails immediately on user dirty state."""
+        from wade.models.config import ProjectConfig
+        from wade.models.session import SyncEventType
+        from wade.services.implementation_service import catchup
+
+        mock_config.return_value = ProjectConfig()
+        mock_repo.get_repo_root.return_value = tmp_path
+        mock_repo.get_current_branch.return_value = "feat/1-feature"
+        mock_repo.is_clean.return_value = False
+        mock_repo.has_remote.return_value = False
+        mock_repo.detect_main_branch.return_value = "main"
+        mock_repo.get_dirty_status.return_value = {"staged": 1, "unstaged": 0, "untracked": 0}
+        mock_bootstrap_repo.get_dirty_file_paths.return_value = ["src/app.py"]
+
+        result = catchup(project_root=tmp_path, no_stash=True)
+
+        assert not result.success
+        mock_stash.create_named_stash.assert_not_called()
+        mock_sync_mod.merge_branch.assert_not_called()
+        error_events = [e for e in result.events if e.event == SyncEventType.ERROR]
+        assert any(e.data.get("reason") == "dirty_worktree" for e in error_events)
 
 
 # ---------------------------------------------------------------------------

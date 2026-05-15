@@ -72,6 +72,12 @@ Run `wade implementation-session check` as your **first action**:
 at startup (before this session begins). The catchup output appears in the
 startup log.
 
+**Auto-stash**: If the worktree has staged or unstaged user changes, catchup
+automatically stashes them, runs the merge, and restores them. Session
+artifacts (PLAN.md, PR-SUMMARY.md, etc.) are left in place — they are never
+stashed. Use `--no-stash` to get the old strict behavior (fail immediately on
+any uncommitted changes).
+
 **If the startup output reports a merge conflict**, note that the catchup
 command always aborts the merge and leaves the worktree clean — there are no
 conflict markers to resolve. `wade implementation-session catchup --json` is
@@ -91,6 +97,17 @@ Then resolve using the standard flow:
 3. Resolve the conflict markers in each file
 4. Stage only the resolved files: `git add <file1> <file2> ...`
 5. Complete the merge: `git commit --no-edit`
+
+**If catchup reports an `untracked_conflict` error**, untracked files in your
+worktree would be overwritten by the merge. The paths are listed in the error.
+Commit, move, or delete them, then re-run catchup.
+
+**If catchup reports a `stash_left_behind` error**, the stash pop conflicted
+after a merge. Your changes are preserved in the named stash. Recover with:
+
+```bash
+git stash apply <stash-ref>   # ref shown in the error output
+```
 
 The closing `sync` step remains necessary for changes that land on the base
 branch *during* your implementation session.
@@ -156,13 +173,15 @@ the PR body. If the file is missing, the PR will have no description.
 > conflicts. The actual sync is performed as part of the closing workflow below
 > (Step 3). Do not run sync separately.
 
-### Step 1: Commit uncommitted work
+### Step 1: Commit your implementation work
 
 ```bash
 git status --porcelain
 ```
 
-If there is output, stage and commit your changes before syncing.
+If there is output from files you authored, stage and commit them before
+syncing. Wade session artifacts (PLAN.md, PR-SUMMARY.md, etc.) can be left
+dirty — sync will skip stashing them.
 
 ### Step 2: Run the sync command
 
@@ -170,20 +189,32 @@ If there is output, stage and commit your changes before syncing.
 wade implementation-session sync --json
 ```
 
+**Auto-stash**: sync automatically stashes any staged or unstaged tracked user
+changes, runs the merge, then restores them. You do not need to stash manually.
+Add `--no-stash` to disable auto-stash and restore the strict old behavior
+(fail immediately on any uncommitted changes).
+
 ### Step 3: Handle the result
 
 **Exit code 0 — Success**: Branch is up to date with main. Proceed to closing.
 
-**Exit code 2 — Conflict**: The merge is paused due to conflicts:
-1. Run `git diff --name-only --diff-filter=U` to list conflicted files
-2. Read each conflicted file — understand both sides of the conflict
-3. Resolve the conflict markers in each file
-4. Stage only the resolved files: `git add <file1> <file2> ...`
-5. Complete the merge: `git commit --no-edit`
-6. Re-run `wade implementation-session sync --json` to verify clean
+**Exit code 2 — Conflict**: The merge conflicted. When auto-stash is active the
+merge is aborted and your stash is restored automatically — the worktree is
+clean. Re-run sync after resolving the conflict manually (see Catchup section).
 
-**Exit code 4 — Pre-flight failure**: Report the issue (dirty worktree, not
-in repo, already on main) and suggest how to fix it.
+**Exit code 4 — Pre-flight failure**: Report the issue (not in git repo, already
+on main, or `--no-stash` with a dirty worktree) and suggest how to fix it.
+
+**`untracked_conflict` error**: Untracked files in your worktree would be
+overwritten by the incoming merge. Commit, move, or delete the listed paths
+before re-running sync.
+
+**`stash_left_behind` error**: The stash pop conflicted after a successful
+merge. Your changes are preserved. Recover with:
+
+```bash
+git stash apply <stash-ref>   # ref shown in the error output
+```
 
 **Never re-implement git operations yourself.** Always use `wade implementation-session sync`.
 

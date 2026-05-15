@@ -62,6 +62,10 @@ class SyncEventType(StrEnum):
     MERGED = "merged"
     CONFLICT = "conflict"
     CONFLICT_DIFF = "conflict_diff"
+    AUTOSTASHED = "autostashed"
+    STASH_RESTORED = "stash_restored"
+    STASH_LEFT_BEHIND = "stash_left_behind"
+    UNTRACKED_CONFLICT = "untracked_conflict"
 
 
 class SyncEvent(BaseModel):

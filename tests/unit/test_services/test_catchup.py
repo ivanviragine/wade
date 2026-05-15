@@ -202,22 +202,23 @@ class TestCatchupStackedBranch:
 
 
 class TestCatchupDirtyWorktree:
-    """Dirty worktree: catchup reports pre-flight failure."""
+    """Dirty worktree: catchup reports pre-flight failure with --no-stash."""
 
     @patch("wade.services.implementation_service.core.git_sync")
     @patch("wade.services.implementation_service.core.git_branch")
     @patch("wade.services.implementation_service.bootstrap.git_repo")
     @patch("wade.services.implementation_service.core.git_repo")
     @patch("wade.services.implementation_service.core.load_config")
-    def test_fails_on_dirty_worktree(
+    def test_fails_on_dirty_worktree_no_stash(
         self,
         mock_config: MagicMock,
         mock_repo: MagicMock,
-        _mock_bootstrap_repo: MagicMock,
+        mock_bootstrap_repo: MagicMock,
         mock_branch: MagicMock,
         mock_sync: MagicMock,
         tmp_path: Path,
     ) -> None:
+        """--no-stash: dirty worktree causes immediate failure (old strict behavior)."""
         from wade.models.config import ProjectConfig
         from wade.services.implementation_service import catchup
 
@@ -226,8 +227,11 @@ class TestCatchupDirtyWorktree:
         mock_repo.get_current_branch.return_value = "feat/1-my-feature"
         mock_repo.is_clean.return_value = False
         mock_repo.detect_main_branch.return_value = "main"
+        # Simulate staged user change (non-session artifact)
+        mock_bootstrap_repo.get_dirty_file_paths.return_value = ["src/main.py"]
+        mock_repo.get_dirty_status.return_value = {"staged": 1, "unstaged": 0, "untracked": 0}
 
-        result = catchup(project_root=tmp_path)
+        result = catchup(project_root=tmp_path, no_stash=True)
 
         assert result.success is False
         assert result.conflicts == []
