@@ -354,19 +354,24 @@ class TestCommentOnTask:
 class TestEnsureLabel:
     @patch("wade.providers.github.run")
     def test_label_already_exists(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
-        mock_run.return_value = _make_completed("feature-plan\n")
+        provider._repo_nwo = "owner/repo"
+        # Probe returns 0 — label exists
+        mock_run.return_value = _make_completed("", returncode=0)
 
         label = Label(name="feature-plan", color="0E8A16", description="Plan issue")
         provider.ensure_label(label)
 
-        # Should only call list, not create
+        # Only the gh api probe — no create call
         assert mock_run.call_count == 1
+        probe_cmd = mock_run.call_args[0][0]
+        assert probe_cmd == ["gh", "api", "repos/owner/repo/labels/feature-plan"]
 
     @patch("wade.providers.github.run")
     def test_label_created(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
-        # First call: list (no match), second call: create
+        provider._repo_nwo = "owner/repo"
+        # First call: probe returns 404 (not found), second call: create succeeds
         mock_run.side_effect = [
-            _make_completed("other-label\n"),
+            subprocess.CompletedProcess(args=["gh"], returncode=1, stdout="", stderr="not found"),
             _make_completed(""),
         ]
 
@@ -374,6 +379,8 @@ class TestEnsureLabel:
         provider.ensure_label(label)
 
         assert mock_run.call_count == 2
+        probe_cmd = mock_run.call_args_list[0][0][0]
+        assert probe_cmd == ["gh", "api", "repos/owner/repo/labels/new-label"]
         create_cmd = mock_run.call_args_list[1][0][0]
         assert "create" in create_cmd
         assert "new-label" in create_cmd
@@ -382,14 +389,49 @@ class TestEnsureLabel:
     @patch("wade.providers.github.run")
     def test_label_race_condition(self, mock_run: MagicMock, provider: GitHubProvider) -> None:
         """Test that "already exists" error during creation is non-fatal."""
+        provider._repo_nwo = "owner/repo"
         mock_run.side_effect = [
-            _make_completed(""),  # list: empty
+            subprocess.CompletedProcess(args=["gh"], returncode=1, stdout="", stderr="not found"),
             CommandError(["gh"], 1, "label already exists"),
         ]
 
         label = Label(name="race-label", color="000000")
         # Should not raise
         provider.ensure_label(label)
+
+    @patch("wade.providers.github.run")
+    def test_label_name_with_colon_is_url_encoded(
+        self, mock_run: MagicMock, provider: GitHubProvider
+    ) -> None:
+        """Label names containing ':' must be percent-encoded in the API path."""
+        provider._repo_nwo = "owner/repo"
+        mock_run.return_value = _make_completed("", returncode=0)
+
+        label = Label(name="review-addressed-by:claude", color="0075ca")
+        provider.ensure_label(label)
+
+        probe_cmd = mock_run.call_args[0][0]
+        assert probe_cmd == ["gh", "api", "repos/owner/repo/labels/review-addressed-by%3Aclaude"]
+
+    @patch("wade.providers.github.run")
+    def test_probe_unexpected_error_falls_through_to_create(
+        self, mock_run: MagicMock, provider: GitHubProvider
+    ) -> None:
+        """Non-404 probe failure (e.g. auth error) still attempts creation."""
+        provider._repo_nwo = "owner/repo"
+        mock_run.side_effect = [
+            subprocess.CompletedProcess(
+                args=["gh"], returncode=1, stdout="", stderr="authentication required"
+            ),
+            _make_completed(""),
+        ]
+
+        label = Label(name="new-label", color="FBCA04")
+        provider.ensure_label(label)
+
+        assert mock_run.call_count == 2
+        create_cmd = mock_run.call_args_list[1][0][0]
+        assert "create" in create_cmd
 
 
 class TestAddLabel:

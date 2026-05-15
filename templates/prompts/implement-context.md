@@ -16,3 +16,4 @@ If you cannot see the plan contents above, read the file `PLAN.md` in the root o
 4. **At session end**: always present a workflow recap (which wade commands you ran),
    current state (PR status, branch, issue), and what happens next. Then suggest
    the user exits.
+5. Search and rate knowledge per `@.claude/skills/knowledge/SKILL.md` — knowledge is lean (gotchas only); rating evaluated entries is required.

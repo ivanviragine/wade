@@ -60,3 +60,56 @@ Session prompt templates (templates/prompts/) are NOT symlinked — they are rea
 Review cycles should be capped at 2 total runs: 1 run if findings are minor (fix and proceed without re-review); 2 runs if findings are major (fix and re-run once, then always proceed). This prevents agents from looping indefinitely. The cap is enforced via text in _partials/review-plan-step.md and _partials/review-implementation-closing-step.md.
 
 ---
+
+## e2a49ac1 | 2026-04-26 | implementation | tags: knowledge
+
+Entry quality rules live in the `## Entry style` section of `templates/skills/knowledge/SKILL.md` (positioned before `## Adding entries`): one insight per entry, lead with key fact, ≤3 sentences, no preamble/hedging — a before/after example is included. Knowledge is not a changelog; `## Adding entries` explains what to capture vs. skip.
+
+---
+
+## ddc10718 | 2026-04-27 | implementation | tags: plan-session, prompts, ai-behavior | Issue #281
+
+When writing instructions for AI tools, "ask the user X" is not sufficient to prevent the tool from using native UI components (e.g. AskUserQuestion with pre-defined options). You must explicitly say "output a plain text question" and "do NOT use a native selection/question component or present pre-defined categories."
+
+---
+
+## 3463fbd4 | 2026-04-27 | implementation | tags: skills, prompts, architecture | Issue #295
+
+When editing agent session rules, check BOTH templates/skills/<name>/SKILL.md AND templates/prompts/<name>.md — skills are symlinked into .claude/skills/ while prompts are read directly by service code. Changes to one without the other can leave contradictory instructions.
+
+---
+
+## 6264c1a6 | 2026-04-27 | plan | tags: github, gh-cli, labels
+
+`gh label list --search <name>` is unreliable for label-existence checks — it returns empty for label names that exist (verified for `bug`, `complexity:medium`, `review-addressed-by:claude`). Use `gh api repos/{slug}/labels/{url-encoded-name}` with `check=False` instead; it returns 200 if the label exists and 404 if not.
+
+---
+
+## 1c18f1d4 | 2026-04-28 | plan | tags: delegation, yolo, headless, ai-tools
+
+wade's headless AI delegation (mode: headless for deps and review_*) should rely on permissions.allowed_commands, not yolo. Why: (1) codex exec auto-defaults approval_policy=never, making yolo args (-a never) redundant. (2) For Claude/Copilot/Gemini/Cursor, headless analytical tasks (read repo, emit output) don't need write permissions, so yolo over-grants. (3) Headless yolo passthrough was added in PR #146 (commit 26771d3) but worked fine before that. The init wizard prompting "Enable YOLO mode for plan review?" on a headless subprocess is confusing UX.
+
+---
+
+## cc91cd11 | 2026-04-28 | plan | tags: review, review-polling, coderabbit
+
+CodeRabbit's `COMPLETED` bot status (detected from the summary comment marker
+in `detect_coderabbit_review_status` — `models/review.py:68-99`) does NOT
+guarantee the inline-review-comment stream is finished. The marker flips when
+CodeRabbit edits its summary comment, but individual inline comments can keep
+arriving for a few seconds afterward.
+
+Implication for any "is the review burst over?" heuristic in
+`review_service.py`: do not treat `bot_status == COMPLETED` alone as
+"reviewer is done posting." Use the freshness of the inline comments themselves
+(`ReviewComment.created_at` — populated by the GraphQL provider in
+`providers/github.py:405`) and/or `PRReview.submitted_at` as the direct signal,
+and keep `bot_status` as a secondary input only.
+
+---
+
+## 08f59f5c | 2026-04-28 | implementation | tags: testing, mocking, datetime, mypy | Issue #302
+
+When a service does 'from datetime import UTC, datetime' and calls datetime.now(UTC), patch the module-level class reference (e.g. wade.services.review_service.datetime). Set mock_datetime.now.return_value = fixed_now. Avoid naming local variables 'now' as datetime when the same function later uses 'now = time.time()' (float) — mypy strict mode flags the type mismatch even across mutually-exclusive code paths (use a distinct name like 'settle_now').
+
+---

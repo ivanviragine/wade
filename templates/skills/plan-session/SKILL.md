@@ -50,16 +50,18 @@ Read @.claude/skills/knowledge/SKILL.md for knowledge operations (search,
 tagging, rating, adding entries).
 
 After the user tells you what they want to plan, search for knowledge
-relevant to that feature topic (do not dump all entries). Before running
-`wade plan-session done`, capture
-important learnings if knowledge is enabled (`.wade.yml` → `knowledge.enabled`).
+relevant to that feature topic (do not dump all entries). **Rating is required
+for each entry you open and evaluate** — not per search call. See the decision
+tree in @.claude/skills/knowledge/SKILL.md for how to decide between up, down,
+or no rating. Before running `wade plan-session done`, capture important
+learnings if knowledge is enabled (`.wade.yml` → `knowledge.enabled`).
 
 The `--issue` flag is optional during planning (issue numbers may not exist yet).
 Running `wade knowledge add` is allowed even though this is a planning session.
 
 ## Your role
 
-1. **Ask the user** what they want to plan. If the session prompt does not already specify a feature or issue, ask before proceeding.
+1. **Ask the user** what they want to plan. If the session is interactive and the prompt does not already specify a feature or issue, ask before proceeding. Output a plain text question (e.g. "What would you like to plan?") — do NOT use a native selection/question component or present pre-defined categories as options at this step.
 2. **Search relevant knowledge** — once you know the topic, search for entries relevant to that feature using `wade knowledge get --search <topic>` or `wade knowledge get --tag <tag>` (see @.claude/skills/knowledge/SKILL.md and the **Project Knowledge** section above). Do not dump all entries.
 3. **Plan the feature** with the user — analyze, break down, propose.
 4. **Present the plan(s)** to the user. Use your tool's native question component to ask: "Ready to write the plan file(s)?" before writing any files.
@@ -161,6 +163,7 @@ you complete every mandatory step and the user can track progress.
 
 - [ ] Ask the user what they want to plan
 - [ ] Search relevant knowledge (`wade knowledge get --search <topic>` or `wade knowledge get --tag <tag>`)
+- [ ] For evaluated knowledge entries, decide per the knowledge-skill decision tree whether to rate with `wade knowledge rate <id> up/down` or intentionally leave the entry unrated
 - [ ] Plan the feature with the user (analyze, break down, propose)
 - [ ] Write plan file(s) to the temp directory
 - [ ] Run `wade review plan` for each plan file (if review is enabled)

@@ -848,8 +848,14 @@ def start(
             complexity=task.complexity.value if task.complexity else None,
         )
 
-        # Resolve effort level
-        resolved_effort = resolve_effort(effort, config, "implement", tool=resolved_tool)
+        # Resolve effort level (per-tier when complexity is known)
+        resolved_effort = resolve_effort(
+            effort,
+            config,
+            "implement",
+            tool=resolved_tool,
+            complexity=task.complexity.value if task.complexity else None,
+        )
 
         # Resolve YOLO mode
         resolved_yolo = resolve_yolo(yolo, config, "implement", tool=resolved_tool)

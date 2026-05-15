@@ -30,7 +30,10 @@ class TestInit:
         config = yaml.safe_load(config_path.read_text())
         assert config["version"] == 2
         assert config["ai"]["default_tool"] == "claude"
-        assert config["models"]["claude"]["medium"] == "claude-sonnet-4.6"
+        assert config["models"]["claude"]["medium"] == {
+            "model": "claude-sonnet-4.6",
+            "effort": None,
+        }
         assert config["models"]["claude"]["medium"] != config["models"]["claude"]["easy"]
         assert "permissions" not in config
 

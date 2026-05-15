@@ -4,6 +4,48 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.25.0] — 2026-04-29
+
+### Features
+
+- skip review-poll settle wait when comments are already settled (#303) (107c3de)
+
+## [v0.24.2] — 2026-04-28
+
+### Refactoring
+
+- stop applying yolo to headless AI delegation (#301) (86b3245)
+
+## [v0.24.1] — 2026-04-27
+
+### Bug Fixes
+
+- ensure_label produces spurious subprocess.failed error when label exists (#299) (bb557e7)
+
+## [v0.24.0] — 2026-04-27
+
+### Features
+
+- rework wade init wizard — order, skippability, effort/yolo defaults (#294) (0b098a0)
+
+## [v0.23.0] — 2026-04-27
+
+### Features
+
+- require knowledge rating after retrieval and reinforce entry quality rules (#296) (01b70de)
+
+## [v0.22.0] — 2026-04-27
+
+### Features
+
+- plan-session prompt should ask open-ended question, not suggest options (#292) (79cab7c)
+
+## [v0.21.0] — 2026-04-26
+
+### Features
+
+- add entry-writing style guide to knowledge skill (#291) (9cced4d)
+
 ## [v0.20.6] — 2026-04-25
 
 ### Bug Fixes
