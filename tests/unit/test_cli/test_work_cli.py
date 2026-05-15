@@ -42,6 +42,7 @@ class TestWorkSyncExitCodes:
             main_branch=None,
             json_output=False,
             session_type="implementation",
+            no_stash=False,
         )
 
     def test_sync_conflicts_map_to_exit_two(self) -> None:
@@ -56,6 +57,7 @@ class TestWorkSyncExitCodes:
             main_branch=None,
             json_output=False,
             session_type="implementation",
+            no_stash=False,
         )
 
     def test_sync_preflight_error_maps_to_exit_four(self) -> None:
@@ -74,6 +76,7 @@ class TestWorkSyncExitCodes:
             main_branch=None,
             json_output=False,
             session_type="implementation",
+            no_stash=False,
         )
 
     def test_sync_other_error_maps_to_exit_one(self) -> None:
@@ -92,6 +95,7 @@ class TestWorkSyncExitCodes:
             main_branch=None,
             json_output=False,
             session_type="implementation",
+            no_stash=False,
         )
 
 

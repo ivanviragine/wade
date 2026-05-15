@@ -32,6 +32,11 @@ def catchup(
     main_branch: str | None = typer.Option(
         None, "--main-branch", help="Override main branch name."
     ),
+    no_stash: bool = typer.Option(
+        False,
+        "--no-stash",
+        help="Disable auto-stash: fail immediately on any uncommitted changes.",
+    ),
 ) -> None:
     """Sync current branch with base branch (early catchup at session startup)."""
     from wade.cli.session_shared import handle_sync_result
@@ -42,6 +47,7 @@ def catchup(
         dry_run=dry_run,
         main_branch=main_branch,
         json_output=json_output,
+        no_stash=no_stash,
     )
     # Catchup has custom success messages for dry-run vs real merge
     if result.success:
@@ -77,6 +83,11 @@ def sync(
     main_branch: str | None = typer.Option(
         None, "--main-branch", help="Override main branch name."
     ),
+    no_stash: bool = typer.Option(
+        False,
+        "--no-stash",
+        help="Disable auto-stash: fail immediately on any uncommitted changes.",
+    ),
 ) -> None:
     """Sync current branch with main."""
     from wade.cli.session_shared import handle_sync_result
@@ -87,6 +98,7 @@ def sync(
         main_branch=main_branch,
         json_output=json_output,
         session_type="implementation",
+        no_stash=no_stash,
     )
     handle_sync_result(
         result, json_output=json_output, next_step_hint="wade implementation-session done"
