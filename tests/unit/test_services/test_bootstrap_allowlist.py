@@ -19,9 +19,23 @@ CURSOR_WADE_ALLOW_PATTERN = "Shell(wade *)"
 def _isolate_cursor_global_config(
     monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
-    """Redirect crossby's global Cursor config to a tmp path so tests don't see ~/.cursor."""
+    """Redirect crossby's global Cursor config to a tmp path so tests don't see ~/.cursor.
+
+    Patches both the legacy alias (older crossby) and the canonical source-of-truth
+    in crossby.sync.permissions (newer crossby, where cursor_allowlist._GLOBAL_CONFIG_PATH
+    is just an import-time alias and patching it no longer affects CursorPermissionWriter).
+    """
     fake_global = tmp_path_factory.mktemp("cursor-home") / "cli-config.json"
-    monkeypatch.setattr("crossby.config.cursor_allowlist._GLOBAL_CONFIG_PATH", fake_global)
+    monkeypatch.setattr(
+        "crossby.config.cursor_allowlist._GLOBAL_CONFIG_PATH",
+        fake_global,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "crossby.sync.permissions._GLOBAL_CURSOR_CONFIG_PATH",
+        fake_global,
+        raising=False,
+    )
 
 
 class TestBootstrapAllowlistPropagation:
