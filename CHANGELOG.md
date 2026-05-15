@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.26.0] — 2026-05-15
+
+### Features
+
+- auto-stash dirty worktree during sync/catchup with safe recovery (#306) (155ec18)
+
 ## [v0.25.0] — 2026-04-29
 
 ### Features
