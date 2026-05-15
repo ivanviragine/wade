@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.25.0] — 2026-04-29
+
+### Features
+
+- skip review-poll settle wait when comments are already settled (#303) (107c3de)
+
 ## [v0.24.2] — 2026-04-28
 
 ### Refactoring
