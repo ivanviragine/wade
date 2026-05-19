@@ -169,8 +169,8 @@ def rate(
     )
     from wade.ui.console import console
 
-    if direction not in ("up", "down"):
-        console.error(f"Invalid direction '{direction}'. Must be 'up' or 'down'.")
+    if direction not in ("up", "down", "stale"):
+        console.error(f"Invalid direction '{direction}'. Must be 'up', 'down', or 'stale'.")
         raise typer.Exit(1)
 
     config = load_config()
@@ -198,8 +198,11 @@ def rate(
     except OSError as exc:
         console.error(str(exc))
         raise typer.Exit(1) from exc
-    symbol = "+" if direction == "up" else "-"
-    console.success(f"Recorded {symbol}1 for entry {entry_id}")
+    if direction == "stale":
+        console.success(f"Recorded stale vote for entry {entry_id}")
+    else:
+        symbol = "+" if direction == "up" else "-"
+        console.success(f"Recorded {symbol}1 for entry {entry_id}")
 
 
 @knowledge_app.command()

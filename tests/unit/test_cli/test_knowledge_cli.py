@@ -205,6 +205,64 @@ class TestKnowledgeGetCommand:
         assert "Plain content." in result.output
         assert "[+" not in result.output
 
+    def test_stale_filter_hides_entry_by_default(self, tmp_path: Path) -> None:
+        content = (
+            KNOWLEDGE_TEMPLATE
+            + "\n## a1b2c3d4 | 2026-03-24 | plan\n\nStale content.\n\n---\n"
+            + "\n## f5e6d7c8 | 2026-03-20 | implementation\n\nFresh content.\n\n---\n"
+        )
+        (tmp_path / "KNOWLEDGE.md").write_text(content, encoding="utf-8")
+        ratings_path = resolve_ratings_path(tmp_path / "KNOWLEDGE.md")
+        ratings_path.write_text(
+            yaml.safe_dump({"a1b2c3d4": {"up": 0, "down": 0, "stale": 2}}),
+            encoding="utf-8",
+        )
+        config = ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
+        )
+        with patch("wade.config.loader.load_config", return_value=config):
+            result = runner.invoke(app, ["knowledge", "get"])
+        assert result.exit_code == 0
+        assert "Stale content." not in result.output
+        assert "Fresh content." in result.output
+
+    def test_no_filter_bypasses_stale_filter(self, tmp_path: Path) -> None:
+        content = (
+            KNOWLEDGE_TEMPLATE + "\n## a1b2c3d4 | 2026-03-24 | plan\n\nStale content.\n\n---\n"
+        )
+        (tmp_path / "KNOWLEDGE.md").write_text(content, encoding="utf-8")
+        ratings_path = resolve_ratings_path(tmp_path / "KNOWLEDGE.md")
+        ratings_path.write_text(
+            yaml.safe_dump({"a1b2c3d4": {"up": 0, "down": 0, "stale": 5}}),
+            encoding="utf-8",
+        )
+        config = ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
+        )
+        with patch("wade.config.loader.load_config", return_value=config):
+            result = runner.invoke(app, ["knowledge", "get", "--no-filter"])
+        assert result.exit_code == 0
+        assert "Stale content." in result.output
+
+    def test_stale_annotation_shown_in_heading(self, tmp_path: Path) -> None:
+        content = KNOWLEDGE_TEMPLATE + "\n## a1b2c3d4 | 2026-03-24 | plan\n\nContent.\n\n---\n"
+        (tmp_path / "KNOWLEDGE.md").write_text(content, encoding="utf-8")
+        ratings_path = resolve_ratings_path(tmp_path / "KNOWLEDGE.md")
+        ratings_path.write_text(
+            yaml.safe_dump({"a1b2c3d4": {"up": 2, "down": 0, "stale": 1}}),
+            encoding="utf-8",
+        )
+        config = ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
+        )
+        with patch("wade.config.loader.load_config", return_value=config):
+            result = runner.invoke(app, ["knowledge", "get", "--no-filter"])
+        assert result.exit_code == 0
+        assert "[+2/-0/stale:1]" in result.output
+
 
 class TestKnowledgeRateCommand:
     def _setup_knowledge(self, tmp_path: Path) -> ProjectConfig:
@@ -300,6 +358,20 @@ class TestKnowledgeRateCommand:
             result = runner.invoke(app, ["knowledge", "rate", "my_entry_name", "down"])
         assert result.exit_code == 0
         assert "-1" in result.output
+
+    def test_rate_stale(self, tmp_path: Path) -> None:
+        config = self._setup_knowledge(tmp_path)
+        with patch("wade.config.loader.load_config", return_value=config):
+            result = runner.invoke(app, ["knowledge", "rate", "a1b2c3d4", "stale"])
+        assert result.exit_code == 0
+        assert "stale" in result.output.lower()
+
+    def test_exits_1_for_invalid_direction_rejects_non_stale(self, tmp_path: Path) -> None:
+        config = self._setup_knowledge(tmp_path)
+        with patch("wade.config.loader.load_config", return_value=config):
+            result = runner.invoke(app, ["knowledge", "rate", "a1b2c3d4", "sideways"])
+        assert result.exit_code == 1
+        assert "stale" in result.output
 
 
 class TestKnowledgeAddSupersedes:
