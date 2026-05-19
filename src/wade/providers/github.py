@@ -19,6 +19,7 @@ import structlog
 from wade.models.config import ProviderConfig
 from wade.models.review import (
     PendingReviewer,
+    PRComment,
     PRReview,
     PRReviewStatus,
     ReviewBotStatus,
@@ -523,11 +524,8 @@ mutation($threadId: ID!) {
     def get_pr_issue_comments(
         self,
         pr_number: int,
-    ) -> list[dict[str, str]]:
-        """Fetch PR issue comments via gh API.
-
-        Returns list of dicts with ``login`` and ``body`` keys.
-        """
+    ) -> list[PRComment]:
+        """Fetch PR-level issue comments via the gh API."""
         try:
             nwo = self.get_repo_nwo()
         except CommandError:
@@ -546,7 +544,8 @@ mutation($threadId: ID!) {
                 check=True,
                 retries=3,
             )
-            return json.loads(result.stdout)  # type: ignore[no-any-return]
+            raw: list[dict[str, str]] = json.loads(result.stdout)
+            return [PRComment(login=c.get("login", ""), body=c.get("body", "")) for c in raw]
         except (CommandError, json.JSONDecodeError) as e:
             logger.warning(
                 "github.get_pr_issue_comments_failed",

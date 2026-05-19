@@ -9,7 +9,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from wade.models.config import ProviderConfig
-from wade.models.review import PRReviewStatus, ReviewThread
+from wade.models.review import PRComment, PRReviewStatus, ReviewThread
 from wade.models.task import Label, Task, TaskState
 
 
@@ -122,8 +122,13 @@ class AbstractTaskProvider(ABC):
     def get_pr_issue_comments(
         self,
         pr_number: int,
-    ) -> list[dict[str, str]]:
-        """Fetch PR issue comments. Returns list of dicts with login/body keys."""
+    ) -> list[PRComment]:
+        """Fetch PR-level issue comments (not inline review comments).
+
+        Returns an empty list by default. Concrete providers override this
+        to surface PR comments — used downstream by review-bot status
+        detection (``detect_coderabbit_review_status``).
+        """
         return []
 
     def get_pr_review_status(

@@ -18,7 +18,7 @@ Matches the v2 .wade.yml format:
         easy: claude-haiku-4.5
         ...
     provider:
-      name: github
+      name: github   # or "clickup" or "markdown"
     permissions:
       allowed_commands:
         - "wade *"
@@ -42,6 +42,7 @@ class ProviderID(StrEnum):
 
     GITHUB = "github"
     CLICKUP = "clickup"
+    MARKDOWN = "markdown"
 
 
 class ComplexityModelMapping(BaseModel):

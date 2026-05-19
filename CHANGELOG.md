@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.27.0] — 2026-05-15
+
+### Features
+
+- add Markdown file-backed task provider (#304) (a234bda)
+
+## [v0.26.0] — 2026-05-15
+
+### Features
+
+- auto-stash dirty worktree during sync/catchup with safe recovery (#306) (155ec18)
+
+## [v0.25.0] — 2026-04-29
+
+### Features
+
+- skip review-poll settle wait when comments are already settled (#303) (107c3de)
+
 ## [v0.24.2] — 2026-04-28
 
 ### Refactoring
