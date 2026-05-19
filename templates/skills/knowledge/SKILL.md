@@ -127,7 +127,7 @@ Knowledge is **not a changelog** — it is a searchable store of facts, gotchas,
 - Content already in `AGENTS.md` or `CLAUDE.md`: anything that is documented there does not need a knowledge entry.
 - Anything reconstructable from `git log`, `git blame`, or reading the current source — if a future agent can find it in 10 seconds, it doesn't belong here.
 
-Entry dates (shown in search results) indicate freshness — rate an entry down if it no longer applies.
+Entry dates (shown in search results) indicate freshness — rate an entry stale if it no longer applies (two stale votes hide it by default; use `--no-filter` to still show it).
 
 ```bash
 echo "Your learnings here" | wade knowledge add --session <type> --issue <number> --tag <topic>
