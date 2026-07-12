@@ -25,6 +25,20 @@ class TestModelRegistry:
     def test_claude_opus_47_in_claude_registry(self) -> None:
         assert "claude-opus-4.7" in get_models_for_tool("claude")
 
+    def test_current_claude_models_in_registry(self) -> None:
+        claude = get_models_for_tool("claude")
+        for model in ("claude-sonnet-5", "claude-opus-4.8", "claude-fable-5"):
+            assert model in claude, f"expected current model {model} in claude registry"
+
+    def test_claude_defaults_use_known_models(self) -> None:
+        from wade.config.defaults import TOOL_DEFAULTS
+
+        known = set(get_models_for_tool("claude"))
+        mapping = TOOL_DEFAULTS[AIToolID.CLAUDE]
+        for model in (mapping.easy, mapping.medium, mapping.complex, mapping.very_complex):
+            if model:
+                assert model in known, f"Claude default '{model}' not in registry"
+
     def test_claude_opus_47_xhigh_in_cursor_registry(self) -> None:
         assert "claude-opus-4-7-xhigh" in get_models_for_tool("cursor")
 

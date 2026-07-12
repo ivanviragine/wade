@@ -29,7 +29,7 @@ class TestMediumTierDefaults:
 
     def test_claude_medium_is_sonnet(self) -> None:
         mapping = get_defaults(AIToolID.CLAUDE)
-        assert mapping.medium == "claude-sonnet-4.6"
+        assert mapping.medium == "claude-sonnet-5"
 
     def test_cursor_medium_is_balanced(self) -> None:
         mapping = get_defaults(AIToolID.CURSOR)

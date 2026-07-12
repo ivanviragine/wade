@@ -28,7 +28,10 @@ _DOCS_URLS: dict[str, str] = {
 }
 
 _SCRAPE_PATTERNS: dict[str, str] = {
-    "claude": r"claude-[a-z]+-[0-9]+[-\.][0-9]+[a-zA-Z0-9._-]*",
+    # Family-anchored so single-number versions (claude-sonnet-5, claude-fable-5)
+    # are matched too; the trailing \b stops before dated (-20251001) and -v1
+    # suffixes and docs-page slug run-ons (…-introductory-pricing).
+    "claude": r"claude-(?:opus|sonnet|haiku|fable)-\d(?:[.-]\d)?\b",
     "gemini": r"gemini-[0-9][.0-9]*-(flash|pro|ultra)[a-z0-9._-]*",
     "codex": r"gpt-[0-9][.0-9]*[a-zA-Z0-9._-]*",
 }
@@ -145,19 +148,13 @@ def _scrape_models(tool: str) -> set[str]:
 
 
 def probe_claude() -> set[str]:
-    """Probe claude CLI, fallback to scrape."""
-    try:
-        res = subprocess.run(["claude", "models"], capture_output=True, text=True, timeout=15)
-        if res.returncode == 0:
-            models = set()
-            for line in res.stdout.splitlines():
-                if line.strip() and not line.startswith(("#", "-")):
-                    found = re.findall(rf"`({_SCRAPE_PATTERNS['claude']})`", line)
-                    models.update(found)
-            if models:
-                return models
-    except Exception:
-        pass
+    """Discover Claude Code models by scraping the published model overview.
+
+    Claude Code has no non-interactive "list models" command — ``claude models``
+    is interpreted as a prompt, not a subcommand — so the docs scrape is the
+    reliable source. ``_SCRAPE_PATTERNS['claude']`` keeps the result clean
+    (current base IDs only, no dated/-v1 snapshots or Glasswing-only mythos).
+    """
     return _scrape_models("claude")
 
 
