@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.28.0] — 2026-07-13
+
+### Features
+
+- add current Claude models to registry and fix model probe (#309) (76b87f7)
+
 ## [v0.27.0] — 2026-05-15
 
 ### Features
