@@ -32,6 +32,11 @@ def sync(
     main_branch: str | None = typer.Option(
         None, "--main-branch", help="Override main branch name."
     ),
+    no_stash: bool = typer.Option(
+        False,
+        "--no-stash",
+        help="Disable auto-stash: fail immediately on any uncommitted changes.",
+    ),
 ) -> None:
     """Sync current branch with main."""
     from wade.cli.session_shared import handle_sync_result
@@ -42,6 +47,7 @@ def sync(
         main_branch=main_branch,
         json_output=json_output,
         session_type="review-pr-comments",
+        no_stash=no_stash,
     )
     handle_sync_result(
         result,
