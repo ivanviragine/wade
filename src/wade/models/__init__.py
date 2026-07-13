@@ -9,11 +9,11 @@ from crossby.models.ai import (
     ModelTier,
     TokenUsage,
 )
-from crossby.models.config import ComplexityModelMapping
 
 from wade.models.config import (
     AICommandConfig,
     AIConfig,
+    ComplexityModelMapping,
     HooksConfig,
     ProjectConfig,
     ProjectSettings,
