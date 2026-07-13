@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from subprocess import CompletedProcess
 from unittest.mock import patch
@@ -14,6 +15,47 @@ from unittest.mock import patch
 
 def _completed(stdout: str = "", stderr: str = "", returncode: int = 0) -> CompletedProcess:  # type: ignore[type-arg]
     return CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
+
+
+# ---------------------------------------------------------------------------
+# probe_claude — docs scrape must catch current models, drop snapshots/slugs
+# ---------------------------------------------------------------------------
+
+
+class TestProbeClaudeScrape:
+    """The scrape must catch single-number versions (sonnet-5, fable-5) that the
+    old two-part-version regex structurally missed, without dragging in dated
+    snapshots, -v1 variants, docs slugs, or Glasswing-only mythos."""
+
+    _DOCS_HTML = (
+        "`claude-sonnet-5` `claude-fable-5` `claude-opus-4-8` "
+        "`claude-haiku-4-5-20251001` `claude-opus-4-6-v1` "
+        "claude-opus-46 claude-mythos-5 claude-sonnet-5-introductory-pricing"
+    )
+
+    def _probe(self) -> set[str]:
+        from probe_models import probe_claude
+
+        with (
+            patch("shutil.which", return_value="/usr/bin/curl"),
+            patch("subprocess.run", return_value=_completed(stdout=self._DOCS_HTML)),
+        ):
+            return probe_claude()
+
+    def test_catches_current_single_number_versions(self) -> None:
+        models = self._probe()
+        assert "claude-sonnet-5" in models
+        assert "claude-fable-5" in models
+        assert "claude-opus-4-8" in models
+        assert "claude-haiku-4-5" in models
+
+    def test_excludes_snapshots_slugs_and_mythos(self) -> None:
+        models = self._probe()
+        assert "claude-mythos-5" not in models
+        assert "claude-opus-46" not in models
+        assert not any(m.endswith("-v1") for m in models)
+        assert not any(re.search(r"-\d{8}$", m) for m in models)
+        assert not any("introductory" in m for m in models)
 
 
 # ---------------------------------------------------------------------------
