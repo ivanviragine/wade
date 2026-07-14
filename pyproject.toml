@@ -107,7 +107,7 @@ filterwarnings = [
 ]
 
 [tool.uv.sources]
-crossby = { git = "https://github.com/ivanviragine/crossby.git", tag = "v0.2.5" }
+crossby = { git = "https://github.com/ivanviragine/crossby.git", tag = "v0.2.6" }
 
 [tool.coverage.run]
 source = ["wade"]

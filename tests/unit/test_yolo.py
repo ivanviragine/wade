@@ -111,8 +111,11 @@ class TestAdapterYoloArgs:
     def test_codex_yolo_args(self) -> None:
         from crossby.ai_tools.codex import CodexAdapter
 
+        # Codex yolo skips approvals but keeps the OS sandbox — NOT --yolo
+        # (which would also disable the sandbox).
         result = CodexAdapter().yolo_args()
-        assert result == ["--yolo"]
+        assert result == ["-a", "never"]
+        assert "--yolo" not in result
 
     def test_copilot_yolo_args(self) -> None:
         from crossby.ai_tools.copilot import CopilotAdapter
@@ -192,7 +195,9 @@ class TestBuildLaunchCommandYolo:
         from crossby.ai_tools.codex import CodexAdapter
 
         cmd = CodexAdapter().build_launch_command(yolo=True)
-        assert "--yolo" in cmd
+        assert "-a" in cmd
+        assert cmd[cmd.index("-a") + 1] == "never"
+        assert "--yolo" not in cmd
 
     def test_copilot_yolo_includes_flag(self) -> None:
         from crossby.ai_tools.copilot import CopilotAdapter
