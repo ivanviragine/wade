@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.29.0] — 2026-07-14
+
+### Features
+
+- replace internal AI tool layer with the crossby dependency (#215) (9e8e92c)
+
 ## [v0.28.0] — 2026-07-13
 
 ### Features
