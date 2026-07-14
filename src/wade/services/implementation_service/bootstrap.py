@@ -38,6 +38,19 @@ __all__ = [
 WORKTREE_GITIGNORE_MARKER_START = "# wade:worktree:start"
 WORKTREE_GITIGNORE_MARKER_END = "# wade:worktree:end"
 
+# wade's own command pattern — always guaranteed in a worktree's allowlist so
+# agents can run ``wade ...`` without manual approval, even when a project
+# narrows ``permissions.allowed_commands``. crossby's permission writers are
+# generic and inject no app-specific base pattern, so wade must ensure it here.
+WADE_BASE_ALLOWLIST_PATTERN = "wade *"
+
+
+def _with_wade_base(patterns: list[str]) -> list[str]:
+    """Return *patterns* with wade's base allowlist pattern guaranteed present."""
+    if WADE_BASE_ALLOWLIST_PATTERN in patterns:
+        return patterns
+    return [WADE_BASE_ALLOWLIST_PATTERN, *patterns]
+
 
 def _resolve_worktrees_dir(config: ProjectConfig, repo_root: Path) -> Path:
     """Resolve the worktrees directory from config."""
@@ -461,10 +474,13 @@ def bootstrap_worktree(
     _suppress_pointer_artifacts(worktree_path)
     logger.debug("implementation.bootstrap_pointer", path=str(worktree_path))
 
-    # Always propagate allowlist to worktree — configure_allowlist is idempotent
+    # Always propagate allowlist to worktree — configure_allowlist is idempotent.
+    # wade's base pattern is guaranteed so ``wade ...`` stays pre-authorized even
+    # when a project narrows permissions.allowed_commands.
     from crossby.config.claude_allowlist import configure_allowlist
 
-    configure_allowlist(worktree_path, config.permissions.allowed_commands)
+    wade_patterns = _with_wade_base(config.permissions.allowed_commands)
+    configure_allowlist(worktree_path, wade_patterns)
 
     # Propagate Cursor allowlist to worktree's per-project .cursor/cli.json.
     # Check both global cursor config and whether cursor is the project's AI tool —
@@ -473,22 +489,23 @@ def bootstrap_worktree(
     from crossby.config.cursor_allowlist import is_allowlist_configured as is_cursor_configured
 
     cursor_in_config = any(config.get_ai_tool(cmd) == "cursor" for cmd in [None, *AI_COMMAND_NAMES])
-    cursor_marker = ["wade *"]
+    cursor_marker = [WADE_BASE_ALLOWLIST_PATTERN]
     if (
         selected_ai_tool == "cursor"
         or cursor_in_config
         or is_cursor_configured(patterns=cursor_marker)
         or is_cursor_configured(repo_root, cursor_marker)
     ):
-        configure_cursor_allowlist(worktree_path, config.permissions.allowed_commands)
+        configure_cursor_allowlist(worktree_path, wade_patterns)
 
     # Propagate Gemini policy to worktree's .gemini/policies/wade.toml.
     # Gemini CLI uses the Policy Engine (TOML files) instead of --allowed-tools.
+    # wade_patterns always carries the wade base pattern, so gemini gets it too.
     gemini_in_config = any(config.get_ai_tool(cmd) == "gemini" for cmd in [None, *AI_COMMAND_NAMES])
-    if (selected_ai_tool == "gemini" or gemini_in_config) and config.permissions.allowed_commands:
+    if selected_ai_tool == "gemini" or gemini_in_config:
         from crossby.sync.permissions import GeminiPermissionWriter
 
-        GeminiPermissionWriter.write(worktree_path, config.permissions.allowed_commands)
+        GeminiPermissionWriter.write(worktree_path, wade_patterns)
 
     # Run post-create hook
     if config.hooks.post_worktree_create:

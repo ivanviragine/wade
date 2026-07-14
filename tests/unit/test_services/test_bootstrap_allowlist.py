@@ -98,6 +98,35 @@ class TestBootstrapAllowlistPropagation:
         data = json.loads(wt_settings.read_text(encoding="utf-8"))
         assert WADE_ALLOW_PATTERN in data["permissions"]["allow"]
 
+    def test_guarantees_wade_base_pattern_when_config_omits_it(self, tmp_path: Path) -> None:
+        """A project that narrows allowed_commands without 'wade *' still gets
+        wade pre-authorized in the worktree.
+
+        Regression: crossby's generic permission writer injects no app-specific
+        base pattern, so wade must guarantee its own 'wade *' regardless of the
+        user's allowed_commands.
+        """
+        worktree_path = tmp_path / "worktree"
+        worktree_path.mkdir()
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        config = ProjectConfig(
+            project=ProjectSettings(),
+            hooks=HooksConfig(),
+            # Deliberately omits "wade *".
+            permissions=PermissionsConfig(allowed_commands=["./scripts/check.sh *"]),
+        )
+
+        with patch("subprocess.run"):
+            bootstrap_worktree(worktree_path, config, repo_root)
+
+        wt_settings = worktree_path / ".claude" / "settings.json"
+        assert wt_settings.is_file()
+        allow = json.loads(wt_settings.read_text(encoding="utf-8"))["permissions"]["allow"]
+        assert WADE_ALLOW_PATTERN in allow  # base pattern still guaranteed
+        assert "Bash(./scripts/check.sh *)" in allow
+
 
 class TestBootstrapCursorAllowlistPropagation:
     """Tests that bootstrap_worktree() propagates Cursor allowlist to worktree."""
