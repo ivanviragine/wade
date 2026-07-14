@@ -17,9 +17,10 @@ from pathlib import Path
 from typing import Any
 
 import structlog
+from crossby.ai_tools import AbstractAITool
+from crossby.models.ai import AIToolID
 from pydantic import BaseModel, Field
 
-from wade.ai_tools.base import AbstractAITool
 from wade.config.loader import load_config
 from wade.git import branch as git_branch
 from wade.git import pr as git_pr
@@ -28,7 +29,6 @@ from wade.git import stash as git_stash
 from wade.git import sync as git_sync
 from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
-from wade.models.ai import AIToolID  # TokenUsage used by _capture_post_session_usage
 from wade.models.config import ProjectConfig
 from wade.models.session import (
     ImplementResult,
@@ -1124,7 +1124,7 @@ def start(
                     if prompt:
                         deliver_prompt_if_needed(adapter, prompt)
                     exit_code = adapter.launch(
-                        worktree_path=worktree_path,
+                        working_dir=worktree_path,
                         model=resolved_model,
                         prompt=prompt,
                         transcript_path=transcript_path,
@@ -2799,8 +2799,8 @@ def _preserve_session_data(repo_root: Path, wt_path: Path) -> None:
         adapter: AbstractAITool | None = None
         if sessions:
             latest = max(sessions, key=lambda s: s.started_at)
-            with contextlib.suppress(ValueError):
-                adapter = AbstractAITool.get(latest.ai_tool)
+            with contextlib.suppress(ValueError, KeyError):
+                adapter = AbstractAITool.get(AIToolID(latest.ai_tool))
 
         # Fallback: detect via session_data_dirs
         if adapter is None:

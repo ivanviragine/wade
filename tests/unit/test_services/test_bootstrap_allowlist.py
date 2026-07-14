@@ -6,10 +6,36 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from wade.config.claude_allowlist import WADE_ALLOW_PATTERN
-from wade.config.cursor_allowlist import WADE_ALLOW_PATTERN as CURSOR_WADE_ALLOW_PATTERN
+import pytest
+
 from wade.models.config import HooksConfig, PermissionsConfig, ProjectConfig, ProjectSettings
 from wade.services.implementation_service import bootstrap_worktree
+
+WADE_ALLOW_PATTERN = "Bash(wade *)"
+CURSOR_WADE_ALLOW_PATTERN = "Shell(wade *)"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_cursor_global_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """Redirect crossby's global Cursor config to a tmp path so tests don't see ~/.cursor.
+
+    Patches both the legacy alias (older crossby) and the canonical source-of-truth
+    in crossby.sync.permissions (newer crossby, where cursor_allowlist._GLOBAL_CONFIG_PATH
+    is just an import-time alias and patching it no longer affects CursorPermissionWriter).
+    """
+    fake_global = tmp_path_factory.mktemp("cursor-home") / "cli-config.json"
+    monkeypatch.setattr(
+        "crossby.config.cursor_allowlist._GLOBAL_CONFIG_PATH",
+        fake_global,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "crossby.sync.permissions._GLOBAL_CURSOR_CONFIG_PATH",
+        fake_global,
+        raising=False,
+    )
 
 
 class TestBootstrapAllowlistPropagation:
@@ -72,6 +98,35 @@ class TestBootstrapAllowlistPropagation:
         data = json.loads(wt_settings.read_text(encoding="utf-8"))
         assert WADE_ALLOW_PATTERN in data["permissions"]["allow"]
 
+    def test_guarantees_wade_base_pattern_when_config_omits_it(self, tmp_path: Path) -> None:
+        """A project that narrows allowed_commands without 'wade *' still gets
+        wade pre-authorized in the worktree.
+
+        Regression: crossby's generic permission writer injects no app-specific
+        base pattern, so wade must guarantee its own 'wade *' regardless of the
+        user's allowed_commands.
+        """
+        worktree_path = tmp_path / "worktree"
+        worktree_path.mkdir()
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        config = ProjectConfig(
+            project=ProjectSettings(),
+            hooks=HooksConfig(),
+            # Deliberately omits "wade *".
+            permissions=PermissionsConfig(allowed_commands=["./scripts/check.sh *"]),
+        )
+
+        with patch("subprocess.run"):
+            bootstrap_worktree(worktree_path, config, repo_root)
+
+        wt_settings = worktree_path / ".claude" / "settings.json"
+        assert wt_settings.is_file()
+        allow = json.loads(wt_settings.read_text(encoding="utf-8"))["permissions"]["allow"]
+        assert WADE_ALLOW_PATTERN in allow  # base pattern still guaranteed
+        assert "Bash(./scripts/check.sh *)" in allow
+
 
 class TestBootstrapCursorAllowlistPropagation:
     """Tests that bootstrap_worktree() propagates Cursor allowlist to worktree."""
@@ -89,13 +144,13 @@ class TestBootstrapCursorAllowlistPropagation:
             permissions=PermissionsConfig(allowed_commands=["wade *", "./scripts/check.sh *"]),
         )
 
-        # Set up global Cursor config with wade pattern
-        global_config = Path.home() / ".cursor" / "cli-config.json"
+        # Autouse fixture already redirects _GLOBAL_CONFIG_PATH to a tmp path.
+        # is_allowlist_configured is mocked to report the global config as configured
+        # (root is None) so propagation flows through.
         with (
-            patch("wade.config.cursor_allowlist._GLOBAL_CONFIG_PATH", global_config),
             patch(
-                "wade.config.cursor_allowlist.is_allowlist_configured",
-                side_effect=lambda root=None: root is None,
+                "crossby.config.cursor_allowlist.is_allowlist_configured",
+                side_effect=lambda root=None, patterns=None: root is None,
             ),
             patch("subprocess.run"),
         ):

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import structlog
+from crossby.ai_tools import AbstractAITool
 
-from wade.ai_tools.base import AbstractAITool
 from wade.ui.console import console
 from wade.utils.clipboard import copy_to_clipboard
 

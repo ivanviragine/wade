@@ -1,6 +1,6 @@
 """Pydantic domain models — pure data, no I/O."""
 
-from wade.models.ai import (
+from crossby.models.ai import (
     AIModel,
     AIToolCapabilities,
     AIToolID,
@@ -9,6 +9,7 @@ from wade.models.ai import (
     ModelTier,
     TokenUsage,
 )
+
 from wade.models.config import (
     AICommandConfig,
     AIConfig,

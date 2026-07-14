@@ -185,7 +185,7 @@ class TestShortAliases:
 
         with (
             patch("wade.services.plan_service.load_config", return_value=ProjectConfig()),
-            patch("wade.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
+            patch("crossby.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
         ):
             result = runner.invoke(app, ["p"])
         assert result.exit_code == 1  # no AI tool → exits 1

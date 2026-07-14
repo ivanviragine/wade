@@ -6,13 +6,14 @@ label ensure/add/remove for planned-by/implemented-by metadata.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any
 
 import structlog
+from crossby.models.ai import ModelBreakdown
 
 from wade.config.loader import load_config
-from wade.models.ai import ModelBreakdown
 from wade.models.config import ProjectConfig
 from wade.models.task import Complexity, Label, LabelType, PlanFile, Task, TaskState
 from wade.providers.base import AbstractTaskProvider
@@ -256,7 +257,7 @@ def build_plan_summary_block(
     """Build the plan summary markdown block."""
     extra_rows: list[str] | None = None
     if per_issue_estimate is not None and per_issue_estimate > 0:
-        from wade.ai_tools.transcript import format_count
+        from crossby.ai_tools.transcript import format_count
 
         extra_rows = [f"| This issue (est.) | **{format_count(per_issue_estimate)}** |"]
 
@@ -305,8 +306,6 @@ def apply_plan_token_usage(
 
     For multi-issue plans, tokens are allocated proportionally by body line count.
     """
-    from wade.ai_tools.transcript import allocate_tokens
-
     if not issue_numbers:
         return
 
@@ -326,7 +325,7 @@ def apply_plan_token_usage(
     # Allocate tokens proportionally
     per_issue_tokens: list[int | None]
     if total_tokens and len(issue_numbers) > 1:
-        per_issue_tokens = list(allocate_tokens(total_tokens, line_counts))
+        per_issue_tokens = list(_allocate_tokens(total_tokens, line_counts))
     elif total_tokens:
         per_issue_tokens = [total_tokens]
     else:
@@ -732,3 +731,27 @@ def close_task(
     except Exception as e:
         console.error(f"Failed to close #{task_id}: {e}")
         return False
+
+
+def _allocate_tokens(total_tokens: int, line_counts: list[int]) -> list[int]:
+    """Distribute tokens across issues proportionally by line count."""
+    n = len(line_counts)
+    if n == 0:
+        return []
+    if n == 1:
+        return [total_tokens]
+    total_lines = sum(line_counts)
+    if total_lines <= 0:
+        base = total_tokens // n
+        remainder = total_tokens % n
+        return [base + (1 if i < remainder else 0) for i in range(n)]
+    raw = [total_tokens * count / total_lines for count in line_counts]
+    result = [math.floor(v) for v in raw]
+    remainder = total_tokens - sum(result)
+    for idx, _ in sorted(
+        enumerate(raw),
+        key=lambda item: item[1] - math.floor(item[1]),
+        reverse=True,
+    )[:remainder]:
+        result[idx] += 1
+    return result

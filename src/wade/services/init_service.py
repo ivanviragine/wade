@@ -13,15 +13,16 @@ from typing import Any, Final
 
 import structlog
 import yaml
+from crossby.ai_tools import AbstractAITool
+from crossby.config.defaults import get_defaults
+from crossby.models.ai import AIToolID
 
-from wade.ai_tools.base import AbstractAITool
-from wade.config.defaults import get_defaults
 from wade.config.loader import ConfigError, ensure_yaml_mapping, find_config_file, load_config
 from wade.git import repo
 from wade.git.repo import GitError
-from wade.models.ai import AIToolID
 from wade.models.config import (
     AI_COMMAND_NAMES,
+    WADE_BASE_ALLOWLIST_PATTERN,
     AICommandConfig,
     ComplexityModelMapping,
     KnowledgeConfig,
@@ -573,6 +574,7 @@ def update(
     Never overwrites .wade.yml user values — only patches missing keys
     and refreshes skill files.
     """
+
     from wade import __version__
     from wade.config.migrations import run_all_migrations
 
@@ -719,8 +721,10 @@ def _migrate_ai_artifacts_off_main(project_root: Path) -> list[str]:
     """
     import json as _json
 
-    from wade.config.claude_allowlist import WADE_ALLOW_PATTERN as _CLAUDE_WADE_PATTERN
-    from wade.config.cursor_allowlist import WADE_ALLOW_PATTERN as _CURSOR_WADE_PATTERN
+    from crossby.sync.permissions import canonical_to_claude, canonical_to_cursor
+
+    claude_wade_pattern = canonical_to_claude(WADE_BASE_ALLOWLIST_PATTERN)
+    cursor_wade_pattern = canonical_to_cursor(WADE_BASE_ALLOWLIST_PATTERN)
 
     removed: list[str] = []
 
@@ -751,7 +755,7 @@ def _migrate_ai_artifacts_off_main(project_root: Path) -> list[str]:
                 isinstance(raw, dict)
                 and set(raw.keys()) == {"permissions"}
                 and isinstance(allow, list)
-                and _CLAUDE_WADE_PATTERN in allow
+                and claude_wade_pattern in allow
             ):
                 claude_settings.unlink()
                 removed.append(".claude/settings.json")
@@ -772,7 +776,7 @@ def _migrate_ai_artifacts_off_main(project_root: Path) -> list[str]:
                 isinstance(raw, dict)
                 and set(raw.keys()) == {"permissions"}
                 and isinstance(allow, list)
-                and _CURSOR_WADE_PATTERN in allow
+                and cursor_wade_pattern in allow
             ):
                 cursor_cli.unlink()
                 removed.append(".cursor/cli.json")
@@ -1301,7 +1305,8 @@ def _prompt_ai_section(
 
         # Prompt for default effort level (only when tool supports it)
         if caps.supports_effort:
-            from wade.models.ai import EffortLevel
+            from crossby.models.ai import EffortLevel
+
             from wade.ui import prompts as ui_prompts
 
             effort_choices = ["(none — use tool default)", *[e.value for e in EffortLevel]]
@@ -1336,7 +1341,16 @@ def _resolve_models(tool: str | None) -> ComplexityModelMapping:
     """
     if not tool:
         return ComplexityModelMapping()
-    return _normalize_mapping(get_defaults(tool))
+    # get_defaults() returns crossby's ComplexityModelMapping (no effort fields).
+    # Convert to wade's local mapping so downstream code can attach per-tier effort.
+    crossby_defaults = get_defaults(tool)
+    wade_mapping = ComplexityModelMapping(
+        easy=crossby_defaults.easy,
+        medium=crossby_defaults.medium,
+        complex=crossby_defaults.complex,
+        very_complex=crossby_defaults.very_complex,
+    )
+    return _normalize_mapping(wade_mapping)
 
 
 def _normalize_model(model_id: str | None) -> str | None:
@@ -1904,7 +1918,7 @@ def _prompt_model_mapping(
         # Per-tier effort (capability-gated, skippable)
         tier_effort: str | None = current_tier_effort
         if tool_supports_effort:
-            from wade.models.ai import EffortLevel
+            from crossby.models.ai import EffortLevel
 
             effort_choices = ["Skip (inherit defaults)", *[e.value for e in EffortLevel]]
             effort_default_idx = 0
@@ -1934,7 +1948,7 @@ def _collect_model_options(
     """Return the full flat model list from the registry for the select menu."""
     if not tool:
         return []
-    from wade.data import get_models_for_tool
+    from crossby.data import get_models_for_tool
 
     return get_models_for_tool(tool)
 
@@ -2102,7 +2116,7 @@ def _prompt_command_overrides(
         current_cmd = current.get(cmd_name, {})
 
         if caps.supports_effort:
-            from wade.models.ai import EffortLevel
+            from crossby.models.ai import EffortLevel
 
             effort_choices = ["Skip (inherit defaults)", *[e.value for e in EffortLevel]]
             current_effort = current_cmd.get("effort")

@@ -1,13 +1,27 @@
-"""Shared AI tool and model resolution logic."""
+"""AI tool and model resolution logic (wade-side).
+
+This intentionally parallels ``crossby.services.ai_resolution`` rather than
+delegating to it: crossby's resolvers operate on ``CrossbyConfig`` (whose AI
+section is a ``commands`` dict), while wade's operate on ``ProjectConfig``
+(whose AI section exposes named per-command fields, e.g. ``ai.plan``). The two
+config shapes are not interchangeable, so wade keeps its own thin resolvers.
+
+Capability parity, however, now lives in crossby: as of crossby v0.2.5,
+``resolve_effort`` supports per-complexity-tier effort and a configurable
+effort env var (wade passes ``WADE_EFFORT``). Full delegation is achievable
+via a thin adapter that maps wade's named-field ``ProjectConfig.ai`` onto the
+``commands``-dict shape crossby expects — tracked as a follow-up rather than
+done here to keep this PR focused.
+"""
 
 from __future__ import annotations
 
 import os
 
 import structlog
+from crossby.ai_tools import AbstractAITool
+from crossby.models.ai import AIToolID, EffortLevel
 
-from wade.ai_tools.base import AbstractAITool
-from wade.models.ai import AIToolID, EffortLevel
 from wade.models.config import AICommandConfig, ProjectConfig
 
 logger = structlog.get_logger()
@@ -308,7 +322,8 @@ def confirm_ai_selection(
 
 def _prompt_model_selection(tool: str) -> str | None:
     """Show a model picker for *tool* and return the chosen model (or None)."""
-    from wade.data import get_models_for_tool
+    from crossby.data import get_models_for_tool
+
     from wade.ui import prompts
 
     models = get_models_for_tool(tool)

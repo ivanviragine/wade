@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from wade.ai_tools import AbstractAITool
+from crossby.ai_tools import AbstractAITool
+
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 
 

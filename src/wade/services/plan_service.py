@@ -17,15 +17,15 @@ from enum import StrEnum
 from pathlib import Path
 
 import structlog
-from pydantic import BaseModel
-
-from wade.ai_tools.base import AbstractAITool
-from wade.ai_tools.transcript import (
+from crossby.ai_tools import AbstractAITool
+from crossby.ai_tools.transcript import (
     extract_token_usage_from_text,
     read_transcript_excerpt,
 )
+from crossby.models.ai import AIToolID, EffortLevel, TokenUsage
+from pydantic import BaseModel
+
 from wade.config.loader import load_config
-from wade.models.ai import AIToolID, EffortLevel, TokenUsage
 from wade.models.config import ProjectConfig
 from wade.models.task import PlanFile, Task
 from wade.providers.base import AbstractTaskProvider

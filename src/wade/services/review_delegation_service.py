@@ -5,11 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import structlog
+from crossby.models.ai import EffortLevel
 
 from wade.config.loader import load_config
 from wade.git import repo as git_repo
 from wade.git.repo import GitError
-from wade.models.ai import EffortLevel
 from wade.models.config import AICommandConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
 from wade.services.ai_resolution import (

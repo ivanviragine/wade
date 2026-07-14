@@ -7,7 +7,7 @@ import typer
 
 def complete_ai_tools(incomplete: str) -> list[str]:
     """Autocomplete AI tool IDs."""
-    from wade.models.ai import AIToolID
+    from crossby.models.ai import AIToolID
 
     tools = [t.value for t in AIToolID]
     return sorted([t for t in tools if t.startswith(incomplete)])
@@ -15,7 +15,7 @@ def complete_ai_tools(incomplete: str) -> list[str]:
 
 def complete_models(ctx: typer.Context, incomplete: str) -> list[str]:
     """Autocomplete AI model IDs."""
-    from wade.data import MODELS
+    from crossby.data import MODELS
 
     # Extract the --ai tool arg if any from context
     ai_arg = ctx.params.get("ai")
@@ -45,7 +45,7 @@ def complete_delegation_modes(incomplete: str) -> list[str]:
 
 def complete_effort_levels(incomplete: str) -> list[str]:
     """Autocomplete effort levels."""
-    from wade.models.ai import EffortLevel
+    from crossby.models.ai import EffortLevel
 
     levels = [e.value for e in EffortLevel]
     return sorted([e for e in levels if e.startswith(incomplete)])

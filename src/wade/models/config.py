@@ -32,9 +32,26 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+from crossby.models.config import ComplexityModelMapping as ComplexityModelMapping
 from pydantic import BaseModel, Field
 
 from wade.models.session import MergeStrategy
+
+# wade's own command pattern — the base allowlist entry that must always be
+# pre-authorized so agents can run ``wade ...`` without manual approval.
+WADE_BASE_ALLOWLIST_PATTERN = "wade *"
+
+
+def with_wade_base_pattern(patterns: list[str]) -> list[str]:
+    """Return *patterns* with wade's base allowlist pattern guaranteed present.
+
+    crossby's permission writers are generic and inject no app-specific base
+    pattern, so wade guarantees ``wade *`` itself wherever it hands an allowlist
+    to those writers (worktree bootstrap and launch-time delegation alike).
+    """
+    if WADE_BASE_ALLOWLIST_PATTERN in patterns:
+        return patterns
+    return [WADE_BASE_ALLOWLIST_PATTERN, *patterns]
 
 
 class ProviderID(StrEnum):
@@ -43,27 +60,6 @@ class ProviderID(StrEnum):
     GITHUB = "github"
     CLICKUP = "clickup"
     MARKDOWN = "markdown"
-
-
-class ComplexityModelMapping(BaseModel):
-    """Model IDs and optional effort levels for each complexity tier.
-
-    Values are exact model IDs as returned by the tool's get_models().
-    Defaults are None — populated at init time by querying the tool.
-    Effort values mirror ``EffortLevel`` but are stored as plain strings to
-    avoid a circular import (``models.ai`` is not importable here).
-    """
-
-    easy: str | None = None
-    medium: str | None = None
-    complex: str | None = None
-    very_complex: str | None = None
-
-    # Per-tier effort overrides — optional, parallel to the model fields.
-    easy_effort: str | None = None
-    medium_effort: str | None = None
-    complex_effort: str | None = None
-    very_complex_effort: str | None = None
 
 
 class ProviderConfig(BaseModel):
@@ -124,7 +120,7 @@ class PermissionsConfig(BaseModel):
     tool-specific allowlist flags at launch time.
     """
 
-    allowed_commands: list[str] = ["wade:*"]
+    allowed_commands: list[str] = [WADE_BASE_ALLOWLIST_PATTERN]
 
 
 class KnowledgeConfig(BaseModel):

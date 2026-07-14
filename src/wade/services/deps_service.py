@@ -11,9 +11,9 @@ import re
 from pathlib import Path
 
 import structlog
+from crossby.models.ai import EffortLevel
 
 from wade.config.loader import load_config
-from wade.models.ai import EffortLevel
 from wade.models.config import ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationRequest
 from wade.models.deps import DependencyEdge, DependencyGraph

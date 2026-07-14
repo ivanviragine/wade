@@ -7,15 +7,15 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from crossby.ai_tools import AbstractAITool
+from crossby.ai_tools.claude import ClaudeAdapter
+from crossby.ai_tools.codex import CodexAdapter
+from crossby.ai_tools.copilot import CopilotAdapter
+from crossby.ai_tools.gemini import GeminiAdapter
+from crossby.models.ai import ModelBreakdown, TokenUsage
 
-from wade.ai_tools.base import AbstractAITool
-from wade.ai_tools.claude import ClaudeAdapter
-from wade.ai_tools.codex import CodexAdapter
-from wade.ai_tools.copilot import CopilotAdapter
-from wade.ai_tools.gemini import GeminiAdapter
 from wade.git.pr import PRSummary
 from wade.git.repo import GitError
-from wade.models.ai import ModelBreakdown, TokenUsage
 from wade.models.config import (
     HooksConfig,
     KnowledgeConfig,
@@ -184,17 +184,21 @@ class TestBootstrapWorktree:
         ) == "a1b2c3d4:\n  up: 1\n"
 
     def test_propagates_allowlist_when_configured(self, tmp_path: Path) -> None:
-        """Allowlist is copied to worktree when project root has Bash(wade *) configured."""
+        """Allowlist is written to worktree using wade's default Bash(wade *) pattern.
+
+        With an empty ProjectConfig(), PermissionsConfig.allowed_commands defaults
+        to ["wade *"] which canonical_to_claude translates to "Bash(wade *)".
+        """
         import json
 
-        from wade.config.claude_allowlist import WADE_ALLOW_PATTERN
+        wade_allow_pattern = "Bash(wade *)"
 
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
         claude_dir = repo_root / ".claude"
         claude_dir.mkdir()
         (claude_dir / "settings.json").write_text(
-            json.dumps({"permissions": {"allow": [WADE_ALLOW_PATTERN]}}) + "\n",
+            json.dumps({"permissions": {"allow": [wade_allow_pattern]}}) + "\n",
             encoding="utf-8",
         )
 
@@ -207,13 +211,13 @@ class TestBootstrapWorktree:
         wt_settings = worktree / ".claude" / "settings.json"
         assert wt_settings.is_file()
         data = json.loads(wt_settings.read_text(encoding="utf-8"))
-        assert WADE_ALLOW_PATTERN in data["permissions"]["allow"]
+        assert wade_allow_pattern in data["permissions"]["allow"]
 
     def test_allowlist_always_propagated_even_without_repo_root_settings(
         self, tmp_path: Path
     ) -> None:
         """Allowlist is always written to worktree regardless of repo root state."""
-        from wade.config.claude_allowlist import WADE_ALLOW_PATTERN
+        wade_allow_pattern = "Bash(wade *)"
 
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
@@ -227,7 +231,7 @@ class TestBootstrapWorktree:
         wt_settings = worktree / ".claude" / "settings.json"
         assert wt_settings.is_file()
         data = json.loads(wt_settings.read_text(encoding="utf-8"))
-        assert WADE_ALLOW_PATTERN in data["permissions"]["allow"]
+        assert wade_allow_pattern in data["permissions"]["allow"]
 
     def test_self_init_creates_symlinks(self, tmp_path: Path) -> None:
         """When repo_root is the wade package root, skills are symlinked from worktree templates."""
@@ -504,7 +508,7 @@ class TestImplementationLaunchCommandAssembly:
         ):
             mock_run.return_value = MagicMock(returncode=0)
             adapter.launch(
-                worktree_path=tmp_path,
+                working_dir=tmp_path,
                 model="claude-sonnet-4-6",
                 transcript_path=transcript,
             )
@@ -523,7 +527,7 @@ class TestImplementationLaunchCommandAssembly:
         with patch("wade.utils.process.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             adapter.launch(
-                worktree_path=tmp_path,
+                working_dir=tmp_path,
                 model="claude-haiku-4-5",
             )
             cmd = mock_run.call_args[0][0]
@@ -539,7 +543,7 @@ class TestImplementationLaunchCommandAssembly:
         ):
             mock_run.return_value = MagicMock(returncode=0)
             adapter.launch(
-                worktree_path=tmp_path,
+                working_dir=tmp_path,
                 model="claude-sonnet-4.6",
                 transcript_path=tmp_path / "transcript.jsonl",
             )
@@ -557,7 +561,7 @@ class TestImplementationLaunchCommandAssembly:
         with patch("wade.utils.process.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             adapter.launch(
-                worktree_path=tmp_path,
+                working_dir=tmp_path,
                 model="gemini-2.5-pro",
             )
             cmd = mock_run.call_args[0][0]
@@ -576,7 +580,7 @@ class TestImplementationLaunchCommandAssembly:
         ):
             mock_run.return_value = MagicMock(returncode=0)
             adapter.launch(
-                worktree_path=tmp_path,
+                working_dir=tmp_path,
                 model="o4-mini",
             )
             cmd = mock_run.call_args[0][0]
@@ -600,7 +604,7 @@ class TestImplementationLaunchCommandAssembly:
             ):
                 mock_run.return_value = MagicMock(returncode=0)
                 adapter.launch(
-                    worktree_path=tmp_path,
+                    working_dir=tmp_path,
                     model="test-model",
                 )
                 cmd = mock_run.call_args[0][0]
@@ -643,7 +647,7 @@ class TestImplementationStart:
             patch("wade.git.worktree.create_worktree") as mock_create,
             patch("wade.services.implementation_service.core.write_plan_md"),
             patch("wade.services.implementation_service.core.bootstrap_worktree"),
-            patch("wade.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
+            patch("crossby.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
             patch(
                 "wade.services.implementation_service.core._detect_ai_cli_env", return_value=None
             ),
@@ -685,7 +689,7 @@ class TestImplementationStart:
             patch("wade.git.worktree.create_worktree") as mock_create,
             patch("wade.services.implementation_service.core.write_plan_md"),
             patch("wade.services.implementation_service.core.bootstrap_worktree"),
-            patch("wade.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
+            patch("crossby.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
             patch(
                 "wade.services.implementation_service.core._detect_ai_cli_env", return_value=None
             ),
@@ -755,7 +759,7 @@ class TestImplementationStart:
             patch(
                 "wade.services.implementation_service.core._detect_ai_cli_env", return_value=None
             ),
-            patch("wade.ai_tools.base.AbstractAITool.get") as mock_get,
+            patch("crossby.ai_tools.base.AbstractAITool.get") as mock_get,
             patch("wade.git.pr.get_pr_for_branch", return_value=None),
             patch(
                 "wade.services.implementation_service.core.bootstrap_draft_pr",
@@ -796,7 +800,7 @@ class TestImplementationStart:
                 "wade.services.implementation_service.core._detect_ai_cli_env",
                 return_value="CLAUDE_CODE",
             ),
-            patch("wade.ai_tools.base.AbstractAITool.get") as mock_get,
+            patch("crossby.ai_tools.base.AbstractAITool.get") as mock_get,
             patch("wade.git.pr.get_pr_for_branch", return_value=None),
             patch(
                 "wade.services.implementation_service.core.bootstrap_draft_pr",
@@ -863,7 +867,7 @@ class TestImplementationStart:
             patch(
                 "wade.services.implementation_service.core._detect_ai_cli_env", return_value=None
             ),
-            patch("wade.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
+            patch("crossby.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
             patch("wade.git.pr.get_pr_for_branch", return_value=None),
             patch(
                 "wade.services.implementation_service.core.bootstrap_draft_pr",
@@ -1624,7 +1628,7 @@ class TestStartTrackingDetection:
             patch("wade.git.worktree.create_worktree") as mock_create,
             patch("wade.services.implementation_service.core.write_plan_md"),
             patch("wade.services.implementation_service.core.bootstrap_worktree"),
-            patch("wade.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
+            patch("crossby.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
             patch(
                 "wade.services.implementation_service.core._detect_ai_cli_env", return_value=None
             ),

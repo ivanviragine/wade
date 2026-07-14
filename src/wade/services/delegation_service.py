@@ -15,10 +15,10 @@ import tempfile
 from pathlib import Path
 
 import structlog
+from crossby.ai_tools import AbstractAITool
+from crossby.models.ai import AIToolID, EffortLevel
 
-from wade.ai_tools.base import AbstractAITool
-from wade.models.ai import AIToolID, EffortLevel
-from wade.models.config import AICommandConfig
+from wade.models.config import AICommandConfig, with_wade_base_pattern
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.ui import prompts
@@ -111,11 +111,14 @@ def _delegate_headless(request: DelegationRequest) -> DelegationResult:
     defaults = [str(session_cwd), tempfile.gettempdir()]
     trusted = defaults + [d for d in request.trusted_dirs if d not in defaults]
 
-    # Write Gemini policy file before launch (replaces deprecated --allowed-tools flag)
-    if request.ai_tool == AIToolID.GEMINI and request.allowed_commands:
-        from wade.config.gemini_policy import write_gemini_policy
+    # Write Gemini policy file before launch (replaces deprecated --allowed-tools flag).
+    # Guarantee wade's base pattern so the agent can always run ``wade ...``.
+    if request.ai_tool == AIToolID.GEMINI:
+        from crossby.sync.permissions import GeminiPermissionWriter
 
-        write_gemini_policy(session_cwd, request.allowed_commands)
+        GeminiPermissionWriter.write(
+            session_cwd, with_wade_base_pattern(request.allowed_commands or [])
+        )
 
     cmd = adapter.build_launch_command(
         model=request.model,
@@ -208,15 +211,18 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
         trusted.append(str(output_file.parent))
 
     try:
-        # Write Gemini policy file before launch (replaces deprecated --allowed-tools flag)
-        if request.ai_tool == AIToolID.GEMINI and request.allowed_commands:
-            from wade.config.gemini_policy import write_gemini_policy
+        # Write Gemini policy file before launch (replaces deprecated --allowed-tools flag).
+        # Guarantee wade's base pattern so the agent can always run ``wade ...``.
+        if request.ai_tool == AIToolID.GEMINI:
+            from crossby.sync.permissions import GeminiPermissionWriter
 
-            write_gemini_policy(session_cwd, request.allowed_commands)
+            GeminiPermissionWriter.write(
+                session_cwd, with_wade_base_pattern(request.allowed_commands or [])
+            )
 
         deliver_prompt_if_needed(adapter, interactive_prompt)
         adapter.launch(
-            worktree_path=session_cwd,
+            working_dir=session_cwd,
             model=request.model,
             prompt=interactive_prompt,
             trusted_dirs=trusted,

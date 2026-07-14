@@ -7,8 +7,8 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from crossby.models.ai import TokenUsage
 
-from wade.models.ai import TokenUsage
 from wade.models.config import AIConfig, ProjectConfig
 from wade.models.task import PlanFile
 from wade.services.ai_resolution import resolve_ai_tool, resolve_model
@@ -63,7 +63,7 @@ class TestResolveAITool:
     def test_detection_fallback(self) -> None:
         config = ProjectConfig()
         with patch("wade.services.plan_service.AbstractAITool.detect_installed") as mock:
-            from wade.models.ai import AIToolID
+            from crossby.models.ai import AIToolID
 
             mock.return_value = [AIToolID.CLAUDE]
             result = resolve_ai_tool(None, config)
