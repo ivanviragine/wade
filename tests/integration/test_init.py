@@ -31,7 +31,7 @@ class TestInit:
         assert config["version"] == 2
         assert config["ai"]["default_tool"] == "claude"
         assert config["models"]["claude"]["medium"] == {
-            "model": "claude-sonnet-4.6",
+            "model": "claude-sonnet-5",
             "effort": None,
         }
         assert config["models"]["claude"]["medium"] != config["models"]["claude"]["easy"]

@@ -1,4 +1,17 @@
-"""Shared AI tool and model resolution logic."""
+"""AI tool and model resolution logic (wade-side).
+
+This intentionally parallels ``crossby.services.ai_resolution`` rather than
+delegating to it: crossby's resolvers operate on ``CrossbyConfig`` (whose AI
+section is a ``commands`` dict), while wade's operate on ``ProjectConfig``
+(whose AI section exposes named per-command fields, e.g. ``ai.plan``). The two
+config shapes are not interchangeable, so wade keeps its own thin resolvers.
+
+Capability parity, however, now lives in crossby: as of crossby v0.2.5,
+``resolve_effort`` supports per-complexity-tier effort and a configurable
+effort env var (wade passes ``WADE_EFFORT``). Collapsing these two modules
+into one requires unifying ``ProjectConfig`` and ``CrossbyConfig`` first —
+tracked as a follow-up, not part of this PR.
+"""
 
 from __future__ import annotations
 

@@ -43,11 +43,11 @@ class TestInitCommand:
         assert config["ai"]["default_tool"] == "claude"
         assert config["models"]["claude"]["easy"] == {"model": "claude-haiku-4.5", "effort": None}
         assert config["models"]["claude"]["medium"] == {
-            "model": "claude-sonnet-4.6",
+            "model": "claude-sonnet-5",
             "effort": None,
         }
         assert config["models"]["claude"]["complex"] == {
-            "model": "claude-sonnet-4.6",
+            "model": "claude-sonnet-5",
             "effort": None,
         }
         assert config["models"]["claude"]["medium"] != config["models"]["claude"]["easy"]
