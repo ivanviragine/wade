@@ -9,7 +9,12 @@ from pathlib import Path
 import structlog
 
 from wade.git import repo as git_repo
-from wade.models.config import AI_COMMAND_NAMES, ProjectConfig
+from wade.models.config import (
+    AI_COMMAND_NAMES,
+    WADE_BASE_ALLOWLIST_PATTERN,
+    ProjectConfig,
+    with_wade_base_pattern,
+)
 from wade.models.task import Task
 from wade.utils.markdown import has_marker_block, remove_marker_block
 
@@ -37,19 +42,6 @@ __all__ = [
 # --- Worktree gitignore block markers ---
 WORKTREE_GITIGNORE_MARKER_START = "# wade:worktree:start"
 WORKTREE_GITIGNORE_MARKER_END = "# wade:worktree:end"
-
-# wade's own command pattern — always guaranteed in a worktree's allowlist so
-# agents can run ``wade ...`` without manual approval, even when a project
-# narrows ``permissions.allowed_commands``. crossby's permission writers are
-# generic and inject no app-specific base pattern, so wade must ensure it here.
-WADE_BASE_ALLOWLIST_PATTERN = "wade *"
-
-
-def _with_wade_base(patterns: list[str]) -> list[str]:
-    """Return *patterns* with wade's base allowlist pattern guaranteed present."""
-    if WADE_BASE_ALLOWLIST_PATTERN in patterns:
-        return patterns
-    return [WADE_BASE_ALLOWLIST_PATTERN, *patterns]
 
 
 def _resolve_worktrees_dir(config: ProjectConfig, repo_root: Path) -> Path:
@@ -479,7 +471,7 @@ def bootstrap_worktree(
     # when a project narrows permissions.allowed_commands.
     from crossby.config.claude_allowlist import configure_allowlist
 
-    wade_patterns = _with_wade_base(config.permissions.allowed_commands)
+    wade_patterns = with_wade_base_pattern(config.permissions.allowed_commands)
     configure_allowlist(worktree_path, wade_patterns)
 
     # Propagate Cursor allowlist to worktree's per-project .cursor/cli.json.

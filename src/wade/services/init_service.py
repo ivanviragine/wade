@@ -22,6 +22,7 @@ from wade.git import repo
 from wade.git.repo import GitError
 from wade.models.config import (
     AI_COMMAND_NAMES,
+    WADE_BASE_ALLOWLIST_PATTERN,
     AICommandConfig,
     ComplexityModelMapping,
     KnowledgeConfig,
@@ -722,8 +723,8 @@ def _migrate_ai_artifacts_off_main(project_root: Path) -> list[str]:
 
     from crossby.sync.permissions import canonical_to_claude, canonical_to_cursor
 
-    claude_wade_pattern = canonical_to_claude("wade *")
-    cursor_wade_pattern = canonical_to_cursor("wade *")
+    claude_wade_pattern = canonical_to_claude(WADE_BASE_ALLOWLIST_PATTERN)
+    cursor_wade_pattern = canonical_to_cursor(WADE_BASE_ALLOWLIST_PATTERN)
 
     removed: list[str] = []
 

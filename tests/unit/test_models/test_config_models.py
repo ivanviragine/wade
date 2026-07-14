@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from wade.models.config import (
+    WADE_BASE_ALLOWLIST_PATTERN,
     AICommandConfig,
     AIConfig,
     ComplexityModelMapping,
     PermissionsConfig,
     ProjectConfig,
+    with_wade_base_pattern,
 )
 from wade.models.session import MergeStrategy
 
@@ -27,6 +29,21 @@ class TestPermissionsConfig:
     def test_empty_commands(self) -> None:
         perms = PermissionsConfig(allowed_commands=[])
         assert perms.allowed_commands == []
+
+
+class TestWithWadeBasePattern:
+    def test_prepends_base_when_missing(self) -> None:
+        assert with_wade_base_pattern(["./scripts/check.sh *"]) == [
+            WADE_BASE_ALLOWLIST_PATTERN,
+            "./scripts/check.sh *",
+        ]
+
+    def test_noop_when_base_already_present(self) -> None:
+        patterns = ["./x *", WADE_BASE_ALLOWLIST_PATTERN]
+        assert with_wade_base_pattern(patterns) == patterns
+
+    def test_base_only_for_empty(self) -> None:
+        assert with_wade_base_pattern([]) == [WADE_BASE_ALLOWLIST_PATTERN]
 
 
 class TestProjectConfig:

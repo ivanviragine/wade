@@ -8,9 +8,10 @@ config shapes are not interchangeable, so wade keeps its own thin resolvers.
 
 Capability parity, however, now lives in crossby: as of crossby v0.2.5,
 ``resolve_effort`` supports per-complexity-tier effort and a configurable
-effort env var (wade passes ``WADE_EFFORT``). Collapsing these two modules
-into one requires unifying ``ProjectConfig`` and ``CrossbyConfig`` first —
-tracked as a follow-up, not part of this PR.
+effort env var (wade passes ``WADE_EFFORT``). Full delegation is achievable
+via a thin adapter that maps wade's named-field ``ProjectConfig.ai`` onto the
+``commands``-dict shape crossby expects — tracked as a follow-up rather than
+done here to keep this PR focused.
 """
 
 from __future__ import annotations

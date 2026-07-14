@@ -37,6 +37,22 @@ from pydantic import BaseModel, Field
 
 from wade.models.session import MergeStrategy
 
+# wade's own command pattern — the base allowlist entry that must always be
+# pre-authorized so agents can run ``wade ...`` without manual approval.
+WADE_BASE_ALLOWLIST_PATTERN = "wade *"
+
+
+def with_wade_base_pattern(patterns: list[str]) -> list[str]:
+    """Return *patterns* with wade's base allowlist pattern guaranteed present.
+
+    crossby's permission writers are generic and inject no app-specific base
+    pattern, so wade guarantees ``wade *`` itself wherever it hands an allowlist
+    to those writers (worktree bootstrap and launch-time delegation alike).
+    """
+    if WADE_BASE_ALLOWLIST_PATTERN in patterns:
+        return patterns
+    return [WADE_BASE_ALLOWLIST_PATTERN, *patterns]
+
 
 class ProviderID(StrEnum):
     """Canonical identifiers for task providers."""
@@ -104,7 +120,7 @@ class PermissionsConfig(BaseModel):
     tool-specific allowlist flags at launch time.
     """
 
-    allowed_commands: list[str] = ["wade *"]
+    allowed_commands: list[str] = [WADE_BASE_ALLOWLIST_PATTERN]
 
 
 class KnowledgeConfig(BaseModel):

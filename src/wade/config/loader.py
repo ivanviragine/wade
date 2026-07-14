@@ -9,6 +9,7 @@ import yaml
 
 from wade.models.config import (
     AI_COMMAND_NAMES,
+    WADE_BASE_ALLOWLIST_PATTERN,
     AICommandConfig,
     AIConfig,
     ComplexityModelMapping,
@@ -187,7 +188,9 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
     if allowed_commands is not None and not isinstance(allowed_commands, list):
         raise TypeError("permissions.allowed_commands must be a list")
     permissions = PermissionsConfig(
-        allowed_commands=allowed_commands if allowed_commands is not None else ["wade *"],
+        allowed_commands=allowed_commands
+        if allowed_commands is not None
+        else [WADE_BASE_ALLOWLIST_PATTERN],
     )
 
     # Parse hooks section
