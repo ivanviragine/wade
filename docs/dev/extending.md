@@ -14,20 +14,11 @@ The task CLI is in `src/wade/cli/task.py`, business logic in `src/wade/services/
 
 ## Adding a New AI Tool
 
-Thanks to `__init_subclass__` auto-registration, adding a new AI tool requires only one file:
-
-1. Create `src/wade/ai_tools/<tool_name>.py`
-2. Define a class that inherits from `AbstractAITool` and sets `TOOL_ID`
-3. Implement the required abstract method: `capabilities()` (returns `AIToolCapabilities`)
-4. Override `get_models()`, `launch()`, or `parse_transcript()` only if the defaults are insufficient
-5. Add the tool ID to `AIToolID` enum in `models/ai.py`
-6. Import the module in `ai_tools/__init__.py` to trigger registration
-
-No modification to `base.py`, services, or CLI is needed.
+AI tool adapters (`AbstractAITool` subclasses, using `__init_subclass__` auto-registration) live in the external [`crossby`](https://github.com/ivanviragine/crossby) package, not in this repo — see `docs/dev/architecture.md` for the full list of what moved there. Adding a new AI tool means adding an adapter in crossby, then in wade: bump the `crossby` pin in `pyproject.toml`, and add the tool's binary name to `README.md`'s "Supported AI Tools" table. No changes to wade's `services/` or `cli/` are needed unless the tool needs command-specific handling.
 
 ## Adding a New Provider
 
-The provider system uses `AbstractTaskProvider` ABC (`src/wade/providers/base.py`) with `GitHubProvider` and `ClickUpProvider` as current implementations. Unlike AI tools (which use `__init_subclass__` auto-registration), providers use a registry pattern. To add a new provider (e.g., Linear, Jira):
+The provider system uses `AbstractTaskProvider` ABC (`src/wade/providers/base.py`) with `GitHubProvider` and `ClickUpProvider` as current implementations. Unlike AI tools (which are external, via crossby), providers are local to wade and use a registry pattern. To add a new provider (e.g., Linear, Jira):
 
 1. Create `src/wade/providers/<provider_name>.py`
 2. Implement all abstract methods from `AbstractTaskProvider`

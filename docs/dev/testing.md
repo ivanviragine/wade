@@ -12,10 +12,8 @@ tests/
 │   ├── test_models/         # Pydantic model tests
 │   ├── test_services/       # Service logic tests (mocked providers/git)
 │   ├── test_config/         # Config parsing tests
-│   ├── test_transcript/     # Transcript parsing tests
 │   ├── test_utils/          # Utility function tests
 │   ├── test_cli/            # CLI command tests (shell-init, AI flags)
-│   ├── test_ai_tools/       # AI tool adapter and registry tests
 │   ├── test_db/             # Database repository tests
 │   ├── test_git/            # Git operation tests (branch, sync, worktree)
 │   ├── test_hooks/          # Hook tests (plan write guard)

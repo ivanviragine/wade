@@ -53,9 +53,8 @@ uv run python scripts/auto_version.py patch # Version bump (patch/minor/major)
 
 ```
 CLI Layer      ->  can import: services, models, config, logging, ui
-Service Layer  ->  can import: providers, ai_tools, git, db, models, config, logging
+Service Layer  ->  can import: providers, crossby (AI tool adapters), git, db, models, config, logging
 Provider Layer ->  can import: models, config, logging  (NO service imports)
-AI Tool Layer  ->  can import: models, config, logging  (NO service imports)
 Git Layer      ->  can import: models, config, logging  (NO service imports)
 DB Layer       ->  can import: models, logging           (NO config imports)
 Models Layer   ->  can import: nothing (leaf dependency)
@@ -63,13 +62,15 @@ Models Layer   ->  can import: nothing (leaf dependency)
 
 No circular dependencies. Models are pure data. Services orchestrate. **Never import a higher layer from a lower layer.**
 
+AI tool adapters are not part of this repo — they live in the external [`crossby`](https://github.com/ivanviragine/crossby) package (`pyproject.toml`). See `docs/dev/architecture.md` for what moved there.
+
 CLI modules are thin dispatch — they parse flags via Typer, then call service methods. Business logic lives in `services/`, not in `cli/`.
 
 > Full package structure, command dispatch, config system, and subsystem details: see `docs/dev/architecture.md`
 
 ### Key Design Patterns
 
-- **AI Tool Self-Registration**: `AbstractAITool.__init_subclass__` auto-registers adapters. Adding a new AI tool = one file, one class.
+- **AI Tool Adapters via crossby**: `AbstractAITool` and every tool-specific adapter (Claude, Cursor, Copilot, Gemini, Codex, OpenCode, Antigravity, VS Code) live in the external `crossby` dependency, not this repo. Wade's services import `crossby.ai_tools` and `crossby.models.ai` directly. Adding a new AI tool means contributing to crossby, not wade.
 - **Provider Abstraction**: `AbstractTaskProvider` ABC with pluggable backends (GitHub via `gh` CLI, ClickUp via REST API, Markdown via a single central file). Non-GitHub providers compose `GitHubPRDelegateMixin` so PR-review APIs still flow through `gh`.
 - **Prompts as .md Templates**: All AI prompts live in `templates/prompts/`, not inline strings.
 - **Synchronous Only**: No asyncio. Process-level parallelism via multiple terminals.

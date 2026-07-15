@@ -146,6 +146,8 @@ Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level
 
 ## Supported AI Tools
 
+Adapters, model/effort resolution, and per-tool config (allowlists, hooks) are powered by [`crossby`](https://github.com/ivanviragine/crossby), WADE's AI-tool-integration dependency.
+
 | Tool | Binary |
 |------|--------|
 | [Claude Code](https://claude.com/product/claude-code) | `claude` |

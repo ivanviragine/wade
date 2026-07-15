@@ -42,8 +42,6 @@ uv run python scripts/changelog.py                   # write CHANGELOG.md
 uv run python scripts/changelog.py --stdout          # print to stdout
 uv run python scripts/changelog.py --tag v1.0.0      # label unreleased as v1.0.0
 
-# Probe AI CLIs for new/removed models and diff against models.json
-./scripts/probe_models.sh
 ```
 
 ## Package Structure
@@ -66,7 +64,6 @@ src/wade/
 │   ├── config.py        # ProjectConfig, ProjectSettings, AIConfig, ComplexityModelMapping
 │   ├── task.py          # Task, PlanFile, Complexity, Label, TaskState
 │   ├── session.py       # ImplementationSession, WorktreeState, SyncResult, SyncEvent, MergeStrategy
-│   ├── ai.py            # AIToolID, AIModel, ModelTier, TokenUsage, AIToolCapabilities
 │   ├── delegation.py    # DelegationRequest, DelegationResult, DelegationMode
 │   ├── review.py        # PRReviewStatus, ReviewThread, ReviewComment
 │   ├── batch.py         # BatchIssueContext, BatchReviewContext
@@ -95,18 +92,6 @@ src/wade/
 │   ├── github.py        # GitHubProvider (gh CLI subprocess)
 │   ├── clickup.py       # ClickUpProvider (REST API)
 │   └── registry.py      # Provider registry (register_provider / get_provider)
-├── ai_tools/            # AI tool adapters (ABC, self-registering)
-│   ├── base.py          # AbstractAITool with __init_subclass__ registry
-│   ├── claude.py        # ClaudeAdapter
-│   ├── cursor.py        # CursorAdapter
-│   ├── copilot.py       # CopilotAdapter
-│   ├── gemini.py        # GeminiAdapter
-│   ├── codex.py         # CodexAdapter (OpenAI Codex)
-│   ├── opencode.py      # OpenCodeAdapter (multi-provider)
-│   ├── antigravity.py   # AntigravityAdapter
-│   ├── vscode.py        # VSCodeAdapter (GUI launcher)
-│   ├── transcript.py    # Shared transcript parsing
-│   └── model_utils.py   # pick_best_for_tier, has_date_suffix
 ├── git/                 # Git operations (all subprocess)
 │   ├── repo.py          # Repo introspection
 │   ├── worktree.py      # Worktree create/remove/list
@@ -121,19 +106,10 @@ src/wade/
 ├── config/              # Configuration management
 │   ├── loader.py        # Find + parse .wade.yml (walk up from CWD)
 │   ├── schema.py        # Re-exports from models (Pydantic Settings)
-│   ├── defaults.py      # Hardcoded defaults per AI tool
-│   ├── migrations.py    # Config migration pipeline (ensure version key)
-│   ├── claude_allowlist.py  # .claude/settings.json allowlist management
-│   ├── cursor_allowlist.py  # Cursor settings allowlist management
-│   ├── hooks_util.py       # Shared JSON hook config read/merge/write utility
-│   ├── cursor_hooks.py     # Cursor settings.json hooks
-│   ├── copilot_hooks.py    # Copilot VS Code settings hooks
-│   └── gemini_hooks.py     # Gemini configuration hooks
+│   └── migrations.py    # Config migration pipeline (ensure version key)
 ├── ui/                  # Terminal UI (Rich)
 │   ├── console.py       # Console class
 │   └── prompts.py       # confirm, input, select, menu
-├── data/                # Bundled data files
-│   └── models.json      # AI model registry (probed from CLIs)
 ├── logging/             # Structured logging
 │   ├── setup.py         # structlog configuration
 │   └── context.py       # Session context binding
@@ -147,6 +123,22 @@ src/wade/
     ├── update_check.py  # Version checking, self-upgrade hints
     └── install.py       # Self-upgrade helpers (venv/source detection, re-exec)
 ```
+
+## AI Tool Layer (external: crossby)
+
+AI tool adapters, model/effort resolution primitives, the model registry, and per-tool config (allowlists, hooks, defaults) are **not** part of this repo. They live in the external [`crossby`](https://github.com/ivanviragine/crossby) package, pinned in `pyproject.toml` (`crossby>=0.2.6,<0.3.0`). This replaced wade's formerly-internal `ai_tools/` and parts of `config/` and `data/` (see `feat: replace internal AI tool layer with the crossby dependency (#215)`).
+
+| What | Lives in crossby | Used from wade via |
+|------|-------------------|---------------------|
+| `AbstractAITool` + adapters (Claude, Cursor, Copilot, Gemini, Codex, OpenCode, Antigravity, VS Code) | `crossby.ai_tools` | `services/ai_resolution.py`, `delegation_service.py`, `review_service.py`, `plan_service.py`, `prompt_delivery.py` |
+| `AIToolID`, `AIModel`, `ModelTier`, `TokenUsage`, `AIToolCapabilities`, `EffortLevel` | `crossby.models.ai` | re-exported from `wade.models` |
+| Model registry (probed from CLIs, was `data/models.json`) | `crossby.data.get_models_for_tool()` | `ai_resolution.py`, `init_service.py` |
+| Per-tool default model tiers (was `config/defaults.py`) | `crossby.config.defaults.get_defaults()` | `init_service.py` |
+| Claude/Cursor allowlist management, Cursor/Copilot/Gemini hook config (was `config/*_allowlist.py`, `config/*_hooks.py`) | `crossby.config.*`, `crossby.sync.permissions` | `implementation_service/bootstrap.py`, `init_service.py` |
+
+Wade still owns a thin `services/ai_resolution.py` rather than delegating outright: wade's `ProjectConfig.ai` uses named per-command fields (e.g. `ai.plan`), while crossby's own config expects a `commands` dict — the two shapes aren't interchangeable yet. See that module's docstring for the up-to-date status.
+
+Adding support for a new AI tool means contributing an adapter to crossby, not to this repo — see `docs/dev/extending.md`.
 
 ## Command Dispatch
 
