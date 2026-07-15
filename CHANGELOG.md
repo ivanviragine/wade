@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.29.2] — 2026-07-15
+
+### CI/CD
+
+- restore release and publish workflows (8a5ddc3)
+
 ## [v0.29.1] — 2026-07-15
 
 ### Documentation
