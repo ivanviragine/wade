@@ -70,7 +70,18 @@ This bumps the version, generates `CHANGELOG.md`, commits, tags, and pushes. CI 
 
 1. Creates a **draft GitHub Release** with the changelog notes
 2. You review it on GitHub and click **Publish Release**
-3. CI publishes the wheel to PyPI automatically
+3. CI publishes the wheel to PyPI automatically, authenticated via [PyPI Trusted Publishing](https://docs.pypi.org/trusted-publishers/) (OIDC) — no API tokens stored anywhere. If PyPI ever rejects the publish with `invalid-publisher`, the trusted publisher for `wade-cli` needs to be (re-)registered on pypi.org under **Publishing** settings, matching `ivanviragine/wade`, workflow `publish.yml`, environment `pypi`.
+
+If you have `./scripts/install-hooks.sh` set up (see below), you rarely need to run the bump command manually — pushing a conventional-commit-prefixed commit straight to `main` auto-bumps, tags, and pushes for you via a `pre-push` hook.
+
+### Git Hooks
+
+```bash
+./scripts/install-hooks.sh          # install into .git/hooks/
+./scripts/install-hooks.sh --force  # overwrite existing hooks
+```
+
+Installs `pre-push` from `scripts/hooks/pre-push`, which detects conventional-commit prefixes on pushes to `main`/`master` and runs the version-bump step above automatically (skipped if the tip commit is already a version bump, to avoid double-bumping).
 
 ### Version bump types
 
