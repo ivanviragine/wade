@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.29.1] — 2026-07-15
+
+### Documentation
+
+- reflect crossby AI tool layer migration, remove dead artifacts (6927543)
+
 ## [v0.29.0] — 2026-07-14
 
 ### Features
