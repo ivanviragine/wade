@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.29.5] — 2026-07-15
+
+### Bug Fixes
+
+- pin typer below 0.26 to avoid CLI usage-string breakage (3b8f234)
+
 ## [v0.29.4] — 2026-07-15
 
 ### Documentation
