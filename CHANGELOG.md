@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.29.3] — 2026-07-15
+
+### Build
+
+- source crossby from PyPI instead of git (15937e0)
+
 ## [v0.29.2] — 2026-07-15
 
 ### CI/CD
