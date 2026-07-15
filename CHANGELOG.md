@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.29.4] — 2026-07-15
+
+### Documentation
+
+- document release auto-bump hook and PyPI trusted publishing (d38a87e)
+
 ## [v0.29.3] — 2026-07-15
 
 ### Build
