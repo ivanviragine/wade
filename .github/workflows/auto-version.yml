@@ -77,8 +77,10 @@ jobs:
           # concurrent version-bump that finished first), then retry push.
           for attempt in 1 2 3; do
             git pull --rebase origin main && git push && git push --tags && exit 0
-            echo "Push attempt $attempt failed, retrying in $((attempt * 2))s..."
-            sleep $((attempt * 2))
+            if [ "$attempt" -lt 3 ]; then
+              echo "Push attempt $attempt failed, retrying in $((attempt * 2))s..."
+              sleep $((attempt * 2))
+            fi
           done
           echo "All push attempts failed"
           exit 1
