@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.30.1] — 2026-07-16
+
+### CI/CD
+
+- use GitHub App token for auto-version push (#319) (7045ef8)
+
 ## [v0.30.0] — 2026-07-16
 
 ### Features
