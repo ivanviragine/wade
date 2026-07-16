@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.29.8] — 2026-07-16
+
+### Bug Fixes
+
+- accept 'in-progress' as a synonym for 'in_progress' in Markdown task state parsing (6d03639)
+
 ## [v0.29.7] — 2026-07-16
 
 ### Refactoring
