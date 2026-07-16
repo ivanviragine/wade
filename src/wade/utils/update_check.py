@@ -26,20 +26,22 @@ PYPI_URL = "https://pypi.org/pypi/wade-cli/json"
 CACHE_FILE = Path.home() / ".local" / "share" / "wade" / "update-check.json"
 
 
-def _is_newer(candidate: str, current: str) -> bool:
-    """Return True if candidate version is strictly newer than current.
+def _version_tuple(v: str) -> tuple[int, ...]:
+    """Parse a dotted version string into a comparable integer tuple.
 
-    Uses simple numeric tuple comparison — sufficient for standard semver.
-    Falls back to False on any parse error.
+    Uses simple numeric tuple parsing — sufficient for standard semver.
+    Non-numeric segments are dropped; falls back to an empty tuple on any
+    parse error.
     """
     try:
-
-        def to_tuple(v: str) -> tuple[int, ...]:
-            return tuple(int(x) for x in v.split(".")[:3] if x.isdigit())
-
-        return to_tuple(candidate) > to_tuple(current)
+        return tuple(int(x) for x in v.split(".")[:3] if x.isdigit())
     except (ValueError, TypeError):
-        return False
+        return ()
+
+
+def _is_newer(candidate: str, current: str) -> bool:
+    """Return True if candidate version is strictly newer than current."""
+    return _version_tuple(candidate) > _version_tuple(current)
 
 
 def _load_cache() -> dict[str, object] | None:
@@ -72,38 +74,63 @@ def _save_cache(latest_version: str, timestamp: float) -> None:
         pass
 
 
+def _select_latest_non_yanked(releases: dict[str, object]) -> str | None:
+    """Return the highest version among releases with at least one non-yanked file.
+
+    A release with no files, or where every file is yanked, is skipped —
+    PyPI's `info.version` does not account for yanking, so it can point at a
+    release that is no longer installable.
+    """
+    candidates = [
+        version
+        for version, files in releases.items()
+        if isinstance(files, list)
+        and files
+        and not all(isinstance(f, dict) and f.get("yanked") for f in files)
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=_version_tuple)
+
+
 def _fetch_latest_version() -> str | None:
-    """Fetch the latest wade-cli version from PyPI. Returns None on any error."""
+    """Fetch the latest non-yanked wade-cli version from PyPI. Returns None on any error."""
     try:
         with urlopen(PYPI_URL, timeout=5) as resp:
             data = json.loads(resp.read())
-            version = data["info"]["version"]
-            if isinstance(version, str):
-                return version
+            releases = data["releases"]
+            if not isinstance(releases, dict):
+                return None
+            return _select_latest_non_yanked(releases)
     except (URLError, OSError, json.JSONDecodeError, KeyError, TypeError):
         pass
     return None
 
 
-def check_for_update(current_version: str) -> str | None:
+def check_for_update(current_version: str, force: bool = False) -> str | None:
     """Return latest PyPI version if newer than current, else None.
 
-    Uses a 2-hour file cache to avoid hammering PyPI.
+    Uses a 2-hour file cache to avoid hammering PyPI, unless force=True.
 
     Args:
         current_version: The currently installed version string.
+        force: When True, bypass the cache and fetch live from PyPI (the
+            fresh result still refreshes the cache). Used by the explicit
+            self-upgrade path so a stale or yanked cached "latest" cannot
+            drive the upgrade decision.
 
     Returns:
         The latest version string if an update is available, otherwise None.
     """
     now = datetime.now(UTC).timestamp()
 
-    cached = _load_cache()
-    if cached is not None:
-        age = now - float(str(cached["timestamp"]))
-        if age < CHECK_INTERVAL_SECS:
-            latest = str(cached["latest_version"])
-            return latest if _is_newer(latest, current_version) else None
+    if not force:
+        cached = _load_cache()
+        if cached is not None:
+            age = now - float(str(cached["timestamp"]))
+            if age < CHECK_INTERVAL_SECS:
+                latest = str(cached["latest_version"])
+                return latest if _is_newer(latest, current_version) else None
 
     fetched = _fetch_latest_version()
     if fetched:

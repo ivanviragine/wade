@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -18,6 +19,7 @@ from wade.services.init_service import (
     _check_gh_auth,
     _clean_gitignore,
     _ensure_wade_dir_self_ignoring,
+    _maybe_self_upgrade,
     _migrate_gitignore_block,
     _patch_config,
     _prompt_ai_section,
@@ -48,6 +50,7 @@ from wade.skills.pointer import (
     remove_pointer,
     write_pointer,
 )
+from wade.utils.install import InstallMethod
 
 # ---------------------------------------------------------------------------
 # Pointer tests
@@ -1430,6 +1433,110 @@ class TestUpdateExtended:
 
         success = update(project_root=tmp_git_repo, skip_self_upgrade=True)
         assert success  # update should succeed and detect version difference
+
+
+# ---------------------------------------------------------------------------
+# _maybe_self_upgrade — re-exec loop guard (issue #321)
+# ---------------------------------------------------------------------------
+
+
+class TestMaybeSelfUpgrade:
+    """A WADE_SELF_UPGRADE_FROM breadcrumb must cap re-exec at one attempt."""
+
+    def setup_method(self) -> None:
+        os.environ.pop("WADE_SELF_UPGRADE_FROM", None)
+
+    def teardown_method(self) -> None:
+        os.environ.pop("WADE_SELF_UPGRADE_FROM", None)
+
+    def test_breadcrumb_unchanged_warns_and_clears_env(self) -> None:
+        """breadcrumb == current version → no re-exec, a warning, env cleared."""
+        from wade import __version__
+
+        os.environ["WADE_SELF_UPGRADE_FROM"] = __version__
+
+        with (
+            patch("wade.utils.install.detect_install_method") as mock_detect,
+            patch("wade.services.init_service.console") as mock_console,
+        ):
+            result = _maybe_self_upgrade()
+
+        assert result is False
+        mock_console.warn.assert_called_once()
+        assert "WADE_SELF_UPGRADE_FROM" not in os.environ
+        mock_detect.assert_not_called()
+
+    def test_breadcrumb_differs_clears_env_without_warning(self) -> None:
+        """breadcrumb != current version → upgrade succeeded, no re-exec, env cleared."""
+        os.environ["WADE_SELF_UPGRADE_FROM"] = "0.0.1"
+
+        with (
+            patch("wade.utils.install.detect_install_method") as mock_detect,
+            patch("wade.services.init_service.console") as mock_console,
+        ):
+            result = _maybe_self_upgrade()
+
+        assert result is False
+        mock_console.warn.assert_not_called()
+        assert "WADE_SELF_UPGRADE_FROM" not in os.environ
+        mock_detect.assert_not_called()
+
+    def test_no_breadcrumb_runs_normal_flow(self) -> None:
+        """No breadcrumb present → proceeds to the ordinary upgrade check."""
+        with patch(
+            "wade.utils.install.detect_install_method", return_value=InstallMethod.UNKNOWN
+        ) as mock_detect:
+            result = _maybe_self_upgrade()
+
+        assert result is False
+        mock_detect.assert_called_once()
+
+    def test_newer_version_sets_breadcrumb_before_re_exec(self) -> None:
+        """A genuinely newer version sets the breadcrumb before calling re_exec()."""
+        from wade import __version__
+
+        captured: dict[str, str] = {}
+
+        def fake_re_exec() -> None:
+            captured["breadcrumb"] = os.environ.get("WADE_SELF_UPGRADE_FROM", "")
+
+        with (
+            patch("wade.utils.install.detect_install_method", return_value=InstallMethod.UV_TOOL),
+            patch("wade.utils.update_check.check_for_update", return_value="99.0.0") as mock_check,
+            patch("wade.utils.install.self_upgrade", return_value=True),
+            patch("wade.utils.install.re_exec", side_effect=fake_re_exec),
+        ):
+            result = _maybe_self_upgrade()
+
+        assert result is True
+        assert captured["breadcrumb"] == __version__
+        mock_check.assert_called_once_with(__version__, force=True)
+
+    def test_at_most_one_re_exec_across_check_upgrade_recheck_chain(self) -> None:
+        """End-to-end: check → upgrade → re-exec → post-re-exec re-check triggers
+        at most one re_exec call across the whole chain."""
+
+        re_exec_calls = 0
+
+        def fake_re_exec() -> None:
+            nonlocal re_exec_calls
+            re_exec_calls += 1
+            # os.execv inherits the current environment into the "new" process —
+            # simulate that by leaving WADE_SELF_UPGRADE_FROM set for the next call.
+
+        with (
+            patch("wade.utils.install.detect_install_method", return_value=InstallMethod.UV_TOOL),
+            patch("wade.utils.update_check.check_for_update", return_value="99.0.0"),
+            patch("wade.utils.install.self_upgrade", return_value=True),
+            patch("wade.utils.install.re_exec", side_effect=fake_re_exec),
+        ):
+            first = _maybe_self_upgrade()  # simulates the pre-upgrade invocation
+            second = _maybe_self_upgrade()  # simulates the post-re-exec invocation
+
+        assert first is True
+        assert second is False
+        assert re_exec_calls == 1
+        assert "WADE_SELF_UPGRADE_FROM" not in os.environ
 
 
 # ---------------------------------------------------------------------------
