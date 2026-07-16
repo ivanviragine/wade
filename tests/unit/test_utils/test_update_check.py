@@ -14,9 +14,11 @@ import pytest
 
 from wade.utils.update_check import (
     CHECK_INTERVAL_SECS,
+    _fetch_latest_version,
     _is_newer,
     _load_cache,
     _save_cache,
+    _select_latest_non_yanked,
     check_for_update,
     maybe_print_update_hint,
 )
@@ -184,6 +186,121 @@ class TestCheckForUpdate:
 
         assert result == "2.0.0"
         mock_fetch.assert_not_called()
+
+    def test_force_bypasses_fresh_cache_and_calls_fetcher(self, tmp_path: Path) -> None:
+        """force=True skips a fresh cache entirely and hits the fetcher."""
+        cache_file = tmp_path / "update-check.json"
+        now = datetime.now(UTC).timestamp()
+        cache_file.write_text(
+            json.dumps({"timestamp": now, "latest_version": "2.0.0"}), encoding="utf-8"
+        )
+        with (
+            patch("wade.utils.update_check.CACHE_FILE", cache_file),
+            patch("wade.utils.update_check._fetch_latest_version", return_value="1.3.0"),
+        ):
+            result = check_for_update("1.0.0", force=True)
+
+        assert result == "1.3.0"
+
+    def test_force_refreshes_cache_with_fetched_result(self, tmp_path: Path) -> None:
+        """force=True still writes the freshly fetched result back to the cache."""
+        cache_file = tmp_path / "update-check.json"
+        now = datetime.now(UTC).timestamp()
+        cache_file.write_text(
+            json.dumps({"timestamp": now, "latest_version": "9.9.9"}), encoding="utf-8"
+        )
+        with (
+            patch("wade.utils.update_check.CACHE_FILE", cache_file),
+            patch("wade.utils.update_check._fetch_latest_version", return_value="1.3.0"),
+        ):
+            check_for_update("1.0.0", force=True)
+            cached = _load_cache()
+
+        assert cached is not None
+        assert cached["latest_version"] == "1.3.0"
+
+
+# ---------------------------------------------------------------------------
+# _select_latest_non_yanked / _fetch_latest_version
+# ---------------------------------------------------------------------------
+
+
+class TestSelectLatestNonYanked:
+    def test_picks_highest_version(self) -> None:
+        releases = {
+            "1.0.0": [{"yanked": False}],
+            "1.2.0": [{"yanked": False}],
+            "1.1.0": [{"yanked": False}],
+        }
+        assert _select_latest_non_yanked(releases) == "1.2.0"
+
+    def test_skips_yanked_highest_version(self) -> None:
+        """A yanked highest version is not selected; the next-highest wins."""
+        releases = {
+            "1.0.0": [{"yanked": False}],
+            "1.2.0": [{"yanked": True}],
+            "1.1.0": [{"yanked": False}],
+        }
+        assert _select_latest_non_yanked(releases) == "1.1.0"
+
+    def test_all_yanked_returns_none(self) -> None:
+        releases = {
+            "1.0.0": [{"yanked": True}],
+            "1.1.0": [{"yanked": True}],
+        }
+        assert _select_latest_non_yanked(releases) is None
+
+    def test_release_with_no_files_is_skipped(self) -> None:
+        releases = {
+            "1.0.0": [{"yanked": False}],
+            "1.1.0": [],
+        }
+        assert _select_latest_non_yanked(releases) == "1.0.0"
+
+    def test_release_with_any_non_yanked_file_counts(self) -> None:
+        """A release is usable if at least one of its files isn't yanked."""
+        releases = {
+            "1.0.0": [{"yanked": True}, {"yanked": False}],
+        }
+        assert _select_latest_non_yanked(releases) == "1.0.0"
+
+    def test_empty_releases_returns_none(self) -> None:
+        assert _select_latest_non_yanked({}) is None
+
+
+class TestFetchLatestVersion:
+    def test_ignores_yanked_release_from_pypi(self) -> None:
+        """A yanked info.version is not treated as the latest — the fetcher
+        selects the highest non-yanked release instead."""
+        payload = json.dumps(
+            {
+                "info": {"version": "1.2.0"},
+                "releases": {
+                    "1.0.0": [{"yanked": False}],
+                    "1.2.0": [{"yanked": True}],
+                    "1.1.0": [{"yanked": False}],
+                },
+            }
+        ).encode("utf-8")
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = payload
+        mock_resp.__enter__.return_value = mock_resp
+        mock_resp.__exit__.return_value = False
+        with patch("wade.utils.update_check.urlopen", return_value=mock_resp):
+            result = _fetch_latest_version()
+
+        assert result == "1.1.0"
+
+    def test_returns_none_when_releases_missing(self) -> None:
+        payload = json.dumps({"info": {"version": "1.0.0"}}).encode("utf-8")
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = payload
+        mock_resp.__enter__.return_value = mock_resp
+        mock_resp.__exit__.return_value = False
+        with patch("wade.utils.update_check.urlopen", return_value=mock_resp):
+            result = _fetch_latest_version()
+
+        assert result is None
 
 
 # ---------------------------------------------------------------------------

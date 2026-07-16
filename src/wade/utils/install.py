@@ -106,6 +106,11 @@ def re_exec() -> None:
 
     Replaces the current process image so the newly installed code is loaded.
     Does not return.
+
+    Uses os.execv (not execve), so the replacement process inherits the
+    calling process's environment unchanged — callers rely on this to pass
+    state across the re-exec (e.g. init_service._maybe_self_upgrade sets
+    WADE_SELF_UPGRADE_FROM beforehand to guard against re-exec loops).
     """
     executable = sys.argv[0]
 

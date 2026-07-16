@@ -340,6 +340,18 @@ class TestReadTask:
         assert task.title == "Fix parser bug"
         assert task.state == TaskState.CLOSED
 
+    def test_reads_canonical_in_progress_state(self, config_factory) -> None:
+        content = "## #7 Busy task\n\n<!-- wade\nstate: in_progress\n-->\n\nbody\n"
+        provider = config_factory(content)
+        assert provider.read_task("7").state == TaskState.IN_PROGRESS
+
+    def test_accepts_hyphenated_in_progress_synonym(self, config_factory) -> None:
+        # A hand-edited file may use the natural hyphenated form. It must
+        # not silently downgrade to OPEN.
+        content = "## #7 Busy task\n\n<!-- wade\nstate: in-progress\n-->\n\nbody\n"
+        provider = config_factory(content)
+        assert provider.read_task("7").state == TaskState.IN_PROGRESS
+
     def test_raises_when_not_found(self, config_factory) -> None:
         provider = config_factory(SAMPLE_FILE)
         with pytest.raises(TaskNotFoundError):

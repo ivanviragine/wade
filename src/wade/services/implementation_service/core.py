@@ -1726,6 +1726,7 @@ def _merge_base(
     json_output: bool = False,
     abort_on_conflict: bool = False,
     session_type: str = "implementation",
+    already_fetched: bool = False,
 ) -> SyncResult:
     """Fetch, count commits behind, and merge base branch into current branch.
 
@@ -1744,6 +1745,9 @@ def _merge_base(
             path) so the worktree stays clean. When False (sync path), leave
             the merge in progress for the AI to resolve manually.
         session_type: Used in the conflict hint message.
+        already_fetched: Skip the fetch step — the caller already fetched
+            origin (e.g. for the autostash collision probe) and the local
+            ``origin/<main>`` ref is fresh enough for the merge.
 
     Returns:
         SyncResult with success/conflicts/commits_merged (events=[]).
@@ -1756,14 +1760,17 @@ def _merge_base(
         has_remote = False
 
     if has_remote:
-        try:
-            git_sync.fetch_origin(repo_root)
+        if already_fetched:
             merge_ref = f"origin/{resolved_main}"
-            if not json_output:
-                console.detail(f"Fetched latest from origin/{resolved_main}")
-        except GitError:
-            if not json_output:
-                console.warn("Fetch failed; using local main")
+        else:
+            try:
+                git_sync.fetch_origin(repo_root)
+                merge_ref = f"origin/{resolved_main}"
+                if not json_output:
+                    console.detail(f"Fetched latest from origin/{resolved_main}")
+            except GitError:
+                if not json_output:
+                    console.warn("Fetch failed; using local main")
 
     # Count commits behind
     try:
@@ -1884,6 +1891,7 @@ def sync(
     resolved_main = preflight.resolved_main
 
     stash_ref: str | None = None
+    already_fetched = False
 
     if preflight.dirty_category == _DirtyCategory.USER_DIRTY:
         if no_stash:
@@ -1900,6 +1908,7 @@ def sync(
             if has_remote:
                 git_sync.fetch_origin(repo_root)
                 merge_ref_for_probe = f"origin/{resolved_main}"
+                already_fetched = True
         except GitError:
             pass
 
@@ -1966,6 +1975,7 @@ def sync(
         json_output=json_output,
         abort_on_conflict=stash_ref is not None,
         session_type=session_type,
+        already_fetched=already_fetched,
     )
 
     if stash_ref is not None:
@@ -2033,6 +2043,7 @@ def catchup(
     resolved_main = preflight.resolved_main
 
     stash_ref: str | None = None
+    already_fetched = False
 
     if preflight.dirty_category == _DirtyCategory.USER_DIRTY:
         if no_stash:
@@ -2047,6 +2058,7 @@ def catchup(
             if git_repo.has_remote(repo_root):
                 git_sync.fetch_origin(repo_root)
                 merge_ref_for_probe = f"origin/{resolved_main}"
+                already_fetched = True
         except GitError:
             pass
 
@@ -2093,6 +2105,7 @@ def catchup(
         dry_run=dry_run,
         json_output=json_output,
         abort_on_conflict=True,
+        already_fetched=already_fetched,
     )
 
     stash_restored = True

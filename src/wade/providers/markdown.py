@@ -230,7 +230,9 @@ def _format_section(section: _Section) -> str:
 
 def _section_to_task(section: _Section) -> Task:
     """Convert a parsed _Section to a Task model."""
-    state_str = (section.meta.get("state") or "open").lower()
+    # Accept ``in-progress`` (dash) as a synonym for ``in_progress`` so a
+    # hand-edited file doesn't silently downgrade to OPEN.
+    state_str = (section.meta.get("state") or "open").lower().replace("-", "_")
     state = TaskState(state_str) if state_str in _VALID_STATES else TaskState.OPEN
 
     label_names = _split_labels(section.meta.get("labels", ""))
@@ -580,11 +582,11 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
         rejection, signing failure) is logged at WARNING and swallowed —
         the close itself already succeeded on disk.
         """
-        repo_root = self._path.parent
+        cwd = self._path.parent
         try:
             add = run(
                 ["git", "add", str(self._path)],
-                cwd=repo_root,
+                cwd=cwd,
                 check=False,
             )
             if add.returncode != 0:
@@ -596,7 +598,7 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
                 return
             commit = run(
                 ["git", "commit", "-m", f"chore: close #{task_id}"],
-                cwd=repo_root,
+                cwd=cwd,
                 check=False,
             )
             if commit.returncode != 0:

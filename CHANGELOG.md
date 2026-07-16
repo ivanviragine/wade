@@ -4,6 +4,48 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.30.2] — 2026-07-16
+
+### Bug Fixes
+
+- prevent infinite self-upgrade re-exec loop in `wade update` (#322) (1e7afc7)
+
+## [v0.30.1] — 2026-07-16
+
+### CI/CD
+
+- use GitHub App token for auto-version push (#319) (7045ef8)
+
+## [v0.30.0] — 2026-07-16
+
+### Features
+
+- add `stale` rating to knowledge entries (56f6f44)
+
+## [v0.29.9] — 2026-07-16
+
+### Bug Fixes
+
+- prevent auto-version workflow race condition on concurrent PR merges (2657e8c)
+
+## [v0.29.8] — 2026-07-16
+
+### Bug Fixes
+
+- accept 'in-progress' as a synonym for 'in_progress' in Markdown task state parsing (6d03639)
+
+## [v0.29.7] — 2026-07-16
+
+### Refactoring
+
+- refine auto-stash sync — skip redundant fetch, extend --no-stash to review session, drop dead stash helpers (45b5f49)
+
+## [v0.29.6] — 2026-07-16
+
+### Build
+
+- bump crossby to v0.3.1 (07be390)
+
 ## [v0.29.5] — 2026-07-15
 
 ### Bug Fixes
