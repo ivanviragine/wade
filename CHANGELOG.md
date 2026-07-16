@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.30.2] — 2026-07-16
+
+### Bug Fixes
+
+- prevent infinite self-upgrade re-exec loop in `wade update` (#322) (1e7afc7)
+
 ## [v0.30.1] — 2026-07-16
 
 ### CI/CD
