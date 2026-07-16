@@ -72,6 +72,7 @@ class EntryRating(BaseModel):
 
     up: int = 0
     down: int = 0
+    stale: int = 0
     superseded_by: str | None = None
 
 
@@ -317,19 +318,21 @@ def record_rating(
     entry_id: str,
     direction: str,
 ) -> None:
-    """Increment the up or down counter for an entry in the sidecar file.
+    """Increment the up, down, or stale counter for an entry in the sidecar file.
 
-    ``direction`` must be ``"up"`` or ``"down"``.
+    ``direction`` must be ``"up"``, ``"down"``, or ``"stale"``.
     """
-    if direction not in ("up", "down"):
-        raise ValueError(f"Invalid direction {direction!r}: must be 'up' or 'down'")
+    if direction not in ("up", "down", "stale"):
+        raise ValueError(f"Invalid direction {direction!r}: must be 'up', 'down', or 'stale'")
 
     def _modify(data: dict[str, EntryRating]) -> None:
         entry = data.setdefault(entry_id, EntryRating())
         if direction == "up":
             entry.up += 1
-        else:
+        elif direction == "down":
             entry.down += 1
+        else:
+            entry.stale += 1
 
     _read_modify_write_ratings(ratings_path, _modify)
 
@@ -454,11 +457,12 @@ def get_annotated_knowledge(
         entry_rating = ratings.get(entry.entry_id) if entry.entry_id else None
         up = entry_rating.up if entry_rating else 0
         down = entry_rating.down if entry_rating else 0
+        stale = entry_rating.stale if entry_rating else 0
         net_score = up - down
         total_votes = up + down
         should_annotate = entry.entry_id is not None
 
-        # Score filtering
+        # Score and stale filtering
         if not no_filter:
             if min_score is not None:
                 # Hard cutoff mode
@@ -470,6 +474,9 @@ def get_annotated_knowledge(
                 and total_votes >= 5
                 and net_score < auto_threshold
             ):
+                continue
+            # Stale threshold filter (independent of score filter)
+            if entry.entry_id is not None and stale >= 2:
                 continue
 
         # Search/tag filtering (OR semantics)
@@ -489,7 +496,8 @@ def get_annotated_knowledge(
         if heading_match and should_annotate:
             id_part = f"{entry.entry_id} | " if entry.entry_id else ""
             assert entry.date is not None  # entry_id is always accompanied by a date
-            heading = f"## {id_part}{entry.date} | {entry.heading_rest} [+{up}/-{down}]"
+            stale_part = f"/stale:{stale}" if stale > 0 else ""
+            heading = f"## {id_part}{entry.date} | {entry.heading_rest} [+{up}/-{down}{stale_part}]"
             raw_lines = entry.raw.split("\n")
             raw_lines[0] = heading
             result_parts.append("\n".join(raw_lines))

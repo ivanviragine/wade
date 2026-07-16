@@ -76,8 +76,9 @@ wade knowledge tag list <entry-id>   # tags for one entry
 **For each entry you open and evaluate, make an explicit decision per the decision tree below** — not per search call. A broad search returning many results does not force you to rate all of them; only entries you actually read and assessed require a decision. Rate up/down when appropriate; otherwise intentionally leave the entry unrated.
 
 ```bash
-wade knowledge rate <entry-id> up    # entry was useful
-wade knowledge rate <entry-id> down  # entry was outdated or misleading
+wade knowledge rate <entry-id> up     # entry was useful
+wade knowledge rate <entry-id> down   # entry is incorrect or misleading
+wade knowledge rate <entry-id> stale  # entry is outdated / no longer applies
 ```
 
 **How to decide:**
@@ -88,7 +89,8 @@ wade knowledge rate <entry-id> down  # entry was outdated or misleading
 2. Search was appropriate; entry came back legitimately:
    - **Useful for your task** → rate **up**.
    - **Correct content but not applicable to your task** → do **not** rate (entry is fine; refine future searches).
-   - **Content is outdated or incorrect** → rate **down**.
+   - **Outdated / no longer applies** → rate **stale**. Two stale votes hide the entry by default; `--no-filter` still shows it.
+   - **Incorrect or misleading** → rate **down**.
    - **Tags or terminology are wrong/missing (content itself is correct)** → do **not** rate down — fix tags via `wade knowledge tag add/remove <id> <tag>`. Downvoting good content for tag problems mis-signals the auto-pruner.
 
 3. **Entry surfaced due to a known parser/search bug** → do not rate; flag as a system issue.
@@ -125,7 +127,7 @@ Knowledge is **not a changelog** — it is a searchable store of facts, gotchas,
 - Content already in `AGENTS.md` or `CLAUDE.md`: anything that is documented there does not need a knowledge entry.
 - Anything reconstructable from `git log`, `git blame`, or reading the current source — if a future agent can find it in 10 seconds, it doesn't belong here.
 
-Entry dates (shown in search results) indicate freshness — rate an entry down if it no longer applies.
+Entry dates (shown in search results) indicate freshness — rate an entry stale if it no longer applies (two stale votes hide it by default; use `--no-filter` to still show it).
 
 ```bash
 echo "Your learnings here" | wade knowledge add --session <type> --issue <number> --tag <topic>
@@ -139,7 +141,8 @@ echo "Corrected info" | wade knowledge add --session <type> --supersedes <old-en
 ## Filtering
 
 By default, entries with enough negative votes are automatically pruned
-(statistical auto-filter). Override with:
+(statistical auto-filter), and entries with `stale >= 2` votes are hidden.
+Override with:
 
 - `--min-score N` — hard cutoff on net score (bypasses auto-filter)
-- `--no-filter` — show everything, no score filtering
+- `--no-filter` — show everything, bypasses both score filtering and stale filtering
