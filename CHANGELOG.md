@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.29.9] — 2026-07-16
+
+### Bug Fixes
+
+- prevent auto-version workflow race condition on concurrent PR merges (2657e8c)
+
 ## [v0.29.8] — 2026-07-16
 
 ### Bug Fixes
