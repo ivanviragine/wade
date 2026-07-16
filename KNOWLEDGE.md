@@ -113,3 +113,19 @@ and keep `bot_status` as a secondary input only.
 When a service does 'from datetime import UTC, datetime' and calls datetime.now(UTC), patch the module-level class reference (e.g. wade.services.review_service.datetime). Set mock_datetime.now.return_value = fixed_now. Avoid naming local variables 'now' as datetime when the same function later uses 'now = time.time()' (float) — mypy strict mode flags the type mismatch even across mutually-exclusive code paths (use a distinct name like 'settle_now').
 
 ---
+
+## 4863036c | 2026-07-16 | plan | tags: refactoring, testing, mocking, architecture
+
+When splitting a wade service module into submodules, moving a function to a new module breaks tests that patch its dependencies: the suite patches fully-qualified paths heavily (e.g. mock.patch("wade.services.implementation_service.core.git_sync"), ~200+ such sites), and mock.patch binds where a name is looked up. Repoint every moved function's patch targets to its new submodule. Also note: the implementation_service package re-exports via "from .sub import *", which does NOT re-export underscore-prefixed helpers — re-export those explicitly in __init__.py.
+
+---
+
+## a24d65b0 | 2026-07-16 | plan | tags: update, self-upgrade, gotcha
+
+`wade update` self-upgrade can infinitely re-exec. Three defects combine:
+(1) `utils/install._run_upgrade` treats package-manager exit code 0 as a successful upgrade — but `uv tool upgrade wade-cli` exits 0 for no-ops too (already up to date, or the target version is yanked/unavailable), so a no-op is reported as success;
+(2) `services/init_service._maybe_self_upgrade` calls `re_exec()` with no loop guard — after re-exec it re-runs the same check with no memory it just tried and no check that the version actually advanced;
+(3) `utils/update_check.check_for_update` trusts the 2-hour nag cache at `~/.local/share/wade/update-check.json`. A stale/yanked `latest_version` (observed: cache said 0.30.1 while 0.29.6 was installed and was repo HEAD) makes every re-exec take the identical upgrade path → infinite "wade upgraded — restarting..." loop for the whole cache TTL.
+Fix: add a re-exec breadcrumb env var (WADE_SELF_UPGRADE_FROM=<old version>) so a post-re-exec process detects the version did NOT advance and stops with a warning; force a cache-bypassing fresh PyPI check for the explicit self-upgrade path; and skip yanked releases when selecting the latest version.
+
+---

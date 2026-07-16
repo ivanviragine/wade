@@ -795,10 +795,31 @@ def _maybe_self_upgrade() -> bool:
     Checks PyPI first — only upgrades if a newer version is actually available.
     If upgrade is applied, calls re_exec() which replaces this process.
     Returns True if an upgrade was triggered, False if skipped or up to date.
+
+    Guards against an infinite re-exec loop: immediately before re-exec'ing,
+    the pre-upgrade version is recorded in WADE_SELF_UPGRADE_FROM, which
+    os.execv inherits into the replacement process. On entry, if that
+    breadcrumb is present this call is a post-re-exec retry, so it is always
+    cleared and the function returns False without attempting another
+    upgrade — regardless of whether the version actually advanced.
     """
     from wade import __version__
     from wade.utils.install import InstallMethod, detect_install_method, re_exec, self_upgrade
     from wade.utils.update_check import check_for_update
+
+    breadcrumb = os.environ.pop("WADE_SELF_UPGRADE_FROM", None)
+    if breadcrumb is not None:
+        if breadcrumb == __version__:
+            console.warn(
+                f"self-upgrade did not change the installed version ({__version__}); "
+                "the reported latest may be unavailable — continuing with "
+                f"{__version__}. Use --skip-self-upgrade to skip."
+            )
+        else:
+            logger.info(
+                "_maybe_self_upgrade.upgraded", from_version=breadcrumb, to_version=__version__
+            )
+        return False
 
     method = detect_install_method()
 
@@ -808,12 +829,13 @@ def _maybe_self_upgrade() -> bool:
 
     console.step("Checking for WADE updates...")
 
-    latest = check_for_update(__version__)
+    latest = check_for_update(__version__, force=True)
     if not latest:
         return False  # Already at the latest version
 
     if self_upgrade():
         console.success("wade upgraded — restarting...")
+        os.environ["WADE_SELF_UPGRADE_FROM"] = __version__
         re_exec()  # Does not return
         return True  # pragma: no cover
 
