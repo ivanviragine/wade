@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.29.7] — 2026-07-16
+
+### Refactoring
+
+- refine auto-stash sync — skip redundant fetch, extend --no-stash to review session, drop dead stash helpers (45b5f49)
+
 ## [v0.29.6] — 2026-07-16
 
 ### Build
