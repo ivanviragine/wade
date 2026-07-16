@@ -394,9 +394,35 @@ class TestRecordRating:
         assert data["a1b2c3d4"].up == 2
         assert data["a1b2c3d4"].down == 1
 
+    def test_records_stale(self, tmp_path: Path) -> None:
+        ratings_path = tmp_path / "KNOWLEDGE.ratings.yml"
+        record_rating(ratings_path, "a1b2c3d4", "stale")
+        data = read_ratings(ratings_path)
+        assert data["a1b2c3d4"].stale == 1
+        assert data["a1b2c3d4"].up == 0
+        assert data["a1b2c3d4"].down == 0
+
+    def test_stale_does_not_affect_net_score(self, tmp_path: Path) -> None:
+        ratings_path = tmp_path / "KNOWLEDGE.ratings.yml"
+        record_rating(ratings_path, "a1b2c3d4", "up")
+        record_rating(ratings_path, "a1b2c3d4", "stale")
+        record_rating(ratings_path, "a1b2c3d4", "stale")
+        data = read_ratings(ratings_path)
+        assert data["a1b2c3d4"].up == 1
+        assert data["a1b2c3d4"].down == 0
+        assert data["a1b2c3d4"].stale == 2
+        assert data["a1b2c3d4"].up - data["a1b2c3d4"].down == 1  # net score unaffected
+
+    def test_stale_increments_independently(self, tmp_path: Path) -> None:
+        ratings_path = tmp_path / "KNOWLEDGE.ratings.yml"
+        record_rating(ratings_path, "a1b2c3d4", "stale")
+        record_rating(ratings_path, "a1b2c3d4", "stale")
+        data = read_ratings(ratings_path)
+        assert data["a1b2c3d4"].stale == 2
+
     def test_rejects_invalid_direction(self, tmp_path: Path) -> None:
         ratings_path = tmp_path / "KNOWLEDGE.ratings.yml"
-        with pytest.raises(ValueError, match="must be 'up' or 'down'"):
+        with pytest.raises(ValueError, match="must be 'up', 'down', or 'stale'"):
             record_rating(ratings_path, "a1b2c3d4", "sideways")
 
     def test_multiple_entries(self, tmp_path: Path) -> None:
@@ -512,6 +538,75 @@ class TestGetAnnotatedKnowledge:
         assert result.content is not None
         assert "Old entry." in result.content
         assert "[+" not in result.content
+
+    def test_stale_annotation_shown_when_positive(
+        self, project_root: Path, config: KnowledgeConfig
+    ) -> None:
+        self._make_knowledge_file(project_root)
+        ratings_path = resolve_ratings_path(project_root / "KNOWLEDGE.md")
+        record_rating(ratings_path, "a1b2c3d4", "stale")
+
+        result = get_annotated_knowledge(project_root, config, no_filter=True)
+        assert result.content is not None
+        assert "[+0/-0/stale:1]" in result.content
+
+    def test_stale_annotation_not_shown_when_zero(
+        self, project_root: Path, config: KnowledgeConfig
+    ) -> None:
+        self._make_knowledge_file(project_root)
+        result = get_annotated_knowledge(project_root, config, no_filter=True)
+        assert result.content is not None
+        assert "stale:" not in result.content
+        assert "[+0/-0]" in result.content
+
+    def test_stale_filter_hides_entries_at_threshold(
+        self, project_root: Path, config: KnowledgeConfig
+    ) -> None:
+        self._make_knowledge_file(project_root)
+        ratings_path = resolve_ratings_path(project_root / "KNOWLEDGE.md")
+        record_rating(ratings_path, "a1b2c3d4", "stale")
+        record_rating(ratings_path, "a1b2c3d4", "stale")  # stale=2 → hidden
+
+        result = get_annotated_knowledge(project_root, config)
+        assert result.content is not None
+        assert "Useful content." not in result.content
+        assert "Outdated content." in result.content  # unaffected entry still shown
+
+    def test_stale_filter_shows_entries_below_threshold(
+        self, project_root: Path, config: KnowledgeConfig
+    ) -> None:
+        self._make_knowledge_file(project_root)
+        ratings_path = resolve_ratings_path(project_root / "KNOWLEDGE.md")
+        record_rating(ratings_path, "a1b2c3d4", "stale")  # stale=1 → not hidden
+
+        result = get_annotated_knowledge(project_root, config)
+        assert result.content is not None
+        assert "Useful content." in result.content
+
+    def test_no_filter_bypasses_stale_threshold(
+        self, project_root: Path, config: KnowledgeConfig
+    ) -> None:
+        self._make_knowledge_file(project_root)
+        ratings_path = resolve_ratings_path(project_root / "KNOWLEDGE.md")
+        for _ in range(5):
+            record_rating(ratings_path, "a1b2c3d4", "stale")
+
+        result = get_annotated_knowledge(project_root, config, no_filter=True)
+        assert result.content is not None
+        assert "Useful content." in result.content
+
+    def test_stale_filter_with_min_score_also_applies(
+        self, project_root: Path, config: KnowledgeConfig
+    ) -> None:
+        self._make_knowledge_file(project_root)
+        ratings_path = resolve_ratings_path(project_root / "KNOWLEDGE.md")
+        record_rating(ratings_path, "a1b2c3d4", "up")
+        record_rating(ratings_path, "a1b2c3d4", "stale")
+        record_rating(ratings_path, "a1b2c3d4", "stale")  # stale=2 → hidden even with min_score
+
+        result = get_annotated_knowledge(project_root, config, min_score=0)
+        assert result.content is not None
+        assert "Useful content." not in result.content
 
 
 class TestBackwardCompatibility:

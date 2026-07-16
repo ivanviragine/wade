@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: auto-version-bump
+  cancel-in-progress: false
+
 jobs:
   version-bump:
     # Only run when the PR was actually merged
@@ -38,9 +42,18 @@ jobs:
         if: steps.detect.outputs.bump == ''
         run: echo "No conventional commit prefix detected — skipping version bump."
 
+      - name: Generate app token
+        if: steps.detect.outputs.bump != ''
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@v4
         if: steps.detect.outputs.bump != ''
         with:
+          token: ${{ steps.app-token.outputs.token }}
           fetch-depth: 0
 
       - uses: astral-sh/setup-uv@v3
@@ -69,5 +82,14 @@ jobs:
       - name: Push commit and tag
         if: steps.detect.outputs.bump != ''
         run: |
-          git push
-          git push --tags
+          # Pull any commits that landed since checkout (e.g. from a
+          # concurrent version-bump that finished first), then retry push.
+          for attempt in 1 2 3; do
+            git pull --rebase origin main && git push && git push --tags && exit 0
+            if [ "$attempt" -lt 3 ]; then
+              echo "Push attempt $attempt failed, retrying in $((attempt * 2))s..."
+              sleep $((attempt * 2))
+            fi
+          done
+          echo "All push attempts failed"
+          exit 1
