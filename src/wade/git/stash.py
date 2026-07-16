@@ -7,20 +7,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
-from pydantic import BaseModel
 
 from wade.git.repo import GitError, _run_git
 
 log = structlog.get_logger(__name__)
 
 AUTOSTASH_PREFIX = "wade-autostash"
-
-
-class AutoStashEntry(BaseModel):
-    """A single wade autostash entry from the git stash list."""
-
-    ref: str
-    message: str
 
 
 def _stash_message(session_type: str, branch: str) -> str:
@@ -80,34 +72,6 @@ def _find_stash_ref(message: str, cwd: Path) -> str | None:
 def pop_stash(stash_ref: str, cwd: Path) -> subprocess.CompletedProcess[str]:
     """Apply and remove *stash_ref*. Returns CompletedProcess (never raises)."""
     return _run_git("stash", "pop", stash_ref, cwd=cwd, check=False)
-
-
-def apply_stash(stash_ref: str, cwd: Path) -> subprocess.CompletedProcess[str]:
-    """Apply *stash_ref* without removing it. Returns CompletedProcess."""
-    return _run_git("stash", "apply", stash_ref, cwd=cwd, check=False)
-
-
-def drop_stash(stash_ref: str, cwd: Path) -> subprocess.CompletedProcess[str]:
-    """Remove *stash_ref* from the stash list. Returns CompletedProcess."""
-    return _run_git("stash", "drop", stash_ref, cwd=cwd, check=False)
-
-
-def list_wade_autostashes(cwd: Path) -> list[AutoStashEntry]:
-    """Return all wade autostash entries."""
-    result = _run_git("stash", "list", "--format=%gd %gs", cwd=cwd, check=False)
-    if result.returncode != 0:
-        return []
-    entries: list[AutoStashEntry] = []
-    for line in result.stdout.splitlines():
-        if not line.strip():
-            continue
-        parts = line.split(" ", 1)
-        if len(parts) < 2:
-            continue
-        ref, subject = parts[0], parts[1]
-        if AUTOSTASH_PREFIX in subject:
-            entries.append(AutoStashEntry(ref=ref, message=subject))
-    return entries
 
 
 def detect_untracked_collisions(cwd: Path, merge_ref: str) -> list[str]:
