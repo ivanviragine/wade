@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.29.6] — 2026-07-16
+
+### Build
+
+- bump crossby to v0.3.1 (07be390)
+
 ## [v0.29.5] — 2026-07-15
 
 ### Bug Fixes
