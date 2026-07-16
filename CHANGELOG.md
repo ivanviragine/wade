@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.30.0] — 2026-07-16
+
+### Features
+
+- add `stale` rating to knowledge entries (56f6f44)
+
 ## [v0.29.9] — 2026-07-16
 
 ### Bug Fixes
