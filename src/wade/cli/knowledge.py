@@ -155,9 +155,9 @@ def get(
 @knowledge_app.command()
 def rate(
     entry_id: str = typer.Argument(help="Entry ID to rate."),
-    direction: str = typer.Argument(help="Rating direction: up or down."),
+    direction: str = typer.Argument(help="Rating direction: up, down, or stale."),
 ) -> None:
-    """Rate a knowledge entry (thumbs up or down)."""
+    """Rate a knowledge entry (up, down, or stale)."""
     from pathlib import Path
 
     from wade.config.loader import load_config
