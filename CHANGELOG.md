@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.31.2] — 2026-07-17
+
+### Refactoring
+
+- convert init_service.py into a package of focused modules (#325) (25d19ef)
+
 ## [v0.31.1] — 2026-07-17
 
 ### Bug Fixes
