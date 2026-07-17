@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from wade.utils.install import (
@@ -54,6 +55,50 @@ class TestDetectInstallMethod:
         with patch("wade.utils.install.sys") as mock_sys:
             mock_sys.executable = "/usr/local/bin/python3"
             assert detect_install_method() == InstallMethod.UNKNOWN
+
+    def test_detects_editable_uv_tool(self, tmp_path: Path) -> None:
+        """A uv-tool env installed with --editable → EDITABLE, not UV_TOOL.
+
+        `uv tool upgrade` is a no-op against an editable install, so it must
+        be treated like a dev checkout and skipped by self-upgrade.
+        """
+        tool_dir = tmp_path / ".local" / "share" / "uv" / "tools" / "wade-cli"
+        (tool_dir / "bin").mkdir(parents=True)
+        exe = tool_dir / "bin" / "python3"
+        exe.touch()
+        receipt = (
+            "[tool]\n"
+            'requirements = [{ name = "wade-cli", editable = "/Users/user/workspace/wade" }]\n'
+            "entrypoints = []\n"
+        )
+        _ = (tool_dir / "uv-receipt.toml").write_text(receipt)
+
+        with patch("wade.utils.install.sys") as mock_sys:
+            mock_sys.executable = str(exe)
+            assert detect_install_method() == InstallMethod.EDITABLE
+
+    def test_detects_non_editable_uv_tool(self, tmp_path: Path) -> None:
+        """A normal (non-editable) uv-tool env with a receipt still → UV_TOOL."""
+        tool_dir = tmp_path / ".local" / "share" / "uv" / "tools" / "wade-cli"
+        (tool_dir / "bin").mkdir(parents=True)
+        exe = tool_dir / "bin" / "python3"
+        exe.touch()
+        receipt = (
+            "[tool]\n"
+            'requirements = [{ name = "wade-cli", specifier = "==0.30.2" }]\n'
+            "entrypoints = []\n"
+        )
+        _ = (tool_dir / "uv-receipt.toml").write_text(receipt)
+
+        with patch("wade.utils.install.sys") as mock_sys:
+            mock_sys.executable = str(exe)
+            assert detect_install_method() == InstallMethod.UV_TOOL
+
+    def test_uv_tool_without_receipt_defaults_to_uv_tool(self) -> None:
+        """No uv-receipt.toml on disk (e.g. mocked path) → falls back to UV_TOOL."""
+        with patch("wade.utils.install.sys") as mock_sys:
+            mock_sys.executable = "/home/user/.local/share/uv/tools/wade-cli/bin/python"
+            assert detect_install_method() == InstallMethod.UV_TOOL
 
 
 # ---------------------------------------------------------------------------
