@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.31.0] — 2026-07-17
+
+### Features
+
+- modularize implementation_service/core.py into focused submodules (#315) (97c5767)
+
 ## [v0.30.3] — 2026-07-17
 
 ### Bug Fixes
