@@ -1,3 +1,7 @@
+0bad70f3:
+  down: 0
+  stale: 0
+  up: 1
 164c355e:
   down: 0
   stale: 0
@@ -17,7 +21,7 @@
 4863036c:
   down: 0
   stale: 0
-  up: 1
+  up: 2
 54326c98:
   down: 1
   stale: 0
@@ -25,6 +29,7 @@
 a24d65b0:
   down: 0
   stale: 0
+  superseded_by: c71d1a70
   up: 1
 b61e247e:
   down: 0
@@ -41,6 +46,10 @@ cc91cd11:
   up: 3
 cedeaad0:
   down: 1
+  stale: 0
+  up: 1
+d65003eb:
+  down: 0
   stale: 0
   up: 1
 e2a49ac1:
