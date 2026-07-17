@@ -330,12 +330,14 @@ def _done_via_pr(
         else:
             updated_body = updated_body.rstrip("\n") + "\n"
 
-        if git_pr.update_pr_body(repo_root, pr_number, updated_body):
-            console.success("PR body updated with summary.")
+        if not git_pr.update_pr_body(repo_root, pr_number, updated_body):
+            console.error("Could not update the PR body.")
+            return False
+        console.success("PR body updated with summary.")
 
-        # Mark draft as ready
+        # Mark draft as ready — but only if the caller did not request a draft.
         is_draft = existing_pr.get("isDraft", False)
-        if is_draft:
+        if is_draft and not draft:
             if git_pr.mark_pr_ready(repo_root, pr_number):
                 console.success("PR marked as ready for review.")
             else:
@@ -427,6 +429,10 @@ def _done_via_direct(
         git_repo.push_branch(repo_root, main_branch)
         console.success("Merged and pushed.")
     except GitError as e:
+        # A conflict from merge_no_edit leaves the main checkout mid-merge with a
+        # conflicted index — abort so it is not left in a broken state.
+        with contextlib.suppress(GitError):
+            git_sync.abort_merge(repo_root)
         console.error(f"Direct merge failed: {e}")
         return False
 
@@ -445,12 +451,20 @@ def _done_via_direct(
     # Cleanup worktree (unless --no-cleanup)
     if not no_cleanup:
         console.step("Cleaning up worktree...")
-        try:
+
+        def _do_cleanup() -> None:
+            # _cleanup_worktree returns False (without raising) when worktree
+            # removal fails — treat that like an exception so the retry/skip
+            # handler runs and success is only reported on confirmed removal.
             if worktree_path:
-                _cleanup_worktree(repo_root, worktree_path, main_branch)
+                if not _cleanup_worktree(repo_root, worktree_path, main_branch):
+                    raise RuntimeError("worktree removal did not complete")
             else:
                 git_branch.delete_branch(repo_root, branch, force=True)
                 git_worktree.prune_worktrees(repo_root)
+
+        try:
+            _do_cleanup()
             console.success("Worktree cleaned up.")
         except Exception as e:
             choice = prompts.select(
@@ -459,11 +473,7 @@ def _done_via_direct(
             )
             if choice == 0:  # Retry
                 try:
-                    if worktree_path:
-                        _cleanup_worktree(repo_root, worktree_path, main_branch)
-                    else:
-                        git_branch.delete_branch(repo_root, branch, force=True)
-                        git_worktree.prune_worktrees(repo_root)
+                    _do_cleanup()
                     console.success("Worktree cleaned up.")
                 except Exception:
                     logger.warning("worktree.cleanup_skipped", reason="retry_failed", exc_info=True)

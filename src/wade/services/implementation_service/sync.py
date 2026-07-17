@@ -365,8 +365,15 @@ def _merge_base(
     # Count commits behind
     try:
         behind = git_branch.commits_ahead(repo_root, merge_ref, current)
-    except GitError:
-        behind = 0
+    except GitError as exc:
+        # Never report an unverified comparison as UP_TO_DATE — surface the
+        # failure so the caller does not treat the sync as successful.
+        emit(SyncEventType.ERROR, reason="behind_count_failed", details=str(exc))
+        return SyncResult(
+            success=False,
+            current_branch=current,
+            main_branch=resolved_main,
+        )
 
     if behind == 0:
         emit(SyncEventType.UP_TO_DATE, branch=current, main=resolved_main)

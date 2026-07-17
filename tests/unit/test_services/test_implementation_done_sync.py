@@ -404,6 +404,14 @@ class TestExistingPrBodyUpdate:
         assert "Closes #42" in result
         assert "Implements #42" not in result
 
+    def test_closes_downgraded_to_implements_with_no_close(self) -> None:
+        """--no-close must strip an existing 'Closes #42' so the merge does not
+        auto-close the issue."""
+        body = "Closes #42\n\n## Tasks\n- Login\n"
+        result = _apply_pr_refs(body, "42", close_issue=False, parent_issue=None)
+        assert "Closes #42" not in result
+        assert "Implements #42" in result
+
 
 # ---------------------------------------------------------------------------
 # Sync tests (unit level — mocked git)
@@ -469,6 +477,39 @@ class TestSync:
             result = sync(project_root=tmp_git_repo)
             assert result.success
             assert any(e.event == "up_to_date" for e in result.events)
+
+    def test_commits_ahead_failure_fails_sync(self, tmp_git_repo: Path) -> None:
+        """A GitError while counting commits behind must fail the sync, never
+        report UP_TO_DATE."""
+        import subprocess
+
+        from wade.services.implementation_service import sync
+
+        subprocess.run(
+            ["git", "checkout", "-b", "feat/42-test"],
+            cwd=tmp_git_repo,
+            capture_output=True,
+            check=True,
+        )
+
+        with (
+            patch(
+                "wade.services.implementation_service.sync.load_config",
+                return_value=ProjectConfig(project=ProjectSettings(main_branch="main")),
+            ),
+            patch(
+                "wade.services.implementation_service.sync.git_branch.commits_ahead",
+                side_effect=GitError("bad rev"),
+            ),
+        ):
+            result = sync(project_root=tmp_git_repo)
+            assert not result.success
+            assert not any(e.event == "up_to_date" for e in result.events)
+            assert any(
+                e.data.get("reason") == "behind_count_failed"
+                for e in result.events
+                if e.event == "error"
+            )
 
     def test_dry_run(self, tmp_git_repo: Path) -> None:
         """Dry run mode reports commits behind without merging."""

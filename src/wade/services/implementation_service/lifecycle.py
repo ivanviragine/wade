@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import re
+import shutil
 import webbrowser
 from pathlib import Path
 
@@ -111,8 +112,10 @@ def _pull_main_after_merge(repo_root: Path) -> None:
     installed by ``wade init`` as untracked files in the repo root. When the PR
     being merged introduced those same files as tracked, a plain ``git pull``
     aborts with "untracked files would be overwritten". This helper detects that
-    condition, removes the conflicting untracked files (they will be replaced by
-    the tracked versions from the merge), and retries the pull.
+    condition, backs up the conflicting untracked files into ``.wade/pull-backups``
+    (never deleting them, since git reports arbitrary untracked collisions here —
+    not only wade-managed files), then retries the pull so the tracked versions
+    take their place.
 
     Also handles local modifications to tracked files (e.g. ``wade init``
     modifying ``.gitignore``) by stashing, pulling, and popping the stash.
@@ -121,12 +124,29 @@ def _pull_main_after_merge(repo_root: Path) -> None:
     if result.returncode == 0:
         return
     if "untracked working tree files would be overwritten by merge" in result.stderr:
+        # NEVER delete the colliding files — git reports every untracked
+        # collision here, not just wade-managed ones, so unlinking could destroy
+        # user data. Move each aside into a backup dir before retrying the pull.
+        backup_root = repo_root / ".wade" / "pull-backups"
+        backed_up: list[Path] = []
         for rel_path in _parse_overwrite_paths(result.stderr):
             target = repo_root / rel_path
-            target.unlink(missing_ok=True)
-            with contextlib.suppress(Exception):
+            if not target.exists():
+                continue
+            dest = backup_root / rel_path
+            try:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(target), str(dest))
+                backed_up.append(dest)
+            except OSError:
+                logger.warning("pull.backup_untracked_failed", path=str(target), exc_info=True)
+            with contextlib.suppress(OSError):
                 target.parent.rmdir()
         retry = git_repo.pull_ff_only(repo_root)
+        if backed_up:
+            console.warn("Backed up untracked files that collided with the merge:")
+            for dest in backed_up:
+                console.detail(str(dest))
         if retry.returncode != 0:
             _warn_pull_sync_failed()
     elif "Your local changes to the following files would be overwritten" in result.stderr:
@@ -136,7 +156,10 @@ def _pull_main_after_merge(repo_root: Path) -> None:
             _warn_pull_sync_failed()
             return
         retry = git_repo.pull_ff_only(repo_root)
-        git_repo.stash_pop(repo_root)  # best-effort restore; failure leaves stash intact
+        pop_result = git_repo.stash_pop(repo_root)
+        if pop_result.returncode != 0:
+            console.warn("Could not restore stashed local changes.")
+            console.hint("Resolve conflicts, then inspect `git stash list`.")
         if retry.returncode != 0:
             _warn_pull_sync_failed()
     else:
@@ -256,11 +279,17 @@ def _merge_pr(
     if worktree_path:
         _preserve_session_data(repo_root, worktree_path)
         console.step(f"Removing worktree: {worktree_path.name}")
-        with contextlib.suppress(Exception):
+        try:
             git_worktree.remove_worktree(repo_root, worktree_path)
-        with contextlib.suppress(Exception):
-            git_worktree.prune_worktrees(repo_root)
-        console.success(f"Removed {worktree_path.name}")
+        except Exception as e:
+            # The PR is already merged — do not fail the lifecycle, but report
+            # the leftover worktree accurately instead of claiming success.
+            console.warn(f"Could not remove worktree {worktree_path.name}: {e}")
+            console.hint(f"Remove it manually with: git worktree remove {worktree_path}")
+        else:
+            with contextlib.suppress(Exception):
+                git_worktree.prune_worktrees(repo_root)
+            console.success(f"Removed {worktree_path.name}")
 
     _pull_main_after_merge(repo_root)
 
@@ -280,7 +309,15 @@ def _post_implementation_lifecycle_direct(
     provider: AbstractTaskProvider,
 ) -> MergeStatus:
     """Run the direct-merge post-implementation lifecycle."""
-    main_branch = config.project.main_branch or "main"
+    main_branch = config.project.main_branch
+    if not main_branch:
+        # Detect the repo's real default branch (master/trunk/...) instead of
+        # assuming "main", matching sync(), done(), and cleanup.remove().
+        try:
+            main_branch = git_repo.detect_main_branch(repo_root)
+        except GitError:
+            console.warn("Could not detect the main branch.")
+            return MergeStatus.MERGE_FAILED
     try:
         ahead = git_branch.commits_ahead(repo_root, branch, main_branch)
     except GitError:
@@ -380,6 +417,15 @@ def _apply_pr_refs(
                 flags=re.MULTILINE,
             )
             updated = f"Closes #{issue_number}\n\n" + updated.lstrip("\n")
+    else:
+        # --no-close: downgrade any existing "Closes #N" to "Implements #N" so
+        # merging the PR does not auto-close the issue against the caller's intent.
+        updated = re.sub(
+            rf"^Closes\s+#{re.escape(issue_number)}\b",
+            f"Implements #{issue_number}",
+            updated,
+            flags=re.MULTILINE,
+        )
 
     # Add "Part of #parent" if detected and not already present
     if parent_issue:

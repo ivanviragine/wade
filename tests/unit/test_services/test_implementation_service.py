@@ -1239,8 +1239,9 @@ class TestParseOverwritePaths:
 
 
 class TestPullMainAfterMerge:
-    def test_untracked_triggers_cleanup_and_retry(self, tmp_path: Path) -> None:
-        """Untracked-files error triggers file deletion and pull retry."""
+    def test_untracked_backed_up_then_retry(self, tmp_path: Path) -> None:
+        """Untracked-files error moves colliding files to a backup dir (never
+        deletes them) and retries the pull."""
         # Create the files that would be "untracked"
         settings = tmp_path / ".claude" / "settings.json"
         settings.parent.mkdir(parents=True)
@@ -1257,8 +1258,13 @@ class TestPullMainAfterMerge:
         ):
             _pull_main_after_merge(tmp_path)
 
+        # Original locations are cleared so the pull can proceed...
         assert not settings.exists()
         assert not managed.exists()
+        # ...but the files are preserved in the backup dir, never destroyed.
+        backup_root = tmp_path / ".wade" / "pull-backups"
+        assert (backup_root / ".claude" / "settings.json").read_text() == "{}"
+        assert (backup_root / ".wade-managed").read_text() == "# managed"
 
     def test_local_changes_triggers_stash_and_retry(self, tmp_path: Path) -> None:
         """Tracked-files error triggers stash, pull retry, then stash pop."""
@@ -1339,6 +1345,35 @@ class TestPullMainAfterMerge:
         ):
             _pull_main_after_merge(tmp_path)
 
+        mock_pop.assert_called_once_with(tmp_path)
+        mock_console.warn.assert_called_once()
+        mock_console.hint.assert_called_once()
+
+    def test_local_changes_stash_pop_failure_warns(self, tmp_path: Path) -> None:
+        """When stash pop fails after a successful pull, warns with a recovery hint."""
+        fail_result = MagicMock(returncode=1, stderr=LOCAL_CHANGES_STDERR)
+        stash_ok = MagicMock(returncode=0)
+        pull_ok = MagicMock(returncode=0, stderr="")
+        pop_fail = MagicMock(returncode=1)
+
+        with (
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.pull_ff_only",
+                side_effect=[fail_result, pull_ok],
+            ),
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.stash",
+                return_value=stash_ok,
+            ),
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.stash_pop",
+                return_value=pop_fail,
+            ) as mock_pop,
+            patch("wade.services.implementation_service.lifecycle.console") as mock_console,
+        ):
+            _pull_main_after_merge(tmp_path)
+
+        # Pull succeeded, so the only warning comes from the failed stash pop.
         mock_pop.assert_called_once_with(tmp_path)
         mock_console.warn.assert_called_once()
         mock_console.hint.assert_called_once()

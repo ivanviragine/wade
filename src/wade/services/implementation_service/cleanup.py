@@ -18,6 +18,7 @@ from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
 from wade.models.session import WorktreeState
 from wade.models.task import Task
+from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.implementation_service._shared import (
     extract_issue_from_branch,
@@ -189,7 +190,7 @@ def remove(
             main_branch = "main"
 
     if stale:
-        return _remove_stale(repo_root, main_branch, force)
+        return _remove_stale(repo_root, main_branch, force, get_provider(config))
 
     if target:
         return _remove_target(repo_root, target, main_branch, force)
@@ -211,7 +212,12 @@ def _remove_target(repo_root: Path, target: str, main_branch: str, force: bool =
     return _cleanup_worktree(repo_root, wt_path, main_branch)
 
 
-def _remove_stale(repo_root: Path, main_branch: str, force: bool) -> bool:
+def _remove_stale(
+    repo_root: Path,
+    main_branch: str,
+    force: bool,
+    provider: AbstractTaskProvider,
+) -> bool:
     """Remove all stale worktrees."""
     worktrees = git_worktree.list_worktrees(repo_root)
     stale_wts: list[dict[str, Any]] = []
@@ -224,11 +230,36 @@ def _remove_stale(repo_root: Path, main_branch: str, force: bool) -> bool:
         wt_path = wt.get("path", "")
         issue_number = extract_issue_from_branch(wt_branch)
 
+        # Look up the issue exactly as list_sessions() does so classify_staleness
+        # can honor its fail-safe contract: an open issue is never STALE_EMPTY.
+        # Without the provider, an open issue with zero commits would be
+        # misclassified STALE_EMPTY and deleted by --force.
+        task_info: Task | None = None
+        task_lookup_attempted = False
+        task_lookup_failed = False
+        if issue_number:
+            task_lookup_attempted = True
+            try:
+                task_info = provider.read_task_or_none(issue_number)
+            except Exception:
+                logger.debug(
+                    "implementation.remove_stale_issue_read_failed",
+                    issue=issue_number,
+                    branch=wt_branch,
+                    exc_info=True,
+                )
+                task_info = None
+                task_lookup_failed = True
+
         staleness = classify_staleness(
             repo_root=repo_root,
             branch=wt_branch,
             main_branch=main_branch,
             issue_number=issue_number,
+            provider=provider,
+            task=task_info,
+            task_lookup_attempted=task_lookup_attempted,
+            task_lookup_failed=task_lookup_failed,
         )
 
         if staleness != WorktreeState.ACTIVE:
