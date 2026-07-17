@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from wade.models.config import ProjectConfig, ProjectSettings
 from wade.models.session import WorktreeState
@@ -204,10 +204,18 @@ class TestImplementationLifecycle:
         create_worktree(tmp_git_repo, "feat/42-auth", wt1, "main")
         create_worktree(tmp_git_repo, "feat/43-db", wt2, "main")
 
-        with patch(
-            "wade.services.implementation_service.cleanup.load_config",
-            return_value=ProjectConfig(
-                project=ProjectSettings(main_branch="main"),
+        provider = MagicMock()
+        provider.read_task_or_none.return_value = None
+
+        with (
+            patch(
+                "wade.services.implementation_service.cleanup.load_config",
+                return_value=ProjectConfig(
+                    project=ProjectSettings(main_branch="main"),
+                ),
+            ),
+            patch(
+                "wade.services.implementation_service.cleanup.get_provider", return_value=provider
             ),
         ):
             # List should show both
