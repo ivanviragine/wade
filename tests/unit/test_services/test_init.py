@@ -337,7 +337,7 @@ class TestInit:
         assert config["project"]["main_branch"] == "main"
 
     @patch(
-        "wade.services.init_service._prompt_knowledge_setup",
+        "wade.services.init_service.commands._prompt_knowledge_setup",
         return_value={"enabled": True, "path": "docs/KNOWLEDGE.md"},
     )
     def test_init_with_knowledge_enabled_creates_file_and_config(
@@ -355,7 +355,7 @@ class TestInit:
         assert knowledge_path.read_text(encoding="utf-8").startswith("# Project Knowledge")
 
     @patch(
-        "wade.services.init_service._prompt_knowledge_setup",
+        "wade.services.init_service.commands._prompt_knowledge_setup",
         return_value={"enabled": True, "path": "../KNOWLEDGE.md"},
     )
     def test_init_rejects_invalid_knowledge_path_before_writing_config(
@@ -381,26 +381,26 @@ class TestSelectAITool:
         with pytest.raises(ValueError, match="Unknown AI tool"):
             _select_ai_tool("unknown-tool", non_interactive=False)
 
-    @patch("wade.services.init_service.AbstractAITool.detect_installed")
+    @patch("wade.services.init_service.prompts_ai.AbstractAITool.detect_installed")
     def test_no_tools_returns_none(self, mock_detect: MagicMock) -> None:
         mock_detect.return_value = []
         result = _select_ai_tool(None, non_interactive=False)
         assert result is None
 
-    @patch("wade.services.init_service.AbstractAITool.detect_installed")
+    @patch("wade.services.init_service.prompts_ai.AbstractAITool.detect_installed")
     def test_single_tool_auto_selects(self, mock_detect: MagicMock) -> None:
         mock_detect.return_value = [AIToolID.CLAUDE]
         result = _select_ai_tool(None, non_interactive=False)
         assert result == "claude"
 
-    @patch("wade.services.init_service.AbstractAITool.detect_installed")
+    @patch("wade.services.init_service.prompts_ai.AbstractAITool.detect_installed")
     def test_multiple_tools_non_interactive_selects_first(self, mock_detect: MagicMock) -> None:
         mock_detect.return_value = [AIToolID.CLAUDE, AIToolID.COPILOT]
         result = _select_ai_tool(None, non_interactive=True)
         assert result == "claude"
 
     @patch("wade.ui.prompts.select")
-    @patch("wade.services.init_service.AbstractAITool.detect_installed")
+    @patch("wade.services.init_service.prompts_ai.AbstractAITool.detect_installed")
     def test_multiple_tools_interactive_selects_chosen(
         self, mock_detect: MagicMock, mock_select: MagicMock
     ) -> None:
@@ -410,7 +410,7 @@ class TestSelectAITool:
         assert result == "copilot"
 
     @patch("wade.ui.prompts.select")
-    @patch("wade.services.init_service.AbstractAITool.detect_installed")
+    @patch("wade.services.init_service.prompts_ai.AbstractAITool.detect_installed")
     def test_multiple_tools_skip_returns_none(
         self, mock_detect: MagicMock, mock_select: MagicMock
     ) -> None:
@@ -586,7 +586,7 @@ class TestPromptCommandOverrides:
         )
         assert batch_mode_call.kwargs["default"] == 2
 
-    @patch("wade.services.init_service._suggest_model_for_tool")
+    @patch("wade.services.init_service.prompts_setup._suggest_model_for_tool")
     @patch("wade.ui.prompts.select")
     def test_interactive_with_tool_override(
         self, mock_select: MagicMock, mock_suggest: MagicMock
@@ -607,9 +607,9 @@ class TestPromptCommandOverrides:
         assert result["review_implementation"] == {"enabled": "true", "mode": "prompt"}
         assert result["review_batch"] == {"enabled": "true", "mode": "prompt"}
 
-    @patch("wade.services.init_service.AbstractAITool.get")
-    @patch("wade.services.init_service._collect_model_options")
-    @patch("wade.services.init_service._suggest_model_for_tool")
+    @patch("wade.services.init_service.prompts_setup.AbstractAITool.get")
+    @patch("wade.services.init_service.prompts_setup._collect_model_options")
+    @patch("wade.services.init_service.prompts_setup._suggest_model_for_tool")
     @patch("wade.ui.prompts.select")
     def test_review_headless_mode_prompts_tool_and_model(
         self,
@@ -716,9 +716,9 @@ class TestPromptCommandOverrides:
         yolo_count = sum(1 for p in prompts_asked if "YOLO" in p)
         assert yolo_count == 2  # plan asks yolo; interactive deps also asks yolo
 
-    @patch("wade.services.init_service.AbstractAITool.get")
-    @patch("wade.services.init_service._collect_model_options")
-    @patch("wade.services.init_service._suggest_model_for_tool")
+    @patch("wade.services.init_service.prompts_setup.AbstractAITool.get")
+    @patch("wade.services.init_service.prompts_setup._collect_model_options")
+    @patch("wade.services.init_service.prompts_setup._suggest_model_for_tool")
     @patch("wade.ui.prompts.select")
     def test_wizard_skips_yolo_for_headless_review(
         self,
@@ -1377,7 +1377,7 @@ class TestUpdateExtended:
     def test_update_does_not_configure_allowlist_on_main(self, tmp_git_repo: Path) -> None:
         """update() must NOT write project-level allowlist to main — only worktrees get it."""
         with patch(
-            "wade.services.init_service.AbstractAITool.detect_installed",
+            "wade.services.init_service.commands.AbstractAITool.detect_installed",
             return_value=[AIToolID.CLAUDE],
         ):
             init(project_root=tmp_git_repo, non_interactive=True)
@@ -1419,7 +1419,7 @@ class TestUpdateExtended:
         """skip_self_upgrade=True should not call _maybe_self_upgrade."""
         init(project_root=tmp_git_repo, non_interactive=True)
 
-        with patch("wade.services.init_service._maybe_self_upgrade") as mock_upgrade:
+        with patch("wade.services.init_service.commands._maybe_self_upgrade") as mock_upgrade:
             update(project_root=tmp_git_repo, skip_self_upgrade=True)
             mock_upgrade.assert_not_called()
 
@@ -1457,7 +1457,7 @@ class TestMaybeSelfUpgrade:
 
         with (
             patch("wade.utils.install.detect_install_method") as mock_detect,
-            patch("wade.services.init_service.console") as mock_console,
+            patch("wade.services.init_service.commands.console") as mock_console,
         ):
             result = _maybe_self_upgrade()
 
@@ -1472,7 +1472,7 @@ class TestMaybeSelfUpgrade:
 
         with (
             patch("wade.utils.install.detect_install_method") as mock_detect,
-            patch("wade.services.init_service.console") as mock_console,
+            patch("wade.services.init_service.commands.console") as mock_console,
         ):
             result = _maybe_self_upgrade()
 
@@ -1651,7 +1651,7 @@ class TestPatchConfigHooks:
         config = yaml.safe_load((tmp_git_repo / ".wade.yml").read_text())
         assert config["version"] == 2
 
-    @patch("wade.services.init_service._prompt_knowledge_setup")
+    @patch("wade.services.init_service.commands._prompt_knowledge_setup")
     def test_init_knowledge_nested_path_adds_correct_ratings_to_copy(
         self,
         mock_knowledge_setup: MagicMock,
@@ -1796,7 +1796,7 @@ class TestPromptProviderSetup:
         result = _prompt_provider_setup(tmp_path, non_interactive=True)
         assert result == {"name": "github"}
 
-    @patch("wade.services.init_service._check_gh_auth", return_value=True)
+    @patch("wade.services.init_service.prompts_setup._check_gh_auth", return_value=True)
     @patch("wade.ui.prompts.select", return_value=0)
     def test_github_already_authed(
         self,
@@ -1807,7 +1807,7 @@ class TestPromptProviderSetup:
         result = _prompt_provider_setup(tmp_path, non_interactive=False)
         assert result["name"] == "github"
 
-    @patch("wade.services.init_service._check_gh_auth", return_value=False)
+    @patch("wade.services.init_service.prompts_setup._check_gh_auth", return_value=False)
     @patch("wade.ui.prompts.confirm", return_value=False)  # skip auth
     @patch("wade.ui.prompts.select", return_value=0)
     def test_github_not_authed_skip(
@@ -1820,7 +1820,7 @@ class TestPromptProviderSetup:
         result = _prompt_provider_setup(tmp_path, non_interactive=False)
         assert result["name"] == "github"
 
-    @patch("wade.services.init_service._check_gh_auth")
+    @patch("wade.services.init_service.prompts_setup._check_gh_auth")
     @patch("subprocess.run")  # gh auth login
     @patch("wade.ui.prompts.confirm", return_value=True)  # yes, try auth
     @patch("wade.ui.prompts.select", return_value=0)
@@ -1839,7 +1839,7 @@ class TestPromptProviderSetup:
         assert result["name"] == "github"
         assert mock_auth.call_count == 2
 
-    @patch("wade.services.init_service._validate_clickup_token", return_value=True)
+    @patch("wade.services.init_service.prompts_setup._validate_clickup_token", return_value=True)
     @patch("wade.ui.prompts.confirm")
     @patch("wade.ui.prompts.input_prompt")
     @patch("wade.ui.prompts.select", return_value=1)  # ClickUp
@@ -1864,7 +1864,7 @@ class TestPromptProviderSetup:
         assert result["settings"]["list_id"] == "list1"
         assert "space_id" not in result["settings"]
 
-    @patch("wade.services.init_service._validate_clickup_token", return_value=True)
+    @patch("wade.services.init_service.prompts_setup._validate_clickup_token", return_value=True)
     @patch("wade.ui.prompts.confirm")
     @patch("wade.ui.prompts.input_prompt")
     @patch("wade.ui.prompts.select", return_value=1)
@@ -1882,8 +1882,8 @@ class TestPromptProviderSetup:
         result = _prompt_provider_setup(tmp_path, non_interactive=False)
         assert result["settings"]["space_id"] == "space1"
 
-    @patch("wade.services.init_service._validate_clickup_token", return_value=True)
-    @patch("wade.services.init_service._save_token_to_env", return_value=True)
+    @patch("wade.services.init_service.prompts_setup._validate_clickup_token", return_value=True)
+    @patch("wade.services.init_service.prompts_setup._save_token_to_env", return_value=True)
     @patch("wade.ui.prompts.confirm")
     @patch("wade.ui.prompts.input_prompt")
     @patch("wade.ui.prompts.select", return_value=1)
@@ -1908,7 +1908,10 @@ class TestPromptProviderSetup:
         """When current_provider='clickup', default index should be 1."""
         with (
             patch("wade.ui.prompts.select", return_value=1) as mock_select,
-            patch("wade.services.init_service._validate_clickup_token", return_value=True),
+            patch(
+                "wade.services.init_service.prompts_setup._validate_clickup_token",
+                return_value=True,
+            ),
             patch("wade.ui.prompts.input_prompt", side_effect=["pk_1", "TOK", "t", "l", ""]),
             patch("wade.ui.prompts.confirm", side_effect=[False, False]),
         ):
@@ -1918,7 +1921,7 @@ class TestPromptProviderSetup:
             _, kwargs = mock_select.call_args
             assert kwargs.get("default") == 1
 
-    @patch("wade.services.init_service._validate_clickup_token")
+    @patch("wade.services.init_service.prompts_setup._validate_clickup_token")
     @patch("wade.ui.prompts.confirm")
     @patch("wade.ui.prompts.input_prompt")
     @patch("wade.ui.prompts.select", return_value=1)
@@ -1940,7 +1943,7 @@ class TestPromptProviderSetup:
         assert result["name"] == "clickup"
         assert mock_validate.call_count == 3
 
-    @patch("wade.services.init_service._validate_clickup_token", return_value=False)
+    @patch("wade.services.init_service.prompts_setup._validate_clickup_token", return_value=False)
     @patch("wade.ui.prompts.confirm")
     @patch("wade.ui.prompts.input_prompt")
     @patch("wade.ui.prompts.select", return_value=1)
@@ -1960,7 +1963,7 @@ class TestPromptProviderSetup:
         # Should still return clickup config despite failures
         assert result["name"] == "clickup"
 
-    @patch("wade.services.init_service._check_gh_auth", return_value=False)
+    @patch("wade.services.init_service.prompts_setup._check_gh_auth", return_value=False)
     @patch("wade.ui.prompts.confirm", return_value=True)  # yes, try auth
     @patch("wade.ui.prompts.select", return_value=0)
     def test_github_gh_not_installed_for_login(
@@ -1975,7 +1978,7 @@ class TestPromptProviderSetup:
             result = _prompt_provider_setup(tmp_path, non_interactive=False)
         assert result["name"] == "github"
 
-    @patch("wade.services.init_service._validate_clickup_token", return_value=True)
+    @patch("wade.services.init_service.prompts_setup._validate_clickup_token", return_value=True)
     @patch("wade.ui.prompts.confirm")
     @patch("wade.ui.prompts.input_prompt")
     @patch("wade.ui.prompts.select", return_value=1)
@@ -2002,7 +2005,7 @@ class TestPromptProviderSetup:
         result = _prompt_provider_setup(tmp_path, non_interactive=False)
         assert result["api_token_env"] == "CLICKUP_TOKEN"
 
-    @patch("wade.services.init_service._check_gh_auth")
+    @patch("wade.services.init_service.prompts_setup._check_gh_auth")
     @patch("subprocess.run")
     @patch("wade.ui.prompts.confirm", return_value=True)
     @patch("wade.ui.prompts.select", return_value=0)
@@ -2021,8 +2024,8 @@ class TestPromptProviderSetup:
         assert result["name"] == "github"
         assert mock_auth.call_count == 2
 
-    @patch("wade.services.init_service._validate_clickup_token", return_value=True)
-    @patch("wade.services.init_service._save_token_to_env", return_value=False)
+    @patch("wade.services.init_service.prompts_setup._validate_clickup_token", return_value=True)
+    @patch("wade.services.init_service.prompts_setup._save_token_to_env", return_value=False)
     @patch("wade.ui.prompts.confirm")
     @patch("wade.ui.prompts.input_prompt")
     @patch("wade.ui.prompts.select", return_value=1)
@@ -2042,7 +2045,7 @@ class TestPromptProviderSetup:
         result = _prompt_provider_setup(tmp_path, non_interactive=False)
         assert result["add_env_to_copy"] is False
 
-    @patch("wade.services.init_service._validate_clickup_token", return_value=False)
+    @patch("wade.services.init_service.prompts_setup._validate_clickup_token", return_value=False)
     @patch("wade.ui.prompts.input_prompt")
     @patch("wade.ui.prompts.select", return_value=1)
     def test_clickup_empty_token_falls_back_to_github(
@@ -2325,8 +2328,8 @@ class TestSelectOrSkip:
 
 
 class TestPromptAiSectionYoloEffort:
-    @patch("wade.services.init_service._prompt_default_model", return_value=None)
-    @patch("wade.services.init_service._select_ai_tool", return_value="claude")
+    @patch("wade.services.init_service.prompts_ai._prompt_default_model", return_value=None)
+    @patch("wade.services.init_service.prompts_ai._select_ai_tool", return_value="claude")
     def test_non_interactive_returns_none_extras(
         self, _mock_tool: MagicMock, _mock_model: MagicMock
     ) -> None:
@@ -2338,9 +2341,9 @@ class TestPromptAiSectionYoloEffort:
 
     @patch("wade.ui.prompts.confirm")
     @patch("wade.ui.prompts.select")
-    @patch("wade.services.init_service._prompt_default_model", return_value=None)
-    @patch("wade.services.init_service._select_ai_tool", return_value="claude")
-    @patch("wade.services.init_service.AbstractAITool.get")
+    @patch("wade.services.init_service.prompts_ai._prompt_default_model", return_value=None)
+    @patch("wade.services.init_service.prompts_ai._select_ai_tool", return_value="claude")
+    @patch("wade.services.init_service.prompts_ai.AbstractAITool.get")
     def test_effort_and_yolo_prompted_when_supported(
         self,
         mock_get_tool: MagicMock,
@@ -2363,9 +2366,9 @@ class TestPromptAiSectionYoloEffort:
 
     @patch("wade.ui.prompts.confirm")
     @patch("wade.ui.prompts.select")
-    @patch("wade.services.init_service._prompt_default_model", return_value=None)
-    @patch("wade.services.init_service._select_ai_tool", return_value="claude")
-    @patch("wade.services.init_service.AbstractAITool.get")
+    @patch("wade.services.init_service.prompts_ai._prompt_default_model", return_value=None)
+    @patch("wade.services.init_service.prompts_ai._select_ai_tool", return_value="claude")
+    @patch("wade.services.init_service.prompts_ai.AbstractAITool.get")
     def test_no_effort_or_yolo_when_unsupported(
         self,
         mock_get_tool: MagicMock,
@@ -2390,7 +2393,7 @@ class TestPromptAiSectionYoloEffort:
 
 
 class TestPromptModelMappingPerTierEffort:
-    @patch("wade.services.init_service.AbstractAITool.get")
+    @patch("wade.services.init_service.prompts_ai.AbstractAITool.get")
     @patch("wade.ui.prompts.select")
     def test_effort_prompts_shown_when_tool_supports_effort(
         self, mock_select: MagicMock, mock_get_tool: MagicMock
@@ -2411,7 +2414,7 @@ class TestPromptModelMappingPerTierEffort:
         assert mock_select.call_count == 8
         assert result.easy == "haiku"
 
-    @patch("wade.services.init_service.AbstractAITool.get")
+    @patch("wade.services.init_service.prompts_ai.AbstractAITool.get")
     @patch("wade.ui.prompts.select")
     def test_no_effort_prompts_when_tool_does_not_support(
         self, mock_select: MagicMock, mock_get_tool: MagicMock
@@ -2430,7 +2433,7 @@ class TestPromptModelMappingPerTierEffort:
         # Only 4 model selects — no effort prompts
         assert mock_select.call_count == 4
 
-    @patch("wade.services.init_service.AbstractAITool.get")
+    @patch("wade.services.init_service.prompts_ai.AbstractAITool.get")
     @patch("wade.ui.prompts.select")
     def test_effort_value_stored_in_mapping(
         self, mock_select: MagicMock, mock_get_tool: MagicMock
@@ -2477,7 +2480,7 @@ class TestPromptModelMappingPerTierEffort:
 
 class TestShowInitSummary:
     def test_renders_without_error_minimal(self) -> None:
-        with patch("wade.services.init_service.console") as mock_console:
+        with patch("wade.services.init_service.manifest.console") as mock_console:
             _show_init_summary(
                 provider_setup={"name": "github"},
                 project_settings={
@@ -2509,7 +2512,7 @@ class TestShowInitSummary:
             very_complex="opus",
             complex_effort="high",
         )
-        with patch("wade.services.init_service.console") as mock_console:
+        with patch("wade.services.init_service.manifest.console") as mock_console:
             _show_init_summary(
                 provider_setup={"name": "github"},
                 project_settings={

@@ -159,7 +159,7 @@ class TestMaybeConfigureShellIntegration:
         """non_interactive=True should skip without prompting."""
         with (
             patch.dict("os.environ", {"SHELL": "/bin/zsh"}),
-            patch("wade.services.init_service._configure_shell_integration") as mock_config,
+            patch("wade.services.init_service.shell._configure_shell_integration") as mock_config,
         ):
             _prompt_configure_shell_integration(non_interactive=True)
             mock_config.assert_not_called()
@@ -171,8 +171,8 @@ class TestMaybeConfigureShellIntegration:
 
         with (
             patch.dict("os.environ", {"SHELL": str(profile.parent / "zsh")}),
-            patch("wade.services.init_service._get_shell_profile", return_value=profile),
-            patch("wade.services.init_service._configure_shell_integration") as mock_config,
+            patch("wade.services.init_service.shell._get_shell_profile", return_value=profile),
+            patch("wade.services.init_service.shell._configure_shell_integration") as mock_config,
         ):
             _prompt_configure_shell_integration(non_interactive=False)
             mock_config.assert_not_called()
@@ -181,8 +181,8 @@ class TestMaybeConfigureShellIntegration:
         """Unknown shell should show hint instead of prompting."""
         with (
             patch.dict("os.environ", {"SHELL": "/usr/bin/unknown"}),
-            patch("wade.services.init_service.console") as mock_console,
-            patch("wade.services.init_service._configure_shell_integration") as mock_config,
+            patch("wade.services.init_service.shell.console") as mock_console,
+            patch("wade.services.init_service.shell._configure_shell_integration") as mock_config,
         ):
             _prompt_configure_shell_integration(non_interactive=False)
             # Should show hint
@@ -196,13 +196,13 @@ class TestMaybeConfigureShellIntegration:
 
         with (
             patch.dict("os.environ", {"SHELL": "/bin/zsh"}),
-            patch("wade.services.init_service._get_shell_profile", return_value=profile),
+            patch("wade.services.init_service.shell._get_shell_profile", return_value=profile),
             patch(
-                "wade.services.init_service._is_shell_integration_configured",
+                "wade.services.init_service.shell._is_shell_integration_configured",
                 return_value=False,
             ),
             patch("wade.ui.prompts.confirm", return_value=True),
-            patch("wade.services.init_service._configure_shell_integration") as mock_config,
+            patch("wade.services.init_service.shell._configure_shell_integration") as mock_config,
         ):
             _prompt_configure_shell_integration(non_interactive=False)
             mock_config.assert_called_once()
@@ -213,13 +213,13 @@ class TestMaybeConfigureShellIntegration:
 
         with (
             patch.dict("os.environ", {"SHELL": "/bin/zsh"}),
-            patch("wade.services.init_service._get_shell_profile", return_value=profile),
+            patch("wade.services.init_service.shell._get_shell_profile", return_value=profile),
             patch(
-                "wade.services.init_service._is_shell_integration_configured",
+                "wade.services.init_service.shell._is_shell_integration_configured",
                 return_value=False,
             ),
             patch("wade.ui.prompts.confirm", return_value=False),
-            patch("wade.services.init_service._configure_shell_integration") as mock_config,
+            patch("wade.services.init_service.shell._configure_shell_integration") as mock_config,
         ):
             _prompt_configure_shell_integration(non_interactive=False)
             mock_config.assert_not_called()
@@ -229,13 +229,13 @@ class TestMaybeConfigureShellIntegration:
         profile = MagicMock()
         with (
             patch.dict("os.environ", {"SHELL": "/usr/bin/fish"}),
-            patch("wade.services.init_service._get_shell_profile", return_value=profile),
+            patch("wade.services.init_service.shell._get_shell_profile", return_value=profile),
             patch(
-                "wade.services.init_service._is_shell_integration_configured",
+                "wade.services.init_service.shell._is_shell_integration_configured",
                 return_value=False,
             ),
             patch("wade.ui.prompts.confirm", return_value=True),
-            patch("wade.services.init_service._configure_shell_integration") as mock_config,
+            patch("wade.services.init_service.shell._configure_shell_integration") as mock_config,
         ):
             _prompt_configure_shell_integration(non_interactive=False)
             # Should pass is_fish=True
