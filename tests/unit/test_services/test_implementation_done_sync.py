@@ -1327,10 +1327,18 @@ class TestListSessions:
         wt_dir = tmp_git_repo.parent / "wt-42"
         create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
 
-        with patch(
-            "wade.services.implementation_service.cleanup.load_config",
-            return_value=ProjectConfig(
-                project=ProjectSettings(main_branch="main"),
+        provider = MagicMock()
+        provider.read_task_or_none.return_value = None
+
+        with (
+            patch(
+                "wade.services.implementation_service.cleanup.load_config",
+                return_value=ProjectConfig(
+                    project=ProjectSettings(main_branch="main"),
+                ),
+            ),
+            patch(
+                "wade.services.implementation_service.cleanup.get_provider", return_value=provider
             ),
         ):
             sessions = list_sessions(project_root=tmp_git_repo)
@@ -1354,10 +1362,18 @@ class TestListSessions:
         wt_dir = tmp_git_repo.parent / "wt-42"
         create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
 
-        with patch(
-            "wade.services.implementation_service.cleanup.load_config",
-            return_value=ProjectConfig(
-                project=ProjectSettings(main_branch="main"),
+        provider = MagicMock()
+        provider.read_task_or_none.return_value = None
+
+        with (
+            patch(
+                "wade.services.implementation_service.cleanup.load_config",
+                return_value=ProjectConfig(
+                    project=ProjectSettings(main_branch="main"),
+                ),
+            ),
+            patch(
+                "wade.services.implementation_service.cleanup.get_provider", return_value=provider
             ),
         ):
             sessions = list_sessions(json_output=True, project_root=tmp_git_repo)
@@ -1447,10 +1463,18 @@ class TestRemove:
         wt_dir = tmp_git_repo.parent / "wt-42"
         create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
 
-        with patch(
-            "wade.services.implementation_service.cleanup.load_config",
-            return_value=ProjectConfig(
-                project=ProjectSettings(main_branch="main"),
+        provider = MagicMock()
+        provider.read_task_or_none.return_value = None
+
+        with (
+            patch(
+                "wade.services.implementation_service.cleanup.load_config",
+                return_value=ProjectConfig(
+                    project=ProjectSettings(main_branch="main"),
+                ),
+            ),
+            patch(
+                "wade.services.implementation_service.cleanup.get_provider", return_value=provider
             ),
         ):
             # Stale but no force — should still return True (preview mode)
@@ -1466,15 +1490,52 @@ class TestRemove:
         wt_dir = tmp_git_repo.parent / "wt-42"
         create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
 
-        with patch(
-            "wade.services.implementation_service.cleanup.load_config",
-            return_value=ProjectConfig(
-                project=ProjectSettings(main_branch="main"),
+        provider = MagicMock()
+        provider.read_task_or_none.return_value = None
+
+        with (
+            patch(
+                "wade.services.implementation_service.cleanup.load_config",
+                return_value=ProjectConfig(
+                    project=ProjectSettings(main_branch="main"),
+                ),
+            ),
+            patch(
+                "wade.services.implementation_service.cleanup.get_provider", return_value=provider
             ),
         ):
             result = remove(stale=True, force=True, project_root=tmp_git_repo)
             assert result
             assert not wt_dir.exists()
+
+    def test_remove_stale_provider_failure_keeps_worktree(self, tmp_git_repo: Path) -> None:
+        """A provider read failure (e.g. unauthenticated gh in CI) must not cause
+        --force --stale to delete a worktree whose issue state is unknown."""
+        from wade.git.worktree import create_worktree
+        from wade.services.implementation_service import remove
+
+        wt_dir = tmp_git_repo.parent / "wt-42"
+        create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
+
+        provider = MagicMock()
+        provider.read_task_or_none.side_effect = RuntimeError("gh unavailable")
+
+        with (
+            patch(
+                "wade.services.implementation_service.cleanup.load_config",
+                return_value=ProjectConfig(
+                    project=ProjectSettings(main_branch="main"),
+                ),
+            ),
+            patch(
+                "wade.services.implementation_service.cleanup.get_provider", return_value=provider
+            ),
+        ):
+            result = remove(stale=True, force=True, project_root=tmp_git_repo)
+            assert result
+            # Fail-safe: unknown issue state keeps the worktree ACTIVE, so
+            # --force --stale must not remove it.
+            assert wt_dir.exists()
 
     def test_remove_no_args(self, tmp_git_repo: Path) -> None:
         from wade.services.implementation_service import remove

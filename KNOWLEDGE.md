@@ -153,3 +153,21 @@ Session prompt templates (templates/prompts/) are NOT symlinked — they are rea
 When splitting a wade service module, a module-level dependency import must stay module-level (not function-local) if any test patches it via that module (e.g. done.load_config). mock.patch resolves the attribute on the module object; a function-local import re-binds from the source module at call time, so the patch is silently ignored. Also: a moved helper imported into several modules is patched in the CALLER's namespace (e.g. find_worktree_path is patched at done./cleanup./core. depending on which function is under test), not where it is defined (_shared).
 
 ---
+
+## b7ff010c | 2026-07-17 | implementation | tags: refactoring, architecture, imports | Issue #317
+
+When splitting a service module into a package, a constant/helper shared by a leaf submodule and an upper one must live in the LEAF, not the upper module — the upper already imports from the leaf, so hosting it upstream creates an import cycle. E.g. init_service `_COMMAND_OVERRIDE_NAMES` belongs in config_io (a leaf), not prompts_setup, since prompts_setup imports `_resolve_models` from config_io.
+
+---
+
+## 129ab9bd | 2026-07-17 | plan | tags: testing, providers, error-handling | Issue #326
+
+GitHubProvider.read_task_or_none() raises RuntimeError (not silently returns None) on any gh CLI failure that isn't a genuine 'not found' match — e.g. missing GH_TOKEN, auth, network, rate-limit. Callers relying on it as a fail-safe (e.g. classify_staleness's task_lookup_failed) must catch exceptions around the call, not just check for None.
+
+---
+
+## 3045ea00 | 2026-07-17 | plan | tags: testing, mocking, ci | Issue #326
+
+Tests that call remove(stale=True)/_remove_stale() or list_sessions() in cleanup.py must mock wade.services.implementation_service.cleanup.get_provider (not just cleanup.load_config), or they instantiate a real GitHubProvider and shell out to gh — passing locally with authenticated gh but failing in CI with no GH_TOKEN. See TestListSessions.test_gracefully_handles_issue_lookup_failures for the mocking pattern.
+
+---
