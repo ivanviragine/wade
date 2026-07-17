@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.30.3] — 2026-07-17
+
+### Bug Fixes
+
+- skip self-upgrade for editable uv-tool installs (#323) (65666ec)
+
 ## [v0.30.2] — 2026-07-16
 
 ### Bug Fixes
