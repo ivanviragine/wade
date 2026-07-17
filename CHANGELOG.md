@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.31.1] — 2026-07-17
+
+### Bug Fixes
+
+- remove(stale=True) misclassifies worktree as ACTIVE when provider read fails in CI (regression from #315) (#327) (83edda9)
+
 ## [v0.31.0] — 2026-07-17
 
 ### Features
