@@ -404,6 +404,14 @@ class TestExistingPrBodyUpdate:
         assert "Closes #42" in result
         assert "Implements #42" not in result
 
+    def test_closes_downgraded_to_implements_with_no_close(self) -> None:
+        """--no-close must strip an existing 'Closes #42' so the merge does not
+        auto-close the issue."""
+        body = "Closes #42\n\n## Tasks\n- Login\n"
+        result = _apply_pr_refs(body, "42", close_issue=False, parent_issue=None)
+        assert "Closes #42" not in result
+        assert "Implements #42" in result
+
 
 # ---------------------------------------------------------------------------
 # Sync tests (unit level — mocked git)
@@ -416,11 +424,11 @@ class TestSync:
 
         with (
             patch(
-                "wade.services.implementation_service.core.load_config",
+                "wade.services.implementation_service.sync.load_config",
                 return_value=ProjectConfig(),
             ),
             patch(
-                "wade.services.implementation_service.core.git_repo.get_repo_root",
+                "wade.services.implementation_service.sync.git_repo.get_repo_root",
                 side_effect=GitError("not a repo"),
             ),
         ):
@@ -432,7 +440,7 @@ class TestSync:
         from wade.services.implementation_service import sync
 
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.sync.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -461,7 +469,7 @@ class TestSync:
         )
 
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.sync.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -469,6 +477,39 @@ class TestSync:
             result = sync(project_root=tmp_git_repo)
             assert result.success
             assert any(e.event == "up_to_date" for e in result.events)
+
+    def test_commits_ahead_failure_fails_sync(self, tmp_git_repo: Path) -> None:
+        """A GitError while counting commits behind must fail the sync, never
+        report UP_TO_DATE."""
+        import subprocess
+
+        from wade.services.implementation_service import sync
+
+        subprocess.run(
+            ["git", "checkout", "-b", "feat/42-test"],
+            cwd=tmp_git_repo,
+            capture_output=True,
+            check=True,
+        )
+
+        with (
+            patch(
+                "wade.services.implementation_service.sync.load_config",
+                return_value=ProjectConfig(project=ProjectSettings(main_branch="main")),
+            ),
+            patch(
+                "wade.services.implementation_service.sync.git_branch.commits_ahead",
+                side_effect=GitError("bad rev"),
+            ),
+        ):
+            result = sync(project_root=tmp_git_repo)
+            assert not result.success
+            assert not any(e.event == "up_to_date" for e in result.events)
+            assert any(
+                e.data.get("reason") == "behind_count_failed"
+                for e in result.events
+                if e.event == "error"
+            )
 
     def test_dry_run(self, tmp_git_repo: Path) -> None:
         """Dry run mode reports commits behind without merging."""
@@ -514,7 +555,7 @@ class TestSync:
         )
 
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.sync.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -567,7 +608,7 @@ class TestSync:
         )
 
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.sync.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -593,7 +634,7 @@ class TestSync:
         (tmp_git_repo / "dirty.txt").write_text("dirty\n")
 
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.sync.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -623,7 +664,7 @@ class TestSync:
         (tmp_git_repo / "my-notes.txt").write_text("work in progress\n")
 
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.sync.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -648,7 +689,7 @@ class TestSync:
         (tmp_git_repo / "PLAN.md").write_text("# Plan\n")
 
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.sync.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -673,7 +714,7 @@ class TestSync:
         (tmp_git_repo / "PLAN.md").write_text("# Plan\n")
 
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.sync.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -706,7 +747,7 @@ class TestSync:
         )
 
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.sync.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -769,12 +810,12 @@ class TestSyncAutoStash:
                 commits_merged=behind,
             )
 
-    @patch("wade.services.implementation_service.core.git_stash")
-    @patch("wade.services.implementation_service.core.git_sync")
-    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.sync.git_stash")
+    @patch("wade.services.implementation_service.sync.git_sync")
+    @patch("wade.services.implementation_service.sync.git_branch")
     @patch("wade.services.implementation_service.bootstrap.git_repo")
-    @patch("wade.services.implementation_service.core.git_repo")
-    @patch("wade.services.implementation_service.core.load_config")
+    @patch("wade.services.implementation_service.sync.git_repo")
+    @patch("wade.services.implementation_service.sync.load_config")
     def test_staged_changes_auto_stash_and_restore(
         self,
         mock_config: MagicMock,
@@ -809,12 +850,12 @@ class TestSyncAutoStash:
         assert any(e.event == SyncEventType.AUTOSTASHED for e in result.events)
         assert any(e.event == SyncEventType.STASH_RESTORED for e in result.events)
 
-    @patch("wade.services.implementation_service.core.git_stash")
-    @patch("wade.services.implementation_service.core.git_sync")
-    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.sync.git_stash")
+    @patch("wade.services.implementation_service.sync.git_sync")
+    @patch("wade.services.implementation_service.sync.git_branch")
     @patch("wade.services.implementation_service.bootstrap.git_repo")
-    @patch("wade.services.implementation_service.core.git_repo")
-    @patch("wade.services.implementation_service.core.load_config")
+    @patch("wade.services.implementation_service.sync.git_repo")
+    @patch("wade.services.implementation_service.sync.load_config")
     def test_unstaged_changes_auto_stash(
         self,
         mock_config: MagicMock,
@@ -845,12 +886,12 @@ class TestSyncAutoStash:
         assert result.success
         mock_stash.create_named_stash.assert_called_once()
 
-    @patch("wade.services.implementation_service.core.git_stash")
-    @patch("wade.services.implementation_service.core.git_sync")
-    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.sync.git_stash")
+    @patch("wade.services.implementation_service.sync.git_sync")
+    @patch("wade.services.implementation_service.sync.git_branch")
     @patch("wade.services.implementation_service.bootstrap.git_repo")
-    @patch("wade.services.implementation_service.core.git_repo")
-    @patch("wade.services.implementation_service.core.load_config")
+    @patch("wade.services.implementation_service.sync.git_repo")
+    @patch("wade.services.implementation_service.sync.load_config")
     def test_untracked_only_no_stash_needed(
         self,
         mock_config: MagicMock,
@@ -883,12 +924,12 @@ class TestSyncAutoStash:
         mock_stash.create_named_stash.assert_not_called()
         assert not any(e.event == SyncEventType.AUTOSTASHED for e in result.events)
 
-    @patch("wade.services.implementation_service.core.git_stash")
-    @patch("wade.services.implementation_service.core.git_sync")
-    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.sync.git_stash")
+    @patch("wade.services.implementation_service.sync.git_sync")
+    @patch("wade.services.implementation_service.sync.git_branch")
     @patch("wade.services.implementation_service.bootstrap.git_repo")
-    @patch("wade.services.implementation_service.core.git_repo")
-    @patch("wade.services.implementation_service.core.load_config")
+    @patch("wade.services.implementation_service.sync.git_repo")
+    @patch("wade.services.implementation_service.sync.load_config")
     def test_untracked_collision_fails_before_mutation(
         self,
         mock_config: MagicMock,
@@ -925,12 +966,12 @@ class TestSyncAutoStash:
         conflict_ev = next(e for e in result.events if e.event == SyncEventType.UNTRACKED_CONFLICT)
         assert "new-feature.py" in conflict_ev.data["paths"]
 
-    @patch("wade.services.implementation_service.core.git_stash")
-    @patch("wade.services.implementation_service.core.git_sync")
-    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.sync.git_stash")
+    @patch("wade.services.implementation_service.sync.git_sync")
+    @patch("wade.services.implementation_service.sync.git_branch")
     @patch("wade.services.implementation_service.bootstrap.git_repo")
-    @patch("wade.services.implementation_service.core.git_repo")
-    @patch("wade.services.implementation_service.core.load_config")
+    @patch("wade.services.implementation_service.sync.git_repo")
+    @patch("wade.services.implementation_service.sync.load_config")
     def test_stash_pop_conflict_leaves_stash_behind(
         self,
         mock_config: MagicMock,
@@ -970,12 +1011,12 @@ class TestSyncAutoStash:
         assert "stash@{0}" in ev.data["stash_ref"]
         assert "recovery_hint" in ev.data
 
-    @patch("wade.services.implementation_service.core.git_stash")
-    @patch("wade.services.implementation_service.core.git_sync")
-    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.sync.git_stash")
+    @patch("wade.services.implementation_service.sync.git_sync")
+    @patch("wade.services.implementation_service.sync.git_branch")
     @patch("wade.services.implementation_service.bootstrap.git_repo")
-    @patch("wade.services.implementation_service.core.git_repo")
-    @patch("wade.services.implementation_service.core.load_config")
+    @patch("wade.services.implementation_service.sync.git_repo")
+    @patch("wade.services.implementation_service.sync.load_config")
     def test_merge_conflict_with_stash_aborts_and_restores(
         self,
         mock_config: MagicMock,
@@ -1018,12 +1059,12 @@ class TestSyncAutoStash:
         mock_stash.pop_stash.assert_called_once_with("stash@{0}", tmp_path)
         assert any(e.event == SyncEventType.STASH_RESTORED for e in result.events)
 
-    @patch("wade.services.implementation_service.core.git_stash")
-    @patch("wade.services.implementation_service.core.git_sync")
-    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.sync.git_stash")
+    @patch("wade.services.implementation_service.sync.git_sync")
+    @patch("wade.services.implementation_service.sync.git_branch")
     @patch("wade.services.implementation_service.bootstrap.git_repo")
-    @patch("wade.services.implementation_service.core.git_repo")
-    @patch("wade.services.implementation_service.core.load_config")
+    @patch("wade.services.implementation_service.sync.git_repo")
+    @patch("wade.services.implementation_service.sync.load_config")
     def test_no_stash_with_user_dirty_fails(
         self,
         mock_config: MagicMock,
@@ -1058,12 +1099,12 @@ class TestSyncAutoStash:
         error_events = [e for e in result.events if e.event == SyncEventType.ERROR]
         assert any(e.data.get("reason") == "dirty_worktree" for e in error_events)
 
-    @patch("wade.services.implementation_service.core.git_stash")
-    @patch("wade.services.implementation_service.core.git_sync")
-    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.sync.git_stash")
+    @patch("wade.services.implementation_service.sync.git_sync")
+    @patch("wade.services.implementation_service.sync.git_branch")
     @patch("wade.services.implementation_service.bootstrap.git_repo")
-    @patch("wade.services.implementation_service.core.git_repo")
-    @patch("wade.services.implementation_service.core.load_config")
+    @patch("wade.services.implementation_service.sync.git_repo")
+    @patch("wade.services.implementation_service.sync.load_config")
     def test_artifacts_only_proceeds_without_stash(
         self,
         mock_config: MagicMock,
@@ -1099,12 +1140,12 @@ class TestSyncAutoStash:
 class TestCatchupAutoStash:
     """Unit tests for catchup() auto-stash flow — all git mocked."""
 
-    @patch("wade.services.implementation_service.core.git_stash")
-    @patch("wade.services.implementation_service.core.git_sync")
-    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.sync.git_stash")
+    @patch("wade.services.implementation_service.sync.git_sync")
+    @patch("wade.services.implementation_service.sync.git_branch")
     @patch("wade.services.implementation_service.bootstrap.git_repo")
-    @patch("wade.services.implementation_service.core.git_repo")
-    @patch("wade.services.implementation_service.core.load_config")
+    @patch("wade.services.implementation_service.sync.git_repo")
+    @patch("wade.services.implementation_service.sync.load_config")
     def test_staged_changes_auto_stash_and_restore(
         self,
         mock_config: MagicMock,
@@ -1144,12 +1185,12 @@ class TestCatchupAutoStash:
         assert any(e.event == SyncEventType.AUTOSTASHED for e in result.events)
         assert any(e.event == SyncEventType.STASH_RESTORED for e in result.events)
 
-    @patch("wade.services.implementation_service.core.git_stash")
-    @patch("wade.services.implementation_service.core.git_sync")
-    @patch("wade.services.implementation_service.core.git_branch")
+    @patch("wade.services.implementation_service.sync.git_stash")
+    @patch("wade.services.implementation_service.sync.git_sync")
+    @patch("wade.services.implementation_service.sync.git_branch")
     @patch("wade.services.implementation_service.bootstrap.git_repo")
-    @patch("wade.services.implementation_service.core.git_repo")
-    @patch("wade.services.implementation_service.core.load_config")
+    @patch("wade.services.implementation_service.sync.git_repo")
+    @patch("wade.services.implementation_service.sync.load_config")
     def test_no_stash_preserves_strict_behavior(
         self,
         mock_config: MagicMock,
@@ -1194,11 +1235,11 @@ class TestDone:
 
         with (
             patch(
-                "wade.services.implementation_service.core.load_config",
+                "wade.services.implementation_service.done.load_config",
                 return_value=ProjectConfig(),
             ),
             patch(
-                "wade.services.implementation_service.core.git_repo.get_repo_root",
+                "wade.services.implementation_service.done.git_repo.get_repo_root",
                 side_effect=GitError("not a repo"),
             ),
         ):
@@ -1211,7 +1252,7 @@ class TestDone:
 
         # We're on 'main' which has no issue number
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.done.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -1254,15 +1295,15 @@ class TestDone:
 
         with (
             patch(
-                "wade.services.implementation_service.core.load_config",
+                "wade.services.implementation_service.done.load_config",
                 return_value=ProjectConfig(
                     project=ProjectSettings(main_branch="main"),
                 ),
             ),
             patch(
-                "wade.services.implementation_service.core.get_provider", return_value=mock_provider
+                "wade.services.implementation_service.done.get_provider", return_value=mock_provider
             ),
-            patch("wade.services.implementation_service.core._done_via_pr") as mock_pr,
+            patch("wade.services.implementation_service.done._done_via_pr") as mock_pr,
         ):
             mock_pr.return_value = True
             done(project_root=wt_dir)
@@ -1287,7 +1328,7 @@ class TestListSessions:
         create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
 
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.cleanup.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -1299,7 +1340,7 @@ class TestListSessions:
 
     def test_empty_when_no_worktrees(self, tmp_git_repo: Path) -> None:
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.cleanup.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -1314,7 +1355,7 @@ class TestListSessions:
         create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
 
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.cleanup.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -1333,12 +1374,14 @@ class TestListSessions:
 
         with (
             patch(
-                "wade.services.implementation_service.core.load_config",
+                "wade.services.implementation_service.cleanup.load_config",
                 return_value=ProjectConfig(
                     project=ProjectSettings(main_branch="main"),
                 ),
             ),
-            patch("wade.services.implementation_service.core.get_provider", return_value=provider),
+            patch(
+                "wade.services.implementation_service.cleanup.get_provider", return_value=provider
+            ),
         ):
             sessions = list_sessions(json_output=True, project_root=tmp_git_repo)
 
@@ -1351,7 +1394,7 @@ class TestListSessions:
 
     def test_show_all_includes_main(self, tmp_git_repo: Path) -> None:
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.cleanup.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -1375,7 +1418,7 @@ class TestRemove:
         create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
 
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.cleanup.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -1388,7 +1431,7 @@ class TestRemove:
         from wade.services.implementation_service import remove
 
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.cleanup.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -1405,7 +1448,7 @@ class TestRemove:
         create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
 
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.cleanup.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -1424,7 +1467,7 @@ class TestRemove:
         create_worktree(tmp_git_repo, "feat/42-test", wt_dir, "main")
 
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.cleanup.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),
@@ -1437,7 +1480,7 @@ class TestRemove:
         from wade.services.implementation_service import remove
 
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.cleanup.load_config",
             return_value=ProjectConfig(
                 project=ProjectSettings(main_branch="main"),
             ),

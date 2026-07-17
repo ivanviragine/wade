@@ -358,7 +358,7 @@ def _build_pr_index(
     issue_set = set(issue_numbers)
     result: dict[str, git_pr.PRSummary] = {}
     for pr in prs:
-        from wade.services.implementation_service.core import extract_issue_from_branch
+        from wade.services.implementation_service._shared import extract_issue_from_branch
 
         extracted = extract_issue_from_branch(pr.head_ref_name)
         if extracted and extracted in issue_set:

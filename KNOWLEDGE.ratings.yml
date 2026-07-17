@@ -1,34 +1,49 @@
 164c355e:
   down: 0
+  stale: 0
   up: 1
 1c18f1d4:
   down: 0
+  stale: 0
   up: 1
 2b4d5319:
   down: 0
+  stale: 0
   up: 2
 3463fbd4:
   down: 0
+  stale: 0
   up: 2
+4863036c:
+  down: 0
+  stale: 0
+  up: 1
 54326c98:
   down: 1
+  stale: 0
   up: 0
 a24d65b0:
   down: 0
-  superseded_by: c71d1a70
+  stale: 0
   up: 1
 b61e247e:
   down: 0
-  up: 3
+  stale: 0
+  superseded_by: bcfa4bb3
+  up: 4
 b6a3a637:
   down: 0
+  stale: 0
   up: 1
 cc91cd11:
   down: 0
+  stale: 0
   up: 3
 cedeaad0:
   down: 1
+  stale: 0
   up: 1
 e2a49ac1:
   down: 0
+  stale: 0
   up: 3

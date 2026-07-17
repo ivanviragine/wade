@@ -7,50 +7,49 @@ project:
   merge_strategy: PR
 ai:
   default_tool: claude
-  default_model: claude-sonnet-4.6
-  effort: max
+  default_model: claude-opus-4.8
+  effort: xhigh
   plan:
-    tool: claude
-    model: claude-opus-4.7
     effort: xhigh
     yolo: true
   deps:
-    tool: copilot
-    model: claude-sonnet-4.6
+    tool: claude
+    model: claude-sonnet-5
     mode: headless
-    yolo: false
+    effort: high
   review_plan:
-    tool: copilot
-    model: claude-sonnet-4.6
+    tool: claude
+    model: claude-sonnet-5
     mode: headless
+    effort: high
     enabled: true
-    yolo: false
   review_implementation:
-    tool: copilot
-    model: claude-sonnet-4.6
+    tool: claude
+    model: claude-sonnet-5
     mode: headless
+    effort: high
     enabled: true
-    yolo: false
   review_batch:
-    tool: copilot
-    model: claude-sonnet-4.6
+    tool: claude
+    model: claude-sonnet-5
     mode: interactive
+    effort: high
     enabled: true
     yolo: true
-  yolo: true
+  yolo: false
 models:
   claude:
     easy:
-      model: claude-sonnet-4.6
-      effort: xhigh
-    medium:
-      model: claude-sonnet-4.6
+      model: claude-haiku-4.5
       effort: max
-    complex:
-      model: claude-opus-4.7
+    medium:
+      model: claude-sonnet-5
       effort: high
+    complex:
+      model: claude-sonnet-5
+      effort: xhigh
     very_complex:
-      model: claude-opus-4.7
+      model: claude-opus-4.8
       effort: xhigh
 provider:
   name: github

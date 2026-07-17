@@ -56,7 +56,7 @@ class TestAutoStashHappyPath:
         assert _git(repo, "status", "--porcelain").startswith("A")
 
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.sync.load_config",
             return_value=ProjectConfig(project=ProjectSettings(main_branch="main")),
         ):
             result = sync(project_root=repo)
@@ -81,7 +81,7 @@ class TestAutoStashHappyPath:
         (repo / "README.md").write_text("modified by user\n")
 
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.sync.load_config",
             return_value=ProjectConfig(project=ProjectSettings(main_branch="main")),
         ):
             result = sync(project_root=repo)
@@ -99,7 +99,7 @@ class TestAutoStashHappyPath:
         _git(repo, "add", "user-work.txt")
 
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.sync.load_config",
             return_value=ProjectConfig(project=ProjectSettings(main_branch="main")),
         ):
             result = sync(project_root=repo)
@@ -118,7 +118,7 @@ class TestAutoStashHappyPath:
         _git(repo, "add", "user-work.txt")
 
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.sync.load_config",
             return_value=ProjectConfig(project=ProjectSettings(main_branch="main")),
         ):
             result = sync(project_root=repo)
@@ -147,7 +147,7 @@ class TestAutoStashUntrackedFiles:
         (repo / "my-notes.txt").write_text("scratch notes\n")
 
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.sync.load_config",
             return_value=ProjectConfig(project=ProjectSettings(main_branch="main")),
         ):
             result = sync(project_root=repo)
@@ -170,7 +170,7 @@ class TestAutoStashUntrackedFiles:
         (tmp_git_repo / "collision-file.txt").write_text("local untracked version\n")
 
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.sync.load_config",
             return_value=ProjectConfig(project=ProjectSettings(main_branch="main")),
         ):
             result = sync(project_root=tmp_git_repo)
@@ -201,7 +201,7 @@ class TestNoStashFlag:
         _git(tmp_git_repo, "add", "user-work.txt")
 
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.sync.load_config",
             return_value=ProjectConfig(project=ProjectSettings(main_branch="main")),
         ):
             result = sync(project_root=tmp_git_repo, no_stash=True)
@@ -221,7 +221,7 @@ class TestNoStashFlag:
         (tmp_git_repo / "PLAN.md").write_text("# Plan\n")
 
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.sync.load_config",
             return_value=ProjectConfig(project=ProjectSettings(main_branch="main")),
         ):
             result = sync(project_root=tmp_git_repo, no_stash=True)
@@ -251,7 +251,7 @@ class TestCatchupAutoStash:
         _git(repo, "add", "user-work.txt")
 
         with patch(
-            "wade.services.implementation_service.core.load_config",
+            "wade.services.implementation_service.sync.load_config",
             return_value=ProjectConfig(project=ProjectSettings(main_branch="main")),
         ):
             result = catchup(project_root=repo)

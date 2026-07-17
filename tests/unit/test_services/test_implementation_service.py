@@ -1239,8 +1239,9 @@ class TestParseOverwritePaths:
 
 
 class TestPullMainAfterMerge:
-    def test_untracked_triggers_cleanup_and_retry(self, tmp_path: Path) -> None:
-        """Untracked-files error triggers file deletion and pull retry."""
+    def test_untracked_backed_up_then_retry(self, tmp_path: Path) -> None:
+        """Untracked-files error moves colliding files to a backup dir (never
+        deletes them) and retries the pull."""
         # Create the files that would be "untracked"
         settings = tmp_path / ".claude" / "settings.json"
         settings.parent.mkdir(parents=True)
@@ -1252,13 +1253,18 @@ class TestPullMainAfterMerge:
         ok_result = MagicMock(returncode=0, stderr="")
 
         with patch(
-            "wade.services.implementation_service.core.git_repo.pull_ff_only",
+            "wade.services.implementation_service.lifecycle.git_repo.pull_ff_only",
             side_effect=[fail_result, ok_result],
         ):
             _pull_main_after_merge(tmp_path)
 
+        # Original locations are cleared so the pull can proceed...
         assert not settings.exists()
         assert not managed.exists()
+        # ...but the files are preserved in the backup dir, never destroyed.
+        backup_root = tmp_path / ".wade" / "pull-backups"
+        assert (backup_root / ".claude" / "settings.json").read_text() == "{}"
+        assert (backup_root / ".wade-managed").read_text() == "# managed"
 
     def test_local_changes_triggers_stash_and_retry(self, tmp_path: Path) -> None:
         """Tracked-files error triggers stash, pull retry, then stash pop."""
@@ -1273,14 +1279,16 @@ class TestPullMainAfterMerge:
 
         with (
             patch(
-                "wade.services.implementation_service.core.git_repo.pull_ff_only",
+                "wade.services.implementation_service.lifecycle.git_repo.pull_ff_only",
                 side_effect=[fail_result, pull_ok],
             ),
             patch(
-                "wade.services.implementation_service.core.git_repo.stash", return_value=stash_ok
+                "wade.services.implementation_service.lifecycle.git_repo.stash",
+                return_value=stash_ok,
             ) as mock_stash,
             patch(
-                "wade.services.implementation_service.core.git_repo.stash_pop", return_value=pop_ok
+                "wade.services.implementation_service.lifecycle.git_repo.stash_pop",
+                return_value=pop_ok,
             ) as mock_pop,
         ):
             _pull_main_after_merge(tmp_path)
@@ -1297,14 +1305,15 @@ class TestPullMainAfterMerge:
 
         with (
             patch(
-                "wade.services.implementation_service.core.git_repo.pull_ff_only",
+                "wade.services.implementation_service.lifecycle.git_repo.pull_ff_only",
                 return_value=fail_result,
             ),
             patch(
-                "wade.services.implementation_service.core.git_repo.stash", return_value=stash_fail
+                "wade.services.implementation_service.lifecycle.git_repo.stash",
+                return_value=stash_fail,
             ),
-            patch("wade.services.implementation_service.core.git_repo.stash_pop") as mock_pop,
-            patch("wade.services.implementation_service.core.console") as mock_console,
+            patch("wade.services.implementation_service.lifecycle.git_repo.stash_pop") as mock_pop,
+            patch("wade.services.implementation_service.lifecycle.console") as mock_console,
         ):
             _pull_main_after_merge(tmp_path)
 
@@ -1321,19 +1330,50 @@ class TestPullMainAfterMerge:
 
         with (
             patch(
-                "wade.services.implementation_service.core.git_repo.pull_ff_only",
+                "wade.services.implementation_service.lifecycle.git_repo.pull_ff_only",
                 side_effect=[fail_result, pull_fail],
             ),
             patch(
-                "wade.services.implementation_service.core.git_repo.stash", return_value=stash_ok
+                "wade.services.implementation_service.lifecycle.git_repo.stash",
+                return_value=stash_ok,
             ),
             patch(
-                "wade.services.implementation_service.core.git_repo.stash_pop", return_value=pop_ok
+                "wade.services.implementation_service.lifecycle.git_repo.stash_pop",
+                return_value=pop_ok,
             ) as mock_pop,
-            patch("wade.services.implementation_service.core.console") as mock_console,
+            patch("wade.services.implementation_service.lifecycle.console") as mock_console,
         ):
             _pull_main_after_merge(tmp_path)
 
+        mock_pop.assert_called_once_with(tmp_path)
+        mock_console.warn.assert_called_once()
+        mock_console.hint.assert_called_once()
+
+    def test_local_changes_stash_pop_failure_warns(self, tmp_path: Path) -> None:
+        """When stash pop fails after a successful pull, warns with a recovery hint."""
+        fail_result = MagicMock(returncode=1, stderr=LOCAL_CHANGES_STDERR)
+        stash_ok = MagicMock(returncode=0)
+        pull_ok = MagicMock(returncode=0, stderr="")
+        pop_fail = MagicMock(returncode=1)
+
+        with (
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.pull_ff_only",
+                side_effect=[fail_result, pull_ok],
+            ),
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.stash",
+                return_value=stash_ok,
+            ),
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.stash_pop",
+                return_value=pop_fail,
+            ) as mock_pop,
+            patch("wade.services.implementation_service.lifecycle.console") as mock_console,
+        ):
+            _pull_main_after_merge(tmp_path)
+
+        # Pull succeeded, so the only warning comes from the failed stash pop.
         mock_pop.assert_called_once_with(tmp_path)
         mock_console.warn.assert_called_once()
         mock_console.hint.assert_called_once()
@@ -1740,9 +1780,9 @@ class TestPostImplementationLifecyclePr:
                 "wade.git.pr.get_pr_for_branch",
                 return_value={"number": 10, "url": "http://test"},
             ),
-            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
-            patch("wade.services.implementation_service.core.webbrowser.open") as mock_open,
-            patch("wade.services.implementation_service.core._merge_pr") as mock_merge,
+            patch("wade.services.implementation_service.lifecycle.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.lifecycle.webbrowser.open") as mock_open,
+            patch("wade.services.implementation_service.lifecycle._merge_pr") as mock_merge,
             patch("wade.services.review_service.poll_for_reviews") as mock_poll,
         ):
             mock_prompts.is_tty.return_value = False
@@ -1763,9 +1803,9 @@ class TestPostImplementationLifecyclePr:
                 "wade.git.pr.get_pr_for_branch",
                 return_value={"number": 10, "url": "http://test"},
             ),
-            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.lifecycle.prompts") as mock_prompts,
             patch(
-                "wade.services.implementation_service.core._merge_pr",
+                "wade.services.implementation_service.lifecycle._merge_pr",
                 return_value=MergeStatus.MERGED,
             ),
         ):
@@ -1787,7 +1827,7 @@ class TestPostImplementationLifecyclePr:
                 "wade.git.pr.get_pr_for_branch",
                 return_value={"number": 10, "url": "http://test"},
             ),
-            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.lifecycle.prompts") as mock_prompts,
             patch(
                 "wade.services.review_service.poll_for_reviews",
                 return_value=PollOutcome.INTERRUPTED,
@@ -1811,7 +1851,7 @@ class TestPostImplementationLifecyclePr:
                 "wade.git.pr.get_pr_for_branch",
                 return_value={"number": 10, "url": "http://test"},
             ),
-            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.lifecycle.prompts") as mock_prompts,
             patch(
                 "wade.services.review_service.poll_for_reviews",
                 return_value=PollOutcome.COMMENTS_FOUND,
@@ -1858,7 +1898,7 @@ class TestPostImplementationLifecyclePr:
                 "wade.git.pr.get_pr_for_branch",
                 return_value={"number": 10, "url": "http://test"},
             ),
-            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.lifecycle.prompts") as mock_prompts,
             patch(
                 "wade.services.review_service.poll_for_reviews",
                 return_value=PollOutcome.QUIET_TIMEOUT,
@@ -1920,11 +1960,11 @@ class TestPostImplementationLifecycleDirect:
         mock_provider = MagicMock()
         with (
             patch("wade.git.branch.commits_ahead", return_value=3),
-            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.lifecycle.prompts") as mock_prompts,
             patch("wade.git.repo.merge_squash"),
             patch("wade.git.repo.commit_no_edit"),
             patch("wade.git.repo.push"),
-            patch("wade.services.implementation_service.core._cleanup_worktree"),
+            patch("wade.services.implementation_service.lifecycle._cleanup_worktree"),
         ):
             mock_prompts.select.return_value = 0  # "Merge into main"
             result = _post_implementation_lifecycle_direct(
@@ -1937,7 +1977,7 @@ class TestPostImplementationLifecycleDirect:
         mock_provider = MagicMock()
         with (
             patch("wade.git.branch.commits_ahead", return_value=3),
-            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.lifecycle.prompts") as mock_prompts,
         ):
             mock_prompts.select.return_value = 2  # "Skip"
             result = _post_implementation_lifecycle_direct(
@@ -1950,7 +1990,7 @@ class TestPostImplementationLifecycleDirect:
         mock_provider = MagicMock()
         with (
             patch("wade.git.branch.commits_ahead", return_value=0),
-            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
+            patch("wade.services.implementation_service.lifecycle.prompts") as mock_prompts,
         ):
             mock_prompts.confirm.return_value = False  # Don't delete worktree
             result = _post_implementation_lifecycle_direct(
