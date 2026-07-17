@@ -42,6 +42,7 @@ __all__ = [
     "_post_implementation_lifecycle_pr",
     "_pull_main_after_merge",
     "_strip_summary_section",
+    "_warn_pull_sync_failed",
 ]
 
 
