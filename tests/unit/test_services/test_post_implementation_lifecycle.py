@@ -9,12 +9,12 @@ from wade.models.session import MergeStrategy
 from wade.models.task import Task
 from wade.services.implementation_service import _post_implementation_lifecycle, start
 
-_PULL_FF = "wade.services.implementation_service.core.git_repo.pull_ff_only"
-_CHECKOUT = "wade.services.implementation_service.core.git_repo.checkout"
-_CHECKOUT_DETACH = "wade.services.implementation_service.core.git_repo.checkout_detach"
-_MERGE_SQUASH = "wade.services.implementation_service.core.git_repo.merge_squash"
-_COMMIT_NO_EDIT = "wade.services.implementation_service.core.git_repo.commit_no_edit"
-_PUSH = "wade.services.implementation_service.core.git_repo.push"
+_PULL_FF = "wade.services.implementation_service.lifecycle.git_repo.pull_ff_only"
+_CHECKOUT = "wade.services.implementation_service.lifecycle.git_repo.checkout"
+_CHECKOUT_DETACH = "wade.services.implementation_service.lifecycle.git_repo.checkout_detach"
+_MERGE_SQUASH = "wade.services.implementation_service.lifecycle.git_repo.merge_squash"
+_COMMIT_NO_EDIT = "wade.services.implementation_service.lifecycle.git_repo.commit_no_edit"
+_PUSH = "wade.services.implementation_service.lifecycle.git_repo.push"
 
 
 def _config(strategy: MergeStrategy) -> ProjectConfig:
@@ -26,15 +26,15 @@ def _config(strategy: MergeStrategy) -> ProjectConfig:
 
 @patch(_PULL_FF)
 @patch(_CHECKOUT_DETACH)
-@patch("wade.services.implementation_service.core.git_worktree.prune_worktrees")
-@patch("wade.services.implementation_service.core.git_worktree.remove_worktree")
-@patch("wade.services.implementation_service.core.git_pr.merge_pr")
-@patch("wade.services.implementation_service.core.git_repo.is_clean", return_value=True)
-@patch("wade.services.implementation_service.core.prompts.select", return_value=0)
-@patch("wade.services.implementation_service.core.prompts.confirm", return_value=True)
-@patch("wade.services.implementation_service.core.webbrowser.open")
+@patch("wade.services.implementation_service.lifecycle.git_worktree.prune_worktrees")
+@patch("wade.services.implementation_service.lifecycle.git_worktree.remove_worktree")
+@patch("wade.services.implementation_service.lifecycle.git_pr.merge_pr")
+@patch("wade.services.implementation_service.lifecycle.git_repo.is_clean", return_value=True)
+@patch("wade.services.implementation_service.lifecycle.prompts.select", return_value=0)
+@patch("wade.services.implementation_service.lifecycle.prompts.confirm", return_value=True)
+@patch("wade.services.implementation_service.lifecycle.webbrowser.open")
 @patch(
-    "wade.services.implementation_service.core.git_pr.get_pr_for_branch",
+    "wade.services.implementation_service.lifecycle.git_pr.get_pr_for_branch",
     return_value={"number": 99, "url": "https://example/pr/99"},
 )
 def test_pr_strategy_prompts_merge_on_existing_pr(
@@ -55,7 +55,7 @@ def test_pr_strategy_prompts_merge_on_existing_pr(
     repo_root = tmp_path / "repo"
     wt_path = tmp_path / "wt"
     wt_path.mkdir()  # Needs to exist for is_dir() check
-    with patch("wade.services.implementation_service.core.prompts.is_tty", return_value=True):
+    with patch("wade.services.implementation_service.lifecycle.prompts.is_tty", return_value=True):
         _post_implementation_lifecycle(
             repo_root, "feat/42-test", 42, wt_path, _config(MergeStrategy.PR), provider
         )
@@ -71,9 +71,9 @@ def test_pr_strategy_prompts_merge_on_existing_pr(
     mock_pull_ff.assert_called_once_with(repo_root)
 
 
-@patch("wade.services.implementation_service.core.git_pr.merge_pr")
-@patch("wade.services.implementation_service.core.prompts.confirm")
-@patch("wade.services.implementation_service.core.git_pr.get_pr_for_branch", return_value=None)
+@patch("wade.services.implementation_service.lifecycle.git_pr.merge_pr")
+@patch("wade.services.implementation_service.lifecycle.prompts.confirm")
+@patch("wade.services.implementation_service.lifecycle.git_pr.get_pr_for_branch", return_value=None)
 def test_pr_strategy_no_pr_warns_and_returns(
     _mock_get_pr: MagicMock,
     mock_confirm: MagicMock,
@@ -95,11 +95,11 @@ def test_pr_strategy_no_pr_warns_and_returns(
 
 
 @patch("wade.services.review_service.poll_for_reviews")
-@patch("wade.services.implementation_service.core.git_pr.merge_pr")
-@patch("wade.services.implementation_service.core.prompts.select", return_value=1)
-@patch("wade.services.implementation_service.core.prompts.confirm", return_value=False)
+@patch("wade.services.implementation_service.lifecycle.git_pr.merge_pr")
+@patch("wade.services.implementation_service.lifecycle.prompts.select", return_value=1)
+@patch("wade.services.implementation_service.lifecycle.prompts.confirm", return_value=False)
 @patch(
-    "wade.services.implementation_service.core.git_pr.get_pr_for_branch",
+    "wade.services.implementation_service.lifecycle.git_pr.get_pr_for_branch",
     return_value={"number": 99, "url": "https://example/pr/99"},
 )
 def test_pr_strategy_user_declines_merge(
@@ -114,7 +114,7 @@ def test_pr_strategy_user_declines_merge(
 
     mock_poll.return_value = PollOutcome.INTERRUPTED
     provider = MagicMock()
-    with patch("wade.services.implementation_service.core.prompts.is_tty", return_value=True):
+    with patch("wade.services.implementation_service.lifecycle.prompts.is_tty", return_value=True):
         _post_implementation_lifecycle(
             tmp_path / "repo",
             "feat/42-test",
@@ -131,12 +131,12 @@ def test_pr_strategy_user_declines_merge(
 
 
 @patch(_CHECKOUT)
-@patch("wade.services.implementation_service.core.git_pr.merge_pr")
-@patch("wade.services.implementation_service.core.prompts.select", return_value=0)
-@patch("wade.services.implementation_service.core.prompts.confirm", return_value=True)
-@patch("wade.services.implementation_service.core.webbrowser.open")
+@patch("wade.services.implementation_service.lifecycle.git_pr.merge_pr")
+@patch("wade.services.implementation_service.lifecycle.prompts.select", return_value=0)
+@patch("wade.services.implementation_service.lifecycle.prompts.confirm", return_value=True)
+@patch("wade.services.implementation_service.lifecycle.webbrowser.open")
 @patch(
-    "wade.services.implementation_service.core.git_pr.get_pr_for_branch",
+    "wade.services.implementation_service.lifecycle.git_pr.get_pr_for_branch",
     return_value={"number": 99, "url": "https://example/pr/99"},
 )
 def test_pr_strategy_merge_failure_preserves_branch(
@@ -151,7 +151,7 @@ def test_pr_strategy_merge_failure_preserves_branch(
     provider = MagicMock()
     mock_merge_pr.side_effect = subprocess.CalledProcessError(1, ["gh", "pr", "merge"])
 
-    with patch("wade.services.implementation_service.core.prompts.is_tty", return_value=True):
+    with patch("wade.services.implementation_service.lifecycle.prompts.is_tty", return_value=True):
         _post_implementation_lifecycle(
             tmp_path / "repo",
             "feat/42-test",
@@ -167,13 +167,13 @@ def test_pr_strategy_merge_failure_preserves_branch(
 
 @patch(_CHECKOUT)
 @patch(_CHECKOUT_DETACH)
-@patch("wade.services.implementation_service.core.git_pr.merge_pr")
-@patch("wade.services.implementation_service.core.git_repo.is_clean", return_value=True)
-@patch("wade.services.implementation_service.core.prompts.select", return_value=0)
-@patch("wade.services.implementation_service.core.prompts.confirm", return_value=True)
-@patch("wade.services.implementation_service.core.webbrowser.open")
+@patch("wade.services.implementation_service.lifecycle.git_pr.merge_pr")
+@patch("wade.services.implementation_service.lifecycle.git_repo.is_clean", return_value=True)
+@patch("wade.services.implementation_service.lifecycle.prompts.select", return_value=0)
+@patch("wade.services.implementation_service.lifecycle.prompts.confirm", return_value=True)
+@patch("wade.services.implementation_service.lifecycle.webbrowser.open")
 @patch(
-    "wade.services.implementation_service.core.git_pr.get_pr_for_branch",
+    "wade.services.implementation_service.lifecycle.git_pr.get_pr_for_branch",
     return_value={"number": 99, "url": "https://example/pr/99"},
 )
 def test_pr_strategy_merge_failure_restores_branch(
@@ -193,7 +193,7 @@ def test_pr_strategy_merge_failure_restores_branch(
     wt_path.mkdir()
     mock_merge_pr.side_effect = subprocess.CalledProcessError(1, ["gh", "pr", "merge"])
 
-    with patch("wade.services.implementation_service.core.prompts.is_tty", return_value=True):
+    with patch("wade.services.implementation_service.lifecycle.prompts.is_tty", return_value=True):
         _post_implementation_lifecycle(
             tmp_path / "repo",
             "feat/42-test",
@@ -209,15 +209,15 @@ def test_pr_strategy_merge_failure_restores_branch(
 
 @patch(_PULL_FF)
 @patch(_CHECKOUT_DETACH)
-@patch("wade.services.implementation_service.core.git_worktree.prune_worktrees")
-@patch("wade.services.implementation_service.core.git_worktree.remove_worktree")
-@patch("wade.services.implementation_service.core.git_pr.merge_pr")
-@patch("wade.services.implementation_service.core.git_repo.is_clean", return_value=True)
-@patch("wade.services.implementation_service.core.prompts.select", return_value=0)
-@patch("wade.services.implementation_service.core.prompts.confirm", return_value=True)
-@patch("wade.services.implementation_service.core.webbrowser.open")
+@patch("wade.services.implementation_service.lifecycle.git_worktree.prune_worktrees")
+@patch("wade.services.implementation_service.lifecycle.git_worktree.remove_worktree")
+@patch("wade.services.implementation_service.lifecycle.git_pr.merge_pr")
+@patch("wade.services.implementation_service.lifecycle.git_repo.is_clean", return_value=True)
+@patch("wade.services.implementation_service.lifecycle.prompts.select", return_value=0)
+@patch("wade.services.implementation_service.lifecycle.prompts.confirm", return_value=True)
+@patch("wade.services.implementation_service.lifecycle.webbrowser.open")
 @patch(
-    "wade.services.implementation_service.core.git_pr.get_pr_for_branch",
+    "wade.services.implementation_service.lifecycle.git_pr.get_pr_for_branch",
     return_value={"number": 99, "url": "https://example/pr/99"},
 )
 def test_pr_strategy_cleanup_and_pull_after_merge(
@@ -239,7 +239,7 @@ def test_pr_strategy_cleanup_and_pull_after_merge(
     wt_path = tmp_path / "wt"
     wt_path.mkdir()  # Needs to exist for is_dir() check
 
-    with patch("wade.services.implementation_service.core.prompts.is_tty", return_value=True):
+    with patch("wade.services.implementation_service.lifecycle.prompts.is_tty", return_value=True):
         _post_implementation_lifecycle(
             repo_root, "feat/42-test", 42, wt_path, _config(MergeStrategy.PR), provider
         )
@@ -249,8 +249,8 @@ def test_pr_strategy_cleanup_and_pull_after_merge(
     mock_pull_ff.assert_called_once_with(repo_root)
 
 
-@patch("wade.services.implementation_service.core.prompts.confirm", return_value=False)
-@patch("wade.services.implementation_service.core.git_branch.commits_ahead", return_value=0)
+@patch("wade.services.implementation_service.lifecycle.prompts.confirm", return_value=False)
+@patch("wade.services.implementation_service.lifecycle.git_branch.commits_ahead", return_value=0)
 def test_direct_strategy_zero_ahead_offers_delete(
     _mock_ahead: MagicMock,
     mock_confirm: MagicMock,
@@ -271,8 +271,8 @@ def test_direct_strategy_zero_ahead_offers_delete(
     assert "delete" in mock_confirm.call_args[0][0].lower()
 
 
-@patch("wade.services.implementation_service.core.prompts.select", return_value=2)
-@patch("wade.services.implementation_service.core.git_branch.commits_ahead", return_value=3)
+@patch("wade.services.implementation_service.lifecycle.prompts.select", return_value=2)
+@patch("wade.services.implementation_service.lifecycle.git_branch.commits_ahead", return_value=3)
 def test_direct_strategy_commits_ahead_shows_menu(
     _mock_ahead: MagicMock,
     mock_select: MagicMock,
@@ -296,12 +296,12 @@ def test_direct_strategy_commits_ahead_shows_menu(
     assert "Skip" in joined
 
 
-@patch("wade.services.implementation_service.core._cleanup_worktree")
-@patch("wade.services.implementation_service.core.prompts.select", return_value=1)
+@patch("wade.services.implementation_service.lifecycle._cleanup_worktree")
+@patch("wade.services.implementation_service.lifecycle.prompts.select", return_value=1)
 @patch(_PUSH)
 @patch(_COMMIT_NO_EDIT)
 @patch(_MERGE_SQUASH)
-@patch("wade.services.implementation_service.core.git_branch.commits_ahead", return_value=3)
+@patch("wade.services.implementation_service.lifecycle.git_branch.commits_ahead", return_value=3)
 def test_direct_strategy_merge_and_close(
     _mock_ahead: MagicMock,
     mock_merge_squash: MagicMock,

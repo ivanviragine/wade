@@ -129,3 +129,27 @@ When splitting a wade service module into submodules, moving a function to a new
 Fix: add a re-exec breadcrumb env var (WADE_SELF_UPGRADE_FROM=<old version>) so a post-re-exec process detects the version did NOT advance and stops with a warning; force a cache-bypassing fresh PyPI check for the explicit self-upgrade path; and skip yanked releases when selecting the latest version.
 
 ---
+
+## d65003eb | 2026-07-16 | implementation | tags: testing, mocking | Issue #321
+
+Functions imported locally inside a function body (e.g. `from wade.utils.install import detect_install_method` inside `_maybe_self_upgrade()`) must be mock-patched at their *source* module (`wade.utils.install.detect_install_method`), not at the importing module (`wade.services.init_service.detect_install_method`) — the local import re-resolves the name from the source module at call time, so patching the importer's namespace has no effect.
+
+---
+
+## c71d1a70 | 2026-07-16 | implementation | tags: pypi | Issue #321
+
+PyPI's JSON API (pypi.org/pypi/<pkg>/json) does not expose a top-level 'yanked' flag on `info` — yanked status lives per-file inside `releases[version]`, where each file dict has a `yanked` bool. `info.version` does not account for yanking, so it can point at a release that pip/uv will refuse to install; select from `releases` and filter out versions where every file is yanked instead of trusting `info.version`.
+
+---
+
+## bcfa4bb3 | 2026-07-17 | implementation | tags: skills, prompts, architecture | Issue #314
+
+Session prompt templates (templates/prompts/) are NOT symlinked — they are read directly by service code: plan_service.py and implementation_service/draft_pr.py (build_implementation_prompt, moved there from core.py in the #314 split). Skill files (templates/skills/) ARE symlinked into .claude/skills/. When fixing agent instructions, check BOTH the skill files AND the prompt templates.
+
+---
+
+## 0bad70f3 | 2026-07-17 | implementation | tags: testing, mocking, refactoring | Issue #314
+
+When splitting a wade service module, a module-level dependency import must stay module-level (not function-local) if any test patches it via that module (e.g. done.load_config). mock.patch resolves the attribute on the module object; a function-local import re-binds from the source module at call time, so the patch is silently ignored. Also: a moved helper imported into several modules is patched in the CALLER's namespace (e.g. find_worktree_path is patched at done./cleanup./core. depending on which function is under test), not where it is defined (_shared).
+
+---
