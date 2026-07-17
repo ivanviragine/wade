@@ -10,7 +10,9 @@ import os
 import shutil
 import subprocess
 import sys
+import tomllib
 from enum import StrEnum
+from pathlib import Path
 
 import structlog
 
@@ -39,12 +41,32 @@ def _package_name_for_self_upgrade() -> str:
     return PACKAGE_NAME
 
 
+def _is_editable_uv_tool(exe: str) -> bool:
+    """Return True if the uv-tool env at ``exe`` was installed with --editable.
+
+    `uv tool upgrade` is a no-op against an editable install — it just
+    re-resolves the local source path, which reports the same version until
+    that source changes — so treating it as a normal UV_TOOL would make
+    self-upgrade silently do nothing forever. The tool env's uv-receipt.toml
+    records an `editable = "<path>"` key on the requirement for such installs.
+    """
+    receipt = Path(exe).parent.parent / "uv-receipt.toml"
+    try:
+        with receipt.open("rb") as f:
+            data = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+
+    requirements = data.get("tool", {}).get("requirements", [])
+    return any(isinstance(req, dict) and "editable" in req for req in requirements)
+
+
 def detect_install_method() -> InstallMethod:
     """Infer how wade was installed by inspecting sys.executable."""
     exe = sys.executable
 
     if "/.local/share/uv/tools/" in exe or "\\.local\\share\\uv\\tools\\" in exe:
-        return InstallMethod.UV_TOOL
+        return InstallMethod.EDITABLE if _is_editable_uv_tool(exe) else InstallMethod.UV_TOOL
     if "/.local/pipx/venvs/" in exe or "\\pipx\\venvs\\" in exe:
         return InstallMethod.PIPX
     if "/homebrew/" in exe.lower() or "/cellar/" in exe.lower():
