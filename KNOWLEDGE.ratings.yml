@@ -13,6 +13,10 @@
 54326c98:
   down: 1
   up: 0
+a24d65b0:
+  down: 0
+  superseded_by: c71d1a70
+  up: 1
 b61e247e:
   down: 0
   up: 3
