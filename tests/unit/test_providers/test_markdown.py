@@ -413,6 +413,15 @@ class TestCloseTask:
         with pytest.raises(TaskNotFoundError):
             provider.close_task("999")
 
+    def test_close_ignores_reason(self, config_factory) -> None:
+        """Markdown has no close-reason concept — reason is accepted and ignored."""
+        from wade.models.task import CloseReason
+
+        provider = config_factory(SAMPLE_FILE)
+        task = provider.close_task("1", reason=CloseReason.NOT_PLANNED)
+        assert task.state == TaskState.CLOSED
+        assert provider.read_task("1").state == TaskState.CLOSED
+
     def test_preserves_existing_file_mode(self, config_factory) -> None:
         # Atomic write must not silently strip group/other perms.
         provider = config_factory(SAMPLE_FILE)

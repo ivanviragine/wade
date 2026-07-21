@@ -144,6 +144,15 @@ Short aliases: `wade p` (plan), `wade i <N>` (implement), `wade r <N>` (review p
 
 Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level>`, and `--yolo` to override configured defaults. `implement` also supports `--detach` (new terminal tab) and `--cd` (print worktree path only).
 
+`wade plan --issue <N>` re-plans an existing issue. If the session produces a
+single plan file, it's attached to `#N` and the issue stays open. If the
+session decides the work should be split into several independent pieces
+(2+ plan files), `#N` is **superseded**: a new issue + draft PR is created
+per plan file, a comment and a `> **Superseded by ...**` banner are added to
+`#N`, and it's closed as *not planned* (confirmed via prompt unless
+`--yolo`/non-interactive). If any plan file fails to become an issue, `#N` is
+left open with a warning instead of superseding on a partial split.
+
 ## Supported AI Tools
 
 Adapters, model/effort resolution, and per-tool config (allowlists, hooks) are powered by [`crossby`](https://github.com/ivanviragine/crossby), WADE's AI-tool-integration dependency.

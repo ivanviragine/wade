@@ -27,7 +27,7 @@ from pydantic import BaseModel
 
 from wade.config.loader import load_config
 from wade.models.config import ProjectConfig
-from wade.models.task import PlanFile, Task
+from wade.models.task import CloseReason, PlanFile, Task
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.ai_resolution import (
@@ -540,23 +540,39 @@ def plan(
         if not usage.total_tokens:
             _warn_token_extraction(transcript_path)
 
-    # Existing issue — attach plan files to it (no new issue created)
+    # Existing issue — attach the plan to it, or supersede it if the session
+    # decided the work should be split into multiple issues.
     if existing_issue is not None:
         plan_files = validate_plan_files(Path(plan_dir))
         if plan_files:
             console.info(f"Found {len(plan_files)} plan file(s)")
-            _attach_plan_to_existing_issue(
-                provider=provider,
-                config=config,
-                issue=existing_issue,
-                plan_files=plan_files,
-                repo_root=repo_root,
-            )
+            if len(plan_files) == 1:
+                _attach_plan_to_existing_issue(
+                    provider=provider,
+                    config=config,
+                    issue=existing_issue,
+                    plan_file=plan_files[0],
+                    repo_root=repo_root,
+                )
+                finalize_issue_numbers = [existing_issue.id]
+            else:
+                finalize_issue_numbers = _supersede_issue_with_plans(
+                    provider=provider,
+                    config=config,
+                    issue=existing_issue,
+                    plan_files=plan_files,
+                    repo_root=repo_root,
+                    yolo=resolved_yolo,
+                )
             stop_title_keeper()
+            if not finalize_issue_numbers:
+                console.warn("No issues were created from plan files.")
+                _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+                return False
             offer_result = _finalize_issues(
                 provider=provider,
                 config=config,
-                issue_numbers=[existing_issue.id],
+                issue_numbers=finalize_issue_numbers,
                 ai_tool=resolved_tool,
                 model=resolved_model,
                 usage=usage,
@@ -579,7 +595,7 @@ def plan(
 
     if plan_files:
         console.info(f"Found {len(plan_files)} plan file(s)")
-        created_numbers = _create_issues_from_plans(
+        created_numbers, _failed_files = _create_issues_from_plans(
             provider=provider,
             config=config,
             plan_files=plan_files,
@@ -649,7 +665,7 @@ def _create_issues_from_plans(
     config: ProjectConfig,
     plan_files: list[PlanFile],
     repo_root: Path | None = None,
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
     """Create lightweight GitHub issues + draft PRs from validated plan files.
 
     Each plan file produces:
@@ -657,11 +673,13 @@ def _create_issues_from_plans(
     2. A ``complexity:X`` label
     3. A draft PR with the full plan content
 
-    Returns list of created issue numbers.
+    Returns a tuple of (created issue numbers, names of plan files that failed
+    to become issues).
     """
     from wade.git import repo as git_repo
 
     created: list[str] = []
+    failed: list[str] = []
 
     # Resolve repo root for draft PR creation
     if repo_root is None:
@@ -686,6 +704,7 @@ def _create_issues_from_plans(
             console.success(f"Created {console.issue_ref(task.id, task.title)}")
         except Exception as e:
             console.error(f"Failed to create issue: {e}")
+            failed.append(plan.path.name)
             continue
 
         # Add complexity label
@@ -720,33 +739,26 @@ def _create_issues_from_plans(
 
         created.append(task.id)
 
-    return created
+    return created, failed
 
 
 def _attach_plan_to_existing_issue(
     provider: AbstractTaskProvider,
     config: ProjectConfig,
     issue: Task,
-    plan_files: list[PlanFile],
+    plan_file: PlanFile,
     repo_root: Path | None,
 ) -> None:
-    """Attach the first plan file to an existing issue via a draft PR.
+    """Attach a single plan file to an existing issue via a draft PR.
 
     Reuses the same label / PR / body-update logic as _create_issues_from_plans
     but skips issue creation since the issue already exists.  The original issue
     body is preserved — the PR link is appended rather than replacing it.
     """
-    if len(plan_files) > 1:
-        console.warn(
-            f"Multiple plan files found — using '{plan_files[0].path.name}', "
-            f"ignoring {len(plan_files) - 1} other(s)."
-        )
-    plan = plan_files[0]
-
     # Add complexity label
-    if plan.complexity:
+    if plan_file.complexity:
         try:
-            add_complexity_label(provider, issue.id, plan.complexity)
+            add_complexity_label(provider, issue.id, plan_file.complexity)
         except Exception as e:
             logger.warning("plan.complexity_label_failed", error=str(e))
 
@@ -755,7 +767,7 @@ def _attach_plan_to_existing_issue(
         pr_info = bootstrap_draft_pr(
             issue_number=issue.id,
             issue_title=issue.title,
-            plan_body=plan.body,
+            plan_body=plan_file.body,
             config=config,
             repo_root=repo_root,
         )
@@ -775,6 +787,91 @@ def _attach_plan_to_existing_issue(
             console.warn(f"Could not create draft PR for #{issue.id}")
     else:
         console.warn("Not in a git repo — skipping draft PR creation.")
+
+
+_SUPERSEDE_BANNER_RE = re.compile(r"\A>\s*\*\*Superseded by[^\n]*\*\*\n*")
+
+
+def _with_supersede_banner(body: str, issue_refs: str) -> str:
+    """Prepend a 'Superseded by' banner, replacing any existing one instead of stacking."""
+    banner = f"> **Superseded by {issue_refs}**"
+    rest = _SUPERSEDE_BANNER_RE.sub("", body or "", count=1).strip("\n")
+    return f"{banner}\n\n{rest}" if rest else banner
+
+
+def _supersede_issue_with_plans(
+    provider: AbstractTaskProvider,
+    config: ProjectConfig,
+    issue: Task,
+    plan_files: list[PlanFile],
+    repo_root: Path | None,
+    yolo: bool,
+) -> list[str]:
+    """Split an existing issue into one new issue per plan file and supersede it.
+
+    Creates a new lightweight issue + draft PR for every plan file (reusing
+    _create_issues_from_plans). Only if every plan file became an issue does
+    this comment on and close the original issue as "not planned" — a partial
+    result leaves the original open so the split is never silently incomplete.
+
+    Returns the list of successfully created issue numbers — the caller must
+    pass only these to _finalize_issues, never the closed original.
+    """
+    created_numbers, failed_files = _create_issues_from_plans(
+        provider=provider,
+        config=config,
+        plan_files=plan_files,
+        repo_root=repo_root,
+    )
+
+    if failed_files:
+        console.warn(
+            f"Only {len(created_numbers)}/{len(plan_files)} plan file(s) became issues "
+            f"— leaving #{issue.id} open. Failed: {', '.join(failed_files)}"
+        )
+        logger.warning(
+            "plan.supersede_partial_failure",
+            issue=issue.id,
+            plan_file_count=len(plan_files),
+            created_count=len(created_numbers),
+        )
+        return created_numbers
+
+    issue_refs = ", ".join(f"#{n}" for n in created_numbers)
+
+    try:
+        provider.comment_on_task(
+            issue.id,
+            f"\U0001f500 Superseded during planning — split into {issue_refs}.",
+        )
+    except Exception as e:
+        logger.warning("plan.supersede_comment_failed", issue=issue.id, error=str(e))
+        console.warn(f"Could not comment on #{issue.id}: {e}")
+
+    try:
+        updated_body = _with_supersede_banner(issue.body or "", issue_refs)
+        provider.update_task(issue.id, body=updated_body)
+    except Exception as e:
+        logger.warning("plan.supersede_banner_failed", issue=issue.id, error=str(e))
+        console.warn(f"Could not update #{issue.id} body: {e}")
+
+    console.empty()
+    proceed = yolo or prompts.confirm(
+        f"Close #{issue.id} as superseded by {issue_refs}?",
+        default=True,
+    )
+    if not proceed:
+        console.info(f"Leaving #{issue.id} open — superseded by {issue_refs}.")
+        return created_numbers
+
+    try:
+        provider.close_task(issue.id, reason=CloseReason.NOT_PLANNED)
+        console.success(f"Closed #{issue.id} as not planned — superseded by {issue_refs}")
+    except Exception as e:
+        logger.warning("plan.supersede_close_failed", issue=issue.id, error=str(e))
+        console.warn(f"Could not close #{issue.id}: {e}")
+
+    return created_numbers
 
 
 def _finalize_issues(

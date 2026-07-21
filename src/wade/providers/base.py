@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 
 from wade.models.config import ProviderConfig
 from wade.models.review import PRComment, PRReviewStatus, ReviewThread
-from wade.models.task import Label, Task, TaskState
+from wade.models.task import CloseReason, Label, Task, TaskState
 
 
 class AbstractTaskProvider(ABC):
@@ -85,8 +85,11 @@ class AbstractTaskProvider(ABC):
         """Update task title and/or body."""
 
     @abstractmethod
-    def close_task(self, task_id: str) -> Task:
-        """Close a task."""
+    def close_task(self, task_id: str, reason: CloseReason | None = None) -> Task:
+        """Close a task, optionally with a typed reason (e.g. GitHub's "not planned").
+
+        Providers without a close-reason concept accept and ignore ``reason``.
+        """
 
     @abstractmethod
     def comment_on_task(self, task_id: str, body: str) -> None:

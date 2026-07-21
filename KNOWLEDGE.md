@@ -171,3 +171,9 @@ GitHubProvider.read_task_or_none() raises RuntimeError (not silently returns Non
 Tests that call remove(stale=True)/_remove_stale() or list_sessions() in cleanup.py must mock wade.services.implementation_service.cleanup.get_provider (not just cleanup.load_config), or they instantiate a real GitHubProvider and shell out to gh — passing locally with authenticated gh but failing in CI with no GH_TOKEN. See TestListSessions.test_gracefully_handles_issue_lookup_failures for the mocking pattern.
 
 ---
+
+## 702b274f | 2026-07-21 | plan | tags: prompts, cli, ux
+
+wade/ui/prompts.py helpers (confirm, input_prompt, choice, etc.) return their default when stdin is not a TTY (they guard on is_tty()). When adding an interactive prompt in a service/CLI path, do NOT write your own non-interactive detection — just pass a sensible default and rely on this. The idiom for an auto-proceed-under-yolo confirmation is: proceed = yolo or prompts.confirm(msg, default=True).
+
+---

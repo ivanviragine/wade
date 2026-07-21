@@ -14,6 +14,7 @@ import structlog
 
 from wade.models.config import ProviderConfig
 from wade.models.task import (
+    CloseReason,
     Label,
     Task,
     TaskState,
@@ -219,8 +220,12 @@ class ClickUpProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
 
         return self.read_task(task_id)
 
-    def close_task(self, task_id: str) -> Task:
-        """Close a task by setting its status to 'closed'."""
+    def close_task(self, task_id: str, reason: CloseReason | None = None) -> Task:
+        """Close a task by setting its status to 'closed'.
+
+        ClickUp has no close-reason concept — ``reason`` is accepted for
+        interface parity with other providers and ignored.
+        """
         self._client.put(
             f"/api/v2/task/{task_id}",
             json={"status": "closed"},
