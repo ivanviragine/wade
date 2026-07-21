@@ -174,6 +174,12 @@ Tests that call remove(stale=True)/_remove_stale() or list_sessions() in cleanup
 
 ## 702b274f | 2026-07-21 | plan | tags: prompts, cli, ux
 
-wade/ui/prompts.py helpers (confirm, input_prompt, choice, etc.) return their default when stdin is not a TTY (they guard on is_tty()). When adding an interactive prompt in a service/CLI path, do NOT write your own non-interactive detection — just pass a sensible default and rely on this. The idiom for an auto-proceed-under-yolo confirmation is: proceed = yolo or prompts.confirm(msg, default=True).
+wade/ui/prompts.py helpers such as confirm, input_prompt, select, and menu return their configured default when stdin is not a TTY; multi_select returns all items. When adding an interactive prompt in a service/CLI path, do NOT write your own non-interactive detection — just pass a sensible default and rely on this. The idiom for an auto-proceed-under-yolo confirmation is: proceed = yolo or prompts.confirm(msg, default=True).
+
+---
+
+## c7a450ff | 2026-07-21 | implementation | tags: testing, python | Issue #330
+
+Python's parenthesized with-statement (with (a, b, c):) does not support unpacking a list of context managers via *patches — it's a syntax error, not a runtime one. To share a list of mock.patch(...) objects across multiple tests, use contextlib.ExitStack() and call stack.enter_context(p) for each, capturing return values for assertions.
 
 ---
