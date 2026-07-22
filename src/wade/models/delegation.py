@@ -25,7 +25,7 @@ class DelegationRequest(BaseModel):
     model: str | None = None
     effort: str | None = None
     cwd: Path | None = None
-    timeout: int = 120
+    timeout: int = 300
     output_file: Path | None = None
     trusted_dirs: list[str] = Field(default_factory=list)
     allowed_commands: list[str] = Field(default_factory=list)

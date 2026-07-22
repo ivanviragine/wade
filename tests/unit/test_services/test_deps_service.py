@@ -511,3 +511,56 @@ class TestAnalyzeDepsMode:
         assert len(result.edges) == 1
         call_args = mock_delegate.call_args[0][0]
         assert call_args.mode == DelegationMode.HEADLESS
+
+    @patch("wade.services.deps_service.create_tracking_issue")
+    @patch("wade.services.deps_service.apply_deps_to_issues")
+    @patch("wade.services.deps_service.delegate")
+    @patch("wade.services.deps_service.confirm_ai_selection")
+    @patch("wade.services.deps_service.resolve_effort")
+    @patch("wade.services.deps_service.resolve_model")
+    @patch("wade.services.deps_service.resolve_ai_tool")
+    @patch("wade.services.deps_service.get_provider")
+    @patch("wade.services.deps_service.load_config")
+    def test_headless_timeout_is_forwarded(
+        self,
+        mock_config: MagicMock,
+        mock_provider: MagicMock,
+        mock_resolve_tool: MagicMock,
+        mock_resolve_model: MagicMock,
+        mock_resolve_effort: MagicMock,
+        mock_confirm: MagicMock,
+        mock_delegate: MagicMock,
+        mock_apply: MagicMock,
+        mock_tracking: MagicMock,
+    ) -> None:
+        """ai.deps.timeout should be forwarded into the DelegationRequest."""
+        from wade.models.config import AICommandConfig, AIConfig
+
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(deps=AICommandConfig(tool="claude", mode="headless", timeout=300))
+        )
+        provider = MagicMock()
+        provider.read_task.side_effect = [
+            Task(id="1", title="Auth", body="Login"),
+            Task(id="2", title="DB", body="Schema"),
+            Task(id="1", title="Auth", body="Login"),
+            Task(id="2", title="DB", body="Schema"),
+        ]
+        mock_provider.return_value = provider
+        mock_resolve_tool.return_value = "claude"
+        mock_resolve_model.return_value = None
+        mock_resolve_effort.return_value = None
+        mock_confirm.return_value = ("claude", None, None, False)
+        mock_delegate.return_value = DelegationResult(
+            success=True,
+            feedback="1 -> 2 # auth before UI",
+            mode=DelegationMode.HEADLESS,
+        )
+        mock_apply.return_value = 2
+        mock_tracking.return_value = "10"
+
+        result = analyze_deps(["1", "2"])
+        assert result is not None
+        call_args = mock_delegate.call_args[0][0]
+        assert call_args.mode == DelegationMode.HEADLESS
+        assert call_args.timeout == 300

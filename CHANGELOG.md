@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.31.3] — 2026-07-22
+
+### Bug Fixes
+
+- --mode headless still blocks on TTY AI-selection confirm prompt (#332) (3095ed7)
+
 ## [v0.31.2] — 2026-07-17
 
 ### Refactoring

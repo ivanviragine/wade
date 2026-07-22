@@ -328,6 +328,7 @@ def _run_delegation(
     effort: str | None = None,
     allowed_commands: list[str] | None = None,
     cwd: Path | None = None,
+    timeout: int | None = None,
 ) -> str | None:
     """Run dependency analysis via the generic delegation infrastructure.
 
@@ -341,6 +342,7 @@ def _run_delegation(
         effort=effort,
         cwd=cwd,
         allowed_commands=allowed_commands or [],
+        **({"timeout": timeout} if timeout is not None else {}),
     )
     result = delegate(request)
     if result.success and result.feedback:
@@ -432,6 +434,7 @@ def analyze_deps(
             model_explicit=model_explicit,
             resolved_effort=resolved_effort,
             effort_explicit=effort_explicit,
+            mode=delegation_mode,
         )
         if not resolved_tool:
             console.error("No AI tool selected.")
@@ -503,6 +506,7 @@ def analyze_deps(
         effort=effort_str,
         allowed_commands=config.permissions.allowed_commands,
         cwd=deps_cwd,
+        timeout=cmd_config.timeout,
     )
 
     if delegation_mode == DelegationMode.PROMPT:

@@ -100,6 +100,7 @@ def _run_review_delegation(
             model_explicit=model_explicit,
             resolved_effort=resolved_effort,
             effort_explicit=effort_explicit,
+            mode=delegation_mode,
         )
 
     effort_str = resolved_effort.value if isinstance(resolved_effort, EffortLevel) else None
