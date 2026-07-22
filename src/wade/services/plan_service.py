@@ -789,7 +789,7 @@ def _attach_plan_to_existing_issue(
         console.warn("Not in a git repo — skipping draft PR creation.")
 
 
-_SUPERSEDE_BANNER_RE = re.compile(r"\A>\s*\*\*Superseded by[^\n]*\*\*\n*")
+_SUPERSEDE_BANNER_RE = re.compile(r"\A\s*>\s*\*\*Superseded by[^\n]*\*\*\n*")
 
 
 def _with_supersede_banner(body: str, issue_refs: str) -> str:

@@ -966,6 +966,13 @@ class TestWithSupersedeBanner:
         result = _with_supersede_banner("", "#1, #2")
         assert result == "> **Superseded by #1, #2**"
 
+    def test_replaces_existing_banner_with_leading_whitespace(self) -> None:
+        body = "\n> **Superseded by #1, #2**\n\nOriginal content"
+        result = _with_supersede_banner(body, "#1, #2, #3")
+        assert result.count("Superseded by") == 1
+        assert "#1, #2, #3" in result
+        assert "Original content" in result
+
 
 # ---------------------------------------------------------------------------
 # _supersede_issue_with_plans
