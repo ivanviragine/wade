@@ -8,6 +8,7 @@ import crossby.ai_tools  # noqa: F401 — registers all adapters via __init_subc
 from crossby.models.ai import EffortLevel
 
 from wade.models.config import AICommandConfig, AIConfig, ComplexityModelMapping, ProjectConfig
+from wade.models.delegation import DelegationMode
 from wade.services.ai_resolution import confirm_ai_selection, resolve_effort
 
 # ---------------------------------------------------------------------------
@@ -73,6 +74,20 @@ class TestConfirmAiSelectionEarlyExit:
         with patch(_IS_TTY, return_value=True), patch(_SELECT) as mock_select:
             result = confirm_ai_selection(None, None, tool_explicit=False, model_explicit=False)
         assert result == (None, None, None, False)
+        mock_select.assert_not_called()
+
+    def test_headless_mode_skips_prompt_even_on_tty(self) -> None:
+        """Headless mode is unattended by definition — never block on a TTY prompt,
+        even when a TTY is attached and flags weren't explicit."""
+        with patch(_IS_TTY, return_value=True), patch(_SELECT) as mock_select:
+            result = confirm_ai_selection(
+                _CLAUDE,
+                _MODEL_A,
+                tool_explicit=False,
+                model_explicit=False,
+                mode=DelegationMode.HEADLESS,
+            )
+        assert result == (_CLAUDE, _MODEL_A, None, False)
         mock_select.assert_not_called()
 
 

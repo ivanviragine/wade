@@ -23,6 +23,7 @@ from crossby.ai_tools import AbstractAITool
 from crossby.models.ai import AIToolID, EffortLevel
 
 from wade.models.config import AICommandConfig, ProjectConfig
+from wade.models.delegation import DelegationMode
 
 logger = structlog.get_logger()
 
@@ -221,22 +222,30 @@ def confirm_ai_selection(
     effort_explicit: bool = False,
     resolved_yolo: bool = False,
     yolo_explicit: bool = True,
+    mode: DelegationMode | None = None,
 ) -> tuple[str | None, str | None, EffortLevel | None, bool]:
     """Interactively confirm (and optionally change) the resolved AI tool/model/effort/yolo.
 
     Fires only when stdin is a TTY and at least one of the flags was not
     explicitly provided by the caller.  When all flags are explicit (e.g.
     because ``wade implement-batch`` passes ``--ai``/``--model``/``--effort`` to
-    child calls), this is a no-op.
+    child calls), this is a no-op. Also a no-op when *mode* is
+    ``DelegationMode.HEADLESS``: headless mode is defined as unattended, so it
+    must never block on a TTY prompt even when one happens to be attached.
 
     Returns the (tool, model, effort, yolo) tuple after any user-driven changes.
     """
     from wade.ui import prompts
     from wade.ui.console import console
 
-    # Skip when non-TTY, no tool resolved, or all flags were explicit.
+    # Skip when non-TTY, no tool resolved, all flags were explicit, or headless.
     all_explicit = tool_explicit and model_explicit and effort_explicit and yolo_explicit
-    if not prompts.is_tty() or resolved_tool is None or all_explicit:
+    if (
+        not prompts.is_tty()
+        or resolved_tool is None
+        or all_explicit
+        or mode == DelegationMode.HEADLESS
+    ):
         return resolved_tool, resolved_model, resolved_effort, resolved_yolo
 
     tool = resolved_tool

@@ -432,6 +432,7 @@ def analyze_deps(
             model_explicit=model_explicit,
             resolved_effort=resolved_effort,
             effort_explicit=effort_explicit,
+            mode=delegation_mode,
         )
         if not resolved_tool:
             console.error("No AI tool selected.")
