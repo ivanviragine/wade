@@ -26,7 +26,7 @@ class TestDelegationRequest:
         assert req.prompt == "Review this"
         assert req.ai_tool is None
         assert req.model is None
-        assert req.timeout == 120
+        assert req.timeout == 300
         assert req.trusted_dirs == []
         assert req.allowed_commands == []
         assert req.yolo is False
