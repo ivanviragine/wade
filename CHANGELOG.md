@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.32.0] — 2026-07-23
+
+### Features
+
+- supersede existing issue when planning splits it into multiple plan files (#331) (2f1fb93)
+
 ## [v0.31.3] — 2026-07-22
 
 ### Bug Fixes
