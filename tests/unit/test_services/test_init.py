@@ -1432,7 +1432,10 @@ class TestUpdateExtended:
         (tmp_git_repo / ".gemini" / "policies").mkdir(parents=True)
         (tmp_git_repo / ".gemini" / "hooks" / "plan_write_guard.py").write_text("x")
         (tmp_git_repo / ".gemini" / "hooks" / "worktree_guard.py").write_text("x")
-        (tmp_git_repo / ".gemini" / "settings.json").write_text("{}")
+        # wade-owned settings.json carries a PreToolUse hook pointing at the guard script.
+        (tmp_git_repo / ".gemini" / "settings.json").write_text(
+            '{"hooks": {"PreToolUse": [{"command": ".gemini/hooks/plan_write_guard.py"}]}}'
+        )
         (tmp_git_repo / ".gemini" / "policies" / "wade.toml").write_text("x")
         # The cross-tool alias was a symlink (now dangling — its target isn't on main).
         (tmp_git_repo / ".gemini" / "skills").symlink_to("../.claude/skills")
@@ -1447,6 +1450,23 @@ class TestUpdateExtended:
         assert not (tmp_git_repo / ".gemini" / "policies" / "wade.toml").exists()
         assert not (tmp_git_repo / ".gemini" / "skills").is_symlink()
         assert not (tmp_git_repo / ".gemini").exists()
+
+    def test_update_preserves_user_owned_gemini_settings(self, tmp_git_repo: Path) -> None:
+        """update() must NOT delete a user's own .gemini/settings.json (no wade hooks)."""
+        init(project_root=tmp_git_repo, non_interactive=True)
+        gemini = tmp_git_repo / ".gemini"
+        gemini.mkdir()
+        user_settings = gemini / "settings.json"
+        user_content = '{"theme": "dark", "sandbox": true}'
+        user_settings.write_text(user_content)
+
+        update(project_root=tmp_git_repo, skip_self_upgrade=True)
+
+        # A generic Gemini CLI config with no wade guard wiring is left untouched,
+        # so both the file and its parent .gemini dir survive.
+        assert user_settings.is_file()
+        assert user_settings.read_text() == user_content
+        assert gemini.is_dir()
 
     def test_skip_self_upgrade_flag(self, tmp_git_repo: Path) -> None:
         """skip_self_upgrade=True should not call _maybe_self_upgrade."""
