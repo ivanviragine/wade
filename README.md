@@ -168,6 +168,9 @@ Adapters, model/effort resolution, and per-tool config (allowlists, hooks) are p
 | [Antigravity](https://antigravity.google/) | `antigravity` |
 | [Antigravity CLI](https://antigravity.google/) | `agy` |
 
+> In `.wade.yml`, refer to a tool by its **config ID**, which matches the binary
+> above except for VS Code (`vscode`) and Antigravity CLI (`antigravity-cli`).
+
 ## Task Providers
 
 WADE can pull tasks from three backends — pick one when you run `wade init`:

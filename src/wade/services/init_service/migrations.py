@@ -142,7 +142,11 @@ def _is_wade_owned_gemini_settings(path: Path) -> bool:
     """
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
+        # Unreadable or non-UTF-8 (corrupt/binary) — wade always writes UTF-8
+        # JSON here, so anything undecodable is not ours; leave it untouched.
+        # UnicodeDecodeError is a ValueError, not an OSError, so it must be
+        # named explicitly or it would escape and crash `wade update`.
         return False
     return any(marker in text for marker in _WADE_GUARD_MARKERS)
 

@@ -1468,6 +1468,28 @@ class TestUpdateExtended:
         assert user_settings.read_text() == user_content
         assert gemini.is_dir()
 
+    def test_update_preserves_non_utf8_gemini_settings(self, tmp_git_repo: Path) -> None:
+        """A corrupt/binary .gemini/settings.json must not crash update() and is kept.
+
+        The ownership check reads the file as UTF-8; non-UTF-8 bytes raise
+        UnicodeDecodeError (a ValueError, not an OSError). It must be caught so
+        `wade update` neither crashes nor deletes a file it cannot prove is ours.
+        """
+        init(project_root=tmp_git_repo, non_interactive=True)
+        gemini = tmp_git_repo / ".gemini"
+        gemini.mkdir()
+        settings = gemini / "settings.json"
+        binary_content = b"\xff\xfe\x00garbage\x80\x81"
+        settings.write_bytes(binary_content)
+
+        # Must not raise despite the undecodable bytes.
+        update(project_root=tmp_git_repo, skip_self_upgrade=True)
+
+        # Undecodable → not provably wade-owned → preserved untouched.
+        assert settings.is_file()
+        assert settings.read_bytes() == binary_content
+        assert gemini.is_dir()
+
     def test_skip_self_upgrade_flag(self, tmp_git_repo: Path) -> None:
         """skip_self_upgrade=True should not call _maybe_self_upgrade."""
         init(project_root=tmp_git_repo, non_interactive=True)
