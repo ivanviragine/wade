@@ -103,9 +103,6 @@ def _detect_ai_cli_env() -> str | None:
     # Copilot CLI
     if os.environ.get("COPILOT_CLI"):
         return "COPILOT_CLI"
-    # Gemini CLI
-    if os.environ.get("GEMINI_CLI"):
-        return "GEMINI_CLI"
     # Codex CLI
     if os.environ.get("CODEX_CLI"):
         return "CODEX_CLI"

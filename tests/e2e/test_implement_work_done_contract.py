@@ -339,7 +339,7 @@ class TestWorkDoneCommand:
         assert managed_claude_dir.is_dir()
         # Force-add gitignored .claude files to simulate accidental tracking.
         # Also stage any other untracked non-gitignored files wade created (e.g.
-        # hook configs in .cursor/, .github/, .gemini/) so the working tree is
+        # hook configs in .cursor/, .github/) so the working tree is
         # clean before calling done.
         _git(["add", "-f", ".claude"], cwd=worktree_path)
         _git(["add", "."], cwd=worktree_path)

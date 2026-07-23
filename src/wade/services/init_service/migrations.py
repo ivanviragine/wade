@@ -47,6 +47,7 @@ __all__ = [
     "GITIGNORE_MARKER_START",
     "_GITIGNORE_LEGACY_ENTRIES",
     "_clean_gitignore",
+    "_cleanup_gemini_artifacts",
     "_ensure_wade_dir_self_ignoring",
     "_migrate_ai_artifacts_off_main",
     "_migrate_gitignore_block",
@@ -93,11 +94,74 @@ def _migrate_skills_off_main(project_root: Path) -> list[str]:
         primary_skills_dir,
         project_root / ".github",
         project_root / ".agents",
-        project_root / ".gemini",
         project_root / ".cursor",
     ]:
         if parent.is_dir() and not any(parent.iterdir()):
             parent.rmdir()
+
+    return removed
+
+
+# Real (non-symlink) files written by removed Gemini-CLI support that older wade
+# versions left behind.  The generic symlink cleanup never touches these, so
+# ``wade update`` prunes them explicitly.  Ordered so nested files come before
+# their parents (see ``_cleanup_gemini_artifacts``).
+_GEMINI_ARTIFACT_FILES: Final = [
+    ".gemini/hooks/plan_write_guard.py",
+    ".gemini/hooks/worktree_guard.py",
+    ".gemini/settings.json",
+    ".gemini/policies/wade.toml",
+]
+
+# Cross-tool alias symlinks older wade versions created under ``.gemini/``.
+_GEMINI_ARTIFACT_SYMLINKS: Final = [
+    ".gemini/skills",
+]
+
+# Real ``.gemini`` sub-directories removed once emptied by the cleanup above.
+# ``.gemini`` itself comes last so it is only removed once its children are gone.
+_GEMINI_ARTIFACT_DIRS: Final = [
+    ".gemini/hooks",
+    ".gemini/policies",
+    ".gemini",
+]
+
+
+def _cleanup_gemini_artifacts(project_root: Path) -> list[str]:
+    """Remove real Gemini-era files left behind by older wade versions.
+
+    Gemini CLI support was removed (crossby dropped its adapter). Earlier wade
+    versions wrote guard-hook scripts, a Policy Engine TOML, hook settings, and a
+    ``.gemini/skills`` cross-tool alias symlink under ``.gemini/``. The generic
+    off-main cleanup no longer knows about ``.gemini`` at all, so this prunes the
+    concrete files and the alias symlink, then removes any ``.gemini``
+    sub-directories that become empty.
+
+    Returns list of removed paths (relative to project root).
+    """
+    removed: list[str] = []
+
+    for rel in _GEMINI_ARTIFACT_FILES:
+        target = project_root / rel
+        if target.is_file() or target.is_symlink():
+            target.unlink()
+            removed.append(rel)
+
+    # Alias symlinks must be unlinked, not rmdir'd — and ``is_dir()`` is False for
+    # a dangling one (its ``.claude/skills`` target may already be gone), so match
+    # on ``is_symlink()``.
+    for rel in _GEMINI_ARTIFACT_SYMLINKS:
+        link = project_root / rel
+        if link.is_symlink():
+            link.unlink()
+            removed.append(rel)
+
+    # Only prune genuinely empty real directories — never a symlink or a dir that
+    # still holds user content.
+    for rel in _GEMINI_ARTIFACT_DIRS:
+        d = project_root / rel
+        if d.is_dir() and not d.is_symlink() and not any(d.iterdir()):
+            d.rmdir()
 
     return removed
 

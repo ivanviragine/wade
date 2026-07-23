@@ -356,7 +356,7 @@ class TestRunDelegation:
             mode=DelegationMode.HEADLESS,
             exit_code=1,
         )
-        result = _run_delegation("gemini", "Analyze deps", DelegationMode.HEADLESS)
+        result = _run_delegation("antigravity-cli", "Analyze deps", DelegationMode.HEADLESS)
         assert result is None
 
     @patch("wade.services.deps_service.delegate")

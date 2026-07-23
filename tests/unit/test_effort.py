@@ -115,7 +115,13 @@ class TestAdapterSupportsEffort:
 
     @pytest.mark.parametrize(
         "tool_id",
-        [AIToolID.CLAUDE, AIToolID.CODEX, AIToolID.CURSOR, AIToolID.OPENCODE],
+        [
+            AIToolID.CLAUDE,
+            AIToolID.CODEX,
+            AIToolID.CURSOR,
+            AIToolID.OPENCODE,
+            AIToolID.ANTIGRAVITY_CLI,
+        ],
     )
     def test_supports_effort_true(self, tool_id: AIToolID) -> None:
         from crossby.ai_tools import AbstractAITool
@@ -125,7 +131,7 @@ class TestAdapterSupportsEffort:
 
     @pytest.mark.parametrize(
         "tool_id",
-        [AIToolID.COPILOT, AIToolID.GEMINI, AIToolID.ANTIGRAVITY, AIToolID.VSCODE],
+        [AIToolID.COPILOT, AIToolID.ANTIGRAVITY, AIToolID.VSCODE],
     )
     def test_supports_effort_false(self, tool_id: AIToolID) -> None:
         from crossby.ai_tools import AbstractAITool

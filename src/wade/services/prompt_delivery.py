@@ -14,7 +14,7 @@ logger = structlog.get_logger()
 def deliver_prompt_if_needed(adapter: AbstractAITool, prompt: str) -> None:
     """Copy prompt to clipboard and inform user if the tool can't accept initial messages.
 
-    No-op for tools that support initial messages (Claude, Copilot, Gemini, etc.).
+    No-op for tools that support initial messages (Claude, Copilot, etc.).
     For tools that don't (VS Code, Antigravity), copies the prompt to the clipboard
     and shows a hint. If clipboard fails, shows the full prompt for manual copy.
     """

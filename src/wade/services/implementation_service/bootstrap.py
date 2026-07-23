@@ -180,19 +180,18 @@ def _install_guard_hooks(
         guard_src = get_guard_script_path()
         script_name = "plan_write_guard.py"
 
-    tool_dirs = [".claude/hooks", ".cursor/hooks", ".copilot/hooks", ".gemini/hooks"]
+    tool_dirs = [".claude/hooks", ".cursor/hooks", ".copilot/hooks"]
     for tool_dir in tool_dirs:
         dest_dir = worktree_path / tool_dir
         dest_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(guard_src, dest_dir / script_name)
 
-    from crossby.config import claude_allowlist, copilot_hooks, cursor_hooks, gemini_hooks
+    from crossby.config import claude_allowlist, copilot_hooks, cursor_hooks
 
     configure_fns = [
         (claude_allowlist, ".claude"),
         (cursor_hooks, ".cursor"),
         (copilot_hooks, ".copilot"),
-        (gemini_hooks, ".gemini"),
     ]
     hook_fn_name = f"configure_{guard_type}_hooks"
     for module, tool_dir_prefix in configure_fns:
@@ -489,15 +488,6 @@ def bootstrap_worktree(
         or is_cursor_configured(repo_root, cursor_marker)
     ):
         configure_cursor_allowlist(worktree_path, wade_patterns)
-
-    # Propagate Gemini policy to worktree's .gemini/policies/wade.toml.
-    # Gemini CLI uses the Policy Engine (TOML files) instead of --allowed-tools.
-    # wade_patterns always carries the wade base pattern, so gemini gets it too.
-    gemini_in_config = any(config.get_ai_tool(cmd) == "gemini" for cmd in [None, *AI_COMMAND_NAMES])
-    if selected_ai_tool == "gemini" or gemini_in_config:
-        from crossby.sync.permissions import GeminiPermissionWriter
-
-        GeminiPermissionWriter.write(worktree_path, wade_patterns)
 
     # Run post-create hook
     if config.hooks.post_worktree_create:
