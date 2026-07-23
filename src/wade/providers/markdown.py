@@ -57,6 +57,7 @@ else:  # pragma: no cover -- exercised only on Windows
 
 from wade.models.config import ProviderConfig
 from wade.models.task import (
+    CloseReason,
     Label,
     Task,
     TaskState,
@@ -552,11 +553,14 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
             self._persist(prelude, sections)
         return _section_to_task(section)
 
-    def close_task(self, task_id: str) -> Task:
+    def close_task(self, task_id: str, reason: CloseReason | None = None) -> Task:
         """Mark a task ``closed`` and strip the in-progress label.
 
         If ``auto_commit`` is set in provider settings, commits the change
         to git so the merge flow doesn't leave the working tree dirty.
+
+        The markdown provider has no close-reason concept — ``reason`` is
+        accepted for interface parity with other providers and ignored.
         """
         with self._lock():
             prelude, sections = self._load_sections()

@@ -332,6 +332,28 @@ class TestCloseTask:
         # First call is close, second is read
         first_cmd = mock_run.call_args_list[0][0][0]
         assert "close" in first_cmd
+        assert "--reason" not in first_cmd
+
+    @patch("wade.providers.github.run")
+    def test_close_with_not_planned_reason(
+        self, mock_run: MagicMock, provider: GitHubProvider
+    ) -> None:
+        from wade.models.task import CloseReason
+
+        read_response = json.dumps(
+            {
+                "number": 42,
+                "title": "t",
+                "body": "",
+                "state": "CLOSED",
+                "labels": [],
+            }
+        )
+        mock_run.return_value = _make_completed(read_response)
+
+        provider.close_task("42", reason=CloseReason.NOT_PLANNED)
+        first_cmd = mock_run.call_args_list[0][0][0]
+        assert first_cmd == ["gh", "issue", "close", "42", "--reason", "not planned"]
 
 
 class TestCommentOnTask:

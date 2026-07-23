@@ -31,6 +31,7 @@ from wade.models.review import (
     filter_unresolved_threads,
 )
 from wade.models.task import (
+    CloseReason,
     Label,
     Task,
     TaskState,
@@ -269,10 +270,13 @@ class GitHubProvider(AbstractTaskProvider):
 
         return self.read_task(task_id)
 
-    def close_task(self, task_id: str) -> Task:
-        """Close an issue."""
-        run(["gh", "issue", "close", task_id], check=True, retries=3)
-        logger.info("github.issue_closed", number=task_id)
+    def close_task(self, task_id: str, reason: CloseReason | None = None) -> Task:
+        """Close an issue, optionally with a reason (e.g. "not planned")."""
+        cmd = ["gh", "issue", "close", task_id]
+        if reason is not None:
+            cmd.extend(["--reason", reason.value])
+        run(cmd, check=True, retries=3)
+        logger.info("github.issue_closed", number=task_id, reason=reason.value if reason else None)
         return self.read_task(task_id)
 
     def comment_on_task(self, task_id: str, body: str) -> None:

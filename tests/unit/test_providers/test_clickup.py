@@ -342,6 +342,20 @@ class TestCloseTask:
         assert call_json["status"] == "closed"
         assert task.state == TaskState.CLOSED
 
+    def test_close_task_ignores_reason(self, provider: ClickUpProvider) -> None:
+        """ClickUp has no close-reason concept — reason is accepted and ignored."""
+        from wade.models.task import CloseReason
+
+        provider._client = MagicMock()
+        provider._client.get.return_value = _make_raw_task(status="closed")
+
+        task = provider.close_task("abc123", reason=CloseReason.NOT_PLANNED)
+
+        provider._client.put.assert_called_once()
+        call_json = provider._client.put.call_args[1]["json"]
+        assert call_json == {"status": "closed"}
+        assert task.state == TaskState.CLOSED
+
 
 class TestCommentOnTask:
     def test_comment(self, provider: ClickUpProvider) -> None:

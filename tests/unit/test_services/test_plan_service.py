@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -10,11 +11,14 @@ import pytest
 from crossby.models.ai import TokenUsage
 
 from wade.models.config import AIConfig, ProjectConfig
-from wade.models.task import PlanFile
+from wade.models.task import CloseReason, PlanFile, Task
 from wade.services.ai_resolution import resolve_ai_tool, resolve_model
 from wade.services.plan_service import (
+    _attach_plan_to_existing_issue,
     _finalize_issues,
     _offer_to_implement,
+    _supersede_issue_with_plans,
+    _with_supersede_banner,
     discover_plan_files,
     get_plan_prompt_template,
     plan,
@@ -737,7 +741,10 @@ class TestPlanOrchestrator:
                 return_value=TokenUsage(total_tokens=123),
             ),
             patch("wade.services.plan_service.validate_plan_files", return_value=[plan_file]),
-            patch("wade.services.plan_service._create_issues_from_plans", return_value=["101"]),
+            patch(
+                "wade.services.plan_service._create_issues_from_plans",
+                return_value=(["101"], []),
+            ),
             patch(
                 "wade.services.plan_service._finalize_issues", return_value=None
             ) as mock_finalize,
@@ -901,3 +908,346 @@ class TestFinalizeIssuesHints:
             mock_offer.assert_not_called()
             mock_console.detail.assert_called_with("wade implement-batch 1 2 3")
             assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _attach_plan_to_existing_issue — single PlanFile
+# ---------------------------------------------------------------------------
+
+
+class TestAttachPlanToExistingIssue:
+    def test_attaches_single_plan_file_preserving_original_body(self, tmp_path: Path) -> None:
+        provider = MagicMock()
+        issue = Task(id="42", title="Some issue", body="Original body")
+        plan_path = tmp_path / "PLAN.md"
+        plan_path.write_text("# feat: thing\n\n## Tasks\n- Do it\n")
+        plan_file = PlanFile.from_markdown(plan_path)
+
+        with (
+            patch(
+                "wade.services.plan_service.bootstrap_draft_pr",
+                return_value={"number": 99, "url": "https://example.com/pr/99"},
+            ),
+            patch("wade.services.plan_service.add_complexity_label"),
+            patch("wade.services.plan_service.console"),
+        ):
+            _attach_plan_to_existing_issue(
+                provider=provider,
+                config=ProjectConfig(),
+                issue=issue,
+                plan_file=plan_file,
+                repo_root=tmp_path,
+            )
+
+        provider.update_task.assert_called_once()
+        updated_body = provider.update_task.call_args.kwargs["body"]
+        assert "Original body" in updated_body
+        assert "PR #99" in updated_body
+
+
+# ---------------------------------------------------------------------------
+# _with_supersede_banner — banner idempotency
+# ---------------------------------------------------------------------------
+
+
+class TestWithSupersedeBanner:
+    def test_prepends_banner_to_body(self) -> None:
+        result = _with_supersede_banner("Original content", "#1, #2")
+        assert result == "> **Superseded by #1, #2**\n\nOriginal content"
+
+    def test_replaces_existing_banner_instead_of_stacking(self) -> None:
+        body = "> **Superseded by #1, #2**\n\nOriginal content"
+        result = _with_supersede_banner(body, "#1, #2, #3")
+        assert result.count("Superseded by") == 1
+        assert "#1, #2, #3" in result
+        assert "Original content" in result
+
+    def test_empty_body_returns_banner_only(self) -> None:
+        result = _with_supersede_banner("", "#1, #2")
+        assert result == "> **Superseded by #1, #2**"
+
+    def test_replaces_existing_banner_with_leading_whitespace(self) -> None:
+        body = "\n> **Superseded by #1, #2**\n\nOriginal content"
+        result = _with_supersede_banner(body, "#1, #2, #3")
+        assert result.count("Superseded by") == 1
+        assert "#1, #2, #3" in result
+        assert "Original content" in result
+
+
+# ---------------------------------------------------------------------------
+# _supersede_issue_with_plans
+# ---------------------------------------------------------------------------
+
+
+class TestSupersedeIssueWithPlans:
+    def _make_plan_files(self, tmp_path: Path, n: int) -> list[PlanFile]:
+        files = []
+        for i in range(n):
+            p = tmp_path / f"PLAN-{i}.md"
+            p.write_text(f"# feat: part {i}\n\n## Tasks\n- Do {i}\n")
+            files.append(PlanFile.from_markdown(p))
+        return files
+
+    def test_full_success_closes_original_as_not_planned(self, tmp_path: Path) -> None:
+        provider = MagicMock()
+        issue = Task(id="330", title="Big feature", body="Original body")
+        plan_files = self._make_plan_files(tmp_path, 3)
+
+        with (
+            patch(
+                "wade.services.plan_service._create_issues_from_plans",
+                return_value=(["101", "102", "103"], []),
+            ),
+            patch("wade.services.plan_service.prompts") as mock_prompts,
+            patch("wade.services.plan_service.console"),
+        ):
+            mock_prompts.confirm.return_value = True
+
+            result = _supersede_issue_with_plans(
+                provider=provider,
+                config=ProjectConfig(),
+                issue=issue,
+                plan_files=plan_files,
+                repo_root=None,
+                yolo=False,
+            )
+
+        assert result == ["101", "102", "103"]
+
+        provider.comment_on_task.assert_called_once()
+        comment_body = provider.comment_on_task.call_args.args[1]
+        assert "#101, #102, #103" in comment_body
+
+        provider.update_task.assert_called_once()
+        updated_body = provider.update_task.call_args.kwargs["body"]
+        assert "Superseded by #101, #102, #103" in updated_body
+        assert "Original body" in updated_body
+
+        provider.close_task.assert_called_once_with("330", reason=CloseReason.NOT_PLANNED)
+
+    def test_partial_failure_leaves_issue_open(self, tmp_path: Path) -> None:
+        provider = MagicMock()
+        issue = Task(id="330", title="Big feature", body="Original body")
+        plan_files = self._make_plan_files(tmp_path, 3)
+
+        with (
+            patch(
+                "wade.services.plan_service._create_issues_from_plans",
+                return_value=(["101", "102"], ["PLAN-2.md"]),
+            ),
+            patch("wade.services.plan_service.console") as mock_console,
+        ):
+            result = _supersede_issue_with_plans(
+                provider=provider,
+                config=ProjectConfig(),
+                issue=issue,
+                plan_files=plan_files,
+                repo_root=None,
+                yolo=True,
+            )
+
+        assert result == ["101", "102"]
+        provider.comment_on_task.assert_not_called()
+        provider.update_task.assert_not_called()
+        provider.close_task.assert_not_called()
+        mock_console.warn.assert_called_once()
+        assert "PLAN-2.md" in mock_console.warn.call_args.args[0]
+
+    def test_yolo_skips_confirmation_prompt(self, tmp_path: Path) -> None:
+        provider = MagicMock()
+        issue = Task(id="330", title="Big feature", body="")
+        plan_files = self._make_plan_files(tmp_path, 2)
+
+        with (
+            patch(
+                "wade.services.plan_service._create_issues_from_plans",
+                return_value=(["101", "102"], []),
+            ),
+            patch("wade.services.plan_service.prompts") as mock_prompts,
+            patch("wade.services.plan_service.console"),
+        ):
+            _supersede_issue_with_plans(
+                provider=provider,
+                config=ProjectConfig(),
+                issue=issue,
+                plan_files=plan_files,
+                repo_root=None,
+                yolo=True,
+            )
+
+        mock_prompts.confirm.assert_not_called()
+        provider.close_task.assert_called_once_with("330", reason=CloseReason.NOT_PLANNED)
+
+    def test_user_declines_close_leaves_issue_open(self, tmp_path: Path) -> None:
+        provider = MagicMock()
+        issue = Task(id="330", title="Big feature", body="")
+        plan_files = self._make_plan_files(tmp_path, 2)
+
+        with (
+            patch(
+                "wade.services.plan_service._create_issues_from_plans",
+                return_value=(["101", "102"], []),
+            ),
+            patch("wade.services.plan_service.prompts") as mock_prompts,
+            patch("wade.services.plan_service.console"),
+        ):
+            mock_prompts.confirm.return_value = False
+
+            result = _supersede_issue_with_plans(
+                provider=provider,
+                config=ProjectConfig(),
+                issue=issue,
+                plan_files=plan_files,
+                repo_root=None,
+                yolo=False,
+            )
+
+        assert result == ["101", "102"]
+        provider.close_task.assert_not_called()
+        # Comment and banner are applied regardless of the close decision.
+        provider.comment_on_task.assert_called_once()
+        provider.update_task.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# plan() — existing-issue branch: attach vs supersede
+# ---------------------------------------------------------------------------
+
+
+class TestPlanExistingIssueBranch:
+    def _base_patches(
+        self,
+        tmp_path: Path,
+        provider: MagicMock,
+        adapter: MagicMock,
+        plan_files: list[PlanFile],
+    ) -> list[contextlib.AbstractContextManager[MagicMock]]:
+        return [
+            patch(
+                "wade.services.plan_service.load_config",
+                return_value=ProjectConfig(ai=AIConfig(default_tool="claude")),
+            ),
+            patch("wade.services.plan_service.get_provider", return_value=provider),
+            patch("wade.services.plan_service.resolve_ai_tool", return_value="claude"),
+            patch("wade.services.plan_service.resolve_model", return_value=None),
+            patch(
+                "wade.services.plan_service.confirm_ai_selection",
+                return_value=("claude", None, None, False),
+            ),
+            patch("wade.services.plan_service.ensure_task_label"),
+            patch("wade.services.plan_service.run_ai_planning_session", return_value=0),
+            patch("wade.services.plan_service.AbstractAITool.get", return_value=adapter),
+            patch(
+                "wade.services.plan_service._extract_token_usage",
+                return_value=TokenUsage(total_tokens=123),
+            ),
+            patch("wade.services.plan_service.validate_plan_files", return_value=plan_files),
+            patch("wade.services.plan_service._cleanup_plan_dir_or_worktree"),
+            patch("wade.services.plan_service.set_terminal_title"),
+            patch("wade.services.plan_service.start_title_keeper"),
+            patch("wade.services.plan_service.stop_title_keeper"),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+        ]
+
+    def test_single_plan_file_attaches_and_issue_stays_open(self, tmp_path: Path) -> None:
+        """--issue N with exactly one plan file keeps today's attach behavior."""
+        provider = MagicMock()
+        existing_issue = Task(id="330", title="Some bug", body="Original body")
+        provider.read_task.return_value = existing_issue
+        adapter = MagicMock()
+        adapter.capabilities.return_value = MagicMock(blocks_until_exit=True)
+
+        plan_path = tmp_path / "PLAN.md"
+        plan_path.write_text("# feat: thing\n\n## Tasks\n- Do it\n")
+        plan_file = PlanFile.from_markdown(plan_path)
+
+        with contextlib.ExitStack() as stack:
+            for p in self._base_patches(tmp_path, provider, adapter, [plan_file]):
+                stack.enter_context(p)
+            mock_attach = stack.enter_context(
+                patch("wade.services.plan_service._attach_plan_to_existing_issue")
+            )
+            mock_supersede = stack.enter_context(
+                patch("wade.services.plan_service._supersede_issue_with_plans")
+            )
+            mock_finalize = stack.enter_context(
+                patch("wade.services.plan_service._finalize_issues", return_value=None)
+            )
+
+            assert plan(project_root=tmp_path, issue_id="330") is True
+
+        mock_attach.assert_called_once()
+        assert mock_attach.call_args.kwargs["plan_file"] is plan_file
+        assert mock_attach.call_args.kwargs["issue"] is existing_issue
+        mock_supersede.assert_not_called()
+
+        mock_finalize.assert_called_once()
+        assert mock_finalize.call_args.kwargs["issue_numbers"] == ["330"]
+
+    def test_multi_plan_files_supersede_and_finalize_only_new_issues(self, tmp_path: Path) -> None:
+        """--issue N with 2+ plan files supersedes #N; only new issues are finalized."""
+        provider = MagicMock()
+        existing_issue = Task(id="330", title="Split me", body="Original body")
+        provider.read_task.return_value = existing_issue
+        adapter = MagicMock()
+        adapter.capabilities.return_value = MagicMock(blocks_until_exit=True)
+
+        plan_files = []
+        for i in range(2):
+            p = tmp_path / f"PLAN-{i}.md"
+            p.write_text(f"# feat: part {i}\n\n## Tasks\n- Do {i}\n")
+            plan_files.append(PlanFile.from_markdown(p))
+
+        with contextlib.ExitStack() as stack:
+            for p in self._base_patches(tmp_path, provider, adapter, plan_files):
+                stack.enter_context(p)
+            mock_attach = stack.enter_context(
+                patch("wade.services.plan_service._attach_plan_to_existing_issue")
+            )
+            mock_supersede = stack.enter_context(
+                patch(
+                    "wade.services.plan_service._supersede_issue_with_plans",
+                    return_value=["101", "102"],
+                )
+            )
+            mock_finalize = stack.enter_context(
+                patch("wade.services.plan_service._finalize_issues", return_value=None)
+            )
+
+            assert plan(project_root=tmp_path, issue_id="330") is True
+
+        mock_attach.assert_not_called()
+        mock_supersede.assert_called_once()
+        assert mock_supersede.call_args.kwargs["issue"] is existing_issue
+        assert mock_supersede.call_args.kwargs["plan_files"] == plan_files
+
+        mock_finalize.assert_called_once()
+        assert mock_finalize.call_args.kwargs["issue_numbers"] == ["101", "102"]
+
+    def test_supersede_with_no_created_issues_skips_finalize(self, tmp_path: Path) -> None:
+        """If supersede created nothing at all, plan() must not call _finalize_issues."""
+        provider = MagicMock()
+        existing_issue = Task(id="330", title="Split me", body="Original body")
+        provider.read_task.return_value = existing_issue
+        adapter = MagicMock()
+        adapter.capabilities.return_value = MagicMock(blocks_until_exit=True)
+
+        plan_files = []
+        for i in range(2):
+            p = tmp_path / f"PLAN-{i}.md"
+            p.write_text(f"# feat: part {i}\n\n## Tasks\n- Do {i}\n")
+            plan_files.append(PlanFile.from_markdown(p))
+
+        with contextlib.ExitStack() as stack:
+            for p in self._base_patches(tmp_path, provider, adapter, plan_files):
+                stack.enter_context(p)
+            stack.enter_context(
+                patch("wade.services.plan_service._supersede_issue_with_plans", return_value=[])
+            )
+            mock_finalize = stack.enter_context(
+                patch("wade.services.plan_service._finalize_issues")
+            )
+
+            assert plan(project_root=tmp_path, issue_id="330") is False
+
+        mock_finalize.assert_not_called()

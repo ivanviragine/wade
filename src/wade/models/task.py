@@ -27,6 +27,18 @@ class TaskState(StrEnum):
     CLOSED = "closed"
 
 
+class CloseReason(StrEnum):
+    """Typed reason for closing a task — maps to provider-specific close semantics.
+
+    GitHub renders ``NOT_PLANNED`` as a grey "closed as not planned" state,
+    distinct from the default "closed as completed". Providers without a
+    close-reason concept accept and ignore it.
+    """
+
+    COMPLETED = "completed"
+    NOT_PLANNED = "not planned"
+
+
 class LabelType(StrEnum):
     """Categories of labels managed by WADE."""
 
