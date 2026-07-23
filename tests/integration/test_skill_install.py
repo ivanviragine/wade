@@ -23,7 +23,7 @@ class TestSkillInstallation:
 
         install_skills(tmp_git_repo)
 
-        for cross_dir in [".github/skills", ".agents/skills", ".gemini/skills"]:
+        for cross_dir in [".github/skills", ".agents/skills", ".cursor/skills"]:
             link = tmp_git_repo / cross_dir
             assert link.is_symlink(), f"{cross_dir} should be a symlink, not a plain dir"
 
@@ -309,7 +309,7 @@ class TestSelectiveSkillInstallation:
 
         install_skills(tmp_git_repo, skills=["deps"])
 
-        for cross_dir in [".github/skills", ".agents/skills", ".gemini/skills", ".cursor/skills"]:
+        for cross_dir in [".github/skills", ".agents/skills", ".cursor/skills"]:
             link = tmp_git_repo / cross_dir
             assert link.is_symlink(), f"{cross_dir} should be a symlink"
 

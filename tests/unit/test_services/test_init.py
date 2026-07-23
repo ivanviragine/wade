@@ -161,7 +161,7 @@ class TestSkillInstaller:
         # Check that cross-tool symlinks were created
         assert (tmp_git_repo / ".github" / "skills").exists()
         assert (tmp_git_repo / ".agents" / "skills").exists()
-        assert (tmp_git_repo / ".gemini" / "skills").exists()
+        assert (tmp_git_repo / ".cursor" / "skills").exists()
 
     def test_remove_skills(self, tmp_git_repo: Path) -> None:
         from wade.skills.installer import install_skills, remove_skills
@@ -586,22 +586,27 @@ class TestPromptCommandOverrides:
         )
         assert batch_mode_call.kwargs["default"] == 2
 
+    @patch("wade.services.init_service.prompts_setup._collect_model_options")
     @patch("wade.services.init_service.prompts_setup._suggest_model_for_tool")
     @patch("wade.ui.prompts.select")
     def test_interactive_with_tool_override(
-        self, mock_select: MagicMock, mock_suggest: MagicMock
+        self, mock_select: MagicMock, mock_suggest: MagicMock, mock_collect: MagicMock
     ) -> None:
-        mock_suggest.return_value = "gemini-2.5-pro"
-        # installed_tools=["claude", "gemini"], tool_options=["claude", "gemini", "Skip"]
-        # plan: idx 1 = gemini; model for plan: idx 1 = "gemini-2.5-pro" (2nd in gemini list)
-        # plan YOLO: idx 0 = Skip (gemini supports_yolo=True; Skip means inherit global)
+        mock_collect.return_value = ["gemini-3-pro", "gemini-3-flash"]
+        mock_suggest.return_value = "gemini-3-pro"
+        # installed_tools=["claude", "antigravity-cli"],
+        #   tool_options=["claude", "antigravity-cli", "Skip"]
+        # plan tool: idx 1 = antigravity-cli
+        # plan model: idx 1 = "gemini-3-flash" (2nd option)
+        # plan effort: idx 0 = Skip (antigravity-cli supports_effort=True)
+        # plan YOLO: idx 0 = Skip (antigravity-cli supports_yolo=True; Skip inherits global)
         # deps: idx 2 = Skip, no effective tool (no default_tool) → mode skipped
         # review_plan/review_implementation/review_batch:
         #   Enable=Yes (idx 0), mode=prompt (idx 0) → skip tool/model
-        mock_select.side_effect = [1, 1, 0, 2, 0, 0, 0, 0, 0, 0]
-        result = _prompt_command_overrides(["claude", "gemini"], non_interactive=False)
-        assert result["plan"]["tool"] == "gemini"
-        assert result["plan"]["model"] == "gemini-2.5-pro"
+        mock_select.side_effect = [1, 1, 0, 0, 2, 0, 0, 0, 0, 0, 0]
+        result = _prompt_command_overrides(["claude", "antigravity-cli"], non_interactive=False)
+        assert result["plan"]["tool"] == "antigravity-cli"
+        assert result["plan"]["model"] == "gemini-3-flash"
         assert result["deps"] == {}
         assert result["review_plan"] == {"enabled": "true", "mode": "prompt"}
         assert result["review_implementation"] == {"enabled": "true", "mode": "prompt"}
@@ -810,7 +815,7 @@ class TestWriteConfig:
     def test_with_command_overrides(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         overrides = {
-            "plan": {"tool": "gemini", "model": "gemini-2.5-pro"},
+            "plan": {"tool": "antigravity-cli", "model": "gemini-3-pro"},
             "deps": {},
         }
         _write_config(
@@ -821,8 +826,8 @@ class TestWriteConfig:
             command_overrides=overrides,
         )
         config = yaml.safe_load(config_path.read_text())
-        assert config["ai"]["plan"]["tool"] == "gemini"
-        assert config["ai"]["plan"]["model"] == "gemini-2.5-pro"
+        assert config["ai"]["plan"]["tool"] == "antigravity-cli"
+        assert config["ai"]["plan"]["model"] == "gemini-3-pro"
         assert "deps" not in config["ai"]
         assert config["ai"]["implement"]["tool"] == "copilot"
         assert "model" not in config["ai"]["implement"]
@@ -885,16 +890,16 @@ class TestWriteConfig:
             config_path,
             "claude",
             mapping,
-            implement_tool="gemini",
-            default_model="gemini-2.5-pro",
+            implement_tool="antigravity-cli",
+            default_model="gemini-3-pro",
         )
         config = yaml.safe_load(config_path.read_text())
         # default_model written to ai section
-        assert config["ai"]["default_model"] == "gemini-2.5-pro"
+        assert config["ai"]["default_model"] == "gemini-3-pro"
         # implement tool written only when different from default_tool
-        assert config["ai"]["implement"]["tool"] == "gemini"
+        assert config["ai"]["implement"]["tool"] == "antigravity-cli"
         # models keyed by implement_tool, not default_tool
-        assert "gemini" in config["models"]
+        assert "antigravity-cli" in config["models"]
         assert "claude" not in config.get("models", {})
 
     def test_implement_tool_same_as_ai_tool_omits_implement_section(self, tmp_path: Path) -> None:
@@ -913,17 +918,17 @@ class TestWriteConfig:
 class TestPatchConfig:
     def test_force_overwrites_ai_tool(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
-        config_path.write_text("version: 2\nai:\n  default_tool: gemini\n")
+        config_path.write_text("version: 2\nai:\n  default_tool: antigravity-cli\n")
         _patch_config(config_path, "claude", ComplexityModelMapping(), force=True)
         config = yaml.safe_load(config_path.read_text())
         assert config["ai"]["default_tool"] == "claude"
 
     def test_no_force_preserves_ai_tool(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
-        config_path.write_text("version: 2\nai:\n  default_tool: gemini\n")
+        config_path.write_text("version: 2\nai:\n  default_tool: antigravity-cli\n")
         _patch_config(config_path, "claude", ComplexityModelMapping(), force=False)
         config = yaml.safe_load(config_path.read_text())
-        assert config["ai"]["default_tool"] == "gemini"
+        assert config["ai"]["default_tool"] == "antigravity-cli"
 
     def test_force_overwrites_default_model(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
@@ -947,15 +952,19 @@ class TestPatchConfig:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
         _patch_config(
-            config_path, "claude", ComplexityModelMapping(), implement_tool="gemini", force=True
+            config_path,
+            "claude",
+            ComplexityModelMapping(),
+            implement_tool="antigravity-cli",
+            force=True,
         )
         config = yaml.safe_load(config_path.read_text())
-        assert config["ai"]["implement"]["tool"] == "gemini"
+        assert config["ai"]["implement"]["tool"] == "antigravity-cli"
 
     def test_force_removes_implement_section_when_same_as_default(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text(
-            "version: 2\nai:\n  default_tool: claude\n  implement:\n    tool: gemini\n"
+            "version: 2\nai:\n  default_tool: claude\n  implement:\n    tool: antigravity-cli\n"
         )
         _patch_config(
             config_path, "claude", ComplexityModelMapping(), implement_tool="claude", force=True
@@ -966,19 +975,19 @@ class TestPatchConfig:
     def test_force_sets_command_overrides(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
-        overrides = {"plan": {"tool": "gemini", "model": "gemini-2.5-pro"}, "deps": {}}
+        overrides = {"plan": {"tool": "antigravity-cli", "model": "gemini-3-pro"}, "deps": {}}
         _patch_config(
             config_path, "claude", ComplexityModelMapping(), command_overrides=overrides, force=True
         )
         config = yaml.safe_load(config_path.read_text())
-        assert config["ai"]["plan"]["tool"] == "gemini"
-        assert config["ai"]["plan"]["model"] == "gemini-2.5-pro"
+        assert config["ai"]["plan"]["tool"] == "antigravity-cli"
+        assert config["ai"]["plan"]["model"] == "gemini-3-pro"
         assert "deps" not in config["ai"]
 
     def test_force_clears_command_overrides_when_empty(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text(
-            "version: 2\nai:\n  default_tool: claude\n  plan:\n    tool: gemini\n"
+            "version: 2\nai:\n  default_tool: claude\n  plan:\n    tool: antigravity-cli\n"
         )
         overrides = {"plan": {}, "deps": {}}
         _patch_config(
@@ -1043,9 +1052,9 @@ class TestPatchConfig:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
         mapping = ComplexityModelMapping(easy="haiku", complex="sonnet")
-        _patch_config(config_path, "claude", mapping, implement_tool="gemini", force=True)
+        _patch_config(config_path, "claude", mapping, implement_tool="antigravity-cli", force=True)
         config = yaml.safe_load(config_path.read_text())
-        assert "gemini" in config["models"]
+        assert "antigravity-cli" in config["models"]
         assert "claude" not in config.get("models", {})
 
     def test_force_overwrites_project_settings(self, tmp_path: Path) -> None:
@@ -1414,6 +1423,72 @@ class TestUpdateExtended:
         assert not (tmp_git_repo / ".cursor" / "cli.json").is_file()
         assert not (tmp_git_repo / "AGENTS.md").is_file()
         assert not (tmp_git_repo / "CLAUDE.md").exists()
+
+    def test_update_removes_leftover_gemini_artifacts(self, tmp_git_repo: Path) -> None:
+        """update() should prune real Gemini-era files left by pre-removal wade versions."""
+        init(project_root=tmp_git_repo, non_interactive=True)
+        # Simulate concrete files an older wade version wrote under .gemini/
+        (tmp_git_repo / ".gemini" / "hooks").mkdir(parents=True)
+        (tmp_git_repo / ".gemini" / "policies").mkdir(parents=True)
+        (tmp_git_repo / ".gemini" / "hooks" / "plan_write_guard.py").write_text("x")
+        (tmp_git_repo / ".gemini" / "hooks" / "worktree_guard.py").write_text("x")
+        # wade-owned settings.json carries a PreToolUse hook pointing at the guard script.
+        (tmp_git_repo / ".gemini" / "settings.json").write_text(
+            '{"hooks": {"PreToolUse": [{"command": ".gemini/hooks/plan_write_guard.py"}]}}'
+        )
+        (tmp_git_repo / ".gemini" / "policies" / "wade.toml").write_text("x")
+        # The cross-tool alias was a symlink (now dangling — its target isn't on main).
+        (tmp_git_repo / ".gemini" / "skills").symlink_to("../.claude/skills")
+
+        update(project_root=tmp_git_repo, skip_self_upgrade=True)
+
+        # The concrete files, the alias symlink, and the now-empty .gemini dir
+        # should all be gone.
+        assert not (tmp_git_repo / ".gemini" / "hooks" / "plan_write_guard.py").exists()
+        assert not (tmp_git_repo / ".gemini" / "hooks" / "worktree_guard.py").exists()
+        assert not (tmp_git_repo / ".gemini" / "settings.json").exists()
+        assert not (tmp_git_repo / ".gemini" / "policies" / "wade.toml").exists()
+        assert not (tmp_git_repo / ".gemini" / "skills").is_symlink()
+        assert not (tmp_git_repo / ".gemini").exists()
+
+    def test_update_preserves_user_owned_gemini_settings(self, tmp_git_repo: Path) -> None:
+        """update() must NOT delete a user's own .gemini/settings.json (no wade hooks)."""
+        init(project_root=tmp_git_repo, non_interactive=True)
+        gemini = tmp_git_repo / ".gemini"
+        gemini.mkdir()
+        user_settings = gemini / "settings.json"
+        user_content = '{"theme": "dark", "sandbox": true}'
+        user_settings.write_text(user_content)
+
+        update(project_root=tmp_git_repo, skip_self_upgrade=True)
+
+        # A generic Gemini CLI config with no wade guard wiring is left untouched,
+        # so both the file and its parent .gemini dir survive.
+        assert user_settings.is_file()
+        assert user_settings.read_text() == user_content
+        assert gemini.is_dir()
+
+    def test_update_preserves_non_utf8_gemini_settings(self, tmp_git_repo: Path) -> None:
+        """A corrupt/binary .gemini/settings.json must not crash update() and is kept.
+
+        The ownership check reads the file as UTF-8; non-UTF-8 bytes raise
+        UnicodeDecodeError (a ValueError, not an OSError). It must be caught so
+        `wade update` neither crashes nor deletes a file it cannot prove is ours.
+        """
+        init(project_root=tmp_git_repo, non_interactive=True)
+        gemini = tmp_git_repo / ".gemini"
+        gemini.mkdir()
+        settings = gemini / "settings.json"
+        binary_content = b"\xff\xfe\x00garbage\x80\x81"
+        settings.write_bytes(binary_content)
+
+        # Must not raise despite the undecodable bytes.
+        update(project_root=tmp_git_repo, skip_self_upgrade=True)
+
+        # Undecodable → not provably wade-owned → preserved untouched.
+        assert settings.is_file()
+        assert settings.read_bytes() == binary_content
+        assert gemini.is_dir()
 
     def test_skip_self_upgrade_flag(self, tmp_git_repo: Path) -> None:
         """skip_self_upgrade=True should not call _maybe_self_upgrade."""
@@ -2527,7 +2602,7 @@ class TestShowInitSummary:
                 default_yolo=True,
                 implementation_setup={"tool": "claude", "model_mapping": mapping},
                 command_overrides={
-                    "plan": {"tool": "gemini", "model": "gemini-2.5-pro"},
+                    "plan": {"tool": "antigravity-cli", "model": "gemini-3-pro"},
                     "deps": {"mode": "headless"},
                     "review_plan": {"enabled": "true", "mode": "prompt"},
                 },
@@ -2546,7 +2621,7 @@ class TestShowInitSummary:
         assert any("high" in str(v) for v in kv_calls.values())
         # Verify per-command overrides are shown
         plan_entry = kv_calls.get("  plan")
-        assert plan_entry is not None and "gemini" in plan_entry
+        assert plan_entry is not None and "antigravity-cli" in plan_entry
 
 
 # ---------------------------------------------------------------------------

@@ -415,7 +415,7 @@ def _prompt_implementation_setup(
 
     console.rule("Implementation")
 
-    base_tools = installed_tools if installed_tools else ["claude", "copilot", "gemini"]
+    base_tools = installed_tools if installed_tools else ["claude", "copilot", "antigravity-cli"]
     implement_tool = _select_or_skip(
         "AI tool for implementation work", base_tools, current_implement_tool
     )
@@ -460,9 +460,9 @@ def _prompt_command_overrides(
 
     # Build selectable list: installed tools + "Skip (use default)"
     skip_label = "Skip (use default)"
-    tool_options = (installed_tools if installed_tools else ["claude", "copilot", "gemini"]) + [
-        skip_label
-    ]
+    tool_options = (
+        installed_tools if installed_tools else ["claude", "copilot", "antigravity-cli"]
+    ) + [skip_label]
 
     cmd_triples = [
         ("plan", "AI tool", "Planning"),

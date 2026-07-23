@@ -162,7 +162,7 @@ class TestToolStdinFormats:
         result = _run_guard(data)
         assert result.returncode == 2
 
-    def test_gemini_format(self) -> None:
+    def test_tool_input_path_key(self) -> None:
         data = json.dumps({"tool_input": {"path": "src/foo.py"}})
         result = _run_guard(data)
         assert result.returncode == 2

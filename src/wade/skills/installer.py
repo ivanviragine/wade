@@ -113,14 +113,13 @@ _LEGACY_SKILLS = {
 MANAGED_SKILL_NAMES: set[str] = set(SKILL_FILES) | _LEGACY_SKILLS
 
 # Cross-tool directories that get symlinked to .claude/skills
-CROSS_TOOL_DIRS = [".github/skills", ".agents/skills", ".gemini/skills", ".cursor/skills"]
+CROSS_TOOL_DIRS = [".github/skills", ".agents/skills", ".cursor/skills"]
 
 # Wade-managed plan guard hook files that should never be committed.
 PLAN_GUARD_HOOK_FILES = [
     ".claude/hooks/plan_write_guard.py",
     ".cursor/hooks/plan_write_guard.py",
     ".copilot/hooks/plan_write_guard.py",
-    ".gemini/hooks/plan_write_guard.py",
 ]
 
 # Wade-managed worktree guard hook files that should never be committed.
@@ -128,13 +127,11 @@ WORKTREE_GUARD_HOOK_FILES = [
     ".claude/hooks/worktree_guard.py",
     ".cursor/hooks/worktree_guard.py",
     ".copilot/hooks/worktree_guard.py",
-    ".gemini/hooks/worktree_guard.py",
 ]
 
 # Wade-managed hook config files written alongside hook scripts — never committed.
 HOOK_CONFIG_FILES = [
     ".cursor/hooks.json",
-    ".gemini/settings.json",
     ".github/hooks/hooks.json",
 ]
 
@@ -172,7 +169,6 @@ def get_worktree_gitignore_entries() -> list[str]:
     # AI tool settings (written per-session to worktrees only)
     entries.append(".claude/settings.json")
     entries.append(".cursor/cli.json")
-    entries.append(".gemini/policies/wade.toml")
 
     # Session artifacts
     entries.extend(
@@ -333,7 +329,6 @@ def remove_skills(project_root: Path) -> list[str]:
         project_root / ".claude",
         project_root / ".github",
         project_root / ".agents",
-        project_root / ".gemini",
         project_root / ".cursor",
     ]:
         if parent.is_dir() and not any(parent.iterdir()):

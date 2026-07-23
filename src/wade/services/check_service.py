@@ -18,7 +18,7 @@ from wade.config.loader import (
 )
 from wade.git import repo
 from wade.git.repo import GitError
-from wade.models.config import AI_COMMAND_NAMES, LEGACY_AI_COMMAND_ALIASES
+from wade.models.config import AI_COMMAND_NAMES, LEGACY_AI_COMMAND_ALIASES, ProjectConfig
 from wade.models.delegation import DelegationMode
 from wade.models.session import MergeStrategy
 from wade.providers import registered_provider_names
@@ -178,6 +178,53 @@ def check_worktree(cwd: Path | None = None) -> CheckResult:
 
 # Valid AI tool names for config validation
 _VALID_AI_TOOLS = {t.value for t in AIToolID}
+
+# AI tools removed from wade, mapped to their recommended replacement. Used to
+# turn the generic "invalid tool" error into an actionable migration hint when a
+# project's .wade.yml still points at a tool that no longer exists in crossby.
+_REMOVED_AI_TOOLS: dict[str, str] = {"gemini": "antigravity-cli"}
+
+
+def _invalid_tool_message(field: str, tool: str) -> str:
+    """Build the validation error for an unknown AI tool.
+
+    Removed tools (e.g. ``gemini``) get an actionable "switch to X" hint instead
+    of the generic list of valid tools.
+    """
+    replacement = _REMOVED_AI_TOOLS.get(tool)
+    if replacement is not None:
+        return (
+            f"{field}: '{tool}' is no longer supported — {tool.capitalize()} CLI "
+            f"support was removed. Switch to '{replacement}' or another supported tool."
+        )
+    return f"{field}: '{tool}' is invalid. Use one of: {', '.join(sorted(_VALID_AI_TOOLS))}"
+
+
+def detect_removed_ai_tools(config: ProjectConfig) -> dict[str, str]:
+    """Return ``{config location: replacement tool}`` for removed tools in config.
+
+    Scans ``ai.default_tool``, each ``ai.<command>.tool`` override, and every
+    ``models.<tool>`` key for tools that wade no longer supports. Empty when the
+    config is clean.
+    """
+    found: dict[str, str] = {}
+
+    default_tool = config.ai.default_tool
+    if default_tool in _REMOVED_AI_TOOLS:
+        found["ai.default_tool"] = _REMOVED_AI_TOOLS[default_tool]
+
+    for cmd in AI_COMMAND_NAMES:
+        cmd_config = getattr(config.ai, cmd, None)
+        tool = getattr(cmd_config, "tool", None)
+        if tool in _REMOVED_AI_TOOLS:
+            found[f"ai.{cmd}.tool"] = _REMOVED_AI_TOOLS[tool]
+
+    for tool_name in config.models:
+        if tool_name in _REMOVED_AI_TOOLS:
+            found[f"models.{tool_name}"] = _REMOVED_AI_TOOLS[tool_name]
+
+    return found
+
 
 # Valid effort levels
 _VALID_EFFORT_LEVELS = {e.value for e in EffortLevel}
@@ -365,10 +412,7 @@ def _validate_ai_section(ai: dict[str, Any], errors: list[str]) -> None:
     """Validate the ai section."""
     default_tool = ai.get("default_tool")
     if default_tool is not None and str(default_tool) and str(default_tool) not in _VALID_AI_TOOLS:
-        errors.append(
-            f"ai.default_tool: '{default_tool}' is invalid. "
-            f"Use one of: {', '.join(sorted(_VALID_AI_TOOLS))}"
-        )
+        errors.append(_invalid_tool_message("ai.default_tool", str(default_tool)))
 
     effort = ai.get("effort")
     if effort is not None and str(effort) not in _VALID_EFFORT_LEVELS:
@@ -419,9 +463,7 @@ def _validate_ai_command_section(cmd: str, cmd_section: dict[str, Any], errors: 
 
     tool = cmd_section.get("tool")
     if tool is not None and str(tool) and str(tool) not in _VALID_AI_TOOLS:
-        errors.append(
-            f"ai.{cmd}.tool: '{tool}' is invalid. Use one of: {', '.join(sorted(_VALID_AI_TOOLS))}"
-        )
+        errors.append(_invalid_tool_message(f"ai.{cmd}.tool", str(tool)))
 
     mode = cmd_section.get("mode")
     if mode is not None and str(mode) not in _VALID_DELEGATION_MODES:
@@ -464,10 +506,7 @@ def _validate_models_section(models: dict[str, Any], errors: list[str]) -> None:
 
     for tool_name, mapping in models.items():
         if str(tool_name) not in _VALID_AI_TOOLS:
-            errors.append(
-                f"models.{tool_name}: unsupported tool. "
-                f"Use one of: {', '.join(sorted(_VALID_AI_TOOLS))}"
-            )
+            errors.append(_invalid_tool_message(f"models.{tool_name}", str(tool_name)))
             continue
 
         if not isinstance(mapping, dict):

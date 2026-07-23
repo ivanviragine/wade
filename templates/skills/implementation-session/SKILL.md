@@ -311,7 +311,7 @@ and must not be modified, committed, or deleted:
 `plan-session`, `implementation-session`, `review-pr-comments-session`, `task`, `deps`, `knowledge`.
 
 Wade also installs cross-tool alias symlinks per-session in worktrees:
-`.github/skills`, `.agents/skills`, `.gemini/skills`, `.cursor/skills`.
+`.github/skills`, `.agents/skills`, `.cursor/skills`.
 These point to `.claude/skills/` and are gitignored automatically. Do **not**
 modify, commit, or delete these alias directories — touching their symlinked
 locations can cause surprising `done()` failures.

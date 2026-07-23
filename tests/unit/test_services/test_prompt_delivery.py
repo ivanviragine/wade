@@ -45,7 +45,7 @@ class TestDeliverPromptIfNeeded:
 
     def test_all_terminal_cli_tools_are_noop(self) -> None:
         """All tools with supports_initial_message=True should be a no-op."""
-        for tool_id in ("claude", "copilot", "gemini", "codex", "opencode"):
+        for tool_id in ("claude", "copilot", "antigravity-cli", "codex", "opencode"):
             adapter = AbstractAITool.get(tool_id)
             with patch("wade.services.prompt_delivery.copy_to_clipboard") as mock_clip:
                 deliver_prompt_if_needed(adapter, "test")

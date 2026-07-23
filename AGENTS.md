@@ -70,7 +70,7 @@ CLI modules are thin dispatch — they parse flags via Typer, then call service 
 
 ### Key Design Patterns
 
-- **AI Tool Adapters via crossby**: `AbstractAITool` and every tool-specific adapter (Claude, Cursor, Copilot, Gemini, Codex, OpenCode, Antigravity, VS Code) live in the external `crossby` dependency, not this repo. Wade's services import `crossby.ai_tools` and `crossby.models.ai` directly. Adding a new AI tool means contributing to crossby, not wade.
+- **AI Tool Adapters via crossby**: `AbstractAITool` and every tool-specific adapter (Claude, Cursor, Copilot, Codex, OpenCode, Antigravity, Antigravity CLI, VS Code) live in the external `crossby` dependency, not this repo. Wade's services import `crossby.ai_tools` and `crossby.models.ai` directly. Adding a new AI tool means contributing to crossby, not wade.
 - **Provider Abstraction**: `AbstractTaskProvider` ABC with pluggable backends (GitHub via `gh` CLI, ClickUp via REST API, Markdown via a single central file). Non-GitHub providers compose `GitHubPRDelegateMixin` so PR-review APIs still flow through `gh`.
 - **Prompts as .md Templates**: All AI prompts live in `templates/prompts/`, not inline strings.
 - **Synchronous Only**: No asyncio. Process-level parallelism via multiple terminals.

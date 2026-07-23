@@ -102,11 +102,12 @@ class TestAdapterYoloArgs:
         result = ClaudeAdapter().yolo_args()
         assert result == ["--dangerously-skip-permissions"]
 
-    def test_gemini_yolo_args(self) -> None:
-        from crossby.ai_tools.gemini import GeminiAdapter
+    def test_antigravity_cli_yolo_args(self) -> None:
+        from crossby.ai_tools.antigravity_cli import AntigravityCLIAdapter
 
-        result = GeminiAdapter().yolo_args()
-        assert result == ["--yolo"]
+        # agy skips permission prompts but keeps the terminal sandbox active.
+        result = AntigravityCLIAdapter().yolo_args()
+        assert result == ["--dangerously-skip-permissions", "--sandbox"]
 
     def test_codex_yolo_args(self) -> None:
         from crossby.ai_tools.codex import CodexAdapter
@@ -147,10 +148,10 @@ class TestAdapterSupportsYolo:
 
         assert ClaudeAdapter().capabilities().supports_yolo is True
 
-    def test_gemini_supports_yolo(self) -> None:
-        from crossby.ai_tools.gemini import GeminiAdapter
+    def test_antigravity_cli_supports_yolo(self) -> None:
+        from crossby.ai_tools.antigravity_cli import AntigravityCLIAdapter
 
-        assert GeminiAdapter().capabilities().supports_yolo is True
+        assert AntigravityCLIAdapter().capabilities().supports_yolo is True
 
     def test_codex_supports_yolo(self) -> None:
         from crossby.ai_tools.codex import CodexAdapter
@@ -185,11 +186,12 @@ class TestBuildLaunchCommandYolo:
         cmd = ClaudeAdapter().build_launch_command(yolo=True)
         assert "--dangerously-skip-permissions" in cmd
 
-    def test_gemini_yolo_includes_flag(self) -> None:
-        from crossby.ai_tools.gemini import GeminiAdapter
+    def test_antigravity_cli_yolo_includes_flag(self) -> None:
+        from crossby.ai_tools.antigravity_cli import AntigravityCLIAdapter
 
-        cmd = GeminiAdapter().build_launch_command(yolo=True)
-        assert "--yolo" in cmd
+        cmd = AntigravityCLIAdapter().build_launch_command(yolo=True)
+        assert "--dangerously-skip-permissions" in cmd
+        assert "--sandbox" in cmd
 
     def test_codex_yolo_includes_flag(self) -> None:
         from crossby.ai_tools.codex import CodexAdapter
@@ -550,44 +552,28 @@ class TestConfirmYolo:
 
 
 # ---------------------------------------------------------------------------
-# Gemini — headless and structured output
+# Antigravity CLI — headless
 # ---------------------------------------------------------------------------
 
 
-class TestGeminiHeadless:
-    def test_gemini_supports_headless_capability(self) -> None:
-        from crossby.ai_tools.gemini import GeminiAdapter
+class TestAntigravityCLIHeadless:
+    def test_antigravity_cli_supports_headless_capability(self) -> None:
+        from crossby.ai_tools.antigravity_cli import AntigravityCLIAdapter
 
-        assert GeminiAdapter().capabilities().supports_headless is True
+        assert AntigravityCLIAdapter().capabilities().supports_headless is True
 
-    def test_gemini_headless_flag_is_dash_p(self) -> None:
-        from crossby.ai_tools.gemini import GeminiAdapter
+    def test_antigravity_cli_headless_flag_is_print(self) -> None:
+        from crossby.ai_tools.antigravity_cli import AntigravityCLIAdapter
 
-        assert GeminiAdapter().capabilities().headless_flag == "-p"
+        assert AntigravityCLIAdapter().capabilities().headless_flag == "--print"
 
-    def test_gemini_build_launch_command_headless_includes_prompt(self) -> None:
-        from crossby.ai_tools.gemini import GeminiAdapter
+    def test_antigravity_cli_build_launch_command_headless_includes_prompt(self) -> None:
+        from crossby.ai_tools.antigravity_cli import AntigravityCLIAdapter
 
-        cmd = GeminiAdapter().build_launch_command(prompt="test prompt")
-        assert "-p" in cmd
-        idx = cmd.index("-p")
+        cmd = AntigravityCLIAdapter().build_launch_command(prompt="test prompt")
+        assert "--print" in cmd
+        idx = cmd.index("--print")
         assert cmd[idx + 1] == "test prompt"
-
-
-class TestGeminiStructuredOutput:
-    def test_gemini_structured_output_args(self) -> None:
-        from crossby.ai_tools.gemini import GeminiAdapter
-
-        result = GeminiAdapter().structured_output_args({"type": "object"})
-        assert result == ["--output-format", "json"]
-
-    def test_gemini_build_launch_command_with_json_schema(self) -> None:
-        from crossby.ai_tools.gemini import GeminiAdapter
-
-        cmd = GeminiAdapter().build_launch_command(json_schema={"type": "object"})
-        assert "--output-format" in cmd
-        idx = cmd.index("--output-format")
-        assert cmd[idx + 1] == "json"
 
 
 # ---------------------------------------------------------------------------
