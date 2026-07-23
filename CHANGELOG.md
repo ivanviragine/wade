@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.33.0] — 2026-07-23
+
+### Features
+
+- replace Gemini CLI support with Antigravity CLI (bump crossby to 0.10.x) (#336) (c54af6d)
+
 ## [v0.32.0] — 2026-07-23
 
 ### Features

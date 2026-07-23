@@ -2,7 +2,7 @@
 """Worktree file-write guard for AI tools.
 
 Standalone script (no wade imports) that intercepts pre-tool-use hooks from
-Claude Code, Cursor, Copilot, and Gemini CLI.  Blocks writes to files outside
+Claude Code, Cursor, and Copilot.  Blocks writes to files outside
 the worktree root.
 
 The worktree root is derived from this script's install location:
@@ -62,9 +62,8 @@ def _extract_file_path(data: dict[str, object]) -> str | None:
     - Claude Code: tool_input.file_path or tool_input.path
     - Cursor: tool_input.filePath or tool_input.file_path
     - Copilot: toolArgs (JSON string) with file/path/filePath keys
-    - Gemini: tool_input.file_path or tool_input.path
     """
-    # Claude Code / Cursor / Gemini: tool_input dict
+    # Claude Code / Cursor: tool_input dict
     tool_input = data.get("tool_input") or data.get("toolInput") or {}
     if isinstance(tool_input, dict):
         for key in ("file_path", "filePath", "path"):
@@ -117,8 +116,8 @@ def _deny(file_path: str, worktree_root: Path) -> None:
     )
     # stderr for human-readable output
     print(msg, file=sys.stderr)
-    # stdout JSON — Claude Code strict schema: only hookSpecificOutput at root
-    # Gemini uses exit code 2 as its block signal regardless of JSON
+    # stdout JSON — Claude Code strict schema: only hookSpecificOutput at root.
+    # Exit code 2 is the block signal regardless of whether JSON is consumed.
     result = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",

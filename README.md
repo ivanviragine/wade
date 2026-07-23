@@ -8,7 +8,7 @@
 
 *Every Wade does the dirty work so the heroes don't have to.*
 
-Branches, worktrees, context loading, model selection, PR creation — all the workflow friction that surrounds AI coding sessions. WADE eliminates it. Works with `Claude Code`, `Copilot`, `Gemini`, `Codex`, and more. Run `wade init` once per project, then just point it at a GitHub *(more to come!)* issue number.
+Branches, worktrees, context loading, model selection, PR creation — all the workflow friction that surrounds AI coding sessions. WADE eliminates it. Works with `Claude Code`, `Copilot`, `Antigravity CLI`, `Codex`, and more. Run `wade init` once per project, then just point it at a GitHub *(more to come!)* issue number.
 
 ## See It in Action
 
@@ -162,11 +162,14 @@ Adapters, model/effort resolution, and per-tool config (allowlists, hooks) are p
 | [Claude Code](https://claude.com/product/claude-code) | `claude` |
 | [Cursor](https://www.cursor.com/) | `cursor` |
 | [GitHub Copilot](https://github.com/features/copilot/cli) | `copilot` |
-| [Google Gemini](https://geminicli.com/) | `gemini` |
 | [OpenAI Codex](https://developers.openai.com/codex/cli/) | `codex` |
 | [OpenCode](https://opencode.ai/) | `opencode` |
 | [VS Code](https://github.com/features/copilot/ai-code-editor) | `code` |
 | [Antigravity](https://antigravity.google/) | `antigravity` |
+| [Antigravity CLI](https://antigravity.google/) | `agy` |
+
+> In `.wade.yml`, refer to a tool by its **config ID**, which matches the binary
+> above except for VS Code (`vscode`) and Antigravity CLI (`antigravity-cli`).
 
 ## Task Providers
 

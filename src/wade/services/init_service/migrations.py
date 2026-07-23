@@ -47,6 +47,7 @@ __all__ = [
     "GITIGNORE_MARKER_START",
     "_GITIGNORE_LEGACY_ENTRIES",
     "_clean_gitignore",
+    "_cleanup_gemini_artifacts",
     "_ensure_wade_dir_self_ignoring",
     "_migrate_ai_artifacts_off_main",
     "_migrate_gitignore_block",
@@ -93,11 +94,107 @@ def _migrate_skills_off_main(project_root: Path) -> list[str]:
         primary_skills_dir,
         project_root / ".github",
         project_root / ".agents",
-        project_root / ".gemini",
         project_root / ".cursor",
     ]:
         if parent.is_dir() and not any(parent.iterdir()):
             parent.rmdir()
+
+    return removed
+
+
+# Wade-specific files whose paths no other tool would ever create — safe to
+# remove on a bare path match.  (Order is irrelevant here; each is unlinked
+# independently.)
+_GEMINI_ARTIFACT_FILES: Final = [
+    ".gemini/hooks/plan_write_guard.py",
+    ".gemini/hooks/worktree_guard.py",
+    ".gemini/policies/wade.toml",
+]
+
+# ``.gemini/settings.json`` is a *generic* Gemini CLI config path a project may
+# own independently, so it is removed only when it still carries wade's guard-hook
+# wiring — see ``_is_wade_owned_gemini_settings``.
+_GEMINI_SETTINGS_FILE: Final = ".gemini/settings.json"
+_WADE_GUARD_MARKERS: Final = ("plan_write_guard", "worktree_guard")
+
+# Cross-tool alias symlinks older wade versions created under ``.gemini/``.
+_GEMINI_ARTIFACT_SYMLINKS: Final = [
+    ".gemini/skills",
+]
+
+# Real ``.gemini`` sub-directories removed once emptied by the cleanup above.
+# ``.gemini`` itself comes last so it is only removed once its children are gone.
+_GEMINI_ARTIFACT_DIRS: Final = [
+    ".gemini/hooks",
+    ".gemini/policies",
+    ".gemini",
+]
+
+
+def _is_wade_owned_gemini_settings(path: Path) -> bool:
+    """True when ``.gemini/settings.json`` still holds wade's guard-hook wiring.
+
+    Wade's removed Gemini support wrote a PreToolUse hook pointing at the
+    ``plan_write_guard.py`` / ``worktree_guard.py`` scripts. A file without those
+    markers is assumed to be the user's own Gemini CLI config and is left alone —
+    mirroring the ownership check ``_migrate_ai_artifacts_off_main`` applies to
+    ``.claude/settings.json`` / ``.cursor/cli.json``.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        # Unreadable or non-UTF-8 (corrupt/binary) — wade always writes UTF-8
+        # JSON here, so anything undecodable is not ours; leave it untouched.
+        # UnicodeDecodeError is a ValueError, not an OSError, so it must be
+        # named explicitly or it would escape and crash `wade update`.
+        return False
+    return any(marker in text for marker in _WADE_GUARD_MARKERS)
+
+
+def _cleanup_gemini_artifacts(project_root: Path) -> list[str]:
+    """Remove real Gemini-era files left behind by older wade versions.
+
+    Gemini CLI support was removed (crossby dropped its adapter). Earlier wade
+    versions wrote guard-hook scripts, a Policy Engine TOML, hook settings, and a
+    ``.gemini/skills`` cross-tool alias symlink under ``.gemini/``. The generic
+    off-main cleanup no longer knows about ``.gemini`` at all, so this prunes the
+    wade-owned files and the alias symlink, then removes any ``.gemini``
+    sub-directories that become empty. ``.gemini/settings.json`` is only removed
+    when it still carries wade's hook wiring, so a user's own Gemini CLI config
+    at that path is preserved.
+
+    Returns list of removed paths (relative to project root).
+    """
+    removed: list[str] = []
+
+    for rel in _GEMINI_ARTIFACT_FILES:
+        target = project_root / rel
+        if target.is_file() or target.is_symlink():
+            target.unlink()
+            removed.append(rel)
+
+    # settings.json is only wade's if it still references a guard script; leave a
+    # user's own Gemini CLI settings at the same path untouched.
+    settings = project_root / _GEMINI_SETTINGS_FILE
+    if settings.is_file() and _is_wade_owned_gemini_settings(settings):
+        settings.unlink()
+        removed.append(_GEMINI_SETTINGS_FILE)
+
+    # Alias symlinks must be unlinked, not rmdir'd — and ``is_dir()`` is False for
+    # a dangling one (its ``.claude/skills`` target may already be gone), so match
+    # on ``is_symlink()``.
+    for rel in _GEMINI_ARTIFACT_SYMLINKS:
+        link = project_root / rel
+        if link.is_symlink():
+            link.unlink()
+            removed.append(rel)
+
+    # Only prune genuinely empty real directories — never a symlink or a dir that
+    # still holds user content.
+    for rel in _GEMINI_ARTIFACT_DIRS:
+        d = project_root / rel
+        if d.is_dir() and not d.is_symlink() and not any(d.iterdir()):
+            d.rmdir()
 
     return removed
 

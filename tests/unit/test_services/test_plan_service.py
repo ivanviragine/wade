@@ -165,8 +165,8 @@ class TestResolveModel:
     def test_incompatible_model_returns_none(self) -> None:
         """When the resolved model is incompatible with the tool, return None."""
         config = ProjectConfig(ai=AIConfig(default_model="claude-sonnet-4-6"))
-        # gemini tool won't accept a claude model
-        result = resolve_model(None, config, "implement", tool="gemini")
+        # codex won't accept a claude model
+        result = resolve_model(None, config, "implement", tool="codex")
         assert result is None
 
 

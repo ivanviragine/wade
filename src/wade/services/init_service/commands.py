@@ -20,7 +20,6 @@ from wade.config.loader import find_config_file, load_config
 from wade.git import repo
 from wade.git.repo import GitError
 from wade.models.config import (
-    AI_COMMAND_NAMES,
     AICommandConfig,
     ComplexityModelMapping,
     KnowledgeConfig,
@@ -41,6 +40,7 @@ from wade.services.init_service.manifest import (
 )
 from wade.services.init_service.migrations import (
     _clean_gitignore,
+    _cleanup_gemini_artifacts,
     _ensure_wade_dir_self_ignoring,
     _migrate_ai_artifacts_off_main,
     _migrate_gitignore_block,
@@ -58,8 +58,6 @@ from wade.services.init_service.prompts_setup import (
     _prompt_provider_setup,
 )
 from wade.services.init_service.shell import (
-    _configure_gemini_experimental,
-    _prompt_configure_gemini_experimental,
     _prompt_configure_shell_integration,
 )
 from wade.skills import installer, pointer
@@ -351,8 +349,6 @@ def init(
     # choosing "Cancel" or iterating through "Modify" never triggers side effects.
     if "claude" in tools_in_use:
         _prompt_claude_code_settings(non_interactive)
-    if "gemini" in tools_in_use:
-        _prompt_configure_gemini_experimental(non_interactive)
     _prompt_configure_shell_integration(non_interactive)
     _prompt_configure_completions(non_interactive)
 
@@ -490,11 +486,11 @@ def update(
     4.  Show version transition
     5.  Run config migration pipeline
     6.  Reload config + backfill probed models
-    7.  Refresh skill files (force overwrite)
-    8.  Configure Gemini experimental (if applicable)
+    7.  Warn about removed AI tools still referenced in config
+    8.  Migrate old skill files off main
     9.  Migrate — remove stale committed gitignore block
     10. Make .wade/ self-ignoring
-    11. Clean up AI tool artifacts from main checkout (migration)
+    11. Clean up AI tool + Gemini artifacts from main checkout (migration)
     12. Rebuild manifest with version
 
     Never overwrites .wade.yml user values — only patches missing keys
@@ -547,23 +543,23 @@ def update(
         model_mapping = _resolve_models(ai_tool)
         _patch_config(config_path, ai_tool, model_mapping)
 
-    # Step 7: Migrate old skill files off main (skills now live in worktrees only)
+    # Step 7: Warn about removed AI tools still referenced in config (e.g. Gemini
+    # CLI). The tool fields are plain strings, so a stale value loads fine here —
+    # surface an actionable message before it breaks a later launch.
+    from wade.services.check_service import detect_removed_ai_tools
+
+    for location, replacement in detect_removed_ai_tools(config).items():
+        console.warn(
+            f"{location} references a removed AI tool — "
+            f"switch to '{replacement}' or another supported tool in .wade.yml"
+        )
+
+    # Step 8: Migrate old skill files off main (skills now live in worktrees only)
     is_self = root.resolve() == get_wade_root().resolve()
     if not is_self:
         removed = _migrate_skills_off_main(root)
         if removed:
             console.info(f"Migrated {len(removed)} old skill entries off main")
-
-    # Compute which tools are actually configured for this project
-    tools_in_use: set[str] = set()
-    for cmd in [None, *AI_COMMAND_NAMES]:
-        t = config.get_ai_tool(cmd)
-        if t:
-            tools_in_use.add(t)
-
-    # Step 8: Configure Gemini experimental (if applicable)
-    if "gemini" in tools_in_use:
-        _configure_gemini_experimental()
 
     # Step 9: Migrate — remove stale committed gitignore block (if present)
     _migrate_gitignore_block(root)
@@ -571,10 +567,13 @@ def update(
     # Step 10: Make .wade/ self-ignoring (idempotent)
     _ensure_wade_dir_self_ignoring(root)
 
-    # Step 11: Clean up AI tool artifacts from main checkout (migration)
+    # Step 11: Clean up AI tool + Gemini artifacts from main checkout (migration)
     removed_artifacts = _migrate_ai_artifacts_off_main(root)
     if removed_artifacts:
         console.info(f"Removed {len(removed_artifacts)} AI tool artifact(s) from main checkout")
+    removed_gemini = _cleanup_gemini_artifacts(root)
+    if removed_gemini:
+        console.info(f"Removed {len(removed_gemini)} leftover Gemini file(s)")
 
     # Step 12: Rebuild manifest with version (no skills on main)
     _write_manifest(root, [])

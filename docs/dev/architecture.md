@@ -130,11 +130,11 @@ AI tool adapters, model/effort resolution primitives, the model registry, and pe
 
 | What | Lives in crossby | Used from wade via |
 |------|-------------------|---------------------|
-| `AbstractAITool` + adapters (Claude, Cursor, Copilot, Gemini, Codex, OpenCode, Antigravity, VS Code) | `crossby.ai_tools` | `services/ai_resolution.py`, `delegation_service.py`, `review_service.py`, `plan_service.py`, `prompt_delivery.py` |
+| `AbstractAITool` + adapters (Claude, Cursor, Copilot, Codex, OpenCode, Antigravity, Antigravity CLI, VS Code) | `crossby.ai_tools` | `services/ai_resolution.py`, `delegation_service.py`, `review_service.py`, `plan_service.py`, `prompt_delivery.py` |
 | `AIToolID`, `AIModel`, `ModelTier`, `TokenUsage`, `AIToolCapabilities`, `EffortLevel` | `crossby.models.ai` | re-exported from `wade.models` |
 | Model registry (probed from CLIs, was `data/models.json`) | `crossby.data.get_models_for_tool()` | `ai_resolution.py`, `init_service.py` |
 | Per-tool default model tiers (was `config/defaults.py`) | `crossby.config.defaults.get_defaults()` | `init_service.py` |
-| Claude/Cursor allowlist management, Cursor/Copilot/Gemini hook config (was `config/*_allowlist.py`, `config/*_hooks.py`) | `crossby.config.*`, `crossby.sync.permissions` | `implementation_service/bootstrap.py`, `init_service.py` |
+| Claude/Cursor allowlist management, Cursor/Copilot hook config (was `config/*_allowlist.py`, `config/*_hooks.py`) | `crossby.config.*`, `crossby.sync.permissions` | `implementation_service/bootstrap.py`, `init_service.py` |
 
 Wade still owns a thin `services/ai_resolution.py` rather than delegating outright: wade's `ProjectConfig.ai` uses named per-command fields (e.g. `ai.plan`), while crossby's own config expects a `commands` dict — the two shapes aren't interchangeable yet. See that module's docstring for the up-to-date status.
 
@@ -218,9 +218,8 @@ knowledge:
 6. Reload config + backfill probed models
 7. Refresh skill files
 8. Configure AI tool allowlists (Claude via `claude_allowlist.py`, Cursor via `cursor_allowlist.py`)
-9. Configure Gemini experimental settings (if applicable)
-10. Refresh .gitignore + AGENTS.md pointer
-11. Rebuild manifest with version
+9. Refresh .gitignore + AGENTS.md pointer
+10. Rebuild manifest with version
 
 **Self-upgrade mechanism**: `utils/install.py:detect_install_method()` inspects `sys.executable` to determine how wade was installed (`uv-tool`, `pipx`, `brew`, or `editable`). On `wade update`, `self_upgrade()` runs the appropriate package manager command (e.g. `uv tool upgrade wade`), then `re_exec()` replaces the current process via `os.execv()` so the new code is loaded. Editable installs skip this naturally. Pass `--skip-self-upgrade` to bypass.
 

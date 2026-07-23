@@ -1,8 +1,8 @@
-"""Init service shell integration — profiles, statusline, gemini experimental.
+"""Init service shell integration — profiles and statusline.
 
-Configures shell-init sourcing in the user's profile, the Claude Code statusline,
-and Gemini experimental settings, with their interactive prompt wrappers. Leaf
-module — imports nothing from siblings.
+Configures shell-init sourcing in the user's profile and the Claude Code
+statusline, with their interactive prompt wrappers. Leaf module — imports
+nothing from siblings.
 """
 
 from __future__ import annotations
@@ -18,84 +18,13 @@ from wade.ui.console import console
 logger = structlog.get_logger()
 
 __all__ = [
-    "_configure_gemini_experimental",
     "_configure_shell_integration",
     "_configure_statusline",
     "_get_shell_profile",
     "_is_shell_integration_configured",
-    "_prompt_configure_gemini_experimental",
     "_prompt_configure_shell_integration",
     "_prompt_configure_statusline",
 ]
-
-
-def _configure_gemini_experimental() -> None:
-    """Write Gemini experimental settings for plan mode support.
-
-    Writes {"experimental":{"plan":true}} to ~/.gemini/settings.json,
-    merging non-destructively with existing content.
-    """
-    import contextlib
-    import json
-
-    settings_path = Path.home() / ".gemini" / "settings.json"
-
-    existing: dict[str, Any] = {}
-    if settings_path.is_file():
-        with contextlib.suppress(json.JSONDecodeError, OSError):
-            raw = json.loads(settings_path.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                existing = raw
-
-    experimental: dict[str, Any] = existing.get("experimental", {})
-    if not isinstance(experimental, dict):
-        experimental = {}
-    if experimental.get("plan") is True:
-        return  # Already configured
-
-    experimental["plan"] = True
-    existing["experimental"] = experimental
-
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-    settings_path.write_text(
-        json.dumps(existing, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    logger.info("gemini.experimental_configured", path=str(settings_path))
-
-
-def _prompt_configure_gemini_experimental(non_interactive: bool) -> None:
-    """Prompt user to enable Gemini experimental plan mode, skipping if already configured."""
-    import contextlib
-    import json
-
-    from wade.ui import prompts
-
-    settings_path = Path.home() / ".gemini" / "settings.json"
-
-    existing: dict[str, Any] = {}
-    if settings_path.is_file():
-        with contextlib.suppress(json.JSONDecodeError, OSError):
-            raw = json.loads(settings_path.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                existing = raw
-
-    experimental = existing.get("experimental", {})
-    if isinstance(experimental, dict) and experimental.get("plan") is True:
-        return  # Already configured — skip section entirely
-
-    if not non_interactive:
-        console.rule("Gemini")
-
-    if non_interactive:
-        return
-
-    if prompts.confirm(
-        "Enable Gemini experimental.plan mode (required for planning)?",
-        default=True,
-    ):
-        _configure_gemini_experimental()
-        console.success("Enabled experimental.plan in ~/.gemini/settings.json")
 
 
 def _configure_statusline() -> None:
