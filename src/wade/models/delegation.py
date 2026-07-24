@@ -7,6 +7,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from wade.models.permission import PermissionMode
+
 
 class DelegationMode(StrEnum):
     """How a delegation request is executed."""
@@ -29,7 +31,7 @@ class DelegationRequest(BaseModel):
     output_file: Path | None = None
     trusted_dirs: list[str] = Field(default_factory=list)
     allowed_commands: list[str] = Field(default_factory=list)
-    yolo: bool = False
+    permission_mode: PermissionMode = PermissionMode.DEFAULT
 
 
 class DelegationResult(BaseModel):

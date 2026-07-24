@@ -142,7 +142,30 @@ wade 42
 
 Short aliases: `wade p` (plan), `wade i <N>` (implement), `wade r <N>` (review pr-comments).
 
-Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level>`, and `--yolo` to override configured defaults. `implement` also supports `--detach` (new terminal tab) and `--cd` (print worktree path only).
+Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level>`, `--permission-mode <tier>`, and `--yolo` to override configured defaults. `implement` also supports `--detach` (new terminal tab) and `--cd` (print worktree path only).
+
+`--permission-mode` sets how much autonomy the AI tool is granted — an axis
+independent of the delegation `--mode` (which controls *how* a tool is
+dispatched: prompt/interactive/headless). The tiers, most→least permissive, are
+`yolo` > `auto` > `accept-edits` > `default`:
+
+| Tier | Behavior |
+|------|----------|
+| `default` | Prompt for every action (no autonomy grant). |
+| `accept-edits` | Auto-apply file edits; still prompt for shell/commands. Claude and Antigravity CLI. |
+| `auto` | Classifier-mediated auto mode (a model reviews each non-read action). Claude only. |
+| `yolo` | Full autonomy — no prompts. |
+
+`--yolo` is a back-compat alias for `--permission-mode yolo`; an explicit
+`--permission-mode` wins when both are given. The same values are accepted in
+`.wade.yml` as `ai.permission_mode` (global) or `ai.<command>.permission_mode`
+(per-command), with `yolo: true` still honored as the alias. A tier a tool
+doesn't support is downgraded automatically (e.g. `auto` → `accept-edits` on
+non-Claude tools) with a warning — WADE forwards the requested tier and
+[`crossby`](https://github.com/ivanviragine/crossby) owns the downgrade ladder.
+Headless commands (`deps`, `review_*`) always run at `default`. `plan` is not a
+permission mode — it's driven separately — and is rejected (warn + fall back to
+`default`) if configured.
 
 `wade plan --issue <N>` re-plans an existing issue. If the session produces a
 single plan file, it's attached to `#N` and the issue stays open. If the

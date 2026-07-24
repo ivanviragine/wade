@@ -9,6 +9,10 @@
 1c18f1d4:
   down: 0
   stale: 0
+  up: 4
+271cf18f:
+  down: 0
+  stale: 0
   up: 1
 2b4d5319:
   down: 0
@@ -22,6 +26,10 @@
   down: 0
   stale: 0
   up: 2
+38aa4f95:
+  down: 0
+  stale: 0
+  up: 5
 4863036c:
   down: 0
   stale: 0
@@ -30,6 +38,22 @@
   down: 1
   stale: 0
   up: 0
+6e38b3aa:
+  down: 0
+  stale: 0
+  up: 1
+702b274f:
+  down: 0
+  stale: 0
+  up: 1
+9b40e000:
+  down: 0
+  stale: 0
+  up: 3
+9f5e5e2c:
+  down: 0
+  stale: 0
+  up: 5
 a24d65b0:
   down: 0
   stale: 0
@@ -41,6 +65,14 @@ b61e247e:
   superseded_by: bcfa4bb3
   up: 4
 b6a3a637:
+  down: 0
+  stale: 0
+  up: 1
+cae0f47a:
+  down: 0
+  stale: 0
+  up: 1
+cc136dba:
   down: 0
   stale: 0
   up: 1
