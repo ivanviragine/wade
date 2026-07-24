@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.35.0] — 2026-07-24
+
+### Features
+
+- refresh Antigravity support (CLI + IDE) for crossby 0.10.2 (#343) (8ff0f9a)
+
 ## [v0.34.0] — 2026-07-24
 
 ### Features

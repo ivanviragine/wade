@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from crossby.ai_tools import AbstractAITool
+from crossby.ai_tools.antigravity import AntigravityAdapter
 from crossby.ai_tools.antigravity_cli import AntigravityCLIAdapter
 from crossby.ai_tools.claude import ClaudeAdapter
 from crossby.ai_tools.codex import CodexAdapter
@@ -569,6 +570,22 @@ class TestImplementationLaunchCommandAssembly:
             assert "--model" in cmd
             assert "gemini-3-pro" in cmd
             assert mock_run.call_args[1]["cwd"] == tmp_path
+
+    def test_antigravity_ide_launch_command(self, tmp_path: Path) -> None:
+        """Antigravity IDE (GUI) launch opens the workspace via `antigravity <workdir>`.
+
+        crossby 0.10.2 changed the launch from `antigravity .` to an explicit
+        working-dir argument so the target is unambiguous. Guard the exact
+        command shape so a regression to `.` (or a leaked model flag) is caught.
+        """
+        adapter = AntigravityAdapter()
+
+        with patch("crossby.ai_tools.antigravity.run_with_transcript", return_value=0) as mock_rwt:
+            adapter.launch(working_dir=tmp_path)
+            cmd = mock_rwt.call_args[0][0]
+            # Exact shape: guards against a regression to `antigravity .` and a
+            # leaked --model flag in one assertion.
+            assert cmd == ["antigravity", str(tmp_path)]
 
     def test_codex_launch_command(self, tmp_path: Path) -> None:
         """Codex launch should use 'codex' binary with --model."""
