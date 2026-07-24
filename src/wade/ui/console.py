@@ -61,6 +61,7 @@ _theme = Theme(
         # AI tools
         "ai.claude": "#d97706",
         "ai.copilot": "#6366f1",
+        "ai.antigravity": "#60a5fa",
         "ai.antigravity-cli": "#3b82f6",
         "ai.codex": "#10b981",
         # Prompts

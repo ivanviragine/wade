@@ -127,11 +127,11 @@ src/wade/
 
 ## AI Tool Layer (external: crossby)
 
-AI tool adapters, model/effort resolution primitives, the model registry, and per-tool config (allowlists, hooks, defaults) are **not** part of this repo. They live in the external [`crossby`](https://github.com/ivanviragine/crossby) package, pinned in `pyproject.toml` (`crossby>=0.2.6,<0.3.0`). This replaced wade's formerly-internal `ai_tools/` and parts of `config/` and `data/` (see `feat: replace internal AI tool layer with the crossby dependency (#215)`).
+AI tool adapters, model/effort resolution primitives, the model registry, and per-tool config (allowlists, hooks, defaults) are **not** part of this repo. They live in the external [`crossby`](https://github.com/ivanviragine/crossby) package, pinned in `pyproject.toml` (`crossby>=0.10.2,<0.11.0`). This replaced wade's formerly-internal `ai_tools/` and parts of `config/` and `data/` (see `feat: replace internal AI tool layer with the crossby dependency (#215)`).
 
 | What | Lives in crossby | Used from wade via |
 |------|-------------------|---------------------|
-| `AbstractAITool` + adapters (Claude, Cursor, Copilot, Codex, OpenCode, Antigravity, Antigravity CLI, VS Code) | `crossby.ai_tools` | `services/ai_resolution.py`, `delegation_service.py`, `review_service.py`, `plan_service.py`, `prompt_delivery.py` |
+| `AbstractAITool` + adapters (Claude, Cursor, Copilot, Codex, OpenCode, Antigravity IDE = GUI launcher for the `antigravity` desktop app, Antigravity CLI = `agy` terminal agent, VS Code) | `crossby.ai_tools` | `services/ai_resolution.py`, `delegation_service.py`, `review_service.py`, `plan_service.py`, `prompt_delivery.py` |
 | `AIToolID`, `AIModel`, `ModelTier`, `TokenUsage`, `AIToolCapabilities`, `EffortLevel` | `crossby.models.ai` | re-exported from `wade.models` |
 | Model registry (probed from CLIs, was `data/models.json`) | `crossby.data.get_models_for_tool()` | `ai_resolution.py`, `init_service.py` |
 | Per-tool default model tiers (was `config/defaults.py`) | `crossby.config.defaults.get_defaults()` | `init_service.py` |

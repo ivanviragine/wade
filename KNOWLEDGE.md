@@ -225,3 +225,9 @@ wade review implementation runs a headless AI subprocess with a bounded timeout 
 wade never branches on crossby's AIToolType/tool_type (only re-exported in wade.models); it gates GUI-vs-terminal launch behavior on the blocks_until_exit capability instead (delegation_service, review_service, plan_service, implementation_service). So crossby 0.10.2 reclassifying the Antigravity IDE from TERMINAL to GUI (display 'Antigravity IDE', launch 'antigravity <workdir>', added to UNSUPPORTED_TOOLS) needs no wade code change — the non-blocking (blocks_until_exit=False) path already covers it.
 
 ---
+
+## 16bc7261 | 2026-07-24 | implementation | tags: testing, antigravity, ai-tools, crossby | Issue #342
+
+To unit-test a crossby GUI adapter launch command (Antigravity IDE, VS Code), patch `crossby.ai_tools.<module>.run_with_transcript` (e.g. crossby.ai_tools.antigravity.run_with_transcript) and read call_args[0][0] — GUI adapters build the cmd and call crossby's run_with_transcript directly, so patching wade.utils.process/subprocess never fires. The Antigravity IDE cmd is exactly ["antigravity", str(working_dir)] (explicit dir, not ".").
+
+---
