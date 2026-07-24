@@ -60,6 +60,16 @@ class TestPermissionModeModel:
         # normalization does not resurrect the excluded value
         assert coerce_permission_mode("PLAN") is None
 
+    def test_coerce_non_string_never_raises(self) -> None:
+        # A non-string that slips past the type hint (raw bool/int/float from
+        # untyped YAML) must degrade to None, never raise — honoring the
+        # documented "never raises" contract.
+        from wade.models.permission import coerce_permission_mode
+
+        assert coerce_permission_mode(True) is None  # type: ignore[arg-type]
+        assert coerce_permission_mode(1) is None  # type: ignore[arg-type]
+        assert coerce_permission_mode(3.5) is None  # type: ignore[arg-type]
+
     def test_launch_kwargs_per_tier(self) -> None:
         from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 

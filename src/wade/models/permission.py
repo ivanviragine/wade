@@ -55,7 +55,10 @@ def coerce_permission_mode(value: str | PermissionMode | None) -> PermissionMode
         return value
     try:
         return PermissionMode(value.replace("_", "-").lower())
-    except ValueError:
+    except (ValueError, AttributeError):
+        # ValueError: unknown/excluded string (e.g. ``plan``). AttributeError:
+        # a non-string slipped past the type hint (e.g. a raw bool/int from
+        # untyped YAML) — honor the "never raises" contract and degrade to None.
         return None
 
 
