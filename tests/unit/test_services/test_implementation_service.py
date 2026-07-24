@@ -583,9 +583,9 @@ class TestImplementationLaunchCommandAssembly:
         with patch("crossby.ai_tools.antigravity.run_with_transcript", return_value=0) as mock_rwt:
             adapter.launch(working_dir=tmp_path)
             cmd = mock_rwt.call_args[0][0]
+            # Exact shape: guards against a regression to `antigravity .` and a
+            # leaked --model flag in one assertion.
             assert cmd == ["antigravity", str(tmp_path)]
-            assert "." not in cmd
-            assert "--model" not in cmd
 
     def test_codex_launch_command(self, tmp_path: Path) -> None:
         """Codex launch should use 'codex' binary with --model."""
