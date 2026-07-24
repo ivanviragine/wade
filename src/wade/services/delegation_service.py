@@ -18,8 +18,9 @@ import structlog
 from crossby.ai_tools import AbstractAITool
 from crossby.models.ai import AIToolID, EffortLevel
 
-from wade.models.config import AICommandConfig, with_wade_base_pattern
+from wade.models.config import AICommandConfig
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
+from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.ui import prompts
 from wade.ui.console import console
@@ -111,22 +112,18 @@ def _delegate_headless(request: DelegationRequest) -> DelegationResult:
     defaults = [str(session_cwd), tempfile.gettempdir()]
     trusted = defaults + [d for d in request.trusted_dirs if d not in defaults]
 
-    # Write Gemini policy file before launch (replaces deprecated --allowed-tools flag).
-    # Guarantee wade's base pattern so the agent can always run ``wade ...``.
-    if request.ai_tool == AIToolID.GEMINI:
-        from crossby.sync.permissions import GeminiPermissionWriter
-
-        GeminiPermissionWriter.write(
-            session_cwd, with_wade_base_pattern(request.allowed_commands or [])
-        )
-
+    # Headless commands (deps, review_*) are read/analytical and never need an
+    # autonomy grant, so the headless path always runs at ``default`` — any
+    # configured permission mode is intentionally ignored here (see
+    # KNOWLEDGE.md: headless-vs-autonomy). Forcing the DEFAULT tier keeps
+    # yolo/auto/accept_edits all off, symmetric with the interactive path.
     cmd = adapter.build_launch_command(
         model=request.model,
         prompt=request.prompt,
         trusted_dirs=trusted,
         allowed_commands=request.allowed_commands or None,
         effort=_parse_effort(request.effort),
-        yolo=False,
+        **permission_mode_launch_kwargs(PermissionMode.DEFAULT),
     )
 
     try:
@@ -211,15 +208,6 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
         trusted.append(str(output_file.parent))
 
     try:
-        # Write Gemini policy file before launch (replaces deprecated --allowed-tools flag).
-        # Guarantee wade's base pattern so the agent can always run ``wade ...``.
-        if request.ai_tool == AIToolID.GEMINI:
-            from crossby.sync.permissions import GeminiPermissionWriter
-
-            GeminiPermissionWriter.write(
-                session_cwd, with_wade_base_pattern(request.allowed_commands or [])
-            )
-
         deliver_prompt_if_needed(adapter, interactive_prompt)
         adapter.launch(
             working_dir=session_cwd,
@@ -228,7 +216,7 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
             trusted_dirs=trusted,
             allowed_commands=request.allowed_commands or None,
             effort=_parse_effort(request.effort),
-            yolo=request.yolo,
+            **permission_mode_launch_kwargs(request.permission_mode),
         )
 
         # Non-blocking tools return immediately — wait for user

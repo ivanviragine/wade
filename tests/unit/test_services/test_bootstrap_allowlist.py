@@ -237,7 +237,7 @@ class TestBootstrapPlanMode:
             bootstrap_worktree(worktree_path, config, repo_root, plan_mode=True)
 
         # Guard script should be copied to all tool hook dirs
-        for tool_dir in [".claude/hooks", ".cursor/hooks", ".copilot/hooks", ".gemini/hooks"]:
+        for tool_dir in [".claude/hooks", ".cursor/hooks", ".copilot/hooks"]:
             guard = worktree_path / tool_dir / "plan_write_guard.py"
             assert guard.is_file(), f"Guard script missing in {tool_dir}"
 
@@ -268,9 +268,6 @@ class TestBootstrapPlanMode:
 
         copilot_hooks = worktree_path / ".github" / "hooks" / "hooks.json"
         assert copilot_hooks.is_file()
-
-        gemini_settings = worktree_path / ".gemini" / "settings.json"
-        assert gemini_settings.is_file()
 
     def test_plan_mode_false_installs_worktree_guard_hooks(self, tmp_path: Path) -> None:
         """plan_mode=False (default) installs worktree guard hooks, not plan guard hooks."""
@@ -303,10 +300,6 @@ class TestBootstrapPlanMode:
         # Copilot hooks.json should exist (worktree guard)
         copilot_hooks = worktree_path / ".github" / "hooks" / "hooks.json"
         assert copilot_hooks.is_file()
-
-        # Gemini settings.json should exist (worktree guard)
-        gemini_settings = worktree_path / ".gemini" / "settings.json"
-        assert gemini_settings.is_file()
 
 
 class TestBootstrapPointerInjection:

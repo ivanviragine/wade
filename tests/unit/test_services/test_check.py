@@ -120,6 +120,14 @@ class TestValidateConfig:
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("ai.plan.tool" in e for e in result.errors)
 
+    def test_removed_gemini_tool_gives_actionable_message(self, tmp_path: Path) -> None:
+        """A stale ``default_tool: gemini`` yields a clear switch-to hint, not a crash."""
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nai:\n  default_tool: gemini\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("no longer supported" in e and "antigravity-cli" in e for e in result.errors)
+
     def test_valid_command_timeout(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"
         config.write_text("version: 2\nai:\n  review_plan:\n    timeout: 300\n")

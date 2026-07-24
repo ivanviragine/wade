@@ -23,6 +23,7 @@ from wade.git import repo as git_repo
 from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
+from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 from wade.models.review import (
     PollOutcome,
     PRReviewStatus,
@@ -40,7 +41,7 @@ from wade.services.ai_resolution import (
     confirm_ai_selection,
     resolve_ai_tool,
     resolve_model,
-    resolve_yolo,
+    resolve_permission_mode,
 )
 from wade.services.implementation_service import (
     _detect_ai_cli_env,
@@ -482,7 +483,8 @@ def start(
     ai_explicit: bool = False,
     model_explicit: bool = False,
     yolo: bool | None = None,
-    yolo_explicit: bool = False,
+    permission_mode: str | None = None,
+    permission_mode_explicit: bool = False,
 ) -> bool:
     """Start a review-addressing session on an issue.
 
@@ -507,6 +509,13 @@ def start(
     except GitError:
         console.error_with_fix("Not inside a git repository", "Navigate to your project directory")
         return False
+
+    # Fold the --yolo alias into permission_mode up front so every downstream
+    # path — including the pre-resolution quiet-exit menu that recurses into
+    # start() — carries the same intent. An explicit permission_mode wins.
+    if permission_mode is None and yolo:
+        permission_mode = PermissionMode.YOLO.value
+        permission_mode_explicit = True
 
     # 1. Read the issue
     issue_number = target.lstrip("#")
@@ -622,8 +631,8 @@ def start(
             detach=detach,
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
-            yolo=yolo,
-            yolo_explicit=yolo_explicit,
+            permission_mode=permission_mode,
+            permission_mode_explicit=permission_mode_explicit,
         )
         return True
 
@@ -654,16 +663,16 @@ def start(
         tool=resolved_tool,
         complexity=task.complexity.value if task.complexity else None,
     )
-    resolved_yolo = resolve_yolo(yolo, config, "implement", tool=resolved_tool)
+    resolved_permission_mode = resolve_permission_mode(permission_mode, yolo, config, "implement")
 
     if not detach:
-        resolved_tool, resolved_model, _effort, resolved_yolo = confirm_ai_selection(
+        resolved_tool, resolved_model, _effort, resolved_permission_mode = confirm_ai_selection(
             resolved_tool,
             resolved_model,
             tool_explicit=ai_explicit,
             model_explicit=model_explicit,
-            resolved_yolo=resolved_yolo,
-            yolo_explicit=yolo_explicit,
+            resolved_permission_mode=resolved_permission_mode,
+            permission_mode_explicit=permission_mode_explicit or yolo is not None,
         )
 
     # 7. Build review prompt
@@ -715,7 +724,7 @@ def start(
                 model=resolved_model,
                 trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
                 initial_message=prompt,
-                yolo=resolved_yolo,
+                **permission_mode_launch_kwargs(resolved_permission_mode),
             )
         except (ValueError, KeyError):
             cmd = [resolved_tool]
@@ -744,7 +753,7 @@ def start(
                 prompt=prompt,
                 transcript_path=transcript_path,
                 trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
-                yolo=resolved_yolo,
+                **permission_mode_launch_kwargs(resolved_permission_mode),
             )
             launch_completed = True
             logger.info("review.ai_exited", exit_code=exit_code, tool=resolved_tool)
@@ -804,8 +813,8 @@ def start(
                 detach=detach,
                 ai_explicit=ai_explicit,
                 model_explicit=model_explicit,
-                yolo=resolved_yolo,
-                yolo_explicit=yolo_explicit,
+                permission_mode=resolved_permission_mode.value,
+                permission_mode_explicit=permission_mode_explicit,
             )
     else:
         console.info(
@@ -827,8 +836,8 @@ def start(
             detach=detach,
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
-            yolo=yolo,
-            yolo_explicit=yolo_explicit,
+            permission_mode=permission_mode,
+            permission_mode_explicit=permission_mode_explicit,
         )
 
     return True
@@ -902,8 +911,8 @@ def _quiet_next_steps_prompt(
     detach: bool = False,
     ai_explicit: bool = False,
     model_explicit: bool = False,
-    yolo: bool | None = None,
-    yolo_explicit: bool = False,
+    permission_mode: str | None = None,
+    permission_mode_explicit: bool = False,
 ) -> None:
     """Shared next-steps menu for quiet PRs: keep polling, merge, or exit.
 
@@ -947,8 +956,8 @@ def _quiet_next_steps_prompt(
                         detach=detach,
                         ai_explicit=ai_explicit,
                         model_explicit=model_explicit,
-                        yolo=yolo,
-                        yolo_explicit=yolo_explicit,
+                        permission_mode=permission_mode,
+                        permission_mode_explicit=permission_mode_explicit,
                     )
                 return
             elif outcome in (PollOutcome.QUIET_TIMEOUT, PollOutcome.REVIEW_COMPLETE):
@@ -975,8 +984,8 @@ def _post_review_lifecycle(
     detach: bool = False,
     ai_explicit: bool = False,
     model_explicit: bool = False,
-    yolo: bool | None = None,
-    yolo_explicit: bool = False,
+    permission_mode: str | None = None,
+    permission_mode_explicit: bool = False,
 ) -> None:
     """Post-review lifecycle menu: Merge PR or wait for new reviews."""
     from wade.ui import prompts
@@ -1002,8 +1011,8 @@ def _post_review_lifecycle(
                     detach=detach,
                     ai_explicit=ai_explicit,
                     model_explicit=model_explicit,
-                    yolo=yolo,
-                    yolo_explicit=yolo_explicit,
+                    permission_mode=permission_mode,
+                    permission_mode_explicit=permission_mode_explicit,
                 )
         elif outcome in (PollOutcome.QUIET_TIMEOUT, PollOutcome.REVIEW_COMPLETE):
             _quiet_next_steps_prompt(
@@ -1018,8 +1027,8 @@ def _post_review_lifecycle(
                 detach=detach,
                 ai_explicit=ai_explicit,
                 model_explicit=model_explicit,
-                yolo=yolo,
-                yolo_explicit=yolo_explicit,
+                permission_mode=permission_mode,
+                permission_mode_explicit=permission_mode_explicit,
             )
         return
 

@@ -59,9 +59,11 @@ class TestConfigYolo:
     def test_get_yolo_no_config(self) -> None:
         from wade.models.config import ProjectConfig
 
+        # get_yolo now derives from the resolved permission mode, so an unset
+        # config resolves to False (default tier) rather than None.
         config = ProjectConfig()
-        assert config.get_yolo() is None
-        assert config.get_yolo("implement") is None
+        assert config.get_yolo() is False
+        assert config.get_yolo("implement") is False
 
 
 # ---------------------------------------------------------------------------
@@ -102,11 +104,12 @@ class TestAdapterYoloArgs:
         result = ClaudeAdapter().yolo_args()
         assert result == ["--dangerously-skip-permissions"]
 
-    def test_gemini_yolo_args(self) -> None:
-        from crossby.ai_tools.gemini import GeminiAdapter
+    def test_antigravity_cli_yolo_args(self) -> None:
+        from crossby.ai_tools.antigravity_cli import AntigravityCLIAdapter
 
-        result = GeminiAdapter().yolo_args()
-        assert result == ["--yolo"]
+        # agy skips permission prompts but keeps the terminal sandbox active.
+        result = AntigravityCLIAdapter().yolo_args()
+        assert result == ["--dangerously-skip-permissions", "--sandbox"]
 
     def test_codex_yolo_args(self) -> None:
         from crossby.ai_tools.codex import CodexAdapter
@@ -147,10 +150,10 @@ class TestAdapterSupportsYolo:
 
         assert ClaudeAdapter().capabilities().supports_yolo is True
 
-    def test_gemini_supports_yolo(self) -> None:
-        from crossby.ai_tools.gemini import GeminiAdapter
+    def test_antigravity_cli_supports_yolo(self) -> None:
+        from crossby.ai_tools.antigravity_cli import AntigravityCLIAdapter
 
-        assert GeminiAdapter().capabilities().supports_yolo is True
+        assert AntigravityCLIAdapter().capabilities().supports_yolo is True
 
     def test_codex_supports_yolo(self) -> None:
         from crossby.ai_tools.codex import CodexAdapter
@@ -185,11 +188,12 @@ class TestBuildLaunchCommandYolo:
         cmd = ClaudeAdapter().build_launch_command(yolo=True)
         assert "--dangerously-skip-permissions" in cmd
 
-    def test_gemini_yolo_includes_flag(self) -> None:
-        from crossby.ai_tools.gemini import GeminiAdapter
+    def test_antigravity_cli_yolo_includes_flag(self) -> None:
+        from crossby.ai_tools.antigravity_cli import AntigravityCLIAdapter
 
-        cmd = GeminiAdapter().build_launch_command(yolo=True)
-        assert "--yolo" in cmd
+        cmd = AntigravityCLIAdapter().build_launch_command(yolo=True)
+        assert "--dangerously-skip-permissions" in cmd
+        assert "--sandbox" in cmd
 
     def test_codex_yolo_includes_flag(self) -> None:
         from crossby.ai_tools.codex import CodexAdapter
@@ -295,13 +299,16 @@ class TestResolveYolo:
         result = resolve_yolo(None, config, "implement")
         assert result is True
 
-    def test_unsupported_tool_returns_false(self) -> None:
+    def test_unsupported_tool_no_longer_gated(self) -> None:
+        # The local supports_yolo gate was removed: WADE forwards the requested
+        # tier and crossby owns capability-aware downgrades. So requesting yolo
+        # on a tool that lacks it still resolves to True here (crossby downgrades
+        # at launch, with a warning).
         from wade.models.config import ProjectConfig
         from wade.services.ai_resolution import resolve_yolo
 
         config = ProjectConfig()
-        result = resolve_yolo(True, config, "implement", tool="opencode")
-        assert result is False
+        assert resolve_yolo(True, config, "implement", tool="opencode") is True
 
     def test_supported_tool_returns_true(self) -> None:
         from wade.models.config import ProjectConfig
@@ -312,13 +319,14 @@ class TestResolveYolo:
         assert result is True
 
     @patch("wade.services.ai_resolution.logger")
-    def test_unsupported_tool_logs_warning(self, mock_logger: object) -> None:
+    def test_unsupported_tool_does_not_log_warning(self, mock_logger: object) -> None:
+        # No local gate → no WADE-side warning (crossby warns at launch instead).
         from wade.models.config import ProjectConfig
         from wade.services.ai_resolution import resolve_yolo
 
         config = ProjectConfig()
         resolve_yolo(True, config, "implement", tool="opencode")
-        assert mock_logger.warning.called  # type: ignore[union-attr]
+        assert not mock_logger.warning.called  # type: ignore[union-attr]
 
 
 # ---------------------------------------------------------------------------
@@ -337,11 +345,11 @@ def _make_installed(*names: str) -> list:
     return [AIToolID(n) for n in names]
 
 
-class TestConfirmYolo:
-    """YOLO-specific behaviour in confirm_ai_selection."""
+class TestConfirmPermissionMode:
+    """Permission-mode behaviour in confirm_ai_selection."""
 
-    def test_yolo_explicit_skips_menu_option(self) -> None:
-        """When yolo_explicit=True, 'Turn on YOLO mode' is not in the menu."""
+    def test_explicit_skips_menu_option(self) -> None:
+        """When permission_mode_explicit=True, 'Change permission mode' is hidden."""
         from wade.services.ai_resolution import confirm_ai_selection
 
         menu_items_seen: list[list[str]] = []
@@ -362,15 +370,14 @@ class TestConfirmYolo:
                 tool_explicit=False,
                 model_explicit=False,
                 effort_explicit=True,
-                yolo_explicit=True,
+                permission_mode_explicit=True,
             )
 
         assert len(menu_items_seen) >= 1
-        assert "Turn on YOLO mode" not in menu_items_seen[0]
-        assert "Turn off YOLO mode" not in menu_items_seen[0]
+        assert "Change permission mode" not in menu_items_seen[0]
 
-    def test_menu_shows_turn_on_yolo_for_supported_tool(self) -> None:
-        """Claude supports yolo → 'Turn on YOLO mode' appears in menu."""
+    def test_menu_shows_change_permission_mode_for_supported_tool(self) -> None:
+        """Claude supports autonomy tiers → 'Change permission mode' appears."""
         from wade.services.ai_resolution import confirm_ai_selection
 
         menu_items_seen: list[list[str]] = []
@@ -391,43 +398,14 @@ class TestConfirmYolo:
                 tool_explicit=False,
                 model_explicit=True,
                 effort_explicit=True,
-                yolo_explicit=False,
+                permission_mode_explicit=False,
             )
 
         assert len(menu_items_seen) >= 1
-        assert "Turn on YOLO mode" in menu_items_seen[0]
+        assert "Change permission mode" in menu_items_seen[0]
 
-    def test_menu_shows_turn_off_when_yolo_on(self) -> None:
-        """When resolved_yolo=True, menu shows 'Turn off YOLO mode'."""
-        from wade.services.ai_resolution import confirm_ai_selection
-
-        menu_items_seen: list[list[str]] = []
-
-        def fake_select(title: str, items: list[str], **kwargs: object) -> int:
-            menu_items_seen.append(list(items))
-            return 0  # Proceed
-
-        with (
-            patch(_IS_TTY, return_value=True),
-            patch(_SELECT, side_effect=fake_select),
-            patch(_DETECT, return_value=_make_installed("claude")),
-            patch(_CONSOLE_KV),
-        ):
-            confirm_ai_selection(
-                "claude",
-                "claude-sonnet-4-6",
-                tool_explicit=False,
-                model_explicit=True,
-                effort_explicit=True,
-                resolved_yolo=True,
-                yolo_explicit=False,
-            )
-
-        assert len(menu_items_seen) >= 1
-        assert "Turn off YOLO mode" in menu_items_seen[0]
-
-    def test_menu_excludes_yolo_for_unsupported_tool(self) -> None:
-        """OpenCode does not support yolo → no YOLO option in menu."""
+    def test_menu_excludes_permission_mode_for_unsupported_tool(self) -> None:
+        """OpenCode supports no autonomy tier → no permission-mode option."""
         from wade.services.ai_resolution import confirm_ai_selection
 
         menu_items_seen: list[list[str]] = []
@@ -447,23 +425,28 @@ class TestConfirmYolo:
                 None,
                 tool_explicit=False,
                 model_explicit=False,
-                yolo_explicit=False,
+                permission_mode_explicit=False,
             )
 
         assert len(menu_items_seen) >= 1
-        assert "Turn on YOLO mode" not in menu_items_seen[0]
+        assert "Change permission mode" not in menu_items_seen[0]
 
-    def test_toggle_yolo_on(self) -> None:
-        """User selects 'Turn on YOLO mode' → yolo becomes True."""
+    def test_change_permission_mode_to_accept_edits(self) -> None:
+        """Selecting 'Change permission mode' then a tier updates the result."""
+        from wade.models.permission import PermissionMode
         from wade.services.ai_resolution import confirm_ai_selection
 
-        call_count = 0
+        changed = False
 
         def fake_select(title: str, items: list[str], **kwargs: object) -> int:
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return items.index("Turn on YOLO mode")
+            nonlocal changed
+            if title == "Select permission mode":
+                changed = True
+                return items.index("accept-edits")
+            # Change the mode once, then Proceed — otherwise the menu re-offers
+            # "Change permission mode" forever and the loop never exits.
+            if not changed and "Change permission mode" in items:
+                return items.index("Change permission mode")
             return 0  # Proceed
 
         with (
@@ -472,122 +455,41 @@ class TestConfirmYolo:
             patch(_DETECT, return_value=_make_installed("claude")),
             patch(_CONSOLE_KV),
         ):
-            _, _, _, yolo = confirm_ai_selection(
+            _, _, _, mode = confirm_ai_selection(
                 "claude",
                 "claude-sonnet-4-6",
                 tool_explicit=False,
                 model_explicit=True,
                 effort_explicit=True,
-                yolo_explicit=False,
+                permission_mode_explicit=False,
             )
 
-        assert yolo is True
-
-    def test_toggle_yolo_off(self) -> None:
-        """User selects 'Turn off YOLO mode' → yolo becomes False."""
-        from wade.services.ai_resolution import confirm_ai_selection
-
-        call_count = 0
-
-        def fake_select(title: str, items: list[str], **kwargs: object) -> int:
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return items.index("Turn off YOLO mode")
-            return 0  # Proceed
-
-        with (
-            patch(_IS_TTY, return_value=True),
-            patch(_SELECT, side_effect=fake_select),
-            patch(_DETECT, return_value=_make_installed("claude")),
-            patch(_CONSOLE_KV),
-        ):
-            _, _, _, yolo = confirm_ai_selection(
-                "claude",
-                "claude-sonnet-4-6",
-                tool_explicit=False,
-                model_explicit=True,
-                effort_explicit=True,
-                resolved_yolo=True,
-                yolo_explicit=False,
-            )
-
-        assert yolo is False
-
-    def test_tool_switch_clears_yolo_for_unsupported_tool(self) -> None:
-        """Switching to a tool that doesn't support yolo clears it."""
-        from wade.services.ai_resolution import confirm_ai_selection
-
-        call_count = 0
-
-        def fake_select(title: str, items: list[str], **kwargs: object) -> int:
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return items.index("Change AI tool")
-            if call_count == 2:
-                return items.index("opencode")
-            if call_count == 3:
-                return 0  # first model
-            return 0  # Proceed
-
-        with (
-            patch(_IS_TTY, return_value=True),
-            patch(_SELECT, side_effect=fake_select),
-            patch(_DETECT, return_value=_make_installed("claude", "opencode")),
-            patch("crossby.data.get_models_for_tool", return_value=["gpt-4o"]),
-            patch(_CONSOLE_KV),
-        ):
-            _, _, _, yolo = confirm_ai_selection(
-                "claude",
-                "claude-sonnet-4-6",
-                tool_explicit=False,
-                model_explicit=False,
-                resolved_yolo=True,
-            )
-
-        assert yolo is False
+        assert mode is PermissionMode.ACCEPT_EDITS
 
 
 # ---------------------------------------------------------------------------
-# Gemini — headless and structured output
+# Antigravity CLI — headless
 # ---------------------------------------------------------------------------
 
 
-class TestGeminiHeadless:
-    def test_gemini_supports_headless_capability(self) -> None:
-        from crossby.ai_tools.gemini import GeminiAdapter
+class TestAntigravityCLIHeadless:
+    def test_antigravity_cli_supports_headless_capability(self) -> None:
+        from crossby.ai_tools.antigravity_cli import AntigravityCLIAdapter
 
-        assert GeminiAdapter().capabilities().supports_headless is True
+        assert AntigravityCLIAdapter().capabilities().supports_headless is True
 
-    def test_gemini_headless_flag_is_dash_p(self) -> None:
-        from crossby.ai_tools.gemini import GeminiAdapter
+    def test_antigravity_cli_headless_flag_is_print(self) -> None:
+        from crossby.ai_tools.antigravity_cli import AntigravityCLIAdapter
 
-        assert GeminiAdapter().capabilities().headless_flag == "-p"
+        assert AntigravityCLIAdapter().capabilities().headless_flag == "--print"
 
-    def test_gemini_build_launch_command_headless_includes_prompt(self) -> None:
-        from crossby.ai_tools.gemini import GeminiAdapter
+    def test_antigravity_cli_build_launch_command_headless_includes_prompt(self) -> None:
+        from crossby.ai_tools.antigravity_cli import AntigravityCLIAdapter
 
-        cmd = GeminiAdapter().build_launch_command(prompt="test prompt")
-        assert "-p" in cmd
-        idx = cmd.index("-p")
+        cmd = AntigravityCLIAdapter().build_launch_command(prompt="test prompt")
+        assert "--print" in cmd
+        idx = cmd.index("--print")
         assert cmd[idx + 1] == "test prompt"
-
-
-class TestGeminiStructuredOutput:
-    def test_gemini_structured_output_args(self) -> None:
-        from crossby.ai_tools.gemini import GeminiAdapter
-
-        result = GeminiAdapter().structured_output_args({"type": "object"})
-        assert result == ["--output-format", "json"]
-
-    def test_gemini_build_launch_command_with_json_schema(self) -> None:
-        from crossby.ai_tools.gemini import GeminiAdapter
-
-        cmd = GeminiAdapter().build_launch_command(json_schema={"type": "object"})
-        assert "--output-format" in cmd
-        idx = cmd.index("--output-format")
-        assert cmd[idx + 1] == "json"
 
 
 # ---------------------------------------------------------------------------
@@ -595,14 +497,15 @@ class TestGeminiStructuredOutput:
 # ---------------------------------------------------------------------------
 
 
-class TestHeadlessYoloBehavior:
-    """Verify _delegate_headless ignores yolo regardless of config value."""
+class TestHeadlessPermissionModeBehavior:
+    """Verify _delegate_headless forces default autonomy regardless of request."""
 
-    def test_headless_does_not_propagate_yolo_true(self) -> None:
-        """yolo=True in DelegationRequest must not produce yolo flags in the subprocess command."""
+    def test_headless_does_not_propagate_yolo_tier(self) -> None:
+        """permission_mode=yolo must not produce autonomy flags on the headless command."""
         from unittest.mock import MagicMock, patch
 
         from wade.models.delegation import DelegationMode, DelegationRequest
+        from wade.models.permission import PermissionMode
         from wade.services.delegation_service import _delegate_headless
 
         with patch("wade.services.delegation_service.run") as mock_run:
@@ -611,7 +514,7 @@ class TestHeadlessYoloBehavior:
                 mode=DelegationMode.HEADLESS,
                 prompt="Review code",
                 ai_tool="claude",
-                yolo=True,
+                permission_mode=PermissionMode.YOLO,
             )
             result = _delegate_headless(req)
 
@@ -620,11 +523,12 @@ class TestHeadlessYoloBehavior:
         assert "--dangerously-skip-permissions" not in cmd
         assert "--yolo" not in cmd
 
-    def test_headless_yolo_false_also_excluded(self) -> None:
-        """yolo=False produces no yolo flags (baseline sanity check)."""
+    def test_headless_default_also_excluded(self) -> None:
+        """permission_mode=default produces no autonomy flags (baseline sanity check)."""
         from unittest.mock import MagicMock, patch
 
         from wade.models.delegation import DelegationMode, DelegationRequest
+        from wade.models.permission import PermissionMode
         from wade.services.delegation_service import _delegate_headless
 
         with patch("wade.services.delegation_service.run") as mock_run:
@@ -633,7 +537,7 @@ class TestHeadlessYoloBehavior:
                 mode=DelegationMode.HEADLESS,
                 prompt="Review code",
                 ai_tool="claude",
-                yolo=False,
+                permission_mode=PermissionMode.DEFAULT,
             )
             result = _delegate_headless(req)
 

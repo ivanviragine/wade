@@ -8,10 +8,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from crossby.ai_tools import AbstractAITool
+from crossby.ai_tools.antigravity_cli import AntigravityCLIAdapter
 from crossby.ai_tools.claude import ClaudeAdapter
 from crossby.ai_tools.codex import CodexAdapter
 from crossby.ai_tools.copilot import CopilotAdapter
-from crossby.ai_tools.gemini import GeminiAdapter
 from crossby.models.ai import ModelBreakdown, TokenUsage
 
 from wade.git.pr import PRSummary
@@ -554,20 +554,20 @@ class TestImplementationLaunchCommandAssembly:
             assert "--output-file" not in cmd
             assert mock_run.call_args[1]["cwd"] == tmp_path
 
-    def test_gemini_launch_command(self, tmp_path: Path) -> None:
-        """Gemini launch should use 'gemini' binary with --model."""
-        adapter = GeminiAdapter()
+    def test_antigravity_cli_launch_command(self, tmp_path: Path) -> None:
+        """Antigravity CLI launch should use the 'agy' binary with --model."""
+        adapter = AntigravityCLIAdapter()
 
         with patch("wade.utils.process.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             adapter.launch(
                 working_dir=tmp_path,
-                model="gemini-2.5-pro",
+                model="gemini-3-pro",
             )
             cmd = mock_run.call_args[0][0]
-            assert cmd[0] == "gemini"
+            assert cmd[0] == "agy"
             assert "--model" in cmd
-            assert "gemini-2.5-pro" in cmd
+            assert "gemini-3-pro" in cmd
             assert mock_run.call_args[1]["cwd"] == tmp_path
 
     def test_codex_launch_command(self, tmp_path: Path) -> None:
@@ -594,7 +594,7 @@ class TestImplementationLaunchCommandAssembly:
         adapters: list[AbstractAITool] = [
             ClaudeAdapter(),
             CopilotAdapter(),
-            GeminiAdapter(),
+            AntigravityCLIAdapter(),
             CodexAdapter(),
         ]
         for adapter in adapters:
@@ -1872,7 +1872,7 @@ class TestPostImplementationLifecyclePr:
                 detach=True,
                 ai_explicit=True,
                 model_explicit=True,
-                yolo=True,
+                permission_mode="yolo",
             )
 
         assert result == MergeStatus.NOT_MERGED
@@ -1884,8 +1884,8 @@ class TestPostImplementationLifecyclePr:
             detach=True,
             ai_explicit=True,
             model_explicit=True,
-            yolo=True,
-            yolo_explicit=False,
+            permission_mode="yolo",
+            permission_mode_explicit=False,
         )
 
     def test_wait_for_reviews_quiet_timeout_preserves_review_context(self, tmp_path: Path) -> None:
@@ -1919,7 +1919,7 @@ class TestPostImplementationLifecyclePr:
                 detach=True,
                 ai_explicit=True,
                 model_explicit=True,
-                yolo=True,
+                permission_mode="yolo",
             )
 
         assert result == MergeStatus.NOT_MERGED
@@ -1935,8 +1935,8 @@ class TestPostImplementationLifecyclePr:
             detach=True,
             ai_explicit=True,
             model_explicit=True,
-            yolo=True,
-            yolo_explicit=False,
+            permission_mode="yolo",
+            permission_mode_explicit=False,
         )
 
     def test_no_pr_found_returns_not_merged(self, tmp_path: Path) -> None:

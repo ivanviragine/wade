@@ -158,7 +158,7 @@ class TestToolStdinFormats:
         result = _run_guard(guard, data)
         assert result.returncode == 2
 
-    def test_gemini_path_key(self, tmp_path: Path) -> None:
+    def test_tool_input_path_key(self, tmp_path: Path) -> None:
         guard = _install_guard(tmp_path)
         data = json.dumps({"tool_input": {"path": "/etc/passwd"}})
         result = _run_guard(guard, data)

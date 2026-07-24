@@ -23,7 +23,7 @@ _SESSION_BODY = build_sessions_block(
 
 _MULTI_SESSION_BODY = build_sessions_block(
     [
-        {"phase": "implementation", "ai_tool": "gemini", "session_id": "gem-old"},
+        {"phase": "implementation", "ai_tool": "antigravity-cli", "session_id": "agy-old"},
         {"phase": "implementation", "ai_tool": "claude", "session_id": "abc-latest"},
     ]
 )

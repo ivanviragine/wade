@@ -27,6 +27,7 @@ from pydantic import BaseModel
 
 from wade.config.loader import load_config
 from wade.models.config import ProjectConfig
+from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 from wade.models.task import CloseReason, PlanFile, Task
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
@@ -35,7 +36,7 @@ from wade.services.ai_resolution import (
     resolve_ai_tool,
     resolve_effort,
     resolve_model,
-    resolve_yolo,
+    resolve_permission_mode,
 )
 from wade.services.implementation_service import bootstrap_draft_pr
 from wade.services.implementation_service import start as start_implementation_session
@@ -267,7 +268,7 @@ def run_ai_planning_session(
     effort: EffortLevel | None = None,
     allowed_commands: list[str] | None = None,
     cwd: Path | None = None,
-    yolo: bool = False,
+    permission_mode: PermissionMode = PermissionMode.DEFAULT,
 ) -> int:
     """Launch the AI CLI for a planning session.
 
@@ -320,7 +321,7 @@ def run_ai_planning_session(
         initial_message=prompt,
         effort=effort,
         allowed_commands=allowed_commands,
-        yolo=yolo,
+        **permission_mode_launch_kwargs(permission_mode),
     )
     console.info(f"Plan directory: {plan_dir}")
 
@@ -388,6 +389,8 @@ def plan(
     effort: str | None = None,
     effort_explicit: bool = False,
     yolo: bool | None = None,
+    permission_mode: str | None = None,
+    permission_mode_explicit: bool = False,
 ) -> bool:
     """Run an AI-assisted planning session.
 
@@ -411,22 +414,25 @@ def plan(
     # Resolve effort level
     resolved_effort = resolve_effort(effort, config, "plan", tool=resolved_tool)
 
-    # Resolve YOLO mode
-    resolved_yolo = resolve_yolo(yolo, config, "plan", tool=resolved_tool)
+    # Resolve autonomy / permission mode (yolo is a back-compat alias)
+    resolved_permission_mode = resolve_permission_mode(permission_mode, yolo, config, "plan")
 
     console.rule("wade plan")
 
     # Offer interactive confirmation unless both flags were explicitly provided.
-    resolved_tool, resolved_model, resolved_effort, resolved_yolo = confirm_ai_selection(
+    resolved_tool, resolved_model, resolved_effort, resolved_permission_mode = confirm_ai_selection(
         resolved_tool,
         resolved_model,
         tool_explicit=ai_explicit,
         model_explicit=model_explicit,
         resolved_effort=resolved_effort,
         effort_explicit=effort_explicit,
-        resolved_yolo=resolved_yolo,
-        yolo_explicit=yolo is not None,
+        resolved_permission_mode=resolved_permission_mode,
+        permission_mode_explicit=(
+            permission_mode_explicit or permission_mode is not None or yolo is not None
+        ),
     )
+    resolved_yolo = resolved_permission_mode is PermissionMode.YOLO
     if not resolved_tool:
         console.error("No AI tool selected.")
         return False
@@ -512,7 +518,7 @@ def plan(
         effort=resolved_effort,
         allowed_commands=config.permissions.allowed_commands,
         cwd=session_cwd,
-        yolo=resolved_yolo,
+        permission_mode=resolved_permission_mode,
     )
     logger.info("plan.ai_exited", exit_code=exit_code)
 

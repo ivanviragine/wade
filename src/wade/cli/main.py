@@ -191,7 +191,22 @@ def _interactive_main_menu() -> None:
 
 # --- Top-level commands ---
 
-from wade.cli.autocomplete import complete_ai_tools, complete_effort_levels, complete_models  # noqa: E402, I001
+from wade.cli.autocomplete import (  # noqa: E402
+    complete_ai_tools,
+    complete_effort_levels,
+    complete_models,
+    complete_permission_modes,
+)
+
+# Shared Typer option for the autonomy/permission tier, reused across every
+# command that already accepts --yolo (which stays as a back-compat alias for
+# --permission-mode yolo). Defined once so no call site is missed.
+_PERMISSION_MODE_OPT = typer.Option(
+    None,
+    "--permission-mode",
+    help="Autonomy tier: default, accept-edits, auto, or yolo.",
+    autocompletion=complete_permission_modes,
+)
 
 
 @app.command("plan", rich_help_panel="Workflow")
@@ -210,6 +225,7 @@ def plan_cmd(
         autocompletion=complete_effort_levels,
     ),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
+    permission_mode: str | None = _PERMISSION_MODE_OPT,
 ) -> None:
     """Start a planning session with AI."""
     from wade.services.plan_service import plan as do_plan
@@ -223,6 +239,7 @@ def plan_cmd(
         effort=effort,
         effort_explicit=effort is not None,
         yolo=yolo or None,
+        permission_mode=permission_mode,
     )
     raise typer.Exit(0 if success else 1)
 
@@ -247,6 +264,7 @@ def implement_cmd(
         False, "--cd", help="Create worktree and print path (no AI launch)."
     ),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
+    permission_mode: str | None = _PERMISSION_MODE_OPT,
     chain: str | None = typer.Option(
         None, "--chain", hidden=True, help="Comma-separated issue IDs for sequential continuation."
     ),
@@ -279,6 +297,7 @@ def implement_cmd(
         effort=effort,
         effort_explicit=effort is not None,
         yolo=yolo or None,
+        permission_mode=permission_mode,
         base_branch=current_base,
     )
 
@@ -313,6 +332,7 @@ def implement_cmd(
             effort=effort,
             effort_explicit=effort is not None,
             yolo=yolo or None,
+            permission_mode=permission_mode,
             base_branch=current_base,
         )
 
@@ -338,6 +358,7 @@ def implement_batch_cmd(
         autocompletion=complete_effort_levels,
     ),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
+    permission_mode: str | None = _PERMISSION_MODE_OPT,
 ) -> None:
     """Start parallel implementation sessions. [beta]"""
     from wade.services.implementation_service import batch as do_batch
@@ -371,6 +392,7 @@ def implement_batch_cmd(
         effort=effort,
         effort_explicit=effort is not None,
         yolo=yolo or None,
+        permission_mode=permission_mode,
     )
     raise typer.Exit(0 if success else 1)
 
@@ -386,11 +408,19 @@ def address_reviews_cmd(
     ),
     detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
+    permission_mode: str | None = _PERMISSION_MODE_OPT,
 ) -> None:
     """Address PR review comments (hidden alias for review pr-comments)."""
     from wade.cli.review import review_pr_comments_cmd
 
-    review_pr_comments_cmd(target=target, ai=ai, model=model, detach=detach, yolo=yolo)
+    review_pr_comments_cmd(
+        target=target,
+        ai=ai,
+        model=model,
+        detach=detach,
+        yolo=yolo,
+        permission_mode=permission_mode,
+    )
 
 
 @app.command("cd", rich_help_panel="Workflow")
@@ -431,6 +461,7 @@ def smart_start_cmd(
         False, "--cd", help="Create worktree and print path (no AI launch)."
     ),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
+    permission_mode: str | None = _PERMISSION_MODE_OPT,
 ) -> None:
     """Internal dispatch for `wade <N>` — routes to implement or review pr-comments.
 
@@ -453,6 +484,7 @@ def smart_start_cmd(
         effort=effort,
         effort_explicit=effort is not None,
         yolo=yolo or None,
+        permission_mode=permission_mode,
     )
     raise typer.Exit(0 if success else 1)
 
@@ -476,9 +508,17 @@ def plan_alias(
         autocompletion=complete_effort_levels,
     ),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
+    permission_mode: str | None = _PERMISSION_MODE_OPT,
 ) -> None:
     """Alias for plan."""
-    plan_cmd(issue=issue, ai=ai, model=model, effort=effort, yolo=yolo)
+    plan_cmd(
+        issue=issue,
+        ai=ai,
+        model=model,
+        effort=effort,
+        yolo=yolo,
+        permission_mode=permission_mode,
+    )
 
 
 @app.command("i", hidden=True)
@@ -501,6 +541,7 @@ def implement_alias(
         False, "--cd", help="Create worktree and print path (no AI launch)."
     ),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
+    permission_mode: str | None = _PERMISSION_MODE_OPT,
     chain: str | None = typer.Option(
         None, "--chain", hidden=True, help="Comma-separated issue IDs for sequential continuation."
     ),
@@ -517,6 +558,7 @@ def implement_alias(
         detach=detach,
         cd_only=cd_only,
         yolo=yolo,
+        permission_mode=permission_mode,
         chain=chain,
         base=base,
     )
@@ -533,11 +575,19 @@ def reviews_alias(
     ),
     detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
+    permission_mode: str | None = _PERMISSION_MODE_OPT,
 ) -> None:
     """Alias for review pr-comments."""
     from wade.cli.review import review_pr_comments_cmd
 
-    review_pr_comments_cmd(target=target, ai=ai, model=model, detach=detach, yolo=yolo)
+    review_pr_comments_cmd(
+        target=target,
+        ai=ai,
+        model=model,
+        detach=detach,
+        yolo=yolo,
+        permission_mode=permission_mode,
+    )
 
 
 # --- Register subcommand groups ---

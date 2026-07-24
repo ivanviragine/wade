@@ -7,6 +7,8 @@ from unittest.mock import patch
 import pytest
 from crossby.models.ai import AIToolID, EffortLevel
 
+from wade.models.permission import PermissionMode
+
 # ---------------------------------------------------------------------------
 # EffortLevel enum
 # ---------------------------------------------------------------------------
@@ -115,7 +117,13 @@ class TestAdapterSupportsEffort:
 
     @pytest.mark.parametrize(
         "tool_id",
-        [AIToolID.CLAUDE, AIToolID.CODEX, AIToolID.CURSOR, AIToolID.OPENCODE],
+        [
+            AIToolID.CLAUDE,
+            AIToolID.CODEX,
+            AIToolID.CURSOR,
+            AIToolID.OPENCODE,
+            AIToolID.ANTIGRAVITY_CLI,
+        ],
     )
     def test_supports_effort_true(self, tool_id: AIToolID) -> None:
         from crossby.ai_tools import AbstractAITool
@@ -125,7 +133,7 @@ class TestAdapterSupportsEffort:
 
     @pytest.mark.parametrize(
         "tool_id",
-        [AIToolID.COPILOT, AIToolID.GEMINI, AIToolID.ANTIGRAVITY, AIToolID.VSCODE],
+        [AIToolID.COPILOT, AIToolID.ANTIGRAVITY, AIToolID.VSCODE],
     )
     def test_supports_effort_false(self, tool_id: AIToolID) -> None:
         from crossby.ai_tools import AbstractAITool
@@ -266,9 +274,9 @@ class TestConfirmEffort:
                 model_explicit=True,
                 resolved_effort=EffortLevel.HIGH,
                 effort_explicit=True,
-                yolo_explicit=True,
+                permission_mode_explicit=True,
             )
-        assert result == ("claude", "claude-sonnet-4-6", EffortLevel.HIGH, False)
+        assert result == ("claude", "claude-sonnet-4-6", EffortLevel.HIGH, PermissionMode.DEFAULT)
         mock_select.assert_not_called()
 
     def test_non_tty_preserves_effort(self) -> None:
@@ -282,7 +290,7 @@ class TestConfirmEffort:
                 model_explicit=False,
                 resolved_effort=EffortLevel.MAX,
             )
-        assert result == ("claude", "claude-sonnet-4-6", EffortLevel.MAX, False)
+        assert result == ("claude", "claude-sonnet-4-6", EffortLevel.MAX, PermissionMode.DEFAULT)
 
     def test_menu_includes_change_effort_for_supported_tool(self) -> None:
         """Claude supports effort → 'Change effort' appears in menu."""

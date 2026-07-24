@@ -49,3 +49,11 @@ def complete_effort_levels(incomplete: str) -> list[str]:
 
     levels = [e.value for e in EffortLevel]
     return sorted([e for e in levels if e.startswith(incomplete)])
+
+
+def complete_permission_modes(incomplete: str) -> list[str]:
+    """Autocomplete permission (autonomy) mode values."""
+    from wade.models.permission import PermissionMode
+
+    modes = [m.value for m in PermissionMode]
+    return sorted([m for m in modes if m.startswith(incomplete)])

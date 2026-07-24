@@ -200,7 +200,7 @@ class TestSessionsBlock:
 
     def test_append_session_preserves_existing_content(self) -> None:
         body = "Original description.\n\nMore text.\n"
-        result = append_session_to_body(body, "Plan", "gemini", "Session ID: 123")
+        result = append_session_to_body(body, "Plan", "antigravity-cli", "Session ID: 123")
         assert "Original description." in result
         assert "More text." in result
         assert "Session ID: 123" in result

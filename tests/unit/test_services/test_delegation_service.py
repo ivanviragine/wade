@@ -10,6 +10,7 @@ import crossby.ai_tools  # noqa: F401 — triggers adapter auto-registration
 
 from wade.models.config import AICommandConfig
 from wade.models.delegation import DelegationMode, DelegationRequest
+from wade.models.permission import PermissionMode
 from wade.services.delegation_service import (
     _delegate_headless,
     _delegate_interactive,
@@ -180,14 +181,14 @@ class TestDelegateHeadless:
         assert "Review code" in cmd
 
     @patch("wade.services.delegation_service.run")
-    def test_headless_yolo_is_not_forwarded(self, mock_run: MagicMock) -> None:
-        """yolo=True in config is silently ignored for headless delegation."""
+    def test_headless_autonomy_is_not_forwarded(self, mock_run: MagicMock) -> None:
+        """An autonomy tier is silently ignored for headless delegation."""
         mock_run.return_value = MagicMock(returncode=0, stdout="done\n")
         req = DelegationRequest(
             mode=DelegationMode.HEADLESS,
             prompt="Review code",
             ai_tool="claude",
-            yolo=True,
+            permission_mode=PermissionMode.YOLO,
         )
         result = _delegate_headless(req)
         assert result.success is True
@@ -269,7 +270,7 @@ class TestDelegateInteractive:
 
     @patch("wade.services.delegation_service.deliver_prompt_if_needed")
     @patch("wade.services.delegation_service.AbstractAITool.get")
-    def test_interactive_yolo_is_forwarded(
+    def test_interactive_permission_mode_is_forwarded(
         self,
         mock_get: MagicMock,
         mock_deliver: MagicMock,
@@ -286,11 +287,15 @@ class TestDelegateInteractive:
             prompt="Review",
             ai_tool="claude",
             output_file=output_file,
-            yolo=True,
+            permission_mode=PermissionMode.YOLO,
         )
         result = _delegate_interactive(req)
         assert result.success is True
-        assert mock_adapter.launch.call_args.kwargs["yolo"] is True
+        # permission_mode=yolo maps to the crossby autonomy triplet.
+        kwargs = mock_adapter.launch.call_args.kwargs
+        assert kwargs["yolo"] is True
+        assert kwargs["auto"] is False
+        assert kwargs["accept_edits"] is False
 
 
 # ---------------------------------------------------------------------------

@@ -9,6 +9,7 @@ from wade.cli.autocomplete import (
     complete_delegation_modes,
     complete_effort_levels,
     complete_models,
+    complete_permission_modes,
 )
 from wade.models.delegation import DelegationMode, DelegationResult
 
@@ -138,6 +139,12 @@ def review_pr_comments_cmd(
     ),
     detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
+    permission_mode: str | None = typer.Option(
+        None,
+        "--permission-mode",
+        help="Autonomy tier: default, accept-edits, auto, or yolo.",
+        autocompletion=complete_permission_modes,
+    ),
 ) -> None:
     """Address PR review comments."""
     from wade.services.review_service import start as do_start
@@ -153,7 +160,8 @@ def review_pr_comments_cmd(
         ai_explicit=selected_ai is not None,
         model_explicit=model is not None,
         yolo=yolo or None,
-        yolo_explicit=yolo,
+        permission_mode=permission_mode,
+        permission_mode_explicit=permission_mode is not None,
     )
     raise typer.Exit(0 if success else 1)
 

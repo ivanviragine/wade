@@ -8,7 +8,7 @@
 
 *Every Wade does the dirty work so the heroes don't have to.*
 
-Branches, worktrees, context loading, model selection, PR creation — all the workflow friction that surrounds AI coding sessions. WADE eliminates it. Works with `Claude Code`, `Copilot`, `Gemini`, `Codex`, and more. Run `wade init` once per project, then just point it at a GitHub *(more to come!)* issue number.
+Branches, worktrees, context loading, model selection, PR creation — all the workflow friction that surrounds AI coding sessions. WADE eliminates it. Works with `Claude Code`, `Copilot`, `Antigravity CLI`, `Codex`, and more. Run `wade init` once per project, then just point it at a GitHub *(more to come!)* issue number.
 
 ## See It in Action
 
@@ -142,7 +142,30 @@ wade 42
 
 Short aliases: `wade p` (plan), `wade i <N>` (implement), `wade r <N>` (review pr-comments).
 
-Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level>`, and `--yolo` to override configured defaults. `implement` also supports `--detach` (new terminal tab) and `--cd` (print worktree path only).
+Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level>`, `--permission-mode <tier>`, and `--yolo` to override configured defaults. `implement` also supports `--detach` (new terminal tab) and `--cd` (print worktree path only).
+
+`--permission-mode` sets how much autonomy the AI tool is granted — an axis
+independent of the delegation `--mode` (which controls *how* a tool is
+dispatched: prompt/interactive/headless). The tiers, most→least permissive, are
+`yolo` > `auto` > `accept-edits` > `default`:
+
+| Tier | Behavior |
+|------|----------|
+| `default` | Prompt for every action (no autonomy grant). |
+| `accept-edits` | Auto-apply file edits; still prompt for shell/commands. Claude and Antigravity CLI. |
+| `auto` | Classifier-mediated auto mode (a model reviews each non-read action). Claude only. |
+| `yolo` | Full autonomy — no prompts. |
+
+`--yolo` is a back-compat alias for `--permission-mode yolo`; an explicit
+`--permission-mode` wins when both are given. The same values are accepted in
+`.wade.yml` as `ai.permission_mode` (global) or `ai.<command>.permission_mode`
+(per-command), with `yolo: true` still honored as the alias. A tier a tool
+doesn't support is downgraded automatically (e.g. `auto` → `accept-edits` on
+non-Claude tools) with a warning — WADE forwards the requested tier and
+[`crossby`](https://github.com/ivanviragine/crossby) owns the downgrade ladder.
+Headless commands (`deps`, `review_*`) always run at `default`. `plan` is not a
+permission mode — it's driven separately — and is rejected (warn + fall back to
+`default`) if configured.
 
 `wade plan --issue <N>` re-plans an existing issue. If the session produces a
 single plan file, it's attached to `#N` and the issue stays open. If the
@@ -162,11 +185,14 @@ Adapters, model/effort resolution, and per-tool config (allowlists, hooks) are p
 | [Claude Code](https://claude.com/product/claude-code) | `claude` |
 | [Cursor](https://www.cursor.com/) | `cursor` |
 | [GitHub Copilot](https://github.com/features/copilot/cli) | `copilot` |
-| [Google Gemini](https://geminicli.com/) | `gemini` |
 | [OpenAI Codex](https://developers.openai.com/codex/cli/) | `codex` |
 | [OpenCode](https://opencode.ai/) | `opencode` |
 | [VS Code](https://github.com/features/copilot/ai-code-editor) | `code` |
 | [Antigravity](https://antigravity.google/) | `antigravity` |
+| [Antigravity CLI](https://antigravity.google/) | `agy` |
+
+> In `.wade.yml`, refer to a tool by its **config ID**, which matches the binary
+> above except for VS Code (`vscode`) and Antigravity CLI (`antigravity-cli`).
 
 ## Task Providers
 

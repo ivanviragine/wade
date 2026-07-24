@@ -415,7 +415,7 @@ def _prompt_implementation_setup(
 
     console.rule("Implementation")
 
-    base_tools = installed_tools if installed_tools else ["claude", "copilot", "gemini"]
+    base_tools = installed_tools if installed_tools else ["claude", "copilot", "antigravity-cli"]
     implement_tool = _select_or_skip(
         "AI tool for implementation work", base_tools, current_implement_tool
     )
@@ -460,9 +460,9 @@ def _prompt_command_overrides(
 
     # Build selectable list: installed tools + "Skip (use default)"
     skip_label = "Skip (use default)"
-    tool_options = (installed_tools if installed_tools else ["claude", "copilot", "gemini"]) + [
-        skip_label
-    ]
+    tool_options = (
+        installed_tools if installed_tools else ["claude", "copilot", "antigravity-cli"]
+    ) + [skip_label]
 
     cmd_triples = [
         ("plan", "AI tool", "Planning"),
@@ -474,13 +474,13 @@ def _prompt_command_overrides(
     result: dict[str, dict[str, Any]] = {cmd_name: {} for cmd_name in _COMMAND_OVERRIDE_NAMES}
     tool_for_cmd: list[str | None] = [None] * len(cmd_triples)
 
-    def _ask_effort_and_yolo(
-        cmd_name: str, effective_tool: str | None, *, skip_yolo: bool = False
+    def _ask_effort_and_permission_mode(
+        cmd_name: str, effective_tool: str | None, *, skip_autonomy: bool = False
     ) -> None:
-        """Prompt for per-command effort and yolo overrides (capability-gated).
+        """Prompt for per-command effort and permission-mode overrides (capability-gated).
 
-        skip_yolo suppresses the yolo prompt for headless commands, which don't
-        need write permissions.
+        skip_autonomy suppresses the autonomy prompt for headless commands,
+        which run at ``default`` (no write permissions needed) regardless.
         """
         if not effective_tool:
             return
@@ -506,22 +506,37 @@ def _prompt_command_overrides(
             if effort_idx > 0:
                 result[cmd_name]["effort"] = effort_choices[effort_idx]
 
-        if not skip_yolo and caps.supports_yolo:
-            current_yolo_val = current_cmd.get("yolo")
-            yolo_choices = ["Skip (use default)", "Yes", "No"]
-            yolo_default = 0  # default to Skip (inherit global ai.yolo)
-            if current_yolo_val == "true" or current_yolo_val is True:
-                yolo_default = 1
-            elif current_yolo_val == "false" or current_yolo_val is False:
-                yolo_default = 2
-            yolo_idx = prompts.select(
-                "  Enable YOLO mode for this command?", yolo_choices, default=yolo_default
-            )
-            if yolo_idx == 1:
-                result[cmd_name]["yolo"] = "true"
-            elif yolo_idx == 2:
-                result[cmd_name]["yolo"] = "false"
-            # idx == 0 means Skip — omit yolo to inherit the global ai.yolo setting
+        if not skip_autonomy:
+            # Offer default plus each autonomy tier the tool supports. crossby
+            # owns downgrades at launch, but gating the menu avoids offering a
+            # tier the user picks only to see it silently downgraded.
+            tiers = ["default"]
+            if caps.supports_accept_edits:
+                tiers.append("accept-edits")
+            if caps.supports_auto:
+                tiers.append("auto")
+            if caps.supports_yolo:
+                tiers.append("yolo")
+
+            if len(tiers) > 1:
+                # Seed the default from an existing permission_mode, falling back
+                # to the legacy yolo alias (yolo: true → yolo tier).
+                current_pm = current_cmd.get("permission_mode")
+                if current_pm is None and (
+                    current_cmd.get("yolo") == "true" or current_cmd.get("yolo") is True
+                ):
+                    current_pm = "yolo"
+
+                pm_choices = ["Skip (use default)", *tiers]
+                pm_default = tiers.index(current_pm) + 1 if current_pm in tiers else 0
+                pm_idx = prompts.select(
+                    "  Permission (autonomy) mode for this command?",
+                    pm_choices,
+                    default=pm_default,
+                )
+                if pm_idx > 0:
+                    result[cmd_name]["permission_mode"] = tiers[pm_idx - 1]
+                # idx == 0 means Skip — omit to inherit the global setting
 
     def _ask_tool_and_model(
         cmd_idx: int,
@@ -591,7 +606,7 @@ def _prompt_command_overrides(
             _ask_tool_and_model(cmd_idx, cmd_name, prompt_label, section)
             effective_tool = tool_for_cmd[cmd_idx] or default_tool
             if effective_tool:
-                _ask_effort_and_yolo(cmd_name, effective_tool)
+                _ask_effort_and_permission_mode(cmd_name, effective_tool)
 
         elif cmd_name.startswith("review_"):
             # 1. Enable?
@@ -641,7 +656,9 @@ def _prompt_command_overrides(
                 )
                 effective_tool = tool_for_cmd[cmd_idx] or default_tool
                 if effective_tool:
-                    _ask_effort_and_yolo(cmd_name, effective_tool, skip_yolo=(mode == "headless"))
+                    _ask_effort_and_permission_mode(
+                        cmd_name, effective_tool, skip_autonomy=(mode == "headless")
+                    )
 
         elif cmd_name == "deps":
             result[cmd_name] = {}
@@ -670,6 +687,8 @@ def _prompt_command_overrides(
                 result[cmd_name]["mode"] = deps_mode
 
                 # 3. Effort + yolo (yolo skipped when mode=headless)
-                _ask_effort_and_yolo(cmd_name, effective_tool, skip_yolo=(deps_mode == "headless"))
+                _ask_effort_and_permission_mode(
+                    cmd_name, effective_tool, skip_autonomy=(deps_mode == "headless")
+                )
 
     return result
