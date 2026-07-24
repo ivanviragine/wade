@@ -24,6 +24,7 @@ from wade.git import branch as git_branch
 from wade.git import pr as git_pr
 from wade.git import repo as git_repo
 from wade.git.repo import GitError
+from wade.models.permission import PermissionMode
 from wade.models.session import MergeStatus, SessionRecord
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
@@ -48,6 +49,7 @@ class SmartStartContext(BaseModel):
     effort: str | None
     effort_explicit: bool
     yolo: bool | None
+    permission_mode: str | None = None
 
     def run_implement(
         self,
@@ -72,6 +74,7 @@ class SmartStartContext(BaseModel):
             resume_session_id=resume_session_id,
             resume_ai_tool=resume_ai_tool,
             yolo=self.yolo,
+            permission_mode=self.permission_mode,
         )
         return result.success
 
@@ -96,6 +99,7 @@ def smart_start(
     effort: str | None = None,
     effort_explicit: bool = False,
     yolo: bool | None = None,
+    permission_mode: str | None = None,
 ) -> bool:
     """Detect PR state for an issue and route to the right command.
 
@@ -105,6 +109,11 @@ def smart_start(
     Returns:
         True on success, False on failure.
     """
+    # Fold the --yolo alias into permission_mode so every downstream route
+    # (implement / batch / review) carries a single normalized intent.
+    if permission_mode is None and yolo:
+        permission_mode = PermissionMode.YOLO.value
+
     ctx = SmartStartContext(
         target=target,
         ai_tool=ai_tool,
@@ -117,6 +126,7 @@ def smart_start(
         effort=effort,
         effort_explicit=effort_explicit,
         yolo=yolo,
+        permission_mode=permission_mode,
     )
 
     config = load_config(project_root)
@@ -149,6 +159,7 @@ def smart_start(
         effort=ctx.effort,
         effort_explicit=ctx.effort_explicit,
         yolo=ctx.yolo,
+        permission_mode=ctx.permission_mode,
         cd_only=ctx.cd_only,
     )
     if batch_result is not None:
@@ -310,7 +321,8 @@ def _run_review_pr_comments(
             ai_explicit=ctx.ai_explicit,
             model_explicit=ctx.model_explicit,
             yolo=ctx.yolo,
-            yolo_explicit=(ctx.yolo is not None),
+            permission_mode=ctx.permission_mode,
+            permission_mode_explicit=(ctx.permission_mode is not None),
         )
     elif outcome == PollOutcome.QUIET_TIMEOUT:
         review_service._quiet_next_steps_prompt(
@@ -325,7 +337,8 @@ def _run_review_pr_comments(
             detach=ctx.detach,
             ai_explicit=ctx.ai_explicit,
             model_explicit=ctx.model_explicit,
-            yolo=ctx.yolo,
+            permission_mode=ctx.permission_mode,
+            permission_mode_explicit=(ctx.permission_mode is not None),
         )
         return True
     else:  # INTERRUPTED or PR_CLOSED

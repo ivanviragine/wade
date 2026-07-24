@@ -25,6 +25,7 @@ from wade.git import repo as git_repo
 from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
+from wade.models.permission import permission_mode_launch_kwargs
 from wade.models.session import ImplementResult, MergeStatus
 from wade.models.task import Task
 from wade.providers.base import AbstractTaskProvider
@@ -34,7 +35,7 @@ from wade.services.ai_resolution import (
     resolve_ai_tool,
     resolve_effort,
     resolve_model,
-    resolve_yolo,
+    resolve_permission_mode,
 )
 from wade.services.implementation_service._shared import (
     extract_issue_from_branch,
@@ -217,6 +218,8 @@ def start(
     resume_session_id: str | None = None,
     resume_ai_tool: str | None = None,
     yolo: bool | None = None,
+    permission_mode: str | None = None,
+    permission_mode_explicit: bool = False,
     base_branch: str | None = None,
 ) -> ImplementResult:
     """Start an implementation session on an issue.
@@ -279,6 +282,7 @@ def start(
             effort=effort,
             effort_explicit=effort_explicit,
             yolo=yolo,
+            permission_mode=permission_mode,
             cd_only=cd_only,
         )
         if batch_result is not None:
@@ -349,8 +353,10 @@ def start(
             complexity=task.complexity.value if task.complexity else None,
         )
 
-        # Resolve YOLO mode
-        resolved_yolo = resolve_yolo(yolo, config, "implement", tool=resolved_tool)
+        # Resolve autonomy / permission mode (yolo is a back-compat alias)
+        resolved_permission_mode = resolve_permission_mode(
+            permission_mode, yolo, config, "implement"
+        )
 
         # When resuming, override the resolved tool and skip interactive confirmation
         if resume_ai_tool:
@@ -359,15 +365,22 @@ def start(
 
         # Offer interactive confirmation (skipped when cd_only or both flags explicit).
         if not cd_only:
-            resolved_tool, resolved_model, resolved_effort, resolved_yolo = confirm_ai_selection(
+            (
+                resolved_tool,
+                resolved_model,
+                resolved_effort,
+                resolved_permission_mode,
+            ) = confirm_ai_selection(
                 resolved_tool,
                 resolved_model,
                 tool_explicit=ai_explicit,
                 model_explicit=model_explicit,
                 resolved_effort=resolved_effort,
                 effort_explicit=effort_explicit,
-                resolved_yolo=resolved_yolo,
-                yolo_explicit=yolo is not None,
+                resolved_permission_mode=resolved_permission_mode,
+                permission_mode_explicit=(
+                    permission_mode_explicit or permission_mode is not None or yolo is not None
+                ),
             )
 
         # Resolve main branch and compute worktree path (only needed for worktree creation)
@@ -558,7 +571,7 @@ def start(
                         initial_message=prompt,
                         effort=resolved_effort,
                         allowed_commands=config.permissions.allowed_commands,
-                        yolo=resolved_yolo,
+                        **permission_mode_launch_kwargs(resolved_permission_mode),
                     )
             except (ValueError, KeyError):
                 cmd = [resolved_tool]
@@ -620,7 +633,7 @@ def start(
                         trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
                         effort=resolved_effort,
                         allowed_commands=config.permissions.allowed_commands,
-                        yolo=resolved_yolo,
+                        **permission_mode_launch_kwargs(resolved_permission_mode),
                     )
 
                 launch_completed = True
@@ -679,8 +692,12 @@ def start(
                             detach=detach,
                             ai_explicit=ai_explicit,
                             model_explicit=model_explicit,
-                            yolo=resolved_yolo,
-                            yolo_explicit=yolo is not None,
+                            permission_mode=resolved_permission_mode.value,
+                            permission_mode_explicit=(
+                                permission_mode_explicit
+                                or permission_mode is not None
+                                or yolo is not None
+                            ),
                         )
                     except Exception:
                         logger.exception("post_implementation_lifecycle.failed")

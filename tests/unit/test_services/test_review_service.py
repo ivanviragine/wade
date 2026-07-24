@@ -1589,8 +1589,8 @@ class TestQuietNextStepsPrompt:
             detach=False,
             ai_explicit=False,
             model_explicit=False,
-            yolo=None,
-            yolo_explicit=False,
+            permission_mode=None,
+            permission_mode_explicit=False,
         )
 
     @patch("wade.services.review_service.get_comprehensive_review_status")
@@ -1626,7 +1626,7 @@ class TestQuietNextStepsPrompt:
             detach=True,
             ai_explicit=True,
             model_explicit=True,
-            yolo=True,
+            permission_mode="yolo",
         )
 
         mock_start.assert_called_once_with(
@@ -1637,8 +1637,8 @@ class TestQuietNextStepsPrompt:
             detach=True,
             ai_explicit=True,
             model_explicit=True,
-            yolo=True,
-            yolo_explicit=False,
+            permission_mode="yolo",
+            permission_mode_explicit=False,
         )
 
     @patch("wade.services.review_service.get_comprehensive_review_status")
@@ -1820,8 +1820,8 @@ class TestPostReviewLifecycle:
             detach=False,
             ai_explicit=False,
             model_explicit=False,
-            yolo=None,
-            yolo_explicit=False,
+            permission_mode=None,
+            permission_mode_explicit=False,
         )
 
     @patch("wade.services.review_service.start")
@@ -1853,8 +1853,8 @@ class TestPostReviewLifecycle:
             detach=False,
             ai_explicit=False,
             model_explicit=False,
-            yolo=None,
-            yolo_explicit=False,
+            permission_mode=None,
+            permission_mode_explicit=False,
         )
 
     @patch("wade.services.review_service.start")
@@ -1888,7 +1888,7 @@ class TestPostReviewLifecycle:
             detach=True,
             ai_explicit=True,
             model_explicit=True,
-            yolo=True,
+            permission_mode="yolo",
         )
         mock_merge.assert_not_called()
         mock_start.assert_called_once_with(
@@ -1899,8 +1899,8 @@ class TestPostReviewLifecycle:
             detach=True,
             ai_explicit=True,
             model_explicit=True,
-            yolo=True,
-            yolo_explicit=False,
+            permission_mode="yolo",
+            permission_mode_explicit=False,
         )
 
     @patch("wade.services.review_service._quiet_next_steps_prompt")

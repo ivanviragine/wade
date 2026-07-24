@@ -697,8 +697,8 @@ class TestPromptCommandOverrides:
 
         mock_select.side_effect = tracking
         _prompt_command_overrides(["claude"], non_interactive=False, default_tool="claude")
-        yolo_count = sum(1 for p in prompts_asked if "YOLO" in p)
-        assert yolo_count == 1  # plan asks yolo; headless deps does not
+        pm_count = sum(1 for p in prompts_asked if "Permission" in p)
+        assert pm_count == 1  # plan asks permission mode; headless deps does not
 
     @patch("wade.ui.prompts.select")
     def test_wizard_asks_yolo_for_interactive_deps(self, mock_select: MagicMock) -> None:
@@ -718,8 +718,8 @@ class TestPromptCommandOverrides:
 
         mock_select.side_effect = capturing_select
         _prompt_command_overrides(["claude"], non_interactive=False, default_tool="claude")
-        yolo_count = sum(1 for p in prompts_asked if "YOLO" in p)
-        assert yolo_count == 2  # plan asks yolo; interactive deps also asks yolo
+        pm_count = sum(1 for p in prompts_asked if "Permission" in p)
+        assert pm_count == 2  # plan asks permission mode; interactive deps also asks
 
     @patch("wade.services.init_service.prompts_setup.AbstractAITool.get")
     @patch("wade.services.init_service.prompts_setup._collect_model_options")
@@ -756,8 +756,8 @@ class TestPromptCommandOverrides:
         mock_select.side_effect = tracking
         _prompt_command_overrides(["claude"], non_interactive=False)
 
-        yolo_prompts = [p for p in prompts_asked if "YOLO" in p]
-        assert not yolo_prompts
+        pm_prompts = [p for p in prompts_asked if "Permission" in p]
+        assert not pm_prompts
 
     @patch("wade.ui.prompts.select")
     def test_wizard_always_asks_yolo_for_plan(self, mock_select: MagicMock) -> None:
@@ -775,10 +775,10 @@ class TestPromptCommandOverrides:
 
         mock_select.side_effect = gated_select
         # Use non_interactive=False with default_tool="claude" (supports yolo)
-        # plan: Skip tool → inherits claude → effort + yolo prompts should appear
+        # plan: Skip tool → inherits claude → effort + permission-mode prompts should appear
         _prompt_command_overrides(["claude"], non_interactive=False, default_tool="claude")
 
-        assert any("YOLO" in p for p in prompts_asked)
+        assert any("Permission" in p for p in prompts_asked)
 
 
 # ---------------------------------------------------------------------------

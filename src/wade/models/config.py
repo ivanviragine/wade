@@ -35,11 +35,26 @@ from enum import StrEnum
 from crossby.models.config import ComplexityModelMapping as ComplexityModelMapping
 from pydantic import BaseModel, Field
 
+from wade.models.permission import PermissionMode, coerce_permission_mode
 from wade.models.session import MergeStrategy
 
 # wade's own command pattern — the base allowlist entry that must always be
 # pre-authorized so agents can run ``wade ...`` without manual approval.
 WADE_BASE_ALLOWLIST_PATTERN = "wade *"
+
+
+def _level_permission_mode(permission_mode: str | None, yolo: bool | None) -> PermissionMode | None:
+    """Resolve one config level's autonomy setting (``permission_mode`` or yolo).
+
+    ``permission_mode`` wins over the ``yolo`` alias at the same level. Returns
+    ``None`` when neither is set (or ``permission_mode`` is invalid), so the
+    caller falls through to the next level.
+    """
+    if permission_mode is not None:
+        return coerce_permission_mode(permission_mode)
+    if yolo is not None:
+        return PermissionMode.YOLO if yolo else PermissionMode.DEFAULT
+    return None
 
 
 def with_wade_base_pattern(patterns: list[str]) -> list[str]:
@@ -78,6 +93,9 @@ class AICommandConfig(BaseModel):
     model: str | None = None
     effort: str | None = None
     mode: str | None = None
+    # Autonomy tier (default|accept-edits|auto|yolo). ``yolo`` below is a
+    # back-compat alias; ``permission_mode`` wins when both are set.
+    permission_mode: str | None = None
     yolo: bool | None = None
     enabled: bool | None = None
     timeout: int | None = None
@@ -104,6 +122,7 @@ class AIConfig(BaseModel):
     default_tool: str | None = None
     default_model: str | None = None
     effort: str | None = None
+    permission_mode: str | None = None
     yolo: bool | None = None
     plan: AICommandConfig = AICommandConfig()
     deps: AICommandConfig = AICommandConfig()
@@ -215,13 +234,27 @@ class ProjectConfig(BaseModel):
                 return cmd_config.effort
         return self.ai.effort
 
-    def get_yolo(self, command: str | None = None) -> bool | None:
-        """Get the yolo setting for a command, with fallback chain.
+    def get_permission_mode(self, command: str | None = None) -> PermissionMode | None:
+        """Resolve the configured permission (autonomy) mode for a command.
 
-        Fallback: command-specific yolo → global ai.yolo → None.
+        Fallback: command-specific → global. At each level an explicit
+        ``permission_mode`` wins over the legacy ``yolo`` alias (``yolo: true``
+        → ``yolo`` tier, ``yolo: false`` → ``default``). Invalid values are
+        treated as unset here (they fall through); the loader emits the warning
+        when parsing them.
         """
         if command:
             cmd_config = getattr(self.ai, command, None)
-            if isinstance(cmd_config, AICommandConfig) and cmd_config.yolo is not None:
-                return cmd_config.yolo
-        return self.ai.yolo
+            if isinstance(cmd_config, AICommandConfig):
+                mode = _level_permission_mode(cmd_config.permission_mode, cmd_config.yolo)
+                if mode is not None:
+                    return mode
+        return _level_permission_mode(self.ai.permission_mode, self.ai.yolo)
+
+    def get_yolo(self, command: str | None = None) -> bool:
+        """Whether the resolved permission mode for a command is ``yolo``.
+
+        Derived from :meth:`get_permission_mode` so the yolo alias has a single
+        source of truth.
+        """
+        return self.get_permission_mode(command) is PermissionMode.YOLO
