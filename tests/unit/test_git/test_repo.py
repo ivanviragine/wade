@@ -175,3 +175,13 @@ class TestIsHeadAttached:
             check=True,
         )
         assert is_head_attached(tmp_git_repo) is False
+
+    def test_returns_false_outside_git_repo(self, tmp_path: Path) -> None:
+        # A real directory with no repo (git symbolic-ref exits non-zero) and a
+        # non-existent path (git invocation raises FileNotFoundError, which
+        # _run_git turns into a synthetic non-zero result) both resolve to
+        # "not attached" rather than raising.
+        non_git = tmp_path / "plain"
+        non_git.mkdir()
+        assert is_head_attached(non_git) is False
+        assert is_head_attached(tmp_path / "does-not-exist") is False
