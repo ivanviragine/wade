@@ -20,7 +20,7 @@ from crossby.models.ai import AIToolID, EffortLevel
 
 from wade.models.config import AICommandConfig
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
-from wade.models.permission import permission_mode_launch_kwargs
+from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.ui import prompts
 from wade.ui.console import console
@@ -115,14 +115,15 @@ def _delegate_headless(request: DelegationRequest) -> DelegationResult:
     # Headless commands (deps, review_*) are read/analytical and never need an
     # autonomy grant, so the headless path always runs at ``default`` — any
     # configured permission mode is intentionally ignored here (see
-    # KNOWLEDGE.md: headless-vs-autonomy). yolo/auto/accept_edits all stay off.
+    # KNOWLEDGE.md: headless-vs-autonomy). Forcing the DEFAULT tier keeps
+    # yolo/auto/accept_edits all off, symmetric with the interactive path.
     cmd = adapter.build_launch_command(
         model=request.model,
         prompt=request.prompt,
         trusted_dirs=trusted,
         allowed_commands=request.allowed_commands or None,
         effort=_parse_effort(request.effort),
-        yolo=False,
+        **permission_mode_launch_kwargs(PermissionMode.DEFAULT),
     )
 
     try:

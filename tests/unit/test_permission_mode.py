@@ -49,6 +49,17 @@ class TestPermissionModeModel:
         assert coerce_permission_mode("plan") is None  # plan is intentionally excluded
         assert coerce_permission_mode("bogus") is None
 
+    def test_coerce_normalizes_underscore_and_case(self) -> None:
+        from wade.models.permission import PermissionMode, coerce_permission_mode
+
+        # crossby's kwarg spelling (underscore) and mixed case both round-trip
+        # to the canonical hyphenated tier.
+        assert coerce_permission_mode("accept_edits") is PermissionMode.ACCEPT_EDITS
+        assert coerce_permission_mode("Accept-Edits") is PermissionMode.ACCEPT_EDITS
+        assert coerce_permission_mode("AUTO") is PermissionMode.AUTO
+        # normalization does not resurrect the excluded value
+        assert coerce_permission_mode("PLAN") is None
+
     def test_launch_kwargs_per_tier(self) -> None:
         from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 

@@ -44,13 +44,17 @@ def coerce_permission_mode(value: str | PermissionMode | None) -> PermissionMode
     Returns ``None`` for unset, unknown, or the excluded ``plan`` value —
     callers apply their own fallback (warn + ``default``). This never raises,
     so invalid config/CLI input degrades gracefully instead of erroring.
+
+    Input is normalized (underscores → hyphens, lower-cased) before matching,
+    so ``accept_edits`` (crossby's kwarg spelling) and ``Accept-Edits`` both
+    resolve to :attr:`PermissionMode.ACCEPT_EDITS`.
     """
     if value is None:
         return None
     if isinstance(value, PermissionMode):
         return value
     try:
-        return PermissionMode(value)
+        return PermissionMode(value.replace("_", "-").lower())
     except ValueError:
         return None
 
