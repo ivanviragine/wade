@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.35.1] — 2026-07-24
+
+### Bug Fixes
+
+- PR merge fails with 'could not determine current branch' when repo_root HEAD is detached (#334) (7c79e88)
+
 ## [v0.35.0] — 2026-07-24
 
 ### Features
