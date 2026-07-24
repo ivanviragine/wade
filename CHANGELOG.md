@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.34.0] — 2026-07-24
+
+### Features
+
+- add "auto" and "accept-edits" permission modes (#338) (5b82060)
+
 ## [v0.33.0] — 2026-07-23
 
 ### Features
