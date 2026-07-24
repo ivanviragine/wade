@@ -12,6 +12,7 @@ from wade.git.repo import (
     _run_git_with_retry,
     diff_between,
     get_main_worktree_path,
+    is_head_attached,
     stash,
     stash_pop,
 )
@@ -155,3 +156,22 @@ class TestGetMainWorktreePath:
             mock_run.return_value.stdout = "HEAD abc123\nbranch refs/heads/main\n"
             result = get_main_worktree_path(tmp_path)
             assert result is None
+
+
+class TestIsHeadAttached:
+    """Tests for is_head_attached against real temp repos."""
+
+    def test_returns_true_on_attached_branch(self, tmp_git_repo: Path) -> None:
+        # tmp_git_repo has an initial commit and HEAD on a branch.
+        assert is_head_attached(tmp_git_repo) is True
+
+    def test_returns_false_on_detached_head(self, tmp_git_repo: Path) -> None:
+        import subprocess
+
+        subprocess.run(
+            ["git", "checkout", "--detach", "HEAD"],
+            cwd=tmp_git_repo,
+            capture_output=True,
+            check=True,
+        )
+        assert is_head_attached(tmp_git_repo) is False

@@ -186,6 +186,22 @@ def get_current_branch(path: Path) -> str:
     return branch
 
 
+def is_head_attached(path: Path) -> bool:
+    """Check whether HEAD is attached to a branch (i.e. not detached).
+
+    Uses ``git symbolic-ref -q HEAD``: returncode 0 means HEAD points at a
+    branch ref (attached); non-zero means a detached HEAD (or not a repo).
+
+    Args:
+        path: Any directory inside the repo.
+
+    Returns:
+        True if HEAD is on a branch, False if detached or on failure.
+    """
+    result = _run_git("symbolic-ref", "-q", "HEAD", cwd=path, check=False)
+    return result.returncode == 0
+
+
 def detect_main_branch(path: Path) -> str:
     """Detect the main branch name — checks for 'main' then 'master'.
 

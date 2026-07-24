@@ -4,14 +4,17 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from wade.git.repo import GitError
 from wade.models.config import AIConfig, ProjectConfig, ProjectSettings
-from wade.models.session import MergeStrategy
+from wade.models.session import MergeStatus, MergeStrategy
 from wade.models.task import Task
 from wade.services.implementation_service import _post_implementation_lifecycle, start
 
 _PULL_FF = "wade.services.implementation_service.lifecycle.git_repo.pull_ff_only"
 _CHECKOUT = "wade.services.implementation_service.lifecycle.git_repo.checkout"
 _CHECKOUT_DETACH = "wade.services.implementation_service.lifecycle.git_repo.checkout_detach"
+_IS_HEAD_ATTACHED = "wade.services.implementation_service.lifecycle.git_repo.is_head_attached"
+_DETECT_MAIN = "wade.services.implementation_service.lifecycle.git_repo.detect_main_branch"
 _MERGE_SQUASH = "wade.services.implementation_service.lifecycle.git_repo.merge_squash"
 _COMMIT_NO_EDIT = "wade.services.implementation_service.lifecycle.git_repo.commit_no_edit"
 _PUSH = "wade.services.implementation_service.lifecycle.git_repo.push"
@@ -24,6 +27,7 @@ def _config(strategy: MergeStrategy) -> ProjectConfig:
     )
 
 
+@patch(_IS_HEAD_ATTACHED, return_value=True)
 @patch(_PULL_FF)
 @patch(_CHECKOUT_DETACH)
 @patch("wade.services.implementation_service.lifecycle.git_worktree.prune_worktrees")
@@ -48,6 +52,7 @@ def test_pr_strategy_prompts_merge_on_existing_pr(
     _mock_prune: MagicMock,
     _mock_checkout_detach: MagicMock,
     mock_pull_ff: MagicMock,
+    _mock_is_head_attached: MagicMock,
     tmp_path: Path,
 ) -> None:
     mock_pull_ff.return_value = MagicMock(returncode=0)
@@ -130,6 +135,7 @@ def test_pr_strategy_user_declines_merge(
     mock_poll.assert_called_once()
 
 
+@patch(_IS_HEAD_ATTACHED, return_value=True)
 @patch(_CHECKOUT)
 @patch("wade.services.implementation_service.lifecycle.git_pr.merge_pr")
 @patch("wade.services.implementation_service.lifecycle.prompts.select", return_value=0)
@@ -146,6 +152,7 @@ def test_pr_strategy_merge_failure_preserves_branch(
     _mock_select: MagicMock,
     mock_merge_pr: MagicMock,
     _mock_checkout: MagicMock,
+    _mock_is_head_attached: MagicMock,
     tmp_path: Path,
 ) -> None:
     provider = MagicMock()
@@ -165,6 +172,7 @@ def test_pr_strategy_merge_failure_preserves_branch(
     mock_merge_pr.assert_called_once()
 
 
+@patch(_IS_HEAD_ATTACHED, return_value=True)
 @patch(_CHECKOUT)
 @patch(_CHECKOUT_DETACH)
 @patch("wade.services.implementation_service.lifecycle.git_pr.merge_pr")
@@ -185,6 +193,7 @@ def test_pr_strategy_merge_failure_restores_branch(
     mock_merge_pr: MagicMock,
     _mock_checkout_detach: MagicMock,
     mock_checkout: MagicMock,
+    _mock_is_head_attached: MagicMock,
     tmp_path: Path,
 ) -> None:
     """On merge failure, HEAD should be restored from detached state to the branch."""
@@ -207,6 +216,7 @@ def test_pr_strategy_merge_failure_restores_branch(
     mock_checkout.assert_called_once_with(wt_path, "feat/42-test")
 
 
+@patch(_IS_HEAD_ATTACHED, return_value=True)
 @patch(_PULL_FF)
 @patch(_CHECKOUT_DETACH)
 @patch("wade.services.implementation_service.lifecycle.git_worktree.prune_worktrees")
@@ -231,6 +241,7 @@ def test_pr_strategy_cleanup_and_pull_after_merge(
     _mock_prune: MagicMock,
     _mock_checkout_detach: MagicMock,
     mock_pull_ff: MagicMock,
+    _mock_is_head_attached: MagicMock,
     tmp_path: Path,
 ) -> None:
     mock_pull_ff.return_value = MagicMock(returncode=0)
@@ -247,6 +258,202 @@ def test_pr_strategy_cleanup_and_pull_after_merge(
     # Worktree is removed AFTER successful merge
     mock_remove_worktree.assert_called_once_with(repo_root, wt_path)
     mock_pull_ff.assert_called_once_with(repo_root)
+
+
+@patch(_PULL_FF)
+@patch(_CHECKOUT_DETACH)
+@patch(_CHECKOUT)
+@patch(_DETECT_MAIN, return_value="main")
+@patch(_IS_HEAD_ATTACHED, return_value=False)
+@patch("wade.services.implementation_service.lifecycle.git_worktree.prune_worktrees")
+@patch("wade.services.implementation_service.lifecycle.git_worktree.remove_worktree")
+@patch("wade.services.implementation_service.lifecycle.git_pr.merge_pr")
+@patch("wade.services.implementation_service.lifecycle.git_repo.is_clean", return_value=True)
+@patch("wade.services.implementation_service.lifecycle.prompts.select", return_value=0)
+@patch("wade.services.implementation_service.lifecycle.prompts.confirm", return_value=True)
+@patch("wade.services.implementation_service.lifecycle.webbrowser.open")
+@patch(
+    "wade.services.implementation_service.lifecycle.git_pr.get_pr_for_branch",
+    return_value={"number": 99, "url": "https://example/pr/99"},
+)
+def test_pr_strategy_detached_repo_root_reattaches_then_merges(
+    _mock_get_pr: MagicMock,
+    _mock_webbrowser_open: MagicMock,
+    _mock_confirm: MagicMock,
+    _mock_select: MagicMock,
+    _mock_is_clean: MagicMock,
+    mock_merge_pr: MagicMock,
+    mock_remove_worktree: MagicMock,
+    _mock_prune: MagicMock,
+    _mock_is_head_attached: MagicMock,
+    mock_detect_main: MagicMock,
+    mock_checkout: MagicMock,
+    _mock_checkout_detach: MagicMock,
+    mock_pull_ff: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """Detached repo_root HEAD is re-attached before the merge, then merge proceeds."""
+    mock_pull_ff.return_value = MagicMock(returncode=0)
+    provider = MagicMock()
+    repo_root = tmp_path / "repo"
+    wt_path = tmp_path / "wt"
+    wt_path.mkdir()
+
+    with patch("wade.services.implementation_service.lifecycle.prompts.is_tty", return_value=True):
+        status = _post_implementation_lifecycle(
+            repo_root, "feat/42-test", 42, wt_path, _config(MergeStrategy.PR), provider
+        )
+
+    # Re-attached repo_root to the detected default branch BEFORE merging.
+    mock_detect_main.assert_called_once_with(repo_root)
+    mock_checkout.assert_called_once_with(repo_root, "main")
+    # Merge and normal cleanup still ran.
+    mock_merge_pr.assert_called_once_with(repo_root=repo_root, pr_number=99, strategy="squash")
+    mock_remove_worktree.assert_called_once_with(repo_root, wt_path)
+    mock_pull_ff.assert_called_once_with(repo_root)
+    assert status == MergeStatus.MERGED
+
+
+@patch(_CHECKOUT_DETACH)
+@patch(_CHECKOUT)
+@patch(_DETECT_MAIN, side_effect=GitError("Neither 'main' nor 'master' branch found"))
+@patch(_IS_HEAD_ATTACHED, return_value=False)
+@patch("wade.services.implementation_service.lifecycle.git_pr.merge_pr")
+@patch("wade.services.implementation_service.lifecycle.git_repo.is_clean", return_value=True)
+@patch("wade.services.implementation_service.lifecycle.prompts.select", return_value=0)
+@patch("wade.services.implementation_service.lifecycle.prompts.confirm", return_value=True)
+@patch("wade.services.implementation_service.lifecycle.webbrowser.open")
+@patch(
+    "wade.services.implementation_service.lifecycle.git_pr.get_pr_for_branch",
+    return_value={"number": 99, "url": "https://example/pr/99"},
+)
+def test_pr_strategy_detached_repo_root_detect_fails_no_merge(
+    _mock_get_pr: MagicMock,
+    _mock_webbrowser_open: MagicMock,
+    _mock_confirm: MagicMock,
+    _mock_select: MagicMock,
+    _mock_is_clean: MagicMock,
+    mock_merge_pr: MagicMock,
+    _mock_is_head_attached: MagicMock,
+    _mock_detect_main: MagicMock,
+    mock_checkout: MagicMock,
+    mock_checkout_detach: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """When re-attach detection fails (no main/master), fail fast without merging."""
+    provider = MagicMock()
+    repo_root = tmp_path / "repo"
+    wt_path = tmp_path / "wt"
+    wt_path.mkdir()
+
+    with patch("wade.services.implementation_service.lifecycle.prompts.is_tty", return_value=True):
+        status = _post_implementation_lifecycle(
+            repo_root, "feat/42-test", 42, wt_path, _config(MergeStrategy.PR), provider
+        )
+
+    # No GitHub-side merge and the worktree is left untouched (never detached).
+    mock_merge_pr.assert_not_called()
+    mock_checkout.assert_not_called()
+    mock_checkout_detach.assert_not_called()
+    provider.close_task.assert_not_called()
+    assert status == MergeStatus.MERGE_FAILED
+
+
+@patch(_CHECKOUT_DETACH)
+@patch(_DETECT_MAIN, return_value="main")
+@patch(_IS_HEAD_ATTACHED, return_value=False)
+@patch("wade.services.implementation_service.lifecycle.git_pr.merge_pr")
+@patch("wade.services.implementation_service.lifecycle.git_repo.is_clean", return_value=True)
+@patch("wade.services.implementation_service.lifecycle.prompts.select", return_value=0)
+@patch("wade.services.implementation_service.lifecycle.prompts.confirm", return_value=True)
+@patch("wade.services.implementation_service.lifecycle.webbrowser.open")
+@patch(
+    "wade.services.implementation_service.lifecycle.git_pr.get_pr_for_branch",
+    return_value={"number": 99, "url": "https://example/pr/99"},
+)
+def test_pr_strategy_detached_repo_root_checkout_fails_no_merge(
+    _mock_get_pr: MagicMock,
+    _mock_webbrowser_open: MagicMock,
+    _mock_confirm: MagicMock,
+    _mock_select: MagicMock,
+    _mock_is_clean: MagicMock,
+    mock_merge_pr: MagicMock,
+    _mock_is_head_attached: MagicMock,
+    _mock_detect_main: MagicMock,
+    mock_checkout_detach: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """When re-attach checkout is refused (e.g. conflicting changes), fail fast."""
+    provider = MagicMock()
+    repo_root = tmp_path / "repo"
+    wt_path = tmp_path / "wt"
+    wt_path.mkdir()
+
+    checkout_target = "wade.services.implementation_service.lifecycle.git_repo.checkout"
+    with (
+        patch(checkout_target, side_effect=GitError("checkout refused: local changes")),
+        patch("wade.services.implementation_service.lifecycle.prompts.is_tty", return_value=True),
+    ):
+        status = _post_implementation_lifecycle(
+            repo_root, "feat/42-test", 42, wt_path, _config(MergeStrategy.PR), provider
+        )
+
+    # Re-attach checkout raised → no merge, worktree never detached.
+    mock_merge_pr.assert_not_called()
+    mock_checkout_detach.assert_not_called()
+    provider.close_task.assert_not_called()
+    assert status == MergeStatus.MERGE_FAILED
+
+
+@patch(_PULL_FF)
+@patch(_CHECKOUT_DETACH)
+@patch(_CHECKOUT)
+@patch(_DETECT_MAIN)
+@patch(_IS_HEAD_ATTACHED, return_value=True)
+@patch("wade.services.implementation_service.lifecycle.git_worktree.prune_worktrees")
+@patch("wade.services.implementation_service.lifecycle.git_worktree.remove_worktree")
+@patch("wade.services.implementation_service.lifecycle.git_pr.merge_pr")
+@patch("wade.services.implementation_service.lifecycle.git_repo.is_clean", return_value=True)
+@patch("wade.services.implementation_service.lifecycle.prompts.select", return_value=0)
+@patch("wade.services.implementation_service.lifecycle.prompts.confirm", return_value=True)
+@patch("wade.services.implementation_service.lifecycle.webbrowser.open")
+@patch(
+    "wade.services.implementation_service.lifecycle.git_pr.get_pr_for_branch",
+    return_value={"number": 99, "url": "https://example/pr/99"},
+)
+def test_pr_strategy_attached_repo_root_skips_reattach(
+    _mock_get_pr: MagicMock,
+    _mock_webbrowser_open: MagicMock,
+    _mock_confirm: MagicMock,
+    _mock_select: MagicMock,
+    _mock_is_clean: MagicMock,
+    mock_merge_pr: MagicMock,
+    _mock_remove_worktree: MagicMock,
+    _mock_prune: MagicMock,
+    _mock_is_head_attached: MagicMock,
+    mock_detect_main: MagicMock,
+    mock_checkout: MagicMock,
+    _mock_checkout_detach: MagicMock,
+    mock_pull_ff: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """Attached repo_root HEAD: no detection, no re-attach checkout — happy path intact."""
+    mock_pull_ff.return_value = MagicMock(returncode=0)
+    provider = MagicMock()
+    repo_root = tmp_path / "repo"
+    wt_path = tmp_path / "wt"
+    wt_path.mkdir()
+
+    with patch("wade.services.implementation_service.lifecycle.prompts.is_tty", return_value=True):
+        status = _post_implementation_lifecycle(
+            repo_root, "feat/42-test", 42, wt_path, _config(MergeStrategy.PR), provider
+        )
+
+    # Attached: never detected the default branch, never re-attached via checkout.
+    mock_detect_main.assert_not_called()
+    mock_checkout.assert_not_called()
+    mock_merge_pr.assert_called_once_with(repo_root=repo_root, pr_number=99, strategy="squash")
+    assert status == MergeStatus.MERGED
 
 
 @patch("wade.services.implementation_service.lifecycle.prompts.confirm", return_value=False)
