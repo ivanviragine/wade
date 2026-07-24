@@ -165,11 +165,14 @@ Adapters, model/effort resolution, and per-tool config (allowlists, hooks) are p
 | [OpenAI Codex](https://developers.openai.com/codex/cli/) | `codex` |
 | [OpenCode](https://opencode.ai/) | `opencode` |
 | [VS Code](https://github.com/features/copilot/ai-code-editor) | `code` |
-| [Antigravity](https://antigravity.google/) | `antigravity` |
+| [Antigravity IDE](https://antigravity.google/) | `antigravity` |
 | [Antigravity CLI](https://antigravity.google/) | `agy` |
 
 > In `.wade.yml`, refer to a tool by its **config ID**, which matches the binary
 > above except for VS Code (`vscode`) and Antigravity CLI (`antigravity-cli`).
+> Antigravity IDE (config ID `antigravity`) is launch-only — WADE opens your
+> workspace in the desktop app; its workflow files are provisioned via the
+> Antigravity CLI's shared `.agents/` layout.
 
 ## Task Providers
 

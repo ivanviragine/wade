@@ -180,6 +180,50 @@ class TestDelegateHeadless:
         assert "Review code" in cmd
 
     @patch("wade.services.delegation_service.run")
+    def test_antigravity_cli_headless_delegation(self, mock_run: MagicMock) -> None:
+        """antigravity-cli (`agy`) must run headless via `--print` and capture stdout.
+
+        Regression guard: this is the review/deps delegation path
+        (review_plan / review_implementation / review_batch / deps) that
+        `antigravity-cli` inherited when it replaced Gemini CLI.
+        """
+        mock_run.return_value = MagicMock(returncode=0, stdout="1 -> 2 # auth first\n")
+        req = DelegationRequest(
+            mode=DelegationMode.HEADLESS,
+            prompt="Analyze deps",
+            ai_tool="antigravity-cli",
+            model="gemini-3-pro",
+        )
+        result = _delegate_headless(req)
+        assert result.success is True
+        assert result.feedback == "1 -> 2 # auth first"
+        assert result.mode == DelegationMode.HEADLESS
+
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0] == "agy"
+        assert "--print" in cmd
+        assert "--model" in cmd
+        assert "gemini-3-pro" in cmd
+        assert "Analyze deps" in cmd
+
+    def test_antigravity_ide_headless_returns_failure(self) -> None:
+        """Antigravity IDE (GUI, launch-only) has no headless surface.
+
+        crossby 0.10.2 reclassifies it as GUI (supports_headless=False); the
+        delegation service must reject it with a clear error rather than trying
+        to launch the desktop app non-interactively.
+        """
+        req = DelegationRequest(
+            mode=DelegationMode.HEADLESS,
+            prompt="Review code",
+            ai_tool="antigravity",
+        )
+        result = _delegate_headless(req)
+        assert result.success is False
+        assert "antigravity" in result.feedback
+        assert "does not support headless" in result.feedback
+
+    @patch("wade.services.delegation_service.run")
     def test_headless_yolo_is_not_forwarded(self, mock_run: MagicMock) -> None:
         """yolo=True in config is silently ignored for headless delegation."""
         mock_run.return_value = MagicMock(returncode=0, stdout="done\n")
