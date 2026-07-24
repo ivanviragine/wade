@@ -258,6 +258,34 @@ def _merge_pr(
         if not prompts.confirm("Proceed anyway? Uncommitted work will be lost.", default=False):
             return MergeStatus.NOT_MERGED
 
+    # Guard repo_root's HEAD state BEFORE the irreversible merge. `gh pr merge
+    # --delete-branch` runs with cwd=repo_root (the main checkout, a *different*
+    # directory from the worktree) and resolves repo_root's current branch during
+    # its post-merge --delete-branch bookkeeping. If repo_root has a detached HEAD
+    # — e.g. from unrelated manual git activity — gh aborts with "could not
+    # determine current branch", but only AFTER it has already squash-merged the
+    # PR on GitHub, leaving a "merged-on-GitHub-but-reported-failed" state.
+    # Re-attaching to the default branch here (mirroring the post-merge
+    # `git pull` that already targets it) lets us fail fast if we cannot proceed
+    # safely, before any GitHub-side merge happens.
+    if not git_repo.is_head_attached(repo_root):
+        try:
+            default_branch = git_repo.detect_main_branch(repo_root)
+            git_repo.checkout(repo_root, default_branch)
+        except GitError as e:
+            logger.error("repo_root.reattach_failed", error=str(e))
+            console.error(
+                f"Cannot merge: '{repo_root.name}' has a detached HEAD and could "
+                f"not be re-attached to a branch ({e})."
+            )
+            console.hint(
+                f"Check out a branch in {repo_root} "
+                f"(e.g. `git -C {repo_root} checkout main`), then retry the merge."
+            )
+            return MergeStatus.MERGE_FAILED
+        console.step(f"Re-attached {repo_root.name} to '{default_branch}' (was detached).")
+        logger.info("repo_root.reattached", branch=default_branch)
+
     # Detach HEAD in the worktree so git no longer considers the branch
     # "checked out", which unblocks `gh pr merge --delete-branch`.
     if worktree_path and worktree_path.is_dir():
