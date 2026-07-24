@@ -663,7 +663,8 @@ class TestRunReviewPrComments:
             ai_explicit=False,
             model_explicit=False,
             yolo=None,
-            yolo_explicit=False,
+            permission_mode=None,
+            permission_mode_explicit=False,
         )
 
     @patch("wade.services.review_service._quiet_next_steps_prompt")
@@ -714,7 +715,8 @@ class TestRunReviewPrComments:
             detach=False,
             ai_explicit=False,
             model_explicit=False,
-            yolo=None,
+            permission_mode=None,
+            permission_mode_explicit=False,
         )
 
 

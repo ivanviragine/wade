@@ -24,6 +24,7 @@ from crossby.models.ai import AIToolID, EffortLevel
 
 from wade.models.config import AICommandConfig, ProjectConfig
 from wade.models.delegation import DelegationMode
+from wade.models.permission import PermissionMode, coerce_permission_mode
 
 logger = structlog.get_logger()
 
@@ -174,6 +175,49 @@ def resolve_effort(
     return level
 
 
+def resolve_permission_mode(
+    permission_mode: str | PermissionMode | None,
+    yolo: bool | None,
+    config: ProjectConfig,
+    command: str = "plan",
+) -> PermissionMode:
+    """Resolve the autonomy tier from args -> config -> ``default``.
+
+    Fallback chain (highest precedence first):
+      1. Explicit ``--permission-mode`` CLI value
+      2. ``--yolo`` CLI alias (equivalent to ``permission_mode=yolo``)
+      3. Command/global config (``ai.<command>.permission_mode`` / ``yolo``,
+         then ``ai.permission_mode`` / ``ai.yolo``)
+      4. ``default``
+
+    Unlike the old ``resolve_yolo``, this does **not** gate on per-tool
+    capability support: crossby owns capability-aware downgrades and warnings
+    (see ``_autonomy_launch_args``), so WADE forwards the requested tier
+    verbatim. Invalid CLI values (including ``plan``) warn and fall back to
+    ``default`` rather than erroring.
+    """
+    if permission_mode is not None:
+        mode = coerce_permission_mode(permission_mode)
+        if mode is None:
+            logger.warning(
+                "permission_mode.invalid",
+                value=permission_mode,
+                source="cli",
+                fallback="default",
+            )
+            return PermissionMode.DEFAULT
+        return mode
+
+    if yolo:
+        return PermissionMode.YOLO
+
+    configured = config.get_permission_mode(command)
+    if configured is not None:
+        return configured
+
+    return PermissionMode.DEFAULT
+
+
 def resolve_yolo(
     yolo: bool | None,
     config: ProjectConfig,
@@ -181,35 +225,15 @@ def resolve_yolo(
     *,
     tool: str | None = None,
 ) -> bool:
-    """Resolve YOLO mode from args -> config -> False.
+    """Whether the resolved permission mode is ``yolo`` (back-compat shim).
 
-    Fallback chain:
-      1. Explicit *yolo* arg (e.g. ``--yolo`` CLI flag)
-      2. Command-specific config (``ai.<command>.yolo``)
-      3. Global config (``ai.yolo``)
-
-    When *tool* is provided and the tool does not support YOLO, a warning
-    is logged and ``False`` is returned.
+    Derives from :func:`resolve_permission_mode` so the yolo alias has one
+    source of truth. The ``tool`` argument is accepted for signature
+    compatibility but no longer gates on ``supports_yolo`` — crossby now owns
+    capability-aware downgrades, so an unsupported tier downgrades (with a
+    crossby warning) instead of WADE silently returning ``False``.
     """
-    resolved: bool | None = yolo
-
-    if resolved is None:
-        resolved = config.get_yolo(command)
-
-    if not resolved:
-        return False
-
-    # Check tool support
-    if tool:
-        try:
-            adapter = AbstractAITool.get(AIToolID(tool))
-            if not adapter.capabilities().supports_yolo:
-                logger.warning("yolo.unsupported_tool", tool=tool)
-                return False
-        except (ValueError, KeyError):
-            pass
-
-    return True
+    return resolve_permission_mode(None, yolo, config, command) is PermissionMode.YOLO
 
 
 def confirm_ai_selection(
@@ -220,11 +244,11 @@ def confirm_ai_selection(
     model_explicit: bool,
     resolved_effort: EffortLevel | None = None,
     effort_explicit: bool = False,
-    resolved_yolo: bool = False,
-    yolo_explicit: bool = True,
+    resolved_permission_mode: PermissionMode = PermissionMode.DEFAULT,
+    permission_mode_explicit: bool = True,
     mode: DelegationMode | None = None,
-) -> tuple[str | None, str | None, EffortLevel | None, bool]:
-    """Interactively confirm (and optionally change) the resolved AI tool/model/effort/yolo.
+) -> tuple[str | None, str | None, EffortLevel | None, PermissionMode]:
+    """Interactively confirm/change the resolved AI tool, model, effort, and permission mode.
 
     Fires only when stdin is a TTY and at least one of the flags was not
     explicitly provided by the caller.  When all flags are explicit (e.g.
@@ -233,25 +257,26 @@ def confirm_ai_selection(
     ``DelegationMode.HEADLESS``: headless mode is defined as unattended, so it
     must never block on a TTY prompt even when one happens to be attached.
 
-    Returns the (tool, model, effort, yolo) tuple after any user-driven changes.
+    Returns the (tool, model, effort, permission_mode) tuple after any
+    user-driven changes.
     """
     from wade.ui import prompts
     from wade.ui.console import console
 
     # Skip when non-TTY, no tool resolved, all flags were explicit, or headless.
-    all_explicit = tool_explicit and model_explicit and effort_explicit and yolo_explicit
+    all_explicit = tool_explicit and model_explicit and effort_explicit and permission_mode_explicit
     if (
         not prompts.is_tty()
         or resolved_tool is None
         or all_explicit
         or mode == DelegationMode.HEADLESS
     ):
-        return resolved_tool, resolved_model, resolved_effort, resolved_yolo
+        return resolved_tool, resolved_model, resolved_effort, resolved_permission_mode
 
     tool = resolved_tool
     model = resolved_model
     effort = resolved_effort
-    yolo = resolved_yolo
+    permission_mode = resolved_permission_mode
 
     while True:
         # Display current selection
@@ -260,8 +285,8 @@ def confirm_ai_selection(
             console.kv("Model", model)
         if effort:
             console.kv("Effort", effort.value)
-        if yolo:
-            console.kv("YOLO mode", "on")
+        if permission_mode is not PermissionMode.DEFAULT:
+            console.kv("Permission mode", permission_mode.value)
 
         # Build menu dynamically based on which flags were NOT explicit.
         menu_items: list[str] = ["Proceed"]
@@ -272,21 +297,23 @@ def confirm_ai_selection(
         if not model_explicit:
             menu_items.append("Change model")
 
-        # Show "Change effort" only when the tool supports it
+        # Show "Change effort" / "Change permission mode" only when the tool
+        # supports the corresponding capability.
         tool_supports_effort = False
-        tool_supports_yolo = False
+        tool_supports_autonomy = False
         try:
             adapter = AbstractAITool.get(AIToolID(tool))
             caps = adapter.capabilities()
             tool_supports_effort = caps.supports_effort
-            tool_supports_yolo = caps.supports_yolo
+            tool_supports_autonomy = (
+                caps.supports_accept_edits or caps.supports_auto or caps.supports_yolo
+            )
         except (ValueError, KeyError):
             pass
         if not effort_explicit and tool_supports_effort:
             menu_items.append("Change effort")
-        if not yolo_explicit and tool_supports_yolo:
-            label = "Turn off YOLO mode" if yolo else "Turn on YOLO mode"
-            menu_items.append(label)
+        if not permission_mode_explicit and tool_supports_autonomy:
+            menu_items.append("Change permission mode")
 
         if len(menu_items) == 1:
             break
@@ -305,17 +332,15 @@ def confirm_ai_selection(
             if new_tool != tool:
                 tool = new_tool
                 model = _prompt_model_selection(tool)
-                # Clear stale effort/yolo when the new tool doesn't support them.
+                # Clear stale effort when the new tool doesn't support it. The
+                # permission mode is left as requested — crossby downgrades any
+                # unsupported tier at launch (WADE must not reimplement that).
                 try:
                     new_adapter = AbstractAITool.get(AIToolID(tool))
-                    new_caps = new_adapter.capabilities()
-                    if effort is not None and not new_caps.supports_effort:
+                    if effort is not None and not new_adapter.capabilities().supports_effort:
                         effort = None
-                    if yolo and not new_caps.supports_yolo:
-                        yolo = False
                 except (ValueError, KeyError):
                     effort = None
-                    yolo = False
 
         elif choice == "Change model":
             model = _prompt_model_selection(tool)
@@ -323,10 +348,10 @@ def confirm_ai_selection(
         elif choice == "Change effort":
             effort = _prompt_effort_selection(effort)
 
-        elif choice in ("Turn on YOLO mode", "Turn off YOLO mode"):
-            yolo = not yolo
+        elif choice == "Change permission mode":
+            permission_mode = _prompt_permission_mode_selection(permission_mode, tool)
 
-    return tool, model, effort, yolo
+    return tool, model, effort, permission_mode
 
 
 def _prompt_model_selection(tool: str) -> str | None:
@@ -343,6 +368,33 @@ def _prompt_model_selection(tool: str) -> str | None:
         custom = prompts.input_prompt("Enter model name", allow_empty=True)
         return custom or None
     return chosen or None
+
+
+def _prompt_permission_mode_selection(current: PermissionMode, tool: str) -> PermissionMode:
+    """Show a permission-mode picker gated by *tool* capabilities.
+
+    Offers ``default`` plus each autonomy tier the tool declares support for.
+    This only reads capability flags for UX affordance — it does not reimplement
+    crossby's precedence/downgrade ladder.
+    """
+    from wade.ui import prompts
+
+    tiers: list[PermissionMode] = [PermissionMode.DEFAULT]
+    try:
+        caps = AbstractAITool.get(AIToolID(tool)).capabilities()
+        if caps.supports_accept_edits:
+            tiers.append(PermissionMode.ACCEPT_EDITS)
+        if caps.supports_auto:
+            tiers.append(PermissionMode.AUTO)
+        if caps.supports_yolo:
+            tiers.append(PermissionMode.YOLO)
+    except (ValueError, KeyError):
+        pass
+
+    labels = [t.value for t in tiers]
+    default_idx = tiers.index(current) if current in tiers else 0
+    idx = prompts.select("Select permission mode", labels, default=default_idx)
+    return tiers[idx]
 
 
 def _prompt_effort_selection(current: EffortLevel | None) -> EffortLevel | None:

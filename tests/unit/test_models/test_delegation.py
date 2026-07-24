@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
+from wade.models.permission import PermissionMode
 
 
 class TestDelegationMode:
@@ -29,7 +30,7 @@ class TestDelegationRequest:
         assert req.timeout == 300
         assert req.trusted_dirs == []
         assert req.allowed_commands == []
-        assert req.yolo is False
+        assert req.permission_mode is PermissionMode.DEFAULT
 
     def test_full_request(self) -> None:
         req = DelegationRequest(
@@ -43,7 +44,7 @@ class TestDelegationRequest:
             output_file=Path("/tmp/out.txt"),
             trusted_dirs=["/tmp"],
             allowed_commands=["wade *"],
-            yolo=True,
+            permission_mode=PermissionMode.YOLO,
         )
         assert req.ai_tool == "claude"
         assert req.model == "claude-sonnet-4-6"
@@ -53,7 +54,7 @@ class TestDelegationRequest:
         assert req.output_file == Path("/tmp/out.txt")
         assert req.trusted_dirs == ["/tmp"]
         assert req.allowed_commands == ["wade *"]
-        assert req.yolo is True
+        assert req.permission_mode is PermissionMode.YOLO
 
 
 class TestDelegationResult:

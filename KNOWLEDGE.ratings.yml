@@ -29,7 +29,7 @@
 38aa4f95:
   down: 0
   stale: 0
-  up: 4
+  up: 5
 4863036c:
   down: 0
   stale: 0
@@ -49,11 +49,11 @@
 9b40e000:
   down: 0
   stale: 0
-  up: 2
+  up: 3
 9f5e5e2c:
   down: 0
   stale: 0
-  up: 4
+  up: 5
 a24d65b0:
   down: 0
   stale: 0
@@ -69,6 +69,10 @@ b6a3a637:
   stale: 0
   up: 1
 cae0f47a:
+  down: 0
+  stale: 0
+  up: 1
+cc136dba:
   down: 0
   stale: 0
   up: 1

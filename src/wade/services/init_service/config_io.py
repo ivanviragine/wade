@@ -224,7 +224,7 @@ def _write_config(
             overrides = command_overrides.get(cmd_name, {})
             if overrides:
                 cmd_section: dict[str, Any] = {}
-                for key in ("tool", "model", "mode", "effort"):
+                for key in ("tool", "model", "mode", "effort", "permission_mode"):
                     if overrides.get(key):
                         cmd_section[key] = overrides[key]
                 # Handle boolean fields (stored as strings in overrides)
@@ -392,7 +392,7 @@ def _patch_config(
             if force:
                 if overrides:
                     cmd_section: dict[str, Any] = {}
-                    for key in ("tool", "model", "mode", "effort"):
+                    for key in ("tool", "model", "mode", "effort", "permission_mode"):
                         if overrides.get(key):
                             cmd_section[key] = overrides[key]
                     if "enabled" in overrides:
@@ -409,7 +409,7 @@ def _patch_config(
                     changed = True
             elif overrides and not ai.get(cmd_name):
                 cmd_section = {}
-                for key in ("tool", "model", "mode", "effort"):
+                for key in ("tool", "model", "mode", "effort", "permission_mode"):
                     if overrides.get(key):
                         cmd_section[key] = overrides[key]
                 if "enabled" in overrides:

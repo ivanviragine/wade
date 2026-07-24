@@ -18,6 +18,7 @@ from wade.git import sync as git_sync
 from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
 from wade.models.deps import DependencyGraph
+from wade.models.permission import PermissionMode
 from wade.models.task import (
     Task,
     has_checklist_items,
@@ -32,7 +33,7 @@ from wade.services.ai_resolution import (
     resolve_ai_tool,
     resolve_effort,
     resolve_model,
-    resolve_yolo,
+    resolve_permission_mode,
 )
 from wade.ui import prompts
 from wade.ui.console import console
@@ -70,6 +71,7 @@ def check_tracking_issue_and_batch(
     effort: str | None,
     effort_explicit: bool,
     yolo: bool | None,
+    permission_mode: str | None = None,
     cd_only: bool = False,
 ) -> bool | None:
     """Detect tracking issues and redirect to batch implementation.
@@ -105,6 +107,7 @@ def check_tracking_issue_and_batch(
             effort=effort,
             effort_explicit=effort_explicit,
             yolo=yolo,
+            permission_mode=permission_mode,
         )
     return False
 
@@ -120,6 +123,7 @@ def batch(
     effort: str | None = None,
     effort_explicit: bool = False,
     yolo: bool | None = None,
+    permission_mode: str | None = None,
 ) -> bool:
     """Start parallel implementation sessions for multiple issues.
 
@@ -146,17 +150,22 @@ def batch(
     resolved_tool = resolve_ai_tool(ai_tool, config, "implement")
     resolved_model = resolve_model(model, config, "implement", tool=resolved_tool)
     resolved_effort = resolve_effort(effort, config, "implement", tool=resolved_tool)
-    resolved_yolo = resolve_yolo(yolo, config, "implement", tool=resolved_tool)
+    resolved_permission_mode = resolve_permission_mode(permission_mode, yolo, config, "implement")
     _pre_model = resolved_model
-    resolved_tool, resolved_model, resolved_effort, resolved_yolo = confirm_ai_selection(
+    (
+        resolved_tool,
+        resolved_model,
+        resolved_effort,
+        resolved_permission_mode,
+    ) = confirm_ai_selection(
         resolved_tool,
         resolved_model,
         tool_explicit=ai_explicit,
         model_explicit=model_explicit,
         resolved_effort=resolved_effort,
         effort_explicit=effort_explicit,
-        resolved_yolo=resolved_yolo,
-        yolo_explicit=yolo is not None,
+        resolved_permission_mode=resolved_permission_mode,
+        permission_mode_explicit=permission_mode is not None or yolo is not None,
     )
     # If the user changed the model interactively, propagate it explicitly to child sessions
     if not model_explicit and resolved_model != _pre_model:
@@ -197,8 +206,8 @@ def batch(
             cmd.extend(["--model", resolved_model])
         if resolved_effort:
             cmd.extend(["--effort", resolved_effort.value])
-        if resolved_yolo:
-            cmd.append("--yolo")
+        if resolved_permission_mode is not PermissionMode.DEFAULT:
+            cmd.extend(["--permission-mode", resolved_permission_mode.value])
         if chain_ids:
             cmd.extend(["--chain", ",".join(chain_ids)])
         return cmd

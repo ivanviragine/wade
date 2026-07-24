@@ -60,8 +60,8 @@ def _post_implementation_lifecycle(
     detach: bool = False,
     ai_explicit: bool = False,
     model_explicit: bool = False,
-    yolo: bool | None = None,
-    yolo_explicit: bool = False,
+    permission_mode: str | None = None,
+    permission_mode_explicit: bool = False,
 ) -> MergeStatus:
     """Run post-implementation lifecycle and return the merge status."""
     if config.project.merge_strategy == MergeStrategy.PR:
@@ -76,8 +76,8 @@ def _post_implementation_lifecycle(
             detach=detach,
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
-            yolo=yolo,
-            yolo_explicit=yolo_explicit,
+            permission_mode=permission_mode,
+            permission_mode_explicit=permission_mode_explicit,
         )
     return _post_implementation_lifecycle_direct(
         repo_root, branch, issue_number, worktree_path, config, provider
@@ -178,8 +178,8 @@ def _post_implementation_lifecycle_pr(
     detach: bool = False,
     ai_explicit: bool = False,
     model_explicit: bool = False,
-    yolo: bool | None = None,
-    yolo_explicit: bool = False,
+    permission_mode: str | None = None,
+    permission_mode_explicit: bool = False,
 ) -> MergeStatus:
     """Run the PR-based post-implementation lifecycle."""
     pr_info = git_pr.get_pr_for_branch(repo_root, branch)
@@ -218,8 +218,8 @@ def _post_implementation_lifecycle_pr(
                 detach=detach,
                 ai_explicit=ai_explicit,
                 model_explicit=model_explicit,
-                yolo=yolo,
-                yolo_explicit=yolo_explicit,
+                permission_mode=permission_mode,
+                permission_mode_explicit=permission_mode_explicit,
             )
         elif outcome in (PollOutcome.QUIET_TIMEOUT, PollOutcome.REVIEW_COMPLETE):
             review_service._quiet_next_steps_prompt(
@@ -234,8 +234,8 @@ def _post_implementation_lifecycle_pr(
                 detach=detach,
                 ai_explicit=ai_explicit,
                 model_explicit=model_explicit,
-                yolo=yolo,
-                yolo_explicit=yolo_explicit,
+                permission_mode=permission_mode,
+                permission_mode_explicit=permission_mode_explicit,
             )
         return MergeStatus.NOT_MERGED
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import structlog
 import yaml
 
 from wade.models.config import (
@@ -20,8 +21,32 @@ from wade.models.config import (
     ProjectSettings,
     ProviderConfig,
 )
+from wade.models.permission import coerce_permission_mode
+
+logger = structlog.get_logger()
 
 CONFIG_FILENAME = ".wade.yml"
+
+
+def _validated_permission_mode(raw_value: Any, *, source: str) -> str | None:
+    """Validate a raw config ``permission_mode`` value, warning on invalid input.
+
+    ``plan`` and any unknown value warn and fall back to ``None`` (treated as
+    unset), so an invalid config never silently misbehaves. Valid values are
+    returned as their canonical string form.
+    """
+    if raw_value is None:
+        return None
+    mode = coerce_permission_mode(str(raw_value))
+    if mode is None:
+        logger.warning(
+            "config.invalid_permission_mode",
+            value=raw_value,
+            source=source,
+            fallback="default",
+        )
+        return None
+    return mode.value
 
 
 class ConfigError(Exception):
@@ -147,6 +172,9 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
         default_tool=ai_raw.get("default_tool"),
         default_model=ai_raw.get("default_model"),
         effort=ai_raw.get("effort"),
+        permission_mode=_validated_permission_mode(
+            ai_raw.get("permission_mode"), source="ai.permission_mode"
+        ),
         yolo=ai_raw.get("yolo"),
         **command_configs,
     )
@@ -230,6 +258,9 @@ def _parse_command_config(raw: dict[str, Any] | None) -> AICommandConfig:
         model=raw.get("model") or None,  # Treat empty string as None
         mode=raw.get("mode"),
         effort=raw.get("effort"),
+        permission_mode=_validated_permission_mode(
+            raw.get("permission_mode"), source="ai.<command>.permission_mode"
+        ),
         yolo=raw.get("yolo"),
         enabled=raw.get("enabled"),
         timeout=raw.get("timeout"),
