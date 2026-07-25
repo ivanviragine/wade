@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.36.0] — 2026-07-25
+
+### Features
+
+- announce headless review timeout so orchestrators don't kill it early (#347) (1af5754)
+
 ## [v0.35.3] — 2026-07-25
 
 ### Chores
