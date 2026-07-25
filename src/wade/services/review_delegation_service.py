@@ -114,7 +114,19 @@ def _run_review_delegation(
         **({"timeout": cmd_config.timeout} if cmd_config.timeout is not None else {}),
     )
 
-    if delegation_mode in (DelegationMode.INTERACTIVE, DelegationMode.HEADLESS):
+    if delegation_mode == DelegationMode.HEADLESS:
+        # This spawns an external AI subprocess bounded by ``request.timeout``.
+        # Announce that budget so the orchestrator driving wade (Claude Code,
+        # Cursor, Copilot, …) allows more than its own shell/tool timeout before
+        # killing the call — otherwise it aborts the review before wade's own
+        # timeout can fire. Configure the budget via ``ai.<command>.timeout``.
+        console.info(
+            "Launching headless AI review — this runs an external AI subprocess "
+            f"that can take up to {request.timeout}s. Keep it in the foreground and "
+            f"allow more than {request.timeout}s before timing out (raise your "
+            "shell/tool timeout if needed). Do not move it to the background."
+        )
+    elif delegation_mode == DelegationMode.INTERACTIVE:
         console.info(
             "Launching external AI review session — "
             "please wait, do not move this to the background."
