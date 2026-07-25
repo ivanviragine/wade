@@ -59,6 +59,7 @@ src/wade/
 │   ├── review_pr_comments_session.py # review-pr-comments-session check/sync/done/fetch/resolve
 │   ├── review.py        # review plan/implementation/pr-comments/batch
 │   ├── plan_session.py  # plan-session done
+│   ├── hook.py          # `wade hook` — write-guard entry point for AI tool hooks
 │   └── autocomplete.py  # Shell autocompletion helpers
 ├── models/              # Pydantic domain models (pure data, no I/O)
 │   ├── config.py        # ProjectConfig, ProjectSettings, AIConfig, ComplexityModelMapping
@@ -99,8 +100,8 @@ src/wade/
 │   ├── branch.py        # Branch naming, creation, deletion
 │   ├── sync.py          # Fetch + merge, conflict detection
 │   └── pr.py            # PR creation, merge
-├── hooks/               # Git/pre-commit hooks
-│   └── plan_write_guard.py  # Guard script for plan file write protection
+├── hooks/               # Guard policies (invoked via `wade hook`)
+│   └── policies.py      # worktree_containment / plan_artifact_only / session_complete
 ├── skills/              # Skill file management
 │   ├── installer.py     # Install/update/remove skill files
 │   └── pointer.py       # AGENTS.md pointer insertion/detection

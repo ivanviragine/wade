@@ -22,9 +22,9 @@ fi
 
 if $RUN_LINT; then
     echo "--- ruff check ---"
-    uv run python -m ruff check src/
+    uv run python -m ruff check src/ tests/
     echo "--- ruff format --check ---"
-    uv run python -m ruff format --check src/
+    uv run python -m ruff format --check src/ tests/
 fi
 
 if $RUN_TYPES; then

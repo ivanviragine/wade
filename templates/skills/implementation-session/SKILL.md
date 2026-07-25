@@ -131,6 +131,11 @@ Before closing the session, write **`PR-SUMMARY.md`** in the worktree root
 (your current working directory). `wade implementation-session done` reads this file to populate
 the PR body. If the file is missing, the PR will have no description.
 
+> **Completion reminder:** on Stop-capable tools, if you end your turn while
+> `PR-SUMMARY.md` is still missing, a Stop hook will remind you once to write it
+> and run `done`. This is a safety net, not an error — if you are pausing to ask
+> a question or are still mid-task, disregard it and continue.
+>
 > **Never commit this file** — it is a session artifact (already in `.gitignore`).
 > If you find it is already tracked by git (e.g. `git status` shows it as modified),
 > untrack it first:
