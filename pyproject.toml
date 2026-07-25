@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "wade-cli"
-version = "0.35.1"
+version = "0.35.2"
 description = "WADE — Workflow for AI-Driven Engineering"
 readme = "README.md"
 license = "MIT"
@@ -24,7 +24,7 @@ classifiers = [
     "Topic :: Software Development :: Version Control :: Git",
 ]
 dependencies = [
-    "crossby>=0.10.2,<0.11.0",
+    "crossby>=0.11.0,<0.12.0",
     "typer>=0.12,<0.26",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
