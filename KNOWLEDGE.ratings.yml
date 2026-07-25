@@ -36,7 +36,7 @@
   up: 4
 54326c98:
   down: 1
-  stale: 0
+  stale: 1
   up: 0
 6e38b3aa:
   down: 0
@@ -65,6 +65,10 @@ b61e247e:
   superseded_by: bcfa4bb3
   up: 4
 b6a3a637:
+  down: 0
+  stale: 0
+  up: 1
+b6ca74e5:
   down: 0
   stale: 0
   up: 1

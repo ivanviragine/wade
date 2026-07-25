@@ -231,3 +231,9 @@ wade never branches on crossby's AIToolType/tool_type (only re-exported in wade.
 To unit-test a crossby GUI adapter launch command (Antigravity IDE, VS Code), patch `crossby.ai_tools.<module>.run_with_transcript` (e.g. crossby.ai_tools.antigravity.run_with_transcript) and read call_args[0][0] — GUI adapters build the cmd and call crossby's run_with_transcript directly, so patching wade.utils.process/subprocess never fires. The Antigravity IDE cmd is exactly ["antigravity", str(working_dir)] (explicit dir, not ".").
 
 ---
+
+## ae5df2be | 2026-07-24 | plan | tags: crossby, ai-tools, model-registry, dependencies
+
+To add or refresh supported AI models in wade (e.g. a new Opus), bump the crossby dependency — there is no wade-side model list to edit. The model registry (crossby.data.MODELS / get_models_for_tool), the complexity-tier defaults used by `wade init` (crossby.config.defaults.get_defaults), and EffortLevel all live in crossby; wade's _resolve_models and _suggest_model_for_tool (init_service/config_io.py, prompts_ai.py), ai_resolution.py, and cli/autocomplete.py are thin pass-throughs. Because the pyproject pin uses an exclusive upper bound (e.g. crossby<0.11.0), each new crossby minor needs an explicit pin bump plus a verification pass across those four import sites.
+
+---
