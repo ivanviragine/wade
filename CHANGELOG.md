@@ -4,15 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
-## [v0.35.2] — 2026-07-24
-
-### Bug Fixes
-
-- exclude scaffold-branch commits from generated changelog (c40a9ca)
+## [v0.35.3] — 2026-07-25
 
 ### Chores
 
-- bump crossby to v0.11.0 and adopt newer models (Opus 5) (ff0ab48)
+- bump crossby to v0.11.0 and adopt newer models (Opus 5) (#345) (d9ac8a5)
 
 ## [v0.35.1] — 2026-07-24
 
