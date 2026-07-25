@@ -225,6 +225,74 @@ class TestReviewPlan:
         assert call_args.mode == DelegationMode.HEADLESS
         assert call_args.timeout == 300
 
+    @patch("wade.services.review_delegation_service.console")
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    def test_headless_launch_notice_announces_timeout(
+        self,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+        mock_console: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """The pre-launch notice must tell the orchestrator how long to wait.
+
+        Without the budget in the message, the AI tool driving wade kills the
+        headless subprocess at its own (shorter) shell timeout before wade's
+        own timeout can fire.
+        """
+        plan_file = tmp_path / "PLAN.md"
+        plan_file.write_text("# Plan")
+        mock_template.return_value = "{plan_content}"
+        mock_config.return_value = _review_config(
+            review_plan_enabled=True,
+            review_plan_mode="headless",
+            review_plan_timeout=420,
+        )
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.HEADLESS
+        )
+
+        review_plan(str(plan_file))
+
+        notices = " ".join(
+            str(call.args[0]) for call in mock_console.info.call_args_list if call.args
+        )
+        assert "420" in notices
+        assert "background" in notices.lower()
+
+    @patch("wade.services.review_delegation_service.console")
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    def test_prompt_mode_emits_no_launch_notice(
+        self,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+        mock_console: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Prompt mode returns instantly — no subprocess, so no wait notice."""
+        plan_file = tmp_path / "PLAN.md"
+        plan_file.write_text("# Plan")
+        mock_template.return_value = "{plan_content}"
+        mock_config.return_value = _review_config(
+            review_plan_enabled=True, review_plan_mode="prompt"
+        )
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.PROMPT
+        )
+
+        review_plan(str(plan_file))
+
+        notices = " ".join(
+            str(call.args[0]) for call in mock_console.info.call_args_list if call.args
+        )
+        assert "background" not in notices.lower()
+
 
 # ---------------------------------------------------------------------------
 # review_implementation

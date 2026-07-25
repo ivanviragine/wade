@@ -11,6 +11,14 @@ Run `wade review implementation` to review your changes and check the exit code:
 
 For staged-only review: `wade review implementation --staged`.
 
+**Headless review can be slow.** When `review_implementation.mode` is `headless`,
+this launches an external AI subprocess that may run for a few minutes. wade
+prints the exact budget when it starts ("can take up to Ns"). Keep the command in
+the foreground and allow more than that before timing out — raise your shell/tool
+timeout if needed. Do not kill it early or move it to the background; a premature
+kill is an infra timeout, not a review result. The budget is
+`ai.review_implementation.timeout` in `.wade.yml` (default 300s).
+
 **Run at most 2 times total**:
 - If findings are **minor** (style, small fixes): Address them and proceed to
   Step 2; no re-review needed.
