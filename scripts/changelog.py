@@ -66,7 +66,8 @@ def get_tags() -> list[str]:
 def get_commits(commit_range: str) -> list[tuple[str, str]]:
     """Get commits in a range as (subject, hash) pairs.
 
-    Filters out version-bump noise.
+    Filters out version-bump and branch-scaffold noise — both are
+    wade-generated commits that carry no user-facing release content.
     """
     raw = git("log", commit_range, "--pretty=format:%s|%h", "--no-merges")
     if not raw:
@@ -76,7 +77,7 @@ def get_commits(commit_range: str) -> list[tuple[str, str]]:
         if "|" not in line:
             continue
         subject, sha = line.rsplit("|", 1)
-        if subject.startswith("chore: bump version"):
+        if subject.startswith(("chore: bump version", "chore: scaffold branch")):
             continue
         commits.append((subject.strip(), sha.strip()))
     return commits
