@@ -69,7 +69,7 @@ class TestSkillInstallation:
         assert skill_md.is_file()
         content = skill_md.read_text(encoding="utf-8")
         assert "{user_interaction_prompt}" not in content, "Placeholder must be expanded"
-        assert "## User interaction" in content, "Partial heading must be injected"
+        assert "## Talking to the user" in content, "Folded heading must be present"
         assert "Key decision points:" in content, "Partial content must be injected"
 
     def test_review_enforcement_rule_expanded_by_default(self, tmp_git_repo: Path) -> None:
@@ -128,7 +128,7 @@ class TestSkillInstallation:
         """Passing disabled one-liner via extra_partials suppresses the plan review step."""
         from wade.skills.installer import install_skills
 
-        disabled = "5. ~~**Review**~~ — skipped (`review_plan.enabled: false` in `.wade.yml`)."
+        disabled = "7. ~~**Review**~~ — skipped (`review_plan.enabled: false` in `.wade.yml`)."
         install_skills(
             tmp_git_repo,
             skills=["plan-session"],

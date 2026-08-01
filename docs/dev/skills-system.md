@@ -49,7 +49,7 @@ In inited projects (normal init), `wade init` copies skill files (not symlinks),
 `wade init` installs skills file-by-file via the `skills/installer.py` module. When adding a new skill:
 
 1. Create the skill template in `templates/skills/<name>/SKILL.md`
-2. Register the skill in `skills/installer.py` — add it to `SKILL_FILES` and optionally `ALWAYS_OVERWRITE`
+2. Register the skill in `skills/installer.py` — add it to `SKILL_FILES` and optionally `ALWAYS_OVERWRITE`. `SKILL_FILES` lists **every** file to install for a skill, including any `reference/<file>.md` (see [Progressive Disclosure](#progressive-disclosure-reference-files-and-the-context-budget)). Files not listed here are not installed and are not gitignored — `get_worktree_gitignore_entries()` derives its paths from this same map.
 3. Add the skill directory to the cleanup logic in `init_service.py` (deinit path)
 4. Reference the skill from `plan-session/SKILL.md`, `implementation-session/SKILL.md`, or `review-pr-comments-session/SKILL.md` as appropriate
 
@@ -70,6 +70,50 @@ The installer expands these placeholders when copying skill files to a project. 
 2. Add an entry to `_SKILL_PARTIALS` in `installer.py`
 3. Use the placeholder string in the relevant skill template(s)
 4. Add the skill to `INJECT_SKILLS` if it is not already there
+
+Partials carry **no H2 heading of their own** when a session folds multiple
+sections around them. For example `user-interaction.md` is heading-less prose
+injected inside each skill's `## Talking to the user` section — the skill owns the
+single heading, so the fold never produces a duplicate H2.
+
+## Progressive Disclosure: reference/ files and the context budget
+
+Every wade session opens with a launch prompt that inlines the phase `SKILL.md`
+(via the bare `@` reference), before the agent reads any code. To keep that
+opening payload small, each rule lives on exactly **one** surface, and reference
+material is loaded **just-in-time** rather than eagerly.
+
+### Ownership model
+
+| Surface | Owns | Never contains |
+|---|---|---|
+| **`SKILL.md`** | the durable *how* + judgment a gate can't check + **one** copy of the workflow | recovery procedures, exit-code tables, format templates, restated checklists |
+| **Launch prompt** (`templates/prompts/*.md`) | the *what* — this task/issue/plan-dir + a one-line "build a todo from the skill" + the first command | the workflow (the skill has it) |
+| **`reference/*.md`** next to `SKILL.md` | recovery procedures, formats, edge cases — read on demand | anything on the happy path |
+| **CLI output** | what to do *now*, at the moment something fails (already emitted by wade) | — |
+
+Each phase skill points at its reference files with a one-line `@`-pointer (e.g.
+`implementation-session/SKILL.md` points at
+`reference/recovery.md` for sync/catchup conflict handling and
+`reference/pr-summary-format.md` for the PR-summary format). The `task` skill uses the
+same pattern with `plan-format.md` + `examples.md`.
+
+Reference files must be registered in `SKILL_FILES` (see [Skill Installation
+Lifecycle](#skill-installation-lifecycle)) using the `reference/<file>.md` path,
+or they are not installed. Review needs its **own** `reference/recovery.md` — it
+cannot point at implementation-session's, because `REVIEW_SKILLS` installs only
+`review-pr-comments-session`, `task`, and `knowledge`. Some duplication between
+the two recovery files is expected and correct.
+
+### The ≤ 8,000-char budget test
+
+`tests/integration/test_skill_context_budget.py` pins the combined size of the
+session-start payload — launch prompt + rendered `SKILL.md` (partials expanded,
+reviews enabled) — at **≤ 8,000 chars** for each of implement / plan / review, so
+the budget cannot silently regress. The unit is **chars** (a deliberate proxy for
+tokens; measured token savings differ slightly). If a skill edit pushes a session
+over budget, move the added detail into a `reference/*.md` and leave a one-line
+pointer rather than inflating the always-loaded `SKILL.md`.
 
 ## Agent Skills (templates/skills/)
 

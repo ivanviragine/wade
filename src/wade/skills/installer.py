@@ -77,9 +77,13 @@ def load_prompt_template(name: str) -> str:
 
 SKILL_FILES: dict[str, list[str]] = {
     "task": ["SKILL.md", "plan-format.md", "examples.md"],
-    "plan-session": ["SKILL.md"],
-    "implementation-session": ["SKILL.md"],
-    "review-pr-comments-session": ["SKILL.md"],
+    "plan-session": ["SKILL.md", "reference/plan-format.md"],
+    "implementation-session": [
+        "SKILL.md",
+        "reference/recovery.md",
+        "reference/pr-summary-format.md",
+    ],
+    "review-pr-comments-session": ["SKILL.md", "reference/recovery.md"],
     "deps": ["SKILL.md"],
     "knowledge": ["SKILL.md"],
 }
