@@ -530,7 +530,7 @@ def bootstrap_worktree(
     skill_extra_partials: dict[str, str] = {}
     if config.ai.review_plan.enabled is False:
         skill_extra_partials["{review_plan_step}"] = (
-            "5. ~~**Review**~~ — skipped (`review_plan.enabled: false` in `.wade.yml`)."
+            "7. ~~**Review**~~ — skipped (`review_plan.enabled: false` in `.wade.yml`)."
         )
     if config.ai.review_implementation.enabled is False:
         skill_extra_partials["{review_enforcement_rule}"] = ""

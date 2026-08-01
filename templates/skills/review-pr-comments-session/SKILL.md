@@ -17,18 +17,12 @@ Run `wade` and `gh` commands with the required permissions/capabilities (not
 in sandboxed mode). Do not "try sandbox first" — run them unsandboxed from the
 start.
 
-## Transparency
+## Talking to the user
 
-Always inform the user before running `wade` commands, reviews, or
-session lifecycle operations. Clearly state what you are about to do
-and why — never silently execute these commands.
-
-When starting a workflow step, announce it:
-  "I'm now syncing your branch with main..."
-
-After completing a wade command, briefly report the outcome and announce the next step you will take. The next step depends on where you are in the workflow — for example:
-  "Sync complete — your branch is up to date with main. Now running `wade review-pr-comments-session done`..."
-  "Push complete — PR updated. Now presenting the workflow recap and suggesting you exit..."
+Inform the user before running `wade`/`gh` commands, reviews, or lifecycle
+operations — say what you're doing and why; never run them silently. Announce
+each step as you start it, and after each command report the outcome and the
+next step you'll take.
 
 {user_interaction_prompt}
 - After presenting the recap and state: "Want any further changes, or is the session complete?"
@@ -41,42 +35,33 @@ Always use `wade task create` for interactive issue creation.
 
 ## Project Knowledge
 
-Read @.claude/skills/knowledge/SKILL.md for knowledge operations (search,
-tagging, rating, adding entries).
-
-Before addressing review comments, search for knowledge relevant to the files
-and topics being reviewed (do not dump all entries). Past gotchas about the
-files you're editing matter most here. **Rating is required for each entry you
-open and evaluate** — not per search call. See the decision tree in
-@.claude/skills/knowledge/SKILL.md for how to decide between up, down, or no
-rating.
+Before addressing comments, search for knowledge about the files and topics being
+reviewed (do not dump all entries) — past gotchas about the files you're editing
+matter most here. Rating is required for each entry you open and evaluate. See
+@.claude/skills/knowledge/SKILL.md for search syntax and the rating decision tree.
 
 ## First action: check your context
 
 Run `wade review-pr-comments-session check` as your **first action**:
 
 - `IN_WORKTREE` — you may proceed with work (code changes, commits, etc.)
-- `IN_MAIN_CHECKOUT` — **editing any source file is forbidden**. Tell the
-  human to run `wade review pr-comments <issue>` from the main checkout.
+- `IN_MAIN_CHECKOUT` — **editing any source file is forbidden**. Tell the human
+  to run `wade review pr-comments <issue>` from the main checkout.
 - `NOT_IN_GIT_REPO` — you are not inside a git repository.
 
 ## Fetching review comments
 
-Use `wade review-pr-comments-session fetch <issue-number>` to fetch all unresolved PR review
-comments. This outputs formatted markdown with:
-- Comments grouped by file
-- CodeRabbit AI-agent prompts extracted and highlighted
-- Thread IDs for resolution
-
-**Run this command first** to understand what needs to be addressed.
+Run `wade review-pr-comments-session fetch <issue-number>` **first** to fetch all
+unresolved PR review comments as formatted markdown — comments grouped by file,
+CodeRabbit AI-agent prompts highlighted, and thread IDs for resolution.
 
 ## Addressing comments
 
 ### Verify before fixing
 
 **Always verify each finding against the current code before fixing it.**
-Automated review tools (CodeRabbit, etc.) can be wrong — they may flag code
-that is actually correct, or suggest changes that don't apply.
+Automated review tools (CodeRabbit, etc.) can be wrong — they may flag code that
+is actually correct, or suggest changes that don't apply.
 
 1. Read the referenced file and line
 2. Understand the reviewer's concern
@@ -85,20 +70,15 @@ that is actually correct, or suggest changes that don't apply.
 
 ### CodeRabbit comments
 
-CodeRabbit comments include a `🤖 Prompt for AI Agents` section — this is
-the primary instruction to follow. The full comment body provides additional
-context (rationale, proposed diffs, etc.) but the AI-agent prompt is the
-actionable instruction.
-
-Severity indicators:
-- 🟠 **Major** — likely a bug or significant issue. Prioritize these.
-- 🔵 **Trivial** — style or minor improvement. Fix if straightforward.
+CodeRabbit comments include a `🤖 Prompt for AI Agents` section — this is the
+primary instruction to follow; the full comment body is additional context.
+Severity: 🟠 **Major** (likely a bug — prioritize) / 🔵 **Trivial** (style — fix
+if straightforward).
 
 ### Human comments
 
-Human reviewer comments use the full comment body as the instruction.
-Follow reviewer intent — ask clarifying questions in your commit message
-if the request is ambiguous.
+Human reviewer comments use the full comment body as the instruction. Follow
+reviewer intent — note clarifying questions in your commit message if ambiguous.
 
 ### Grouping changes
 
@@ -107,26 +87,23 @@ cohesive — don't mix unrelated fixes.
 
 ## Resolving threads
 
-After addressing a review comment, resolve the corresponding thread on GitHub:
+After addressing a comment, resolve its thread (the thread ID comes from
+`fetch`):
 
 ```bash
 wade review-pr-comments-session resolve <thread-node-id>
 ```
 
-The thread ID is included in the output of `wade review-pr-comments-session fetch`.
-
 ## Commit conventions
 
-Use [Conventional Commits](https://www.conventionalcommits.org/) format:
-
-- `fix: address review comment — <brief description>`
-- `fix: address review comments` (for multiple related fixes)
-- `refactor: address review feedback on <component>`
+Use [Conventional Commits](https://www.conventionalcommits.org/) format, e.g.
+`fix: address review comment — <brief description>` or
+`refactor: address review feedback on <component>`.
 
 ## Testing
 
-Run the project's test suite after making changes to ensure nothing is broken.
-Add tests if a review comment identified a missing test case.
+Run the project's test suite after making changes. Add tests if a review comment
+identified a missing test case.
 
 ## What NOT to do
 
@@ -134,63 +111,15 @@ Add tests if a review comment identified a missing test case.
 - **Do NOT make unrelated changes** — stay focused on the review feedback
 - **Do NOT create new PRs** — push to the existing branch
 
-## Syncing with main
-
-> **Reference section** — this describes how syncing works and how to handle
-> conflicts. The actual sync is performed as part of the closing workflow below
-> (Step 2). Do not run sync separately.
-
-### Handling sync results
-
-**Exit code 0 — Success**: Branch is up to date with main. Proceed to closing.
-
-**Exit code 2 — Conflict**: The merge is paused due to conflicts:
-1. Run `git diff --name-only --diff-filter=U` to list conflicted files
-2. Read each conflicted file — understand both sides of the conflict
-3. Resolve the conflict markers in each file
-4. Stage only the resolved files: `git add <file1> <file2> ...`
-5. Complete the merge: `git commit --no-edit`
-6. Re-run `wade review-pr-comments-session sync --json` to verify clean
-
-**Exit code 4 — Pre-flight failure**: Report the issue and suggest how to fix it.
-
-## PR summary
-
-Before closing the session, write **`PR-SUMMARY.md`** in the worktree root.
-`wade review-pr-comments-session done` reads this file to update the PR body.
-
-> **Never commit this file** — it is a session artifact (already in `.gitignore`).
->
-> **Completion reminder:** on Stop-capable tools, if you end your turn while
-> `PR-SUMMARY.md` is still missing, a Stop hook will remind you once to write it
-> and run `done`. This is a safety net, not an error — disregard it if you are
-> pausing to ask a question or are still mid-task.
-
-### Format
-
-```markdown
-## What was addressed
-[Summary of review comments handled]
-
-## Changes
-- Fixed X per reviewer feedback
-- Resolved CodeRabbit finding on Y
-
-## Remaining
-[Any threads intentionally left unresolved, with reasoning]
-```
-
 ## Closing the session
 
 **NEVER** create Pull Requests manually (`gh pr create`) or push branches
-directly.
+directly. Follow these steps in order:
 
-To finalize your work, follow these steps in order:
-
-**Step 1 — Write PR summary:**
-
-Write `PR-SUMMARY.md` in the worktree root (see format above). If the file
-already exists, update it.
+**Step 1 — Write PR summary:** write `PR-SUMMARY.md` in the worktree root (update
+if it exists) — cover what was addressed, the changes made, and any threads left
+unresolved with reasoning. `done` reads it to update the PR body. Never commit
+this file; it is a gitignored session artifact.
 
 **Step 2 — Sync with main:**
 
@@ -198,54 +127,24 @@ already exists, update it.
 wade review-pr-comments-session sync --json
 ```
 
+Exit 0 means you're up to date — proceed. For any conflict or error, see
+@.claude/skills/review-pr-comments-session/reference/recovery.md.
+
 **Step 3 — Done:**
 
 ```bash
 wade review-pr-comments-session done
 ```
 
-`wade review-pr-comments-session done` pushes changes to the existing PR branch.
+`done` pushes changes to the existing PR branch. This is a **mandatory** step; if
+it fails, debug and fix it — do NOT bypass.
 
-This is a **mandatory** completion step. If it fails, debug and fix the error —
-do NOT bypass it.
-
-**Step 4 — Present results to the user:**
-
-Provide a brief **workflow recap** and **current state summary**, then suggest
-the user exits the session.
-
-Workflow recap (list only the steps you actually performed):
-- Fetched review comments (`wade review-pr-comments-session fetch`)
-- Addressed N comment(s), resolved N thread(s)
-- Wrote PR-SUMMARY.md
-- Synced with main (`wade review-pr-comments-session sync`)
-- Pushed changes (`wade review-pr-comments-session done`)
-
-Current state:
-- PR #{number} has been updated at {url}
-- {N} review thread(s) resolved, {M} remaining (if any)
-
-What happens next:
-- After you exit, wade will continue monitoring the PR
-- Reviewers will be notified of your changes automatically
-
-Use your tool's native question component to ask: "Want any further changes, or is the session complete?" Apply them and repeat Steps 1–4 if so. Otherwise, suggest the user exits so wade can continue the workflow.
-
-## Task Tracking
-
-At the start of this session, use your tool's native task/todo tracking
-mechanism to populate a checklist with the workflow steps below. This ensures
-you complete every mandatory step and the user can track progress.
-
-- [ ] Run `wade review-pr-comments-session check`
-- [ ] Fetch review comments (`wade review-pr-comments-session fetch`)
-- [ ] Search relevant knowledge (`wade knowledge get --search <topic>` or `wade knowledge get --tag <tag>`)
-- [ ] Rate evaluated knowledge entries `up/down` when appropriate (`wade knowledge rate <id> up/down` per the decision tree in knowledge skill); otherwise intentionally leave them unrated
-- [ ] Address each review comment (add each as a separate item)
-- [ ] Write PR-SUMMARY.md
-- [ ] Sync with main (`wade review-pr-comments-session sync --json`)
-- [ ] Close session (`wade review-pr-comments-session done`)
-- [ ] Present results and suggest exit
+**Step 4 — Present results:** give a brief **workflow recap** (only the steps you
+performed) and **current state** (PR number/URL, threads resolved and remaining),
+then note what's next (wade keeps monitoring the PR; reviewers are notified of
+your changes). Then ask (native question component): "Want any further changes,
+or is the session complete?" — apply and repeat Steps 1–4 if so, else suggest the
+user exits.
 
 ## Skills reference
 
