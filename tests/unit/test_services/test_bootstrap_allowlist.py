@@ -218,88 +218,162 @@ class TestBootstrapCursorAllowlistPropagation:
 
 
 class TestBootstrapPlanMode:
-    """Tests that bootstrap_worktree(plan_mode=True) installs guard hooks."""
+    """bootstrap_worktree installs ``wade-hook`` guard configs (no copied scripts)."""
 
-    def test_plan_mode_installs_guard_hooks(self, tmp_path: Path) -> None:
-        """plan_mode=True installs guard script and configs for all tools."""
-        worktree_path = tmp_path / "worktree"
-        worktree_path.mkdir()
-        repo_root = tmp_path / "repo"
-        repo_root.mkdir()
-
-        config = ProjectConfig(
+    def _config(self) -> ProjectConfig:
+        return ProjectConfig(
             project=ProjectSettings(),
             hooks=HooksConfig(),
             permissions=PermissionsConfig(),
         )
 
-        with patch("subprocess.run"):
-            bootstrap_worktree(worktree_path, config, repo_root, plan_mode=True)
+    def _claude_hook_commands(self, worktree_path: Path) -> list[str]:
+        data = json.loads((worktree_path / ".claude" / "settings.json").read_text("utf-8"))
+        commands: list[str] = []
+        for event_entries in data["hooks"].values():  # PreToolUse, Stop, ...
+            for entry in event_entries:
+                for hook in entry["hooks"]:
+                    assert hook["type"] == "command"
+                    commands.append(hook["command"])
+        return commands
 
-        # Guard script should be copied to all tool hook dirs
+    def test_plan_mode_installs_wade_hook_configs(self, tmp_path: Path) -> None:
+        """plan_mode=True wires each tool's PreToolUse hook to ``wade-hook --guard plan``."""
+        worktree_path = tmp_path / "worktree"
+        worktree_path.mkdir()
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        with patch("subprocess.run"):
+            bootstrap_worktree(worktree_path, self._config(), repo_root, plan_mode=True)
+
+        # No standalone guard scripts are copied anymore.
         for tool_dir in [".claude/hooks", ".cursor/hooks", ".copilot/hooks"]:
-            guard = worktree_path / tool_dir / "plan_write_guard.py"
-            assert guard.is_file(), f"Guard script missing in {tool_dir}"
+            assert not (worktree_path / tool_dir / "plan_write_guard.py").exists()
+            assert not (worktree_path / tool_dir / "worktree_guard.py").exists()
 
-        # Hook configs should exist
-        claude_settings = worktree_path / ".claude" / "settings.json"
-        assert claude_settings.is_file()
-        data = json.loads(claude_settings.read_text(encoding="utf-8"))
-        assert "hooks" in data
-        assert "PreToolUse" in data["hooks"]
+        # Claude config points PreToolUse at the lean `wade-hook` entry point.
+        commands = self._claude_hook_commands(worktree_path)
+        assert commands, "no PreToolUse hook installed"
+        assert any(
+            "wade-hook" in c and "--guard plan" in c and "--tool claude" in c for c in commands
+        )
 
-        # Verify hook format is correct: array of objects with type and command
-        pre_tool_use_hooks = data["hooks"]["PreToolUse"]
-        assert isinstance(pre_tool_use_hooks, list)
-        assert len(pre_tool_use_hooks) > 0
-        for hook_entry in pre_tool_use_hooks:
-            assert isinstance(hook_entry, dict)
-            assert "hooks" in hook_entry
-            assert isinstance(hook_entry["hooks"], list)
-            for hook in hook_entry["hooks"]:
-                assert isinstance(hook, dict), "Hook must be an object, not a string"
-                assert "type" in hook
-                assert hook["type"] == "command"
-                assert "command" in hook
-                assert "plan_write_guard.py" in hook["command"]
+        # Every tool with a PreToolUse guard (incl. Codex — plan guard is finer
+        # than any sandbox) gets a config. Antigravity CLI is intentionally not
+        # given a PreToolUse guard (see _install_guard_hooks), so no .agents
+        # config is written here.
+        assert (worktree_path / ".cursor" / "hooks.json").is_file()
+        assert (worktree_path / ".github" / "hooks" / "hooks.json").is_file()
+        assert (worktree_path / ".codex" / "hooks.json").is_file()
 
-        cursor_hooks = worktree_path / ".cursor" / "hooks.json"
-        assert cursor_hooks.is_file()
-
-        copilot_hooks = worktree_path / ".github" / "hooks" / "hooks.json"
-        assert copilot_hooks.is_file()
-
-    def test_plan_mode_false_installs_worktree_guard_hooks(self, tmp_path: Path) -> None:
-        """plan_mode=False (default) installs worktree guard hooks, not plan guard hooks."""
+    def test_worktree_mode_installs_wade_hook_configs(self, tmp_path: Path) -> None:
+        """Default (worktree) mode wires ``wade-hook --guard worktree`` for non-sandbox tools."""
         worktree_path = tmp_path / "worktree"
         worktree_path.mkdir()
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
 
-        config = ProjectConfig(
-            project=ProjectSettings(),
-            hooks=HooksConfig(),
-            permissions=PermissionsConfig(),
+        with patch("subprocess.run"):
+            bootstrap_worktree(worktree_path, self._config(), repo_root)
+
+        assert not (worktree_path / ".claude" / "hooks" / "worktree_guard.py").exists()
+
+        commands = self._claude_hook_commands(worktree_path)
+        assert any(
+            "wade-hook" in c and "--guard worktree" in c and "--tool claude" in c for c in commands
         )
+        assert (worktree_path / ".cursor" / "hooks.json").is_file()
+        assert (worktree_path / ".github" / "hooks" / "hooks.json").is_file()
+
+    def test_cursor_write_guard_is_fail_closed(self, tmp_path: Path) -> None:
+        """Cursor's write guard sets failClosed (fail-open by default); Stop stays fail-open."""
+        worktree_path = tmp_path / "worktree"
+        worktree_path.mkdir()
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
 
         with patch("subprocess.run"):
-            bootstrap_worktree(worktree_path, config, repo_root)
+            bootstrap_worktree(worktree_path, self._config(), repo_root)
 
-        # Plan guard script should NOT be created
-        plan_guard = worktree_path / ".claude" / "hooks" / "plan_write_guard.py"
-        assert not plan_guard.exists()
+        cursor = json.loads((worktree_path / ".cursor" / "hooks.json").read_text("utf-8"))
+        pre = cursor["preToolUse"]
+        assert pre and all(entry.get("failClosed") is True for entry in pre)
+        # The Stop hook must NOT be fail-closed (it must never trap the agent).
+        for entry in cursor.get("stop", []):
+            assert entry.get("failClosed") is not True
 
-        # Worktree guard script SHOULD be created
-        worktree_guard = worktree_path / ".claude" / "hooks" / "worktree_guard.py"
-        assert worktree_guard.is_file()
+    def test_worktree_guard_skipped_for_sandboxed_codex(self, tmp_path: Path) -> None:
+        """Codex hard-sandboxes writes, so the worktree guard is skipped (but plan guard is not)."""
+        worktree_path = tmp_path / "worktree"
+        worktree_path.mkdir()
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
 
-        # Cursor hooks.json should exist (worktree guard)
-        cursor_hooks = worktree_path / ".cursor" / "hooks.json"
-        assert cursor_hooks.is_file()
+        with patch("subprocess.run"):
+            bootstrap_worktree(worktree_path, self._config(), repo_root)  # worktree mode
 
-        # Copilot hooks.json should exist (worktree guard)
-        copilot_hooks = worktree_path / ".github" / "hooks" / "hooks.json"
-        assert copilot_hooks.is_file()
+        # Codex writes .codex/hooks.json for the Stop hook, but the worktree guard
+        # is skipped (native sandbox). Assert on Codex's own config, not Claude's.
+        codex_config = (worktree_path / ".codex" / "hooks.json").read_text("utf-8")
+        assert "--guard worktree" not in codex_config
+        assert "session-complete" in codex_config
+
+    def test_codex_hooks_feature_flag_enabled(self, tmp_path: Path) -> None:
+        """crossby's Codex writer enables [features].codex_hooks so hooks load."""
+        import tomllib
+
+        worktree_path = tmp_path / "worktree"
+        worktree_path.mkdir()
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        with patch("subprocess.run"):
+            bootstrap_worktree(worktree_path, self._config(), repo_root)
+
+        config = worktree_path / ".codex" / "config.toml"
+        assert config.is_file(), "Codex hooks are inert without .codex/config.toml"
+        parsed = tomllib.loads(config.read_text("utf-8"))
+        assert parsed["features"]["codex_hooks"] is True
+
+    def test_stop_hook_installed_for_implement_not_plan(self, tmp_path: Path) -> None:
+        """Implement/review sessions install a Stop completion hook; plan sessions do not."""
+        # Implement (worktree) mode → Stop hook present for Stop-capable Claude.
+        wt = tmp_path / "impl"
+        wt.mkdir()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        with patch("subprocess.run"):
+            bootstrap_worktree(wt, self._config(), repo)
+        commands = self._claude_hook_commands(wt)
+        assert any(
+            "wade-hook stop --guard session-complete" in c and "--tool claude" in c
+            for c in commands
+        )
+
+        # Plan mode → no Stop hook.
+        wt2 = tmp_path / "plan"
+        wt2.mkdir()
+        with patch("subprocess.run"):
+            bootstrap_worktree(wt2, self._config(), repo, plan_mode=True)
+        commands2 = self._claude_hook_commands(wt2)
+        assert not any("session-complete" in c for c in commands2)
+
+    def test_stop_hook_installed_for_antigravity_cli(self, tmp_path: Path) -> None:
+        """agy supports_stop_hook=True, so its Stop hook lands in .agents/hooks.json."""
+        wt = tmp_path / "impl"
+        wt.mkdir()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        with patch("subprocess.run"):
+            bootstrap_worktree(wt, self._config(), repo)
+        agy_config = wt / ".agents" / "hooks.json"
+        assert agy_config.is_file(), "agy Stop hook config should be written"
+        body = agy_config.read_text("utf-8")
+        # agy's Stop handlers sit directly under a "Stop" key (no matcher wrapper).
+        assert "Stop" in body
+        assert "wade-hook stop --guard session-complete" in body
+        assert "--tool antigravity-cli" in body
 
 
 class TestBootstrapPointerInjection:

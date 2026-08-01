@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.37.0] — 2026-08-01
+
+### Features
+
+- modernize AI-tool hook integration via crossby runtime contract (#320) (76e8ca2)
+
 ## [v0.36.0] — 2026-07-25
 
 ### Features

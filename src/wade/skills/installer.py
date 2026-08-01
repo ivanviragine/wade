@@ -118,24 +118,29 @@ MANAGED_SKILL_NAMES: set[str] = set(SKILL_FILES) | _LEGACY_SKILLS
 # Cross-tool directories that get symlinked to .claude/skills
 CROSS_TOOL_DIRS = [".github/skills", ".agents/skills", ".cursor/skills"]
 
-# Wade-managed plan guard hook files that should never be committed.
+# LEGACY: standalone guard scripts that older wade versions copied into each
+# worktree's ``.{tool}/hooks/`` dir. Guards are now the versioned ``wade hook``
+# entry point (no copied scripts), but these paths are still gitignored and
+# flagged-if-tracked so worktrees created by an older wade get cleaned up.
 PLAN_GUARD_HOOK_FILES = [
     ".claude/hooks/plan_write_guard.py",
     ".cursor/hooks/plan_write_guard.py",
     ".copilot/hooks/plan_write_guard.py",
 ]
-
-# Wade-managed worktree guard hook files that should never be committed.
 WORKTREE_GUARD_HOOK_FILES = [
     ".claude/hooks/worktree_guard.py",
     ".cursor/hooks/worktree_guard.py",
     ".copilot/hooks/worktree_guard.py",
 ]
 
-# Wade-managed hook config files written alongside hook scripts — never committed.
+# Wade-managed hook config files written per-session by crossby's hook writers
+# (one per supported tool) — never committed. ``.agents/hooks.json`` is
+# Antigravity CLI's Stop-hook config (crossby's AntigravityCLIHooksWriter).
 HOOK_CONFIG_FILES = [
     ".cursor/hooks.json",
+    ".agents/hooks.json",
     ".github/hooks/hooks.json",
+    ".codex/hooks.json",
 ]
 
 # --- Command-to-skill mapping: which skills each session type needs ---
@@ -172,6 +177,9 @@ def get_worktree_gitignore_entries() -> list[str]:
     # AI tool settings (written per-session to worktrees only)
     entries.append(".claude/settings.json")
     entries.append(".cursor/cli.json")
+    # Codex config — crossby's hook writer sets [features].codex_hooks = true here
+    # per-session so Codex loads the installed hooks; not user content in a worktree.
+    entries.append(".codex/config.toml")
 
     # Session artifacts
     entries.extend(

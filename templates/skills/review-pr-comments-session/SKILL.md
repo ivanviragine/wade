@@ -160,6 +160,11 @@ Before closing the session, write **`PR-SUMMARY.md`** in the worktree root.
 `wade review-pr-comments-session done` reads this file to update the PR body.
 
 > **Never commit this file** — it is a session artifact (already in `.gitignore`).
+>
+> **Completion reminder:** on Stop-capable tools, if you end your turn while
+> `PR-SUMMARY.md` is still missing, a Stop hook will remind you once to write it
+> and run `done`. This is a safety net, not an error — disregard it if you are
+> pausing to ask a question or are still mid-task.
 
 ### Format
 

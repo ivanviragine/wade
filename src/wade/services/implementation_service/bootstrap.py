@@ -31,6 +31,7 @@ __all__ = [
     "_get_info_exclude_path",
     "_identify_session_dirty_files",
     "_install_guard_hooks",
+    "_install_stop_hook",
     "_resolve_worktrees_dir",
     "_suppress_pointer_artifacts",
     "bootstrap_worktree",
@@ -159,46 +160,146 @@ def write_plan_md(
     return plan_path
 
 
+# Canonical write-family tool names the guard scopes to; crossby's hook writers
+# translate these to each tool's native tool names + matcher.
+_GUARD_WRITE_TOOLS = ["Edit", "Write", "Delete", "NotebookEdit"]
+
+
+def _log_sync_result(result: object, tool_id: object) -> None:
+    """Surface a crossby ``SyncResult`` — warn on writer errors, else stay quiet.
+
+    Hook writers return a ``SyncResult`` describing what happened. A silently
+    discarded ``action == "error"`` (e.g. a pre-existing malformed config file)
+    would leave a session unprotected without any signal, so log those; the
+    ``message`` also carries any per-tool manual-fix notes worth recording.
+    """
+    action = getattr(result, "action", None)
+    message = getattr(result, "message", "") or ""
+    if action == "error":
+        logger.warning(
+            "implementation.hook_sync_error",
+            tool=getattr(tool_id, "value", str(tool_id)),
+            detail=message,
+        )
+    elif message:
+        logger.debug(
+            "implementation.hook_sync_note",
+            tool=getattr(tool_id, "value", str(tool_id)),
+            detail=message,
+        )
+
+
 def _install_guard_hooks(
     worktree_path: Path,
     *,
     guard_type: str,
 ) -> None:
-    """Copy a guard script and configure all AI tool hooks.
+    """Install a wade write-guard hook for ``guard_type`` into each tool's config.
+
+    Points every tool's ``pre_tool_use`` hook at the versioned ``wade hook``
+    entry point instead of copying a standalone script into the worktree — so the
+    guard logic can never drift from the installed wade version. Per-tool config
+    format and dialect are handled by crossby's hook writers; the decision logic
+    lives in ``wade hook`` / ``wade.hooks.policies``.
+
+    The worktree-containment guard is **skipped** for tools that hard-sandbox
+    writes (e.g. Codex ``--sandbox workspace-write``), where it is redundant. The
+    plan guard is **always** installed — it is finer-grained than any directory
+    sandbox (it must block source writes *inside* the workspace).
 
     Args:
         worktree_path: Worktree directory.
-        guard_type: ``"worktree"`` or ``"plan"`` — selects the guard script
-            and the matching configure function on each tool module.
+        guard_type: ``"worktree"`` or ``"plan"``.
     """
-    from wade.hooks import get_guard_script_path, get_worktree_guard_script_path
+    import shlex
 
-    if guard_type == "worktree":
-        guard_src = get_worktree_guard_script_path()
-        script_name = "worktree_guard.py"
-    else:
-        guard_src = get_guard_script_path()
-        script_name = "plan_write_guard.py"
+    from crossby.ai_tools import AbstractAITool
+    from crossby.models.ai import AIToolID
+    from crossby.models.config import HookEntry
+    from crossby.sync.base import SyncData
+    from crossby.sync.hooks import (
+        ClaudeHooksWriter,
+        CodexHooksWriter,
+        CopilotHooksWriter,
+        CursorHooksWriter,
+    )
 
-    tool_dirs = [".claude/hooks", ".cursor/hooks", ".copilot/hooks"]
-    for tool_dir in tool_dirs:
-        dest_dir = worktree_path / tool_dir
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(guard_src, dest_dir / script_name)
-
-    from crossby.config import claude_allowlist, copilot_hooks, cursor_hooks
-
-    configure_fns = [
-        (claude_allowlist, ".claude"),
-        (cursor_hooks, ".cursor"),
-        (copilot_hooks, ".copilot"),
+    # Antigravity CLI (which replaced Gemini) is intentionally absent here even
+    # though crossby 0.12 ships an AntigravityCLIHooksWriter: a PreToolUse guard
+    # is scoped by a tool-name matcher (``_GUARD_WRITE_TOOLS`` — Claude names),
+    # which would not match agy's tool names, so the hook would be an inert no-op
+    # that merely *looks* like protection. agy's own bundled plugin registers no
+    # PreToolUse hook either, so that path is best-effort there. Write containment
+    # for agy is therefore left to its workspace confinement; the reliable
+    # enforcement wade installs for agy is the Stop hook (see _install_stop_hook).
+    writers = [
+        (AIToolID.CLAUDE, ClaudeHooksWriter()),
+        (AIToolID.CURSOR, CursorHooksWriter()),
+        (AIToolID.COPILOT, CopilotHooksWriter()),
+        (AIToolID.CODEX, CodexHooksWriter()),
     ]
-    hook_fn_name = f"configure_{guard_type}_hooks"
-    for module, tool_dir_prefix in configure_fns:
-        fn = getattr(module, hook_fn_name)
-        fn(worktree_path, worktree_path / tool_dir_prefix / "hooks" / script_name)
+    root = shlex.quote(str(worktree_path))
+    for tool_id, writer in writers:
+        caps = AbstractAITool.get(tool_id).capabilities()
+        if guard_type == "worktree" and caps.sandboxes_writes:
+            # Native sandbox already confines writes to the worktree.
+            continue
+        command = (
+            f"wade-hook pre_tool_use --guard {guard_type} --tool {tool_id.value} --root {root}"
+        )
+        # fail_closed: block the write if the hook itself crashes/times out. Only
+        # Cursor honors this (it defaults to fail-open, which silently defeats a
+        # security guard); other writers ignore the field. Deliberately not set
+        # on the Stop hook, which must stay fail-open so a bug never traps the agent.
+        hook = HookEntry(
+            event="pre_tool_use",
+            tools=_GUARD_WRITE_TOOLS,
+            command=command,
+            fail_closed=True,
+        )
+        _log_sync_result(writer.sync(SyncData(hooks=[hook]), worktree_path), tool_id)
 
     logger.info(f"implementation.{guard_type}_guard_hooks_installed", path=str(worktree_path))
+
+
+def _install_stop_hook(worktree_path: Path) -> None:
+    """Install a Stop-hook workflow-completion reminder into each capable tool.
+
+    On session Stop, ``wade hook stop --guard session-complete`` nudges (once) if
+    ``PR-SUMMARY.md`` is missing — enforcing the closing steps rather than relying
+    on the skill checklist. Installed only for tools that fire a blocking Stop
+    hook (``supports_stop_hook`` — Claude/Codex/Cursor/Antigravity CLI); Copilot
+    degrades to the skill's closing-steps checklist. Merged alongside the
+    PreToolUse write guard by crossby's hook writers.
+    """
+    import shlex
+
+    from crossby.ai_tools import AbstractAITool
+    from crossby.models.ai import AIToolID
+    from crossby.models.config import HookEntry
+    from crossby.sync.base import SyncData
+    from crossby.sync.hooks import (
+        AntigravityCLIHooksWriter,
+        ClaudeHooksWriter,
+        CodexHooksWriter,
+        CursorHooksWriter,
+    )
+
+    writers = [
+        (AIToolID.CLAUDE, ClaudeHooksWriter()),
+        (AIToolID.CURSOR, CursorHooksWriter()),
+        (AIToolID.CODEX, CodexHooksWriter()),
+        (AIToolID.ANTIGRAVITY_CLI, AntigravityCLIHooksWriter()),
+    ]
+    root = shlex.quote(str(worktree_path))
+    for tool_id, writer in writers:
+        if not AbstractAITool.get(tool_id).capabilities().supports_stop_hook:
+            continue
+        command = f"wade-hook stop --guard session-complete --tool {tool_id.value} --root {root}"
+        hook = HookEntry(event="stop", tools=[], command=command)
+        _log_sync_result(writer.sync(SyncData(hooks=[hook]), worktree_path), tool_id)
+
+    logger.info("implementation.stop_hook_installed", path=str(worktree_path))
 
 
 def _effective_copy_files(config: ProjectConfig) -> list[str]:
@@ -517,6 +618,11 @@ def bootstrap_worktree(
     # Install file-write guard hooks last so post-create scripts cannot
     # overwrite the guarded config files.
     _install_guard_hooks(worktree_path, guard_type="plan" if plan_mode else "worktree")
+
+    # Implement/review sessions (not plan) also get a Stop-hook completion
+    # reminder that enforces writing PR-SUMMARY.md + running `done` before exit.
+    if not plan_mode:
+        _install_stop_hook(worktree_path)
 
     # Write worktree gitignore block AFTER all file generation so the entry
     # list is complete (skills, hooks, settings, pointer are all in place).
