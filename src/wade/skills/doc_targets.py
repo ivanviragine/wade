@@ -8,17 +8,15 @@ from pathlib import Path
 _ROOT_DOC_FILES = ["README.md", "AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md"]
 
 # Marker files/dirs (relative to project root) that indicate docs/ is generated
-# build output rather than hand-authored source. Add new site generators here.
+# build output rather than hand-authored source. Deliberately excludes generator
+# *config* files (mkdocs.yml, docusaurus.config.js, docs/conf.py, docs/.vitepress,
+# docs/book.toml, docs/_config.yml) — under each tool's default convention those
+# mark docs/ as hand-authored SOURCE (MkDocs/Docusaurus/Sphinx/VitePress/mdBook/
+# Jekyll all build docs/ into a separate output dir by default), so treating them
+# as "generated" would exclude docs/ for the common case this feature most needs
+# to reach. Add new markers here only when they identify actual build output.
 _GENERATED_DOCS_MARKERS = [
-    "mkdocs.yml",
-    "mkdocs.yaml",
-    "docs/conf.py",
     "docs/_build",
-    "docs/.vitepress",
-    "docs/book.toml",
-    "docs/_config.yml",
-    "docusaurus.config.js",
-    "docusaurus.config.ts",
 ]
 
 
@@ -32,9 +30,12 @@ def detect_doc_targets(project_root: Path) -> list[str]:
     or a bare ``docs``/``docs/`` entry in ``.gitignore``. The ``.gitignore``
     check is a deliberately narrow heuristic, not exhaustive: it matches only a
     bare ``docs``, ``docs/``, ``/docs``, or ``/docs/`` line and will not catch
-    patterns like ``docs/**``, ``**/docs/``, or a nested ``apps/docs/``. The
-    marker-file check is the primary defense; the ``.gitignore`` check is a
-    cheap second signal.
+    patterns like ``docs/**``, ``**/docs/``, or a nested ``apps/docs/``. Both
+    checks are intentionally conservative — a doc-site generator's *config*
+    file (``mkdocs.yml``, ``docusaurus.config.js``, ``docs/conf.py``, etc.) is
+    NOT treated as a generated marker, because under each tool's default
+    convention that config indicates ``docs/`` is hand-authored source, not
+    build output.
     """
     targets = [name for name in _ROOT_DOC_FILES if (project_root / name).is_file()]
 

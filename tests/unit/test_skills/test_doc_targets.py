@@ -47,30 +47,43 @@ class TestDetectDocTargetsDocsDir:
     def test_missing_docs_dir_not_included(self, tmp_path: Path) -> None:
         assert "docs/" not in detect_doc_targets(tmp_path)
 
+    def test_generated_docs_skipped_via_marker(self, tmp_path: Path) -> None:
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "_build").mkdir()
+
+        assert "docs/" not in detect_doc_targets(tmp_path)
+
     @pytest.mark.parametrize(
-        "marker",
+        ("marker", "is_dir"),
         [
-            "mkdocs.yml",
-            "mkdocs.yaml",
-            "docs/conf.py",
-            "docs/_build",
-            "docs/.vitepress",
-            "docs/book.toml",
-            "docs/_config.yml",
-            "docusaurus.config.js",
-            "docusaurus.config.ts",
+            ("mkdocs.yml", False),
+            ("mkdocs.yaml", False),
+            ("docs/conf.py", False),
+            ("docs/.vitepress", True),
+            ("docs/book.toml", False),
+            ("docs/_config.yml", False),
+            ("docusaurus.config.js", False),
+            ("docusaurus.config.ts", False),
         ],
     )
-    def test_generated_docs_skipped_via_marker(self, tmp_path: Path, marker: str) -> None:
+    def test_generator_config_files_do_not_suppress_docs(
+        self, tmp_path: Path, marker: str, is_dir: bool
+    ) -> None:
+        """Under each generator's default convention these mark docs/ as hand-
+        authored source (MkDocs/Docusaurus/Sphinx/VitePress/mdBook/Jekyll all
+        build docs/ into a separate output dir by default) — they must never
+        cause docs/ to be excluded from the mandatory doc-update step.
+        """
         (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "guide.md").write_text("x")
         marker_path = tmp_path / marker
         marker_path.parent.mkdir(parents=True, exist_ok=True)
-        if marker.endswith("_build") or marker.endswith(".vitepress"):
+        if is_dir:
             marker_path.mkdir()
         else:
             marker_path.write_text("x")
 
-        assert "docs/" not in detect_doc_targets(tmp_path)
+        assert "docs/" in detect_doc_targets(tmp_path)
 
     @pytest.mark.parametrize("entry", ["docs", "docs/", "/docs", "/docs/"])
     def test_generated_docs_skipped_via_gitignore(self, tmp_path: Path, entry: str) -> None:

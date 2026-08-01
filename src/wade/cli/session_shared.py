@@ -8,6 +8,13 @@ import typer
 
 from wade.models.session import SyncEventType, SyncResult
 
+# Printed by both `implementation-session done` and `review-pr-comments-session
+# done` after a successful push, mirroring the existing review advisory pattern.
+DOC_PASS_ADVISORY = (
+    "Documentation pass not confirmed — re-read what this session changed and "
+    "update docs (or state why none were needed) if you haven't already."
+)
+
 
 def run_check() -> None:
     """Verify worktree safety for AI agents.
