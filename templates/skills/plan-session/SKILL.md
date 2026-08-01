@@ -60,7 +60,7 @@ in a planning session.
 <!-- markdownlint-disable-next-line MD029 -->
 9. **Validate** — run `wade plan-session done <plan_dir>` (the temp dir from your prompt). If it exits with errors, fix each reported issue and re-run until it passes. Warnings are informational and do not block.
 <!-- markdownlint-disable-next-line MD029 -->
-10. **Present results and suggest exit** — give a brief workflow recap (only the steps you performed: wrote plan file(s), ran `wade review plan`, validated with `wade plan-session done`) and what's next (after exit, wade creates the GitHub issue(s) and draft PR(s); start work with `wade implement <issue-number>`). Then ask (native question component): "Ready to exit?"
+10. **Present results and suggest exit** — give a brief workflow recap (only the steps you performed — e.g. wrote plan file(s), validated with `wade plan-session done`, and, only if `review_plan.enabled` and the review step actually ran, `wade review plan`) and what's next (after exit, wade creates the GitHub issue(s) and draft PR(s); start work with `wade implement <issue-number>`). Then ask (native question component): "Ready to exit?"
 
 You do **not** create issues, implement code, run `wade implement`, `wade implementation-session done`, or `wade implementation-session sync`, or make any code changes. Planning only.
 

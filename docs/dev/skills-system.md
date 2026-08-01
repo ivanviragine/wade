@@ -95,7 +95,7 @@ material is loaded **just-in-time** rather than eagerly.
 Each phase skill points at its reference files with a one-line `@`-pointer (e.g.
 `implementation-session/SKILL.md` points at
 `reference/recovery.md` for sync/catchup conflict handling and
-`reference/pr-summary.md` for the PR-summary format). The `task` skill uses the
+`reference/pr-summary-format.md` for the PR-summary format). The `task` skill uses the
 same pattern with `plan-format.md` + `examples.md`.
 
 Reference files must be registered in `SKILL_FILES` (see [Skill Installation
