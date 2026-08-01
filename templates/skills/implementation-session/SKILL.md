@@ -171,7 +171,7 @@ the PR body. If the file is missing, the PR will have no description.
 
 > **Reference section** — this describes how syncing works and how to handle
 > conflicts. The actual sync is performed as part of the closing workflow below
-> (Step 3). Do not run sync separately.
+> (Step 4). Do not run sync separately.
 
 ### Step 1: Commit your implementation work
 
@@ -227,18 +227,22 @@ To finalize your work, follow these steps in order:
 
 {review_implementation_closing_step}
 
-**Step 2 — Write PR summary:**
+**Step 2 — Documentation pass [MANDATORY]:**
+
+{doc_update_step}
+
+**Step 3 — Write PR summary:**
 
 Write `PR-SUMMARY.md` in the worktree root with a real description of your
 changes (see the format above). If the file already exists, update it.
 
-**Step 3 — Sync with main:**
+**Step 4 — Sync with main:**
 
 ```bash
 wade implementation-session sync --json
 ```
 
-**Step 4 — Done:**
+**Step 5 — Done:**
 
 ```bash
 wade implementation-session done
@@ -251,13 +255,14 @@ it is cleaned up automatically by `implement` after the human merges the PR.
 This is a **mandatory** final step. If `wade implementation-session done` fails, debug and
 fix the error — do NOT bypass it.
 
-**Step 5 — Present results to the user:**
+**Step 6 — Present results to the user:**
 
 Provide a brief **workflow recap** and **current state summary**, then suggest
 the user exits the session.
 
 Workflow recap (list only the steps you actually performed):
 - Ran self-review (`wade review implementation`)
+- Ran documentation pass
 - Wrote PR-SUMMARY.md
 - Synced with main (`wade implementation-session sync`)
 - Pushed and opened/updated PR (`wade implementation-session done`)
@@ -272,7 +277,7 @@ What happens next:
 - To address review feedback later: `wade review pr-comments <issue>`
 - To check PR status: `wade status <issue>`
 
-Use your tool's native question component to ask: "Want any further changes, or is the session complete?" Apply them and repeat Steps 1–5 if so. Otherwise, suggest the user exits so wade can continue the workflow.
+Use your tool's native question component to ask: "Want any further changes, or is the session complete?" Apply them and repeat Steps 1–6 if so. Otherwise, suggest the user exits so wade can continue the workflow.
 
 ### Working on a child issue (sub-issue of a tracking/epic)
 
@@ -330,6 +335,7 @@ you complete every mandatory step and the user can track progress.
 - [ ] Follow the knowledge skill decision tree for evaluated knowledge entries (rate with `wade knowledge rate <id> up/down` when appropriate; otherwise leave the entry unrated)
 - [ ] Implementation tasks from PLAN.md (add each task as a separate item)
 - [ ] Run `wade review implementation` (if `review_implementation.enabled` is not `false`)
+- [ ] Documentation pass — update docs or state why none needed
 - [ ] Capture knowledge (`wade knowledge add`) (if knowledge capture is enabled)
 - [ ] Write PR-SUMMARY.md
 - [ ] Sync with main (`wade implementation-session sync --json`)

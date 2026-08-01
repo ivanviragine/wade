@@ -138,7 +138,7 @@ Add tests if a review comment identified a missing test case.
 
 > **Reference section** — this describes how syncing works and how to handle
 > conflicts. The actual sync is performed as part of the closing workflow below
-> (Step 2). Do not run sync separately.
+> (Step 3). Do not run sync separately.
 
 ### Handling sync results
 
@@ -182,18 +182,22 @@ directly.
 
 To finalize your work, follow these steps in order:
 
-**Step 1 — Write PR summary:**
+**Step 1 — Documentation pass [MANDATORY]:**
+
+{doc_update_step}
+
+**Step 2 — Write PR summary:**
 
 Write `PR-SUMMARY.md` in the worktree root (see format above). If the file
 already exists, update it.
 
-**Step 2 — Sync with main:**
+**Step 3 — Sync with main:**
 
 ```bash
 wade review-pr-comments-session sync --json
 ```
 
-**Step 3 — Done:**
+**Step 4 — Done:**
 
 ```bash
 wade review-pr-comments-session done
@@ -204,7 +208,7 @@ wade review-pr-comments-session done
 This is a **mandatory** completion step. If it fails, debug and fix the error —
 do NOT bypass it.
 
-**Step 4 — Present results to the user:**
+**Step 5 — Present results to the user:**
 
 Provide a brief **workflow recap** and **current state summary**, then suggest
 the user exits the session.
@@ -212,6 +216,7 @@ the user exits the session.
 Workflow recap (list only the steps you actually performed):
 - Fetched review comments (`wade review-pr-comments-session fetch`)
 - Addressed N comment(s), resolved N thread(s)
+- Ran documentation pass
 - Wrote PR-SUMMARY.md
 - Synced with main (`wade review-pr-comments-session sync`)
 - Pushed changes (`wade review-pr-comments-session done`)
@@ -224,7 +229,7 @@ What happens next:
 - After you exit, wade will continue monitoring the PR
 - Reviewers will be notified of your changes automatically
 
-Use your tool's native question component to ask: "Want any further changes, or is the session complete?" Apply them and repeat Steps 1–4 if so. Otherwise, suggest the user exits so wade can continue the workflow.
+Use your tool's native question component to ask: "Want any further changes, or is the session complete?" Apply them and repeat Steps 1–5 if so. Otherwise, suggest the user exits so wade can continue the workflow.
 
 ## Task Tracking
 
@@ -237,6 +242,7 @@ you complete every mandatory step and the user can track progress.
 - [ ] Search relevant knowledge (`wade knowledge get --search <topic>` or `wade knowledge get --tag <tag>`)
 - [ ] Rate evaluated knowledge entries `up/down` when appropriate (`wade knowledge rate <id> up/down` per the decision tree in knowledge skill); otherwise intentionally leave them unrated
 - [ ] Address each review comment (add each as a separate item)
+- [ ] Documentation pass — update docs or state why none needed
 - [ ] Write PR-SUMMARY.md
 - [ ] Sync with main (`wade review-pr-comments-session sync --json`)
 - [ ] Close session (`wade review-pr-comments-session done`)

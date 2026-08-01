@@ -350,3 +350,108 @@ class TestSelectiveSkillInstallation:
         assert not (skills_dir / "implementation-session").exists(), (
             "implementation-session should be pruned when re-bootstrapping with REVIEW_SKILLS"
         )
+
+
+class TestDocUpdateStep:
+    """Tests for the {doc_update_step}/{doc_targets} documentation pass (#360)."""
+
+    def test_expanded_in_implementation_session(self, tmp_git_repo: Path) -> None:
+        """doc_update_step and doc_targets both expand with a concrete file list."""
+        from wade.skills.installer import install_skills
+
+        install_skills(tmp_git_repo, skills=["implementation-session"])
+
+        skill_md = tmp_git_repo / ".claude" / "skills" / "implementation-session" / "SKILL.md"
+        content = skill_md.read_text(encoding="utf-8")
+        assert "{doc_update_step}" not in content, "Placeholder must be expanded"
+        assert "{doc_targets}" not in content, "Nested placeholder must be expanded"
+        assert "**Step 2 — Documentation pass [MANDATORY]:**" in content
+        assert "State the outcome before moving on" in content
+        assert "`README.md`" in content, "tmp_git_repo's README.md must be detected"
+
+    def test_expanded_in_review_pr_comments_session(self, tmp_git_repo: Path) -> None:
+        """doc_update_step and doc_targets both expand in the review-pr-comments skill."""
+        from wade.skills.installer import install_skills
+
+        install_skills(tmp_git_repo, skills=["review-pr-comments-session"])
+
+        skill_md = tmp_git_repo / ".claude" / "skills" / "review-pr-comments-session" / "SKILL.md"
+        content = skill_md.read_text(encoding="utf-8")
+        assert "{doc_update_step}" not in content, "Placeholder must be expanded"
+        assert "{doc_targets}" not in content, "Nested placeholder must be expanded"
+        assert "**Step 1 — Documentation pass [MANDATORY]:**" in content
+        assert "State the outcome before moving on" in content
+        assert "`README.md`" in content, "tmp_git_repo's README.md must be detected"
+
+    def test_no_placeholder_survives_in_self_init_mode(self, tmp_git_repo: Path) -> None:
+        """Self-init mode processes INJECT_SKILLS as copies, so placeholders must expand too."""
+        from wade.skills.installer import install_skills
+
+        install_skills(tmp_git_repo, is_self_init=True, skills=["implementation-session"])
+
+        skill_md = tmp_git_repo / ".claude" / "skills" / "implementation-session" / "SKILL.md"
+        content = skill_md.read_text(encoding="utf-8")
+        assert "{doc_update_step}" not in content
+        assert "{doc_targets}" not in content
+
+    def test_doc_targets_detects_multiple_files_and_docs_dir(self, tmp_git_repo: Path) -> None:
+        """All detected root files plus docs/ appear in the expanded step."""
+        from wade.skills.installer import install_skills
+
+        (tmp_git_repo / "AGENTS.md").write_text("# Agents\n")
+        (tmp_git_repo / "docs").mkdir()
+        (tmp_git_repo / "docs" / "guide.md").write_text("# Guide\n")
+
+        install_skills(tmp_git_repo, skills=["implementation-session"])
+
+        skill_md = tmp_git_repo / ".claude" / "skills" / "implementation-session" / "SKILL.md"
+        content = skill_md.read_text(encoding="utf-8")
+        assert "`README.md`, `AGENTS.md`, `docs/`" in content
+
+    def test_doc_targets_empty_project_uses_fallback_wording(self, tmp_path: Path) -> None:
+        """A project with no detected docs gets generic fallback wording, not an empty list."""
+        from wade.skills.installer import install_skills
+
+        project_root = tmp_path / "empty_project"
+        project_root.mkdir()
+
+        install_skills(project_root, skills=["implementation-session"])
+
+        skill_md = project_root / ".claude" / "skills" / "implementation-session" / "SKILL.md"
+        content = skill_md.read_text(encoding="utf-8")
+        assert "{doc_targets}" not in content
+        assert "the project's documentation, if it has any" in content
+
+    def test_caller_supplied_doc_targets_wins_over_computed(self, tmp_git_repo: Path) -> None:
+        """extra_partials overrides for {doc_targets} take precedence over detection."""
+        from wade.skills.installer import install_skills
+
+        install_skills(
+            tmp_git_repo,
+            skills=["implementation-session"],
+            extra_partials={"{doc_targets}": "`CUSTOM.md`"},
+        )
+
+        skill_md = tmp_git_repo / ".claude" / "skills" / "implementation-session" / "SKILL.md"
+        content = skill_md.read_text(encoding="utf-8")
+        assert "`CUSTOM.md`" in content
+        assert "`README.md`" not in content, "Computed value must not leak through override"
+
+    def test_expand_partials_two_pass_resolves_nested_placeholder(self, tmp_git_repo: Path) -> None:
+        """_expand_partials re-applies extra_partials after file partials expand.
+
+        {doc_update_step} is a file partial whose content contains {doc_targets} —
+        a placeholder that only exists in the string *after* the file partial is
+        substituted in. Without the second extra_partials pass this would leak
+        into the installed skill verbatim.
+        """
+        from wade.skills.installer import _expand_partials, get_skills_templates_dir
+
+        expanded = _expand_partials(
+            "before {doc_update_step} after",
+            get_skills_templates_dir(),
+            extra_partials={"{doc_targets}": "`README.md`"},
+        )
+        assert "{doc_update_step}" not in expanded
+        assert "{doc_targets}" not in expanded
+        assert "`README.md`" in expanded

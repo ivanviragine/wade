@@ -140,6 +140,11 @@ def done(
         except Exception:  # Advisory — must never break a successful completion
             pass
 
+        console.warn(
+            "Documentation pass not confirmed — re-read what this session changed and "
+            "update docs (or state why none were needed) if you haven't already."
+        )
+
         console.info(
             "SESSION COMPLETE — do not make further changes. "
             "Present the workflow recap, current state, and next steps to the user. "

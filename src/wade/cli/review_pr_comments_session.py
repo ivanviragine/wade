@@ -79,6 +79,11 @@ def done(
         from wade.services.review_service import get_review_status
         from wade.ui.console import console
 
+        console.warn(
+            "Documentation pass not confirmed — re-read what this session changed and "
+            "update docs (or state why none were needed) if you haven't already."
+        )
+
         status = get_review_status()
         if status is not None:
             messages = format_review_status_summary(status)

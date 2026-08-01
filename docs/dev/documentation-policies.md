@@ -15,6 +15,8 @@ Every change **must** include documentation updates as part of the implementatio
 
 Do not skip documentation even for "small" changes — a new flag, a renamed option, or a changed default all need docs updates. Documentation is part of "done", not a separate task.
 
+For **inited projects** (the output side, not this repo), the same principle is enforced as an explicit, mandatory closing step in the installed `implementation-session` and `review-pr-comments-session` skills — see `templates/skills/_partials/doc-update-step.md`, injected via `{doc_update_step}`. That step's target file list is detected per project by `src/wade/skills/doc_targets.py`.
+
 ## Full Change Checklist
 
 Before considering any work complete, verify each item:
