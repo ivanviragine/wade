@@ -60,7 +60,13 @@ def _argv_subcommand_path(argv: list[str]) -> list[str]:
 
 def _is_passthrough_subcommand(argv: list[str]) -> bool:
     """Return whether argv targets a passthrough command with exact output contracts."""
-    return _argv_subcommand_path(argv) in (["shell-init"], ["knowledge", "get"])
+    path = _argv_subcommand_path(argv)
+    # ``wade hook`` is invoked by AI tools as a PreToolUse/Stop hook — its stdout
+    # is a machine-read decision payload, so the version banner and update nag
+    # must stay off it regardless of the positional event argument.
+    if path[:1] == ["hook"]:
+        return True
+    return path in (["shell-init"], ["knowledge", "get"])
 
 
 def _should_print_version_banner(invoked_subcommand: str | None, argv: list[str]) -> bool:
@@ -593,6 +599,7 @@ def reviews_alias(
 # --- Register subcommand groups ---
 
 from wade.cli.admin import admin_app  # noqa: E402
+from wade.cli.hook import hook_command  # noqa: E402
 from wade.cli.implementation_session import implementation_session_app  # noqa: E402
 from wade.cli.knowledge import knowledge_app  # noqa: E402
 from wade.cli.plan_session import plan_session_app  # noqa: E402
@@ -650,6 +657,9 @@ app.add_typer(
     help="Project knowledge management.",
     rich_help_panel="Knowledge",
 )
+
+# ``wade hook`` — hidden write-guard entry point invoked by AI tools' hooks.
+app.command("hook", hidden=True)(hook_command)
 
 # Admin commands are registered directly on the root app
 for command in admin_app.registered_commands:

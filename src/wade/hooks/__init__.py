@@ -1,19 +1,14 @@
-"""File-write guard hooks for plan and worktree sessions.
+"""Write-guard policies for AI sessions.
 
-Provides standalone Python guard scripts that block AI tool writes
-to files outside allowed paths.
+The decision logic for wade's write guards lives in :mod:`wade.hooks.policies`
+as pure predicates over a normalized ``crossby.hooks.runtime.HookEvent``. They
+are invoked out-of-process by the ``wade hook`` CLI entry point (see
+:mod:`wade.cli.hook`), which AI tools call from their PreToolUse hooks — the
+per-tool stdin parsing / decision emitting is handled by ``crossby.hooks.runtime``.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
+from wade.hooks.policies import plan_artifact_only, worktree_containment
 
-
-def get_guard_script_path() -> Path:
-    """Return the absolute path to the plan_write_guard.py script."""
-    return Path(__file__).parent / "plan_write_guard.py"
-
-
-def get_worktree_guard_script_path() -> Path:
-    """Return the absolute path to the worktree_guard.py script."""
-    return Path(__file__).parent / "worktree_guard.py"
+__all__ = ["plan_artifact_only", "worktree_containment"]
