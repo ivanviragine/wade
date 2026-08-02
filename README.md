@@ -197,6 +197,32 @@ Adapters, model/effort resolution, and per-tool config (allowlists, hooks) are p
 > workspace in the desktop app; its workflow files are provisioned via the
 > Antigravity CLI's shared `.agents/` layout.
 
+### Session guards
+
+When WADE creates a worktree it installs hooks into whichever tools your project
+uses, so session rules are enforced in code rather than left to the agent to
+honour. Guards are written per-worktree at session start — upgrading WADE is
+enough to pick up improvements, with no re-init or migration.
+
+| Guard | What it blocks |
+|-------|----------------|
+| Worktree containment | Writes that land outside your worktree |
+| Plan-artifact | During `wade plan`, writes to anything but plan artifacts |
+| Session completion | Finishing a session with `PR-SUMMARY.md` missing (nudges once) |
+
+Both write guards cover **shell commands** as well as file edits, so a redirect
+like `printf x > ../other-repo/app.py` is blocked, not just an `Edit` call. Shell
+coverage is best-effort defense-in-depth: it catches ordinary commands, not
+deliberate obfuscation (variable indirection, command substitution, subshells).
+
+| Tool | Write guard | Session-completion guard |
+|------|-------------|--------------------------|
+| Claude Code | ✅ | ✅ |
+| Cursor | ✅ | ✅ |
+| GitHub Copilot | ✅ | ✅ |
+| OpenAI Codex | ✅ shell (writes are sandboxed natively) | ✅ |
+| Antigravity CLI | ✅ | ✅ |
+
 ## Task Providers
 
 WADE can pull tasks from three backends — pick one when you run `wade init`:

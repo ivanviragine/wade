@@ -100,8 +100,9 @@ src/wade/
 │   ├── branch.py        # Branch naming, creation, deletion
 │   ├── sync.py          # Fetch + merge, conflict detection
 │   └── pr.py            # PR creation, merge
-├── hooks/               # Guard policies (invoked via `wade hook`)
-│   └── policies.py      # worktree_containment / plan_artifact_only / session_complete
+├── hooks/               # Guard policies (invoked via `wade hook` / `wade-hook`)
+│   ├── cli.py           # Lean `wade-hook` entry point (dialect maps, guard routing)
+│   └── policies.py      # worktree_containment / plan_artifact_only / shell_containment / session_complete
 ├── skills/              # Skill file management
 │   ├── installer.py     # Install/update/remove skill files
 │   └── pointer.py       # AGENTS.md pointer insertion/detection
@@ -128,7 +129,7 @@ src/wade/
 
 ## AI Tool Layer (external: crossby)
 
-AI tool adapters, model/effort resolution primitives, the model registry, and per-tool config (allowlists, hooks, defaults) are **not** part of this repo. They live in the external [`crossby`](https://github.com/ivanviragine/crossby) package, pinned in `pyproject.toml` (`crossby>=0.11.0,<0.12.0`). This replaced wade's formerly-internal `ai_tools/` and parts of `config/` and `data/` (see `feat: replace internal AI tool layer with the crossby dependency (#215)`).
+AI tool adapters, model/effort resolution primitives, the model registry, and per-tool config (allowlists, hooks, defaults) are **not** part of this repo. They live in the external [`crossby`](https://github.com/ivanviragine/crossby) package, pinned in `pyproject.toml` (`crossby>=0.13.0,<0.14.0`). This replaced wade's formerly-internal `ai_tools/` and parts of `config/` and `data/` (see `feat: replace internal AI tool layer with the crossby dependency (#215)`).
 
 | What | Lives in crossby | Used from wade via |
 |------|-------------------|---------------------|
@@ -141,6 +142,81 @@ AI tool adapters, model/effort resolution primitives, the model registry, and pe
 Wade still owns a thin `services/ai_resolution.py` rather than delegating outright: wade's `ProjectConfig.ai` uses named per-command fields (e.g. `ai.plan`), while crossby's own config expects a `commands` dict — the two shapes aren't interchangeable yet. See that module's docstring for the up-to-date status.
 
 Adding support for a new AI tool means contributing an adapter to crossby, not to this repo — see `docs/dev/extending.md`.
+
+## Hook Guard Layer
+
+wade installs AI-tool hooks that enforce session rules in *code* rather than
+trusting the agent to follow the skill. The split across the two repos:
+
+| Concern | Lives in | Detail |
+|---------|----------|--------|
+| Guard **policies** (allow/deny) | wade `hooks/policies.py` | Pure predicates over a normalized `HookEvent` |
+| Guard **entry point** | wade `hooks/cli.py` (`wade-hook`) | Argparse, guard routing, dialect selection |
+| Guard **installation** | wade `implementation_service/bootstrap.py` | Per-worktree, at `bootstrap_worktree` time |
+| Hook **dialects** (parse/emit, tool names, events, capabilities) | crossby | `hooks/runtime.py`, `sync/hooks.py`, `ai_tools/*` |
+
+### Guards
+
+| Guard | Event | Failure mode | Blocks |
+|-------|-------|--------------|--------|
+| `worktree` | PreToolUse | **closed** (deny) | Writes resolving outside the worktree |
+| `plan` | PreToolUse | **closed** (deny) | Writes to anything but plan artifacts |
+| `session-complete` | Stop | **open** (allow) | Ending a turn with `PR-SUMMARY.md` missing (once) |
+
+The asymmetry is deliberate and must not regress: a write guard that allows on
+error is worse than useless, while a Stop guard that blocks on error traps the
+agent in a session it cannot exit.
+
+### Two write channels
+
+A write reaches the guard through one of two channels, and both must be covered:
+
+- **`file_path`** — a tool-call write (`Write`, `Edit`, `apply_patch`,
+  `write_to_file`, …). crossby's `HookEvent.is_write` is a **denylist**
+  (`READ_TOOL_NAMES`), so a tool name it has never seen counts as a write.
+- **`command`** — a *shell* write. crossby reports `is_write=False` for shell
+  tool names (`SHELL_TOOL_NAMES`) by design, so the file-path policies would
+  allow it; `wade-hook` routes any payload carrying a `command` to
+  `shell_containment` instead.
+
+`shell_containment` tokenizes with `shlex.split` (failing **closed** on
+unbalanced quotes) and denies redirect targets, `cd`/`pushd` targets, and
+path arguments that resolve outside the worktree — plus, in plan mode,
+redirects/in-place edits/`tee` aimed at non-artifacts.
+
+**It is defense-in-depth, not a completeness guarantee.** It stops the
+non-obfuscated cases an agent actually produces. Documented residual gaps
+(see the function docstring): env-var indirection (`$HOME/x`), command
+substitution, subshells, here-docs, `$IFS` tricks, `eval`, symlinks created
+within the same command, and interpreters given inline code (`python -c`).
+
+### Per-tool capability matrix
+
+Two static maps in `hooks/cli.py` mirror crossby's adapter capabilities. They
+are **deliberate copies** — the hot per-edit path must not import
+`crossby.ai_tools` (~450ms vs ~150ms cold start) — so they must be re-verified
+on every crossby bump. `TestPerToolDialectsMatchCrossby` asserts they still
+agree, turning silent drift into a test failure.
+
+| Tool | PreToolUse dialect | Stop dialect | Notes |
+|------|--------------------|--------------|-------|
+| Claude | `hookSpecificOutput` | `{"decision":"block"}` | Extra root-level keys fail schema validation → silent fail-open |
+| Codex | `hookSpecificOutput` | `{"decision":"block"}` | Sandboxes writes; guard narrowed to the shell token |
+| Cursor | `{"permission":…}` | `{"followup_message":…}` | Only tool defaulting to fail-**open**; needs `failClosed` |
+| Copilot | flat `{"permissionDecision":…}` | `{"decision":"block"}` | Never nests under `hookSpecificOutput`; `tools` scope is dropped, so its guard fires on everything |
+| Antigravity CLI (`agy`) | `{"decision":…}` | `{"decision":"continue"}` | Inverted Stop polarity — blocks by saying *continue* |
+
+Codex is the one tool whose worktree guard is **narrowed** rather than skipped:
+`--sandbox workspace-write` already confines tool-call writes, but it also
+permits `/tmp` and `$TMPDIR`, so a shell redirect remains a live escape.
+
+### Upgrade path for already-inited projects
+
+Guards are installed **per-worktree** in `bootstrap_worktree`, not at
+`wade init` time, and nothing guard-related is persisted into a project at init.
+So an existing inited project picks up corrected guards automatically on its
+next `wade implement` / `wade plan` session once wade (and transitively crossby)
+is upgraded — **no re-init, resync, or migration is needed.**
 
 ## Command Dispatch
 

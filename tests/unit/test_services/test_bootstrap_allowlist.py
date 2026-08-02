@@ -296,15 +296,22 @@ class TestBootstrapPlanMode:
         with patch("subprocess.run"):
             bootstrap_worktree(worktree_path, self._config(), repo_root)
 
+        # crossby 0.13 writes Cursor's documented shape: {"version": 1, "hooks": {...}}.
         cursor = json.loads((worktree_path / ".cursor" / "hooks.json").read_text("utf-8"))
-        pre = cursor["preToolUse"]
+        hooks = cursor["hooks"]
+        pre = hooks["preToolUse"]
         assert pre and all(entry.get("failClosed") is True for entry in pre)
         # The Stop hook must NOT be fail-closed (it must never trap the agent).
-        for entry in cursor.get("stop", []):
+        for entry in hooks.get("stop", []):
             assert entry.get("failClosed") is not True
 
-    def test_worktree_guard_skipped_for_sandboxed_codex(self, tmp_path: Path) -> None:
-        """Codex hard-sandboxes writes, so the worktree guard is skipped (but plan guard is not)."""
+    def test_worktree_guard_narrowed_to_shell_for_sandboxed_codex(self, tmp_path: Path) -> None:
+        """Codex's sandbox covers tool-call writes but not shell redirects to /tmp.
+
+        ``--sandbox workspace-write`` permits ``/tmp`` and ``$TMPDIR``, so a shell
+        redirect is sandbox-legal yet lands outside the worktree. The guard is
+        therefore narrowed to the shell matcher rather than skipped entirely.
+        """
         worktree_path = tmp_path / "worktree"
         worktree_path.mkdir()
         repo_root = tmp_path / "repo"
@@ -313,11 +320,17 @@ class TestBootstrapPlanMode:
         with patch("subprocess.run"):
             bootstrap_worktree(worktree_path, self._config(), repo_root)  # worktree mode
 
-        # Codex writes .codex/hooks.json for the Stop hook, but the worktree guard
-        # is skipped (native sandbox). Assert on Codex's own config, not Claude's.
-        codex_config = (worktree_path / ".codex" / "hooks.json").read_text("utf-8")
-        assert "--guard worktree" not in codex_config
-        assert "session-complete" in codex_config
+        codex = json.loads((worktree_path / ".codex" / "hooks.json").read_text("utf-8"))
+        pre_entries = codex["hooks"]["PreToolUse"]
+        assert pre_entries, "Codex must still receive a shell-scoped worktree guard"
+        # Scoped to the shell token only — the file-write half is the sandbox's job.
+        assert all(entry.get("matcher") == "Bash" for entry in pre_entries)
+        assert any(
+            "--guard worktree" in hook["command"]
+            for entry in pre_entries
+            for hook in entry["hooks"]
+        )
+        assert "session-complete" in (worktree_path / ".codex" / "hooks.json").read_text("utf-8")
 
     def test_codex_hooks_feature_flag_enabled(self, tmp_path: Path) -> None:
         """crossby's Codex writer enables [features].codex_hooks so hooks load."""

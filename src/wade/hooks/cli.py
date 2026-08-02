@@ -36,11 +36,13 @@ from crossby.hooks.runtime import (
     emit_stop_decision,
     parse_event,
 )
-from crossby.models.ai import HookOutputDialect
+from crossby.models.ai import HookOutputDialect, HookStopDialect
 
 from wade.hooks.policies import (
+    GUARD_NAMES,
     plan_artifact_only,
     session_complete,
+    shell_containment,
     stop_nudge_marker_path,
     worktree_containment,
 )
@@ -50,12 +52,33 @@ from wade.hooks.policies import (
 # imports ``crossby.ai_tools`` (which eagerly loads all adapters). Kept in sync
 # with crossby; an unknown id falls back to the universal hookSpecificOutput
 # shape (+ exit 2), which every tool honors via the exit code.
+#
+# MUST be re-verified on every crossby version bump — these are copies, so a
+# dialect change upstream silently gives a tool the wrong output shape here.
+# Copilot moved HOOK_SPECIFIC_OUTPUT-adjacent EXIT_CODE -> PERMISSION_DECISION
+# in crossby 0.13 once its documented stdout schema was confirmed.
 _TOOL_DIALECTS: dict[str, HookOutputDialect] = {
     "claude": HookOutputDialect.HOOK_SPECIFIC_OUTPUT,
     "codex": HookOutputDialect.HOOK_SPECIFIC_OUTPUT,
     "cursor": HookOutputDialect.PERMISSION,
-    "copilot": HookOutputDialect.EXIT_CODE,
+    "copilot": HookOutputDialect.PERMISSION_DECISION,
     "antigravity-cli": HookOutputDialect.DECISION,
+}
+
+# Static ``tool id -> stop dialect`` map, mirroring ``capabilities().hook_stop_dialect``.
+# crossby 0.13 split the Stop channel out of ``HookOutputDialect`` because a tool's
+# turn-complete contract does not follow from its tool-call contract (Copilot reads a
+# flat ``permissionDecision`` for PreToolUse but ``{"decision": "block"}`` for
+# ``agentStop``). ``emit_stop_decision`` still accepts a legacy ``HookOutputDialect``,
+# but resolving the stop dialect explicitly keeps the two channels independent — which
+# is the point of the split — instead of riding a deprecated compatibility path.
+# An unknown id falls back to BLOCK_DECISION, the shape three of the five tools use.
+_TOOL_STOP_DIALECTS: dict[str, HookStopDialect] = {
+    "claude": HookStopDialect.BLOCK_DECISION,
+    "codex": HookStopDialect.BLOCK_DECISION,
+    "cursor": HookStopDialect.FOLLOWUP_MESSAGE,
+    "copilot": HookStopDialect.BLOCK_DECISION,
+    "antigravity-cli": HookStopDialect.CONTINUE_DECISION,
 }
 
 # PreToolUse write guards fail CLOSED (deny) on any error or misconfiguration.
@@ -64,6 +87,22 @@ _WRITE_GUARDS = frozenset({"worktree", "plan"})
 
 def _dialect_for(tool: str) -> HookOutputDialect:
     return _TOOL_DIALECTS.get(tool.strip().lower(), HookOutputDialect.HOOK_SPECIFIC_OUTPUT)
+
+
+def _stop_dialect_for(tool: str) -> HookStopDialect:
+    return _TOOL_STOP_DIALECTS.get(tool.strip().lower(), HookStopDialect.BLOCK_DECISION)
+
+
+def _is_stop_event(event: str, ev: object) -> bool:
+    """True when this invocation is a session-Stop, by CLI arg or parsed payload.
+
+    Checked independently of the guard name so an unrecognized ``--guard`` on a
+    Stop event still takes the fail-*open* path instead of the fail-closed write
+    path — a guard typo must never leave an agent unable to end its turn.
+    """
+    if event.strip().lower() == "stop":
+        return True
+    return getattr(ev, "event", None) == "stop"
 
 
 def _mark_stop_nudged(worktree_root: Path) -> None:
@@ -110,15 +149,21 @@ def _run(event: str, guard: str, tool: str, root: str) -> HookEmission:
       payload denies the write. A guard that silently allows on error is worse
       than useless.
     - The Stop guard (``session-complete``) fails **open**: a bug, an internal
-      error, or a missing ``--root`` must never trap the agent in a session it
-      cannot exit — it emits a non-blocking decision rather than inspecting the
-      CWD (which could spuriously block completion).
+      error, a missing ``--root``, *or an unrecognized guard name* must never trap
+      the agent in a session it cannot exit — it emits a non-blocking decision
+      rather than inspecting the CWD (which could spuriously block completion).
 
     Payload handling is asymmetric on purpose. An *empty* payload describes no
     write target, so there is nothing that could escape the worktree — allowing
     it is safe. A *non-empty but malformed* payload may well contain a target we
     simply failed to parse, so a write guard must deny it rather than let an
     unverifiable write through.
+
+    Two channels carry a write. A tool-call write names its target in
+    ``file_path``; a *shell* write hides it inside ``command`` (crossby reports
+    ``is_write=False`` for shell tool names by design, so the file-path policies
+    would wave it through). A payload with a ``command`` is therefore routed to
+    :func:`shell_containment`, and one carrying both channels is checked twice.
     """
     dialect = _dialect_for(tool)
 
@@ -131,13 +176,21 @@ def _run(event: str, guard: str, tool: str, root: str) -> HookEmission:
 
     ev = parse_event(raw, event=event)
 
-    if guard == "session-complete":
+    # The Stop channel is claimed by either the guard name or the event, so an
+    # unknown ``--guard`` on a Stop event cannot fall through to the write-guard
+    # path below and block session completion (it fails open here instead).
+    if guard == "session-complete" or _is_stop_event(event, ev):
+        stop_dialect = _stop_dialect_for(tool)
+        if guard != "session-complete":
+            # Unrecognized guard on a Stop event — emit a non-blocking decision
+            # without evaluating any policy. A Stop guard must never trap the agent.
+            return emit_stop_decision(False, "", stop_dialect)
         if not root or read_error is not None:
             # No worktree root to inspect, or stdin was unreadable — fail open
             # rather than block completion. Falling back to the CWD (missing
             # root) or evaluating an empty event (read error) could spuriously
             # trap the agent, which a Stop guard must never do.
-            return emit_stop_decision(False, "", dialect)
+            return emit_stop_decision(False, "", stop_dialect)
         try:
             decision = session_complete(ev, worktree_root=Path(root))
             should_block = decision.action == "deny"
@@ -150,14 +203,25 @@ def _run(event: str, guard: str, tool: str, root: str) -> HookEmission:
                 _mark_stop_nudged(Path(root))
         except Exception:
             should_block, reason = False, ""  # fail-open: never trap the agent
-        return emit_stop_decision(should_block, reason, dialect)
+        return emit_stop_decision(should_block, reason, stop_dialect)
 
     # PreToolUse write guards from here down — fail closed.
     try:
-        if read_error is not None:
+        if guard not in _WRITE_GUARDS:
+            # An unrecognized guard is a misconfiguration: the hook is installed but
+            # enforces nothing. Decided *before* any payload or --root branching so
+            # empty stdin cannot route past it into the allow branch below — which is
+            # exactly how `--guard <typo>` used to exit 0 and silently protect nothing.
+            # (A Stop event never reaches here; it fails open above.)
+            known = ", ".join(g for g in GUARD_NAMES)
+            decision = HookDecision.deny(
+                f"wade hook: unknown guard '{guard}' (expected one of: {known}); "
+                "denying to fail closed."
+            )
+        elif read_error is not None:
             # Couldn't read the payload — can't verify the write is contained.
             raise read_error
-        if guard in _WRITE_GUARDS and not root:
+        elif not root:
             # Without a worktree root we cannot make a containment decision.
             decision = HookDecision.deny(
                 f"wade hook: '{guard}' guard requires --root; denying to fail closed."
@@ -171,14 +235,20 @@ def _run(event: str, guard: str, tool: str, root: str) -> HookEmission:
             # up front so a write guard denies rather than defaulting to a no-op
             # event. The policy itself denies a parsed-but-pathless write.
             json.loads(raw)
-            if guard == "worktree":
-                decision = worktree_containment(ev, worktree_root=Path(root))
-            elif guard == "plan":
-                decision = plan_artifact_only(ev, worktree_root=Path(root))
-            else:
-                # Unknown guard on a write event is a misconfiguration — fail closed.
-                decision = HookDecision.deny(
-                    f"wade hook: unknown guard '{guard}'; denying to fail closed."
+            worktree_root = Path(root)
+            plan_mode = guard == "plan"
+            decision = HookDecision.allow()
+            if ev.command:
+                # Shell channel: crossby reports is_write=False for shell tool
+                # names, so the file-path policies below would allow this outright.
+                decision = shell_containment(ev, worktree_root=worktree_root, plan_mode=plan_mode)
+            if decision.action != "deny" and (ev.file_path or not ev.command):
+                # File-path channel — the only channel for a tool-call write, and a
+                # second check when a payload happens to carry both.
+                decision = (
+                    plan_artifact_only(ev, worktree_root=worktree_root)
+                    if plan_mode
+                    else worktree_containment(ev, worktree_root=worktree_root)
                 )
     except Exception as e:
         decision = HookDecision.deny(f"wade hook guard error: {type(e).__name__}: {e}")

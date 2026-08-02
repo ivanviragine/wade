@@ -7,13 +7,142 @@ from pathlib import Path
 import pytest
 from crossby.hooks.runtime import HookEvent
 
-from wade.hooks.policies import plan_artifact_only, session_complete, worktree_containment
+from wade.hooks.policies import (
+    plan_artifact_only,
+    session_complete,
+    shell_containment,
+    worktree_containment,
+)
 
 WT = Path("/repo/wt")
 
 
 def _write(file_path: str | None, tool_name: str = "write") -> HookEvent:
     return HookEvent(tool_name=tool_name, file_path=file_path)
+
+
+def _shell(command: str, cwd: str | None = str(WT)) -> HookEvent:
+    return HookEvent(tool_name="bash", command=command, cwd=cwd)
+
+
+class TestFailClosedWriteDetection:
+    """crossby 0.13 inverted ``is_write`` to a denylist — unknown names are writes.
+
+    Regression cover for the fail-*open* allowlist that let Codex ``apply_patch``
+    and agy ``write_to_file`` past every containment guard.
+    """
+
+    @pytest.mark.parametrize(
+        "tool_name",
+        ["apply_patch", "write_to_file", "replace_file_content", "some_future_tool"],
+    )
+    def test_unrecognized_write_names_denied_outside_worktree(self, tool_name: str) -> None:
+        d = worktree_containment(_write("/etc/passwd", tool_name), worktree_root=WT)
+        assert d.action == "deny"
+
+    @pytest.mark.parametrize(
+        "tool_name",
+        ["apply_patch", "write_to_file", "replace_file_content", "some_future_tool"],
+    )
+    def test_unrecognized_write_names_denied_in_plan_mode(self, tool_name: str) -> None:
+        d = plan_artifact_only(_write("/repo/wt/src/app.py", tool_name), worktree_root=WT)
+        assert d.action == "deny"
+
+    @pytest.mark.parametrize("tool_name", ["read", "grep", "view_file", "glob", "list_dir"])
+    def test_known_read_names_allowed(self, tool_name: str) -> None:
+        d = worktree_containment(_write("/etc/passwd", tool_name), worktree_root=WT)
+        assert d.action == "allow"
+
+
+class TestShellContainment:
+    """The shell channel — crossby reports ``is_write=False`` for shell tool names."""
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "ls -la",
+            "./scripts/test.sh",
+            "rg foo src/",
+            "git status",
+            "/usr/bin/env python foo.py",  # absolute *executable* is exempt
+            "printf x > out.txt",
+            "printf x >> notes.md",
+            "cd src && ls",
+            "cat ./a/b.txt",
+            "echo hi 2>&1",  # fd duplication names no path
+            "cat < in.txt",
+        ],
+    )
+    def test_inside_worktree_allowed(self, command: str) -> None:
+        assert shell_containment(_shell(command), worktree_root=WT).action == "allow"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "printf 'x' > /tmp/out.txt",  # spaced redirect
+            "printf 'x' >/tmp/out.txt",  # glued redirect
+            "printf x >>../main/file",  # relative traversal, glued append
+            'printf x > "/tmp/quoted"',  # quoting does not hide the target
+            "printf x > /tmp/esc\\ aped",  # escaped space
+            "cd /etc && rm x",  # cd outside rebases later writes
+            "cd ..",  # bare .. carries no slash
+            "cd ../../elsewhere",
+            "cp a /tmp/b",
+            "git checkout -- ../main-repo/x",
+            "cat ~/secrets",  # ~ is expanded (shlex does not)
+            "echo a | tee /etc/p",
+            "sed -i '' s/a/b/ ../main/file",
+            "true; cp a /tmp/b",  # ;-chained segment
+            "true && cp a /tmp/b",  # &&-chained segment
+            "cat < /etc/passwd",
+        ],
+    )
+    def test_outside_worktree_denied(self, command: str) -> None:
+        assert shell_containment(_shell(command), worktree_root=WT).action == "deny"
+
+    @pytest.mark.parametrize("command", ['echo "unterminated', "echo 'unbalanced"])
+    def test_unparseable_fails_closed(self, command: str) -> None:
+        """An untokenizable command may hide anything — deny rather than guess."""
+        assert shell_containment(_shell(command), worktree_root=WT).action == "deny"
+
+    def test_empty_command_allowed(self) -> None:
+        assert shell_containment(_shell(""), worktree_root=WT).action == "allow"
+
+    def test_cwd_outside_root_does_not_widen_the_root(self) -> None:
+        """A payload-supplied cwd cannot be used to escape containment."""
+        d = shell_containment(_shell("printf x > out.txt", cwd="/etc"), worktree_root=WT)
+        assert d.action == "deny"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "printf x > src/app.py",  # redirect to a non-artifact
+            "printf x >> src/app.py",
+            "sed -i.bak s/a/b/ src/app.py",  # in-place edit
+            "sed --in-place s/a/b/ src/app.py",
+            "echo x | tee src/app.py",  # tee to a non-artifact
+            "printf x > /tmp/o",  # outside wins regardless
+        ],
+    )
+    def test_plan_mode_denies_non_artifact_writes(self, command: str) -> None:
+        assert shell_containment(_shell(command), worktree_root=WT, plan_mode=True).action == "deny"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "printf x > PLAN.md",
+            "printf x > PLAN-2-thing.md",
+            "echo x >> PR-SUMMARY.md",
+            "printf x > .claude/plans/a.md",
+            "echo x | tee PLAN.md",
+            "ls -la",
+            "cat src/app.py",  # reading source is fine in plan mode
+            "cat < src/app.py",  # input redirect is a read, not a write
+        ],
+    )
+    def test_plan_mode_allows_artifacts_and_reads(self, command: str) -> None:
+        got = shell_containment(_shell(command), worktree_root=WT, plan_mode=True).action
+        assert got == "allow"
 
 
 class TestWorktreeContainment:

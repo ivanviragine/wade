@@ -5,13 +5,18 @@ dialect parsing/emitting lives in ``crossby.hooks.runtime``; here we only decide
 allow vs deny for a normalized event. Each predicate is dialect-agnostic and
 side-effect free, so it is trivially unit-testable without a subprocess.
 
-Two guards today:
+Guards today:
 
 - :func:`worktree_containment` — block writes outside the worktree root
   (installed only for tools that don't hard-sandbox writes; see
   ``AIToolCapabilities.sandboxes_writes``).
 - :func:`plan_artifact_only` — during a plan session, allow writes only to plan
   artifacts (finer-grained than any directory sandbox, so always installed).
+- :func:`shell_containment` — the same two rules applied to a *shell command*
+  rather than a tool-call file path. crossby's ``HookEvent.is_write`` is False
+  for shell tool names by design (``SHELL_TOOL_NAMES``), so a shell call carries
+  its target in ``command``, not ``file_path``, and the two path guards above
+  would wave it through. This closes that channel.
 """
 
 from __future__ import annotations
@@ -19,6 +24,8 @@ from __future__ import annotations
 import fnmatch
 import os
 import posixpath
+import re
+import shlex
 import stat as stat_module
 from pathlib import Path
 
@@ -28,6 +35,7 @@ __all__ = [
     "GUARD_NAMES",
     "plan_artifact_only",
     "session_complete",
+    "shell_containment",
     "stop_nudge_marker_path",
     "worktree_containment",
 ]
@@ -188,6 +196,233 @@ def plan_artifact_only(event: HookEvent, *, worktree_root: Path) -> HookDecision
         ".transcript, .commit-msg, PR-SUMMARY.md, .claude/plans/*, .wade/plans/*) "
         "may be written. Do NOT modify source code files."
     )
+
+
+# Shell separators that start a fresh command segment, so the next token is an
+# executable name rather than one of the previous command's arguments.
+_SEGMENT_SEPARATORS = frozenset({"&&", "||", "|", ";", "&", "|&"})
+
+# A redirect operator, optionally fd-prefixed (``2>``) or fd-duplicating (``&>``),
+# optionally with the target glued on (``>/tmp/x``). ``shlex`` keeps the operator
+# and an unspaced target in a single token, so the target is group ``target``.
+_REDIRECT_RE = re.compile(r"^(?:[0-9]*|&)(?P<op>>>|>\||>|<)(?P<target>.*)$")
+
+# Commands whose in-place flag rewrites a file rather than emitting to stdout.
+_IN_PLACE_FLAG_RE = re.compile(r"^--in-place(=.*)?$|^-i(\..*)?$")
+
+
+def _looks_like_path(token: str) -> bool:
+    """True when a token plausibly names a filesystem path rather than a flag/word.
+
+    ``.`` and ``..`` count: a bare ``..`` carries no ``/`` but still escapes.
+    """
+    if not token or token.startswith("-"):
+        return False
+    if token in (".", ".."):
+        return True
+    return token.startswith(("/", "~")) or "/" in token
+
+
+def _resolve_shell_path(token: str, *, base: Path) -> Path | None:
+    """Resolve a command token to an absolute path, or None if it isn't resolvable.
+
+    Expands ``~`` (``shlex`` does not) and resolves relative tokens against
+    ``base`` — the agent's CWD when the payload reports one, else the worktree
+    root — so ``../../etc/passwd`` is collapsed and caught.
+    """
+    try:
+        expanded = os.path.expanduser(token)
+        p = Path(expanded)
+        return p.resolve() if p.is_absolute() else (base / p).resolve()
+    except (OSError, ValueError, RuntimeError):
+        return None
+
+
+def _contained(path: Path, root: Path) -> bool:
+    """True when ``path`` is inside ``root``."""
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def shell_containment(
+    event: HookEvent,
+    *,
+    worktree_root: Path,
+    plan_mode: bool = False,
+) -> HookDecision:
+    """Deny a shell command that writes outside the worktree (or outside plan artifacts).
+
+    crossby routes shell tool calls (``bash``, ``shell``, ``exec_command``,
+    ``powershell``, ``run_command``) through :attr:`HookEvent.command` and reports
+    ``is_write=False`` for them, so :func:`worktree_containment` and
+    :func:`plan_artifact_only` never inspect them. Without this predicate a single
+    ``printf ... > ../main-repo/src/app.py`` defeats both guards.
+
+    Rules, in order (any match denies):
+
+    1. The command does not tokenize (unbalanced quotes) — **fail closed**.
+    2. A redirect target (``>``, ``>>``, ``2>``, glued or spaced) resolves outside
+       the root.
+    3. ``cd`` / ``pushd`` targets a path outside the root — it would rebase every
+       later relative write in the same command.
+    4. Any remaining path-like argument resolves outside the root. The *executable*
+       position of each segment is exempt, since binaries legitimately live in
+       ``/usr/bin``, ``/bin``, ``/opt/homebrew/bin`` and denying those breaks every
+       session.
+    5. In plan mode only: any redirect, any in-place edit flag (``sed -i``,
+       ``--in-place``), or a ``tee`` target whose path is not a plan artifact.
+
+    **This is defense-in-depth, not a completeness guarantee.** It stops the
+    non-obfuscated cases — the ones an agent actually produces — and is trivially
+    defeatable by an adversary. Known residual gaps, all out of scope because a
+    tokenizer cannot resolve them without executing the command:
+
+    - **Env-var indirection** — ``$HOME/x``, ``${OUT}/x``. ``shlex`` does not expand
+      variables, so the token stays literal and resolves to a nonsense relative path
+      inside the root.
+    - **Command substitution** — ``$(echo /etc)/passwd``, backticks.
+    - **Subshells and here-docs** — ``(cd /etc && ...)``, ``<<EOF`` bodies.
+    - **``$IFS`` and word-splitting tricks**, ``eval``, ``base64 -d | sh``.
+    - **Symlinks inside the worktree** pointing out of it: ``Path.resolve`` follows
+      them, so a symlinked *target* is caught, but a symlink created earlier in the
+      same command is not.
+    - **Interpreters given inline code** — ``python -c 'open("/etc/x","w")'``.
+
+    Args:
+        event: Normalized hook event; only :attr:`HookEvent.command` is read.
+        worktree_root: The session worktree; writes must stay inside it.
+        plan_mode: Apply the stricter plan-session rules (rule 5).
+    """
+    command = (event.command or "").strip()
+    if not command:
+        return HookDecision.allow()  # nothing to inspect
+
+    root = worktree_root.resolve()
+    base = root
+    if event.cwd:
+        cwd_resolved = _resolve_shell_path(event.cwd, base=root)
+        if cwd_resolved is not None:
+            base = cwd_resolved
+
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return HookDecision.deny(
+            f"BLOCKED by {'plan-session' if plan_mode else 'worktree'} guard: could not "
+            f"parse the shell command well enough to verify it stays inside the worktree "
+            f"at '{root}' (unbalanced quotes). Denying to fail closed — rewrite it as a "
+            "simpler, fully-quoted command."
+        )
+
+    def deny_outside(what: str, token: str) -> HookDecision:
+        return HookDecision.deny(
+            f"BLOCKED by worktree guard: the shell command's {what} ('{token}') resolves "
+            f"outside the worktree at '{root}'. Run commands that read or write only "
+            "inside your worktree."
+        )
+
+    def check_redirect_target(target: str, op: str) -> HookDecision | None:
+        """Containment (always) + plan-artifact (plan mode, writes only) for a target."""
+        resolved = _resolve_shell_path(target, base=base)
+        if resolved is None or not _contained(resolved, root):
+            return deny_outside("redirect target", target)
+        # ``<`` only reads, so the plan-artifact allowlist does not apply to it.
+        if plan_mode and op != "<" and not _is_plan_artifact_path(resolved, root):
+            return HookDecision.deny(
+                f"BLOCKED by plan-session guard: redirecting output to '{target}' "
+                "would write a non-artifact file without going through a write tool. "
+                "In plan mode only plan artifacts (PLAN.md, PLAN-*.md, prompt.txt, "
+                ".transcript, .commit-msg, PR-SUMMARY.md, .claude/plans/*, "
+                ".wade/plans/*) may be written."
+            )
+        return None
+
+    expect_executable = True
+    prev: str | None = None
+    pending_redirect: str | None = None
+    for token in tokens:
+        if token in _SEGMENT_SEPARATORS:
+            expect_executable = True
+            prev = None
+            pending_redirect = None
+            continue
+
+        redirect = _REDIRECT_RE.match(token)
+        if redirect:
+            op = redirect.group("op")
+            target = redirect.group("target")
+            prev = None
+            if not target:
+                # Spaced form (``> path``) — the target is the next token.
+                pending_redirect = op
+            elif not target.startswith("&"):
+                # Glued form (``>/tmp/x``). ``2>&1`` duplicates an fd, names no path.
+                pending_redirect = None
+                denial = check_redirect_target(target, op)
+                if denial is not None:
+                    return denial
+            else:
+                pending_redirect = None
+            continue
+
+        if pending_redirect is not None:
+            op, pending_redirect = pending_redirect, None
+            if not token.startswith("&"):
+                denial = check_redirect_target(token, op)
+                if denial is not None:
+                    return denial
+            continue
+
+        if expect_executable:
+            # Only the basename matters: `/bin/cd` and `cd` are the same builtin,
+            # and the executable's own path is exempt from containment (rule 4).
+            prev = posixpath.basename(token)
+            expect_executable = False
+            continue
+
+        if prev in ("cd", "pushd"):
+            # Every non-flag argument to cd/pushd is a directory, including a bare
+            # `..` that `_looks_like_path` would not otherwise recognize.
+            if token.startswith("-"):
+                continue
+            resolved = _resolve_shell_path(token, base=base)
+            if resolved is None or not _contained(resolved, root):
+                return deny_outside(f"{prev} target", token)
+            prev = None
+            continue
+
+        if plan_mode and _IN_PLACE_FLAG_RE.match(token):
+            return HookDecision.deny(
+                f"BLOCKED by plan-session guard: in-place editing ('{token}') is not "
+                "allowed in plan mode — it rewrites a file without going through a "
+                "write tool. Only plan artifacts may be written."
+            )
+
+        if _looks_like_path(token):
+            resolved = _resolve_shell_path(token, base=base)
+            if resolved is None or not _contained(resolved, root):
+                return deny_outside("path argument", token)
+            if plan_mode and prev == "tee" and not _is_plan_artifact_path(resolved, root):
+                return HookDecision.deny(
+                    f"BLOCKED by plan-session guard: 'tee' would write to '{token}', "
+                    "which is not a plan artifact. In plan mode only plan artifacts "
+                    "(PLAN.md, PLAN-*.md, prompt.txt, .transcript, .commit-msg, "
+                    "PR-SUMMARY.md, .claude/plans/*, .wade/plans/*) may be written."
+                )
+
+    return HookDecision.allow()
+
+
+def _is_plan_artifact_path(resolved: Path, root: Path) -> bool:
+    """True when an already-contained absolute path is an allowed plan artifact."""
+    try:
+        relative = resolved.relative_to(root)
+    except ValueError:
+        return False
+    return _is_plan_artifact(relative.as_posix())
 
 
 def session_complete(event: HookEvent, *, worktree_root: Path) -> HookDecision:
