@@ -184,6 +184,11 @@ unbalanced quotes) and denies redirect targets, `cd`/`pushd` targets, and
 path arguments that resolve outside the worktree — plus, in plan mode,
 redirects/in-place edits/`tee` aimed at non-artifacts.
 
+It also unglues paths from flags (`--output=/tmp/x`, `-o/tmp/x`, `of=/tmp/x`),
+treats bash's `>&file` as a write while skipping true fd duplication (`2>&1`),
+denies a bare `cd` (it lands in `$HOME`), and exempts character devices so
+`>/dev/null 2>&1` still works.
+
 **It is defense-in-depth, not a completeness guarantee.** It stops the
 non-obfuscated cases an agent actually produces. Documented residual gaps
 (see the function docstring): env-var indirection (`$HOME/x`), command

@@ -202,13 +202,54 @@ def plan_artifact_only(event: HookEvent, *, worktree_root: Path) -> HookDecision
 # executable name rather than one of the previous command's arguments.
 _SEGMENT_SEPARATORS = frozenset({"&&", "||", "|", ";", "&", "|&"})
 
+# Characters that glue a separator onto an adjacent word (``echo x|tee f``).
+_SEPARATOR_CHARS = "|;&"
+_GLUED_SEPARATOR_RE = re.compile(r"([|;&]+)")
+
 # A redirect operator, optionally fd-prefixed (``2>``) or fd-duplicating (``&>``),
 # optionally with the target glued on (``>/tmp/x``). ``shlex`` keeps the operator
 # and an unspaced target in a single token, so the target is group ``target``.
 _REDIRECT_RE = re.compile(r"^(?:[0-9]*|&)(?P<op>>>|>\||>|<)(?P<target>.*)$")
 
+# A redirect target that duplicates or closes a file descriptor (``2>&1``, ``>&-``)
+# rather than naming a file. Bash's ``>&word`` with a *filename* is a real write, so
+# only these exact shapes may be skipped.
+_FD_DUP_RE = re.compile(r"^&(?:[0-9]+-?|-)$")
+
 # Commands whose in-place flag rewrites a file rather than emitting to stdout.
 _IN_PLACE_FLAG_RE = re.compile(r"^--in-place(=.*)?$|^-i(\..*)?$")
+
+# Character devices are not worktree escapes — `>/dev/null 2>&1` is the single most
+# common shell idiom an agent emits, and denying it breaks ordinary sessions.
+_ALWAYS_ALLOWED_PATH_PREFIXES = ("/dev/",)
+
+# Commands that write their path operands. In plan mode those operands must be plan
+# artifacts, otherwise `cp PLAN.md src/app.py` edits source without a write tool.
+_PLAN_WRITE_COMMANDS = frozenset(
+    {"tee", "cp", "mv", "touch", "install", "ln", "dd", "truncate", "patch", "rsync"}
+)
+# `git <sub> -- <path>` forms that overwrite working-tree files.
+_GIT_WRITE_SUBCOMMANDS = frozenset({"checkout", "restore", "apply", "mv", "rm", "clean"})
+
+
+def _normalize_tokens(tokens: list[str]) -> list[str]:
+    """Split separators that ``shlex`` left glued to a neighbouring word.
+
+    ``shlex.split`` is not a shell parser: ``echo x|tee f`` tokenizes as
+    ``['echo', 'x|tee', 'f']``, which would score ``tee`` as an argument and miss
+    that a new command started. Tokens containing a redirect operator are left
+    alone so ``2>&1`` is not shredded into ``2>``/``&``/``1``.
+    """
+    out: list[str] = []
+    for token in tokens:
+        if token in _SEGMENT_SEPARATORS or ">" in token or "<" in token:
+            out.append(token)
+            continue
+        for part in _GLUED_SEPARATOR_RE.split(token):
+            if not part:
+                continue
+            out.append(";" if set(part) <= set(_SEPARATOR_CHARS) else part)
+    return out
 
 
 def _looks_like_path(token: str) -> bool:
@@ -221,6 +262,24 @@ def _looks_like_path(token: str) -> bool:
     if token in (".", ".."):
         return True
     return token.startswith(("/", "~")) or "/" in token
+
+
+def _embedded_path(token: str) -> str | None:
+    """Extract a path glued to a flag or operand (``--output=/tmp/x``, ``of=/tmp/x``).
+
+    ``_looks_like_path`` rejects anything starting with ``-``, and ``of=/tmp/pwn``
+    resolves as a *relative* path (so it lands "inside" the root). Both let a plain,
+    non-obfuscated write escape, so pull the real path out of these shapes:
+
+    - ``--output=/tmp/x`` / ``of=/tmp/x`` — value after the first ``=``
+    - ``-o/tmp/x`` / ``-C/tmp/x`` — value from the first ``/`` of a short flag
+    """
+    if "=" in token:
+        _, _, value = token.partition("=")
+        return value if value and _looks_like_path(value) else None
+    if token.startswith("-") and "/" in token:
+        return token[token.index("/") :]
+    return None
 
 
 def _resolve_shell_path(token: str, *, base: Path) -> Path | None:
@@ -239,7 +298,9 @@ def _resolve_shell_path(token: str, *, base: Path) -> Path | None:
 
 
 def _contained(path: Path, root: Path) -> bool:
-    """True when ``path`` is inside ``root``."""
+    """True when ``path`` is inside ``root`` (or is an always-allowed device node)."""
+    if str(path).startswith(_ALWAYS_ALLOWED_PATH_PREFIXES):
+        return True
     try:
         path.relative_to(root)
     except ValueError:
@@ -264,16 +325,21 @@ def shell_containment(
     Rules, in order (any match denies):
 
     1. The command does not tokenize (unbalanced quotes) — **fail closed**.
-    2. A redirect target (``>``, ``>>``, ``2>``, glued or spaced) resolves outside
-       the root.
+    2. A redirect target (``>``, ``>>``, ``2>``, ``>&file``, glued or spaced)
+       resolves outside the root. Pure fd duplication (``2>&1``, ``>&-``) names no
+       file and is skipped.
     3. ``cd`` / ``pushd`` targets a path outside the root — it would rebase every
-       later relative write in the same command.
-    4. Any remaining path-like argument resolves outside the root. The *executable*
-       position of each segment is exempt, since binaries legitimately live in
-       ``/usr/bin``, ``/bin``, ``/opt/homebrew/bin`` and denying those breaks every
-       session.
+       later relative write in the same command. A *bare* ``cd`` (or ``cd -``)
+       counts: it lands in ``$HOME``/``$OLDPWD``, equally outside.
+    4. Any remaining path-like argument resolves outside the root, including a path
+       glued to a flag or operand (``--output=/tmp/x``, ``-o/tmp/x``, ``of=/tmp/x``).
+       The *executable* position of each segment is exempt, since binaries
+       legitimately live in ``/usr/bin``, ``/bin``, ``/opt/homebrew/bin`` and denying
+       those breaks every session. Character devices (``/dev/null``) are exempt too —
+       ``>/dev/null 2>&1`` is not an escape.
     5. In plan mode only: any redirect, any in-place edit flag (``sed -i``,
-       ``--in-place``), or a ``tee`` target whose path is not a plan artifact.
+       ``--in-place``), or an operand of a write command (``tee``, ``cp``, ``mv``,
+       ``touch``, ``git checkout --`` …) whose path is not a plan artifact.
 
     **This is defense-in-depth, not a completeness guarantee.** It stops the
     non-obfuscated cases — the ones an agent actually produces — and is trivially
@@ -290,6 +356,10 @@ def shell_containment(
       them, so a symlinked *target* is caught, but a symlink created earlier in the
       same command is not.
     - **Interpreters given inline code** — ``python -c 'open("/etc/x","w")'``.
+    - **Plan mode only:** a write command outside :data:`_PLAN_WRITE_COMMANDS`
+      (the list covers ``tee``/``cp``/``mv``/``touch``/``git checkout --`` and
+      friends). The *worktree* rules still apply to it, so it cannot escape the
+      root — it can only write a non-artifact inside it.
 
     Args:
         event: Normalized hook event; only :attr:`HookEvent.command` is read.
@@ -340,13 +410,42 @@ def shell_containment(
             )
         return None
 
+    def check_non_artifact(what: str, token: str, resolved: Path) -> HookDecision | None:
+        """Plan mode: a contained path a write command targets must be an artifact."""
+        if not plan_mode or _is_plan_artifact_path(resolved, root):
+            return None
+        return HookDecision.deny(
+            f"BLOCKED by plan-session guard: {what} would write to '{token}', which is "
+            "not a plan artifact. In plan mode only plan artifacts (PLAN.md, PLAN-*.md, "
+            "prompt.txt, .transcript, .commit-msg, PR-SUMMARY.md, .claude/plans/*, "
+            ".wade/plans/*) may be written."
+        )
+
     expect_executable = True
-    prev: str | None = None
+    command_name: str | None = None
+    is_write_command = False
+    awaiting_cd_target = False
     pending_redirect: str | None = None
-    for token in tokens:
+
+    def end_segment() -> HookDecision | None:
+        """A segment that ended while `cd` still wanted a target went to $HOME."""
+        if awaiting_cd_target:
+            return HookDecision.deny(
+                f"BLOCKED by worktree guard: a bare '{command_name}' changes directory "
+                f"to your home directory, which is outside the worktree at '{root}'. "
+                "Later relative paths in the same command would resolve there."
+            )
+        return None
+
+    for token in _normalize_tokens(tokens):
         if token in _SEGMENT_SEPARATORS:
+            denial = end_segment()
+            if denial is not None:
+                return denial
             expect_executable = True
-            prev = None
+            command_name = None
+            is_write_command = False
+            awaiting_cd_target = False
             pending_redirect = None
             continue
 
@@ -354,24 +453,24 @@ def shell_containment(
         if redirect:
             op = redirect.group("op")
             target = redirect.group("target")
-            prev = None
             if not target:
                 # Spaced form (``> path``) — the target is the next token.
                 pending_redirect = op
-            elif not target.startswith("&"):
-                # Glued form (``>/tmp/x``). ``2>&1`` duplicates an fd, names no path.
+            elif _FD_DUP_RE.match(target):
+                # ``2>&1`` / ``>&-`` duplicate or close an fd and name no file.
                 pending_redirect = None
-                denial = check_redirect_target(target, op)
+            else:
+                # Glued form (``>/tmp/x``, and bash's ``>&file`` which is a real write).
+                pending_redirect = None
+                denial = check_redirect_target(target.lstrip("&"), op)
                 if denial is not None:
                     return denial
-            else:
-                pending_redirect = None
             continue
 
         if pending_redirect is not None:
             op, pending_redirect = pending_redirect, None
-            if not token.startswith("&"):
-                denial = check_redirect_target(token, op)
+            if not _FD_DUP_RE.match(token):
+                denial = check_redirect_target(token.lstrip("&"), op)
                 if denial is not None:
                     return denial
             continue
@@ -379,19 +478,24 @@ def shell_containment(
         if expect_executable:
             # Only the basename matters: `/bin/cd` and `cd` are the same builtin,
             # and the executable's own path is exempt from containment (rule 4).
-            prev = posixpath.basename(token)
+            command_name = posixpath.basename(token)
             expect_executable = False
+            awaiting_cd_target = command_name in ("cd", "pushd")
+            is_write_command = command_name in _PLAN_WRITE_COMMANDS
             continue
 
-        if prev in ("cd", "pushd"):
+        if awaiting_cd_target:
             # Every non-flag argument to cd/pushd is a directory, including a bare
-            # `..` that `_looks_like_path` would not otherwise recognize.
-            if token.startswith("-"):
+            # `..` that `_looks_like_path` would not otherwise recognize. `-`/`~-`
+            # jump to $OLDPWD, which we cannot resolve — treat as an escape.
+            if token.startswith("-") and token != "-":
                 continue
+            if token in ("-", "~-"):
+                return deny_outside(f"{command_name} target", token)
+            awaiting_cd_target = False
             resolved = _resolve_shell_path(token, base=base)
             if resolved is None or not _contained(resolved, root):
-                return deny_outside(f"{prev} target", token)
-            prev = None
+                return deny_outside(f"{command_name} target", token)
             continue
 
         if plan_mode and _IN_PLACE_FLAG_RE.match(token):
@@ -401,19 +505,34 @@ def shell_containment(
                 "write tool. Only plan artifacts may be written."
             )
 
-        if _looks_like_path(token):
+        if command_name == "git" and token in _GIT_WRITE_SUBCOMMANDS:
+            is_write_command = True
+
+        # A path glued to a flag or operand (``--output=/tmp/x``, ``of=/tmp/x``) is
+        # invisible to `_looks_like_path`, and `of=/tmp/x` would resolve *relative*.
+        embedded = _embedded_path(token)
+        if embedded is not None:
+            resolved = _resolve_shell_path(embedded, base=base)
+            if resolved is None or not _contained(resolved, root):
+                return deny_outside("path argument", embedded)
+            if is_write_command:
+                denial = check_non_artifact(f"'{command_name}'", embedded, resolved)
+                if denial is not None:
+                    return denial
+            continue
+
+        if _looks_like_path(token) or (is_write_command and not token.startswith("-")):
+            # A write command's operands are checked even without a `/` — plan mode
+            # must catch `tee app.py`, not just `tee src/app.py`.
             resolved = _resolve_shell_path(token, base=base)
             if resolved is None or not _contained(resolved, root):
                 return deny_outside("path argument", token)
-            if plan_mode and prev == "tee" and not _is_plan_artifact_path(resolved, root):
-                return HookDecision.deny(
-                    f"BLOCKED by plan-session guard: 'tee' would write to '{token}', "
-                    "which is not a plan artifact. In plan mode only plan artifacts "
-                    "(PLAN.md, PLAN-*.md, prompt.txt, .transcript, .commit-msg, "
-                    "PR-SUMMARY.md, .claude/plans/*, .wade/plans/*) may be written."
-                )
+            if is_write_command:
+                denial = check_non_artifact(f"'{command_name}'", token, resolved)
+                if denial is not None:
+                    return denial
 
-    return HookDecision.allow()
+    return end_segment() or HookDecision.allow()
 
 
 def _is_plan_artifact_path(resolved: Path, root: Path) -> bool:

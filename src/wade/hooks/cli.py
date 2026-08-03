@@ -30,6 +30,7 @@ import sys
 from pathlib import Path
 
 from crossby.hooks.runtime import (
+    SHELL_TOOL_NAMES,
     HookDecision,
     HookEmission,
     emit_decision,
@@ -91,6 +92,20 @@ def _dialect_for(tool: str) -> HookOutputDialect:
 
 def _stop_dialect_for(tool: str) -> HookStopDialect:
     return _TOOL_STOP_DIALECTS.get(tool.strip().lower(), HookStopDialect.BLOCK_DECISION)
+
+
+def _is_shell_call(ev: object) -> bool:
+    """True when the payload is a shell invocation, not a path-addressed write.
+
+    Requires a ``command`` *and* a shell-family (or absent) tool name. Cursor's
+    ``beforeShellExecution`` sends a command with no ``tool_name`` at all, so an
+    absent name counts; a *write* tool that happens to carry a command does not,
+    and still gets the file-path guard.
+    """
+    if not getattr(ev, "command", None):
+        return False
+    tool_name = getattr(ev, "tool_name", None)
+    return tool_name is None or tool_name in SHELL_TOOL_NAMES
 
 
 def _is_stop_event(event: str, ev: object) -> bool:
@@ -242,9 +257,12 @@ def _run(event: str, guard: str, tool: str, root: str) -> HookEmission:
                 # Shell channel: crossby reports is_write=False for shell tool
                 # names, so the file-path policies below would allow this outright.
                 decision = shell_containment(ev, worktree_root=worktree_root, plan_mode=plan_mode)
-            if decision.action != "deny" and (ev.file_path or not ev.command):
+            if decision.action != "deny" and not _is_shell_call(ev):
                 # File-path channel — the only channel for a tool-call write, and a
-                # second check when a payload happens to carry both.
+                # second check when a payload happens to carry both. Skipped *only*
+                # for a genuine shell call: gating this on "has a command" instead
+                # would let a write tool that carries a command and no file_path
+                # through, losing the "deny a write we cannot locate" invariant.
                 decision = (
                     plan_artifact_only(ev, worktree_root=worktree_root)
                     if plan_mode
@@ -273,12 +291,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tool", required=True, help="AI tool id (selects the output dialect).")
     parser.add_argument("--root", default="", help="Worktree root — required by write guards.")
 
+    raw_argv = sys.argv[1:] if argv is None else argv
     try:
         ns = parser.parse_args(argv)
     except SystemExit:
         # argparse exits 2 on a usage error. For a PreToolUse write guard that
         # would (via the non-zero code) block the edit, which is the safe
-        # direction, so let it stand.
+        # direction, so let it stand. On a *Stop* event it is the opposite: exit 2
+        # means "block the stop", so a malformed invocation (e.g. a worktree path
+        # with a space that the tool's runner word-split) would trap the agent with
+        # an argparse usage message. The Stop channel fails open even here.
+        if any(arg.strip().lower() == "stop" for arg in raw_argv):
+            return 0
         raise
 
     emission = _run(ns.event, ns.guard, ns.tool, ns.root)

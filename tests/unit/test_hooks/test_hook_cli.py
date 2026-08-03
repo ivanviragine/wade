@@ -410,3 +410,60 @@ class TestPerToolDialectsMatchCrossby:
         r = _run_lean("stop", "session-complete", "copilot", "{}", str(tmp_path))
         assert r.returncode == 0
         assert json.loads(r.stdout)["decision"] == "block"
+
+
+class TestChannelRoutingRegressions:
+    """Guard-band regressions found in review of the shell-channel routing."""
+
+    def test_write_tool_carrying_a_command_still_gets_the_file_guard(self) -> None:
+        """A write tool with a command but no path must still deny.
+
+        Routing on "has a command" alone skipped the file-path guard here, losing
+        the "deny a write we cannot locate" invariant.
+        """
+        stdin = json.dumps({"tool_name": "Write", "tool_input": {"command": "ls"}})
+        assert _run_lean("pre_tool_use", "worktree", "claude", stdin).returncode == 2
+
+    def test_write_tool_with_blank_command_still_denies(self) -> None:
+        stdin = json.dumps({"tool_name": "Write", "tool_input": {"command": "   "}})
+        assert _run_lean("pre_tool_use", "worktree", "claude", stdin).returncode == 2
+
+    def test_genuine_shell_call_skips_the_file_guard(self) -> None:
+        stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "ls"}})
+        assert _run_lean("pre_tool_use", "worktree", "claude", stdin).returncode == 0
+
+    def test_cursor_shell_event_without_tool_name_skips_the_file_guard(self) -> None:
+        """Cursor's beforeShellExecution sends a command and no tool_name at all."""
+        assert (
+            _run_lean(
+                "pre_tool_use", "worktree", "cursor", json.dumps({"command": "ls"})
+            ).returncode
+            == 0
+        )
+
+
+class TestStopNeverTrapsOnUsageError:
+    """A malformed *invocation* must not block session completion either."""
+
+    def _raw(self, *args: str):
+        return subprocess.run(
+            [sys.executable, "-m", "wade.hooks.cli", *args],
+            input="{}",
+            capture_output=True,
+            text=True,
+        )
+
+    def test_stop_with_word_split_root_fails_open(self) -> None:
+        # A worktree path containing a space, word-split by the tool's runner.
+        r = self._raw(
+            "stop", "--guard", "session-complete", "--tool", "claude", "--root", "/a", "b"
+        )
+        assert r.returncode == 0
+
+    def test_stop_missing_required_flag_fails_open(self) -> None:
+        r = self._raw("stop", "--guard", "session-complete", "--root", WT)
+        assert r.returncode == 0
+
+    def test_pre_tool_use_usage_error_still_fails_closed(self) -> None:
+        r = self._raw("pre_tool_use", "--guard", "worktree", "--root", WT)
+        assert r.returncode == 2

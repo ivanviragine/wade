@@ -105,6 +105,62 @@ class TestShellContainment:
         """An untokenizable command may hide anything — deny rather than guess."""
         assert shell_containment(_shell(command), worktree_root=WT).action == "deny"
 
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "command -v gh >/dev/null 2>&1",
+            "git rev-parse --show-toplevel 2>/dev/null",
+            "./scripts/test.sh > /dev/null",
+            "make build &>/dev/null",
+            "cat /dev/null",
+        ],
+    )
+    def test_device_redirects_allowed(self, command: str) -> None:
+        """``>/dev/null 2>&1`` is the commonest shell idiom there is, not an escape."""
+        assert shell_containment(_shell(command), worktree_root=WT).action == "allow"
+
+    @pytest.mark.parametrize("command", ["echo hi 2>&1", "echo hi >&2", "exec 3>&-"])
+    def test_fd_duplication_names_no_file(self, command: str) -> None:
+        assert shell_containment(_shell(command), worktree_root=WT).action == "allow"
+
+    @pytest.mark.parametrize("command", ["printf x >&/tmp/pwn", "printf x >>&/tmp/pwn"])
+    def test_glued_ampersand_redirect_to_file_denied(self, command: str) -> None:
+        """bash's ``>&word`` with a filename is a real write, not an fd dup."""
+        assert shell_containment(_shell(command), worktree_root=WT).action == "deny"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "sort --output=/tmp/pwn file",
+            "tar --file=/tmp/pwn.tar -c .",
+            "curl -o/tmp/pwn https://example.com",
+            "dd of=/tmp/pwn if=README.md",
+            "git -C/tmp/other init",
+        ],
+    )
+    def test_paths_glued_to_flags_denied(self, command: str) -> None:
+        """A path attached to a flag or operand is still a path."""
+        assert shell_containment(_shell(command), worktree_root=WT).action == "deny"
+
+    @pytest.mark.parametrize(
+        "command",
+        ["rg --glob=*.py foo", "sort --output=out.txt file", "tar --file=x.tar -c ."],
+    )
+    def test_relative_glued_flag_values_allowed(self, command: str) -> None:
+        assert shell_containment(_shell(command), worktree_root=WT).action == "allow"
+
+    @pytest.mark.parametrize(
+        "command",
+        ["cd && printf x > pwn.txt", "cd - && printf x > pwn.txt", "cd ~-", "cd"],
+    )
+    def test_bare_cd_denied(self, command: str) -> None:
+        """A bare ``cd`` lands in $HOME, rebasing every later relative write."""
+        assert shell_containment(_shell(command), worktree_root=WT).action == "deny"
+
+    def test_glued_separator_starts_a_new_segment(self) -> None:
+        """``shlex`` leaves ``;``/``|`` glued to a word; the executable must still parse."""
+        assert shell_containment(_shell("echo hi; /bin/ls"), worktree_root=WT).action == "allow"
+
     def test_empty_command_allowed(self) -> None:
         assert shell_containment(_shell(""), worktree_root=WT).action == "allow"
 
@@ -121,6 +177,12 @@ class TestShellContainment:
             "sed -i.bak s/a/b/ src/app.py",  # in-place edit
             "sed --in-place s/a/b/ src/app.py",
             "echo x | tee src/app.py",  # tee to a non-artifact
+            "echo x | tee app.py",  # bare filename — no "/" to look path-like
+            "echo x|tee src/app.py",  # glued pipe still starts a new segment
+            "cp PLAN.md src/app.py",  # non-redirect write commands
+            "mv PLAN.md src/app.py",
+            "touch src/app.py",
+            "git checkout main -- src/app.py",
             "printf x > /tmp/o",  # outside wins regardless
         ],
     )
@@ -135,6 +197,7 @@ class TestShellContainment:
             "echo x >> PR-SUMMARY.md",
             "printf x > .claude/plans/a.md",
             "echo x | tee PLAN.md",
+            "cp PLAN.md PLAN-2.md",  # write command, artifact operands
             "ls -la",
             "cat src/app.py",  # reading source is fine in plan mode
             "cat < src/app.py",  # input redirect is a read, not a write
