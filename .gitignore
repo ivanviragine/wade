@@ -28,6 +28,7 @@ htmlcov/
 # AI tool directories (wade-managed — never committed in this repo)
 .agents/
 .claude/
+.codex/
 .copilot/
 .cursor/
 .gemini/
