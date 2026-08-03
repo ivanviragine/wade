@@ -251,7 +251,7 @@ def _run(event: str, guard: str, tool: str, root: str) -> HookEmission:
             # empty stdin cannot route past it into the allow branch below — which is
             # exactly how `--guard <typo>` used to exit 0 and silently protect nothing.
             # (A Stop event never reaches here; it fails open above.)
-            known = ", ".join(g for g in GUARD_NAMES)
+            known = ", ".join(GUARD_NAMES)
             decision = HookDecision.deny(
                 f"wade hook: unknown guard '{guard}' (expected one of: {known}); "
                 "denying to fail closed."

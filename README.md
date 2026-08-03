@@ -223,6 +223,10 @@ deliberate obfuscation (variable indirection, command substitution, subshells).
 | OpenAI Codex | ✅ shell (writes are sandboxed natively) | ✅ |
 | Antigravity CLI | ✅ | ✅ |
 
+The remaining supported tools (OpenCode, VS Code, Antigravity IDE) expose no hook
+mechanism WADE can install into, so they receive neither guard — session rules
+there rest on the skill files alone.
+
 ## Task Providers
 
 WADE can pull tasks from three backends — pick one when you run `wade init`:

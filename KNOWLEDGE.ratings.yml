@@ -58,6 +58,15 @@
   down: 0
   stale: 0
   up: 1
+8ee8260b:
+  down: 0
+  stale: 0
+  superseded_by: a15045c3
+  up: 1
+97d81e85:
+  down: 0
+  stale: 0
+  up: 1
 9b40e000:
   down: 0
   stale: 0
@@ -92,7 +101,7 @@ bcfa4bb3:
 cae0f47a:
   down: 0
   stale: 0
-  up: 2
+  up: 3
 cc136dba:
   down: 0
   stale: 0
