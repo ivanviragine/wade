@@ -8,6 +8,8 @@ from pathlib import Path
 
 import structlog
 
+from wade.skills.doc_targets import detect_doc_targets, format_doc_targets
+
 logger = structlog.get_logger()
 
 # Placeholder substitutions applied when skill files are copied to a project.
@@ -17,6 +19,7 @@ _SKILL_PARTIALS: dict[str, str] = {
     "{review_enforcement_rule}": "_partials/review-enforcement-rule.md",
     "{review_plan_step}": "_partials/review-plan-step.md",
     "{review_implementation_closing_step}": "_partials/review-implementation-closing-step.md",
+    "{doc_update_step}": "_partials/doc-update-step.md",
 }
 
 
@@ -82,8 +85,15 @@ SKILL_FILES: dict[str, list[str]] = {
         "SKILL.md",
         "reference/recovery.md",
         "reference/pr-summary-format.md",
+        "reference/doc-update.md",
+        "reference/tracking-issues.md",
+        "reference/new-plan.md",
     ],
-    "review-pr-comments-session": ["SKILL.md", "reference/recovery.md"],
+    "review-pr-comments-session": [
+        "SKILL.md",
+        "reference/recovery.md",
+        "reference/doc-update.md",
+    ],
     "deps": ["SKILL.md"],
     "knowledge": ["SKILL.md"],
 }
@@ -216,6 +226,8 @@ def install_skills(
             Useful for worktrees where templates live in the worktree itself.
         skills: If provided, install only the listed skills instead of all
             ``SKILL_FILES``.  When ``None`` (default), all skills are installed.
+        extra_partials: Placeholder overrides. Caller-supplied values win over
+            the ``{doc_targets}`` value computed here from ``project_root``.
 
     Returns:
         List of installed paths (relative to project root).  Symlinked skill
@@ -228,6 +240,9 @@ def install_skills(
     if not templates_dir.is_dir():
         logger.warning("skills.templates_not_found", path=str(templates_dir))
         return installed
+
+    computed_partials = {"{doc_targets}": format_doc_targets(detect_doc_targets(project_root))}
+    extra_partials = {**computed_partials, **(extra_partials or {})}
 
     primary_skills_dir = project_root / ".claude" / "skills"
 
@@ -359,8 +374,10 @@ def _expand_partials(
     ``extra_partials`` (placeholder → replacement string) are applied first, so
     callers can override or suppress any entry in ``_SKILL_PARTIALS`` by passing
     an empty string.  File-based partials in ``_SKILL_PARTIALS`` are applied
-    afterwards for any placeholders still present.  Unknown partial paths are
-    left unchanged with a warning.
+    afterwards for any placeholders still present, then ``extra_partials`` is
+    re-applied so placeholders nested inside a just-expanded file partial (e.g.
+    ``{doc_targets}`` inside ``doc-update-step.md``) also resolve.  Unknown
+    partial paths are left unchanged with a warning.
     """
     if extra_partials:
         for placeholder, replacement in extra_partials.items():
@@ -373,6 +390,9 @@ def _expand_partials(
             logger.warning("skills.partial_not_found", path=str(partial))
             continue
         content = content.replace(placeholder, partial.read_text(encoding="utf-8").rstrip())
+    if extra_partials:
+        for placeholder, replacement in extra_partials.items():
+            content = content.replace(placeholder, replacement)
     return content
 
 

@@ -76,6 +76,41 @@ sections around them. For example `user-interaction.md` is heading-less prose
 injected inside each skill's `## Talking to the user` section — the skill owns the
 single heading, so the fold never produces a duplicate H2.
 
+Partials also carry **no step number**. `doc-update-step.md` is inserted at a
+different position in each session (Step 2 in implement, after review; Step 1 in
+review-pr-comments), so the numbered heading lives in each `SKILL.md` and the
+partial holds only the shared body.
+
+## Documentation Targets
+
+The closing documentation pass names the files a project actually maintains.
+That list is **detected per project**, not hardcoded: `install_skills` calls
+`src/wade/skills/doc_targets.py` and injects the result as `{doc_targets}` into
+`doc-update-step.md`.
+
+- `detect_doc_targets(project_root)` returns the root doc files that exist
+  (`README.md`, `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, in that order) plus
+  `docs/` when it exists and is not generated build output.
+- `format_doc_targets(targets)` renders a backtick-quoted list, falling back to
+  *"the project's documentation, if it has any"* when nothing is detected, so the
+  step still reads correctly in a doc-less project.
+
+**Generated-docs guard.** Instructing an agent to edit generated output is worse
+than silence — the edit is real, plausible, committed, and erased by the next
+build. `docs/` is skipped when `docs/_build` exists or `.gitignore` contains a
+bare `docs` entry. Site-generator *config* files (`mkdocs.yml`,
+`docusaurus.config.js`, `docs/conf.py`, `docs/.vitepress`, `docs/book.toml`,
+`docs/_config.yml`) are deliberately **not** treated as generated markers: under
+each tool's default convention they mark `docs/` as hand-authored *source*, so
+treating them as output would exclude `docs/` for the most common case.
+
+`{doc_targets}` is a **computed** placeholder — it is resolved in
+`install_skills`, not read from a file in `_SKILL_PARTIALS`. Two consequences:
+`_expand_partials` re-applies `extra_partials` after the file-partial loop so a
+placeholder nested inside an expanded partial still resolves, and the budget test
+must render it explicitly (see below). Caller-supplied `extra_partials` win over
+the computed value.
+
 ## Progressive Disclosure: reference/ files and the context budget
 
 Every wade session opens with a launch prompt that inlines the phase `SKILL.md`
@@ -92,18 +127,22 @@ material is loaded **just-in-time** rather than eagerly.
 | **`reference/*.md`** next to `SKILL.md` | recovery procedures, formats, edge cases — read on demand | anything on the happy path |
 | **CLI output** | what to do *now*, at the moment something fails (already emitted by wade) | — |
 
-Each phase skill points at its reference files with a one-line `@`-pointer (e.g.
-`implementation-session/SKILL.md` points at
-`reference/recovery.md` for sync/catchup conflict handling and
-`reference/pr-summary-format.md` for the PR-summary format). The `task` skill uses the
-same pattern with `plan-format.md` + `examples.md`.
+Each phase skill points at its reference files with a one-line `@`-pointer.
+`implementation-session/SKILL.md` points at `reference/recovery.md` for
+sync/catchup conflict handling, `reference/pr-summary-format.md` for the
+PR-summary format, `reference/doc-update.md` for the closing documentation pass,
+and — from the `## Skills reference` index — `reference/tracking-issues.md`
+(child/epic issues) and `reference/new-plan.md` (finalizing a plan mid-session).
+`review-pr-comments-session` points at its own `reference/recovery.md` and
+`reference/doc-update.md`. The `task` skill uses the same pattern with
+`plan-format.md` + `examples.md`.
 
 Reference files must be registered in `SKILL_FILES` (see [Skill Installation
 Lifecycle](#skill-installation-lifecycle)) using the `reference/<file>.md` path,
-or they are not installed. Review needs its **own** `reference/recovery.md` — it
-cannot point at implementation-session's, because `REVIEW_SKILLS` installs only
-`review-pr-comments-session`, `task`, and `knowledge`. Some duplication between
-the two recovery files is expected and correct.
+or they are not installed. Review needs its **own** `reference/recovery.md` and
+`reference/doc-update.md` — it cannot point at implementation-session's, because
+`REVIEW_SKILLS` installs only `review-pr-comments-session`, `task`, and
+`knowledge`. Some duplication between the paired files is expected and correct.
 
 ### The ≤ 8,000-char budget test
 
@@ -114,6 +153,15 @@ the budget cannot silently regress. The unit is **chars** (a deliberate proxy fo
 tokens; measured token savings differ slightly). If a skill edit pushes a session
 over budget, move the added detail into a `reference/*.md` and leave a one-line
 pointer rather than inflating the always-loaded `SKILL.md`.
+
+**Computed placeholders must be rendered, not left literal.** `{doc_targets}` is
+resolved per project at install time (see [Documentation
+Targets](#documentation-targets)) rather than read from a partial file, so
+`_expand_partials` alone leaves the 14-char placeholder in place and
+under-measures every real install. The test therefore expands it with the
+largest set the detector can produce (all root doc files + `docs/`, ~64 chars) so
+the ceiling reflects a worst-case project. Any future computed placeholder added
+to a `SKILL.md` must be given the same treatment, or the budget silently drifts.
 
 ## Agent Skills (templates/skills/)
 

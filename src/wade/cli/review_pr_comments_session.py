@@ -75,9 +75,12 @@ def done(
         no_cleanup=no_cleanup,
     )
     if success:
+        from wade.cli.session_shared import DOC_PASS_ADVISORY
         from wade.models.review import format_review_status_summary
         from wade.services.review_service import get_review_status
         from wade.ui.console import console
+
+        console.warn(DOC_PASS_ADVISORY)
 
         status = get_review_status()
         if status is not None:

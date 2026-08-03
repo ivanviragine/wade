@@ -237,3 +237,57 @@ To unit-test a crossby GUI adapter launch command (Antigravity IDE, VS Code), pa
 To add or refresh supported AI models in wade (e.g. a new Opus), bump the crossby dependency — there is no wade-side model list to edit. The model registry (crossby.data.MODELS / get_models_for_tool), the complexity-tier defaults used by `wade init` (crossby.config.defaults.get_defaults), and EffortLevel all live in crossby; wade's _resolve_models and _suggest_model_for_tool (init_service/config_io.py, prompts_ai.py), ai_resolution.py, and cli/autocomplete.py are thin pass-throughs. Because the pyproject pin uses an exclusive upper bound (e.g. crossby<0.11.0), each new crossby minor needs an explicit pin bump plus a verification pass across those four import sites.
 
 ---
+
+## b2fd3ce3 | 2026-08-01 | implementation | tags: skills, git, pointer | Issue #360
+
+When editing WADE's own AGENTS.md in a self-init worktree, wade's bootstrap process (_suppress_pointer_artifacts in implementation_service/bootstrap.py) marks the tracked AGENTS.md with git's --skip-worktree bit so the locally-injected ## Git Workflow pointer block (from pointer.ensure_pointer) doesn't show as dirty in git status. This hides ALL edits to AGENTS.md, including real content changes, from git status/diff/add (git add even fails with a sparse-checkout-style error). To commit a real AGENTS.md edit: run 'git update-index --no-skip-worktree AGENTS.md' first, then use pointer.remove_pointer() on a copy of the file to strip the injected pointer block before staging (so the transient pointer text doesn't get committed), stage that cleaned content via 'git hash-object -w' + 'git update-index --cacheinfo', commit, then restore 'git update-index --skip-worktree AGENTS.md' to keep the suppression working for the rest of the session.
+
+---
+
+## 13459084 | 2026-08-01 | plan | tags: git, stash, worktree, concurrency | Issue #357
+
+git's stash stack lives in $GIT_COMMON_DIR, so EVERY linked worktree of a repo shares ONE stash stack — a stash pushed in worktree A is visible (and position-shiftable) from worktree B. wade's autostash (git/stash.py create_named_stash -> _find_stash_ref) resolves by message at creation but then HOLDS the resulting positional ref (stash@{N}) from creation (sync.py:526/676) all the way to pop (sync.py:580/590/711). Any intervening 'git stash push' from another worktree's catchup(), _pull_main_after_merge (lifecycle.py), or the user shifts the positions, so the held ref now points at someone else's work; pop_stash (stash.py:72, check=False) then silently applies the wrong changes. wade implement-batch runs parallel 'wade implement' in sibling worktrees, each autostashing on startup catchup — a live race. Safe pattern: capture the stash COMMIT SHA at creation (git stash list --format='%H %gs') and 'git stash apply <sha>', or re-resolve _find_stash_ref(message) immediately before pop and refuse if it no longer resolves. Also note: _run_gh (git/pr.py:35) and _run_git_with_retry (git/repo.py:63, _LOCK_PATTERNS at repo.py:59) are TWO SEPARATE retry mechanisms — _LOCK_PATTERNS is not in pr.py.
+
+---
+
+## 8ee8260b | 2026-08-01 | plan | tags: hooks, crossby, gotcha | Issue #356
+
+wade's hook layer spans TWO repos. Guard *policies* (allow/deny decisions) live in wade: hooks/policies.py + the wade-hook entry point hooks/cli.py. All per-tool hook *dialect* parsing/emitting (is_write detection, _extract_command, emit_decision/emit_stop_decision, _TOOL_NAME_MAP, _EVENT_NAMES, per-tool supported-events, adapter capability flags) lives in the EXTERNAL crossby package (hooks/runtime.py, sync/hooks.py, ai_tools/*). Two drift gotchas when bumping crossby: (1) wade-hook (hooks/cli.py) hard-codes a static _TOOL_DIALECTS map mirroring each crossby adapter's hook_output_dialect, deliberately duplicated to avoid importing crossby.ai_tools on the hot per-edit path (~150ms vs ~450ms) — it must be MANUALLY re-synced on every crossby version bump or a tool silently gets the wrong output shape. (2) Guard hooks (_install_guard_hooks/_install_stop_hook) are installed per-worktree in bootstrap_worktree, NOT at 'wade init' — so a wade/crossby upgrade auto-remediates existing inited projects on their next 'wade implement'/'wade plan' session; no re-init/migration needed. Also: crossby's HookEvent.is_write was historically an ALLOWLIST (WRITE_TOOL_NAMES), which is fail-OPEN on any recognized-but-unlisted tool name (e.g. Codex apply_patch, agy write_to_file).
+
+---
+
+## 97d81e85 | 2026-08-01 | plan | tags: crossby, architecture, planning | Issue #359
+
+crossby is an EXTERNAL repo consumed by wade (sibling checkout at ../crossby, also installed in the venv, pinned in pyproject.toml). AI-tool adapters, the sync registry/writers, and hook readers all live there — NOT in src/wade/. Changes to crossby internals (e.g. adding a sync hook reader, fixing the registry comment, adding an adapter) cannot be implemented inside a wade worktree session: they require a crossby PR + release, then a pin bump in wade pyproject.toml. When planning a wade issue that names crossby files, split the crossby part out or fold it into whichever issue already bumps the pin.
+
+---
+
+## 455476d6 | 2026-08-01 | implementation | tags: plan-session, skills, templates | Issue #355
+
+plan-session `## Your role` step numbering for the `{review_plan_step}` slot (currently step 7) must stay in sync across THREE places: the leading number in `_partials/review-plan-step.md` (the enabled step), the disabled one-liner hardcoded in `bootstrap.py` (`skill_extra_partials['{review_plan_step}']`), and the placeholder's position in `plan-session/SKILL.md`. #278 moved the step 5→7 but left bootstrap.py's disabled string at '5.', so numbering only rendered wrong when `review_plan.enabled: false`. Steps 8/9/10 carry MD029-disable comments because the injected block is variable-length.
+
+---
+
+## d20c7cbe | 2026-08-01 | implementation | tags: skills, git, gotcha | Issue #355
+
+A skill reference file (`templates/skills/<name>/reference/<file>.md`) whose basename case-insensitively matches a worktree session-artifact ignore (`PR-SUMMARY.md`, `PLAN.md` — emitted root-unanchored by get_worktree_gitignore_entries in installer.py) is silently gitignored on case-insensitive filesystems (macOS): `git add -A` skips it, so the template source never gets committed. Verify with `git check-ignore -v <path>`. #355 named a reference `pr-summary.md` which collided with `PR-SUMMARY.md`; renamed to `pr-summary-format.md` to avoid it (Linux CI is case-sensitive and would not have caught this).
+
+---
+
+## 235fb8e8 | 2026-08-03 | implementation | tags: hooks, crossby, gotcha | Issue #356
+
+crossby's HookEvent.is_write returns False for SHELL_TOOL_NAMES (bash, shell, exec_command, powershell, run_command) BY DESIGN — a shell call carries its target in HookEvent.command, not file_path. So worktree_containment/plan_artifact_only allow every shell command, and shell writes are only covered by wade's separate shell_containment policy routed on ev.command. Any new PreToolUse guard must cover both channels or it silently misses 'printf x > ../outside'.
+
+---
+
+## a44493f7 | 2026-08-03 | implementation | tags: hooks, codex, gotcha | Issue #356
+
+Codex's --sandbox workspace-write does NOT imply worktree containment: it also permits /tmp and $TMPDIR, so a shell redirect like 'printf x > /tmp/pwn' is sandbox-legal yet outside the worktree. wade therefore narrows (not skips) the worktree guard for tools reporting sandboxes_writes=True — the matcher drops to the shell token only, leaving tool-call writes to the sandbox. Treating sandboxes_writes as 'fully contained' is the bug this replaced.
+
+---
+
+## a15045c3 | 2026-08-03 | implementation | tags: hooks, crossby | Issue #356
+
+wade's hooks/cli.py now hard-codes TWO static per-tool maps that mirror crossby adapter capabilities: _TOOL_DIALECTS (hook_output_dialect) and _TOOL_STOP_DIALECTS (hook_stop_dialect, split out as a separate enum in crossby 0.13 because a tool's Stop contract does not follow from its tool-call contract). Both are deliberate copies to keep the hot per-edit path off crossby.ai_tools (~150ms vs ~450ms). TestPerToolDialectsMatchCrossby in tests/unit/test_hooks/test_hook_cli.py asserts both still match the adapters, so a crossby bump that changes a dialect now fails the suite instead of silently mis-shaping hook output.
+
+---
