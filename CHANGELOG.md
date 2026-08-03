@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.38.0] — 2026-08-03
+
+### Features
+
+- add a documentation update pass to the implementation and pr-comments sessions (#361) (96b6b6d)
+
+### Other Changes
+
+- E: Context budget — slim the skills, say each rule once, load reference just-in-time (#364) (670cc29)
+
 ## [v0.37.0] — 2026-08-01
 
 ### Features
