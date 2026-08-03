@@ -202,9 +202,18 @@ def plan_artifact_only(event: HookEvent, *, worktree_root: Path) -> HookDecision
 # executable name rather than one of the previous command's arguments.
 _SEGMENT_SEPARATORS = frozenset({"&&", "||", "|", ";", "&", "|&"})
 
-# Characters that glue a separator onto an adjacent word (``echo x|tee f``).
+# Characters a separator run is built from (``echo x|tee f``, ``a;;b``).
 _SEPARATOR_CHARS = "|;&"
-_GLUED_SEPARATOR_RE = re.compile(r"([|;&]+)")
+
+# A redirect operator standing alone as its own token, optionally fd-prefixed
+# (``2>``) or fd-duplicating (``&>``), with a trailing ``&`` captured separately
+# (``>&``). :func:`_tokenize` returns runs of ``<>|&`` glued together but splits a
+# *leading* fd digit off (``2>&1`` -> ``2``/``>&``/``1``), so :func:`_normalize_tokens`
+# re-attaches both ends.
+_REDIRECT_OP_RE = re.compile(r"^(?P<head>(?:[0-9]*|&)(?:>>|>\||>|<))(?P<amp>&?)$")
+
+# The tail of an fd duplication or close (``2>&1`` -> ``1``, ``>&-`` -> ``-``).
+_FD_TAIL_RE = re.compile(r"^(?:[0-9]+-?|-)$")
 
 # A redirect operator, optionally fd-prefixed (``2>``) or fd-duplicating (``&>``),
 # optionally with the target glued on (``>/tmp/x``). ``shlex`` keeps the operator
@@ -218,6 +227,13 @@ _FD_DUP_RE = re.compile(r"^&(?:[0-9]+-?|-)$")
 
 # Commands whose in-place flag rewrites a file rather than emitting to stdout.
 _IN_PLACE_FLAG_RE = re.compile(r"^--in-place(=.*)?$|^-i(\..*)?$")
+
+# ...but only for commands where ``-i`` actually *means* in-place. It is an
+# ordinary read flag almost everywhere else (``grep -i``, ``rg -i``, ``ls -i``,
+# ``git commit -i``, ``ssh -i key``), and denying those broke plan sessions on
+# perfectly innocent commands. An in-place tool missing from this set is a gap in
+# rule 5 only — the worktree rules still apply, so it cannot escape the root.
+_IN_PLACE_COMMANDS = frozenset({"sed", "gsed", "perl", "ruby", "yq"})
 
 # Character devices are not worktree escapes — `>/dev/null 2>&1` is the single most
 # common shell idiom an agent emits, and denying it breaks ordinary sessions.
@@ -250,23 +266,66 @@ _PLAN_WRITE_COMMANDS = frozenset(
 _GIT_WRITE_SUBCOMMANDS = frozenset({"checkout", "restore", "apply", "mv", "rm", "clean"})
 
 
-def _normalize_tokens(tokens: list[str]) -> list[str]:
-    """Split separators that ``shlex`` left glued to a neighbouring word.
+def _tokenize(command: str) -> list[str]:
+    """Split a command into words, keeping quoted operands whole.
 
-    ``shlex.split`` is not a shell parser: ``echo x|tee f`` tokenizes as
-    ``['echo', 'x|tee', 'f']``, which would score ``tee`` as an argument and miss
-    that a new command started. Tokens containing a redirect operator are left
-    alone so ``2>&1`` is not shredded into ``2>``/``&``/``1``.
+    ``shlex.split`` is not a shell parser: it strips quotes and leaves separators
+    glued to their neighbours, so ``echo x|tee f`` came back as
+    ``['echo', 'x|tee', 'f']``. Re-splitting on ``|`` afterwards fixed that but
+    could not tell an operand's ``|`` from a real pipe — ``tee 'a|b' out.md`` split
+    into ``a``/``;``/``b``, and the phantom ``;`` made ``out.md`` look like the next
+    segment's *executable*, which is exempt from the path checks.
+
+    ``punctuation_chars`` moves that decision into the lexer, which still knows
+    what was quoted: separator runs become their own tokens only when unquoted.
+    ``commenters`` is cleared to match ``shlex.split`` — otherwise a ``#`` in a
+    filename or commit message would truncate the rest of the command.
+
+    Raises:
+        ValueError: The command does not tokenize (unbalanced quotes).
+    """
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    return list(lexer)
+
+
+def _normalize_tokens(tokens: list[str]) -> list[str]:
+    """Re-glue the redirect pieces :func:`_tokenize` split apart.
+
+    ``punctuation_chars`` returns a run of ``<>|&`` as one token but breaks a
+    *word* off either end, so ``2>&1`` arrives as ``2``/``>&``/``1``. Left alone,
+    the ``1`` would read as an argument and the ``2`` as an operand — in plan mode
+    ``tee 2>err.log`` would then be denied for "writing" a file named ``2``. Both
+    ends are re-attached here so the scanner keeps seeing whole redirects:
+
+    - fd prefix — ``['2', '>&']`` -> ``'2>&'``
+    - fd dup/close tail — ``['2>&', '1']`` -> ``'2>&1'`` (names no file)
+    - filename tail — ``['>&', 'out.md']`` -> ``'>'`` + ``'out.md'``, since bash's
+      ``>&word`` with a filename is a real write, handled as a spaced redirect.
+
+    A separator run that is not itself a known separator (``a ;; b``) collapses to
+    ``;`` so it still ends the segment.
     """
     out: list[str] = []
-    for token in tokens:
-        if token in _SEGMENT_SEPARATORS or ">" in token or "<" in token:
-            out.append(token)
-            continue
-        for part in _GLUED_SEPARATOR_RE.split(token):
-            if not part:
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if token.isdigit() and i + 1 < len(tokens) and _REDIRECT_OP_RE.match(tokens[i + 1]):
+            token += tokens[i + 1]
+            i += 1
+        redirect = _REDIRECT_OP_RE.match(token)
+        if redirect is not None and redirect.group("amp"):
+            tail = tokens[i + 1] if i + 1 < len(tokens) else None
+            if tail is not None and _FD_TAIL_RE.match(tail):
+                out.append(token + tail)
+                i += 2
                 continue
-            out.append(";" if set(part) <= set(_SEPARATOR_CHARS) else part)
+            token = redirect.group("head")
+        elif token not in _SEGMENT_SEPARATORS and set(token) <= set(_SEPARATOR_CHARS) and token:
+            token = ";"
+        out.append(token)
+        i += 1
     return out
 
 
@@ -355,9 +414,11 @@ def shell_containment(
        legitimately live in ``/usr/bin``, ``/bin``, ``/opt/homebrew/bin`` and denying
        those breaks every session. Character devices (``/dev/null``) are exempt too —
        ``>/dev/null 2>&1`` is not an escape.
-    5. In plan mode only: any redirect, any in-place edit flag (``sed -i``,
-       ``--in-place``), or an operand of a write command (``tee``, ``cp``, ``mv``,
-       ``touch``, ``git checkout --`` …) whose path is not a plan artifact.
+    5. In plan mode only: any redirect, an in-place edit flag (``sed -i``,
+       ``--in-place``) on a command that *has* one (:data:`_IN_PLACE_COMMANDS` —
+       ``grep -i`` and ``ls -i`` are ordinary read flags), or an operand of a write
+       command (``tee``, ``cp``, ``mv``, ``touch``, ``git checkout --`` …) whose
+       path is not a plan artifact.
 
     **This is defense-in-depth, not a completeness guarantee.** It stops the
     non-obfuscated cases — the ones an agent actually produces — and is trivially
@@ -376,8 +437,9 @@ def shell_containment(
     - **Interpreters given inline code** — ``python -c 'open("/etc/x","w")'``.
     - **Plan mode only:** a write command outside :data:`_PLAN_WRITE_COMMANDS`
       (the list covers ``tee``/``cp``/``mv``/``touch``/``git checkout --`` and
-      friends). The *worktree* rules still apply to it, so it cannot escape the
-      root — it can only write a non-artifact inside it.
+      friends), or an in-place editor outside :data:`_IN_PLACE_COMMANDS`. The
+      *worktree* rules still apply to both, so neither can escape the root — they
+      can only write a non-artifact inside it.
 
     Args:
         event: Normalized hook event; only :attr:`HookEvent.command` is read.
@@ -396,7 +458,7 @@ def shell_containment(
             base = cwd_resolved
 
     try:
-        tokens = shlex.split(command)
+        tokens = _tokenize(command)
     except ValueError:
         return HookDecision.deny(
             f"BLOCKED by {'plan-session' if plan_mode else 'worktree'} guard: could not "
@@ -516,7 +578,7 @@ def shell_containment(
                 return deny_outside(f"{command_name} target", token)
             continue
 
-        if plan_mode and _IN_PLACE_FLAG_RE.match(token):
+        if plan_mode and command_name in _IN_PLACE_COMMANDS and _IN_PLACE_FLAG_RE.match(token):
             return HookDecision.deny(
                 f"BLOCKED by plan-session guard: in-place editing ('{token}') is not "
                 "allowed in plan mode — it rewrites a file without going through a "

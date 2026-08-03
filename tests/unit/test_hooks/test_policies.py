@@ -161,6 +161,27 @@ class TestShellContainment:
         """``shlex`` leaves ``;``/``|`` glued to a word; the executable must still parse."""
         assert shell_containment(_shell("echo hi; /bin/ls"), worktree_root=WT).action == "allow"
 
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "tee 'a|b' /tmp/pwn",  # quoted '|' must not fake a segment break
+            "tee 'a;b' /tmp/pwn",
+            "grep 'x&y' f && cp a /tmp/b",  # real separator after a quoted one
+        ],
+    )
+    def test_quoted_separators_do_not_hide_the_next_operand(self, command: str) -> None:
+        """A separator *inside* a quoted word is data, not a new command segment.
+
+        Re-splitting tokens on ``|;&`` after ``shlex.split`` stripped the quotes
+        turned ``a|b`` into ``a``/``;``/``b``; the phantom ``;`` promoted the
+        following path to an *executable*, which is exempt from containment.
+        """
+        assert shell_containment(_shell(command), worktree_root=WT).action == "deny"
+
+    def test_quoted_separator_operand_checked_in_plan_mode(self) -> None:
+        d = shell_containment(_shell("tee 'a|b' src/app.py"), worktree_root=WT, plan_mode=True)
+        assert d.action == "deny"
+
     def test_empty_command_allowed(self) -> None:
         assert shell_containment(_shell(""), worktree_root=WT).action == "allow"
 
@@ -211,6 +232,40 @@ class TestShellContainment:
     def test_plan_mode_allows_artifacts_and_reads(self, command: str) -> None:
         got = shell_containment(_shell(command), worktree_root=WT, plan_mode=True).action
         assert got == "allow"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "grep -i pattern src/app.py",
+            "rg -i foo",
+            "ls -i src",
+            "git commit -i",
+            "sort -i notes.txt",
+        ],
+    )
+    def test_plan_mode_allows_read_only_dash_i(self, command: str) -> None:
+        """``-i`` means in-place only for a handful of commands, not universally.
+
+        Matching a bare ``-i`` on *any* command denied `grep -i`, `rg -i` and
+        `ls -i` in plan mode — with a message about "in-place editing" that was
+        wrong for all three.
+        """
+        got = shell_containment(_shell(command), worktree_root=WT, plan_mode=True).action
+        assert got == "allow"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "sed -i s/a/b/ src/app.py",
+            "perl -i -pe s/a/b/ src/app.py",
+            "ruby -i -pe x src/app.py",
+            "yq -i .a=1 src/config.yml",
+        ],
+    )
+    def test_plan_mode_still_denies_real_in_place_edits(self, command: str) -> None:
+        d = shell_containment(_shell(command), worktree_root=WT, plan_mode=True)
+        assert d.action == "deny"
+        assert "in-place" in d.reason
 
 
 class TestWorktreeContainment:
