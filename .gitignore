@@ -33,6 +33,7 @@ htmlcov/
 .gemini/
 .github/hooks/
 .github/skills
+.wade/
 CLAUDE.md
 PLAN.md
 PR-SUMMARY.md
