@@ -467,3 +467,12 @@ class TestStopNeverTrapsOnUsageError:
     def test_pre_tool_use_usage_error_still_fails_closed(self) -> None:
         r = self._raw("pre_tool_use", "--guard", "worktree", "--root", WT)
         assert r.returncode == 2
+
+    def test_flag_value_named_stop_does_not_flip_write_guard_open(self) -> None:
+        """`--root stop` must not look like a Stop event to the fail-open path.
+
+        Scanning all of argv for "stop" turned a PreToolUse usage error from
+        fail-closed into fail-open.
+        """
+        r = self._raw("pre_tool_use", "--guard", "worktree", "--root", "stop")
+        assert r.returncode == 2

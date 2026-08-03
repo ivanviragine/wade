@@ -225,8 +225,26 @@ _ALWAYS_ALLOWED_PATH_PREFIXES = ("/dev/",)
 
 # Commands that write their path operands. In plan mode those operands must be plan
 # artifacts, otherwise `cp PLAN.md src/app.py` edits source without a write tool.
+# Deletion counts as a write: `rm src/app.py` destroys source just as surely as
+# overwriting it, and omitting it left the mildest command (`touch`) guarded while
+# the most destructive one was not.
 _PLAN_WRITE_COMMANDS = frozenset(
-    {"tee", "cp", "mv", "touch", "install", "ln", "dd", "truncate", "patch", "rsync"}
+    {
+        "tee",
+        "cp",
+        "mv",
+        "touch",
+        "install",
+        "ln",
+        "dd",
+        "truncate",
+        "patch",
+        "rsync",
+        "rm",
+        "rmdir",
+        "unlink",
+        "shred",
+    }
 )
 # `git <sub> -- <path>` forms that overwrite working-tree files.
 _GIT_WRITE_SUBCOMMANDS = frozenset({"checkout", "restore", "apply", "mv", "rm", "clean"})

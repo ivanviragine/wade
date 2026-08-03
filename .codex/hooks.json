@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "command": "wade-hook stop --guard session-complete --tool codex --root /Users/ivanviragine/Documents/workspace/.worktrees/wade/feat-356-h1-hook-layer-correctness-capability-matrix-fail",
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}

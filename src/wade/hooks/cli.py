@@ -94,6 +94,29 @@ def _stop_dialect_for(tool: str) -> HookStopDialect:
     return _TOOL_STOP_DIALECTS.get(tool.strip().lower(), HookStopDialect.BLOCK_DECISION)
 
 
+_VALUE_FLAGS = ("--guard", "--tool", "--root")
+
+
+def _event_from_argv(argv: list[str]) -> str:
+    """Recover the ``event`` positional from a raw argv that argparse rejected.
+
+    Must key off the positional specifically, not scan the whole argv: a flag
+    *value* of ``stop`` (e.g. ``--root stop``) would otherwise look like a Stop
+    event and flip a PreToolUse usage error from fail-closed to fail-open.
+    """
+    skip = False
+    for arg in argv:
+        if skip:
+            skip = False
+            continue
+        if arg.startswith("-"):
+            if arg in _VALUE_FLAGS:
+                skip = True
+            continue
+        return arg.strip().lower()
+    return ""
+
+
 def _is_shell_call(ev: object) -> bool:
     """True when the payload is a shell invocation, not a path-addressed write.
 
@@ -301,7 +324,7 @@ def main(argv: list[str] | None = None) -> int:
         # means "block the stop", so a malformed invocation (e.g. a worktree path
         # with a space that the tool's runner word-split) would trap the agent with
         # an argparse usage message. The Stop channel fails open even here.
-        if any(arg.strip().lower() == "stop" for arg in raw_argv):
+        if _event_from_argv(raw_argv) == "stop":
             return 0
         raise
 

@@ -183,6 +183,10 @@ class TestShellContainment:
             "mv PLAN.md src/app.py",
             "touch src/app.py",
             "git checkout main -- src/app.py",
+            "rm src/app.py",  # deletion is a write
+            "rm -rf src/",
+            "rmdir src",
+            "unlink src/app.py",
             "printf x > /tmp/o",  # outside wins regardless
         ],
     )
@@ -198,6 +202,7 @@ class TestShellContainment:
             "printf x > .claude/plans/a.md",
             "echo x | tee PLAN.md",
             "cp PLAN.md PLAN-2.md",  # write command, artifact operands
+            "rm PLAN.md",  # deleting an artifact is allowed
             "ls -la",
             "cat src/app.py",  # reading source is fine in plan mode
             "cat < src/app.py",  # input redirect is a read, not a write
