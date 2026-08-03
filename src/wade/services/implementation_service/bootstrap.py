@@ -5,8 +5,13 @@ from __future__ import annotations
 import shutil
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import structlog
+
+if TYPE_CHECKING:
+    from crossby.models.ai import AIToolID
+    from crossby.sync.base import AbstractSyncWriter
 
 from wade.git import repo as git_repo
 from wade.models.config import (
@@ -180,6 +185,39 @@ _GUARD_WRITE_TOOLS = ["Edit", "Write", "Delete", "NotebookEdit", _GUARD_SHELL_TO
 _GUARD_HOOK_TIMEOUT_SECONDS = 10
 
 
+def _hook_writers() -> list[tuple[AIToolID, AbstractSyncWriter]]:
+    """Tools wade installs guard hooks into, paired with crossby's writer for each.
+
+    Shared by the PreToolUse and Stop installers so the two lists cannot drift,
+    and read by the dialect-map parity test — a tool added here without matching
+    entries in ``wade.hooks.cli``'s ``_TOOL_DIALECTS`` / ``_TOOL_STOP_DIALECTS``
+    would silently fall back to the default output shape, so the test fails first.
+
+    Imported lazily: ``crossby.sync.hooks`` pulls in every adapter, which is a
+    cost worth paying once per worktree bootstrap but not on every ``wade`` start.
+    """
+    from crossby.models.ai import AIToolID
+    from crossby.sync.hooks import (
+        AntigravityCLIHooksWriter,
+        ClaudeHooksWriter,
+        CodexHooksWriter,
+        CopilotHooksWriter,
+        CursorHooksWriter,
+    )
+
+    # Antigravity CLI joined this list in crossby 0.13, which added agy's native
+    # tool names to ``_TOOL_NAME_MAP`` (``Write`` -> ``write_to_file`` etc.).
+    # Before that the canonical matcher compiled to names agy never emits, so the
+    # hook installed and then never fired — protection in appearance only.
+    return [
+        (AIToolID.CLAUDE, ClaudeHooksWriter()),
+        (AIToolID.CURSOR, CursorHooksWriter()),
+        (AIToolID.COPILOT, CopilotHooksWriter()),
+        (AIToolID.CODEX, CodexHooksWriter()),
+        (AIToolID.ANTIGRAVITY_CLI, AntigravityCLIHooksWriter()),
+    ]
+
+
 def _log_sync_result(result: object, tool_id: object) -> None:
     """Surface a crossby ``SyncResult`` — warn on writer errors, else stay quiet.
 
@@ -231,30 +269,11 @@ def _install_guard_hooks(
     import shlex
 
     from crossby.ai_tools import AbstractAITool
-    from crossby.models.ai import AIToolID
     from crossby.models.config import HookEntry
     from crossby.sync.base import SyncData
-    from crossby.sync.hooks import (
-        AntigravityCLIHooksWriter,
-        ClaudeHooksWriter,
-        CodexHooksWriter,
-        CopilotHooksWriter,
-        CursorHooksWriter,
-    )
 
-    # Antigravity CLI joined this list in crossby 0.13, which added agy's native
-    # tool names to ``_TOOL_NAME_MAP`` (``Write`` -> ``write_to_file`` etc.).
-    # Before that the canonical matcher compiled to names agy never emits, so the
-    # hook installed and then never fired — protection in appearance only.
-    writers = [
-        (AIToolID.CLAUDE, ClaudeHooksWriter()),
-        (AIToolID.CURSOR, CursorHooksWriter()),
-        (AIToolID.COPILOT, CopilotHooksWriter()),
-        (AIToolID.CODEX, CodexHooksWriter()),
-        (AIToolID.ANTIGRAVITY_CLI, AntigravityCLIHooksWriter()),
-    ]
     root = shlex.quote(str(worktree_path))
-    for tool_id, writer in writers:
+    for tool_id, writer in _hook_writers():
         caps = AbstractAITool.get(tool_id).capabilities()
         tools = _GUARD_WRITE_TOOLS
         if guard_type == "worktree" and caps.sandboxes_writes:
@@ -309,26 +328,11 @@ def _install_stop_hook(worktree_path: Path) -> None:
     import shlex
 
     from crossby.ai_tools import AbstractAITool
-    from crossby.models.ai import AIToolID
     from crossby.models.config import HookEntry
     from crossby.sync.base import SyncData
-    from crossby.sync.hooks import (
-        AntigravityCLIHooksWriter,
-        ClaudeHooksWriter,
-        CodexHooksWriter,
-        CopilotHooksWriter,
-        CursorHooksWriter,
-    )
 
-    writers = [
-        (AIToolID.CLAUDE, ClaudeHooksWriter()),
-        (AIToolID.CURSOR, CursorHooksWriter()),
-        (AIToolID.CODEX, CodexHooksWriter()),
-        (AIToolID.COPILOT, CopilotHooksWriter()),
-        (AIToolID.ANTIGRAVITY_CLI, AntigravityCLIHooksWriter()),
-    ]
     root = shlex.quote(str(worktree_path))
-    for tool_id, writer in writers:
+    for tool_id, writer in _hook_writers():
         if not AbstractAITool.get(tool_id).capabilities().supports_stop_hook:
             continue
         command = f"wade-hook stop --guard session-complete --tool {tool_id.value} --root {root}"

@@ -259,13 +259,17 @@ class TestBootstrapPlanMode:
             "wade-hook" in c and "--guard plan" in c and "--tool claude" in c for c in commands
         )
 
-        # Every tool with a PreToolUse guard (incl. Codex — plan guard is finer
-        # than any sandbox) gets a config. Antigravity CLI is intentionally not
-        # given a PreToolUse guard (see _install_guard_hooks), so no .agents
-        # config is written here.
+        # Every tool in _hook_writers() gets a config — incl. Codex (the plan
+        # guard is finer-grained than any sandbox) and Antigravity CLI, which
+        # joined in crossby 0.13 once agy's native tool names landed in the
+        # matcher map.
         assert (worktree_path / ".cursor" / "hooks.json").is_file()
         assert (worktree_path / ".github" / "hooks" / "hooks.json").is_file()
         assert (worktree_path / ".codex" / "hooks.json").is_file()
+        agents = (worktree_path / ".agents" / "hooks.json").read_text("utf-8")
+        assert "wade-hook" in agents
+        assert "--guard plan" in agents
+        assert "--tool antigravity-cli" in agents
 
     def test_worktree_mode_installs_wade_hook_configs(self, tmp_path: Path) -> None:
         """Default (worktree) mode wires ``wade-hook --guard worktree`` for non-sandbox tools."""

@@ -405,6 +405,20 @@ class TestPerToolDialectsMatchCrossby:
             caps = AbstractAITool.get(AIToolID(tool_id)).capabilities()
             assert caps.hook_stop_dialect == dialect, tool_id
 
+    def test_every_installed_tool_has_both_dialects(self) -> None:
+        """The reverse direction: a tool wade installs a hook for must be mapped.
+
+        The two tests above only walk the wade maps, so a tool added to
+        ``_hook_writers`` but forgotten here would silently take the fallback
+        dialect and emit the wrong shape — passing tests, unenforced guard.
+        """
+        from wade.hooks.cli import _TOOL_DIALECTS, _TOOL_STOP_DIALECTS
+        from wade.services.implementation_service.bootstrap import _hook_writers
+
+        installed = {tool_id.value for tool_id, _ in _hook_writers()}
+        assert installed <= set(_TOOL_DIALECTS), installed - set(_TOOL_DIALECTS)
+        assert installed <= set(_TOOL_STOP_DIALECTS), installed - set(_TOOL_STOP_DIALECTS)
+
     def test_copilot_stop_hook_blocks(self, tmp_path: Path) -> None:
         """Copilot gained supports_stop_hook in 0.13 — its Stop must actually block."""
         r = _run_lean("stop", "session-complete", "copilot", "{}", str(tmp_path))
