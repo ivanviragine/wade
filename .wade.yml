@@ -30,7 +30,8 @@ ai:
     effort: high
     enabled: true
     # The 300s default is not enough for a large diff at effort: high — the
-    # subprocess is killed mid-review and the step silently reports no findings.
+    # subprocess is killed mid-review and the whole review is lost (wade exits 1
+    # with no findings, and the retry costs another full budget).
     timeout: 900
   review_batch:
     tool: claude
