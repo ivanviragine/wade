@@ -140,6 +140,14 @@ def _is_stop_event(event: str, ev: object) -> bool:
     """
     if event.strip().lower() == "stop":
         return True
+    # Reads as if a hostile payload could claim `"event": "stop"` and talk a
+    # PreToolUse write out of its fail-closed path. It cannot: `_run` calls
+    # `parse_event(raw, event=event)`, and crossby's `_extract_event` gives that
+    # override unconditional precedence — the payload's `hook_event_name` is
+    # consulted only when the override is falsy. So `ev.event` is CLI-derived,
+    # and this clause can differ from the one above only when the event arg is
+    # empty, which no command wade installs ever is. Kept as the fail-open
+    # safety net for exactly that malformed case.
     return getattr(ev, "event", None) == "stop"
 
 
