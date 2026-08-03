@@ -130,6 +130,13 @@ Before considering any work complete:
 - [ ] **`templates/skills/`** — updated if agent-facing rules changed (plan-session for planning, implementation-session for implementation, review-pr-comments-session for reviews)
 - [ ] **Commit** — uses conventional-commit prefix
 
+Note: for inited projects, the doc update pass is now an explicit, mandatory
+closing step in the installed `implementation-session` and
+`review-pr-comments-session` skills (`{doc_update_step}` /
+`templates/skills/_partials/doc-update-step.md`) — not something an agent has
+to remember on its own. This repo's own checklist above is unaffected; it
+still governs what WADE-repo changes require here.
+
 > Full 10-item checklist, documentation rules, feedback loop, and correction-driven docs: see `docs/dev/documentation-policies.md`
 
 ## Detailed Reference

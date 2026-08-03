@@ -123,12 +123,18 @@ identified a missing test case.
 **NEVER** create Pull Requests manually (`gh pr create`) or push branches
 directly. Follow these steps in order:
 
-**Step 1 — Write PR summary:** write `PR-SUMMARY.md` in the worktree root (update
+**Step 1 — Documentation pass [MANDATORY]:**
+
+{doc_update_step}
+
+@.claude/skills/review-pr-comments-session/reference/doc-update.md
+
+**Step 2 — Write PR summary:** write `PR-SUMMARY.md` in the worktree root (update
 if it exists) — cover what was addressed, the changes made, and any threads left
 unresolved with reasoning. `done` reads it to update the PR body. Never commit
 this file; it is a gitignored session artifact.
 
-**Step 2 — Sync with main:**
+**Step 3 — Sync with main:**
 
 ```bash
 wade review-pr-comments-session sync --json
@@ -137,7 +143,7 @@ wade review-pr-comments-session sync --json
 Exit 0 means you're up to date — proceed. For any conflict or error, see
 @.claude/skills/review-pr-comments-session/reference/recovery.md.
 
-**Step 3 — Done:**
+**Step 4 — Done:**
 
 ```bash
 wade review-pr-comments-session done
@@ -146,11 +152,11 @@ wade review-pr-comments-session done
 `done` pushes changes to the existing PR branch. This is a **mandatory** step; if
 it fails, debug and fix it — do NOT bypass.
 
-**Step 4 — Present results:** give a brief **workflow recap** (only the steps you
+**Step 5 — Present results:** give a brief **workflow recap** (only the steps you
 performed) and **current state** (PR number/URL, threads resolved and remaining),
 then note what's next (wade keeps monitoring the PR; reviewers are notified of
 your changes). Then ask (native question component): "Want any further changes,
-or is the session complete?" — apply and repeat Steps 1–4 if so, else suggest the
+or is the session complete?" — apply and repeat Steps 1–5 if so, else suggest the
 user exits.
 
 ## Skills reference

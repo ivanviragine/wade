@@ -79,14 +79,20 @@ To finalize your work, follow these steps in order:
 
 {review_implementation_closing_step}
 
-**Step 2 — Write PR summary:**
+**Step 2 — Documentation pass [MANDATORY]:**
+
+{doc_update_step}
+
+@.claude/skills/implementation-session/reference/doc-update.md
+
+**Step 3 — Write PR summary:**
 
 Write `PR-SUMMARY.md` in the worktree root with a real description of your
 changes (format + the "never commit this file" fix:
 @.claude/skills/implementation-session/reference/pr-summary-format.md). If the
 file already exists, update it.
 
-**Step 3 — Sync with main:**
+**Step 4 — Sync with main:**
 
 ```bash
 wade implementation-session sync --json
@@ -96,7 +102,7 @@ Exit 0 means you're up to date — proceed. For any conflict or error, see
 @.claude/skills/implementation-session/reference/recovery.md. Never re-implement
 git operations yourself.
 
-**Step 4 — Done:**
+**Step 5 — Done:**
 
 ```bash
 wade implementation-session done
@@ -106,28 +112,12 @@ wade implementation-session done
 marks it ready). The worktree is **not** deleted — `implement` cleans it up after
 merge. This is a **mandatory** step; if it fails, debug and fix it — do NOT bypass.
 
-**Step 5 — Present results:** give a brief **workflow recap** (only the steps you
+**Step 6 — Present results:** give a brief **workflow recap** (only the steps you
 performed) and **current state** (PR number/URL, that the issue closes on merge,
 the branch), then what's next (wade monitors the PR; later feedback →
 `wade review pr-comments <issue>`; status → `wade status <issue>`). Then ask
 (native question component): "Want any further changes, or is the session
-complete?" — apply and repeat Steps 1–5 if so, else suggest the user exits.
-
-### Tracking / epic issues
-
-If your issue is a **child** in a parent "Tracking:" checklist, `done`
-auto-detects the parent and adds `Part of #<parent>` alongside `Closes #<child>`
-(pass `--no-close` to keep the issue open). After merge, tick your entry via
-`gh issue edit <parent>`, and run `wade task close <parent>` once all children
-are done. If you are working on the tracking issue **itself**, use
-`Closes #<tracking>` and list child statuses in the PR body with GitHub tasklist
-syntax.
-
-## After creating a new plan
-
-If you finalize a plan during a work session, create a GitHub Issue from it:
-write the plan file to the worktree root, run `wade task create` (interactive),
-then show `wade implement <number>` as a hint — do **not** run it yourself.
+complete?" — apply and repeat Steps 1–6 if so, else suggest the user exits.
 
 ## Wade-managed skills
 
@@ -138,3 +128,7 @@ enforce this — do not modify, commit, or delete them.
 ## Skills reference
 
 - **About to create GitHub Issues** → read @.claude/skills/task/SKILL.md first
+- **Child of a "Tracking:" issue, or the epic itself** →
+  @.claude/skills/implementation-session/reference/tracking-issues.md
+- **Finalized a new plan mid-session** →
+  @.claude/skills/implementation-session/reference/new-plan.md
