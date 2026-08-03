@@ -74,7 +74,18 @@ Bootstrap sets git's `--skip-worktree` bit on `AGENTS.md` so the injected
 
 ```bash
 git update-index --no-skip-worktree AGENTS.md
-git diff AGENTS.md   # verify the ONLY diff is the wade:pointer block
+git diff AGENTS.md
+```
+
+**Stop there if that diff shows anything beyond the generated `wade:pointer`
+block.** The next command discards it permanently, and the skip-worktree bit
+means nobody will see what was lost. Real `AGENTS.md` edits need the
+pointer-preserving workflow instead — see the `AGENTS.md` / `--skip-worktree`
+entry in `KNOWLEDGE.md`.
+
+Only once the pointer block is the *entire* diff:
+
+```bash
 git checkout -- AGENTS.md
 ```
 
