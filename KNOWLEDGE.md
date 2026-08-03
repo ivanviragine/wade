@@ -273,3 +273,21 @@ plan-session `## Your role` step numbering for the `{review_plan_step}` slot (cu
 A skill reference file (`templates/skills/<name>/reference/<file>.md`) whose basename case-insensitively matches a worktree session-artifact ignore (`PR-SUMMARY.md`, `PLAN.md` — emitted root-unanchored by get_worktree_gitignore_entries in installer.py) is silently gitignored on case-insensitive filesystems (macOS): `git add -A` skips it, so the template source never gets committed. Verify with `git check-ignore -v <path>`. #355 named a reference `pr-summary.md` which collided with `PR-SUMMARY.md`; renamed to `pr-summary-format.md` to avoid it (Linux CI is case-sensitive and would not have caught this).
 
 ---
+
+## 235fb8e8 | 2026-08-03 | implementation | tags: hooks, crossby, gotcha | Issue #356
+
+crossby's HookEvent.is_write returns False for SHELL_TOOL_NAMES (bash, shell, exec_command, powershell, run_command) BY DESIGN — a shell call carries its target in HookEvent.command, not file_path. So worktree_containment/plan_artifact_only allow every shell command, and shell writes are only covered by wade's separate shell_containment policy routed on ev.command. Any new PreToolUse guard must cover both channels or it silently misses 'printf x > ../outside'.
+
+---
+
+## a44493f7 | 2026-08-03 | implementation | tags: hooks, codex, gotcha | Issue #356
+
+Codex's --sandbox workspace-write does NOT imply worktree containment: it also permits /tmp and $TMPDIR, so a shell redirect like 'printf x > /tmp/pwn' is sandbox-legal yet outside the worktree. wade therefore narrows (not skips) the worktree guard for tools reporting sandboxes_writes=True — the matcher drops to the shell token only, leaving tool-call writes to the sandbox. Treating sandboxes_writes as 'fully contained' is the bug this replaced.
+
+---
+
+## a15045c3 | 2026-08-03 | implementation | tags: hooks, crossby | Issue #356
+
+wade's hooks/cli.py now hard-codes TWO static per-tool maps that mirror crossby adapter capabilities: _TOOL_DIALECTS (hook_output_dialect) and _TOOL_STOP_DIALECTS (hook_stop_dialect, split out as a separate enum in crossby 0.13 because a tool's Stop contract does not follow from its tool-call contract). Both are deliberate copies to keep the hot per-edit path off crossby.ai_tools (~150ms vs ~450ms). TestPerToolDialectsMatchCrossby in tests/unit/test_hooks/test_hook_cli.py asserts both still match the adapters, so a crossby bump that changes a dialect now fails the suite instead of silently mis-shaping hook output.
+
+---
