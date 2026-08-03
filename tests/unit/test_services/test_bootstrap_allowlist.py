@@ -318,6 +318,12 @@ class TestBootstrapPlanMode:
         the bound a hung hook stalls every write, and crossby renaming or
         dropping the field would surface as a missing key rather than a failure.
         """
+        # Pinned separately from the assertions below: those compare the emitted
+        # value against the constant, so they check serialization fidelity and
+        # would stay green if the constant itself were retuned. 10s is the
+        # agreed bound, so changing it should be a deliberate edit here.
+        assert _GUARD_HOOK_TIMEOUT_SECONDS == 10
+
         worktree_path = tmp_path / "worktree"
         worktree_path.mkdir()
         repo_root = tmp_path / "repo"
@@ -328,6 +334,8 @@ class TestBootstrapPlanMode:
 
         cursor = json.loads((worktree_path / ".cursor" / "hooks.json").read_text("utf-8"))
         cursor_pre = cursor["hooks"]["preToolUse"]
+        # `all()` is vacuously true on an empty list — require the guard first.
+        assert cursor_pre
         assert all(e["timeout"] == _GUARD_HOOK_TIMEOUT_SECONDS for e in cursor_pre)
 
         claude = json.loads((worktree_path / ".claude" / "settings.json").read_text("utf-8"))
