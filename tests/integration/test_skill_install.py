@@ -69,7 +69,7 @@ class TestSkillInstallation:
         assert skill_md.is_file()
         content = skill_md.read_text(encoding="utf-8")
         assert "{user_interaction_prompt}" not in content, "Placeholder must be expanded"
-        assert "## User interaction" in content, "Partial heading must be injected"
+        assert "## Talking to the user" in content, "Folded heading must be present"
         assert "Key decision points:" in content, "Partial content must be injected"
 
     def test_review_enforcement_rule_expanded_by_default(self, tmp_git_repo: Path) -> None:
@@ -128,7 +128,7 @@ class TestSkillInstallation:
         """Passing disabled one-liner via extra_partials suppresses the plan review step."""
         from wade.skills.installer import install_skills
 
-        disabled = "5. ~~**Review**~~ — skipped (`review_plan.enabled: false` in `.wade.yml`)."
+        disabled = "7. ~~**Review**~~ — skipped (`review_plan.enabled: false` in `.wade.yml`)."
         install_skills(
             tmp_git_repo,
             skills=["plan-session"],
@@ -366,7 +366,7 @@ class TestDocUpdateStep:
         assert "{doc_update_step}" not in content, "Placeholder must be expanded"
         assert "{doc_targets}" not in content, "Nested placeholder must be expanded"
         assert "**Step 2 — Documentation pass [MANDATORY]:**" in content
-        assert "State the outcome before moving on" in content
+        assert "**State the outcome**" in content, "Enforcement clause must survive"
         assert "`README.md`" in content, "tmp_git_repo's README.md must be detected"
 
     def test_expanded_in_review_pr_comments_session(self, tmp_git_repo: Path) -> None:
@@ -380,8 +380,25 @@ class TestDocUpdateStep:
         assert "{doc_update_step}" not in content, "Placeholder must be expanded"
         assert "{doc_targets}" not in content, "Nested placeholder must be expanded"
         assert "**Step 1 — Documentation pass [MANDATORY]:**" in content
-        assert "State the outcome before moving on" in content
+        assert "**State the outcome**" in content, "Enforcement clause must survive"
         assert "`README.md`" in content, "tmp_git_repo's README.md must be detected"
+
+    def test_doc_update_reference_installed_for_both_sessions(self, tmp_git_repo: Path) -> None:
+        """The step's @-pointer must resolve to an installed reference file."""
+        from wade.skills.installer import install_skills
+
+        install_skills(
+            tmp_git_repo, skills=["implementation-session", "review-pr-comments-session"]
+        )
+
+        skills_dir = tmp_git_repo / ".claude" / "skills"
+        for skill_name in ("implementation-session", "review-pr-comments-session"):
+            reference = skills_dir / skill_name / "reference" / "doc-update.md"
+            assert reference.is_file(), f"{skill_name} doc-update reference must be installed"
+
+            pointer = f"@.claude/skills/{skill_name}/reference/doc-update.md"
+            content = (skills_dir / skill_name / "SKILL.md").read_text(encoding="utf-8")
+            assert pointer in content, f"{skill_name} must point at its doc-update reference"
 
     def test_no_placeholder_survives_in_self_init_mode(self, tmp_git_repo: Path) -> None:
         """Self-init mode processes INJECT_SKILLS as copies, so placeholders must expand too."""

@@ -1,10 +1,5 @@
-Re-read what this session changed (`git diff <base-branch>...HEAD`) and ask what
-it invalidates. Update {doc_targets} — plus anything else the change makes wrong.
+Re-read `git diff <base>...HEAD` and update {doc_targets} — plus anything else
+it makes wrong. A new flag, renamed option, or changed default all count.
 
-Do not skip because the change is small: a new flag, a renamed option, or a
-changed default all need docs. Commit doc changes with the work, not as a
-follow-up.
-
-**State the outcome before moving on** — either the files you updated, or "no
-doc changes needed: not user-facing, no change to architecture, commands, or
-conventions." Proceeding silently is not a valid result for this step.
+**State the outcome** — name the files you updated, or say "no doc changes
+needed" and why. Silence is not a valid result.

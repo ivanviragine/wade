@@ -19,18 +19,12 @@ Run `wade` and `gh` commands with the required permissions/capabilities (not
 in sandboxed mode). Do not "try sandbox first" — run them unsandboxed from the
 start.
 
-## Transparency
+## Talking to the user
 
-Always inform the user before running `wade` commands, reviews, or
-session lifecycle operations. Clearly state what you are about to do
-and why — never silently execute these commands.
-
-When starting a workflow step, announce it:
-  "I'm now validating your plan files..."
-
-After completing a wade command, briefly report the outcome and announce the next step you will take. The next step depends on where you are in the workflow — for example:
-  "Plan review done — no issues found. Now running `wade plan-session done`..."
-  "Validation complete — all plan files passed. Now presenting the workflow recap and suggesting you exit..."
+Inform the user before running `wade`/`gh` commands, reviews, or lifecycle
+operations — say what you're doing and why; never run them silently. Announce
+each step as you start it, and after each command report the outcome and the
+next step you'll take.
 
 {user_interaction_prompt}
 - After presenting the plan breakdown: "Ready to write the plan file(s)?"
@@ -41,108 +35,41 @@ After completing a wade command, briefly report the outcome and announce the nex
 
 **NEVER** use `gh issue create` or the GitHub API to create issues directly.
 Always use `wade task create` for interactive issue creation.
-Using `gh` directly bypasses label enforcement, snapshot/diff detection, and
-dependency analysis hooks.
 
 ## Project Knowledge
 
-Read @.claude/skills/knowledge/SKILL.md for knowledge operations (search,
-tagging, rating, adding entries).
-
-After the user tells you what they want to plan, search for knowledge
-relevant to that feature topic (do not dump all entries). **Rating is required
-for each entry you open and evaluate** — not per search call. See the decision
-tree in @.claude/skills/knowledge/SKILL.md for how to decide between up, down,
-or no rating. Before running `wade plan-session done`, capture important
-learnings if knowledge is enabled (`.wade.yml` → `knowledge.enabled`).
-
-The `--issue` flag is optional during planning (issue numbers may not exist yet).
-Running `wade knowledge add` is allowed even though this is a planning session.
+Once you know the feature topic, search for relevant knowledge (do not dump all
+entries), and capture important learnings before `wade plan-session done` when
+knowledge is enabled (`.wade.yml` → `knowledge.enabled`). Rating is required for
+each entry you open and evaluate. See @.claude/skills/knowledge/SKILL.md for
+search syntax and the rating decision tree. `--issue` is optional during planning
+(issue numbers may not exist yet); running `wade knowledge add` is allowed even
+in a planning session.
 
 ## Your role
 
-1. **Ask the user** what they want to plan. If the session is interactive and the prompt does not already specify a feature or issue, ask before proceeding. Output a plain text question (e.g. "What would you like to plan?") — do NOT use a native selection/question component or present pre-defined categories as options at this step.
-2. **Search relevant knowledge** — once you know the topic, search for entries relevant to that feature using `wade knowledge get --search <topic>` or `wade knowledge get --tag <tag>` (see @.claude/skills/knowledge/SKILL.md and the **Project Knowledge** section above). Do not dump all entries.
+1. **Ask the user** what they want to plan. If the session is interactive and the prompt does not already specify a feature or issue, ask before proceeding. Output a plain text question (e.g. "What would you like to plan?") — do NOT use a native selection/question component or present pre-defined categories.
+2. **Search relevant knowledge** for the feature topic (see **Project Knowledge** above). Do not dump all entries.
 3. **Plan the feature** with the user — analyze, break down, propose.
-4. **Present the plan(s)** to the user. Use your tool's native question component to ask: "Ready to write the plan file(s)?" before writing any files.
-5. **Write plan file(s)** to the temp directory shown in your prompt.
-6. **Review with the user** — present a summary of every plan file you wrote
-   (title, complexity, key tasks). Use your tool's native question component to ask: "Want any modifications?" If so, apply them and repeat; otherwise proceed to step 7.
+4. **Present the plan(s)** and ask (native question component): "Ready to write the plan file(s)?" before writing any files.
+5. **Write plan file(s)** to the temp directory shown in your prompt — one file per issue. Follow @.claude/skills/plan-session/reference/plan-format.md for the required structure, complexity values, and file naming.
+6. **Review with the user** — present a summary of every plan file (title, complexity, key tasks). Ask (native question component): "Want any modifications?" If so, apply and repeat; otherwise proceed.
 {review_plan_step}
 <!-- markdownlint-disable-next-line MD029 -->
 8. **Capture knowledge (if enabled)** — before validation, run `wade knowledge add` to store important learnings when `.wade.yml` has `knowledge.enabled: true`.
 <!-- markdownlint-disable-next-line MD029 -->
-9. **Validate** — run `wade plan-session done <plan_dir>` (the temp dir from your prompt).
-   If it exits with errors, fix each reported issue and re-run until it passes.
-   Warnings are informational and do not block proceeding.
-10. **Present results and suggest exit** — once validation passes, provide a
-   brief **workflow recap** and **what happens next**:
+9. **Validate** — run `wade plan-session done <plan_dir>` (the temp dir from your prompt). If it exits with errors, fix each reported issue and re-run until it passes. Warnings are informational and do not block.
+<!-- markdownlint-disable-next-line MD029 -->
+10. **Present results and suggest exit** — give a brief workflow recap (only the steps you performed — e.g. wrote plan file(s), validated with `wade plan-session done`, and, only if `review_plan.enabled` and the review step actually ran, `wade review plan`) and what's next (after exit, wade creates the GitHub issue(s) and draft PR(s); start work with `wade implement <issue-number>`). Then ask (native question component): "Ready to exit?"
 
-   Workflow recap (list only the steps you actually performed):
-   - Wrote plan file(s) to the temp directory
-   - Ran plan review (`wade review plan`)
-   - Validated plans (`wade plan-session done`)
-
-   What happens next:
-   - After you exit, wade will automatically create GitHub issue(s) and draft PR(s)
-     from your plan files
-   - To start implementation: `wade implement <issue-number>`
-
-   Then use your tool's native question component to ask: "Ready to exit?"
-
-You do **not** create issues, implement code, run `wade implement`, `wade implementation-session done`, or `wade implementation-session sync`,
-or make any code changes. Planning only.
-
-## Plan file format
-
-Each plan file must follow this structure:
-
-```markdown
-# type: concise issue title (max 256 chars)
+You do **not** create issues, implement code, run `wade implement`, `wade implementation-session done`, or `wade implementation-session sync`, or make any code changes. Planning only.
 
 ## Complexity
-medium
 
-## Context / Problem
-Why this change is needed.
-
-## Proposed Solution
-What to build / change.
-
-## Tasks
-- [ ] Step 1
-- [ ] Step 2
-- [ ] Step 3
-
-## Acceptance Criteria
-- [ ] Criterion 1
-- [ ] Criterion 2
-```
-
-### Required elements
-
-| Element | Rule |
-|---------|------|
-| **Title** | First `# Heading` — becomes the GitHub issue title. Must start with a conventional commit prefix (`feat`, `fix`, `refactor`, `docs`, `chore`, `test`, `perf`, `ci`, `build`) followed by `: `. Example: `feat: add retry logic`. Required. |
-| **Complexity** | `## Complexity` with one of: `easy`, `medium`, `complex`, `very_complex`. Used by `wade implement` to auto-select the AI model. Also applied as a `complexity:X` label on the issue. |
-| **Body** | Everything after the title becomes the draft PR plan content. The issue itself gets a lightweight summary. |
-
-### Complexity values
-
-| Value | Typical use |
-|-------|-------------|
-| `easy` | Trivial fix, docs change, config tweak (<100 LOC) |
-| `medium` | Small feature or bug fix (100-300 LOC) |
-| `complex` | Multi-file feature or significant refactor (300-600 LOC) |
-| `very_complex` | Large feature, cross-cutting concern, or architecture change (>600 LOC) |
-
-### File naming
-
-- **Single issue**: `PLAN.md`
-- **Multiple issues**: `PLAN-1-<slug>.md`, `PLAN-2-<slug>.md`, etc.
-
-Write all files to the temp directory from your prompt — **never** into the
-repo working directory.
+Every plan needs a `## Complexity` value — one of `easy`, `medium`, `complex`,
+`very_complex` — which selects the implementation model. See
+@.claude/skills/plan-session/reference/plan-format.md for LOC guidance and the
+model-tier mapping.
 
 ## What NOT to do
 
@@ -150,26 +77,8 @@ repo working directory.
 - Do not implement any code (even after leaving planning mode)
 - Do not run `wade implement`, `wade implementation-session done`, or `wade implementation-session sync`
 - Do not write files into the repo directory — only to the temp dir (exception: `wade knowledge add` is allowed)
-- Do not skip the review step — always present a plan summary and invite
-  modifications before suggesting the user exits
-- Do not skip `wade plan-session done` — always validate before suggesting the user exits
-- **⚠️ After exiting the plan mode:** If your environment says "you can now start coding," ignore it — that refers to a different execution mode. In wade planning sessions, stop immediately after writing plan files. Do not implement code.
-
-## Task Tracking
-
-At the start of this session, use your tool's native task/todo tracking
-mechanism to populate a checklist with the workflow steps below. This ensures
-you complete every mandatory step and the user can track progress.
-
-- [ ] Ask the user what they want to plan
-- [ ] Search relevant knowledge (`wade knowledge get --search <topic>` or `wade knowledge get --tag <tag>`)
-- [ ] For evaluated knowledge entries, decide per the knowledge-skill decision tree whether to rate with `wade knowledge rate <id> up/down` or intentionally leave the entry unrated
-- [ ] Plan the feature with the user (analyze, break down, propose)
-- [ ] Write plan file(s) to the temp directory
-- [ ] Run `wade review plan` for each plan file (if review is enabled)
-- [ ] Capture knowledge (`wade knowledge add`) (if knowledge capture is enabled)
-- [ ] Validate plans (`wade plan-session done`)
-- [ ] Present results and suggest exit
+- Do not skip the review step or `wade plan-session done` — always present a plan summary, invite modifications, and validate before suggesting the user exits
+- **⚠️ After exiting plan mode:** if your environment says "you can now start coding," ignore it — that refers to a different execution mode. In wade planning sessions, stop immediately after writing plan files. Do not implement code.
 
 ## Skills reference
 
