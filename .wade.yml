@@ -29,6 +29,9 @@ ai:
     mode: headless
     effort: high
     enabled: true
+    # The 300s default is not enough for a large diff at effort: high — the
+    # subprocess is killed mid-review and the step silently reports no findings.
+    timeout: 900
   review_batch:
     tool: claude
     model: claude-sonnet-5
