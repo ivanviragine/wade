@@ -10,6 +10,7 @@ import pytest
 
 from wade.models.config import HooksConfig, PermissionsConfig, ProjectConfig, ProjectSettings
 from wade.services.implementation_service import bootstrap_worktree
+from wade.services.implementation_service.bootstrap import _GUARD_HOOK_TIMEOUT_SECONDS
 
 WADE_ALLOW_PATTERN = "Bash(wade *)"
 CURSOR_WADE_ALLOW_PATTERN = "Shell(wade *)"
@@ -308,6 +309,35 @@ class TestBootstrapPlanMode:
         # The Stop hook must NOT be fail-closed (it must never trap the agent).
         for entry in hooks.get("stop", []):
             assert entry.get("failClosed") is not True
+
+    def test_write_guard_carries_timeout_under_each_native_key(self, tmp_path: Path) -> None:
+        """Every writer emits the guard's timeout, under whichever key it spells it.
+
+        Companion to the fail-closed test above: ``HookEntry`` carries both
+        ``fail_closed`` and ``timeout``, and only the former was pinned. Without
+        the bound a hung hook stalls every write, and crossby renaming or
+        dropping the field would surface as a missing key rather than a failure.
+        """
+        worktree_path = tmp_path / "worktree"
+        worktree_path.mkdir()
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        with patch("subprocess.run"):
+            bootstrap_worktree(worktree_path, self._config(), repo_root)
+
+        cursor = json.loads((worktree_path / ".cursor" / "hooks.json").read_text("utf-8"))
+        cursor_pre = cursor["hooks"]["preToolUse"]
+        assert all(e["timeout"] == _GUARD_HOOK_TIMEOUT_SECONDS for e in cursor_pre)
+
+        claude = json.loads((worktree_path / ".claude" / "settings.json").read_text("utf-8"))
+        claude_hook = claude["hooks"]["PreToolUse"][0]["hooks"][0]
+        assert claude_hook["timeout"] == _GUARD_HOOK_TIMEOUT_SECONDS
+
+        # Copilot is the odd one out: it spells the key `timeoutSec`.
+        copilot_path = worktree_path / ".github" / "hooks" / "hooks.json"
+        copilot = json.loads(copilot_path.read_text("utf-8"))
+        assert copilot["hooks"]["preToolUse"][0]["timeoutSec"] == _GUARD_HOOK_TIMEOUT_SECONDS
 
     def test_worktree_guard_narrowed_to_shell_for_sandboxed_codex(self, tmp_path: Path) -> None:
         """Codex's sandbox covers tool-call writes but not shell redirects to /tmp.
