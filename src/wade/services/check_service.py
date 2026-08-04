@@ -409,7 +409,12 @@ def _validate_config_file(config_path: Path) -> list[str]:
 def _validate_project_section(project: dict[str, Any], errors: list[str]) -> None:
     """Validate the project section."""
     merge = project.get("merge_strategy")
-    if merge is not None and str(merge) not in _VALID_MERGE_STRATEGIES:
+    if merge is not None and str(merge).strip().lower() == "direct":
+        errors.append(
+            "project.merge_strategy: 'direct' is retired (#357). Change it to 'PR' "
+            "— wade migrates it automatically on load, but check-config rejects it."
+        )
+    elif merge is not None and str(merge) not in _VALID_MERGE_STRATEGIES:
         errors.append(
             f"project.merge_strategy: '{merge}' is invalid. "
             f"Allowed values: {', '.join(sorted(_VALID_MERGE_STRATEGIES))}"

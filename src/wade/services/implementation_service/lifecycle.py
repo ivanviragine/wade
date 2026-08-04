@@ -14,19 +14,14 @@ from pathlib import Path
 
 import structlog
 
-from wade.git import branch as git_branch
 from wade.git import pr as git_pr
 from wade.git import repo as git_repo
 from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
-from wade.models.config import ProjectConfig
-from wade.models.session import MergeStatus, MergeStrategy
+from wade.models.session import MergeStatus
 from wade.models.task import Task
 from wade.providers.base import AbstractTaskProvider
-from wade.services.implementation_service.cleanup import (
-    _cleanup_worktree,
-    _preserve_session_data,
-)
+from wade.services.implementation_service.cleanup import _preserve_session_data
 from wade.services.implementation_service.usage_tracking import IMPL_USAGE_MARKER_START
 from wade.ui import prompts
 from wade.ui.console import console
@@ -39,7 +34,6 @@ __all__ = [
     "_merge_pr",
     "_parse_overwrite_paths",
     "_post_implementation_lifecycle",
-    "_post_implementation_lifecycle_direct",
     "_post_implementation_lifecycle_pr",
     "_pull_main_after_merge",
     "_strip_summary_section",
@@ -52,7 +46,6 @@ def _post_implementation_lifecycle(
     branch: str,
     issue_number: str | int | None,
     worktree_path: Path | None,
-    config: ProjectConfig,
     provider: AbstractTaskProvider,
     *,
     ai_tool: str | None = None,
@@ -63,24 +56,24 @@ def _post_implementation_lifecycle(
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
 ) -> MergeStatus:
-    """Run post-implementation lifecycle and return the merge status."""
-    if config.project.merge_strategy == MergeStrategy.PR:
-        return _post_implementation_lifecycle_pr(
-            repo_root,
-            branch,
-            issue_number,
-            worktree_path,
-            provider,
-            ai_tool=ai_tool,
-            model=model,
-            detach=detach,
-            ai_explicit=ai_explicit,
-            model_explicit=model_explicit,
-            permission_mode=permission_mode,
-            permission_mode_explicit=permission_mode_explicit,
-        )
-    return _post_implementation_lifecycle_direct(
-        repo_root, branch, issue_number, worktree_path, config, provider
+    """Run post-implementation lifecycle and return the merge status.
+
+    PR is the only supported merge strategy (the ``direct`` strategy was
+    retired in #357), so this delegates straight to the PR lifecycle.
+    """
+    return _post_implementation_lifecycle_pr(
+        repo_root,
+        branch,
+        issue_number,
+        worktree_path,
+        provider,
+        ai_tool=ai_tool,
+        model=model,
+        detach=detach,
+        ai_explicit=ai_explicit,
+        model_explicit=model_explicit,
+        permission_mode=permission_mode,
+        permission_mode_explicit=permission_mode_explicit,
     )
 
 
@@ -119,18 +112,23 @@ def _pull_main_after_merge(repo_root: Path) -> None:
 
     Also handles local modifications to tracked files (e.g. ``wade init``
     modifying ``.gitignore``) by stashing, pulling, and popping the stash.
+
+    Pulling main only makes sense in the *main checkout*: a ``git pull`` run from
+    a linked worktree (which is on a feature branch) would target the wrong
+    branch, so we resolve the main checkout root first.
     """
-    result = git_repo.pull_ff_only(repo_root)
+    main_root = git_repo.main_checkout_root(repo_root)
+    result = git_repo.pull_ff_only(main_root)
     if result.returncode == 0:
         return
     if "untracked working tree files would be overwritten by merge" in result.stderr:
         # NEVER delete the colliding files — git reports every untracked
         # collision here, not just wade-managed ones, so unlinking could destroy
         # user data. Move each aside into a backup dir before retrying the pull.
-        backup_root = repo_root / ".wade" / "pull-backups"
+        backup_root = main_root / ".wade" / "pull-backups"
         backed_up: list[Path] = []
         for rel_path in _parse_overwrite_paths(result.stderr):
-            target = repo_root / rel_path
+            target = main_root / rel_path
             if not target.exists():
                 continue
             dest = backup_root / rel_path
@@ -142,7 +140,7 @@ def _pull_main_after_merge(repo_root: Path) -> None:
                 logger.warning("pull.backup_untracked_failed", path=str(target), exc_info=True)
             with contextlib.suppress(OSError):
                 target.parent.rmdir()
-        retry = git_repo.pull_ff_only(repo_root)
+        retry = git_repo.pull_ff_only(main_root)
         if backed_up:
             console.warn("Backed up untracked files that collided with the merge:")
             for dest in backed_up:
@@ -151,12 +149,12 @@ def _pull_main_after_merge(repo_root: Path) -> None:
             _warn_pull_sync_failed()
     elif "Your local changes to the following files would be overwritten" in result.stderr:
         # Stash local changes, pull, then restore
-        stash_result = git_repo.stash(repo_root)
+        stash_result = git_repo.stash(main_root)
         if stash_result.returncode != 0:
             _warn_pull_sync_failed()
             return
-        retry = git_repo.pull_ff_only(repo_root)
-        pop_result = git_repo.stash_pop(repo_root)
+        retry = git_repo.pull_ff_only(main_root)
+        pop_result = git_repo.stash_pop(main_root)
         if pop_result.returncode != 0:
             console.warn("Could not restore stashed local changes.")
             console.hint("Resolve conflicts, then inspect `git stash list`.")
@@ -182,17 +180,20 @@ def _post_implementation_lifecycle_pr(
     permission_mode_explicit: bool = False,
 ) -> MergeStatus:
     """Run the PR-based post-implementation lifecycle."""
-    pr_info = git_pr.get_pr_for_branch(repo_root, branch)
-    if not pr_info:
+    lookup = git_pr.get_pr_for_branch(repo_root, branch)
+    if lookup.lookup_failed:
+        console.warn(f"Could not look up the PR for branch '{branch}'. Skipping lifecycle.")
+        return MergeStatus.NOT_MERGED
+    if lookup.is_closed_or_merged:
+        # A merged/closed PR is not ours to merge — never offer "Merge PR" on it.
+        console.info(f"PR #{lookup.number} is already {lookup.state.lower()}. Nothing to merge.")
+        return MergeStatus.NOT_MERGED
+    if not lookup.is_open or lookup.pr is None:
         console.warn(f"No open PR found for branch '{branch}'. Skipping lifecycle.")
         return MergeStatus.NOT_MERGED
 
-    pr_number = pr_info.get("number") or pr_info.get("pr_number")
-    if not pr_number:
-        console.warn(f"Could not determine PR number for branch '{branch}'.")
-        return MergeStatus.NOT_MERGED
-
-    pr_url = str(pr_info.get("url", ""))
+    pr_number = lookup.pr.number
+    pr_url = lookup.pr.url
     if pr_url and prompts.is_tty() and prompts.confirm("Open PR in browser?", default=True):
         webbrowser.open(pr_url)
 
@@ -252,39 +253,44 @@ def _merge_pr(
     provider: AbstractTaskProvider,
 ) -> MergeStatus:
     """Merge a PR via squash, clean up worktree, pull main, close issue."""
+    # `gh pr merge --delete-branch`, branch deletion, and worktree pruning all
+    # target the *main checkout*, which is a different directory from the
+    # worktree we may be running inside. Resolve it explicitly so we never run
+    # main-checkout bookkeeping against a linked worktree root (see C2).
+    main_root = git_repo.main_checkout_root(repo_root)
+
     # Warn if the worktree has uncommitted changes before proceeding.
     if worktree_path and worktree_path.is_dir() and not git_repo.is_clean(worktree_path):
         console.warn("Worktree has uncommitted changes.")
         if not prompts.confirm("Proceed anyway? Uncommitted work will be lost.", default=False):
             return MergeStatus.NOT_MERGED
 
-    # Guard repo_root's HEAD state BEFORE the irreversible merge. `gh pr merge
-    # --delete-branch` runs with cwd=repo_root (the main checkout, a *different*
-    # directory from the worktree) and resolves repo_root's current branch during
-    # its post-merge --delete-branch bookkeeping. If repo_root has a detached HEAD
-    # — e.g. from unrelated manual git activity — gh aborts with "could not
-    # determine current branch", but only AFTER it has already squash-merged the
-    # PR on GitHub, leaving a "merged-on-GitHub-but-reported-failed" state.
-    # Re-attaching to the default branch here (mirroring the post-merge
-    # `git pull` that already targets it) lets us fail fast if we cannot proceed
-    # safely, before any GitHub-side merge happens.
-    if not git_repo.is_head_attached(repo_root):
+    # Guard the main checkout's HEAD state BEFORE the irreversible merge. `gh pr
+    # merge --delete-branch` runs with cwd=main_root and resolves its current
+    # branch during the post-merge --delete-branch bookkeeping. If main_root has
+    # a detached HEAD — e.g. from unrelated manual git activity — gh aborts with
+    # "could not determine current branch", but only AFTER it has already
+    # squash-merged the PR on GitHub, leaving a "merged-on-GitHub-but-reported-
+    # failed" state. Re-attaching to the default branch here (mirroring the
+    # post-merge `git pull` that already targets it) lets us fail fast if we
+    # cannot proceed safely, before any GitHub-side merge happens.
+    if not git_repo.is_head_attached(main_root):
         try:
-            default_branch = git_repo.detect_main_branch(repo_root)
-            git_repo.checkout(repo_root, default_branch)
+            default_branch = git_repo.detect_main_branch(main_root)
+            git_repo.checkout(main_root, default_branch)
         except GitError as e:
-            logger.error("repo_root.reattach_failed", error=str(e))
+            logger.error("main_root.reattach_failed", error=str(e))
             console.error(
-                f"Cannot merge: '{repo_root.name}' has a detached HEAD and could "
+                f"Cannot merge: '{main_root.name}' has a detached HEAD and could "
                 f"not be re-attached to a branch ({e})."
             )
             console.hint(
-                f"Check out a branch in {repo_root} "
-                f"(e.g. `git -C {repo_root} checkout main`), then retry the merge."
+                f"Check out a branch in {main_root} "
+                f"(e.g. `git -C {main_root} checkout main`), then retry the merge."
             )
             return MergeStatus.MERGE_FAILED
-        console.step(f"Re-attached {repo_root.name} to '{default_branch}' (was detached).")
-        logger.info("repo_root.reattached", branch=default_branch)
+        console.step(f"Re-attached {main_root.name} to '{default_branch}' (was detached).")
+        logger.info("main_root.reattached", branch=default_branch)
 
     # Detach HEAD in the worktree so git no longer considers the branch
     # "checked out", which unblocks `gh pr merge --delete-branch`.
@@ -293,7 +299,7 @@ def _merge_pr(
             git_repo.checkout_detach(worktree_path)
 
     try:
-        git_pr.merge_pr(repo_root=repo_root, pr_number=pr_number, strategy="squash")
+        git_pr.merge_pr(repo_root=main_root, pr_number=pr_number, strategy="squash")
     except Exception as e:
         if worktree_path and worktree_path.is_dir():
             with contextlib.suppress(Exception):
@@ -305,10 +311,10 @@ def _merge_pr(
 
     # Remove the worktree only after a successful merge.
     if worktree_path:
-        _preserve_session_data(repo_root, worktree_path)
+        _preserve_session_data(main_root, worktree_path)
         console.step(f"Removing worktree: {worktree_path.name}")
         try:
-            git_worktree.remove_worktree(repo_root, worktree_path)
+            git_worktree.remove_worktree(main_root, worktree_path)
         except Exception as e:
             # The PR is already merged — do not fail the lifecycle, but report
             # the leftover worktree accurately instead of claiming success.
@@ -316,10 +322,10 @@ def _merge_pr(
             console.hint(f"Remove it manually with: git worktree remove {worktree_path}")
         else:
             with contextlib.suppress(Exception):
-                git_worktree.prune_worktrees(repo_root)
+                git_worktree.prune_worktrees(main_root)
             console.success(f"Removed {worktree_path.name}")
 
-    _pull_main_after_merge(repo_root)
+    _pull_main_after_merge(main_root)
 
     if issue_number:
         with contextlib.suppress(Exception):
@@ -328,63 +334,16 @@ def _merge_pr(
     return MergeStatus.MERGED
 
 
-def _post_implementation_lifecycle_direct(
-    repo_root: Path,
-    branch: str,
-    issue_number: str | int | None,
-    worktree_path: Path | None,
-    config: ProjectConfig,
-    provider: AbstractTaskProvider,
-) -> MergeStatus:
-    """Run the direct-merge post-implementation lifecycle."""
-    main_branch = config.project.main_branch
-    if not main_branch:
-        # Detect the repo's real default branch (master/trunk/...) instead of
-        # assuming "main", matching sync(), done(), and cleanup.remove().
-        try:
-            main_branch = git_repo.detect_main_branch(repo_root)
-        except GitError:
-            console.warn("Could not detect the main branch.")
-            return MergeStatus.MERGE_FAILED
-    try:
-        ahead = git_branch.commits_ahead(repo_root, branch, main_branch)
-    except GitError:
-        console.warn("Could not determine commit count; skipping post-implementation lifecycle.")
-        return MergeStatus.MERGE_FAILED
-
-    if ahead == 0:
-        if not prompts.confirm("Branch has no new commits. Delete empty worktree?", default=False):
-            return MergeStatus.NOT_MERGED
-        if worktree_path:
-            _cleanup_worktree(repo_root, worktree_path, main_branch)
-        return MergeStatus.NOT_MERGED
-
-    choices = ["Merge into main", "Merge + close task", "Skip"]
-    idx = prompts.select(f"Branch '{branch}' has {ahead} commit(s). What next?", choices)
-    choice = choices[idx]
-    if choice == "Skip":
-        return MergeStatus.NOT_MERGED
-
-    try:
-        git_repo.merge_squash(repo_root, branch)
-        git_repo.commit_no_edit(repo_root)
-        git_repo.push(repo_root)
-    except (GitError, Exception) as e:
-        logger.error("direct_merge.failed", branch=branch, error=str(e))
-        return MergeStatus.MERGE_FAILED
-
-    if worktree_path:
-        _cleanup_worktree(repo_root, worktree_path, main_branch)
-
-    if choice == "Merge + close task" and issue_number:
-        with contextlib.suppress(Exception):
-            provider.close_task(str(issue_number))
-
-    return MergeStatus.MERGED
+SUMMARY_MARKER_START = "<!-- wade:summary:start -->"
+SUMMARY_MARKER_END = "<!-- wade:summary:end -->"
 
 
 def _strip_summary_section(body: str) -> str:
     """Remove an existing ``## Summary`` section from a PR body.
+
+    Handles the *legacy* unmarked ``## Summary`` heading (written before #357
+    wrapped the section in ``wade:summary`` markers). The marked block is
+    removed separately via ``remove_marker_block``.
 
     The body may contain an implementation-usage block delimited by HTML
     comment markers.  We use that marker as a hard boundary so freeform
@@ -479,6 +438,8 @@ def _build_pr_body(
 
     Plan summary stays on the issue only — not copied into the PR body.
     """
+    from wade.utils.body_markers import build_marked_block
+
     lines: list[str] = []
 
     if parent_issue:
@@ -489,12 +450,17 @@ def _build_pr_body(
     if lines:
         lines.append("")
 
-    # PR summary from file
+    # PR summary from file — wrapped in wade:summary markers so a later `done`
+    # rewrites only this block and preserves any concurrent edits (A4).
     if pr_summary_path and pr_summary_path.is_file():
         summary_content = pr_summary_path.read_text(encoding="utf-8").strip()
         if summary_content:
-            lines.append("## Summary")
-            lines.append("")
-            lines.append(summary_content)
+            lines.append(
+                build_marked_block(
+                    SUMMARY_MARKER_START,
+                    SUMMARY_MARKER_END,
+                    f"## Summary\n\n{summary_content}",
+                )
+            )
 
     return "\n".join(lines)

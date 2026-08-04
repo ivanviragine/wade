@@ -110,4 +110,6 @@ class TestWorkOtherCommands:
         with patch("wade.services.implementation_service.remove", return_value=True) as mock_remove:
             result = runner.invoke(worktree_app, ["remove", "--all", "--force"])
         assert result.exit_code == 0
-        mock_remove.assert_called_once_with(target=None, stale=True, force=True)
+        mock_remove.assert_called_once_with(
+            target=None, stale=True, force=True, discard_dirty=False
+        )

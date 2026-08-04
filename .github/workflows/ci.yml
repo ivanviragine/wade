@@ -60,6 +60,8 @@ jobs:
         run: ./scripts/test.sh tests/unit/
       - name: Run integration tests
         run: ./scripts/test.sh tests/integration/
+      - name: Run concurrency lane (shared git/remote state)
+        run: ./scripts/test-concurrency.sh
       - name: Run top-level CLI contract smoke
         run: ./scripts/test.sh tests/test_cli_basics.py
 
