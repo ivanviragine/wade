@@ -24,6 +24,11 @@ from wade.services.implementation_service import (
     list_sessions,
 )
 
+# An immutable stash *commit* SHA — production restores by content-addressed SHA
+# (create_named_stash returns it), never by a mutable ``stash@{N}`` position that
+# a concurrent stash could shift onto someone else's work (#357, A1).
+STASH_SHA = "0123456789abcdef0123456789abcdef01234567"
+
 # ---------------------------------------------------------------------------
 # Branch/issue extraction
 # ---------------------------------------------------------------------------
@@ -780,7 +785,7 @@ class TestSyncAutoStash:
         staged: int = 0,
         unstaged: int = 0,
         untracked: int = 0,
-        stash_ref: str = "stash@{0}",
+        stash_sha: str = STASH_SHA,
         behind: int = 0,
     ) -> None:
         from wade.models.config import ProjectConfig
@@ -799,7 +804,7 @@ class TestSyncAutoStash:
         }
         mock_bootstrap_repo.get_dirty_file_paths.return_value = dirty_paths
         mock_stash.detect_untracked_collisions.return_value = []
-        mock_stash.create_named_stash.return_value = (stash_ref, "wade-autostash/test")
+        mock_stash.create_named_stash.return_value = (stash_sha, "wade-autostash/test")
         mock_stash.apply_stash_by_sha.return_value = MagicMock(returncode=0)
         mock_branch.commits_ahead.return_value = behind
         if behind > 0:
@@ -846,7 +851,7 @@ class TestSyncAutoStash:
 
         assert result.success
         mock_stash.create_named_stash.assert_called_once()
-        mock_stash.apply_stash_by_sha.assert_called_once_with("stash@{0}", tmp_path)
+        mock_stash.apply_stash_by_sha.assert_called_once_with(STASH_SHA, tmp_path)
         assert any(e.event == SyncEventType.AUTOSTASHED for e in result.events)
         assert any(e.event == SyncEventType.STASH_RESTORED for e in result.events)
 
@@ -1008,7 +1013,7 @@ class TestSyncAutoStash:
         assert not result.success
         assert any(e.event == SyncEventType.STASH_LEFT_BEHIND for e in result.events)
         ev = next(e for e in result.events if e.event == SyncEventType.STASH_LEFT_BEHIND)
-        assert "stash@{0}" in ev.data["stash_ref"]
+        assert ev.data["stash_ref"] == STASH_SHA
         assert "recovery_hint" in ev.data
 
     @patch("wade.services.implementation_service.sync.git_stash")
@@ -1056,7 +1061,7 @@ class TestSyncAutoStash:
         # abort_on_conflict=True when stash_ref is set, so abort_merge is called
         mock_sync_mod.abort_merge.assert_called_once()
         # Stash should be restored after abort
-        mock_stash.apply_stash_by_sha.assert_called_once_with("stash@{0}", tmp_path)
+        mock_stash.apply_stash_by_sha.assert_called_once_with(STASH_SHA, tmp_path)
         assert any(e.event == SyncEventType.STASH_RESTORED for e in result.events)
 
     @patch("wade.services.implementation_service.sync.git_stash")
@@ -1170,7 +1175,7 @@ class TestCatchupAutoStash:
         mock_repo.get_dirty_status.return_value = {"staged": 1, "unstaged": 0, "untracked": 0}
         mock_bootstrap_repo.get_dirty_file_paths.return_value = ["src/app.py"]
         mock_stash.detect_untracked_collisions.return_value = []
-        mock_stash.create_named_stash.return_value = ("stash@{0}", "wade-autostash/test")
+        mock_stash.create_named_stash.return_value = (STASH_SHA, "wade-autostash/test")
         mock_stash.apply_stash_by_sha.return_value = MagicMock(returncode=0)
         mock_branch.commits_ahead.return_value = 1
         mock_sync_mod.merge_branch.return_value = SyncResult(
@@ -1181,7 +1186,7 @@ class TestCatchupAutoStash:
 
         assert result.success
         mock_stash.create_named_stash.assert_called_once()
-        mock_stash.apply_stash_by_sha.assert_called_once()
+        mock_stash.apply_stash_by_sha.assert_called_once_with(STASH_SHA, tmp_path)
         assert any(e.event == SyncEventType.AUTOSTASHED for e in result.events)
         assert any(e.event == SyncEventType.STASH_RESTORED for e in result.events)
 

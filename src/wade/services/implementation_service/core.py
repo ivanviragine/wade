@@ -313,6 +313,14 @@ def start(
         # Only an OPEN PR is resumable — a merged/closed PR must not be treated as a
         # live draft (that would extract a stale plan and skip fresh bootstrap).
         pr_lookup = git_pr.get_pr_for_branch(repo_root, branch_name)
+        if pr_lookup.lookup_failed:
+            # A failed lookup is NOT "no PR" — bootstrapping now would scaffold a
+            # duplicate draft over an existing PR and lose its extracted plan.
+            console.error_with_fix(
+                f"Could not look up the PR for branch {branch_name}",
+                "Transient gh error — try again shortly",
+            )
+            return ImplementResult(success=False)
         existing_pr = pr_lookup.pr if pr_lookup.is_open else None
         plan_content: str | None = None
         proceed_needs_bootstrap = False

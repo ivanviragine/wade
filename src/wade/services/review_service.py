@@ -587,8 +587,16 @@ def start(
     pr_number = lookup.pr.number
     pr_state = lookup.state.upper()
 
-    if pr_state == "MERGED":
-        console.error(f"PR #{pr_number} is already merged — nothing to address.")
+    # Reject any non-open PR before fetching review status — matching
+    # fetch_reviews' is_open gate. A CLOSED (not just MERGED) PR is not
+    # actionable and must not continue into review operations.
+    if not lookup.is_open:
+        if pr_state == "MERGED":
+            console.error(f"PR #{pr_number} is already merged — nothing to address.")
+        else:
+            console.error(
+                f"PR #{pr_number} is {pr_state.lower() or 'not open'} — nothing to address."
+            )
         return False
 
     console.kv("PR", f"#{pr_number}")

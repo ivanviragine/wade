@@ -95,6 +95,15 @@ def bootstrap_draft_pr(
     # Reuse only an OPEN PR for this branch. A merged/closed PR must not be
     # reused (its branch work is done); fall through and create a fresh one.
     lookup = git_pr.get_pr_for_branch(repo_root, branch_name)
+    if lookup.lookup_failed:
+        # A failed lookup is NOT "no PR" — creating one now risks a duplicate PR
+        # (or GitHub's "a pull request already exists" error) for a branch that
+        # may already have an open PR.
+        console.error(
+            f"Could not look up the PR for branch {branch_name} — "
+            "transient gh error; try again shortly."
+        )
+        return None
     if lookup.is_open and lookup.pr is not None:
         existing = lookup.pr
         # If a stacked base was requested but the existing PR targets main,

@@ -917,6 +917,40 @@ class TestImplementationStart:
         mock_bootstrap.assert_called_once()
         assert call_order == ["confirm", "bootstrap"]
 
+    def test_pr_lookup_failure_aborts_before_bootstrap(self, tmp_path: Path) -> None:
+        """A failed PR lookup must stop — never scaffold a duplicate draft PR.
+
+        On lookup_failed, existing_pr would collapse to None and bootstrap a
+        fresh draft over a branch that may already have an open PR with a plan.
+        """
+        task = self._make_task()
+        mock_provider = MagicMock()
+        mock_provider.read_task.return_value = task
+
+        with (
+            patch(
+                "wade.services.implementation_service.core.load_config",
+                return_value=self._make_config(),
+            ),
+            patch(
+                "wade.services.implementation_service.core.get_provider", return_value=mock_provider
+            ),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch(
+                "wade.git.pr.get_pr_for_branch",
+                return_value=PRLookup(found=False, lookup_failed=True),
+            ),
+            patch("wade.services.implementation_service.core.bootstrap_draft_pr") as mock_bootstrap,
+            patch("wade.services.implementation_service.core.confirm_ai_selection") as mock_confirm,
+            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
+        ):
+            mock_prompts.is_tty.return_value = False
+            result = start("42", project_root=tmp_path)
+
+        assert result.success is False
+        mock_bootstrap.assert_not_called()
+        mock_confirm.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # Implementation batch tests

@@ -126,9 +126,21 @@ def drop_stash_by_sha(stash_sha: str, cwd: Path) -> bool:
     Re-resolves the positional ref at call time (never a held one). Returns True
     if an entry was found and dropped; False if no matching entry exists (e.g.
     it was already dropped) or the drop failed.
+
+    ``git`` has no drop-by-SHA primitive, so the resolved ``stash@{N}`` is
+    re-verified immediately before the drop. A concurrent ``stash push`` that
+    shifts positions between the two commands then makes the drop a no-op
+    (return False) instead of removing a different, unrelated entry.
     """
     ref = _find_stash_ref_by_sha(stash_sha, cwd)
     if ref is None:
+        return False
+    # Re-verify: the position must still resolve to the same stash commit. This
+    # narrows the shared-stack reordering window (A1) to a single command
+    # boundary — a wrong drop becomes a no-op in the common case.
+    check = _run_git("rev-parse", "--verify", f"{ref}^{{commit}}", cwd=cwd, check=False)
+    if check.returncode != 0 or check.stdout.strip() != stash_sha:
+        log.debug("git.stash.drop_skipped_reordered", sha=stash_sha, ref=ref)
         return False
     result = _run_git("stash", "drop", ref, cwd=cwd, check=False)
     return result.returncode == 0

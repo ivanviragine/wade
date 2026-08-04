@@ -378,8 +378,14 @@ def _worktree_loss_risk(
 
     # 2. Local commits not merged into main — would be lost by `git branch -D`.
     if branch_name and branch_name != main_branch:
+        # Prefer the remote-tracking base: a local main that is behind origin
+        # makes an already-merged branch look unmerged (a false loss).
+        base_ref = main_branch
+        with contextlib.suppress(GitError):
+            git_repo.rev_parse(main_root, f"origin/{main_branch}")
+            base_ref = f"origin/{main_branch}"
         try:
-            ahead = git_branch.commits_ahead(main_root, branch_name, main_branch)
+            ahead = git_branch.commits_ahead(main_root, branch_name, base_ref)
         except GitError:
             # Fail CLOSED — an unverifiable branch state is treated as unsafe,
             # same as the is_clean check above. Never read "could not check" as
@@ -389,13 +395,20 @@ def _worktree_loss_risk(
         if ahead > 0:
             merged = False
             try:
-                mb = git_repo.merge_base(main_root, branch_name, main_branch)
+                mb = git_repo.merge_base(main_root, branch_name, base_ref)
                 tip = git_repo.rev_parse(main_root, branch_name)
                 merged = mb == tip
             except GitError:
                 merged = False
             if not merged:
-                losses.append(f"{ahead} local commit(s) not merged into {main_branch}")
+                # Squash/rebase merge: the branch tip is not an ancestor of the
+                # base, yet every patch is already applied there. `git cherry`
+                # (patch-id based) recognizes this — the completion path for this
+                # PR is squash-merge, so this is the routine cleanup case, not a
+                # loss. Fails closed on any git error.
+                merged = git_branch.all_patches_present(main_root, base_ref, branch_name)
+            if not merged:
+                losses.append(f"{ahead} local commit(s) not merged into {base_ref}")
 
     return losses
 

@@ -225,20 +225,32 @@ def done(
         return False
 
     # Success only: strip the worktree gitignore block and restore .gitignore
-    # visibility now that there is nothing left to retry.
-    with contextlib.suppress(OSError):
+    # visibility now that there is nothing left to retry. The PR is already
+    # updated at this point, so a filesystem cleanup failure (read-only file,
+    # permission change, removed worktree dir) must NOT turn an already-finalized
+    # PR into a reported failure — warn and continue instead.
+    try:
         git_repo.unskip_worktree_file(cwd, ".gitignore")
-    strip_worktree_gitignore(cwd)
+        strip_worktree_gitignore(cwd)
+    except OSError as e:
+        console.warn(f"Could not clean up the worktree gitignore block: {e}")
+        console.hint("Remove the `# wade:worktree:start` block from .gitignore manually.")
+        logger.warning("implementation.gitignore_strip_failed", error=str(e), exc_info=True)
 
     return True
 
 
+# A bare "rejected" is intentionally NOT here: it matches every rejection git
+# reports (e.g. a pre-receive hook / branch-protection "push rejected"), which a
+# force-push cannot fix — offering the force-with-lease recovery menu for those
+# would be misleading. The specific signals below (including the "! [rejected]
+# ... (non-fast-forward)" line, matched via "non-fast-forward") already cover a
+# real non-fast-forward rejection.
 _NON_FAST_FORWARD_SIGNALS = (
     "non-fast-forward",
     "fetch first",
     "updates were rejected",
     "tip of your current branch is behind",
-    "rejected",
 )
 
 
@@ -406,9 +418,14 @@ def _done_via_pr(
             # Keep existing content; refresh close/parent refs; rewrite ONLY the
             # wade:summary block so a concurrent edit elsewhere survives (A4).
             body = _apply_pr_refs(body, issue_number, close_issue, parent_issue)
-            # Drop any legacy unmarked ## Summary and the prior marked block.
-            body = _strip_summary_section(body)
+            # Remove the prior marked block FIRST: the legacy heading stripper is
+            # not marker-aware, so running it on a body that still contains the
+            # marked block would match the `## Summary` *inside* the block,
+            # orphan the start marker, and drop the end marker (leaving an
+            # unbalanced pair remove_marker_block can no longer clean). After the
+            # marked block is gone, strip any genuinely legacy unmarked heading.
             body = remove_marker_block(body, SUMMARY_MARKER_START, SUMMARY_MARKER_END)
+            body = _strip_summary_section(body)
             if not summary_content:
                 return body.rstrip("\n") + "\n"
             block = build_marked_block(

@@ -23,6 +23,14 @@ class TestNonFastForwardDetection:
     def test_non_ff_ignores_other_errors(self) -> None:
         assert _is_non_fast_forward("fatal: authentication failed") is False
 
+    def test_hook_and_policy_rejections_are_not_non_ff(self) -> None:
+        # A bare "rejected" must not classify a hook / branch-protection
+        # rejection as non-fast-forward — a force-push cannot fix those, so the
+        # force-with-lease recovery menu must not be offered.
+        assert _is_non_fast_forward("remote: error: push rejected by branch protection") is False
+        hook_rejection = "! [remote rejected] main -> main (pre-receive hook declined)"
+        assert _is_non_fast_forward(hook_rejection) is False
+
 
 class TestPushRecovery:
     def _patches(self, stack: ExitStack, *, is_tty: bool, select: int = 0) -> dict[str, MagicMock]:

@@ -282,13 +282,17 @@ def _handle_stash_restoration(
     Applies by content-addressed SHA — never a positional ref held from
     creation, which a concurrent worktree's ``stash push`` could have shifted
     onto someone else's work (A1) — then drops the entry only after a clean
-    apply. On an apply conflict (or a missing/undroppable entry) the stash is
-    left in place and STASH_LEFT_BEHIND is emitted. Callers should treat a
-    False return as a sync failure.
+    apply. On an apply conflict the stash is left in place and
+    STASH_LEFT_BEHIND is emitted. A clean apply whose drop fails still counts
+    as a restore — the changes are back — but the leftover entry is reported so
+    the user can remove it. Callers should treat a False return as a sync
+    failure.
     """
     apply_result = git_stash.apply_stash_by_sha(stash_sha, cwd)
     if apply_result.returncode == 0:
-        git_stash.drop_stash_by_sha(stash_sha, cwd)
+        if not git_stash.drop_stash_by_sha(stash_sha, cwd) and not json_output:
+            console.warn(f"Restored the changes, but the stash entry {stash_sha} remains.")
+            console.hint(f"Remove it with: git stash drop {stash_sha}")
         emit(SyncEventType.STASH_RESTORED, stash_ref=stash_sha)
         if not json_output:
             console.success("Restored stashed changes.")

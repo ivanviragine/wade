@@ -14,7 +14,7 @@ import structlog
 from crossby.ai_tools import AbstractAITool
 
 from wade.git import repo
-from wade.models.config import ComplexityModelMapping
+from wade.models.config import ComplexityModelMapping, ProjectSettings
 from wade.services.init_service.auth import (
     _check_gh_auth,
     _save_token_to_env,
@@ -261,11 +261,12 @@ def _prompt_project_settings(
     current_branch_prefix: str | None = None,
     current_issue_label: str | None = None,
     current_worktrees_dir: str | None = None,
-) -> dict[str, str]:
+) -> ProjectSettings:
     """Collect project settings — interactively or with defaults.
 
-    Auto-detects the main branch via git. Returns a dict with keys:
-    main_branch, merge_strategy, branch_prefix, issue_label, worktrees_dir.
+    Auto-detects the main branch via git. Returns a :class:`ProjectSettings`
+    model; ``merge_strategy`` is always ``PR`` (``direct`` retired in #357), so
+    it defaults from the model and is never prompted for.
     """
     from wade.ui import prompts
 
@@ -276,28 +277,23 @@ def _prompt_project_settings(
         logger.debug("init.main_branch_detect_failed", exc_info=True)
         main_branch = "main"
 
-    # PR is the only merge strategy (``direct`` retired in #357), so it is no
-    # longer prompted for — the config always records "PR".
-    defaults = {
-        "main_branch": current_main_branch or main_branch,
-        "merge_strategy": "PR",
-        "branch_prefix": current_branch_prefix or "feat",
-        "issue_label": current_issue_label or "feature-plan",
-        "worktrees_dir": current_worktrees_dir or "../.worktrees",
-    }
+    branch_prefix = current_branch_prefix or "feat"
+    issue_label = current_issue_label or "feature-plan"
+    worktrees_dir = current_worktrees_dir or "../.worktrees"
 
-    if non_interactive:
-        return defaults
+    if not non_interactive:
+        console.rule("Project")
+        branch_prefix = prompts.input_prompt("Branch prefix", branch_prefix)
+        issue_label = prompts.input_prompt("Issue label", issue_label)
+        worktrees_dir = prompts.input_prompt("Worktrees directory", worktrees_dir)
 
-    console.rule("Project")
-
-    defaults["branch_prefix"] = prompts.input_prompt("Branch prefix", defaults["branch_prefix"])
-    defaults["issue_label"] = prompts.input_prompt("Issue label", defaults["issue_label"])
-    defaults["worktrees_dir"] = prompts.input_prompt(
-        "Worktrees directory", defaults["worktrees_dir"]
+    # merge_strategy defaults to PR in the model (``direct`` retired in #357).
+    return ProjectSettings(
+        main_branch=current_main_branch or main_branch,
+        branch_prefix=branch_prefix,
+        issue_label=issue_label,
+        worktrees_dir=worktrees_dir,
     )
-
-    return defaults
 
 
 def _prompt_hooks_setup(

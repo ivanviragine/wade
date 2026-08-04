@@ -77,6 +77,23 @@ class TestEnforceBodyBudget:
         assert warnings  # a user-visible warning was emitted
         assert "Dropped content" in warnings[0]
 
+    def test_trim_preserves_block_position(self) -> None:
+        # A budget trim must replace the block content IN PLACE, not relocate the
+        # whole block to the end of the body (which reorders it past trailing
+        # content and the other usage block).
+        old = "### Session 1\n\n" + ("x" * (GITHUB_BODY_MAX + 100))
+        new = "### Session 2\n\nrecent"
+        body = _impl_block(old, new) + "\n\nTRAILING SENTINEL"
+        assert len(body) > GITHUB_BODY_MAX
+
+        out = enforce_body_budget(body, warn=lambda _m: None, label="x")
+
+        assert len(out) <= GITHUB_BODY_MAX
+        assert "### Session 2" in out  # newest kept
+        assert "### Session 1" not in out  # oldest dropped
+        # The block stays BEFORE the trailing content — not moved to the end.
+        assert out.index(IMPL_USAGE_MARKER_END) < out.index("TRAILING SENTINEL")
+
 
 class TestUpdateBodyPreservingMarkers:
     def test_reads_then_writes_transformed(self) -> None:

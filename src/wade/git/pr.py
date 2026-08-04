@@ -120,12 +120,14 @@ _TRANSIENT_GH_SIGNALS = (
     "bad gateway",
     "gateway timeout",
     "internal server error",
-    "server error",
     "http 500",
     "http 502",
     "http 503",
     "http 504",
-    "eof",
+    # Specific EOF phrasings only — a bare "eof" substring also matches benign
+    # tokens (e.g. a branch named ``feat/eof-parser``) echoed back in stderr.
+    "unexpected eof",
+    "eof occurred",
     "tls handshake",
     "i/o timeout",
 )
@@ -248,8 +250,34 @@ def create_pr(
         cmd_args.append("--draft")
 
     log.info("pr.create", title=title, base=base, head=head, draft=draft)
-    # Retry transient failures (B4) with the same budget as the edit helpers.
-    result = _run_gh(*cmd_args, cwd=repo_root, retries=3)
+    # gh pr create is NOT idempotent — an attempt that reached GitHub but whose
+    # response was lost must never create a second PR for the branch. So we run
+    # the retry loop here (not inside _run_gh) and, before every retry, re-check
+    # whether a PR for the head branch now exists; if so the earlier attempt
+    # actually succeeded, so we return it instead of creating a duplicate (or
+    # failing with GitHub's "a pull request already exists"). Mirrors merge_pr's
+    # state-aware retry (B4).
+    max_retries = 3
+    attempt = 0
+    while True:
+        result = _run_gh(*cmd_args, cwd=repo_root, check=False)
+        if result.returncode == 0:
+            break
+        if head is not None:
+            existing = get_pr_for_branch(repo_root, head)
+            if existing.found and existing.pr is not None:
+                log.info("pr.create.already_exists", pr_number=existing.pr.number)
+                return {"number": existing.pr.number, "url": existing.pr.url}
+        if attempt < max_retries and _is_transient_gh_error(result.stderr):
+            attempt += 1
+            log.warning(
+                "pr.create.retrying",
+                attempt=attempt,
+                stderr=result.stderr.strip()[:200],
+            )
+            time.sleep(attempt)
+            continue
+        raise GhCliError(f"gh pr create failed (exit {result.returncode}): {result.stderr.strip()}")
 
     # gh pr create prints the PR URL to stdout
     pr_url = result.stdout.strip()

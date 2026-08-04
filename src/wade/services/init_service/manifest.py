@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from wade.models.config import ProjectSettings
 from wade.ui.console import console
 
 MANIFEST_FILENAME = ".wade-managed"
@@ -24,7 +25,7 @@ __all__ = [
 def _show_init_summary(
     *,
     provider_setup: dict[str, Any],
-    project_settings: dict[str, str],
+    project_settings: ProjectSettings,
     selected_tool: str | None,
     default_model: str | None,
     default_effort: str | None,
@@ -39,10 +40,10 @@ def _show_init_summary(
 
     # Provider + Project
     console.kv("Provider", provider_setup.get("name", "github"))
-    console.kv("Main branch", project_settings.get("main_branch", "main"))
-    console.kv("Merge strategy", project_settings.get("merge_strategy", "PR"))
-    console.kv("Branch prefix", project_settings.get("branch_prefix", "feat"))
-    console.kv("Worktrees dir", project_settings.get("worktrees_dir", "../.worktrees"))
+    console.kv("Main branch", project_settings.main_branch or "main")
+    console.kv("Merge strategy", project_settings.merge_strategy.value)
+    console.kv("Branch prefix", project_settings.branch_prefix)
+    console.kv("Worktrees dir", project_settings.worktrees_dir)
 
     # AI defaults
     console.kv("AI tool", selected_tool or "(not set)")

@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from structlog.testing import capture_logs
 
 from wade.config.loader import ConfigError, parse_config_file
 from wade.models.session import MergeStrategy
@@ -27,8 +28,16 @@ def _write_config(dir_path: Path, merge_strategy: str) -> Path:
 class TestLoaderMigratesDirect:
     def test_direct_is_migrated_to_pr(self, tmp_path: Path) -> None:
         config_path = _write_config(tmp_path, "direct")
-        config = parse_config_file(config_path)
+        with capture_logs() as logs:
+            config = parse_config_file(config_path)
         assert config.project.merge_strategy == MergeStrategy.PR
+        # The migration must not be silent — a warning event is emitted so the
+        # user can see the retired value was upgraded.
+        assert any(
+            log.get("event") == "config.merge_strategy_direct_retired"
+            and log.get("log_level") == "warning"
+            for log in logs
+        )
 
     def test_pr_is_preserved(self, tmp_path: Path) -> None:
         config_path = _write_config(tmp_path, "PR")

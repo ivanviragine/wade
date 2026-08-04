@@ -46,6 +46,7 @@ __all__ = [
     "_BATCH_STATUS_IN_PROGRESS",
     "_BATCH_STATUS_MERGED",
     "_BATCH_STATUS_NOT_STARTED",
+    "_BATCH_STATUS_UNKNOWN",
     "_POLL_INTERVAL_SECONDS",
     "_POLL_TIMEOUT_SECONDS",
     "_build_graph_from_issues",
@@ -302,28 +303,18 @@ _POLL_TIMEOUT_SECONDS = 4 * 60 * 60  # 4 hours
 def _branch_merged_into_main(repo_root: Path, branch: str, main_branch: str) -> bool:
     """Return True if *branch*'s tip is an ancestor of the (origin) main branch.
 
-    Deterministic: uses ``git merge-base --is-ancestor`` against the real branch
-    ref instead of grepping commit subjects (which false-matches any commit that
-    merely mentions the issue number). Returns False when the ref cannot be
-    resolved (git error / missing ref).
+    Deterministic: uses ``git merge-base --is-ancestor`` (via the git layer)
+    against the real branch ref instead of grepping commit subjects (which
+    false-matches any commit that merely mentions the issue number). The origin
+    ref is authoritative when it resolves; a bad/missing ref falls back to the
+    local main. Returns False when neither ref can be resolved.
     """
     for base in (f"origin/{main_branch}", main_branch):
-        try:
-            result = subprocess.run(
-                ["git", "merge-base", "--is-ancestor", branch, base],
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except FileNotFoundError:
-            return False
-        # 0 = ancestor (merged); 1 = not an ancestor; anything else = a bad ref,
-        # so try the other base before giving up.
-        if result.returncode == 0:
-            return True
-        if result.returncode == 1:
-            return False
+        # None = the base ref could not be resolved, so try the other base;
+        # a definitive True/False from the origin ref is authoritative.
+        merged = git_branch.is_merged_into(repo_root, branch, base)
+        if merged is not None:
+            return merged
     return False
 
 
@@ -331,7 +322,7 @@ def _is_merged_to_main(
     repo_root: Path,
     issue_num: str,
     main_branch: str,
-    branch_set: set[str] | None = None,
+    branch_set: set[str],
 ) -> bool:
     """Return True if a branch for this issue is fully merged into main.
 
@@ -339,10 +330,13 @@ def _is_merged_to_main(
     commit-subject grep. Only branches present in *branch_set* are checked, so
     an unrelated commit mentioning the number can no longer cause a false
     "merged". Returns False when no branch ref for the issue exists.
+
+    *branch_set* is required (no default): a stale three-argument caller must
+    fail at the call site, not silently return False (which reads as
+    NOT_STARTED / IN_PROGRESS for an already-merged issue).
     """
-    branches = branch_set or set()
     pattern = rf"/0*{re.escape(issue_num)}(?:-|$)"
-    for branch in branches:
+    for branch in branch_set:
         if re.search(pattern, branch) and _branch_merged_into_main(repo_root, branch, main_branch):
             return True
     return False
@@ -555,6 +549,7 @@ def poll_batch_completion(
             _BATCH_STATUS_MERGED: "merged",
             _BATCH_STATUS_IN_PROGRESS: "in progress",
             _BATCH_STATUS_NOT_STARTED: "not started",
+            _BATCH_STATUS_UNKNOWN: "unknown",
         }.get(status, status)
         pr = pr_index.get(num)
         url = f" {pr.url}" if pr and pr.url else ""

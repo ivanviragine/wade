@@ -510,6 +510,19 @@ class TestReviewServiceStart:
         result = start(target="42")
         assert result is False
 
+    def test_closed_pr_returns_false(
+        self, tmp_path: Path, mock_setup: dict[str, MagicMock]
+    ) -> None:
+        """start() should fail for a CLOSED (non-open) PR, not just MERGED."""
+        mock_setup["get_pr_for_branch"].return_value = PRLookup(
+            found=True,
+            pr=PRRef(number=99, state="CLOSED"),
+        )
+        result = start(target="42")
+        assert result is False
+        # Never proceeds to fetch review status for a non-open PR.
+        mock_setup["get_comprehensive_review_status"].assert_not_called()
+
     def test_no_actionable_comments_returns_true(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock], mock_provider: MagicMock
     ) -> None:

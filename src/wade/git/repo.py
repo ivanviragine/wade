@@ -97,7 +97,10 @@ def _run_git_with_retry(
         try:
             result = _run_git(*args, cwd=cwd, check=check)
         except GitError as exc:
-            if any(p in str(exc) for p in _LOCK_PATTERNS):
+            # Only back off + retry while attempts remain; on the final attempt
+            # re-raise the lock error immediately instead of paying one last
+            # (wasted) backoff sleep — matching the check=False guard below.
+            if attempt < retries - 1 and any(p in str(exc) for p in _LOCK_PATTERNS):
                 last_exc = exc
                 _sleep_lock_backoff(attempt, base_delay, args)
                 continue

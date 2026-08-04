@@ -58,3 +58,34 @@ class TestDoneDefersStrip:
         # Only on success is the worktree gitignore block stripped.
         strip = _run_done(tmp_path, pr_result=True)
         strip.assert_called_once()
+
+    def test_success_survives_strip_oserror(self, tmp_path: Path) -> None:
+        # The PR is already pushed + updated when the strip runs. A filesystem
+        # error there (read-only file, removed worktree dir) must NOT turn an
+        # already-finalized PR into a reported failure — it is warned, not raised.
+        repo_root = tmp_path / "repo"
+        wt_path = tmp_path / "wt"
+        repo_root.mkdir()
+        wt_path.mkdir()
+        config = ProjectConfig(project=ProjectSettings(main_branch="main"))
+
+        with ExitStack() as stack:
+            stack.enter_context(patch(f"{_DONE}.load_config", return_value=config))
+            stack.enter_context(patch(f"{_DONE}.get_provider"))
+            stack.enter_context(patch(f"{_DONE}.git_repo.get_repo_root", return_value=repo_root))
+            stack.enter_context(patch(f"{_DONE}.find_worktree_path", return_value=wt_path))
+            stack.enter_context(
+                patch(f"{_DONE}.git_repo.get_current_branch", return_value="feat/42-x")
+            )
+            stack.enter_context(patch(f"{_DONE}.git_repo.is_clean", return_value=True))
+            stack.enter_context(patch(f"{_DONE}._check_tracked_managed_files", return_value=[]))
+            stack.enter_context(patch(f"{_DONE}.git_repo.unskip_worktree_file"))
+            stack.enter_context(
+                patch(f"{_DONE}.strip_worktree_gitignore", side_effect=OSError("read-only fs"))
+            )
+            stack.enter_context(patch(f"{_DONE}._done_via_pr", return_value=True))
+            stack.enter_context(patch(f"{_DONE}.console"))
+
+            result = done("42", project_root=repo_root)
+
+        assert result is True

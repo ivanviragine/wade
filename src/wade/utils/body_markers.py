@@ -81,7 +81,15 @@ def _trim_oldest_session(body: str, start_marker: str, end_marker: str) -> tuple
         return body, None  # keep at least the newest session
     dropped = sessions[0].strip()
     kept_inner = (preamble + "".join(sessions[1:])).strip("\n")
-    new_body = upsert_marked_block(body, start_marker, end_marker, kept_inner)
+    # Replace the block content IN PLACE, between the existing markers. Using
+    # upsert_marked_block here would remove the block and re-append it at the end
+    # of the body, reordering it relative to the other usage block and any
+    # trailing content. rfind targets the same (last) pair extract_marker_block
+    # resolved, so surrounding content is preserved verbatim.
+    end_idx = body.rfind(end_marker)
+    start_idx = body.rfind(start_marker, 0, end_idx)
+    new_block = build_marked_block(start_marker, end_marker, kept_inner)
+    new_body = body[:start_idx] + new_block + body[end_idx + len(end_marker) :]
     return new_body, dropped
 
 

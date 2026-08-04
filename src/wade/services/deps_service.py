@@ -218,10 +218,14 @@ def apply_deps_to_issues(
             if not deps_inner and not has_legacy and not has_marked:
                 continue
 
-            # Drop any legacy unmarked ## Dependencies and the prior marked block,
-            # then upsert the fresh block — everything else is preserved verbatim.
-            cleaned = strip_deps_section(body)
-            cleaned = remove_marker_block(cleaned, DEPS_MARKER_START, DEPS_MARKER_END)
+            # Remove the prior marked block FIRST: strip_deps_section is not
+            # marker-aware, so running it on a body that still contains the block
+            # would cut at the ## Dependencies heading *inside* the markers and
+            # leave them unbalanced. After the marked block is gone, drop any
+            # genuinely legacy unmarked ## Dependencies, then upsert the fresh
+            # block — everything else is preserved verbatim.
+            cleaned = remove_marker_block(body, DEPS_MARKER_START, DEPS_MARKER_END)
+            cleaned = strip_deps_section(cleaned)
             new_body = upsert_marked_block(cleaned, DEPS_MARKER_START, DEPS_MARKER_END, deps_inner)
             new_body = enforce_body_budget(
                 new_body, warn=console.warn, label=f"issue #{issue_id} body"
