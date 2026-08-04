@@ -346,7 +346,7 @@ def confirm_ai_selection(
             model = _prompt_model_selection(tool)
 
         elif choice == "Change effort":
-            effort = _prompt_effort_selection(effort)
+            effort = _prompt_effort_selection(effort, tool)
 
         elif choice == "Change permission mode":
             permission_mode = _prompt_permission_mode_selection(permission_mode, tool)
@@ -397,14 +397,39 @@ def _prompt_permission_mode_selection(current: PermissionMode, tool: str) -> Per
     return tiers[idx]
 
 
-def _prompt_effort_selection(current: EffortLevel | None) -> EffortLevel | None:
-    """Show an effort level picker and return the chosen level (or None)."""
+def valid_effort_levels(tool: str | None) -> list[EffortLevel]:
+    """Return the effort levels *tool* actually supports.
+
+    Reads crossby's ``capabilities().supported_efforts`` and falls back to the
+    full ``EffortLevel`` set when the tool is unknown or declares no restriction
+    (an empty/unset value). Callers prepend their own skip/none label — this
+    returns only the level list, since those labels differ per call site.
+    """
+    if tool:
+        try:
+            caps = AbstractAITool.get(AIToolID(tool)).capabilities()
+        except (ValueError, KeyError):
+            caps = None
+        if caps is not None and caps.supported_efforts:
+            return list(caps.supported_efforts)
+    return list(EffortLevel)
+
+
+def _prompt_effort_selection(
+    current: EffortLevel | None, tool: str | None = None
+) -> EffortLevel | None:
+    """Show an effort level picker and return the chosen level (or None).
+
+    Only the levels *tool* supports are offered (see :func:`valid_effort_levels`).
+    A *current* level the tool no longer supports is not pre-selected.
+    """
     from wade.ui import prompts
 
-    choices = ["(none — use tool default)", *[e.value for e in EffortLevel]]
+    level_values = [e.value for e in valid_effort_levels(tool)]
+    choices = ["(none — use tool default)", *level_values]
     default_idx = 0
-    if current:
-        default_idx = [e.value for e in EffortLevel].index(current.value) + 1
+    if current is not None and current.value in level_values:
+        default_idx = level_values.index(current.value) + 1
     idx = prompts.select("Select effort level", choices, default=default_idx)
     if idx == 0:
         return None

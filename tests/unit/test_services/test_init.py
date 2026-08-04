@@ -630,6 +630,7 @@ class TestPromptCommandOverrides:
         mock_caps = MagicMock()
         mock_caps.supports_effort = False
         mock_caps.supports_yolo = False
+        mock_caps.supported_efforts = None
         mock_get_tool.return_value.capabilities.return_value = mock_caps
         # tool_options=["claude", "Skip"]
         # model_options=["claude-haiku", "claude-sonnet", "Custom...", "Skip"]
@@ -738,6 +739,7 @@ class TestPromptCommandOverrides:
         mock_caps = MagicMock()
         mock_caps.supports_effort = False
         mock_caps.supports_yolo = True  # would appear if not for headless gating
+        mock_caps.supported_efforts = None
         mock_get_tool.return_value.capabilities.return_value = mock_caps
 
         prompts_asked: list[str] = []
@@ -2430,6 +2432,7 @@ class TestPromptAiSectionYoloEffort:
         mock_caps = MagicMock()
         mock_caps.supports_effort = True
         mock_caps.supports_yolo = True
+        mock_caps.supported_efforts = None
         mock_get_tool.return_value.capabilities.return_value = mock_caps
         mock_select.return_value = 2  # "medium" effort (index 2 = medium in [none, low, medium...])
         mock_confirm.return_value = True  # yolo = True
@@ -2455,6 +2458,7 @@ class TestPromptAiSectionYoloEffort:
         mock_caps = MagicMock()
         mock_caps.supports_effort = False
         mock_caps.supports_yolo = False
+        mock_caps.supported_efforts = None
         mock_get_tool.return_value.capabilities.return_value = mock_caps
 
         _prompt_ai_section(None, non_interactive=False)
@@ -2475,6 +2479,7 @@ class TestPromptModelMappingPerTierEffort:
     ) -> None:
         mock_caps = MagicMock()
         mock_caps.supports_effort = True
+        mock_caps.supported_efforts = None
         mock_get_tool.return_value.capabilities.return_value = mock_caps
 
         mapping = ComplexityModelMapping(
@@ -2496,6 +2501,7 @@ class TestPromptModelMappingPerTierEffort:
     ) -> None:
         mock_caps = MagicMock()
         mock_caps.supports_effort = False
+        mock_caps.supported_efforts = None
         mock_get_tool.return_value.capabilities.return_value = mock_caps
 
         mapping = ComplexityModelMapping(
@@ -2515,6 +2521,7 @@ class TestPromptModelMappingPerTierEffort:
     ) -> None:
         mock_caps = MagicMock()
         mock_caps.supports_effort = True
+        mock_caps.supported_efforts = None
         mock_get_tool.return_value.capabilities.return_value = mock_caps
 
         mapping = ComplexityModelMapping(

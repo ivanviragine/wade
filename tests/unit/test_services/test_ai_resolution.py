@@ -10,7 +10,11 @@ from crossby.models.ai import EffortLevel
 from wade.models.config import AICommandConfig, AIConfig, ComplexityModelMapping, ProjectConfig
 from wade.models.delegation import DelegationMode
 from wade.models.permission import PermissionMode
-from wade.services.ai_resolution import confirm_ai_selection, resolve_effort
+from wade.services.ai_resolution import (
+    confirm_ai_selection,
+    resolve_effort,
+    valid_effort_levels,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -433,6 +437,35 @@ class TestChangeEffort:
         assert tool == _COPILOT
         assert model == _MODEL_B
         assert effort is None  # stale effort cleared when copilot doesn't support it
+
+
+# ---------------------------------------------------------------------------
+# valid_effort_levels — tool-valid effort levels from crossby capabilities
+# ---------------------------------------------------------------------------
+
+
+class TestValidEffortLevels:
+    """valid_effort_levels reflects each tool's crossby supported_efforts."""
+
+    def test_antigravity_cli_restricted(self) -> None:
+        """antigravity-cli supports only low/medium/high."""
+        assert valid_effort_levels("antigravity-cli") == [
+            EffortLevel.LOW,
+            EffortLevel.MEDIUM,
+            EffortLevel.HIGH,
+        ]
+
+    def test_claude_supports_all_levels(self) -> None:
+        """claude imposes no restriction — every EffortLevel is offered."""
+        assert valid_effort_levels("claude") == list(EffortLevel)
+
+    def test_unknown_tool_falls_back_to_all(self) -> None:
+        """An unknown tool falls back to the full EffortLevel set."""
+        assert valid_effort_levels("not-a-real-tool") == list(EffortLevel)
+
+    def test_none_tool_falls_back_to_all(self) -> None:
+        """No tool falls back to the full EffortLevel set."""
+        assert valid_effort_levels(None) == list(EffortLevel)
 
 
 # ---------------------------------------------------------------------------
