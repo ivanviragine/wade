@@ -193,6 +193,38 @@ class TestApplyDeps:
         updated = apply_deps_to_issues(provider, ["3"], edges)
         assert updated == 0
 
+    def test_existing_marked_block_not_corrupted(self) -> None:
+        # A body that already carries a marked wade:deps block (with the
+        # ## Dependencies heading *inside* it). The legacy heading stripper must
+        # not orphan the markers — after the update there must be exactly one
+        # balanced pair, with surrounding content preserved.
+        from wade.services.deps_service import DEPS_MARKER_END, DEPS_MARKER_START
+
+        body = (
+            "Intro paragraph.\n\n"
+            f"{DEPS_MARKER_START}\n"
+            "## Dependencies\n\n"
+            "**Depends on:** #9\n"
+            f"{DEPS_MARKER_END}\n\n"
+            "Trailing content.\n"
+        )
+        provider = MagicMock()
+        provider.read_task.return_value = Task(id="2", title="UI", body=body)
+        provider.update_task.return_value = Task(id="2", title="UI")
+
+        edges = [DependencyEdge(from_task="1", to_task="2")]
+        updated = apply_deps_to_issues(provider, ["2"], edges)
+
+        assert updated == 1
+        new_body = provider.update_task.call_args.kwargs["body"]
+        # Exactly one balanced marker pair — no orphaned start marker.
+        assert new_body.count(DEPS_MARKER_START) == 1
+        assert new_body.count(DEPS_MARKER_END) == 1
+        # Surrounding content is preserved and the block is refreshed.
+        assert "Intro paragraph." in new_body
+        assert "Trailing content." in new_body
+        assert "**Depends on:** #1" in new_body
+
 
 # ---------------------------------------------------------------------------
 # Tracking issue tests

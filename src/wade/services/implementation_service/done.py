@@ -12,10 +12,8 @@ from wade.git import branch as git_branch
 from wade.git import pr as git_pr
 from wade.git import repo as git_repo
 from wade.git import sync as git_sync
-from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
-from wade.models.session import MergeStrategy
 from wade.providers.registry import get_provider
 from wade.services.implementation_service._shared import (
     extract_issue_from_branch,
@@ -28,9 +26,10 @@ from wade.services.implementation_service.bootstrap import (
     _identify_session_dirty_files,
     strip_worktree_gitignore,
 )
-from wade.services.implementation_service.cleanup import _cleanup_worktree
 from wade.services.implementation_service.core import _resolve_worktree_from_plan
 from wade.services.implementation_service.lifecycle import (
+    SUMMARY_MARKER_END,
+    SUMMARY_MARKER_START,
     _apply_pr_refs,
     _build_pr_body,
     _strip_summary_section,
@@ -39,11 +38,12 @@ from wade.services.implementation_service.usage_tracking import IMPL_USAGE_MARKE
 from wade.services.task_service import remove_in_progress_label
 from wade.ui import prompts
 from wade.ui.console import console
+from wade.utils.body_markers import build_marked_block, update_body_preserving_markers
+from wade.utils.markdown import remove_marker_block
 
 logger = structlog.get_logger()
 
 __all__ = [
-    "_done_via_direct",
     "_done_via_pr",
     "done",
 ]
@@ -54,20 +54,19 @@ def done(
     plan_file: Path | None = None,
     no_close: bool = False,
     draft: bool = False,
-    no_cleanup: bool = False,
     project_root: Path | None = None,
 ) -> bool:
-    """Complete implementation session — create PR or merge directly.
+    """Complete implementation session — push the branch and finalize the PR.
 
-    Detects current branch, extracts issue number, reads merge strategy
-    from config, and delegates to _done_via_pr or _done_via_direct.
+    Detects the current branch, extracts the issue number, and delegates to
+    ``_done_via_pr`` (PR is the only merge strategy since #357 retired
+    ``direct``).
 
     Args:
         target: Optional issue number, worktree name, or plan file.
             If None, detects from current branch.
         no_close: Don't close the issue on merge.
         draft: Create PR as draft.
-        no_cleanup: Don't remove worktree after merge (direct strategy).
         project_root: Repository root.
     """
     config = load_config(project_root)
@@ -170,14 +169,16 @@ def done(
         )
         return False
 
-    # Clean gate passed — now strip the worktree gitignore block and
-    # restore .gitignore visibility so downstream operations see the
-    # true state.
-    with contextlib.suppress(OSError):
-        git_repo.unskip_worktree_file(cwd, ".gitignore")
-    strip_worktree_gitignore(cwd)
+    # Clean gate passed. IMPORTANT (A3): keep the worktree gitignore block and
+    # its skip-worktree bit in place until the PR finalize actually succeeds. If
+    # we stripped now and a later step failed (tracked-managed gate, push, PR API
+    # error), a retry would see the un-hidden session artifacts (PLAN.md, .wade/)
+    # as a dirty tree and fail the clean gate — leaving `done` un-retryable. The
+    # strip is deferred to the very end, gated on success.
 
-    # Check for tracked wade-managed files that should never be committed
+    # Check for tracked wade-managed files that should never be committed. This
+    # inspects the git index (not .gitignore), so it is safe to run before the
+    # strip.
     tracked_managed = _check_tracked_managed_files(cwd)
     if tracked_managed:
         console.error("Wade-managed files are tracked in git — these must not be committed")
@@ -208,30 +209,125 @@ def done(
 
     console.rule(f"done #{issue_number}")
 
-    strategy = config.project.merge_strategy
+    ok = _done_via_pr(
+        repo_root=repo_root,
+        branch=branch,
+        issue_number=issue_number,
+        main_branch=main_branch,
+        close_issue=not no_close,
+        draft=draft,
+        config=config,
+        worktree_path=wt_path,
+    )
+    if not ok:
+        # Finalize failed — leave the worktree exactly as we found it (gitignore
+        # block + skip-worktree still in place) so the user can fix and re-run.
+        return False
 
-    if strategy == MergeStrategy.DIRECT:
-        return _done_via_direct(
-            repo_root=repo_root,
-            branch=branch,
-            issue_number=issue_number,
-            main_branch=main_branch,
-            close_issue=not no_close,
-            config=config,
-            no_cleanup=no_cleanup,
-            worktree_path=wt_path,
+    # Success only: strip the worktree gitignore block and restore .gitignore
+    # visibility now that there is nothing left to retry. The PR is already
+    # updated at this point, so a filesystem cleanup failure (read-only file,
+    # permission change, removed worktree dir) must NOT turn an already-finalized
+    # PR into a reported failure — warn and continue instead.
+    try:
+        git_repo.unskip_worktree_file(cwd, ".gitignore")
+        strip_worktree_gitignore(cwd)
+    except OSError as e:
+        console.warn(f"Could not clean up the worktree gitignore block: {e}")
+        console.hint("Remove the `# wade:worktree:start` block from .gitignore manually.")
+        logger.warning("implementation.gitignore_strip_failed", error=str(e), exc_info=True)
+
+    return True
+
+
+# A bare "rejected" is intentionally NOT here: it matches every rejection git
+# reports (e.g. a pre-receive hook / branch-protection "push rejected"), which a
+# force-push cannot fix — offering the force-with-lease recovery menu for those
+# would be misleading. The specific signals below (including the "! [rejected]
+# ... (non-fast-forward)" line, matched via "non-fast-forward") already cover a
+# real non-fast-forward rejection.
+_NON_FAST_FORWARD_SIGNALS = (
+    "non-fast-forward",
+    "fetch first",
+    "updates were rejected",
+    "tip of your current branch is behind",
+)
+
+
+def _is_non_fast_forward(message: str) -> bool:
+    """Return True if a push error message indicates a non-fast-forward rejection."""
+    lowered = message.lower()
+    return any(sig in lowered for sig in _NON_FAST_FORWARD_SIGNALS)
+
+
+def _push_branch_with_recovery(
+    repo_root: Path,
+    branch: str,
+    worktree_path: Path | None,
+) -> bool:
+    """Push *branch*, recovering interactively from a non-fast-forward rejection.
+
+    On a non-FF rejection the remote branch has commits the local branch lacks.
+    We fetch, report the divergence, and — only behind an explicit confirm —
+    offer to merge the remote in and retry, or force-push with
+    ``--force-with-lease``. wade never force-pushes silently (C4).
+    """
+    try:
+        git_repo.push_branch(repo_root, branch, set_upstream=True)
+        console.success("Branch pushed.")
+        return True
+    except GitError as e:
+        if not _is_non_fast_forward(str(e)):
+            console.error(f"Push failed: {e}")
+            return False
+
+    console.warn(f"Push rejected — '{branch}' has diverged from its remote.")
+    with contextlib.suppress(GitError):
+        git_sync.fetch_origin(repo_root)
+
+    merge_cwd = worktree_path if worktree_path and worktree_path.is_dir() else repo_root
+    with contextlib.suppress(GitError):
+        behind = git_branch.commits_ahead(repo_root, f"origin/{branch}", branch)
+        ahead = git_branch.commits_ahead(repo_root, branch, f"origin/{branch}")
+        console.detail(f"Local is {ahead} commit(s) ahead, {behind} behind origin/{branch}.")
+
+    if not prompts.is_tty():
+        console.error(
+            "Remote branch has diverged. Resolve it manually "
+            f"(e.g. `git -C {merge_cwd} pull --no-rebase`), then re-run done."
         )
-    else:
-        return _done_via_pr(
-            repo_root=repo_root,
-            branch=branch,
-            issue_number=issue_number,
-            main_branch=main_branch,
-            close_issue=not no_close,
-            draft=draft,
-            config=config,
-            worktree_path=wt_path,
-        )
+        return False
+
+    choice = prompts.select(
+        "The remote branch has diverged. How do you want to proceed?",
+        [
+            "Merge the remote in, then push (safe)",
+            "Force-push with --force-with-lease (overwrites remote history)",
+            "Cancel",
+        ],
+    )
+    if choice == 0:
+        try:
+            merge_result = git_sync.merge_branch(merge_cwd, f"origin/{branch}")
+            if not merge_result.success:
+                console.error("Merge conflicts with the remote branch — resolve them, then re-run.")
+                return False
+            git_repo.push_branch(repo_root, branch, set_upstream=True)
+            console.success("Merged the remote and pushed.")
+            return True
+        except GitError as e:
+            console.error(f"Could not merge and push: {e}")
+            return False
+    if choice == 1:
+        try:
+            git_repo.push_branch(repo_root, branch, set_upstream=True, force=True)
+            console.success("Force-pushed with lease.")
+            return True
+        except GitError as e:
+            console.error(f"Force push failed: {e}")
+            return False
+    console.info("Push cancelled — the branch was not updated on the remote.")
+    return False
 
 
 def _done_via_pr(
@@ -262,17 +358,29 @@ def _done_via_pr(
         console.error(f"Cannot read issue #{issue_number}: {e}")
         return False
 
-    # Push branch
+    # Push branch (with non-fast-forward divergence recovery — never a silent
+    # force-push).
     console.step("Pushing branch...")
-    try:
-        git_repo.push_branch(repo_root, branch, set_upstream=True)
-        console.success("Branch pushed.")
-    except GitError as e:
-        console.error(f"Push failed: {e}")
+    if not _push_branch_with_recovery(repo_root, branch, worktree_path):
         return False
 
-    # Check for existing PR (expected from plan or implement bootstrap)
-    existing_pr = git_pr.get_pr_for_branch(repo_root, branch)
+    # Check for existing PR (expected from plan or implement bootstrap).
+    # A lookup failure is transient — do NOT fall through to "create a new PR"
+    # (that would duplicate the draft); report and let the user retry. A merged
+    # or closed PR must not be body-updated / re-marked-ready as if it were open.
+    lookup = git_pr.get_pr_for_branch(repo_root, branch)
+    if lookup.lookup_failed:
+        console.error(f"Could not look up the PR for branch '{branch}' — try again shortly.")
+        return False
+    if lookup.is_merged:
+        console.error(f"PR #{lookup.number} is already merged — nothing to finalize.")
+        return False
+    if lookup.found and not lookup.is_open:
+        console.error(
+            f"PR #{lookup.number} is {lookup.state.lower()} — reopen it or start a new branch."
+        )
+        return False
+    existing_pr = lookup.pr if lookup.is_open else None
 
     # Resolve PR-SUMMARY.md from worktree root
     pr_summary_path: Path | None = None
@@ -284,21 +392,16 @@ def _done_via_pr(
         if worktree_path:
             console.detail(f"Expected: {worktree_path / 'PR-SUMMARY.md'}")
 
-    if existing_pr:
+    if existing_pr is not None:
         # Update existing PR: append summary
-        pr_number = int(existing_pr["number"])
-        pr_url = str(existing_pr.get("url", ""))
+        pr_number = existing_pr.number
+        pr_url = existing_pr.url
         console.step(f"Updating existing PR #{pr_number}...")
 
-        # Read current PR body and append summary
-        current_body = git_pr.get_pr_body(repo_root, pr_number) or ""
-
-        # Build summary section
-        summary_section = ""
+        # Build summary content
+        summary_content = ""
         if pr_summary_path and pr_summary_path.is_file():
             summary_content = pr_summary_path.read_text(encoding="utf-8").strip()
-            if summary_content:
-                summary_section = f"\n\n## Summary\n\n{summary_content}"
 
         # Detect parent tracking issue
         parent_issue: str | None = None
@@ -311,32 +414,44 @@ def _done_via_pr(
         except Exception:
             logger.debug("implementation.parent_issue_detection_failed", exc_info=True)
 
-        # Build updated body: keep existing content, add close/parent references + summary
-        updated_body = _apply_pr_refs(current_body, issue_number, close_issue, parent_issue)
-        # Strip any existing ## Summary section to avoid duplication on retry.
-        # Use the impl-usage HTML marker as a hard boundary so that freeform
-        # summary content (which may contain ## subheadings) is fully removed.
-        updated_body = _strip_summary_section(updated_body)
-        # Insert summary before any impl-usage block so ordering stays
-        # consistent: content → summary → impl-usage.
-        if summary_section:
-            marker_pos = updated_body.find(IMPL_USAGE_MARKER_START)
+        def _transform(body: str) -> str:
+            # Keep existing content; refresh close/parent refs; rewrite ONLY the
+            # wade:summary block so a concurrent edit elsewhere survives (A4).
+            body = _apply_pr_refs(body, issue_number, close_issue, parent_issue)
+            # Remove the prior marked block FIRST: the legacy heading stripper is
+            # not marker-aware, so running it on a body that still contains the
+            # marked block would match the `## Summary` *inside* the block,
+            # orphan the start marker, and drop the end marker (leaving an
+            # unbalanced pair remove_marker_block can no longer clean). After the
+            # marked block is gone, strip any genuinely legacy unmarked heading.
+            body = remove_marker_block(body, SUMMARY_MARKER_START, SUMMARY_MARKER_END)
+            body = _strip_summary_section(body)
+            if not summary_content:
+                return body.rstrip("\n") + "\n"
+            block = build_marked_block(
+                SUMMARY_MARKER_START, SUMMARY_MARKER_END, f"## Summary\n\n{summary_content}"
+            )
+            # Keep ordering content → summary → impl-usage.
+            marker_pos = body.find(IMPL_USAGE_MARKER_START)
             if marker_pos != -1:
-                before = updated_body[:marker_pos].rstrip("\n")
-                after = updated_body[marker_pos:]
-                updated_body = before + summary_section + "\n\n" + after + "\n"
-            else:
-                updated_body = updated_body.rstrip("\n") + summary_section + "\n"
-        else:
-            updated_body = updated_body.rstrip("\n") + "\n"
+                before = body[:marker_pos].rstrip("\n")
+                after = body[marker_pos:]
+                return f"{before}\n\n{block}\n\n{after}\n"
+            return body.rstrip("\n") + "\n\n" + block + "\n"
 
-        if not git_pr.update_pr_body(repo_root, pr_number, updated_body):
+        if not update_body_preserving_markers(
+            read_body=lambda: git_pr.get_pr_body(repo_root, pr_number) or "",
+            write_body=lambda b: git_pr.update_pr_body(repo_root, pr_number, b),
+            transform=_transform,
+            warn=console.warn,
+            label=f"PR #{pr_number} body",
+        ):
             console.error("Could not update the PR body.")
             return False
         console.success("PR body updated with summary.")
 
         # Mark draft as ready — but only if the caller did not request a draft.
-        is_draft = existing_pr.get("isDraft", False)
+        is_draft = existing_pr.is_draft
         if is_draft and not draft:
             if git_pr.mark_pr_ready(repo_root, pr_number):
                 console.success("PR marked as ready for review.")
@@ -374,6 +489,9 @@ def _done_via_pr(
                 head=branch,
                 draft=draft,
             )
+            if pr_info is None:
+                console.error("PR creation failed — could not determine the new PR number.")
+                return False
             pr_url = str(pr_info.get("url", ""))
             console.success(f"PR created: {pr_url}")
         except Exception as e:
@@ -387,102 +505,6 @@ def _done_via_pr(
     lines = []
     lines.append(f"  PR      [url]{pr_url}[/]")
     lines.append(f"  Issue   {console.issue_ref(issue_number, task.title)}")
-    console.panel("\n".join(lines), title="Implementation done")
-
-    return True
-
-
-def _done_via_direct(
-    repo_root: Path,
-    branch: str,
-    issue_number: str,
-    main_branch: str,
-    close_issue: bool,
-    config: ProjectConfig,
-    no_cleanup: bool = False,
-    worktree_path: Path | None = None,
-) -> bool:
-    """Merge directly into main and clean up."""
-    provider = get_provider(config)
-
-    # Sync first
-    console.step(f"Merging {main_branch} into {branch}...")
-    with contextlib.suppress(GitError):
-        git_sync.fetch_origin(repo_root)
-
-    try:
-        sync_cwd = worktree_path if worktree_path and worktree_path.is_dir() else repo_root
-        merge_result = git_sync.merge_branch(sync_cwd, main_branch)
-        if not merge_result.success:
-            console.error("Merge conflicts detected. Resolve them first.")
-            return False
-    except GitError as e:
-        console.error(f"Merge failed: {e}")
-        return False
-
-    # Switch to main, fast-forward to origin, and merge feature branch
-    console.step(f"Merging {branch} into {main_branch}...")
-    try:
-        git_repo.checkout(repo_root, main_branch)
-        git_repo.merge_ff_only(repo_root, f"origin/{main_branch}")
-        git_repo.merge_no_edit(repo_root, branch)
-        git_repo.push_branch(repo_root, main_branch)
-        console.success("Merged and pushed.")
-    except GitError as e:
-        # A conflict from merge_no_edit leaves the main checkout mid-merge with a
-        # conflicted index — abort so it is not left in a broken state.
-        with contextlib.suppress(GitError):
-            git_sync.abort_merge(repo_root)
-        console.error(f"Direct merge failed: {e}")
-        return False
-
-    # Remove in-progress label
-    with contextlib.suppress(Exception):
-        remove_in_progress_label(provider, issue_number)
-
-    # Close issue
-    if close_issue:
-        try:
-            provider.close_task(issue_number)
-            console.success(f"Closed #{issue_number}")
-        except Exception as e:
-            console.warn(f"Could not close issue #{issue_number}: {e}")
-
-    # Cleanup worktree (unless --no-cleanup)
-    if not no_cleanup:
-        console.step("Cleaning up worktree...")
-
-        def _do_cleanup() -> None:
-            # _cleanup_worktree returns False (without raising) when worktree
-            # removal fails — treat that like an exception so the retry/skip
-            # handler runs and success is only reported on confirmed removal.
-            if worktree_path:
-                if not _cleanup_worktree(repo_root, worktree_path, main_branch):
-                    raise RuntimeError("worktree removal did not complete")
-            else:
-                git_branch.delete_branch(repo_root, branch, force=True)
-                git_worktree.prune_worktrees(repo_root)
-
-        try:
-            _do_cleanup()
-            console.success("Worktree cleaned up.")
-        except Exception as e:
-            choice = prompts.select(
-                f"Worktree cleanup failed: {e}. What would you like to do?",
-                ["Retry", "Skip (leave worktree in place)"],
-            )
-            if choice == 0:  # Retry
-                try:
-                    _do_cleanup()
-                    console.success("Worktree cleaned up.")
-                except Exception:
-                    logger.warning("worktree.cleanup_skipped", reason="retry_failed", exc_info=True)
-            else:  # Skip
-                logger.warning("worktree.cleanup_skipped", reason="user_skipped")
-
-    lines = []
-    lines.append(f"  Branch   {console.git_ref(branch)} merged into {console.git_ref(main_branch)}")
-    lines.append(f"  Issue    #{issue_number}")
     console.panel("\n".join(lines), title="Implementation done")
 
     return True

@@ -105,13 +105,20 @@ class TestRunGitWithRetry:
     def test_raises_after_all_retries_exhausted(self, tmp_path: Path) -> None:
         with (
             patch("wade.git.repo._run_git") as mock_run,
-            patch("wade.git.repo.time.sleep"),
+            patch("wade.git.repo.time.sleep") as mock_sleep,
         ):
             lock_err = GitError("Unable to create '/repo/.git/index.lock': File exists")
             mock_run.side_effect = [lock_err, lock_err, lock_err]
             with pytest.raises(GitError, match=r"index\.lock"):
                 _run_git_with_retry("worktree", "add", cwd=tmp_path, retries=3)
             assert mock_run.call_count == 3
+            # The final attempt re-raises immediately — no wasted backoff sleep
+            # after the last try (only retries-1 sleeps).
+            assert mock_sleep.call_count == 2
+
+    def test_raises_on_invalid_retries(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="retries must be at least 1"):
+            _run_git_with_retry("status", cwd=tmp_path, retries=0)
 
 
 class TestGetMainWorktreePath:

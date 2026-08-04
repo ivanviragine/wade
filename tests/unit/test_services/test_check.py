@@ -104,7 +104,8 @@ class TestValidateConfig:
         result = validate_config(tmp_path)
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("merge_strategy" in e for e in result.errors)
-        assert any("PR" in e and "direct" in e for e in result.errors)
+        # PR is the only allowed strategy now that `direct` is retired (#357).
+        assert any("PR" in e for e in result.errors)
 
     def test_invalid_ai_tool(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"

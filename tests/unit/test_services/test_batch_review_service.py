@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from wade.git.pr import PRLookup
 from wade.models.batch import BatchIssueContext, BatchReviewContext
 from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationResult
@@ -122,7 +123,7 @@ class TestGatherBatchContext:
             "feat/11-add-feature-b",
         ]
         mock_branch.branch_exists.return_value = True
-        mock_pr.get_pr_for_branch.return_value = None
+        mock_pr.get_pr_for_branch.return_value = PRLookup(found=False)
         mock_repo.diff_stat_between.return_value = " 2 files changed"
 
         ctx = gather_batch_context("99", repo_root=Path("/repo"))
@@ -168,7 +169,7 @@ class TestGatherBatchContext:
 
         mock_branch.make_branch_name.return_value = "feat/10-good-issue"
         mock_branch.branch_exists.return_value = False
-        mock_pr.get_pr_for_branch.return_value = None
+        mock_pr.get_pr_for_branch.return_value = PRLookup(found=False)
         mock_repo.fetch_ref.side_effect = GitError("no remote")
 
         ctx = gather_batch_context("99", repo_root=Path("/repo"))
@@ -371,7 +372,7 @@ class TestCreateReviewPr:
     ) -> None:
         from wade.services.batch_review_service import create_review_pr
 
-        mock_pr.get_pr_for_branch.return_value = None
+        mock_pr.get_pr_for_branch.return_value = PRLookup(found=False)
         mock_pr.create_pr.return_value = {
             "number": 42,
             "url": "https://github.com/org/repo/pull/42",

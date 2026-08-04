@@ -64,6 +64,7 @@ from wade.services.task_service import (
 )
 from wade.ui import prompts
 from wade.ui.console import console
+from wade.utils.body_markers import enforce_body_budget, update_body_preserving_markers
 from wade.utils.terminal import (
     compose_implement_title,
     launch_in_new_terminal,
@@ -150,31 +151,36 @@ def _capture_post_session_usage(
         usage.model_breakdown[0].model if usage and usage.model_breakdown else None
     )
 
-    # Update PR body with usage stats and session ID
-    pr_info = git_pr.get_pr_for_branch(repo_root, branch)
-    if pr_info:
-        pr_number = int(pr_info["number"])
+    # Update PR body with usage stats and session ID — only on an OPEN PR
+    # (a merged/closed PR is not ours to rewrite; a lookup failure is transient).
+    lookup = git_pr.get_pr_for_branch(repo_root, branch)
+    if lookup.is_open and lookup.pr is not None:
+        pr_number = lookup.pr.number
         try:
-            current_body = git_pr.get_pr_body(repo_root, pr_number)
-            if current_body is not None:
-                new_body = _enrich_body_with_usage(
-                    current_body,
-                    ai_tool,
-                    effective_model,
-                    usage,
-                    has_tokens,
-                    has_session,
+            # Re-read the body immediately before writing and rewrite only wade's
+            # own usage marker block, so a concurrent edit outside it survives
+            # (A4); enforce GitHub's size cap with a visible warning (A5).
+            updated = update_body_preserving_markers(
+                read_body=lambda: git_pr.get_pr_body(repo_root, pr_number),
+                write_body=lambda b: git_pr.update_pr_body(repo_root, pr_number, b),
+                transform=lambda b: _enrich_body_with_usage(
+                    b, ai_tool, effective_model, usage, has_tokens, has_session
+                ),
+                warn=console.warn,
+                label=f"PR #{pr_number} body",
+            )
+            if updated:
+                if has_tokens:
+                    console.success("Updated PR with implementation usage stats.")
+                logger.info(
+                    "implementation.impl_usage_updated",
+                    pr=pr_number,
+                    total_tokens=usage.total_tokens if usage else None,
                 )
-                if git_pr.update_pr_body(repo_root, pr_number, new_body):
-                    if has_tokens:
-                        console.success("Updated PR with implementation usage stats.")
-                    logger.info(
-                        "implementation.impl_usage_updated",
-                        pr=pr_number,
-                        total_tokens=usage.total_tokens if usage else None,
-                    )
         except Exception:
             logger.debug("implementation.pr_body_read_failed", exc_info=True)
+    elif lookup.lookup_failed:
+        logger.debug("implementation.pr_lookup_failed", branch=branch)
     else:
         logger.debug("implementation.no_pr_for_branch", branch=branch)
 
@@ -189,6 +195,9 @@ def _capture_post_session_usage(
                 usage,
                 has_tokens,
                 has_session,
+            )
+            new_body = enforce_body_budget(
+                new_body, warn=console.warn, label=f"issue #{issue_number} body"
             )
             provider.update_task(str(issue_number), body=new_body)
             if has_tokens:
@@ -301,15 +310,26 @@ def start(
 
         # Check for existing draft PR (from plan flow) before AI selection so that
         # "Plan first" can short-circuit without ever showing the AI confirmation menu.
-        existing_pr = git_pr.get_pr_for_branch(repo_root, branch_name)
+        # Only an OPEN PR is resumable — a merged/closed PR must not be treated as a
+        # live draft (that would extract a stale plan and skip fresh bootstrap).
+        pr_lookup = git_pr.get_pr_for_branch(repo_root, branch_name)
+        if pr_lookup.lookup_failed:
+            # A failed lookup is NOT "no PR" — bootstrapping now would scaffold a
+            # duplicate draft over an existing PR and lose its extracted plan.
+            console.error_with_fix(
+                f"Could not look up the PR for branch {branch_name}",
+                "Transient gh error — try again shortly",
+            )
+            return ImplementResult(success=False)
+        existing_pr = pr_lookup.pr if pr_lookup.is_open else None
         plan_content: str | None = None
         proceed_needs_bootstrap = False
 
         has_plan = False
-        if existing_pr:
-            console.info(f"Found existing PR #{existing_pr['number']} for this task")
+        if existing_pr is not None:
+            console.info(f"Found existing PR #{existing_pr.number} for this task")
             # Extract plan content from PR body
-            pr_body = git_pr.get_pr_body(repo_root, int(existing_pr["number"]))
+            pr_body = git_pr.get_pr_body(repo_root, existing_pr.number)
             if pr_body:
                 plan_content = extract_plan_from_pr_body(pr_body)
                 if plan_content:
@@ -423,7 +443,7 @@ def start(
         if existing_wt:
             worktree_path = existing_wt
             console.info(f"Reusing existing worktree: {worktree_path}")
-        elif existing_pr:
+        elif existing_pr is not None:
             # Draft PR exists → branch already exists remotely, check it out
             try:
                 # Ensure local branch tracks remote
@@ -685,7 +705,6 @@ def start(
                             branch=branch_name,
                             issue_number=task.id,
                             worktree_path=worktree_path,
-                            config=config,
                             provider=provider,
                             ai_tool=resolved_tool,
                             model=effective_model,

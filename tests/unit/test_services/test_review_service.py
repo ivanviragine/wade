@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from crossby.models.ai import ModelBreakdown, TokenUsage
 
+from wade.git.pr import PRLookup, PRRef
 from wade.git.repo import GitError
 from wade.models.review import ReviewComment, ReviewThread
 from wade.models.task import Task, TaskState
@@ -419,12 +420,15 @@ class TestReviewServiceStart:
             ),
             "get_pr_for_branch": patch(
                 "wade.services.review_service.git_pr.get_pr_for_branch",
-                return_value={
-                    "number": 99,
-                    "url": "https://...",
-                    "state": "OPEN",
-                    "isDraft": False,
-                },
+                return_value=PRLookup(
+                    found=True,
+                    pr=PRRef(
+                        number=99,
+                        url="https://...",
+                        state="OPEN",
+                        isDraft=False,
+                    ),
+                ),
             ),
             "get_comprehensive_review_status": patch(
                 "wade.services.review_service.get_comprehensive_review_status",
@@ -491,7 +495,7 @@ class TestReviewServiceStart:
 
     def test_no_pr_returns_false(self, tmp_path: Path, mock_setup: dict[str, MagicMock]) -> None:
         """start() should fail if no PR exists for the branch."""
-        mock_setup["get_pr_for_branch"].return_value = None
+        mock_setup["get_pr_for_branch"].return_value = PRLookup(found=False)
         result = start(target="42")
         assert result is False
 
@@ -499,12 +503,25 @@ class TestReviewServiceStart:
         self, tmp_path: Path, mock_setup: dict[str, MagicMock]
     ) -> None:
         """start() should fail if the PR is already merged."""
-        mock_setup["get_pr_for_branch"].return_value = {
-            "number": 99,
-            "state": "MERGED",
-        }
+        mock_setup["get_pr_for_branch"].return_value = PRLookup(
+            found=True,
+            pr=PRRef(number=99, state="MERGED"),
+        )
         result = start(target="42")
         assert result is False
+
+    def test_closed_pr_returns_false(
+        self, tmp_path: Path, mock_setup: dict[str, MagicMock]
+    ) -> None:
+        """start() should fail for a CLOSED (non-open) PR, not just MERGED."""
+        mock_setup["get_pr_for_branch"].return_value = PRLookup(
+            found=True,
+            pr=PRRef(number=99, state="CLOSED"),
+        )
+        result = start(target="42")
+        assert result is False
+        # Never proceeds to fetch review status for a non-open PR.
+        mock_setup["get_comprehensive_review_status"].assert_not_called()
 
     def test_no_actionable_comments_returns_true(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock], mock_provider: MagicMock
@@ -653,7 +670,10 @@ class TestCaptureReviewSessionUsage:
         )
 
         with (
-            patch("wade.services.review_service.git_pr.get_pr_for_branch", return_value=None),
+            patch(
+                "wade.services.review_service.git_pr.get_pr_for_branch",
+                return_value=PRLookup(found=False),
+            ),
         ):
             result = _capture_review_session_usage(
                 transcript_path=transcript,
@@ -677,7 +697,10 @@ class TestCaptureReviewSessionUsage:
         )
 
         with (
-            patch("wade.services.review_service.git_pr.get_pr_for_branch", return_value=None),
+            patch(
+                "wade.services.review_service.git_pr.get_pr_for_branch",
+                return_value=PRLookup(found=False),
+            ),
         ):
             result = _capture_review_session_usage(
                 transcript_path=transcript,
@@ -729,7 +752,7 @@ class TestFetchReviews:
         mock_repo_root.return_value = tmp_path
         provider = mock_get_provider.return_value
         provider.read_task.return_value = self._make_task()
-        mock_pr.return_value = {"number": 99, "state": "OPEN"}
+        mock_pr.return_value = PRLookup(found=True, pr=PRRef(number=99, state="OPEN"))
         threads = [
             ReviewThread(
                 id="PRRT_123",
@@ -774,7 +797,7 @@ class TestFetchReviews:
         mock_repo_root.return_value = tmp_path
         provider = mock_get_provider.return_value
         provider.read_task.return_value = self._make_task()
-        mock_pr.return_value = {"number": 99, "state": "OPEN"}
+        mock_pr.return_value = PRLookup(found=True, pr=PRRef(number=99, state="OPEN"))
         mock_status.return_value = PRReviewStatus()
 
         result = fetch_reviews("42", project_root=tmp_path)
@@ -783,7 +806,10 @@ class TestFetchReviews:
         captured = capsys.readouterr()
         assert "No unresolved" in captured.out
 
-    @patch("wade.services.review_service.git_pr.get_pr_for_branch", return_value=None)
+    @patch(
+        "wade.services.review_service.git_pr.get_pr_for_branch",
+        return_value=PRLookup(found=False),
+    )
     @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
     @patch(
         "wade.services.review_service.git_repo.get_current_branch",
@@ -840,7 +866,7 @@ class TestFetchReviews:
         mock_repo_root.return_value = tmp_path
         provider = mock_get_provider.return_value
         provider.read_task.return_value = self._make_task()
-        mock_pr.return_value = {"number": 99, "state": "OPEN"}
+        mock_pr.return_value = PRLookup(found=True, pr=PRRef(number=99, state="OPEN"))
         mock_status.return_value = PRReviewStatus()
 
         fetch_reviews("42", project_root=tmp_path)
@@ -878,7 +904,7 @@ class TestFetchReviews:
         mock_repo_root.return_value = tmp_path
         provider = mock_get_provider.return_value
         provider.read_task.return_value = self._make_task()
-        mock_pr.return_value = {"number": 99, "state": "OPEN"}
+        mock_pr.return_value = PRLookup(found=True, pr=PRRef(number=99, state="OPEN"))
         mock_status.return_value = PRReviewStatus()
 
         fetch_reviews("42", project_root=tmp_path)
@@ -886,7 +912,10 @@ class TestFetchReviews:
         mock_make_branch.assert_called_once()
         mock_pr.assert_called_once_with(tmp_path, "feat/42-reconstructed")
 
-    @patch("wade.services.review_service.git_pr.get_pr_for_branch", return_value=None)
+    @patch(
+        "wade.services.review_service.git_pr.get_pr_for_branch",
+        return_value=PRLookup(found=False),
+    )
     @patch(
         "wade.services.review_service.git_branch.make_branch_name",
         return_value="feat/42-reconstructed",
@@ -958,7 +987,7 @@ class TestFetchReviews:
         mock_repo_root.return_value = tmp_path
         provider = mock_get_provider.return_value
         provider.read_task.return_value = self._make_task()
-        mock_pr.return_value = {"number": 99, "state": "OPEN"}
+        mock_pr.return_value = PRLookup(found=True, pr=PRRef(number=99, state="OPEN"))
         mock_status.return_value = PRReviewStatus(
             reviews=[PRReview(author="bob", state=ReviewState.CHANGES_REQUESTED)]
         )
@@ -997,7 +1026,7 @@ class TestFetchReviews:
         mock_repo_root.return_value = tmp_path
         provider = mock_get_provider.return_value
         provider.read_task.return_value = self._make_task()
-        mock_pr.return_value = {"number": 99, "state": "OPEN"}
+        mock_pr.return_value = PRLookup(found=True, pr=PRRef(number=99, state="OPEN"))
         mock_status.return_value = PRReviewStatus(
             pending_reviewers=[PendingReviewer(name="charlie", is_team=False)]
         )
@@ -1037,7 +1066,7 @@ class TestFetchReviews:
         mock_repo_root.return_value = tmp_path
         provider = mock_get_provider.return_value
         provider.read_task.return_value = self._make_task()
-        mock_pr.return_value = {"number": 99, "state": "OPEN"}
+        mock_pr.return_value = PRLookup(found=True, pr=PRRef(number=99, state="OPEN"))
         outdated = ReviewThread(
             id="t_outdated",
             is_outdated=True,
@@ -1084,7 +1113,7 @@ class TestFetchReviews:
         mock_repo_root.return_value = tmp_path
         provider = mock_get_provider.return_value
         provider.read_task.return_value = self._make_task()
-        mock_pr.return_value = {"number": 99, "state": "OPEN"}
+        mock_pr.return_value = PRLookup(found=True, pr=PRRef(number=99, state="OPEN"))
         thread = ReviewThread(
             id="t1",
             comments=[ReviewComment(author="alice", body="Fix this", path="a.py", line=1)],
@@ -1190,7 +1219,7 @@ class TestCountUnresolvedThreads:
 
         mock_repo_root.return_value = tmp_path
         provider = mock_get_provider.return_value
-        mock_pr.return_value = {"number": 99, "state": "OPEN"}
+        mock_pr.return_value = PRLookup(found=True, pr=PRRef(number=99, state="OPEN"))
         threads = [
             ReviewThread(comments=[ReviewComment(author="a", body="Fix this")]),
             ReviewThread(comments=[ReviewComment(author="b", body="And this")]),
@@ -1223,7 +1252,7 @@ class TestCountUnresolvedThreads:
 
         mock_repo_root.return_value = tmp_path
         provider = mock_get_provider.return_value
-        mock_pr.return_value = {"number": 99, "state": "OPEN"}
+        mock_pr.return_value = PRLookup(found=True, pr=PRRef(number=99, state="OPEN"))
         provider.get_pr_review_status.return_value = PRReviewStatus()
 
         result = count_unresolved_threads(project_root=tmp_path)
@@ -1282,7 +1311,10 @@ class TestCountUnresolvedThreads:
 
         assert result is None
 
-    @patch("wade.services.review_service.git_pr.get_pr_for_branch", return_value=None)
+    @patch(
+        "wade.services.review_service.git_pr.get_pr_for_branch",
+        return_value=PRLookup(found=False),
+    )
     @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
     @patch("wade.services.review_service.git_repo.get_current_branch", return_value="feat/42-fix")
     @patch("wade.services.review_service.git_repo.get_repo_root")
@@ -1322,7 +1354,7 @@ class TestCountUnresolvedThreads:
     ) -> None:
         mock_repo_root.return_value = tmp_path
         provider = mock_get_provider.return_value
-        mock_pr.return_value = {"number": 99}
+        mock_pr.return_value = PRLookup(found=True, pr=PRRef(number=99, state="OPEN"))
         provider.get_pr_review_status.side_effect = RuntimeError("API down")
 
         result = count_unresolved_threads(project_root=tmp_path)
@@ -1359,7 +1391,7 @@ class TestGetReviewStatus:
 
         mock_repo_root.return_value = tmp_path
         provider = mock_get_provider.return_value
-        mock_pr.return_value = {"number": 99}
+        mock_pr.return_value = PRLookup(found=True, pr=PRRef(number=99, state="OPEN"))
 
         expected_status = PRReviewStatus(
             reviews=[PRReview(author="alice", state=ReviewState.APPROVED)]
@@ -1395,7 +1427,7 @@ class TestGetReviewStatus:
 
         mock_repo_root.return_value = tmp_path
         provider = mock_get_provider.return_value
-        mock_pr.return_value = {"number": 99}
+        mock_pr.return_value = PRLookup(found=True, pr=PRRef(number=99, state="OPEN"))
         provider.get_pr_review_status.side_effect = NotImplementedError
 
         threads = [ReviewThread(comments=[ReviewComment(author="a", body="Fix")])]
@@ -1950,7 +1982,7 @@ class TestPollForReviews:
         from wade.models.review import PollOutcome, PRReviewStatus, ReviewBotStatus
         from wade.services.review_service import poll_for_reviews
 
-        mock_pr.return_value = {"state": "OPEN", "number": 99}
+        mock_pr.return_value = PRLookup(found=True, pr=PRRef(state="OPEN", number=99))
         mock_status.return_value = PRReviewStatus(
             bot_status=ReviewBotStatus.COMPLETED,
             actionable_threads=[],
@@ -1976,7 +2008,7 @@ class TestPollForReviews:
         from wade.models.review import PollOutcome, PRReviewStatus, ReviewBotStatus
         from wade.services.review_service import poll_for_reviews
 
-        mock_pr.return_value = {"state": "OPEN", "number": 99}
+        mock_pr.return_value = PRLookup(found=True, pr=PRRef(state="OPEN", number=99))
         thread = ReviewThread(comments=[ReviewComment(author="coderabbitai[bot]", body="Fix this")])
         mock_status.return_value = PRReviewStatus(
             bot_status=ReviewBotStatus.COMPLETED,
