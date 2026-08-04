@@ -122,6 +122,7 @@ def done(
         draft=draft,
     )
     if success:
+        from wade.cli.session_shared import DOC_PASS_ADVISORY
         from wade.ui.console import console
 
         # Remind agent to review if reviews are enabled. Advisory only —
@@ -137,6 +138,8 @@ def done(
                 )
         except Exception:  # Advisory — must never break a successful completion
             pass
+
+        console.warn(DOC_PASS_ADVISORY)
 
         console.info(
             "SESSION COMPLETE — do not make further changes. "
