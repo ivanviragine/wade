@@ -252,6 +252,12 @@ _VALID_AI_COMMAND_KEYS = frozenset(AICommandConfig.model_fields)
 # Top-level ``ai`` scalar keys are AIConfig's fields minus the per-command
 # subsections, which are validated separately as their own sections.
 _VALID_AI_SCALAR_KEYS = frozenset(AIConfig.model_fields) - set(AI_COMMAND_NAMES)
+# Full accepted key set for the top-level ``ai`` section: scalar keys plus the
+# per-command subsections (canonical names + legacy aliases). Precomputed once
+# rather than rebuilt on every _validate_ai_section call.
+_VALID_AI_TOP_LEVEL_KEYS = frozenset(
+    {*_VALID_AI_SCALAR_KEYS, *AI_COMMAND_NAMES, *LEGACY_AI_COMMAND_ALIASES}
+)
 
 
 def validate_config(cwd: Path | None = None) -> ConfigCheckResult:
@@ -459,13 +465,8 @@ def _validate_ai_section(ai: dict[str, Any], errors: list[str]) -> None:
             else:
                 _validate_ai_command_section(cmd, cmd_section, errors)
 
-    valid_keys = {
-        *_VALID_AI_SCALAR_KEYS,
-        *AI_COMMAND_NAMES,
-        *LEGACY_AI_COMMAND_ALIASES,
-    }
     for key in ai:
-        if key not in valid_keys:
+        if key not in _VALID_AI_TOP_LEVEL_KEYS:
             errors.append(f"ai.{key}: unsupported key")
 
 
