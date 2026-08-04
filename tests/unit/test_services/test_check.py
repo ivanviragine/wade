@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from wade.models.config import AI_COMMAND_NAMES, AICommandConfig, AIConfig
 from wade.services.check_service import (
     CheckExitCode,
     CheckStatus,
@@ -104,7 +105,8 @@ class TestValidateConfig:
         result = validate_config(tmp_path)
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("merge_strategy" in e for e in result.errors)
-        assert any("PR" in e and "direct" in e for e in result.errors)
+        # PR is the only allowed strategy now that `direct` is retired (#357).
+        assert any("PR" in e for e in result.errors)
 
     def test_invalid_ai_tool(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"
@@ -328,6 +330,70 @@ class TestValidateConfig:
         result = validate_config(tmp_path)
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("ai.review_batch.unexpected" in e for e in result.errors)
+
+    def test_invalid_ai_top_level_unknown_key(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nai:\n  bogus_setting: true\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("ai.bogus_setting: unsupported key" in e for e in result.errors)
+
+    def test_valid_command_permission_mode(self, tmp_path: Path) -> None:
+        """``ai.<cmd>.permission_mode`` is a supported key (issue #368).
+
+        ``wade init`` writes this per-command, so validating it must not emit a
+        spurious "unsupported key" warning.
+        """
+        config = tmp_path / ".wade.yml"
+        config.write_text(
+            "version: 2\n"
+            "ai:\n"
+            "  plan:\n"
+            "    permission_mode: accept-edits\n"
+            "  review_batch:\n"
+            "    permission_mode: yolo\n"
+        )
+        result = validate_config(tmp_path)
+        assert result.is_valid, f"Errors: {result.errors}"
+
+    def test_valid_top_level_permission_mode(self, tmp_path: Path) -> None:
+        """The global ``ai.permission_mode`` key is supported (issue #368)."""
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nai:\n  permission_mode: auto\n")
+        result = validate_config(tmp_path)
+        assert result.is_valid, f"Errors: {result.errors}"
+
+    def test_ai_command_valid_keys_stay_in_sync_with_model(self, tmp_path: Path) -> None:
+        """Every ``AICommandConfig`` field must be an accepted per-command key.
+
+        Guards against the validator's allowlist drifting from the Pydantic
+        schema (issue #368): a field added to the model must not be rejected as
+        an "unsupported key". Uses a null value so only key acceptance — not
+        per-field value validation — is exercised.
+        """
+        config = tmp_path / ".wade.yml"
+        for field in AICommandConfig.model_fields:
+            config.write_text(f"version: 2\nai:\n  plan:\n    {field}: null\n")
+            result = validate_config(tmp_path)
+            assert not any(f"ai.plan.{field}: unsupported key" in e for e in result.errors), (
+                f"model field '{field}' rejected as an unsupported per-command key"
+            )
+
+    def test_ai_top_level_valid_keys_stay_in_sync_with_model(self, tmp_path: Path) -> None:
+        """Every top-level ``AIConfig`` scalar field must be an accepted ``ai`` key.
+
+        Companion to the per-command sync test (issue #368): the scalar keys
+        (``AIConfig`` fields minus the per-command subsections) are derived from
+        the model, so a newly added scalar field can't silently drift.
+        """
+        config = tmp_path / ".wade.yml"
+        scalar_fields = set(AIConfig.model_fields) - set(AI_COMMAND_NAMES)
+        for field in scalar_fields:
+            config.write_text(f"version: 2\nai:\n  {field}: null\n")
+            result = validate_config(tmp_path)
+            assert not any(f"ai.{field}: unsupported key" in e for e in result.errors), (
+                f"model field '{field}' rejected as an unsupported top-level ai key"
+            )
 
     def test_rejects_duplicate_canonical_and_legacy_ai_sections(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"

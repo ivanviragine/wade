@@ -15,7 +15,12 @@ import yaml
 from crossby.config.defaults import get_defaults
 
 from wade.config.loader import ConfigError, ensure_yaml_mapping
-from wade.models.config import AI_COMMAND_NAMES, ComplexityModelMapping, KnowledgeConfig
+from wade.models.config import (
+    AI_COMMAND_NAMES,
+    ComplexityModelMapping,
+    KnowledgeConfig,
+    ProjectSettings,
+)
 from wade.ui.console import console
 
 logger = structlog.get_logger()
@@ -174,7 +179,7 @@ def _write_config(
     config_path: Path,
     ai_tool: str | None,
     model_mapping: ComplexityModelMapping,
-    project_settings: dict[str, str] | None = None,
+    project_settings: ProjectSettings | None = None,
     implement_tool: str | None = None,
     default_model: str | None = None,
     default_effort: str | None = None,
@@ -187,22 +192,14 @@ def _write_config(
     """Write a fresh .wade.yml config file."""
     config_dict: dict[str, Any] = {"version": 2}
 
-    if project_settings:
-        config_dict["project"] = {
-            "main_branch": project_settings.get("main_branch", "main"),
-            "issue_label": project_settings.get("issue_label", "feature-plan"),
-            "worktrees_dir": project_settings.get("worktrees_dir", "../.worktrees"),
-            "branch_prefix": project_settings.get("branch_prefix", "feat"),
-            "merge_strategy": project_settings.get("merge_strategy", "PR"),
-        }
-    else:
-        config_dict["project"] = {
-            "main_branch": "main",
-            "issue_label": "feature-plan",
-            "worktrees_dir": "../.worktrees",
-            "branch_prefix": "feat",
-            "merge_strategy": "PR",
-        }
+    settings = project_settings or ProjectSettings()
+    config_dict["project"] = {
+        "main_branch": settings.main_branch or "main",
+        "issue_label": settings.issue_label,
+        "worktrees_dir": settings.worktrees_dir,
+        "branch_prefix": settings.branch_prefix,
+        "merge_strategy": settings.merge_strategy.value,
+    }
 
     ai_section: dict[str, Any] = {}
     if ai_tool:
@@ -299,7 +296,7 @@ def _patch_config(
     default_model: str | None = None,
     default_effort: str | None = None,
     default_yolo: bool | None = None,
-    project_settings: dict[str, str] | None = None,
+    project_settings: ProjectSettings | None = None,
     implement_tool: str | None = None,
     command_overrides: dict[str, dict[str, Any]] | None = None,
     hooks_setup: dict[str, Any] | None = None,
@@ -332,6 +329,8 @@ def _patch_config(
 
     # Patch project settings
     if project_settings:
+        # mode="json" renders the merge_strategy enum as its "PR" string.
+        dumped = project_settings.model_dump(mode="json")
         project = raw.get("project", {}) or {}
         for key in (
             "main_branch",
@@ -340,7 +339,7 @@ def _patch_config(
             "branch_prefix",
             "merge_strategy",
         ):
-            value = project_settings.get(key)
+            value = dumped.get(key)
             if value and (force or not project.get(key)):
                 project[key] = value
                 changed = True

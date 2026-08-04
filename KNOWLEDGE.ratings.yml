@@ -1,12 +1,16 @@
 08f59f5c:
   down: 0
   stale: 0
-  up: 1
+  up: 2
 0bad70f3:
   down: 0
   stale: 0
-  up: 3
+  up: 4
 129ab9bd:
+  down: 0
+  stale: 0
+  up: 1
+'13459084':
   down: 0
   stale: 0
   up: 1
@@ -33,7 +37,7 @@
 3045ea00:
   down: 0
   stale: 0
-  up: 2
+  up: 3
 3463fbd4:
   down: 0
   stale: 0
@@ -42,6 +46,10 @@
   down: 0
   stale: 0
   up: 6
+443a71b3:
+  down: 0
+  stale: 0
+  up: 1
 455476d6:
   down: 0
   stale: 0
@@ -49,7 +57,7 @@
 4863036c:
   down: 0
   stale: 0
-  up: 5
+  up: 6
 54326c98:
   down: 1
   stale: 1
@@ -66,7 +74,7 @@
   down: 0
   stale: 0
   superseded_by: a15045c3
-  up: 1
+  up: 2
 97d81e85:
   down: 0
   stale: 0
@@ -101,7 +109,7 @@ b6a3a637:
 b6ca74e5:
   down: 0
   stale: 0
-  up: 2
+  up: 3
 bcfa4bb3:
   down: 0
   stale: 0

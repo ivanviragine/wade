@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "wade-cli"
-version = "0.38.0"
+version = "0.38.1"
 description = "WADE — Workflow for AI-Driven Engineering"
 readme = "README.md"
 license = "MIT"
@@ -28,7 +28,6 @@ dependencies = [
     "typer>=0.12,<0.26",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
-    "sqlmodel>=0.0.16",
     "pyyaml>=6.0",
     "rich>=13.0",
     "structlog>=24.0",
@@ -102,6 +101,7 @@ markers = [
     "live_ai: manual live tests requiring real AI provider credentials",
     "e2e_docker: deterministic e2e tests intended for docker/CI lanes",
     "contract: behavior contract tests for CLI/service integration",
+    "concurrency: deterministic forced-interleaving tests for shared git/remote state (#357)",
 ]
 filterwarnings = [
     "error::ResourceWarning",

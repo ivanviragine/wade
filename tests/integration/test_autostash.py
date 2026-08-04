@@ -125,9 +125,12 @@ class TestAutoStashHappyPath:
 
         assert result.success
         stash_ev = next(e for e in result.events if e.event == SyncEventType.AUTOSTASHED)
-        # After successful pop, the stash is gone from the list — but during sync
-        # the ref should have been 'stash@{0}'
-        assert "stash@{" in stash_ev.data["stash_ref"]
+        # stash_ref is the content-addressed commit SHA (never a mutable
+        # ``stash@{N}`` position a concurrent stash could shift — #357 A1), so
+        # it is a 40-char hex string.
+        stash_ref = stash_ev.data["stash_ref"]
+        assert len(stash_ref) == 40
+        assert all(c in "0123456789abcdef" for c in stash_ref)
         assert stash_ev.data["stash_name"].startswith("wade-autostash/")
 
 

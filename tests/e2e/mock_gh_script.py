@@ -362,6 +362,10 @@ def _handle_pr(args: list[str], state: dict[str, object]) -> int:
         target = args[1]
         pr_num, pr = _find_pr(prs, target)
         if not pr_num or not pr:
+            # Match real gh: a branch with no PR is a normal "not found" (a
+            # recognizable stderr signal), NOT a lookup failure. get_pr_for_branch
+            # keys on this message to tell "no PR" apart from a transient error.
+            print(f'no pull requests found for branch "{target}"', file=sys.stderr)
             return 1
         print(
             json.dumps(

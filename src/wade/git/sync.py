@@ -6,7 +6,7 @@ from pathlib import Path
 
 import structlog
 
-from wade.git.repo import GitError, _run_git, get_current_branch
+from wade.git.repo import GitError, _run_git, _run_git_with_retry, get_current_branch
 from wade.models.session import SyncResult
 
 log = structlog.get_logger(__name__)
@@ -22,7 +22,8 @@ def fetch_origin(repo_root: Path) -> None:
         GitError: If the fetch fails (network error, no remote, etc.).
     """
     log.info("sync.fetch")
-    _run_git("fetch", "origin", cwd=repo_root)
+    # Retry transient ref-lock contention — N parallel sessions fetch at once (C3).
+    _run_git_with_retry("fetch", "origin", cwd=repo_root)
 
 
 def merge_branch(repo_root: Path, branch: str) -> SyncResult:
@@ -41,7 +42,14 @@ def merge_branch(repo_root: Path, branch: str) -> SyncResult:
     current = get_current_branch(repo_root)
     log.info("sync.merge", current=current, merging=branch)
 
-    result = _run_git(
+    # C5a: capture the REAL number of commits *branch* contributes, computed
+    # before the merge folds them into *current* (git rev-list --count
+    # current..branch). The old heuristic only ever returned 0 or 1.
+    merged_count = _count_commits_to_merge(repo_root, current, branch)
+
+    # Retry transient index-lock contention; a real conflict/failure is a
+    # non-lock non-zero result and is returned for the caller to inspect (C3).
+    result = _run_git_with_retry(
         "merge",
         "--no-edit",
         branch,
@@ -50,8 +58,6 @@ def merge_branch(repo_root: Path, branch: str) -> SyncResult:
     )
 
     if result.returncode == 0:
-        # Merge succeeded — count how many commits were merged
-        merged_count = _count_merged_commits(result.stdout)
         return SyncResult(
             success=True,
             current_branch=current,
@@ -73,20 +79,27 @@ def merge_branch(repo_root: Path, branch: str) -> SyncResult:
     raise GitError(f"git merge {branch} failed (exit {result.returncode}): {result.stderr.strip()}")
 
 
-def _count_merged_commits(merge_output: str) -> int:
-    """Extract the number of merged commits from git merge output.
+def _count_commits_to_merge(repo_root: Path, current: str, branch: str) -> int:
+    """Return the true number of commits *branch* has that *current* does not.
 
-    Git merge output typically contains something like "Fast-forward" or
-    "Merge made by the '...' strategy." — we return 0 for already-up-to-date
-    and 1 as a minimum for any successful merge that wasn't a no-op.
-
-    For a more accurate count the caller should use ``commits_ahead`` before
-    and after.
+    Equivalent to ``git rev-list --count current..branch`` — the exact number of
+    commits a merge of *branch* into *current* would bring in (0 when already up
+    to date). Computed before the merge so ``SyncResult.commits_merged`` is
+    accurate, not a 0/1 heuristic (C5a). Returns 0 on any git error.
     """
-    if "Already up to date" in merge_output:
+    result = _run_git(
+        "rev-list",
+        "--count",
+        f"{current}..{branch}",
+        cwd=repo_root,
+        check=False,
+    )
+    if result.returncode != 0:
         return 0
-    # Any successful merge moved at least one commit forward
-    return 1
+    try:
+        return int(result.stdout.strip())
+    except ValueError:
+        return 0
 
 
 def get_conflicted_files(repo_root: Path) -> list[str]:

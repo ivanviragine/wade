@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.38.1] — 2026-08-04
+
+### Bug Fixes
+
+- accept permission_mode key in config validation (#369) (cdeb48e)
+
+### Other Changes
+
+- H2: Git &amp; remote-state hygiene — never lose work, never act on a stale read (+ retire `merge_strategy: direct`) (#362) (6e55893)
+- H1: Hook-layer correctness — capability matrix + fail-closed containment (crossby 0.13) (#363) (623805f)
+
 ## [v0.38.0] — 2026-08-03
 
 ### Features

@@ -55,6 +55,7 @@ from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.review_settle import compute_effective_settle, latest_signal_ts
 from wade.services.task_service import add_review_addressed_by_labels
 from wade.ui.console import console
+from wade.utils.body_markers import enforce_body_budget, update_body_preserving_markers
 from wade.utils.markdown import append_session_to_body
 from wade.utils.terminal import (
     compose_review_title,
@@ -126,12 +127,15 @@ def fetch_reviews(
     # fall back to reconstructed name for out-of-worktree or detached-HEAD callers.
     branch_name = _resolve_task_branch(config, task, repo_root)
 
-    pr_info = git_pr.get_pr_for_branch(repo_root, branch_name)
-    if not pr_info:
+    lookup = git_pr.get_pr_for_branch(repo_root, branch_name)
+    if lookup.lookup_failed:
+        console.error(f"Could not look up the PR for branch {branch_name} — try again shortly.")
+        return False
+    if not lookup.is_open or lookup.pr is None:
         console.error(f"No open PR found for branch {branch_name}")
         return False
 
-    pr_number = int(pr_info["number"])
+    pr_number = lookup.pr.number
 
     # Fetch comprehensive review status
     status = get_comprehensive_review_status(provider, pr_number)
@@ -263,11 +267,11 @@ def get_review_status(
     if not issue_number:
         return None
 
-    pr_info = git_pr.get_pr_for_branch(repo_root, branch)
-    if not pr_info:
+    lookup = git_pr.get_pr_for_branch(repo_root, branch)
+    if not lookup.is_open or lookup.pr is None:
         return None
 
-    pr_number = int(pr_info["number"])
+    pr_number = lookup.pr.number
 
     try:
         return provider.get_pr_review_status(pr_number)
@@ -348,13 +352,23 @@ def poll_for_reviews(
 
     try:
         while True:
-            pr_info = git_pr.get_pr_for_branch(repo_root, branch)
-            if not pr_info:
+            lookup = git_pr.get_pr_for_branch(repo_root, branch)
+            # B2: a transient lookup failure must NOT end the wait — treat it
+            # exactly like a fetch_failed below (reset the quiet timer, sleep,
+            # retry). PR_CLOSED is reserved for an actual CLOSED/MERGED state or
+            # a PR that genuinely no longer exists.
+            if lookup.lookup_failed:
+                quiet_start = None
+                console.detail("PR lookup failed — retrying shortly...")
+                time.sleep(poll_interval)
+                continue
+            if not lookup.found:
                 console.info("PR is no longer open. Stopping poll.")
                 return PollOutcome.PR_CLOSED
-            pr_state = str(pr_info.get("state", "")).upper()
-            if pr_state in ("MERGED", "CLOSED"):
-                console.info(f"PR #{pr_number} was {pr_state.lower()} externally. Stopping poll.")
+            if lookup.is_closed_or_merged:
+                console.info(
+                    f"PR #{pr_number} was {lookup.state.lower()} externally. Stopping poll."
+                )
                 return PollOutcome.PR_CLOSED
 
             status = get_comprehensive_review_status(provider, pr_number)
@@ -556,19 +570,33 @@ def start(
     console.kv("Worktree", str(worktree_path))
 
     # 3. Find PR for the branch
-    pr_info = git_pr.get_pr_for_branch(repo_root, branch_name)
-    if not pr_info:
+    lookup = git_pr.get_pr_for_branch(repo_root, branch_name)
+    if lookup.lookup_failed:
+        console.error_with_fix(
+            f"Could not look up the PR for branch {branch_name}",
+            "Transient gh error — try again shortly",
+        )
+        return False
+    if not lookup.found or lookup.pr is None:
         console.error_with_fix(
             f"No open PR found for branch {branch_name}",
             "Run `wade implementation-session done` from the worktree to create a PR first",
         )
         return False
 
-    pr_number = int(pr_info["number"])
-    pr_state = str(pr_info.get("state", "")).upper()
+    pr_number = lookup.pr.number
+    pr_state = lookup.state.upper()
 
-    if pr_state == "MERGED":
-        console.error(f"PR #{pr_number} is already merged — nothing to address.")
+    # Reject any non-open PR before fetching review status — matching
+    # fetch_reviews' is_open gate. A CLOSED (not just MERGED) PR is not
+    # actionable and must not continue into review operations.
+    if not lookup.is_open:
+        if pr_state == "MERGED":
+            console.error(f"PR #{pr_number} is already merged — nothing to address.")
+        else:
+            console.error(
+                f"PR #{pr_number} is {pr_state.lower() or 'not open'} — nothing to address."
+            )
         return False
 
     console.kv("PR", f"#{pr_number}")
@@ -1105,33 +1133,41 @@ def _capture_review_session_usage(
         usage.model_breakdown[0].model if usage and usage.model_breakdown else None
     )
 
-    # Update PR body with review usage stats
-    pr_info = git_pr.get_pr_for_branch(repo_root, branch)
-    if pr_info:
-        pr_number = int(pr_info["number"])
-        try:
-            current_body = git_pr.get_pr_body(repo_root, pr_number)
-            if current_body is not None:
-                new_body = current_body
-                assert usage is not None
-                new_body = append_review_usage_entry(
-                    new_body,
-                    ai_tool=ai_tool,
-                    model=effective_model,
-                    token_usage=usage,
+    # Update PR body with review usage stats — only on an OPEN PR (a
+    # merged/closed PR is not ours to rewrite; a lookup failure is transient).
+    lookup = git_pr.get_pr_for_branch(repo_root, branch)
+    if lookup.is_open and lookup.pr is not None:
+        pr_number = lookup.pr.number
+        assert usage is not None
+        usage_val = usage
+        session_id = usage.session_id
+
+        def _review_transform(body: str) -> str:
+            # Rewrite only wade's own review-usage / sessions marker blocks so a
+            # concurrent edit elsewhere survives (A4).
+            body = append_review_usage_entry(
+                body, ai_tool=ai_tool, model=effective_model, token_usage=usage_val
+            )
+            if has_session and session_id is not None:
+                body = append_session_to_body(
+                    body, phase="Review", ai_tool=ai_tool, session_id=session_id
                 )
-                if has_session:
-                    assert usage is not None and usage.session_id is not None
-                    new_body = append_session_to_body(
-                        new_body, phase="Review", ai_tool=ai_tool, session_id=usage.session_id
-                    )
-                if git_pr.update_pr_body(repo_root, pr_number, new_body):
-                    console.success("Updated PR with review usage stats.")
-                    logger.info(
-                        "review.usage_updated",
-                        pr=pr_number,
-                        total_tokens=usage.total_tokens if usage else None,
-                    )
+            return body
+
+        try:
+            if update_body_preserving_markers(
+                read_body=lambda: git_pr.get_pr_body(repo_root, pr_number),
+                write_body=lambda b: git_pr.update_pr_body(repo_root, pr_number, b),
+                transform=_review_transform,
+                warn=console.warn,
+                label=f"PR #{pr_number} body",
+            ):
+                console.success("Updated PR with review usage stats.")
+                logger.info(
+                    "review.usage_updated",
+                    pr=pr_number,
+                    total_tokens=usage.total_tokens if usage else None,
+                )
         except Exception:
             logger.debug("review.pr_body_read_failed", exc_info=True)
     else:
@@ -1154,6 +1190,9 @@ def _capture_review_session_usage(
                 new_body = append_session_to_body(
                     new_body, phase="Review", ai_tool=ai_tool, session_id=usage.session_id
                 )
+            new_body = enforce_body_budget(
+                new_body, warn=console.warn, label=f"issue #{issue_number} body"
+            )
             provider.update_task(str(issue_number), body=new_body)
             console.success("Updated issue with review usage stats.")
             logger.info("review.usage_issue_updated", issue=issue_number)

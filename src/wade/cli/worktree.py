@@ -78,7 +78,12 @@ def remove(
     target: str | None = typer.Argument(None, help="Issue number or worktree name."),
     stale: bool = typer.Option(False, "--stale", help="Remove all stale worktrees."),
     show_all: bool = typer.Option(False, "--all", hidden=True, help="Alias for --stale."),
-    force: bool = typer.Option(False, "--force", help="Skip confirmation."),
+    force: bool = typer.Option(False, "--force", help="Skip confirmation (never discards work)."),
+    discard_dirty: bool = typer.Option(
+        False,
+        "--discard-dirty",
+        help="Permit removing a worktree with uncommitted changes or unmerged commits.",
+    ),
 ) -> None:
     """Remove a worktree."""
     from wade.services.implementation_service import list_sessions
@@ -108,7 +113,9 @@ def remove(
         else:
             raise typer.Exit(0)
 
-    success = do_remove(target=target, stale=effective_stale, force=force)
+    success = do_remove(
+        target=target, stale=effective_stale, force=force, discard_dirty=discard_dirty
+    )
     raise typer.Exit(0 if success else 1)
 
 
