@@ -63,6 +63,9 @@ _LOCK_PATTERNS = (
     "cannot lock ref",
     ".lock': File exists",
     ".lock' failed",
+    # `git stash push` reports this (not the index.lock message) when the shared
+    # index lock is held by another worktree/process.
+    "could not write index",
 )
 """Stderr substrings that indicate a transient git lock contention.
 
