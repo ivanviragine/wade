@@ -92,7 +92,8 @@ def _run_git_with_retry(
     caught and retried) and ``check=False`` callers such as ``merge``/``stash``
     (a lock yields a non-zero result whose stderr is inspected and retried).
     """
-    last_exc: GitError | None = None
+    if retries < 1:
+        raise ValueError("retries must be at least 1")
     for attempt in range(retries):
         try:
             result = _run_git(*args, cwd=cwd, check=check)
@@ -101,7 +102,6 @@ def _run_git_with_retry(
             # re-raise the lock error immediately instead of paying one last
             # (wasted) backoff sleep — matching the check=False guard below.
             if attempt < retries - 1 and any(p in str(exc) for p in _LOCK_PATTERNS):
-                last_exc = exc
                 _sleep_lock_backoff(attempt, base_delay, args)
                 continue
             raise
@@ -114,7 +114,8 @@ def _run_git_with_retry(
             _sleep_lock_backoff(attempt, base_delay, args)
             continue
         return result
-    raise last_exc  # type: ignore[misc]
+    # Unreachable: every loop iteration either returns result or re-raises GitError
+    raise RuntimeError("Unreachable _run_git_with_retry termination")
 
 
 def _sleep_lock_backoff(attempt: int, base_delay: float, args: tuple[str, ...]) -> None:

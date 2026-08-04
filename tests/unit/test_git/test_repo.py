@@ -116,6 +116,10 @@ class TestRunGitWithRetry:
             # after the last try (only retries-1 sleeps).
             assert mock_sleep.call_count == 2
 
+    def test_raises_on_invalid_retries(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="retries must be at least 1"):
+            _run_git_with_retry("status", cwd=tmp_path, retries=0)
+
 
 class TestGetMainWorktreePath:
     def test_returns_none_when_not_a_worktree(self, tmp_path: Path) -> None:
