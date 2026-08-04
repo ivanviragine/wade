@@ -164,9 +164,6 @@ def init(
         dict(existing_config.provider.settings) if existing_config else {}
     )
     _cur_main_branch: str | None = existing_config.project.main_branch if existing_config else None
-    _cur_merge_strategy: str | None = (
-        existing_config.project.merge_strategy.value if existing_config else None
-    )
     _cur_branch_prefix: str | None = (
         existing_config.project.branch_prefix if existing_config else None
     )
@@ -229,7 +226,6 @@ def init(
             root,
             non_interactive,
             current_main_branch=_cur_main_branch,
-            current_merge_strategy=_cur_merge_strategy,
             current_branch_prefix=_cur_branch_prefix,
             current_issue_label=_cur_issue_label,
             current_worktrees_dir=_cur_worktrees_dir,
@@ -326,7 +322,6 @@ def init(
             _cur_provider_api_token_env = provider_setup.get("api_token_env")
             _cur_provider_settings = dict(provider_setup.get("settings") or {})
             _cur_main_branch = project_settings.get("main_branch")
-            _cur_merge_strategy = project_settings.get("merge_strategy")
             _cur_branch_prefix = project_settings.get("branch_prefix")
             _cur_issue_label = project_settings.get("issue_label")
             _cur_worktrees_dir = project_settings.get("worktrees_dir")

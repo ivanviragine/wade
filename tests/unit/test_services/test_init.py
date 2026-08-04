@@ -455,17 +455,18 @@ class TestPromptProjectSettings:
     def test_interactive_uses_prompts(
         self, mock_input: MagicMock, mock_select: MagicMock, tmp_git_repo: Path
     ) -> None:
-        # merge_strategy uses prompts.select (index 1 = "direct")
-        mock_select.side_effect = [1]
-        # branch_prefix, issue_label, worktrees_dir use input_prompt
+        # merge_strategy is no longer prompted (only "PR" since #357 retired
+        # "direct") — the wizard just collects branch_prefix, issue_label,
+        # worktrees_dir via input_prompt and never calls select here.
         mock_input.side_effect = ["fix", "bug", "../worktrees"]
         result = _prompt_project_settings(tmp_git_repo, non_interactive=False)
-        assert result["merge_strategy"] == "direct"
+        assert result["merge_strategy"] == "PR"
         assert result["branch_prefix"] == "fix"
         assert result["issue_label"] == "bug"
         assert result["worktrees_dir"] == "../worktrees"
         # main_branch is auto-detected, not prompted
         assert result["main_branch"] == "main"
+        mock_select.assert_not_called()
 
     def test_detects_main_branch_from_git(self, tmp_git_repo: Path) -> None:
         result = _prompt_project_settings(tmp_git_repo, non_interactive=True)
@@ -799,7 +800,7 @@ class TestWriteConfig:
         config_path = tmp_path / ".wade.yml"
         settings = {
             "main_branch": "master",
-            "merge_strategy": "direct",
+            "merge_strategy": "PR",
             "branch_prefix": "fix",
             "issue_label": "bug",
             "worktrees_dir": "../trees",
@@ -807,7 +808,7 @@ class TestWriteConfig:
         _write_config(config_path, "claude", ComplexityModelMapping(), project_settings=settings)
         config = yaml.safe_load(config_path.read_text())
         assert config["project"]["main_branch"] == "master"
-        assert config["project"]["merge_strategy"] == "direct"
+        assert config["project"]["merge_strategy"] == "PR"
         assert config["project"]["branch_prefix"] == "fix"
         assert config["project"]["issue_label"] == "bug"
         assert config["project"]["worktrees_dir"] == "../trees"
@@ -2592,7 +2593,7 @@ class TestShowInitSummary:
                 provider_setup={"name": "github"},
                 project_settings={
                     "main_branch": "main",
-                    "merge_strategy": "direct",
+                    "merge_strategy": "PR",
                     "branch_prefix": "fix",
                     "worktrees_dir": "../trees",
                 },

@@ -12,10 +12,13 @@ from pydantic import BaseModel, Field
 
 
 class MergeStrategy(StrEnum):
-    """How feature branches are merged into main."""
+    """How feature branches are merged into main.
+
+    ``direct`` was retired in #357 — PR is the only supported strategy. The
+    config loader migrates a legacy ``direct`` value to ``PR`` with a warning.
+    """
 
     PR = "PR"
-    DIRECT = "direct"
 
 
 class WorktreeState(StrEnum):

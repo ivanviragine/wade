@@ -11,11 +11,8 @@ from wade.config.loader import load_config
 from wade.git import branch as git_branch
 from wade.git import pr as git_pr
 from wade.git import repo as git_repo
-from wade.git import sync as git_sync
-from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
-from wade.models.session import MergeStrategy
 from wade.providers.registry import get_provider
 from wade.services.implementation_service._shared import (
     extract_issue_from_branch,
@@ -28,7 +25,6 @@ from wade.services.implementation_service.bootstrap import (
     _identify_session_dirty_files,
     strip_worktree_gitignore,
 )
-from wade.services.implementation_service.cleanup import _cleanup_worktree
 from wade.services.implementation_service.core import _resolve_worktree_from_plan
 from wade.services.implementation_service.lifecycle import (
     _apply_pr_refs,
@@ -37,13 +33,11 @@ from wade.services.implementation_service.lifecycle import (
 )
 from wade.services.implementation_service.usage_tracking import IMPL_USAGE_MARKER_START
 from wade.services.task_service import remove_in_progress_label
-from wade.ui import prompts
 from wade.ui.console import console
 
 logger = structlog.get_logger()
 
 __all__ = [
-    "_done_via_direct",
     "_done_via_pr",
     "done",
 ]
@@ -54,20 +48,19 @@ def done(
     plan_file: Path | None = None,
     no_close: bool = False,
     draft: bool = False,
-    no_cleanup: bool = False,
     project_root: Path | None = None,
 ) -> bool:
-    """Complete implementation session — create PR or merge directly.
+    """Complete implementation session — push the branch and finalize the PR.
 
-    Detects current branch, extracts issue number, reads merge strategy
-    from config, and delegates to _done_via_pr or _done_via_direct.
+    Detects the current branch, extracts the issue number, and delegates to
+    ``_done_via_pr`` (PR is the only merge strategy since #357 retired
+    ``direct``).
 
     Args:
         target: Optional issue number, worktree name, or plan file.
             If None, detects from current branch.
         no_close: Don't close the issue on merge.
         draft: Create PR as draft.
-        no_cleanup: Don't remove worktree after merge (direct strategy).
         project_root: Repository root.
     """
     config = load_config(project_root)
@@ -208,30 +201,16 @@ def done(
 
     console.rule(f"done #{issue_number}")
 
-    strategy = config.project.merge_strategy
-
-    if strategy == MergeStrategy.DIRECT:
-        return _done_via_direct(
-            repo_root=repo_root,
-            branch=branch,
-            issue_number=issue_number,
-            main_branch=main_branch,
-            close_issue=not no_close,
-            config=config,
-            no_cleanup=no_cleanup,
-            worktree_path=wt_path,
-        )
-    else:
-        return _done_via_pr(
-            repo_root=repo_root,
-            branch=branch,
-            issue_number=issue_number,
-            main_branch=main_branch,
-            close_issue=not no_close,
-            draft=draft,
-            config=config,
-            worktree_path=wt_path,
-        )
+    return _done_via_pr(
+        repo_root=repo_root,
+        branch=branch,
+        issue_number=issue_number,
+        main_branch=main_branch,
+        close_issue=not no_close,
+        draft=draft,
+        config=config,
+        worktree_path=wt_path,
+    )
 
 
 def _done_via_pr(
@@ -402,102 +381,6 @@ def _done_via_pr(
     lines = []
     lines.append(f"  PR      [url]{pr_url}[/]")
     lines.append(f"  Issue   {console.issue_ref(issue_number, task.title)}")
-    console.panel("\n".join(lines), title="Implementation done")
-
-    return True
-
-
-def _done_via_direct(
-    repo_root: Path,
-    branch: str,
-    issue_number: str,
-    main_branch: str,
-    close_issue: bool,
-    config: ProjectConfig,
-    no_cleanup: bool = False,
-    worktree_path: Path | None = None,
-) -> bool:
-    """Merge directly into main and clean up."""
-    provider = get_provider(config)
-
-    # Sync first
-    console.step(f"Merging {main_branch} into {branch}...")
-    with contextlib.suppress(GitError):
-        git_sync.fetch_origin(repo_root)
-
-    try:
-        sync_cwd = worktree_path if worktree_path and worktree_path.is_dir() else repo_root
-        merge_result = git_sync.merge_branch(sync_cwd, main_branch)
-        if not merge_result.success:
-            console.error("Merge conflicts detected. Resolve them first.")
-            return False
-    except GitError as e:
-        console.error(f"Merge failed: {e}")
-        return False
-
-    # Switch to main, fast-forward to origin, and merge feature branch
-    console.step(f"Merging {branch} into {main_branch}...")
-    try:
-        git_repo.checkout(repo_root, main_branch)
-        git_repo.merge_ff_only(repo_root, f"origin/{main_branch}")
-        git_repo.merge_no_edit(repo_root, branch)
-        git_repo.push_branch(repo_root, main_branch)
-        console.success("Merged and pushed.")
-    except GitError as e:
-        # A conflict from merge_no_edit leaves the main checkout mid-merge with a
-        # conflicted index — abort so it is not left in a broken state.
-        with contextlib.suppress(GitError):
-            git_sync.abort_merge(repo_root)
-        console.error(f"Direct merge failed: {e}")
-        return False
-
-    # Remove in-progress label
-    with contextlib.suppress(Exception):
-        remove_in_progress_label(provider, issue_number)
-
-    # Close issue
-    if close_issue:
-        try:
-            provider.close_task(issue_number)
-            console.success(f"Closed #{issue_number}")
-        except Exception as e:
-            console.warn(f"Could not close issue #{issue_number}: {e}")
-
-    # Cleanup worktree (unless --no-cleanup)
-    if not no_cleanup:
-        console.step("Cleaning up worktree...")
-
-        def _do_cleanup() -> None:
-            # _cleanup_worktree returns False (without raising) when worktree
-            # removal fails — treat that like an exception so the retry/skip
-            # handler runs and success is only reported on confirmed removal.
-            if worktree_path:
-                if not _cleanup_worktree(repo_root, worktree_path, main_branch):
-                    raise RuntimeError("worktree removal did not complete")
-            else:
-                git_branch.delete_branch(repo_root, branch, force=True)
-                git_worktree.prune_worktrees(repo_root)
-
-        try:
-            _do_cleanup()
-            console.success("Worktree cleaned up.")
-        except Exception as e:
-            choice = prompts.select(
-                f"Worktree cleanup failed: {e}. What would you like to do?",
-                ["Retry", "Skip (leave worktree in place)"],
-            )
-            if choice == 0:  # Retry
-                try:
-                    _do_cleanup()
-                    console.success("Worktree cleaned up.")
-                except Exception:
-                    logger.warning("worktree.cleanup_skipped", reason="retry_failed", exc_info=True)
-            else:  # Skip
-                logger.warning("worktree.cleanup_skipped", reason="user_skipped")
-
-    lines = []
-    lines.append(f"  Branch   {console.git_ref(branch)} merged into {console.git_ref(main_branch)}")
-    lines.append(f"  Issue    #{issue_number}")
     console.panel("\n".join(lines), title="Implementation done")
 
     return True

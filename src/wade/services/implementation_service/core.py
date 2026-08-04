@@ -691,7 +691,6 @@ def start(
                             branch=branch_name,
                             issue_number=task.id,
                             worktree_path=worktree_path,
-                            config=config,
                             provider=provider,
                             ai_tool=resolved_tool,
                             model=effective_model,

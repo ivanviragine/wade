@@ -252,11 +252,11 @@ This avoids requiring the AI to report back which issues it created — the serv
 
 ## Merge Strategy
 
-`MergeStrategy` (config key `project.merge_strategy`) controls how feature branches are merged into main:
-- **`PR`** (default) — The agent runs `wade implementation-session done` during its session to push the branch and update the existing draft PR (or create one if missing). The worktree is **not** cleaned up by `done` — it is cleaned up automatically by `implement` after the human merges the PR. When the tool exits, `implement`'s post-work prompt detects the PR and asks "Do you want to merge this PR?" — if yes, squash-merges via `gh pr merge --squash --delete-branch`.
-- **`direct`** — Merge locally into main, push, and clean up the worktree. Useful for solo projects or repos without branch protection.
+`MergeStrategy` (config key `project.merge_strategy`) has a single value, `PR` — the `direct` strategy was retired in #357. A config that still carries `merge_strategy: direct` is migrated to `PR` with a warning on load (`config/loader.py` `_migrate_merge_strategy`), and `wade check-config` rejects it.
 
-`wade implementation-session done` handles PR creation / direct merge. The post-work lifecycle prompt handles the merge decision (PR strategy) or local merge options (direct strategy).
+- **`PR`** (default and only) — The agent runs `wade implementation-session done` during its session to push the branch and update the existing draft PR (or create one if missing). The worktree is **not** cleaned up by `done` — it is cleaned up automatically by `implement` after the human merges the PR. When the tool exits, `implement`'s post-work prompt detects the PR and asks "Do you want to merge this PR?" — if yes, squash-merges via `gh pr merge --squash --delete-branch`.
+
+`wade implementation-session done` handles PR creation / update. The post-work lifecycle prompt handles the merge decision.
 
 ## Determinism via Services
 
@@ -288,7 +288,6 @@ When wade installs skills into a target project (`wade init`), the skills refere
 - `target` (positional) — Optional issue number, worktree name, or plan file path. When a file path is given, creates the issue first; when a number/name, finds the worktree; when omitted, detects from current branch.
 - `--no-close` — Don't close the issue on merge.
 - `--draft` — Create PR as draft.
-- `--no-cleanup` — Keep the worktree after direct merge (no effect in PR strategy, which already preserves worktrees).
 
 **`wade implement-batch`:**
 - `--model` — Pass a specific AI model to all parallel sessions.

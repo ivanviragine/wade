@@ -258,7 +258,6 @@ def _prompt_project_settings(
     non_interactive: bool,
     *,
     current_main_branch: str | None = None,
-    current_merge_strategy: str | None = None,
     current_branch_prefix: str | None = None,
     current_issue_label: str | None = None,
     current_worktrees_dir: str | None = None,
@@ -277,9 +276,11 @@ def _prompt_project_settings(
         logger.debug("init.main_branch_detect_failed", exc_info=True)
         main_branch = "main"
 
+    # PR is the only merge strategy (``direct`` retired in #357), so it is no
+    # longer prompted for — the config always records "PR".
     defaults = {
         "main_branch": current_main_branch or main_branch,
-        "merge_strategy": current_merge_strategy or "PR",
+        "merge_strategy": "PR",
         "branch_prefix": current_branch_prefix or "feat",
         "issue_label": current_issue_label or "feature-plan",
         "worktrees_dir": current_worktrees_dir or "../.worktrees",
@@ -290,14 +291,6 @@ def _prompt_project_settings(
 
     console.rule("Project")
 
-    merge_options = ["PR", "direct"]
-    merge_default = (
-        merge_options.index(defaults["merge_strategy"])
-        if defaults["merge_strategy"] in merge_options
-        else 0
-    )
-    merge_idx = prompts.select("Merge strategy", merge_options, default=merge_default)
-    defaults["merge_strategy"] = merge_options[merge_idx]
     defaults["branch_prefix"] = prompts.input_prompt("Branch prefix", defaults["branch_prefix"])
     defaults["issue_label"] = prompts.input_prompt("Issue label", defaults["issue_label"])
     defaults["worktrees_dir"] = prompts.input_prompt(

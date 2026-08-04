@@ -14,19 +14,14 @@ from pathlib import Path
 
 import structlog
 
-from wade.git import branch as git_branch
 from wade.git import pr as git_pr
 from wade.git import repo as git_repo
 from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
-from wade.models.config import ProjectConfig
-from wade.models.session import MergeStatus, MergeStrategy
+from wade.models.session import MergeStatus
 from wade.models.task import Task
 from wade.providers.base import AbstractTaskProvider
-from wade.services.implementation_service.cleanup import (
-    _cleanup_worktree,
-    _preserve_session_data,
-)
+from wade.services.implementation_service.cleanup import _preserve_session_data
 from wade.services.implementation_service.usage_tracking import IMPL_USAGE_MARKER_START
 from wade.ui import prompts
 from wade.ui.console import console
@@ -39,7 +34,6 @@ __all__ = [
     "_merge_pr",
     "_parse_overwrite_paths",
     "_post_implementation_lifecycle",
-    "_post_implementation_lifecycle_direct",
     "_post_implementation_lifecycle_pr",
     "_pull_main_after_merge",
     "_strip_summary_section",
@@ -52,7 +46,6 @@ def _post_implementation_lifecycle(
     branch: str,
     issue_number: str | int | None,
     worktree_path: Path | None,
-    config: ProjectConfig,
     provider: AbstractTaskProvider,
     *,
     ai_tool: str | None = None,
@@ -63,24 +56,24 @@ def _post_implementation_lifecycle(
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
 ) -> MergeStatus:
-    """Run post-implementation lifecycle and return the merge status."""
-    if config.project.merge_strategy == MergeStrategy.PR:
-        return _post_implementation_lifecycle_pr(
-            repo_root,
-            branch,
-            issue_number,
-            worktree_path,
-            provider,
-            ai_tool=ai_tool,
-            model=model,
-            detach=detach,
-            ai_explicit=ai_explicit,
-            model_explicit=model_explicit,
-            permission_mode=permission_mode,
-            permission_mode_explicit=permission_mode_explicit,
-        )
-    return _post_implementation_lifecycle_direct(
-        repo_root, branch, issue_number, worktree_path, config, provider
+    """Run post-implementation lifecycle and return the merge status.
+
+    PR is the only supported merge strategy (the ``direct`` strategy was
+    retired in #357), so this delegates straight to the PR lifecycle.
+    """
+    return _post_implementation_lifecycle_pr(
+        repo_root,
+        branch,
+        issue_number,
+        worktree_path,
+        provider,
+        ai_tool=ai_tool,
+        model=model,
+        detach=detach,
+        ai_explicit=ai_explicit,
+        model_explicit=model_explicit,
+        permission_mode=permission_mode,
+        permission_mode_explicit=permission_mode_explicit,
     )
 
 
@@ -335,61 +328,6 @@ def _merge_pr(
     _pull_main_after_merge(main_root)
 
     if issue_number:
-        with contextlib.suppress(Exception):
-            provider.close_task(str(issue_number))
-
-    return MergeStatus.MERGED
-
-
-def _post_implementation_lifecycle_direct(
-    repo_root: Path,
-    branch: str,
-    issue_number: str | int | None,
-    worktree_path: Path | None,
-    config: ProjectConfig,
-    provider: AbstractTaskProvider,
-) -> MergeStatus:
-    """Run the direct-merge post-implementation lifecycle."""
-    main_branch = config.project.main_branch
-    if not main_branch:
-        # Detect the repo's real default branch (master/trunk/...) instead of
-        # assuming "main", matching sync(), done(), and cleanup.remove().
-        try:
-            main_branch = git_repo.detect_main_branch(repo_root)
-        except GitError:
-            console.warn("Could not detect the main branch.")
-            return MergeStatus.MERGE_FAILED
-    try:
-        ahead = git_branch.commits_ahead(repo_root, branch, main_branch)
-    except GitError:
-        console.warn("Could not determine commit count; skipping post-implementation lifecycle.")
-        return MergeStatus.MERGE_FAILED
-
-    if ahead == 0:
-        if not prompts.confirm("Branch has no new commits. Delete empty worktree?", default=False):
-            return MergeStatus.NOT_MERGED
-        if worktree_path:
-            _cleanup_worktree(repo_root, worktree_path, main_branch)
-        return MergeStatus.NOT_MERGED
-
-    choices = ["Merge into main", "Merge + close task", "Skip"]
-    idx = prompts.select(f"Branch '{branch}' has {ahead} commit(s). What next?", choices)
-    choice = choices[idx]
-    if choice == "Skip":
-        return MergeStatus.NOT_MERGED
-
-    try:
-        git_repo.merge_squash(repo_root, branch)
-        git_repo.commit_no_edit(repo_root)
-        git_repo.push(repo_root)
-    except (GitError, Exception) as e:
-        logger.error("direct_merge.failed", branch=branch, error=str(e))
-        return MergeStatus.MERGE_FAILED
-
-    if worktree_path:
-        _cleanup_worktree(repo_root, worktree_path, main_branch)
-
-    if choice == "Merge + close task" and issue_number:
         with contextlib.suppress(Exception):
             provider.close_task(str(issue_number))
 

@@ -39,7 +39,6 @@ from wade.services.implementation_service import (
     _effective_copy_files,
     _find_tracking_issue,
     _parse_overwrite_paths,
-    _post_implementation_lifecycle_direct,
     _post_implementation_lifecycle_pr,
     _pull_main_after_merge,
     _resolve_task_target,
@@ -1111,13 +1110,6 @@ class TestClassifyIssueStatus:
             result = _classify_issue_status("1", {}, branches, "main", tmp_path)
         assert result == _BATCH_STATUS_IN_PROGRESS
 
-    def test_no_pr_no_branch_direct_merge_is_done(self, tmp_path: Path) -> None:
-        with patch(
-            "wade.services.implementation_service.batch._is_merged_to_main", return_value=True
-        ):
-            result = _classify_issue_status("1", {}, set(), "main", tmp_path)
-        assert result == _BATCH_STATUS_DONE
-
 
 class TestBuildPrIndex:
     """Tests for _build_pr_index()."""
@@ -1972,56 +1964,6 @@ class TestPostImplementationLifecyclePr:
         with patch("wade.git.pr.get_pr_for_branch", return_value=PRLookup(found=False)):
             result = _post_implementation_lifecycle_pr(
                 tmp_path, "feat/42", "42", tmp_path / "wt", mock_provider
-            )
-        assert result == MergeStatus.NOT_MERGED
-
-
-class TestPostImplementationLifecycleDirect:
-    """Tests for _post_implementation_lifecycle_direct — merged status propagation."""
-
-    def _make_config(self) -> ProjectConfig:
-        return ProjectConfig(project=ProjectSettings(main_branch="main"))
-
-    def test_merge_returns_merged(self, tmp_path: Path) -> None:
-        """User chooses 'Merge into main' → returns MERGED."""
-        mock_provider = MagicMock()
-        with (
-            patch("wade.git.branch.commits_ahead", return_value=3),
-            patch("wade.services.implementation_service.lifecycle.prompts") as mock_prompts,
-            patch("wade.git.repo.merge_squash"),
-            patch("wade.git.repo.commit_no_edit"),
-            patch("wade.git.repo.push"),
-            patch("wade.services.implementation_service.lifecycle._cleanup_worktree"),
-        ):
-            mock_prompts.select.return_value = 0  # "Merge into main"
-            result = _post_implementation_lifecycle_direct(
-                tmp_path, "feat/42", "42", tmp_path / "wt", self._make_config(), mock_provider
-            )
-        assert result == MergeStatus.MERGED
-
-    def test_skip_returns_not_merged(self, tmp_path: Path) -> None:
-        """User chooses 'Skip' → returns NOT_MERGED."""
-        mock_provider = MagicMock()
-        with (
-            patch("wade.git.branch.commits_ahead", return_value=3),
-            patch("wade.services.implementation_service.lifecycle.prompts") as mock_prompts,
-        ):
-            mock_prompts.select.return_value = 2  # "Skip"
-            result = _post_implementation_lifecycle_direct(
-                tmp_path, "feat/42", "42", tmp_path / "wt", self._make_config(), mock_provider
-            )
-        assert result == MergeStatus.NOT_MERGED
-
-    def test_no_commits_returns_not_merged(self, tmp_path: Path) -> None:
-        """Zero commits ahead → returns NOT_MERGED (nothing merged)."""
-        mock_provider = MagicMock()
-        with (
-            patch("wade.git.branch.commits_ahead", return_value=0),
-            patch("wade.services.implementation_service.lifecycle.prompts") as mock_prompts,
-        ):
-            mock_prompts.confirm.return_value = False  # Don't delete worktree
-            result = _post_implementation_lifecycle_direct(
-                tmp_path, "feat/42", "42", tmp_path / "wt", self._make_config(), mock_provider
             )
         assert result == MergeStatus.NOT_MERGED
 

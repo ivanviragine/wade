@@ -150,7 +150,6 @@ def test_cli_plan_flag_passes_to_service() -> None:
         plan_file=Path("/tmp/PLAN.md"),
         no_close=False,
         draft=False,
-        no_cleanup=False,
     )
 
 
