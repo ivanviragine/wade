@@ -55,6 +55,7 @@ from wade.services.prompt_delivery import deliver_prompt_if_needed
 from wade.services.review_settle import compute_effective_settle, latest_signal_ts
 from wade.services.task_service import add_review_addressed_by_labels
 from wade.ui.console import console
+from wade.utils.body_markers import enforce_body_budget, update_body_preserving_markers
 from wade.utils.markdown import append_session_to_body
 from wade.utils.terminal import (
     compose_review_title,
@@ -1120,29 +1121,36 @@ def _capture_review_session_usage(
     lookup = git_pr.get_pr_for_branch(repo_root, branch)
     if lookup.is_open and lookup.pr is not None:
         pr_number = lookup.pr.number
-        try:
-            current_body = git_pr.get_pr_body(repo_root, pr_number)
-            if current_body is not None:
-                new_body = current_body
-                assert usage is not None
-                new_body = append_review_usage_entry(
-                    new_body,
-                    ai_tool=ai_tool,
-                    model=effective_model,
-                    token_usage=usage,
+        assert usage is not None
+        usage_val = usage
+        session_id = usage.session_id
+
+        def _review_transform(body: str) -> str:
+            # Rewrite only wade's own review-usage / sessions marker blocks so a
+            # concurrent edit elsewhere survives (A4).
+            body = append_review_usage_entry(
+                body, ai_tool=ai_tool, model=effective_model, token_usage=usage_val
+            )
+            if has_session and session_id is not None:
+                body = append_session_to_body(
+                    body, phase="Review", ai_tool=ai_tool, session_id=session_id
                 )
-                if has_session:
-                    assert usage is not None and usage.session_id is not None
-                    new_body = append_session_to_body(
-                        new_body, phase="Review", ai_tool=ai_tool, session_id=usage.session_id
-                    )
-                if git_pr.update_pr_body(repo_root, pr_number, new_body):
-                    console.success("Updated PR with review usage stats.")
-                    logger.info(
-                        "review.usage_updated",
-                        pr=pr_number,
-                        total_tokens=usage.total_tokens if usage else None,
-                    )
+            return body
+
+        try:
+            if update_body_preserving_markers(
+                read_body=lambda: git_pr.get_pr_body(repo_root, pr_number),
+                write_body=lambda b: git_pr.update_pr_body(repo_root, pr_number, b),
+                transform=_review_transform,
+                warn=console.warn,
+                label=f"PR #{pr_number} body",
+            ):
+                console.success("Updated PR with review usage stats.")
+                logger.info(
+                    "review.usage_updated",
+                    pr=pr_number,
+                    total_tokens=usage.total_tokens if usage else None,
+                )
         except Exception:
             logger.debug("review.pr_body_read_failed", exc_info=True)
     else:
@@ -1165,6 +1173,9 @@ def _capture_review_session_usage(
                 new_body = append_session_to_body(
                     new_body, phase="Review", ai_tool=ai_tool, session_id=usage.session_id
                 )
+            new_body = enforce_body_budget(
+                new_body, warn=console.warn, label=f"issue #{issue_number} body"
+            )
             provider.update_task(str(issue_number), body=new_body)
             console.success("Updated issue with review usage stats.")
             logger.info("review.usage_issue_updated", issue=issue_number)

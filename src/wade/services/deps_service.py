@@ -187,6 +187,10 @@ def build_deps_section(
     return "\n".join(lines)
 
 
+DEPS_MARKER_START = "<!-- wade:deps:start -->"
+DEPS_MARKER_END = "<!-- wade:deps:end -->"
+
+
 def apply_deps_to_issues(
     provider: AbstractTaskProvider,
     issue_numbers: list[str],
@@ -194,24 +198,34 @@ def apply_deps_to_issues(
 ) -> int:
     """Update each issue body with dependency cross-references.
 
-    Returns number of successfully updated issues.
+    The ``## Dependencies`` section is wrapped in ``wade:deps`` markers so this
+    rewrites only wade's own block and preserves any concurrent edit to the rest
+    of the issue body (A4). Returns number of successfully updated issues.
     """
+    from wade.utils.body_markers import enforce_body_budget, upsert_marked_block
+    from wade.utils.markdown import remove_marker_block
+
     updated = 0
 
     for issue_id in issue_numbers:
-        deps_section = build_deps_section(issue_id, edges)
+        deps_inner = build_deps_section(issue_id, edges).strip()
 
         try:
             task = provider.read_task(issue_id)
-            cleaned_body = strip_deps_section(task.body)
-
-            if deps_section:
-                new_body = cleaned_body.rstrip("\n") + "\n\n" + deps_section
-            elif "## Dependencies" in task.body:
-                # No edges remain but a stale ## Dependencies block was stripped
-                new_body = cleaned_body
-            else:
+            body = task.body
+            has_legacy = "## Dependencies" in body
+            has_marked = DEPS_MARKER_START in body
+            if not deps_inner and not has_legacy and not has_marked:
                 continue
+
+            # Drop any legacy unmarked ## Dependencies and the prior marked block,
+            # then upsert the fresh block — everything else is preserved verbatim.
+            cleaned = strip_deps_section(body)
+            cleaned = remove_marker_block(cleaned, DEPS_MARKER_START, DEPS_MARKER_END)
+            new_body = upsert_marked_block(cleaned, DEPS_MARKER_START, DEPS_MARKER_END, deps_inner)
+            new_body = enforce_body_budget(
+                new_body, warn=console.warn, label=f"issue #{issue_id} body"
+            )
 
             provider.update_task(issue_id, body=new_body)
             console.detail(f"Updated #{issue_id} with dependency refs")

@@ -334,8 +334,16 @@ def _merge_pr(
     return MergeStatus.MERGED
 
 
+SUMMARY_MARKER_START = "<!-- wade:summary:start -->"
+SUMMARY_MARKER_END = "<!-- wade:summary:end -->"
+
+
 def _strip_summary_section(body: str) -> str:
     """Remove an existing ``## Summary`` section from a PR body.
+
+    Handles the *legacy* unmarked ``## Summary`` heading (written before #357
+    wrapped the section in ``wade:summary`` markers). The marked block is
+    removed separately via ``remove_marker_block``.
 
     The body may contain an implementation-usage block delimited by HTML
     comment markers.  We use that marker as a hard boundary so freeform
@@ -430,6 +438,8 @@ def _build_pr_body(
 
     Plan summary stays on the issue only — not copied into the PR body.
     """
+    from wade.utils.body_markers import build_marked_block
+
     lines: list[str] = []
 
     if parent_issue:
@@ -440,12 +450,17 @@ def _build_pr_body(
     if lines:
         lines.append("")
 
-    # PR summary from file
+    # PR summary from file — wrapped in wade:summary markers so a later `done`
+    # rewrites only this block and preserves any concurrent edits (A4).
     if pr_summary_path and pr_summary_path.is_file():
         summary_content = pr_summary_path.read_text(encoding="utf-8").strip()
         if summary_content:
-            lines.append("## Summary")
-            lines.append("")
-            lines.append(summary_content)
+            lines.append(
+                build_marked_block(
+                    SUMMARY_MARKER_START,
+                    SUMMARY_MARKER_END,
+                    f"## Summary\n\n{summary_content}",
+                )
+            )
 
     return "\n".join(lines)

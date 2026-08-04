@@ -64,6 +64,7 @@ from wade.services.task_service import (
 )
 from wade.ui import prompts
 from wade.ui.console import console
+from wade.utils.body_markers import enforce_body_budget, update_body_preserving_markers
 from wade.utils.terminal import (
     compose_implement_title,
     launch_in_new_terminal,
@@ -156,24 +157,26 @@ def _capture_post_session_usage(
     if lookup.is_open and lookup.pr is not None:
         pr_number = lookup.pr.number
         try:
-            current_body = git_pr.get_pr_body(repo_root, pr_number)
-            if current_body is not None:
-                new_body = _enrich_body_with_usage(
-                    current_body,
-                    ai_tool,
-                    effective_model,
-                    usage,
-                    has_tokens,
-                    has_session,
+            # Re-read the body immediately before writing and rewrite only wade's
+            # own usage marker block, so a concurrent edit outside it survives
+            # (A4); enforce GitHub's size cap with a visible warning (A5).
+            updated = update_body_preserving_markers(
+                read_body=lambda: git_pr.get_pr_body(repo_root, pr_number),
+                write_body=lambda b: git_pr.update_pr_body(repo_root, pr_number, b),
+                transform=lambda b: _enrich_body_with_usage(
+                    b, ai_tool, effective_model, usage, has_tokens, has_session
+                ),
+                warn=console.warn,
+                label=f"PR #{pr_number} body",
+            )
+            if updated:
+                if has_tokens:
+                    console.success("Updated PR with implementation usage stats.")
+                logger.info(
+                    "implementation.impl_usage_updated",
+                    pr=pr_number,
+                    total_tokens=usage.total_tokens if usage else None,
                 )
-                if git_pr.update_pr_body(repo_root, pr_number, new_body):
-                    if has_tokens:
-                        console.success("Updated PR with implementation usage stats.")
-                    logger.info(
-                        "implementation.impl_usage_updated",
-                        pr=pr_number,
-                        total_tokens=usage.total_tokens if usage else None,
-                    )
         except Exception:
             logger.debug("implementation.pr_body_read_failed", exc_info=True)
     elif lookup.lookup_failed:
@@ -192,6 +195,9 @@ def _capture_post_session_usage(
                 usage,
                 has_tokens,
                 has_session,
+            )
+            new_body = enforce_body_budget(
+                new_body, warn=console.warn, label=f"issue #{issue_number} body"
             )
             provider.update_task(str(issue_number), body=new_body)
             if has_tokens:

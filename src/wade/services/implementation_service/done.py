@@ -27,6 +27,8 @@ from wade.services.implementation_service.bootstrap import (
 )
 from wade.services.implementation_service.core import _resolve_worktree_from_plan
 from wade.services.implementation_service.lifecycle import (
+    SUMMARY_MARKER_END,
+    SUMMARY_MARKER_START,
     _apply_pr_refs,
     _build_pr_body,
     _strip_summary_section,
@@ -34,6 +36,8 @@ from wade.services.implementation_service.lifecycle import (
 from wade.services.implementation_service.usage_tracking import IMPL_USAGE_MARKER_START
 from wade.services.task_service import remove_in_progress_label
 from wade.ui.console import console
+from wade.utils.body_markers import build_marked_block, update_body_preserving_markers
+from wade.utils.markdown import remove_marker_block
 
 logger = structlog.get_logger()
 
@@ -298,15 +302,10 @@ def _done_via_pr(
         pr_url = existing_pr.url
         console.step(f"Updating existing PR #{pr_number}...")
 
-        # Read current PR body and append summary
-        current_body = git_pr.get_pr_body(repo_root, pr_number) or ""
-
-        # Build summary section
-        summary_section = ""
+        # Build summary content
+        summary_content = ""
         if pr_summary_path and pr_summary_path.is_file():
             summary_content = pr_summary_path.read_text(encoding="utf-8").strip()
-            if summary_content:
-                summary_section = f"\n\n## Summary\n\n{summary_content}"
 
         # Detect parent tracking issue
         parent_issue: str | None = None
@@ -319,26 +318,33 @@ def _done_via_pr(
         except Exception:
             logger.debug("implementation.parent_issue_detection_failed", exc_info=True)
 
-        # Build updated body: keep existing content, add close/parent references + summary
-        updated_body = _apply_pr_refs(current_body, issue_number, close_issue, parent_issue)
-        # Strip any existing ## Summary section to avoid duplication on retry.
-        # Use the impl-usage HTML marker as a hard boundary so that freeform
-        # summary content (which may contain ## subheadings) is fully removed.
-        updated_body = _strip_summary_section(updated_body)
-        # Insert summary before any impl-usage block so ordering stays
-        # consistent: content → summary → impl-usage.
-        if summary_section:
-            marker_pos = updated_body.find(IMPL_USAGE_MARKER_START)
+        def _transform(body: str) -> str:
+            # Keep existing content; refresh close/parent refs; rewrite ONLY the
+            # wade:summary block so a concurrent edit elsewhere survives (A4).
+            body = _apply_pr_refs(body, issue_number, close_issue, parent_issue)
+            # Drop any legacy unmarked ## Summary and the prior marked block.
+            body = _strip_summary_section(body)
+            body = remove_marker_block(body, SUMMARY_MARKER_START, SUMMARY_MARKER_END)
+            if not summary_content:
+                return body.rstrip("\n") + "\n"
+            block = build_marked_block(
+                SUMMARY_MARKER_START, SUMMARY_MARKER_END, f"## Summary\n\n{summary_content}"
+            )
+            # Keep ordering content → summary → impl-usage.
+            marker_pos = body.find(IMPL_USAGE_MARKER_START)
             if marker_pos != -1:
-                before = updated_body[:marker_pos].rstrip("\n")
-                after = updated_body[marker_pos:]
-                updated_body = before + summary_section + "\n\n" + after + "\n"
-            else:
-                updated_body = updated_body.rstrip("\n") + summary_section + "\n"
-        else:
-            updated_body = updated_body.rstrip("\n") + "\n"
+                before = body[:marker_pos].rstrip("\n")
+                after = body[marker_pos:]
+                return f"{before}\n\n{block}\n\n{after}\n"
+            return body.rstrip("\n") + "\n\n" + block + "\n"
 
-        if not git_pr.update_pr_body(repo_root, pr_number, updated_body):
+        if not update_body_preserving_markers(
+            read_body=lambda: git_pr.get_pr_body(repo_root, pr_number) or "",
+            write_body=lambda b: git_pr.update_pr_body(repo_root, pr_number, b),
+            transform=_transform,
+            warn=console.warn,
+            label=f"PR #{pr_number} body",
+        ):
             console.error("Could not update the PR body.")
             return False
         console.success("PR body updated with summary.")
