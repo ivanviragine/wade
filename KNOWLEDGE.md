@@ -291,3 +291,21 @@ Codex's --sandbox workspace-write does NOT imply worktree containment: it also p
 wade's hooks/cli.py now hard-codes TWO static per-tool maps that mirror crossby adapter capabilities: _TOOL_DIALECTS (hook_output_dialect) and _TOOL_STOP_DIALECTS (hook_stop_dialect, split out as a separate enum in crossby 0.13 because a tool's Stop contract does not follow from its tool-call contract). Both are deliberate copies to keep the hot per-edit path off crossby.ai_tools (~150ms vs ~450ms). TestPerToolDialectsMatchCrossby in tests/unit/test_hooks/test_hook_cli.py asserts both still match the adapters, so a crossby bump that changes a dialect now fails the suite instead of silently mis-shaping hook output.
 
 ---
+
+## 443a71b3 | 2026-08-03 | implementation | tags: git, gotcha, worktree | Issue #356
+
+wade session sync fails with GitError exit 1 (not the documented exit 0/2/4) when AGENTS.md carries the --skip-worktree bit set by _suppress_pointer_artifacts: git refuses the merge with 'Your local changes to the following files would be overwritten by merge: AGENTS.md' while git status/diff show nothing, because skip-worktree hides the locally-injected ## Git Workflow pointer block. Recovery: 'git update-index --no-skip-worktree AGENTS.md', confirm the only diff is the wade:pointer block, 'git checkout -- AGENTS.md', re-run sync, then restore via wade.skills.pointer.ensure_pointer(Path('.')) plus 'git update-index --skip-worktree AGENTS.md'. Do NOT restore AGENTS.md from a pre-merge backup copy — main's own AGENTS.md changes arrive with the merge and skip-worktree would silently mask reverting them.
+
+---
+
+## ca245d6a | 2026-08-04 | plan | tags: config, validation, gotcha
+
+wade config-key validity is declared in THREE independent places that can drift: the Pydantic models (src/wade/models/config.py: AICommandConfig/AIConfig), the loader (src/wade/config/loader.py, _validated_* helpers), and the standalone validator's HARDCODED valid_keys allowlists (src/wade/services/check_service.py: _validate_ai_command_section line ~462, _validate_ai_section lines ~447-454). The validator does not introspect the models, so a field added to the model+loader but missing from check_service's allowlists makes wade emit 'ai.<cmd>.<key>: unsupported key' for a config wade init itself just wrote (observed with permission_mode). When adding an ai config field, update all three — or derive the validator allowlists from <Model>.model_fields.
+
+---
+
+## 801e1af0 | 2026-08-04 | implementation | tags: git, stash, concurrency | Issue #357
+
+git stash push reports 'could not write index' (NOT 'Unable to create index.lock') when the shared $GIT_COMMON_DIR index lock is held by another worktree/process — unlike 'git add' which says 'Unable to create .git/index.lock: File exists'. Any lock-contention retry matcher (git/repo.py _LOCK_PATTERNS) must include 'could not write index' or autostash (git stash push via _run_git_with_retry) silently fails to retry on real contention. Verified in the #357 concurrency lane by pre-creating .git/index.lock.
+
+---
