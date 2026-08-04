@@ -381,7 +381,11 @@ def _worktree_loss_risk(
         try:
             ahead = git_branch.commits_ahead(main_root, branch_name, main_branch)
         except GitError:
-            ahead = 0
+            # Fail CLOSED — an unverifiable branch state is treated as unsafe,
+            # same as the is_clean check above. Never read "could not check" as
+            # "no work to lose".
+            losses.append(f"could not verify commits on '{branch_name}' — treating as unsafe")
+            return losses
         if ahead > 0:
             merged = False
             try:
@@ -442,16 +446,21 @@ def _cleanup_worktree(
         return False
 
     if branch_name and branch_name != main_branch:
-        # Prefer `-d` (git refuses to delete an unmerged branch); escalate to
-        # `-D` only when discarding was explicitly requested, or when `-d`
-        # refuses a branch the loss guard already verified is safe (e.g. a
-        # fast-forward-merged branch that git won't delete because main_root's
-        # HEAD hasn't caught up).
+        # `-d` refuses to delete an unmerged branch (safe); `-D` (force) is used
+        # ONLY when the caller explicitly opted into discarding work. Never
+        # escalate a `-d` refusal to `-D` automatically — that would bypass the
+        # discard_dirty gate and could force-delete unmerged commits (the loss
+        # guard already refused branches it could verify as unmerged, but a
+        # refusal here — e.g. a transient error, or main_root's local main being
+        # behind — must not become a silent force-delete). A lingering branch is
+        # not data loss; a blind `-D` could be.
         try:
             git_branch.delete_branch(main_root, branch_name, force=discard_dirty)
-        except GitError:
-            with contextlib.suppress(GitError):
-                git_branch.delete_branch(main_root, branch_name, force=True)
+        except GitError as e:
+            console.warn(f"Could not delete branch '{branch_name}': {e}")
+            console.hint(
+                f"If it is safe, delete it manually: git branch -d {branch_name} (or -D to force)."
+            )
 
     with contextlib.suppress(GitError):
         git_worktree.prune_worktrees(main_root)

@@ -70,6 +70,22 @@ class TestWorktreeLossRisk:
             losses = _worktree_loss_risk(tmp_path, wt, "feat/42-x", "main")
         assert losses == []
 
+    def test_unverifiable_commit_count_fails_closed(self, tmp_path: Path) -> None:
+        # A git error measuring commits must read as UNSAFE (a loss), never as
+        # "no work to lose" — same fail-safe direction as the is_clean check.
+        from wade.git.repo import GitError
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        with ExitStack() as stack:
+            stack.enter_context(patch(f"{_CLEANUP}.git_repo.is_clean", return_value=True))
+            stack.enter_context(
+                patch(f"{_CLEANUP}.git_branch.commits_ahead", side_effect=GitError("bad ref"))
+            )
+            losses = _worktree_loss_risk(tmp_path, wt, "feat/42-x", "main")
+        assert len(losses) == 1
+        assert "could not verify" in losses[0]
+
 
 class TestCleanupWorktreeGuard:
     def _common_patches(self, stack: ExitStack, *, losses: list[str]) -> dict[str, MagicMock]:
@@ -124,5 +140,23 @@ class TestCleanupWorktreeGuard:
         assert result is True
         mocks["remove"].assert_called_once()
         # No loss + no discard → prefer -d (force=False).
+        _, kwargs = mocks["delete"].call_args
+        assert kwargs.get("force") is False
+
+    def test_branch_delete_refusal_is_not_force_escalated(self) -> None:
+        # If `git branch -d` refuses (e.g. transient error / behind main), wade
+        # must NOT auto-escalate to `-D` — that would bypass the discard_dirty
+        # gate and could force-delete unmerged commits.
+        from wade.git.repo import GitError
+
+        with ExitStack() as stack:
+            mocks = self._common_patches(stack, losses=[])
+            mocks["delete"].side_effect = GitError("branch not fully merged")
+            result = _cleanup_worktree(Path("/repo"), Path("/repo/wt"), "main", discard_dirty=False)
+        # Worktree removal itself still succeeded.
+        assert result is True
+        # delete_branch was attempted exactly once (force=False) — never retried
+        # with force=True.
+        assert mocks["delete"].call_count == 1
         _, kwargs = mocks["delete"].call_args
         assert kwargs.get("force") is False
