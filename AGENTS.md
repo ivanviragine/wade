@@ -53,10 +53,9 @@ uv run python scripts/auto_version.py patch # Version bump (patch/minor/major)
 
 ```
 CLI Layer      ->  can import: services, models, config, logging, ui
-Service Layer  ->  can import: providers, crossby (AI tool adapters), git, db, models, config, logging
+Service Layer  ->  can import: providers, crossby (AI tool adapters), git, models, config, logging
 Provider Layer ->  can import: models, config, logging  (NO service imports)
 Git Layer      ->  can import: models, config, logging  (NO service imports)
-DB Layer       ->  can import: models, logging           (NO config imports)
 Models Layer   ->  can import: nothing (leaf dependency)
 ```
 
