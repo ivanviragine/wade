@@ -290,29 +290,62 @@ _BATCH_STATUS_NOT_STARTED = "not_started"
 _BATCH_STATUS_IN_PROGRESS = "in_progress"
 _BATCH_STATUS_DONE = "done"
 _BATCH_STATUS_MERGED = "merged"
+# Distinct from NOT_STARTED: a branch exists but git couldn't be read to
+# measure it, so wade won't guess — it reports UNKNOWN rather than pretending
+# the issue is untouched (B3).
+_BATCH_STATUS_UNKNOWN = "unknown"
 
 _POLL_INTERVAL_SECONDS = 30
 _POLL_TIMEOUT_SECONDS = 4 * 60 * 60  # 4 hours
 
 
-def _is_merged_to_main(repo_root: Path, issue_num: str, main_branch: str) -> bool:
-    """Return True if a branch for this issue was merged directly into main.
+def _branch_merged_into_main(repo_root: Path, branch: str, main_branch: str) -> bool:
+    """Return True if *branch*'s tip is an ancestor of the (origin) main branch.
 
-    Searches recent merge commits on ``origin/<main_branch>`` for the typical
-    branch-name pattern (e.g. "feat/227-..." or "fix/227-...").
+    Deterministic: uses ``git merge-base --is-ancestor`` against the real branch
+    ref instead of grepping commit subjects (which false-matches any commit that
+    merely mentions the issue number). Returns False when the ref cannot be
+    resolved (git error / missing ref).
     """
-    try:
-        result = subprocess.run(
-            ["git", "log", f"origin/{main_branch}", "--oneline", "-100"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        pattern = rf"/0*{re.escape(issue_num)}(?:[^0-9]|$)"
-        return bool(re.search(pattern, result.stdout))
-    except FileNotFoundError:
-        return False
+    for base in (f"origin/{main_branch}", main_branch):
+        try:
+            result = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", branch, base],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError:
+            return False
+        # 0 = ancestor (merged); 1 = not an ancestor; anything else = a bad ref,
+        # so try the other base before giving up.
+        if result.returncode == 0:
+            return True
+        if result.returncode == 1:
+            return False
+    return False
+
+
+def _is_merged_to_main(
+    repo_root: Path,
+    issue_num: str,
+    main_branch: str,
+    branch_set: set[str] | None = None,
+) -> bool:
+    """Return True if a branch for this issue is fully merged into main.
+
+    Ref-based (``git merge-base --is-ancestor``) — never the old fragile
+    commit-subject grep. Only branches present in *branch_set* are checked, so
+    an unrelated commit mentioning the number can no longer cause a false
+    "merged". Returns False when no branch ref for the issue exists.
+    """
+    branches = branch_set or set()
+    pattern = rf"/0*{re.escape(issue_num)}(?:-|$)"
+    for branch in branches:
+        if re.search(pattern, branch) and _branch_merged_into_main(repo_root, branch, main_branch):
+            return True
+    return False
 
 
 def _classify_issue_status(
@@ -337,42 +370,73 @@ def _classify_issue_status(
             return _BATCH_STATUS_DONE
         # CLOSED without merged_at — PR was abandoned; fall through to branch check
 
-    # No PR (or abandoned PR) — check if branch exists
+    # Deterministic merge check against the real branch ref (B3).
+    if _is_merged_to_main(repo_root, issue_num, main_branch, branch_set):
+        return _BATCH_STATUS_DONE
+
+    # No PR (or abandoned PR) — check if a branch for the issue exists.
     pattern = rf"/0*{re.escape(issue_num)}(?:-|$)"
     matching_branches = [b for b in branch_set if re.search(pattern, b)]
     if matching_branches:
-        # Branch exists — check for commits ahead of base
+        errored = False
         for branch in matching_branches:
             try:
-                ahead = git_branch.commits_ahead(repo_root, branch, main_branch)
-                if ahead > 0:
+                if git_branch.commits_ahead(repo_root, branch, main_branch) > 0:
                     return _BATCH_STATUS_IN_PROGRESS
             except GitError:
-                pass
-        return _BATCH_STATUS_IN_PROGRESS
-
-    # No PR, no branch — check for direct merge to main
-    if _is_merged_to_main(repo_root, issue_num, main_branch):
-        return _BATCH_STATUS_DONE
+                errored = True
+        # A branch exists. If we could measure at least one and it had no
+        # commits ahead, it is still an in-progress (scaffolded) branch. If we
+        # could NOT measure any (all git errors), report UNKNOWN rather than
+        # guessing.
+        return _BATCH_STATUS_UNKNOWN if errored else _BATCH_STATUS_IN_PROGRESS
 
     return _BATCH_STATUS_NOT_STARTED
+
+
+def _pick_pr(candidates: list[git_pr.PRSummary]) -> git_pr.PRSummary:
+    """Pick one PR from several for the same issue, deterministically.
+
+    Prefers an open non-draft PR, then the most-recently-updated, then the
+    highest PR number — so a re-run with the same remote state always yields the
+    same choice (B3, no last-wins nondeterminism).
+    """
+
+    def sort_key(pr: git_pr.PRSummary) -> tuple[bool, str, int]:
+        open_nondraft = pr.state.upper() == "OPEN" and not pr.is_draft
+        return (open_nondraft, pr.updated_at or "", pr.number)
+
+    return max(candidates, key=sort_key)
 
 
 def _build_pr_index(
     repo_root: Path,
     issue_numbers: list[str],
 ) -> dict[str, git_pr.PRSummary]:
-    """Build a mapping from issue number to PR data using a single gh pr list call."""
-    prs = git_pr.list_prs(repo_root, state="all", limit=200)
-    issue_set = set(issue_numbers)
-    result: dict[str, git_pr.PRSummary] = {}
-    for pr in prs:
-        from wade.services.implementation_service._shared import extract_issue_from_branch
+    """Build a mapping from issue number to PR data using a single gh pr list call.
 
+    When an issue has multiple PRs, one is picked deterministically via
+    :func:`_pick_pr` (never last-wins). Warns if the ``gh pr list`` result was
+    truncated at the limit, since a needed PR may be missing (B3).
+    """
+    from wade.services.implementation_service._shared import extract_issue_from_branch
+
+    limit = 200
+    prs = git_pr.list_prs(repo_root, state="all", limit=limit)
+    if len(prs) >= limit:
+        logger.warning("batch.pr_list_truncated", limit=limit, returned=len(prs))
+        console.warn(
+            f"PR list hit the {limit}-PR limit — batch status may be incomplete for older PRs."
+        )
+
+    issue_set = set(issue_numbers)
+    candidates: dict[str, list[git_pr.PRSummary]] = {}
+    for pr in prs:
         extracted = extract_issue_from_branch(pr.head_ref_name)
         if extracted and extracted in issue_set:
-            result[extracted] = pr
-    return result
+            candidates.setdefault(extracted, []).append(pr)
+
+    return {issue: _pick_pr(prs_for_issue) for issue, prs_for_issue in candidates.items()}
 
 
 def _get_remote_branches(repo_root: Path) -> set[str]:
@@ -445,7 +509,14 @@ def poll_batch_completion(
                 1 for s in statuses.values() if s in (_BATCH_STATUS_DONE, _BATCH_STATUS_MERGED)
             )
             in_progress = sum(1 for s in statuses.values() if s == _BATCH_STATUS_IN_PROGRESS)
-            not_started = sum(1 for s in statuses.values() if s == _BATCH_STATUS_NOT_STARTED)
+            # NOT_STARTED and UNKNOWN both count as "pending" for the progress
+            # line; UNKNOWN is kept distinct in `statuses` so it is not silently
+            # treated as done.
+            not_started = sum(
+                1
+                for s in statuses.values()
+                if s in (_BATCH_STATUS_NOT_STARTED, _BATCH_STATUS_UNKNOWN)
+            )
             total = len(issue_numbers)
 
             console.step(

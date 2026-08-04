@@ -353,6 +353,15 @@ def poll_for_reviews(
     try:
         while True:
             lookup = git_pr.get_pr_for_branch(repo_root, branch)
+            # B2: a transient lookup failure must NOT end the wait — treat it
+            # exactly like a fetch_failed below (reset the quiet timer, sleep,
+            # retry). PR_CLOSED is reserved for an actual CLOSED/MERGED state or
+            # a PR that genuinely no longer exists.
+            if lookup.lookup_failed:
+                quiet_start = None
+                console.detail("PR lookup failed — retrying shortly...")
+                time.sleep(poll_interval)
+                continue
             if not lookup.found:
                 console.info("PR is no longer open. Stopping poll.")
                 return PollOutcome.PR_CLOSED

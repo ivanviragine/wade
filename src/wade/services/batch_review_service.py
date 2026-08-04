@@ -335,8 +335,11 @@ def create_review_pr(
             head=ctx.integration_branch,
             draft=True,
         )
-        ctx.pr_number = int(pr_info["number"])
-        ctx.pr_url = str(pr_info["url"])
+        if pr_info is not None:
+            ctx.pr_number = int(pr_info["number"])
+            ctx.pr_url = str(pr_info["url"])
+        else:
+            logger.warning("batch_review.integration_pr_create_failed")
     return ctx
 
 

@@ -145,6 +145,9 @@ def bootstrap_draft_pr(
             head=branch_name,
             draft=True,
         )
+        if pr_info is None:
+            console.error("Failed to create draft PR — could not determine the new PR number.")
+            return None
         logger.info(
             "bootstrap_draft_pr.created",
             branch=branch_name,

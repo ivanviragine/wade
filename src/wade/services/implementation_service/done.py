@@ -388,6 +388,9 @@ def _done_via_pr(
                 head=branch,
                 draft=draft,
             )
+            if pr_info is None:
+                console.error("PR creation failed — could not determine the new PR number.")
+                return False
             pr_url = str(pr_info.get("url", ""))
             console.success(f"PR created: {pr_url}")
         except Exception as e:

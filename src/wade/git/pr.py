@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -30,6 +31,7 @@ class PRSummary(BaseModel):
     state: str
     is_draft: bool = Field(alias="isDraft")
     merged_at: str | None = Field(default=None, alias="mergedAt")
+    updated_at: str | None = Field(default=None, alias="updatedAt")
 
 
 class PRRef(BaseModel):
@@ -101,6 +103,40 @@ class PRLookup(BaseModel):
         return self.pr is not None and self.pr.state.upper() in ("CLOSED", "MERGED")
 
 
+# Stderr substrings that mark a TRANSIENT gh/GitHub failure worth retrying.
+# Permanent failures (404 not found, 422 unprocessable, bad auth) are NOT here —
+# retrying them just wastes time and, for merge_pr, risks acting twice (B4).
+_TRANSIENT_GH_SIGNALS = (
+    "rate limit",
+    "was submitted too quickly",
+    "connection reset",
+    "connection refused",
+    "connection timed out",
+    "timeout",
+    "timed out",
+    "temporary failure",
+    "temporarily unavailable",
+    "service unavailable",
+    "bad gateway",
+    "gateway timeout",
+    "internal server error",
+    "server error",
+    "http 500",
+    "http 502",
+    "http 503",
+    "http 504",
+    "eof",
+    "tls handshake",
+    "i/o timeout",
+)
+
+
+def _is_transient_gh_error(stderr: str) -> bool:
+    """Return True when *stderr* indicates a transient (retryable) gh failure."""
+    lowered = stderr.lower()
+    return any(sig in lowered for sig in _TRANSIENT_GH_SIGNALS)
+
+
 def _run_gh(
     *args: str,
     cwd: Path,
@@ -113,7 +149,9 @@ def _run_gh(
         *args: gh subcommand and arguments.
         cwd: Working directory for the command.
         check: If True, raise GhCliError on non-zero exit.
-        retries: Number of times to retry on non-zero exit (default 0).
+        retries: Max retries on a **transient** failure (default 0). Permanent
+            failures (404, 422, bad auth) never retry — only stderr matching
+            :data:`_TRANSIENT_GH_SIGNALS` does.
 
     Returns:
         CompletedProcess with captured stdout/stderr.
@@ -135,7 +173,7 @@ def _run_gh(
         except FileNotFoundError as exc:
             raise GhCliError("gh CLI not found — install it from https://cli.github.com/") from exc
 
-        if result.returncode != 0 and attempt < retries:
+        if result.returncode != 0 and attempt < retries and _is_transient_gh_error(result.stderr):
             attempt += 1
             log.warning(
                 "gh.retrying",
@@ -155,6 +193,19 @@ def _run_gh(
         return result
 
 
+def _get_pr_state(repo_root: Path, pr_number: int) -> str | None:
+    """Return a PR's state (``OPEN`` / ``CLOSED`` / ``MERGED``) or None on failure."""
+    result = _run_gh("pr", "view", str(pr_number), "--json", "state", cwd=repo_root, check=False)
+    if result.returncode != 0:
+        return None
+    try:
+        data = json.loads(result.stdout)
+        state: str = data.get("state", "")
+        return state or None
+    except (json.JSONDecodeError, KeyError):
+        return None
+
+
 def create_pr(
     repo_root: Path,
     title: str,
@@ -162,7 +213,7 @@ def create_pr(
     base: str,
     head: str | None = None,
     draft: bool = False,
-) -> dict[str, str | int]:
+) -> dict[str, str | int] | None:
     """Create a pull request via ``gh pr create``.
 
     Args:
@@ -174,7 +225,9 @@ def create_pr(
         draft: If True, create as a draft PR.
 
     Returns:
-        Dict with "number" (int) and "url" (str) keys.
+        Dict with "number" (int) and "url" (str) keys, or ``None`` when the PR
+        number cannot be determined — this function never fabricates a ``#0``
+        (B5). Callers must handle ``None`` and report the failure.
 
     Raises:
         GhCliError: If PR creation fails.
@@ -195,18 +248,34 @@ def create_pr(
         cmd_args.append("--draft")
 
     log.info("pr.create", title=title, base=base, head=head, draft=draft)
-    result = _run_gh(*cmd_args, cwd=repo_root)
+    # Retry transient failures (B4) with the same budget as the edit helpers.
+    result = _run_gh(*cmd_args, cwd=repo_root, retries=3)
 
     # gh pr create prints the PR URL to stdout
     pr_url = result.stdout.strip()
 
-    # Try to get structured info via gh pr view
+    # Prefer structured info via gh pr view.
     pr_info = _get_pr_info_from_url(repo_root, pr_url)
     if pr_info:
         return pr_info
 
-    # Fallback: return URL only (number unknown)
-    return {"number": 0, "url": pr_url}
+    # Second fallback: parse the number straight from the returned URL.
+    number = _parse_pr_number_from_url(pr_url)
+    if number is not None:
+        return {"number": number, "url": pr_url}
+
+    # Never fabricate a PR number — surface the failure to the caller (B5).
+    log.warning("pr.create.number_undeterminable", url=pr_url)
+    return None
+
+
+_PR_URL_NUMBER_RE = re.compile(r"/pull/(\d+)")
+
+
+def _parse_pr_number_from_url(pr_url: str) -> int | None:
+    """Extract the PR number from a ``.../pull/<n>`` URL, or None."""
+    match = _PR_URL_NUMBER_RE.search(pr_url)
+    return int(match.group(1)) if match else None
 
 
 def _get_pr_info_from_url(repo_root: Path, pr_url: str) -> dict[str, str | int] | None:
@@ -263,7 +332,35 @@ def merge_pr(
     ]
     if delete_branch:
         cmd_args.append("--delete-branch")
-    _run_gh(*cmd_args, cwd=repo_root)
+
+    # merge_pr is NOT idempotent — a completed remote merge cannot be re-run.
+    # So we do the retry loop here (not inside _run_gh) and, before every retry,
+    # re-check the PR state: if it is already MERGED the earlier attempt actually
+    # succeeded (its response was just lost to a transient error), so we return
+    # success instead of re-attempting the irreversible merge (knowledge
+    # b6ca74e5). Only transient failures are retried.
+    max_retries = 3
+    attempt = 0
+    while True:
+        result = _run_gh(*cmd_args, cwd=repo_root, check=False)
+        if result.returncode == 0:
+            return
+        if _get_pr_state(repo_root, pr_number) == "MERGED":
+            log.info("pr.merge.already_merged", pr_number=pr_number)
+            return
+        if attempt < max_retries and _is_transient_gh_error(result.stderr):
+            attempt += 1
+            log.warning(
+                "pr.merge.retrying",
+                pr_number=pr_number,
+                attempt=attempt,
+                stderr=result.stderr.strip()[:200],
+            )
+            time.sleep(attempt)
+            continue
+        raise GhCliError(
+            f"gh pr merge {pr_number} failed (exit {result.returncode}): {result.stderr.strip()}"
+        )
 
 
 def update_pr_body(repo_root: Path, pr_number: int, body: str) -> bool:
@@ -363,7 +460,7 @@ def list_prs(
             "--limit",
             str(limit),
             "--json",
-            "number,url,headRefName,state,isDraft,mergedAt",
+            "number,url,headRefName,state,isDraft,mergedAt,updatedAt",
             cwd=repo_root,
             check=False,
         )
