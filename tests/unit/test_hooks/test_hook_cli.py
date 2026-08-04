@@ -303,3 +303,190 @@ class TestLeanEntryParity:
         )
         assert r.returncode == 0
         assert json.loads(r.stdout)["decision"] == "block"
+
+
+class TestGuardNameValidation:
+    """E.1 — an unrecognized guard must deny on writes but never trap a Stop.
+
+    The write path used to gate its ``--root`` deny on the *known* guard set, so an
+    unknown guard fell through to the "empty payload → allow" branch and exited 0:
+    a hook that looked installed and enforced nothing.
+    """
+
+    def test_unknown_guard_denies_on_empty_stdin(self) -> None:
+        r = _run_lean("pre_tool_use", "nonexistent", "claude", "")
+        assert r.returncode == 2
+        assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_unknown_guard_denies_without_root(self) -> None:
+        r = _run_lean("pre_tool_use", "nonexistent", "claude", "", root=None)
+        assert r.returncode == 2
+
+    def test_unknown_guard_denies_on_whitespace_stdin(self) -> None:
+        r = _run_lean("pre_tool_use", "nonexistent", "claude", "   \n  ")
+        assert r.returncode == 2
+
+    def test_unknown_guard_on_stop_fails_open(self, tmp_path: Path) -> None:
+        """A guard typo must never leave an agent unable to end its turn."""
+        r = _run_lean("stop", "nonexistent", "claude", "", str(tmp_path))
+        assert r.returncode == 0
+        assert json.loads(r.stdout) == {"continue": True}
+
+    def test_unknown_guard_on_stop_fails_open_without_root(self) -> None:
+        r = _run_lean("stop", "nonexistent", "claude", "", root=None)
+        assert r.returncode == 0
+
+
+class TestShellGuardCLI:
+    """Part B — shell writes routed to ``shell_containment`` via ``ev.command``."""
+
+    def _bash(self, command: str) -> str:
+        return json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
+
+    def test_shell_write_outside_worktree_denied(self) -> None:
+        r = _run_lean("pre_tool_use", "worktree", "claude", self._bash("printf x > /etc/pwn"))
+        assert r.returncode == 2
+        assert "outside the worktree" in r.stdout
+
+    def test_shell_write_inside_worktree_allowed(self) -> None:
+        r = _run_lean("pre_tool_use", "worktree", "claude", self._bash(f"printf x > {WT}/a.txt"))
+        assert r.returncode == 0
+
+    def test_unparseable_shell_command_fails_closed(self) -> None:
+        r = _run_lean("pre_tool_use", "worktree", "claude", self._bash('printf "unterminated'))
+        assert r.returncode == 2
+
+    def test_plan_mode_denies_shell_write_to_source(self) -> None:
+        r = _run_lean("pre_tool_use", "plan", "claude", self._bash(f"printf x > {WT}/src/a.py"))
+        assert r.returncode == 2
+
+    def test_plan_mode_allows_shell_write_to_artifact(self) -> None:
+        r = _run_lean("pre_tool_use", "plan", "claude", self._bash(f"printf x > {WT}/PLAN.md"))
+        assert r.returncode == 0
+
+    def test_cursor_shell_event_payload_shape(self) -> None:
+        """Cursor's beforeShellExecution puts ``command`` at the payload top level."""
+        r = _run_lean("pre_tool_use", "worktree", "cursor", json.dumps({"command": "cp a /etc/x"}))
+        assert r.returncode == 2
+        assert json.loads(r.stdout)["permission"] == "deny"
+
+    def test_agy_shell_payload_shape(self) -> None:
+        """agy nests shell args under ``toolCall.args``."""
+        r = _run_lean(
+            "pre_tool_use",
+            "worktree",
+            "antigravity-cli",
+            json.dumps({"toolCall": {"name": "run_command", "args": {"command": "cp a /etc/x"}}}),
+        )
+        assert r.returncode == 2
+        assert json.loads(r.stdout)["decision"] == "deny"
+
+
+class TestPerToolDialectsMatchCrossby:
+    """The static dialect maps are copies — assert they still match crossby."""
+
+    def test_output_dialects_match_adapters(self) -> None:
+        from crossby.ai_tools import AbstractAITool
+        from crossby.models.ai import AIToolID
+
+        from wade.hooks.cli import _TOOL_DIALECTS
+
+        for tool_id, dialect in _TOOL_DIALECTS.items():
+            caps = AbstractAITool.get(AIToolID(tool_id)).capabilities()
+            assert caps.hook_output_dialect == dialect, tool_id
+
+    def test_stop_dialects_match_adapters(self) -> None:
+        from crossby.ai_tools import AbstractAITool
+        from crossby.models.ai import AIToolID
+
+        from wade.hooks.cli import _TOOL_STOP_DIALECTS
+
+        for tool_id, dialect in _TOOL_STOP_DIALECTS.items():
+            caps = AbstractAITool.get(AIToolID(tool_id)).capabilities()
+            assert caps.hook_stop_dialect == dialect, tool_id
+
+    def test_every_installed_tool_has_both_dialects(self) -> None:
+        """The reverse direction: a tool wade installs a hook for must be mapped.
+
+        The two tests above only walk the wade maps, so a tool added to
+        ``_hook_writers`` but forgotten here would silently take the fallback
+        dialect and emit the wrong shape — passing tests, unenforced guard.
+        """
+        from wade.hooks.cli import _TOOL_DIALECTS, _TOOL_STOP_DIALECTS
+        from wade.services.implementation_service.bootstrap import _hook_writers
+
+        installed = {tool_id.value for tool_id, _ in _hook_writers()}
+        assert installed <= set(_TOOL_DIALECTS), installed - set(_TOOL_DIALECTS)
+        assert installed <= set(_TOOL_STOP_DIALECTS), installed - set(_TOOL_STOP_DIALECTS)
+
+    def test_copilot_stop_hook_blocks(self, tmp_path: Path) -> None:
+        """Copilot gained supports_stop_hook in 0.13 — its Stop must actually block."""
+        r = _run_lean("stop", "session-complete", "copilot", "{}", str(tmp_path))
+        assert r.returncode == 0
+        assert json.loads(r.stdout)["decision"] == "block"
+
+
+class TestChannelRoutingRegressions:
+    """Guard-band regressions found in review of the shell-channel routing."""
+
+    def test_write_tool_carrying_a_command_still_gets_the_file_guard(self) -> None:
+        """A write tool with a command but no path must still deny.
+
+        Routing on "has a command" alone skipped the file-path guard here, losing
+        the "deny a write we cannot locate" invariant.
+        """
+        stdin = json.dumps({"tool_name": "Write", "tool_input": {"command": "ls"}})
+        assert _run_lean("pre_tool_use", "worktree", "claude", stdin).returncode == 2
+
+    def test_write_tool_with_blank_command_still_denies(self) -> None:
+        stdin = json.dumps({"tool_name": "Write", "tool_input": {"command": "   "}})
+        assert _run_lean("pre_tool_use", "worktree", "claude", stdin).returncode == 2
+
+    def test_genuine_shell_call_skips_the_file_guard(self) -> None:
+        stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": "ls"}})
+        assert _run_lean("pre_tool_use", "worktree", "claude", stdin).returncode == 0
+
+    def test_cursor_shell_event_without_tool_name_skips_the_file_guard(self) -> None:
+        """Cursor's beforeShellExecution sends a command and no tool_name at all."""
+        assert (
+            _run_lean(
+                "pre_tool_use", "worktree", "cursor", json.dumps({"command": "ls"})
+            ).returncode
+            == 0
+        )
+
+
+class TestStopNeverTrapsOnUsageError:
+    """A malformed *invocation* must not block session completion either."""
+
+    def _raw(self, *args: str):
+        return subprocess.run(
+            [sys.executable, "-m", "wade.hooks.cli", *args],
+            input="{}",
+            capture_output=True,
+            text=True,
+        )
+
+    def test_stop_with_word_split_root_fails_open(self) -> None:
+        # A worktree path containing a space, word-split by the tool's runner.
+        r = self._raw(
+            "stop", "--guard", "session-complete", "--tool", "claude", "--root", "/a", "b"
+        )
+        assert r.returncode == 0
+
+    def test_stop_missing_required_flag_fails_open(self) -> None:
+        r = self._raw("stop", "--guard", "session-complete", "--root", WT)
+        assert r.returncode == 0
+
+    def test_pre_tool_use_usage_error_still_fails_closed(self) -> None:
+        r = self._raw("pre_tool_use", "--guard", "worktree", "--root", WT)
+        assert r.returncode == 2
+
+    def test_flag_value_named_stop_does_not_flip_write_guard_open(self) -> None:
+        """`--root stop` must not look like a Stop event to the fail-open path.
+
+        Scanning all of argv for "stop" turned a PreToolUse usage error from
+        fail-closed into fail-open.
+        """
+        r = self._raw("pre_tool_use", "--guard", "worktree", "--root", "stop")
+        assert r.returncode == 2

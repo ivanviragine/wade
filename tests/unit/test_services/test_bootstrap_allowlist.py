@@ -10,6 +10,7 @@ import pytest
 
 from wade.models.config import HooksConfig, PermissionsConfig, ProjectConfig, ProjectSettings
 from wade.services.implementation_service import bootstrap_worktree
+from wade.services.implementation_service.bootstrap import _GUARD_HOOK_TIMEOUT_SECONDS
 
 WADE_ALLOW_PATTERN = "Bash(wade *)"
 CURSOR_WADE_ALLOW_PATTERN = "Shell(wade *)"
@@ -259,13 +260,17 @@ class TestBootstrapPlanMode:
             "wade-hook" in c and "--guard plan" in c and "--tool claude" in c for c in commands
         )
 
-        # Every tool with a PreToolUse guard (incl. Codex — plan guard is finer
-        # than any sandbox) gets a config. Antigravity CLI is intentionally not
-        # given a PreToolUse guard (see _install_guard_hooks), so no .agents
-        # config is written here.
+        # Every tool in _hook_writers() gets a config — incl. Codex (the plan
+        # guard is finer-grained than any sandbox) and Antigravity CLI, which
+        # joined in crossby 0.13 once agy's native tool names landed in the
+        # matcher map.
         assert (worktree_path / ".cursor" / "hooks.json").is_file()
         assert (worktree_path / ".github" / "hooks" / "hooks.json").is_file()
         assert (worktree_path / ".codex" / "hooks.json").is_file()
+        agents = (worktree_path / ".agents" / "hooks.json").read_text("utf-8")
+        assert "wade-hook" in agents
+        assert "--guard plan" in agents
+        assert "--tool antigravity-cli" in agents
 
     def test_worktree_mode_installs_wade_hook_configs(self, tmp_path: Path) -> None:
         """Default (worktree) mode wires ``wade-hook --guard worktree`` for non-sandbox tools."""
@@ -296,15 +301,59 @@ class TestBootstrapPlanMode:
         with patch("subprocess.run"):
             bootstrap_worktree(worktree_path, self._config(), repo_root)
 
+        # crossby 0.13 writes Cursor's documented shape: {"version": 1, "hooks": {...}}.
         cursor = json.loads((worktree_path / ".cursor" / "hooks.json").read_text("utf-8"))
-        pre = cursor["preToolUse"]
+        hooks = cursor["hooks"]
+        pre = hooks["preToolUse"]
         assert pre and all(entry.get("failClosed") is True for entry in pre)
         # The Stop hook must NOT be fail-closed (it must never trap the agent).
-        for entry in cursor.get("stop", []):
+        for entry in hooks.get("stop", []):
             assert entry.get("failClosed") is not True
 
-    def test_worktree_guard_skipped_for_sandboxed_codex(self, tmp_path: Path) -> None:
-        """Codex hard-sandboxes writes, so the worktree guard is skipped (but plan guard is not)."""
+    def test_write_guard_carries_timeout_under_each_native_key(self, tmp_path: Path) -> None:
+        """Every writer emits the guard's timeout, under whichever key it spells it.
+
+        Companion to the fail-closed test above: ``HookEntry`` carries both
+        ``fail_closed`` and ``timeout``, and only the former was pinned. Without
+        the bound a hung hook stalls every write, and crossby renaming or
+        dropping the field would surface as a missing key rather than a failure.
+        """
+        # Pinned separately from the assertions below: those compare the emitted
+        # value against the constant, so they check serialization fidelity and
+        # would stay green if the constant itself were retuned. 10s is the
+        # agreed bound, so changing it should be a deliberate edit here.
+        assert _GUARD_HOOK_TIMEOUT_SECONDS == 10
+
+        worktree_path = tmp_path / "worktree"
+        worktree_path.mkdir()
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        with patch("subprocess.run"):
+            bootstrap_worktree(worktree_path, self._config(), repo_root)
+
+        cursor = json.loads((worktree_path / ".cursor" / "hooks.json").read_text("utf-8"))
+        cursor_pre = cursor["hooks"]["preToolUse"]
+        # `all()` is vacuously true on an empty list — require the guard first.
+        assert cursor_pre
+        assert all(e["timeout"] == _GUARD_HOOK_TIMEOUT_SECONDS for e in cursor_pre)
+
+        claude = json.loads((worktree_path / ".claude" / "settings.json").read_text("utf-8"))
+        claude_hook = claude["hooks"]["PreToolUse"][0]["hooks"][0]
+        assert claude_hook["timeout"] == _GUARD_HOOK_TIMEOUT_SECONDS
+
+        # Copilot is the odd one out: it spells the key `timeoutSec`.
+        copilot_path = worktree_path / ".github" / "hooks" / "hooks.json"
+        copilot = json.loads(copilot_path.read_text("utf-8"))
+        assert copilot["hooks"]["preToolUse"][0]["timeoutSec"] == _GUARD_HOOK_TIMEOUT_SECONDS
+
+    def test_worktree_guard_narrowed_to_shell_for_sandboxed_codex(self, tmp_path: Path) -> None:
+        """Codex's sandbox covers tool-call writes but not shell redirects to /tmp.
+
+        ``--sandbox workspace-write`` permits ``/tmp`` and ``$TMPDIR``, so a shell
+        redirect is sandbox-legal yet lands outside the worktree. The guard is
+        therefore narrowed to the shell matcher rather than skipped entirely.
+        """
         worktree_path = tmp_path / "worktree"
         worktree_path.mkdir()
         repo_root = tmp_path / "repo"
@@ -313,11 +362,17 @@ class TestBootstrapPlanMode:
         with patch("subprocess.run"):
             bootstrap_worktree(worktree_path, self._config(), repo_root)  # worktree mode
 
-        # Codex writes .codex/hooks.json for the Stop hook, but the worktree guard
-        # is skipped (native sandbox). Assert on Codex's own config, not Claude's.
-        codex_config = (worktree_path / ".codex" / "hooks.json").read_text("utf-8")
-        assert "--guard worktree" not in codex_config
-        assert "session-complete" in codex_config
+        codex = json.loads((worktree_path / ".codex" / "hooks.json").read_text("utf-8"))
+        pre_entries = codex["hooks"]["PreToolUse"]
+        assert pre_entries, "Codex must still receive a shell-scoped worktree guard"
+        # Scoped to the shell token only — the file-write half is the sandbox's job.
+        assert all(entry.get("matcher") == "Bash" for entry in pre_entries)
+        assert any(
+            "--guard worktree" in hook["command"]
+            for entry in pre_entries
+            for hook in entry["hooks"]
+        )
+        assert "session-complete" in (worktree_path / ".codex" / "hooks.json").read_text("utf-8")
 
     def test_codex_hooks_feature_flag_enabled(self, tmp_path: Path) -> None:
         """crossby's Codex writer enables [features].codex_hooks so hooks load."""

@@ -59,3 +59,44 @@ merges, then restores them (disable with `--no-stash`).
   ```bash
   git stash apply <stash-ref>   # ref shown in the error output
   ```
+
+  If the pop left conflict markers in a file it applied, resolve them in place —
+  the merge itself already succeeded, so there is nothing to `git commit --no-edit`.
+
+## `GitError` on merge with a clean `git status`
+
+The merge aborts with `Your local changes to the following files would be
+overwritten by merge: AGENTS.md`, yet `git status` and `git diff` show nothing.
+Bootstrap sets git's `--skip-worktree` bit on `AGENTS.md` so the injected
+`## Git Workflow` pointer never reads as dirty — that also hides the file from
+`status`/`diff` while git still refuses to merge over it. Confirm with
+`git ls-files -v AGENTS.md` (a leading `S`), then:
+
+```bash
+git update-index --no-skip-worktree AGENTS.md
+git diff AGENTS.md
+```
+
+**Stop there if that diff shows anything beyond the generated `wade:pointer`
+block.** The next command discards it permanently, and the skip-worktree bit
+means nobody will see what was lost. Real `AGENTS.md` edits need the
+pointer-preserving workflow instead — see the `AGENTS.md` / `--skip-worktree`
+entry in `KNOWLEDGE.md`.
+
+Only once the pointer block is the *entire* diff:
+
+```bash
+git checkout -- AGENTS.md
+```
+
+Re-run sync, then put the pointer and the bit back:
+
+```bash
+uv run python -c "from pathlib import Path; \
+  from wade.skills.pointer import ensure_pointer; ensure_pointer(Path('.'))"
+git update-index --skip-worktree AGENTS.md
+```
+
+**Never restore `AGENTS.md` from a copy taken before the merge** — main's own
+`AGENTS.md` changes arrive with that merge, and `--skip-worktree` would silently
+mask reverting them.
