@@ -18,7 +18,13 @@ from wade.config.loader import (
 )
 from wade.git import repo
 from wade.git.repo import GitError
-from wade.models.config import AI_COMMAND_NAMES, LEGACY_AI_COMMAND_ALIASES, ProjectConfig
+from wade.models.config import (
+    AI_COMMAND_NAMES,
+    LEGACY_AI_COMMAND_ALIASES,
+    AICommandConfig,
+    AIConfig,
+    ProjectConfig,
+)
 from wade.models.delegation import DelegationMode
 from wade.models.session import MergeStrategy
 from wade.providers import registered_provider_names
@@ -238,6 +244,21 @@ _VALID_MERGE_STRATEGIES = {s.value for s in MergeStrategy}
 # Valid complexity keys in the models section
 _VALID_COMPLEXITY_KEYS = {"easy", "medium", "complex", "very_complex"}
 
+# Valid keys for the AI config sections, derived from the Pydantic models so the
+# validator's allowlists can't drift from the schema (issue #368). Deriving
+# these — rather than hand-maintaining literal sets — means any field later
+# added to ``AICommandConfig`` / ``AIConfig`` is accepted automatically.
+_VALID_AI_COMMAND_KEYS = frozenset(AICommandConfig.model_fields)
+# Top-level ``ai`` scalar keys are AIConfig's fields minus the per-command
+# subsections, which are validated separately as their own sections.
+_VALID_AI_SCALAR_KEYS = frozenset(AIConfig.model_fields) - set(AI_COMMAND_NAMES)
+# Full accepted key set for the top-level ``ai`` section: scalar keys plus the
+# per-command subsections (canonical names + legacy aliases). Precomputed once
+# rather than rebuilt on every _validate_ai_section call.
+_VALID_AI_TOP_LEVEL_KEYS = frozenset(
+    {*_VALID_AI_SCALAR_KEYS, *AI_COMMAND_NAMES, *LEGACY_AI_COMMAND_ALIASES}
+)
+
 
 def validate_config(cwd: Path | None = None) -> ConfigCheckResult:
     """Validate the project's .wade.yml config.
@@ -449,23 +470,13 @@ def _validate_ai_section(ai: dict[str, Any], errors: list[str]) -> None:
             else:
                 _validate_ai_command_section(cmd, cmd_section, errors)
 
-    valid_keys = {
-        "default_tool",
-        "default_model",
-        "effort",
-        "yolo",
-        *AI_COMMAND_NAMES,
-        *LEGACY_AI_COMMAND_ALIASES,
-    }
     for key in ai:
-        if key not in valid_keys:
+        if key not in _VALID_AI_TOP_LEVEL_KEYS:
             errors.append(f"ai.{key}: unsupported key")
 
 
 def _validate_ai_command_section(cmd: str, cmd_section: dict[str, Any], errors: list[str]) -> None:
     """Validate one per-command AI config subsection."""
-    valid_keys = {"tool", "model", "mode", "effort", "enabled", "yolo", "timeout"}
-
     tool = cmd_section.get("tool")
     if tool is not None and str(tool) and str(tool) not in _VALID_AI_TOOLS:
         errors.append(_invalid_tool_message(f"ai.{cmd}.tool", str(tool)))
@@ -499,7 +510,7 @@ def _validate_ai_command_section(cmd: str, cmd_section: dict[str, Any], errors: 
         errors.append(f"ai.{cmd}.timeout: must be a positive integer")
 
     for key in cmd_section:
-        if key not in valid_keys:
+        if key not in _VALID_AI_COMMAND_KEYS:
             errors.append(f"ai.{cmd}.{key}: unsupported key")
 
 
