@@ -138,7 +138,8 @@ def remove_worktree(repo_root: Path, worktree_path: Path, force: bool = True) ->
     if force:
         args.append("--force")
     args.append(str(worktree_path))
-    _run_git(*args, cwd=repo_root)
+    # Retry transient worktree-lock contention from parallel sessions (C3).
+    _run_git_with_retry(*args, cwd=repo_root)
 
 
 def list_worktrees(repo_root: Path) -> list[dict[str, str]]:
@@ -192,4 +193,4 @@ def prune_worktrees(repo_root: Path) -> None:
         GitError: If the prune command fails.
     """
     log.info("worktree.prune")
-    _run_git("worktree", "prune", cwd=repo_root)
+    _run_git_with_retry("worktree", "prune", cwd=repo_root)

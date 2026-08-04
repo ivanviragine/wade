@@ -85,7 +85,8 @@ def delete_branch(
     """
     flag = "-D" if force else "-d"
     log.info("branch.delete", branch=branch_name, force=force)
-    _run_git("branch", flag, branch_name, cwd=repo_root)
+    # Retry transient ref-lock contention from parallel sessions (C3).
+    _run_git_with_retry("branch", flag, branch_name, cwd=repo_root)
 
 
 def create_scaffold_commit(

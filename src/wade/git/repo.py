@@ -56,8 +56,20 @@ def _run_git(
     return result
 
 
-_LOCK_PATTERNS = ("index.lock", "Unable to create", "lock on reference")
-"""Stderr substrings that indicate a transient git lock contention."""
+_LOCK_PATTERNS = (
+    "index.lock",
+    "Unable to create",
+    "lock on reference",
+    "cannot lock ref",
+    ".lock': File exists",
+    ".lock' failed",
+)
+"""Stderr substrings that indicate a transient git lock contention.
+
+Covers both the index lock (``index.lock``) and ref locks (``cannot lock ref``,
+``Unable to create '.../refs/....lock'``) that N parallel ``wade implement``
+sessions contend on during startup catchup (C3).
+"""
 
 
 def _run_git_with_retry(
@@ -71,27 +83,39 @@ def _run_git_with_retry(
 
     Uses exponential backoff: *base_delay*, *base_delay * 2*, *base_delay * 4*, etc.
     Only retries when stderr matches known lock-contention patterns; all other
-    errors are raised immediately.
+    errors are raised (check=True) or returned (check=False) immediately.
+
+    Works for both ``check=True`` callers (a lock raises ``GitError`` which is
+    caught and retried) and ``check=False`` callers such as ``merge``/``stash``
+    (a lock yields a non-zero result whose stderr is inspected and retried).
     """
     last_exc: GitError | None = None
     for attempt in range(retries):
         try:
-            return _run_git(*args, cwd=cwd, check=check)
+            result = _run_git(*args, cwd=cwd, check=check)
         except GitError as exc:
-            msg = str(exc)
-            if any(p in msg for p in _LOCK_PATTERNS):
+            if any(p in str(exc) for p in _LOCK_PATTERNS):
                 last_exc = exc
-                delay = base_delay * (2**attempt)
-                log.debug(
-                    "git.retry",
-                    attempt=attempt + 1,
-                    delay=delay,
-                    cmd=["git", *args],
-                )
-                time.sleep(delay)
+                _sleep_lock_backoff(attempt, base_delay, args)
                 continue
             raise
+        # check=False path: a lock surfaces as a non-zero result, not a raise.
+        if (
+            result.returncode != 0
+            and attempt < retries - 1
+            and any(p in result.stderr for p in _LOCK_PATTERNS)
+        ):
+            _sleep_lock_backoff(attempt, base_delay, args)
+            continue
+        return result
     raise last_exc  # type: ignore[misc]
+
+
+def _sleep_lock_backoff(attempt: int, base_delay: float, args: tuple[str, ...]) -> None:
+    """Sleep with exponential backoff between git lock-contention retries."""
+    delay = base_delay * (2**attempt)
+    log.debug("git.retry", attempt=attempt + 1, delay=delay, cmd=["git", *args])
+    time.sleep(delay)
 
 
 def is_git_repo(path: Path) -> bool:
@@ -402,7 +426,7 @@ def push_branch(
         args.extend(["-u", "origin", branch])
     else:
         args.extend(["origin", branch])
-    _run_git(*args, cwd=repo_root)
+    _run_git_with_retry(*args, cwd=repo_root)
 
 
 def checkout(repo_root: Path, branch: str) -> None:
@@ -549,13 +573,19 @@ def merge_no_edit(repo_root: Path, branch: str) -> None:
 
 
 def stash(repo_root: Path) -> subprocess.CompletedProcess[str]:
-    """Stash local changes. Returns CompletedProcess (no raise on failure)."""
-    return _run_git("stash", "--quiet", cwd=repo_root, check=False)
+    """Stash local changes. Returns CompletedProcess (no raise on failure).
+
+    Retries transient index-lock contention (C3).
+    """
+    return _run_git_with_retry("stash", "--quiet", cwd=repo_root, check=False)
 
 
 def stash_pop(repo_root: Path) -> subprocess.CompletedProcess[str]:
-    """Pop the top stash entry. Returns CompletedProcess (no raise on failure)."""
-    return _run_git("stash", "pop", "--quiet", cwd=repo_root, check=False)
+    """Pop the top stash entry. Returns CompletedProcess (no raise on failure).
+
+    Retries transient index-lock contention (C3).
+    """
+    return _run_git_with_retry("stash", "pop", "--quiet", cwd=repo_root, check=False)
 
 
 def upstream_tracking_status(repo_root: Path, branch: str) -> str | None:

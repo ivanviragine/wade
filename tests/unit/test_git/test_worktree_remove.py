@@ -13,12 +13,12 @@ def test_remove_worktree_default_uses_force(tmp_path: Path) -> None:
     repo_root.mkdir()
     worktree_path.mkdir()
 
-    with patch("wade.git.worktree._run_git") as mock_run_git:
+    with patch("wade.git.worktree._run_git_with_retry") as mock_run:
         remove_worktree(repo_root, worktree_path)
 
         # Verify _run_git was called with --force
-        mock_run_git.assert_called_once()
-        args = mock_run_git.call_args[0]
+        mock_run.assert_called_once()
+        args = mock_run.call_args[0]
         assert "worktree" in args
         assert "remove" in args
         assert "--force" in args
@@ -32,12 +32,12 @@ def test_remove_worktree_force_false_omits_flag(tmp_path: Path) -> None:
     repo_root.mkdir()
     worktree_path.mkdir()
 
-    with patch("wade.git.worktree._run_git") as mock_run_git:
+    with patch("wade.git.worktree._run_git_with_retry") as mock_run:
         remove_worktree(repo_root, worktree_path, force=False)
 
         # Verify _run_git was called without --force
-        mock_run_git.assert_called_once()
-        args = mock_run_git.call_args[0]
+        mock_run.assert_called_once()
+        args = mock_run.call_args[0]
         assert "worktree" in args
         assert "remove" in args
         assert "--force" not in args
@@ -51,12 +51,12 @@ def test_remove_worktree_force_true_explicit(tmp_path: Path) -> None:
     repo_root.mkdir()
     worktree_path.mkdir()
 
-    with patch("wade.git.worktree._run_git") as mock_run_git:
+    with patch("wade.git.worktree._run_git_with_retry") as mock_run:
         remove_worktree(repo_root, worktree_path, force=True)
 
         # Verify _run_git was called with --force
-        mock_run_git.assert_called_once()
-        args = mock_run_git.call_args[0]
+        mock_run.assert_called_once()
+        args = mock_run.call_args[0]
         assert "worktree" in args
         assert "remove" in args
         assert "--force" in args

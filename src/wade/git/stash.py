@@ -17,7 +17,7 @@ from pathlib import Path
 
 import structlog
 
-from wade.git.repo import GitError, _run_git
+from wade.git.repo import GitError, _run_git, _run_git_with_retry
 
 log = structlog.get_logger(__name__)
 
@@ -55,7 +55,8 @@ def create_named_stash(session_type: str, branch: str, cwd: Path) -> tuple[str, 
         GitError: If the stash command fails or nothing was stashed.
     """
     message = _stash_message(session_type, branch)
-    result = _run_git("stash", "push", "-m", message, cwd=cwd, check=False)
+    # Retry transient index-lock contention from parallel worktrees (C3).
+    result = _run_git_with_retry("stash", "push", "-m", message, cwd=cwd, check=False)
     if result.returncode != 0:
         raise GitError(f"git stash push failed: {result.stderr.strip()}")
     stdout = result.stdout.strip()

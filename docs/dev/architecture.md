@@ -71,10 +71,6 @@ src/wade/
 │   ├── batch.py         # BatchIssueContext, BatchReviewContext
 │   ├── deps.py          # DependencyEdge, DependencyGraph
 │   └── events.py        # Typed event models
-├── db/                  # SQLite via SQLModel
-│   ├── engine.py        # Engine creation, WAL mode
-│   ├── tables.py        # SQLModel table definitions
-│   └── repositories.py  # Repository classes
 ├── services/            # Business logic (orchestration)
 │   ├── task_service.py  # Task CRUD, plan parsing, labels
 │   ├── implementation_service.py  # Implementation session lifecycle
@@ -317,7 +313,6 @@ Runtime:
 - `typer>=0.12` — CLI framework
 - `pydantic>=2.0` — Data validation and settings
 - `pydantic-settings>=2.0` — Env var overrides
-- `sqlmodel>=0.0.16` — SQLite ORM (SQLAlchemy + Pydantic)
 - `pyyaml>=6.0` — YAML config parsing
 - `rich>=13.0` — Terminal UI (tables, prompts, panels)
 - `questionary>=2.0` — Interactive prompts (select, confirm, input)

@@ -9,7 +9,6 @@ from typing import Any
 
 import structlog
 from crossby.ai_tools import AbstractAITool
-from crossby.models.ai import AIToolID
 
 from wade.config.loader import load_config
 from wade.git import branch as git_branch
@@ -317,36 +316,25 @@ def _remove_stale(
 def _preserve_session_data(repo_root: Path, wt_path: Path) -> None:
     """Preserve AI tool session data before worktree removal.
 
-    Queries the DB for the AI tool used in this worktree; falls back to
-    directory-presence detection via ``session_data_dirs()``.  Calls the
-    adapter's ``preserve_session_data()``.  Any failure is logged but never
-    propagates — preservation must never block worktree deletion.
+    Detects the AI tool that ran in this worktree by directory presence
+    (``session_data_dirs()``) and calls the adapter's
+    ``preserve_session_data()``.  Any failure is logged but never propagates —
+    preservation must never block worktree deletion.
+
+    (C5b) The old SQLite ``SessionRepository.get_by_worktree_path`` lookup was
+    removed: nothing in wade ever wrote a session record, so it always returned
+    empty and the directory-presence detection below is the only real path.
     """
     try:
-        from wade.db.engine import get_or_create_engine
-        from wade.db.repositories import SessionRepository
-
-        engine = get_or_create_engine(repo_root)
-        session_repo = SessionRepository(engine)
-
-        sessions = session_repo.get_by_worktree_path(str(wt_path))
-
         adapter: AbstractAITool | None = None
-        if sessions:
-            latest = max(sessions, key=lambda s: s.started_at)
-            with contextlib.suppress(ValueError, KeyError):
-                adapter = AbstractAITool.get(AIToolID(latest.ai_tool))
-
-        # Fallback: detect via session_data_dirs
-        if adapter is None:
-            for tool_id in AbstractAITool.available_tools():
-                candidate = AbstractAITool.get(tool_id)
-                for dir_name in candidate.session_data_dirs():
-                    if (wt_path / dir_name).exists():
-                        adapter = candidate
-                        break
-                if adapter is not None:
+        for tool_id in AbstractAITool.available_tools():
+            candidate = AbstractAITool.get(tool_id)
+            for dir_name in candidate.session_data_dirs():
+                if (wt_path / dir_name).exists():
+                    adapter = candidate
                     break
+            if adapter is not None:
+                break
 
         if adapter is None:
             return

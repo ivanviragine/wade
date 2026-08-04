@@ -11,6 +11,7 @@ from wade.config.loader import load_config
 from wade.git import branch as git_branch
 from wade.git import pr as git_pr
 from wade.git import repo as git_repo
+from wade.git import sync as git_sync
 from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
 from wade.providers.registry import get_provider
@@ -35,6 +36,7 @@ from wade.services.implementation_service.lifecycle import (
 )
 from wade.services.implementation_service.usage_tracking import IMPL_USAGE_MARKER_START
 from wade.services.task_service import remove_in_progress_label
+from wade.ui import prompts
 from wade.ui.console import console
 from wade.utils.body_markers import build_marked_block, update_body_preserving_markers
 from wade.utils.markdown import remove_marker_block
@@ -231,6 +233,91 @@ def done(
     return True
 
 
+_NON_FAST_FORWARD_SIGNALS = (
+    "non-fast-forward",
+    "fetch first",
+    "updates were rejected",
+    "tip of your current branch is behind",
+    "rejected",
+)
+
+
+def _is_non_fast_forward(message: str) -> bool:
+    """Return True if a push error message indicates a non-fast-forward rejection."""
+    lowered = message.lower()
+    return any(sig in lowered for sig in _NON_FAST_FORWARD_SIGNALS)
+
+
+def _push_branch_with_recovery(
+    repo_root: Path,
+    branch: str,
+    worktree_path: Path | None,
+) -> bool:
+    """Push *branch*, recovering interactively from a non-fast-forward rejection.
+
+    On a non-FF rejection the remote branch has commits the local branch lacks.
+    We fetch, report the divergence, and — only behind an explicit confirm —
+    offer to merge the remote in and retry, or force-push with
+    ``--force-with-lease``. wade never force-pushes silently (C4).
+    """
+    try:
+        git_repo.push_branch(repo_root, branch, set_upstream=True)
+        console.success("Branch pushed.")
+        return True
+    except GitError as e:
+        if not _is_non_fast_forward(str(e)):
+            console.error(f"Push failed: {e}")
+            return False
+
+    console.warn(f"Push rejected — '{branch}' has diverged from its remote.")
+    with contextlib.suppress(GitError):
+        git_sync.fetch_origin(repo_root)
+
+    merge_cwd = worktree_path if worktree_path and worktree_path.is_dir() else repo_root
+    with contextlib.suppress(GitError):
+        behind = git_branch.commits_ahead(repo_root, f"origin/{branch}", branch)
+        ahead = git_branch.commits_ahead(repo_root, branch, f"origin/{branch}")
+        console.detail(f"Local is {ahead} commit(s) ahead, {behind} behind origin/{branch}.")
+
+    if not prompts.is_tty():
+        console.error(
+            "Remote branch has diverged. Resolve it manually "
+            f"(e.g. `git -C {merge_cwd} pull --no-rebase`), then re-run done."
+        )
+        return False
+
+    choice = prompts.select(
+        "The remote branch has diverged. How do you want to proceed?",
+        [
+            "Merge the remote in, then push (safe)",
+            "Force-push with --force-with-lease (overwrites remote history)",
+            "Cancel",
+        ],
+    )
+    if choice == 0:
+        try:
+            merge_result = git_sync.merge_branch(merge_cwd, f"origin/{branch}")
+            if not merge_result.success:
+                console.error("Merge conflicts with the remote branch — resolve them, then re-run.")
+                return False
+            git_repo.push_branch(repo_root, branch, set_upstream=True)
+            console.success("Merged the remote and pushed.")
+            return True
+        except GitError as e:
+            console.error(f"Could not merge and push: {e}")
+            return False
+    if choice == 1:
+        try:
+            git_repo.push_branch(repo_root, branch, set_upstream=True, force=True)
+            console.success("Force-pushed with lease.")
+            return True
+        except GitError as e:
+            console.error(f"Force push failed: {e}")
+            return False
+    console.info("Push cancelled — the branch was not updated on the remote.")
+    return False
+
+
 def _done_via_pr(
     repo_root: Path,
     branch: str,
@@ -259,13 +346,10 @@ def _done_via_pr(
         console.error(f"Cannot read issue #{issue_number}: {e}")
         return False
 
-    # Push branch
+    # Push branch (with non-fast-forward divergence recovery — never a silent
+    # force-push).
     console.step("Pushing branch...")
-    try:
-        git_repo.push_branch(repo_root, branch, set_upstream=True)
-        console.success("Branch pushed.")
-    except GitError as e:
-        console.error(f"Push failed: {e}")
+    if not _push_branch_with_recovery(repo_root, branch, worktree_path):
         return False
 
     # Check for existing PR (expected from plan or implement bootstrap).
