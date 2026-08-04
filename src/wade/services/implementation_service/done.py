@@ -163,14 +163,16 @@ def done(
         )
         return False
 
-    # Clean gate passed — now strip the worktree gitignore block and
-    # restore .gitignore visibility so downstream operations see the
-    # true state.
-    with contextlib.suppress(OSError):
-        git_repo.unskip_worktree_file(cwd, ".gitignore")
-    strip_worktree_gitignore(cwd)
+    # Clean gate passed. IMPORTANT (A3): keep the worktree gitignore block and
+    # its skip-worktree bit in place until the PR finalize actually succeeds. If
+    # we stripped now and a later step failed (tracked-managed gate, push, PR API
+    # error), a retry would see the un-hidden session artifacts (PLAN.md, .wade/)
+    # as a dirty tree and fail the clean gate — leaving `done` un-retryable. The
+    # strip is deferred to the very end, gated on success.
 
-    # Check for tracked wade-managed files that should never be committed
+    # Check for tracked wade-managed files that should never be committed. This
+    # inspects the git index (not .gitignore), so it is safe to run before the
+    # strip.
     tracked_managed = _check_tracked_managed_files(cwd)
     if tracked_managed:
         console.error("Wade-managed files are tracked in git — these must not be committed")
@@ -201,7 +203,7 @@ def done(
 
     console.rule(f"done #{issue_number}")
 
-    return _done_via_pr(
+    ok = _done_via_pr(
         repo_root=repo_root,
         branch=branch,
         issue_number=issue_number,
@@ -211,6 +213,18 @@ def done(
         config=config,
         worktree_path=wt_path,
     )
+    if not ok:
+        # Finalize failed — leave the worktree exactly as we found it (gitignore
+        # block + skip-worktree still in place) so the user can fix and re-run.
+        return False
+
+    # Success only: strip the worktree gitignore block and restore .gitignore
+    # visibility now that there is nothing left to retry.
+    with contextlib.suppress(OSError):
+        git_repo.unskip_worktree_file(cwd, ".gitignore")
+    strip_worktree_gitignore(cwd)
+
+    return True
 
 
 def _done_via_pr(

@@ -166,12 +166,17 @@ def remove(
     stale: bool = False,
     force: bool = False,
     project_root: Path | None = None,
+    discard_dirty: bool = False,
 ) -> bool:
     """Remove a worktree.
 
     Modes:
     - target: remove a specific worktree by issue number or name
     - stale: remove all stale (non-active) worktrees
+
+    ``force`` only skips the interactive confirmation; it never discards work.
+    ``discard_dirty`` is the separate opt-in that permits removing a worktree
+    with uncommitted changes or unmerged local commits (A2).
     """
     config = load_config(project_root)
     cwd = project_root or Path.cwd()
@@ -190,16 +195,25 @@ def remove(
             main_branch = "main"
 
     if stale:
-        return _remove_stale(repo_root, main_branch, force, get_provider(config))
+        return _remove_stale(
+            repo_root, main_branch, force, get_provider(config), discard_dirty=discard_dirty
+        )
 
     if target:
-        return _remove_target(repo_root, target, main_branch, force)
+        return _remove_target(repo_root, target, main_branch, force, discard_dirty=discard_dirty)
 
     console.error("Specify a target or use --stale")
     return False
 
 
-def _remove_target(repo_root: Path, target: str, main_branch: str, force: bool = False) -> bool:
+def _remove_target(
+    repo_root: Path,
+    target: str,
+    main_branch: str,
+    force: bool = False,
+    *,
+    discard_dirty: bool = False,
+) -> bool:
     """Remove a specific worktree by issue number or name."""
     wt_path = find_worktree_path(target, project_root=repo_root)
     if not wt_path:
@@ -209,7 +223,7 @@ def _remove_target(repo_root: Path, target: str, main_branch: str, force: bool =
     if not force and not prompts.confirm(f"Remove worktree {wt_path.name}?"):
         return False
 
-    return _cleanup_worktree(repo_root, wt_path, main_branch)
+    return _cleanup_worktree(repo_root, wt_path, main_branch, discard_dirty=discard_dirty)
 
 
 def _remove_stale(
@@ -217,6 +231,8 @@ def _remove_stale(
     main_branch: str,
     force: bool,
     provider: AbstractTaskProvider,
+    *,
+    discard_dirty: bool = False,
 ) -> bool:
     """Remove all stale worktrees."""
     worktrees = git_worktree.list_worktrees(repo_root)
@@ -286,7 +302,12 @@ def _remove_stale(
 
     removed = 0
     for wt in stale_wts:
-        if _cleanup_worktree(repo_root, Path(wt["path"]), main_branch):
+        # A2: even with --force (skip confirmation), _cleanup_worktree still
+        # refuses a worktree carrying uncommitted changes or unmerged local
+        # commits unless --discard-dirty was passed. STALE_REMOTE_GONE says
+        # nothing about local commits, so a remote-gone branch with unpushed
+        # work is preserved here, not silently nuked.
+        if _cleanup_worktree(repo_root, Path(wt["path"]), main_branch, discard_dirty=discard_dirty):
             removed += 1
 
     console.panel(f"  Removed {removed} stale worktree(s)", title="Stale cleanup")
@@ -339,8 +360,67 @@ def _preserve_session_data(repo_root: Path, wt_path: Path) -> None:
         )
 
 
-def _cleanup_worktree(repo_root: Path, wt_path: Path, main_branch: str) -> bool:
-    """Remove a single worktree and its branch."""
+def _worktree_loss_risk(
+    main_root: Path,
+    wt_path: Path,
+    branch_name: str | None,
+    main_branch: str,
+) -> list[str]:
+    """Return human-readable descriptions of work removing this worktree destroys.
+
+    An empty list means removal is safe: a clean working tree AND a branch that
+    is either empty (zero commits ahead of main) or fully merged into main.
+    A non-empty list names each hazard — uncommitted changes and/or unmerged
+    local commits — so the caller can refuse and tell the user exactly what
+    ``--discard-dirty`` would throw away (A2).
+    """
+    losses: list[str] = []
+
+    # 1. Uncommitted changes in the worktree's working directory.
+    if wt_path.is_dir():
+        try:
+            if not git_repo.is_clean(wt_path):
+                status = git_repo.get_dirty_status(wt_path)
+                losses.append(
+                    f"uncommitted changes ({status['staged']} staged, "
+                    f"{status['unstaged']} unstaged, {status['untracked']} untracked)"
+                )
+        except GitError:
+            losses.append("uncommitted changes (could not verify — treating as unsafe)")
+
+    # 2. Local commits not merged into main — would be lost by `git branch -D`.
+    if branch_name and branch_name != main_branch:
+        try:
+            ahead = git_branch.commits_ahead(main_root, branch_name, main_branch)
+        except GitError:
+            ahead = 0
+        if ahead > 0:
+            merged = False
+            try:
+                mb = git_repo.merge_base(main_root, branch_name, main_branch)
+                tip = git_repo.rev_parse(main_root, branch_name)
+                merged = mb == tip
+            except GitError:
+                merged = False
+            if not merged:
+                losses.append(f"{ahead} local commit(s) not merged into {main_branch}")
+
+    return losses
+
+
+def _cleanup_worktree(
+    repo_root: Path,
+    wt_path: Path,
+    main_branch: str,
+    *,
+    discard_dirty: bool = False,
+) -> bool:
+    """Remove a single worktree and its branch.
+
+    Refuses to remove a worktree with uncommitted changes or unmerged local
+    commits unless ``discard_dirty`` is set, naming exactly what would be lost
+    (A2). ``--force`` (skip confirmation) never implies ``discard_dirty``.
+    """
     console.step(f"Removing worktree: {wt_path}")
 
     # Worktree removal, branch deletion, and pruning must run against the main
@@ -355,6 +435,16 @@ def _cleanup_worktree(repo_root: Path, wt_path: Path, main_branch: str) -> bool:
             branch_name = wt.get("branch")
             break
 
+    # A2 loss guard — never silently discard a dirty worktree or force-delete a
+    # branch carrying unmerged commits.
+    losses = _worktree_loss_risk(main_root, wt_path, branch_name, main_branch)
+    if losses and not discard_dirty:
+        console.error(f"Refusing to remove {wt_path.name} — this would lose work:")
+        for loss in losses:
+            console.detail(loss)
+        console.hint("Push/commit the work, or re-run with --discard-dirty to discard it.")
+        return False
+
     _preserve_session_data(main_root, wt_path)
 
     try:
@@ -364,8 +454,16 @@ def _cleanup_worktree(repo_root: Path, wt_path: Path, main_branch: str) -> bool:
         return False
 
     if branch_name and branch_name != main_branch:
-        with contextlib.suppress(GitError):
-            git_branch.delete_branch(main_root, branch_name, force=True)
+        # Prefer `-d` (git refuses to delete an unmerged branch); escalate to
+        # `-D` only when discarding was explicitly requested, or when `-d`
+        # refuses a branch the loss guard already verified is safe (e.g. a
+        # fast-forward-merged branch that git won't delete because main_root's
+        # HEAD hasn't caught up).
+        try:
+            git_branch.delete_branch(main_root, branch_name, force=discard_dirty)
+        except GitError:
+            with contextlib.suppress(GitError):
+                git_branch.delete_branch(main_root, branch_name, force=True)
 
     with contextlib.suppress(GitError):
         git_worktree.prune_worktrees(main_root)

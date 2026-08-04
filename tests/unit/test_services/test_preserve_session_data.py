@@ -227,6 +227,14 @@ class TestCleanupWorktreeCallsPreservation:
             stack.enter_context(
                 patch("wade.services.implementation_service.cleanup.git_worktree.prune_worktrees")
             )
+            # A2 loss guard: treat the worktree as clean so removal is permitted
+            # (this test exercises DB-failure resilience, not the loss guard).
+            stack.enter_context(
+                patch(
+                    "wade.services.implementation_service.cleanup.git_repo.is_clean",
+                    return_value=True,
+                )
+            )
             stack.enter_context(patch("wade.services.implementation_service.cleanup.console"))
             stack.enter_context(patch("wade.services.implementation_service.cleanup.logger"))
 

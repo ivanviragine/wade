@@ -800,7 +800,7 @@ class TestSyncAutoStash:
         mock_bootstrap_repo.get_dirty_file_paths.return_value = dirty_paths
         mock_stash.detect_untracked_collisions.return_value = []
         mock_stash.create_named_stash.return_value = (stash_ref, "wade-autostash/test")
-        mock_stash.pop_stash.return_value = MagicMock(returncode=0)
+        mock_stash.apply_stash_by_sha.return_value = MagicMock(returncode=0)
         mock_branch.commits_ahead.return_value = behind
         if behind > 0:
             mock_sync_mod.merge_branch.return_value = SyncResult(
@@ -846,7 +846,7 @@ class TestSyncAutoStash:
 
         assert result.success
         mock_stash.create_named_stash.assert_called_once()
-        mock_stash.pop_stash.assert_called_once_with("stash@{0}", tmp_path)
+        mock_stash.apply_stash_by_sha.assert_called_once_with("stash@{0}", tmp_path)
         assert any(e.event == SyncEventType.AUTOSTASHED for e in result.events)
         assert any(e.event == SyncEventType.STASH_RESTORED for e in result.events)
 
@@ -1001,7 +1001,7 @@ class TestSyncAutoStash:
         mock_sync_mod.merge_branch.return_value = SyncResult(
             success=True, current_branch="feat/1-feature", main_branch="main", commits_merged=1
         )
-        mock_stash.pop_stash.return_value = MagicMock(returncode=1)
+        mock_stash.apply_stash_by_sha.return_value = MagicMock(returncode=1)
 
         result = sync(project_root=tmp_path)
 
@@ -1056,7 +1056,7 @@ class TestSyncAutoStash:
         # abort_on_conflict=True when stash_ref is set, so abort_merge is called
         mock_sync_mod.abort_merge.assert_called_once()
         # Stash should be restored after abort
-        mock_stash.pop_stash.assert_called_once_with("stash@{0}", tmp_path)
+        mock_stash.apply_stash_by_sha.assert_called_once_with("stash@{0}", tmp_path)
         assert any(e.event == SyncEventType.STASH_RESTORED for e in result.events)
 
     @patch("wade.services.implementation_service.sync.git_stash")
@@ -1171,7 +1171,7 @@ class TestCatchupAutoStash:
         mock_bootstrap_repo.get_dirty_file_paths.return_value = ["src/app.py"]
         mock_stash.detect_untracked_collisions.return_value = []
         mock_stash.create_named_stash.return_value = ("stash@{0}", "wade-autostash/test")
-        mock_stash.pop_stash.return_value = MagicMock(returncode=0)
+        mock_stash.apply_stash_by_sha.return_value = MagicMock(returncode=0)
         mock_branch.commits_ahead.return_value = 1
         mock_sync_mod.merge_branch.return_value = SyncResult(
             success=True, current_branch="feat/1-feature", main_branch="main", commits_merged=1
@@ -1181,7 +1181,7 @@ class TestCatchupAutoStash:
 
         assert result.success
         mock_stash.create_named_stash.assert_called_once()
-        mock_stash.pop_stash.assert_called_once()
+        mock_stash.apply_stash_by_sha.assert_called_once()
         assert any(e.event == SyncEventType.AUTOSTASHED for e in result.events)
         assert any(e.event == SyncEventType.STASH_RESTORED for e in result.events)
 
