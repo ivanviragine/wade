@@ -129,7 +129,7 @@ src/wade/
 
 ## AI Tool Layer (external: crossby)
 
-AI tool adapters, model/effort resolution primitives, the model registry, and per-tool config (allowlists, hooks, defaults) are **not** part of this repo. They live in the external [`crossby`](https://github.com/ivanviragine/crossby) package, pinned in `pyproject.toml` (`crossby>=0.13.0,<0.14.0`). This replaced wade's formerly-internal `ai_tools/` and parts of `config/` and `data/` (see `feat: replace internal AI tool layer with the crossby dependency (#215)`).
+AI tool adapters, model/effort resolution primitives, the model registry, and per-tool config (allowlists, hooks, defaults) are **not** part of this repo. They live in the external [`crossby`](https://github.com/ivanviragine/crossby) package, pinned in `pyproject.toml` (`crossby>=0.17.1,<0.18.0`). This replaced wade's formerly-internal `ai_tools/` and parts of `config/` and `data/` (see `feat: replace internal AI tool layer with the crossby dependency (#215)`).
 
 | What | Lives in crossby | Used from wade via |
 |------|-------------------|---------------------|
