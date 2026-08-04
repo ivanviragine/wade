@@ -7,6 +7,7 @@ from datetime import UTC
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from wade.git.pr import PRLookup, PRRef
 from wade.models.review import (
     PendingReviewer,
     PollOutcome,
@@ -46,7 +47,7 @@ def test_human_comments_settle_120s(
     tmp_path: Path,
 ) -> None:
     """Human reviewer comment found — should settle for 120s and return COMMENTS_FOUND."""
-    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
     thread = _make_thread()
     mock_status.return_value = PRReviewStatus(
         actionable_threads=[thread],
@@ -78,7 +79,7 @@ def test_bot_comments_settle_60s(
     tmp_path: Path,
 ) -> None:
     """Bot reviewer comment found — should settle for 60s and return COMMENTS_FOUND."""
-    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
     thread = _make_thread()
     mock_status.return_value = PRReviewStatus(
         actionable_threads=[thread],
@@ -110,7 +111,7 @@ def test_pr_merged_returns_pr_closed(
     tmp_path: Path,
 ) -> None:
     """PR merged externally — should return PR_CLOSED without checking status."""
-    mock_get_pr.return_value = {"number": 42, "state": "MERGED"}
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="MERGED"))
 
     result = poll_for_reviews(_provider(), tmp_path, 42, "feat/42-test")
 
@@ -129,7 +130,7 @@ def test_pr_closed_returns_pr_closed(
     tmp_path: Path,
 ) -> None:
     """PR closed externally — should return PR_CLOSED."""
-    mock_get_pr.return_value = {"number": 42, "state": "CLOSED"}
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="CLOSED"))
 
     result = poll_for_reviews(_provider(), tmp_path, 42, "feat/42-test")
 
@@ -147,7 +148,7 @@ def test_bot_in_progress_keeps_polling_then_finds_comments(
     tmp_path: Path,
 ) -> None:
     """Bot IN_PROGRESS should keep polling, then detect comments after bot finishes."""
-    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
     thread = _make_thread()
     mock_status.side_effect = [
         PRReviewStatus(bot_status=ReviewBotStatus.IN_PROGRESS),
@@ -184,7 +185,7 @@ def test_transient_fetch_failure_keeps_polling(
     tmp_path: Path,
 ) -> None:
     """Transient fetch failure should keep polling and eventually find comments."""
-    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
     thread = _make_thread()
     mock_status.side_effect = [
         PRReviewStatus(fetch_failed=True),
@@ -217,7 +218,7 @@ def test_keyboard_interrupt_returns_interrupted(
     tmp_path: Path,
 ) -> None:
     """KeyboardInterrupt during status check should be caught and return INTERRUPTED."""
-    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
     mock_status.side_effect = KeyboardInterrupt
 
     result = poll_for_reviews(_provider(), tmp_path, 42, "feat/42-test")
@@ -240,7 +241,7 @@ def test_quiet_timeout_after_old_commit(
     from datetime import datetime, timedelta
 
     old_commit_time = datetime.now(UTC) - timedelta(minutes=30)
-    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
     # Each call returns no comments, commit is old
     mock_status.return_value = PRReviewStatus(
         actionable_threads=[],
@@ -279,7 +280,7 @@ def test_fresh_commit_resets_quiet_timer(
     fresh_commit = datetime.now(UTC) - timedelta(seconds=30)
     old_commit = datetime.now(UTC) - timedelta(minutes=30)
 
-    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
     # First two calls: fresh commit → reset timer; third: old + elapsed → timeout
     mock_status.side_effect = [
         PRReviewStatus(bot_status=None, latest_commit_pushed_at=fresh_commit),
@@ -325,7 +326,7 @@ def test_outdated_threads_return_comments_found(
     tmp_path: Path,
 ) -> None:
     """Outdated-but-unresolved threads should be detected and return COMMENTS_FOUND."""
-    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
     outdated = _make_outdated_thread()
     mock_status.return_value = PRReviewStatus(
         actionable_threads=[],
@@ -359,7 +360,7 @@ def test_changes_requested_no_threads_returns_comments_found(
     """PR-level CHANGES_REQUESTED with no inline threads should return COMMENTS_FOUND."""
     from wade.models.review import PRReview, ReviewState
 
-    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
     mock_status.return_value = PRReviewStatus(
         actionable_threads=[],
         all_unresolved_threads=[],
@@ -391,7 +392,7 @@ def test_bot_completed_with_outdated_threads_returns_comments_found(
     tmp_path: Path,
 ) -> None:
     """Bot completed but outdated threads remain — COMMENTS_FOUND, not REVIEW_COMPLETE."""
-    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
     outdated = _make_outdated_thread()
     mock_status.return_value = PRReviewStatus(
         actionable_threads=[],
@@ -424,7 +425,7 @@ def test_bot_completed_with_changes_requested_returns_comments_found(
     """Bot completed + CHANGES_REQUESTED with no threads — should return COMMENTS_FOUND."""
     from wade.models.review import PRReview, ReviewState
 
-    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
     mock_status.return_value = PRReviewStatus(
         actionable_threads=[],
         all_unresolved_threads=[],
@@ -455,7 +456,7 @@ def test_bot_completed_no_signals_returns_review_complete(
     tmp_path: Path,
 ) -> None:
     """Bot completed with no threads and no changes_requested — REVIEW_COMPLETE."""
-    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
     mock_status.return_value = PRReviewStatus(
         actionable_threads=[],
         all_unresolved_threads=[],
@@ -489,7 +490,7 @@ def test_bot_completed_with_pending_reviewers_keeps_polling(
     from datetime import datetime, timedelta
 
     old_commit_time = datetime.now(UTC) - timedelta(minutes=30)
-    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
     mock_status.return_value = PRReviewStatus(
         actionable_threads=[],
         all_unresolved_threads=[],
@@ -528,7 +529,7 @@ def test_actionable_only_no_all_unresolved_threads(
     Polling must still detect the thread and return COMMENTS_FOUND, exercising
     the _effective_unresolved_threads fallback path.
     """
-    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
     thread = _make_thread()
     # Simulate a legacy provider that only populates actionable_threads
     mock_status.return_value = PRReviewStatus(
@@ -580,7 +581,7 @@ def test_settle_skip_when_comment_older_than_settle(
 ) -> None:
     """Newest comment age ≥ settle → COMMENTS_FOUND without any sleep."""
     mock_datetime.now.return_value = _FIXED_NOW
-    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
     thread = _thread_with_ts(age_seconds=300)  # 300 >> 120 (human_settle)
     mock_status.return_value = PRReviewStatus(
         all_unresolved_threads=[thread],
@@ -614,7 +615,7 @@ def test_settle_partial_when_comment_mid_age(
 ) -> None:
     """Newest comment age < 2*poll_interval → partial sleep of settle - age."""
     mock_datetime.now.return_value = _FIXED_NOW
-    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
     thread = _thread_with_ts(age_seconds=20)  # 20s old; human_settle=120 → sleep 100
     mock_status.return_value = PRReviewStatus(
         all_unresolved_threads=[thread],
@@ -648,7 +649,7 @@ def test_settle_full_for_paused_bot_with_old_comments(
 ) -> None:
     """PAUSED bot forces full settle even when comment age is in [2*poll, settle)."""
     mock_datetime.now.return_value = _FIXED_NOW
-    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
     thread = _thread_with_ts(age_seconds=70)  # 70 >= 2*30=60 → would skip, but PAUSED overrides
     mock_status.return_value = PRReviewStatus(
         all_unresolved_threads=[thread],
@@ -682,7 +683,7 @@ def test_nobody_coming_skip_no_pending_bot_none(
 ) -> None:
     """No pending reviewers + bot None + age in [2*poll, settle) → skip sleep."""
     mock_datetime.now.return_value = _FIXED_NOW
-    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
     thread = _thread_with_ts(age_seconds=70)  # 70 >= 2*30=60, 70 < 120
     mock_status.return_value = PRReviewStatus(
         all_unresolved_threads=[thread],
@@ -717,7 +718,7 @@ def test_nobody_coming_partial_when_comment_too_fresh(
 ) -> None:
     """No pending reviewers + bot None + age < 2*poll_interval → partial sleep."""
     mock_datetime.now.return_value = _FIXED_NOW
-    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
     thread = _thread_with_ts(age_seconds=10)  # 10 < 2*30=60 → escape hatch doesn't apply
     mock_status.return_value = PRReviewStatus(
         all_unresolved_threads=[thread],
@@ -754,7 +755,7 @@ def test_newest_timestamp_wins_across_thread_and_review(
     from wade.models.review import PRReview, ReviewState
 
     mock_datetime.now.return_value = _FIXED_NOW
-    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
     old_ts = _FIXED_NOW - dt.timedelta(seconds=80)
     new_ts = _FIXED_NOW - dt.timedelta(seconds=10)
     thread = ReviewThread(
@@ -799,7 +800,7 @@ def test_changes_requested_settle_driven_by_submitted_at(
     from wade.models.review import PRReview, ReviewState
 
     mock_datetime.now.return_value = _FIXED_NOW
-    mock_get_pr.return_value = {"number": 42, "state": "OPEN"}
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
     old_ts = _FIXED_NOW - dt.timedelta(seconds=300)  # 300 > 120 = human_settle
     review = PRReview(author="alice", state=ReviewState.CHANGES_REQUESTED, submitted_at=old_ts)
     mock_status.return_value = PRReviewStatus(

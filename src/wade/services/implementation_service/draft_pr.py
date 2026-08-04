@@ -92,22 +92,22 @@ def bootstrap_draft_pr(
         issue_title,
     )
 
-    # Check if PR already exists for this branch
-    existing_pr = git_pr.get_pr_for_branch(repo_root, branch_name)
-    if existing_pr:
+    # Reuse only an OPEN PR for this branch. A merged/closed PR must not be
+    # reused (its branch work is done); fall through and create a fresh one.
+    lookup = git_pr.get_pr_for_branch(repo_root, branch_name)
+    if lookup.is_open and lookup.pr is not None:
+        existing = lookup.pr
         # If a stacked base was requested but the existing PR targets main,
         # re-target it to the parent branch.
-        if base_branch:
-            pr_number = int(existing_pr["number"])
-            if not git_pr.update_pr_base(repo_root, pr_number, base_branch):
-                console.error(f"Failed to retarget existing PR #{pr_number} to {base_branch}.")
-                return None
+        if base_branch and not git_pr.update_pr_base(repo_root, existing.number, base_branch):
+            console.error(f"Failed to retarget PR #{existing.number} to {base_branch}.")
+            return None
         logger.info(
             "bootstrap_draft_pr.existing",
             branch=branch_name,
-            pr=existing_pr["number"],
+            pr=existing.number,
         )
-        return existing_pr
+        return {"number": existing.number, "url": existing.url}
 
     # Resolve the effective base for branch creation and PR target
     main_branch = config.project.main_branch or git_repo.detect_main_branch(repo_root)

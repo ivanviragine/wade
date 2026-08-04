@@ -11,6 +11,8 @@ from wade.git.branch import (
 )
 from wade.git.pr import (
     GhCliError,
+    PRLookup,
+    PRRef,
     create_pr,
     get_pr_for_branch,
     merge_pr,
@@ -27,6 +29,7 @@ from wade.git.repo import (
     is_git_repo,
     is_worktree,
     list_tracked_files,
+    main_checkout_root,
     skip_worktree_file,
     unskip_worktree_file,
 )
@@ -46,6 +49,8 @@ from wade.git.worktree import (
 __all__ = [
     "GhCliError",
     "GitError",
+    "PRLookup",
+    "PRRef",
     "abort_merge",
     "branch_exists",
     "commits_ahead",
@@ -67,6 +72,7 @@ __all__ = [
     "is_worktree",
     "list_tracked_files",
     "list_worktrees",
+    "main_checkout_root",
     "make_branch_name",
     "merge_branch",
     "merge_pr",

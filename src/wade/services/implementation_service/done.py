@@ -271,8 +271,23 @@ def _done_via_pr(
         console.error(f"Push failed: {e}")
         return False
 
-    # Check for existing PR (expected from plan or implement bootstrap)
-    existing_pr = git_pr.get_pr_for_branch(repo_root, branch)
+    # Check for existing PR (expected from plan or implement bootstrap).
+    # A lookup failure is transient — do NOT fall through to "create a new PR"
+    # (that would duplicate the draft); report and let the user retry. A merged
+    # or closed PR must not be body-updated / re-marked-ready as if it were open.
+    lookup = git_pr.get_pr_for_branch(repo_root, branch)
+    if lookup.lookup_failed:
+        console.error(f"Could not look up the PR for branch '{branch}' — try again shortly.")
+        return False
+    if lookup.is_merged:
+        console.error(f"PR #{lookup.number} is already merged — nothing to finalize.")
+        return False
+    if lookup.found and not lookup.is_open:
+        console.error(
+            f"PR #{lookup.number} is {lookup.state.lower()} — reopen it or start a new branch."
+        )
+        return False
+    existing_pr = lookup.pr if lookup.is_open else None
 
     # Resolve PR-SUMMARY.md from worktree root
     pr_summary_path: Path | None = None
@@ -284,10 +299,10 @@ def _done_via_pr(
         if worktree_path:
             console.detail(f"Expected: {worktree_path / 'PR-SUMMARY.md'}")
 
-    if existing_pr:
+    if existing_pr is not None:
         # Update existing PR: append summary
-        pr_number = int(existing_pr["number"])
-        pr_url = str(existing_pr.get("url", ""))
+        pr_number = existing_pr.number
+        pr_url = existing_pr.url
         console.step(f"Updating existing PR #{pr_number}...")
 
         # Read current PR body and append summary
@@ -336,7 +351,7 @@ def _done_via_pr(
         console.success("PR body updated with summary.")
 
         # Mark draft as ready — but only if the caller did not request a draft.
-        is_draft = existing_pr.get("isDraft", False)
+        is_draft = existing_pr.is_draft
         if is_draft and not draft:
             if git_pr.mark_pr_ready(repo_root, pr_number):
                 console.success("PR marked as ready for review.")

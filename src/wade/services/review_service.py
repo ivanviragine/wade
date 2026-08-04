@@ -126,12 +126,15 @@ def fetch_reviews(
     # fall back to reconstructed name for out-of-worktree or detached-HEAD callers.
     branch_name = _resolve_task_branch(config, task, repo_root)
 
-    pr_info = git_pr.get_pr_for_branch(repo_root, branch_name)
-    if not pr_info:
+    lookup = git_pr.get_pr_for_branch(repo_root, branch_name)
+    if lookup.lookup_failed:
+        console.error(f"Could not look up the PR for branch {branch_name} — try again shortly.")
+        return False
+    if not lookup.is_open or lookup.pr is None:
         console.error(f"No open PR found for branch {branch_name}")
         return False
 
-    pr_number = int(pr_info["number"])
+    pr_number = lookup.pr.number
 
     # Fetch comprehensive review status
     status = get_comprehensive_review_status(provider, pr_number)
@@ -263,11 +266,11 @@ def get_review_status(
     if not issue_number:
         return None
 
-    pr_info = git_pr.get_pr_for_branch(repo_root, branch)
-    if not pr_info:
+    lookup = git_pr.get_pr_for_branch(repo_root, branch)
+    if not lookup.is_open or lookup.pr is None:
         return None
 
-    pr_number = int(pr_info["number"])
+    pr_number = lookup.pr.number
 
     try:
         return provider.get_pr_review_status(pr_number)
@@ -348,13 +351,14 @@ def poll_for_reviews(
 
     try:
         while True:
-            pr_info = git_pr.get_pr_for_branch(repo_root, branch)
-            if not pr_info:
+            lookup = git_pr.get_pr_for_branch(repo_root, branch)
+            if not lookup.found:
                 console.info("PR is no longer open. Stopping poll.")
                 return PollOutcome.PR_CLOSED
-            pr_state = str(pr_info.get("state", "")).upper()
-            if pr_state in ("MERGED", "CLOSED"):
-                console.info(f"PR #{pr_number} was {pr_state.lower()} externally. Stopping poll.")
+            if lookup.is_closed_or_merged:
+                console.info(
+                    f"PR #{pr_number} was {lookup.state.lower()} externally. Stopping poll."
+                )
                 return PollOutcome.PR_CLOSED
 
             status = get_comprehensive_review_status(provider, pr_number)
@@ -556,16 +560,22 @@ def start(
     console.kv("Worktree", str(worktree_path))
 
     # 3. Find PR for the branch
-    pr_info = git_pr.get_pr_for_branch(repo_root, branch_name)
-    if not pr_info:
+    lookup = git_pr.get_pr_for_branch(repo_root, branch_name)
+    if lookup.lookup_failed:
+        console.error_with_fix(
+            f"Could not look up the PR for branch {branch_name}",
+            "Transient gh error — try again shortly",
+        )
+        return False
+    if not lookup.found or lookup.pr is None:
         console.error_with_fix(
             f"No open PR found for branch {branch_name}",
             "Run `wade implementation-session done` from the worktree to create a PR first",
         )
         return False
 
-    pr_number = int(pr_info["number"])
-    pr_state = str(pr_info.get("state", "")).upper()
+    pr_number = lookup.pr.number
+    pr_state = lookup.state.upper()
 
     if pr_state == "MERGED":
         console.error(f"PR #{pr_number} is already merged — nothing to address.")
@@ -1105,10 +1115,11 @@ def _capture_review_session_usage(
         usage.model_breakdown[0].model if usage and usage.model_breakdown else None
     )
 
-    # Update PR body with review usage stats
-    pr_info = git_pr.get_pr_for_branch(repo_root, branch)
-    if pr_info:
-        pr_number = int(pr_info["number"])
+    # Update PR body with review usage stats — only on an OPEN PR (a
+    # merged/closed PR is not ours to rewrite; a lookup failure is transient).
+    lookup = git_pr.get_pr_for_branch(repo_root, branch)
+    if lookup.is_open and lookup.pr is not None:
+        pr_number = lookup.pr.number
         try:
             current_body = git_pr.get_pr_body(repo_root, pr_number)
             if current_body is not None:

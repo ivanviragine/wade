@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from wade.git.pr import PRLookup, PRRef
 from wade.git.repo import GitError
 from wade.models.review import PollOutcome
 from wade.models.task import Task, TaskState
@@ -19,7 +20,10 @@ class TestSmartStartNoPR:
     """When no PR exists, smart_start falls through to implement."""
 
     @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
-    @patch("wade.services.smart_start.git_pr.get_pr_for_branch", return_value=None)
+    @patch(
+        "wade.services.smart_start.git_pr.get_pr_for_branch",
+        return_value=PRLookup(found=False),
+    )
     @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")
@@ -62,7 +66,7 @@ class TestSmartStartMergedPR:
     ) -> None:
         mock_repo_root.return_value = tmp_path
         mock_get_provider.return_value.read_task.return_value = _make_task()
-        mock_pr.return_value = {"number": 99, "state": "MERGED"}
+        mock_pr.return_value = PRLookup(found=True, pr=PRRef(number=99, state="MERGED"))
 
         result = smart_start("42", project_root=tmp_path)
 
@@ -98,7 +102,9 @@ class TestSmartStartOpenPR:
     ) -> None:
         mock_repo_root.return_value = tmp_path
         mock_get_provider.return_value.read_task.return_value = _make_task()
-        mock_pr.return_value = {"number": 99, "state": "OPEN", "isDraft": False}
+        mock_pr.return_value = PRLookup(
+            found=True, pr=PRRef(number=99, state="OPEN", isDraft=False)
+        )
 
         result = smart_start("42", project_root=tmp_path)
 
@@ -132,12 +138,15 @@ class TestSmartStartOpenPR:
         """Non-interactive smart-start should take the default action explicitly."""
         mock_repo_root.return_value = tmp_path
         mock_get_provider.return_value.read_task.return_value = _make_task()
-        mock_pr.return_value = {
-            "number": 99,
-            "state": "OPEN",
-            "isDraft": False,
-            "url": "https://example/pr/99",
-        }
+        mock_pr.return_value = PRLookup(
+            found=True,
+            pr=PRRef(
+                number=99,
+                state="OPEN",
+                isDraft=False,
+                url="https://example/pr/99",
+            ),
+        )
 
         result = smart_start("42", project_root=tmp_path)
 
@@ -169,7 +178,9 @@ class TestSmartStartOpenPR:
     ) -> None:
         mock_repo_root.return_value = tmp_path
         mock_get_provider.return_value.read_task.return_value = _make_task()
-        mock_pr.return_value = {"number": 99, "state": "OPEN", "isDraft": False}
+        mock_pr.return_value = PRLookup(
+            found=True, pr=PRRef(number=99, state="OPEN", isDraft=False)
+        )
 
         result = smart_start("42", project_root=tmp_path)
 
@@ -201,7 +212,9 @@ class TestSmartStartOpenPR:
         mock_repo_root.return_value = tmp_path
         provider = mock_get_provider.return_value
         provider.read_task.return_value = _make_task()
-        mock_pr.return_value = {"number": 99, "state": "OPEN", "isDraft": False}
+        mock_pr.return_value = PRLookup(
+            found=True, pr=PRRef(number=99, state="OPEN", isDraft=False)
+        )
 
         result = smart_start("42", project_root=tmp_path)
 
@@ -237,7 +250,7 @@ class TestSmartStartDraftPR:
         """Draft PR with no worktree shows 'Start implementation' and calls _run_implement_task."""
         mock_repo_root.return_value = tmp_path
         mock_get_provider.return_value.read_task.return_value = _make_task()
-        mock_pr.return_value = {"number": 99, "state": "OPEN", "isDraft": True}
+        mock_pr.return_value = PRLookup(found=True, pr=PRRef(number=99, state="OPEN", isDraft=True))
         mock_worktrees.return_value = []
 
         result = smart_start("42", project_root=tmp_path)
@@ -282,7 +295,7 @@ class TestSmartStartDraftPR:
         """Draft PR with worktree shows 'Continue working' and calls _run_implement_task."""
         mock_repo_root.return_value = tmp_path
         mock_get_provider.return_value.read_task.return_value = _make_task()
-        mock_pr.return_value = {"number": 99, "state": "OPEN", "isDraft": True}
+        mock_pr.return_value = PRLookup(found=True, pr=PRRef(number=99, state="OPEN", isDraft=True))
 
         result = smart_start("42", project_root=tmp_path)
 
@@ -321,7 +334,7 @@ class TestSmartStartDraftPR:
         """Draft PR never shows 'Review PR comments' or 'Merge PR' options."""
         mock_repo_root.return_value = tmp_path
         mock_get_provider.return_value.read_task.return_value = _make_task()
-        mock_pr.return_value = {"number": 99, "state": "OPEN", "isDraft": True}
+        mock_pr.return_value = PRLookup(found=True, pr=PRRef(number=99, state="OPEN", isDraft=True))
         mock_worktrees.return_value = []
 
         smart_start("42", project_root=tmp_path)
@@ -399,7 +412,10 @@ class TestSmartStartTrackingDetection:
         mock_implement.assert_not_called()
 
     @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
-    @patch("wade.services.smart_start.git_pr.get_pr_for_branch", return_value=None)
+    @patch(
+        "wade.services.smart_start.git_pr.get_pr_for_branch",
+        return_value=PRLookup(found=False),
+    )
     @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")
@@ -493,7 +509,10 @@ class TestSmartStartTrackingDetection:
         assert mock_batch.call_args.args[0].id == "173"
 
     @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
-    @patch("wade.services.smart_start.git_pr.get_pr_for_branch", return_value=None)
+    @patch(
+        "wade.services.smart_start.git_pr.get_pr_for_branch",
+        return_value=PRLookup(found=False),
+    )
     @patch(
         "wade.services.smart_start.git_branch.make_branch_name", return_value="feat/173-tracking"
     )
@@ -525,7 +544,10 @@ class TestSmartStartTrackingDetection:
         mock_implement.assert_called_once()
 
     @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
-    @patch("wade.services.smart_start.git_pr.get_pr_for_branch", return_value=None)
+    @patch(
+        "wade.services.smart_start.git_pr.get_pr_for_branch",
+        return_value=PRLookup(found=False),
+    )
     @patch(
         "wade.services.smart_start.git_branch.make_branch_name", return_value="feat/173-tracking"
     )
@@ -586,7 +608,10 @@ class TestSmartStartTrackingDetection:
         assert mock_batch.call_args.args[0].id == "173"
 
     @patch("wade.services.implementation_service.start")
-    @patch("wade.services.smart_start.git_pr.get_pr_for_branch", return_value=None)
+    @patch(
+        "wade.services.smart_start.git_pr.get_pr_for_branch",
+        return_value=PRLookup(found=False),
+    )
     @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")

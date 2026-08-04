@@ -154,6 +154,11 @@ def get_main_worktree_path(path: Path) -> Path | None:
 def get_repo_root(path: Path) -> Path:
     """Return the repository root (top-level working directory).
 
+    This is the toplevel of *wherever you are*: inside a linked worktree it
+    returns that worktree's root, NOT the main checkout. For operations that
+    must act on the main checkout (pulling main, deleting branches, pruning
+    worktrees, ``gh pr merge`` bookkeeping) use :func:`main_checkout_root`.
+
     Args:
         path: Any directory inside the repo.
 
@@ -165,6 +170,35 @@ def get_repo_root(path: Path) -> Path:
     """
     result = _run_git("rev-parse", "--show-toplevel", cwd=path)
     return Path(result.stdout.strip())
+
+
+def main_checkout_root(path: Path) -> Path:
+    """Return the root of the *main* checkout for the repo containing *path*.
+
+    Unlike :func:`get_repo_root` — which returns the toplevel of wherever you
+    are, so a linked worktree returns its own root — this always resolves the
+    main working tree. When *path* is inside a linked worktree this is the main
+    worktree's path; otherwise (already the main checkout, or a non-worktree
+    repo) it is *path* itself.
+
+    Main-checkout operations must route through this so "toplevel of wherever I
+    am" is never mistaken for "the main checkout": pulling main after a merge,
+    ``gh pr merge --delete-branch`` bookkeeping, branch deletion, and worktree
+    pruning all target the main checkout, and running them against a linked
+    worktree root corrupts state or fails outright.
+
+    Args:
+        path: A repo root (typically the value from :func:`get_repo_root`).
+
+    Returns:
+        Absolute path to the main checkout root.
+    """
+    main = get_main_worktree_path(path)
+    if main is not None:
+        return main
+    # Not a linked worktree (or detection failed) — *path* is already the main
+    # checkout root, so fall back to it directly (no extra git call needed).
+    return path
 
 
 def get_current_branch(path: Path) -> str:

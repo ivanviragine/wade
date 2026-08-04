@@ -32,6 +32,75 @@ class PRSummary(BaseModel):
     merged_at: str | None = Field(default=None, alias="mergedAt")
 
 
+class PRRef(BaseModel):
+    """Details of the PR associated with a branch (``gh pr view <branch>``)."""
+
+    model_config = {"populate_by_name": True}
+
+    number: int
+    url: str = ""
+    title: str = ""
+    state: str = ""
+    is_draft: bool = Field(default=False, alias="isDraft")
+
+
+class PRLookup(BaseModel):
+    """Result of looking up the PR for a branch.
+
+    Distinguishes the three realities that the old ``dict | None`` return type
+    conflated:
+
+    - ``found=False, lookup_failed=False`` — no PR exists for the branch.
+    - ``found=False, lookup_failed=True`` — the lookup itself failed (transient
+      ``gh`` error, bad auth, or unparseable output). Callers MUST NOT treat
+      this as "no PR" — retry or report the failure instead.
+    - ``found=True`` — a PR exists; ``pr`` holds its details and ``state`` its
+      ``OPEN`` / ``CLOSED`` / ``MERGED`` state.
+
+    Callers acting on an *open* PR must check :attr:`is_open` (or ``state``)
+    first — a merged or closed PR is ``found`` but not open.
+    """
+
+    found: bool = False
+    lookup_failed: bool = False
+    pr: PRRef | None = None
+
+    @property
+    def state(self) -> str:
+        """The PR's state (``OPEN`` / ``CLOSED`` / ``MERGED``), or ``""``."""
+        return self.pr.state if self.pr else ""
+
+    @property
+    def number(self) -> int | None:
+        """The PR number, or ``None`` when no PR was found."""
+        return self.pr.number if self.pr else None
+
+    @property
+    def url(self) -> str:
+        """The PR URL, or ``""`` when no PR was found."""
+        return self.pr.url if self.pr else ""
+
+    @property
+    def is_draft(self) -> bool:
+        """Whether the found PR is a draft."""
+        return bool(self.pr and self.pr.is_draft)
+
+    @property
+    def is_open(self) -> bool:
+        """Whether a PR exists and is in the OPEN state."""
+        return self.pr is not None and self.pr.state.upper() == "OPEN"
+
+    @property
+    def is_merged(self) -> bool:
+        """Whether a PR exists and has been MERGED."""
+        return self.pr is not None and self.pr.state.upper() == "MERGED"
+
+    @property
+    def is_closed_or_merged(self) -> bool:
+        """Whether a PR exists and is CLOSED or MERGED (not actionable as open)."""
+        return self.pr is not None and self.pr.state.upper() in ("CLOSED", "MERGED")
+
+
 def _run_gh(
     *args: str,
     cwd: Path,
@@ -221,16 +290,27 @@ def update_pr_body(repo_root: Path, pr_number: int, body: str) -> bool:
     return result.returncode == 0
 
 
-def get_pr_for_branch(repo_root: Path, branch: str) -> dict[str, str | int | bool] | None:
-    """Find an open PR for the given branch.
+# Substrings in ``gh`` stderr that mean "no PR exists for this branch" — a
+# normal, non-error result — as opposed to a transient/permanent lookup failure
+# (network error, bad auth, rate limit). ``gh pr view <branch>`` exits non-zero
+# in BOTH cases, so the message is the only signal that tells them apart.
+_NO_PR_SIGNALS = ("no pull requests found", "no open pull requests")
+
+
+def get_pr_for_branch(repo_root: Path, branch: str) -> PRLookup:
+    """Look up the PR associated with *branch*.
 
     Args:
         repo_root: Repository root directory.
         branch: Branch name to search for.
 
     Returns:
-        Dict with "number" (int), "url" (str), "title" (str),
-        "state" (str), and "isDraft" (bool) keys, or None if no PR exists.
+        A :class:`PRLookup` distinguishing three realities: no PR exists, the
+        lookup failed (transient/permanent ``gh`` error), or a PR exists with a
+        known ``OPEN`` / ``CLOSED`` / ``MERGED`` state. Callers must check
+        :attr:`PRLookup.is_open` before acting on a PR as if it were open, and
+        must handle :attr:`PRLookup.lookup_failed` separately from "no PR"
+        (retry / report — never assume the PR is absent).
     """
     result = _run_gh(
         "pr",
@@ -242,18 +322,23 @@ def get_pr_for_branch(repo_root: Path, branch: str) -> dict[str, str | int | boo
         check=False,
     )
     if result.returncode != 0:
-        return None
+        stderr = result.stderr.lower()
+        if any(sig in stderr for sig in _NO_PR_SIGNALS):
+            return PRLookup(found=False, lookup_failed=False)
+        # Non-zero exit without the "no PR" signal is a real lookup failure.
+        return PRLookup(found=False, lookup_failed=True)
     try:
         data = json.loads(result.stdout)
-        return {
-            "number": data["number"],
-            "url": data["url"],
-            "title": data.get("title", ""),
-            "state": data.get("state", ""),
-            "isDraft": data.get("isDraft", False),
-        }
-    except (json.JSONDecodeError, KeyError):
-        return None
+        pr = PRRef(
+            number=data["number"],
+            url=data.get("url", ""),
+            title=data.get("title", ""),
+            state=data.get("state", ""),
+            isDraft=data.get("isDraft", False),
+        )
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return PRLookup(found=False, lookup_failed=True)
+    return PRLookup(found=True, pr=pr)
 
 
 def list_prs(

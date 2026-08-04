@@ -146,10 +146,12 @@ def gather_batch_context(
             except GitError:
                 logger.debug("batch_review.fetch_failed", branch=branch_name, exc_info=True)
 
-        pr_info = git_pr.get_pr_for_branch(repo, branch_name)
-        pr_number = int(pr_info["number"]) if pr_info and "number" in pr_info else None
-        pr_url = str(pr_info["url"]) if pr_info and "url" in pr_info else None
-        status = str(pr_info.get("state", "")) if pr_info else ""
+        lookup = git_pr.get_pr_for_branch(repo, branch_name)
+        if lookup.lookup_failed:
+            logger.debug("batch_review.pr_lookup_failed", branch=branch_name)
+        pr_number = lookup.number
+        pr_url = lookup.url or None
+        status = lookup.state
 
         # Fetch PR base branch to detect chain structure
         pr_base_branch: str | None = None
@@ -318,12 +320,12 @@ def create_review_pr(
 
     body = "\n".join(body_parts)
 
-    existing = git_pr.get_pr_for_branch(repo_root, ctx.integration_branch)
-    if existing:
-        pr_number = int(existing["number"])
+    lookup = git_pr.get_pr_for_branch(repo_root, ctx.integration_branch)
+    if lookup.is_open and lookup.pr is not None:
+        pr_number = lookup.pr.number
         git_pr.update_pr_body(repo_root, pr_number, body)
         ctx.pr_number = pr_number
-        ctx.pr_url = str(existing["url"])
+        ctx.pr_url = lookup.pr.url
     else:
         pr_info = git_pr.create_pr(
             repo_root,

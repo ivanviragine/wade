@@ -173,23 +173,27 @@ def smart_start(
     )
 
     # Check for existing PR
-    pr_info = git_pr.get_pr_for_branch(repo_root, branch_name)
-    if not pr_info:
+    lookup = git_pr.get_pr_for_branch(repo_root, branch_name)
+    if lookup.lookup_failed:
+        # Transient gh failure — don't guess. Fall through to the normal
+        # implement flow rather than acting on an unknown PR state.
+        console.warn("Could not look up the PR for this branch — proceeding with implement.")
+        return ctx.run_implement()
+    if not lookup.found or lookup.pr is None:
         # No PR → normal implement flow
         return ctx.run_implement()
 
-    pr_number = pr_info.get("number") or pr_info.get("pr_number")
-    if not pr_number:
-        # Can't determine PR number — fall through to implement.
-        return ctx.run_implement()
-    pr_number_int = int(pr_number)
-    pr_state = str(pr_info.get("state", "")).upper()
-    pr_url_raw = pr_info.get("url")
-    pr_url = pr_url_raw.strip() if isinstance(pr_url_raw, str) else ""
+    pr_number_int = lookup.pr.number
+    pr_state = lookup.state.upper()
+    pr_url = lookup.pr.url.strip()
 
-    if pr_state == "MERGED":
+    if lookup.is_merged:
         console.info(f"PR #{pr_number_int} is already merged.")
         return True
+    if lookup.is_closed_or_merged:
+        # CLOSED (not merged) — not resumable; start a fresh implement flow.
+        console.info(f"PR #{pr_number_int} is closed — starting a fresh implementation.")
+        return ctx.run_implement()
 
     # cd_only: skip menu, just set up worktree and print path
     if cd_only:
@@ -203,7 +207,7 @@ def smart_start(
     console.kv("PR", f"#{pr_number_int} ({pr_state.lower()})")
 
     # Extract draft state and worktree presence
-    is_draft = pr_info.get("isDraft", False)
+    is_draft = lookup.pr.is_draft
     worktrees = git_worktree.list_worktrees(repo_root)
     has_worktree = any(wt.get("branch") == branch_name for wt in worktrees)
 

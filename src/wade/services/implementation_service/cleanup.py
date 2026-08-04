@@ -343,28 +343,32 @@ def _cleanup_worktree(repo_root: Path, wt_path: Path, main_branch: str) -> bool:
     """Remove a single worktree and its branch."""
     console.step(f"Removing worktree: {wt_path}")
 
+    # Worktree removal, branch deletion, and pruning must run against the main
+    # checkout — not a linked worktree root — or git refuses / corrupts state.
+    main_root = git_repo.main_checkout_root(repo_root)
+
     # Find the branch name for this worktree
-    worktrees = git_worktree.list_worktrees(repo_root)
+    worktrees = git_worktree.list_worktrees(main_root)
     branch_name: str | None = None
     for wt in worktrees:
         if wt.get("path") == str(wt_path):
             branch_name = wt.get("branch")
             break
 
-    _preserve_session_data(repo_root, wt_path)
+    _preserve_session_data(main_root, wt_path)
 
     try:
-        git_worktree.remove_worktree(repo_root, wt_path)
+        git_worktree.remove_worktree(main_root, wt_path)
     except GitError as e:
         console.warn(f"Worktree removal failed: {e}")
         return False
 
     if branch_name and branch_name != main_branch:
         with contextlib.suppress(GitError):
-            git_branch.delete_branch(repo_root, branch_name, force=True)
+            git_branch.delete_branch(main_root, branch_name, force=True)
 
     with contextlib.suppress(GitError):
-        git_worktree.prune_worktrees(repo_root)
+        git_worktree.prune_worktrees(main_root)
 
     console.success(f"Removed {wt_path.name}")
     return True

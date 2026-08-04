@@ -150,10 +150,11 @@ def _capture_post_session_usage(
         usage.model_breakdown[0].model if usage and usage.model_breakdown else None
     )
 
-    # Update PR body with usage stats and session ID
-    pr_info = git_pr.get_pr_for_branch(repo_root, branch)
-    if pr_info:
-        pr_number = int(pr_info["number"])
+    # Update PR body with usage stats and session ID — only on an OPEN PR
+    # (a merged/closed PR is not ours to rewrite; a lookup failure is transient).
+    lookup = git_pr.get_pr_for_branch(repo_root, branch)
+    if lookup.is_open and lookup.pr is not None:
+        pr_number = lookup.pr.number
         try:
             current_body = git_pr.get_pr_body(repo_root, pr_number)
             if current_body is not None:
@@ -175,6 +176,8 @@ def _capture_post_session_usage(
                     )
         except Exception:
             logger.debug("implementation.pr_body_read_failed", exc_info=True)
+    elif lookup.lookup_failed:
+        logger.debug("implementation.pr_lookup_failed", branch=branch)
     else:
         logger.debug("implementation.no_pr_for_branch", branch=branch)
 
@@ -301,15 +304,18 @@ def start(
 
         # Check for existing draft PR (from plan flow) before AI selection so that
         # "Plan first" can short-circuit without ever showing the AI confirmation menu.
-        existing_pr = git_pr.get_pr_for_branch(repo_root, branch_name)
+        # Only an OPEN PR is resumable — a merged/closed PR must not be treated as a
+        # live draft (that would extract a stale plan and skip fresh bootstrap).
+        pr_lookup = git_pr.get_pr_for_branch(repo_root, branch_name)
+        existing_pr = pr_lookup.pr if pr_lookup.is_open else None
         plan_content: str | None = None
         proceed_needs_bootstrap = False
 
         has_plan = False
-        if existing_pr:
-            console.info(f"Found existing PR #{existing_pr['number']} for this task")
+        if existing_pr is not None:
+            console.info(f"Found existing PR #{existing_pr.number} for this task")
             # Extract plan content from PR body
-            pr_body = git_pr.get_pr_body(repo_root, int(existing_pr["number"]))
+            pr_body = git_pr.get_pr_body(repo_root, existing_pr.number)
             if pr_body:
                 plan_content = extract_plan_from_pr_body(pr_body)
                 if plan_content:
@@ -423,7 +429,7 @@ def start(
         if existing_wt:
             worktree_path = existing_wt
             console.info(f"Reusing existing worktree: {worktree_path}")
-        elif existing_pr:
+        elif existing_pr is not None:
             # Draft PR exists → branch already exists remotely, check it out
             try:
                 # Ensure local branch tracks remote
