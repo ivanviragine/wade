@@ -15,10 +15,12 @@ Detection strategy: parse each service module and flag two literal shapes:
    ``cmd = ["git", ...]``-then-execute pattern. An absolute path to the binary
    (``["/usr/bin/git", ...]``) is matched by basename.
 2. A string command argument to a process call (``subprocess.run`` / ``Popen`` /
-   ``call`` / ``check_output`` / ``check_call`` / ``os.system``) whose first
-   shell token resolves to git — the shape of
-   ``subprocess.run("git status", shell=True)`` or a call using an absolute path
-   to the executable.
+   ``call`` / ``check_output`` / ``check_call`` / ``getoutput`` /
+   ``getstatusoutput`` / ``os.system`` / ``os.popen``) whose first shell token
+   resolves to git — the shape of ``subprocess.run("git status", shell=True)``,
+   ``subprocess.getoutput("git status")``, a quoted form such as
+   ``run("'git' status", shell=True)``, or a call using an absolute path to the
+   executable.
 
 String constants are only inspected when they are the command argument of a
 process call, so example text in docstrings and log messages is never flagged.
@@ -27,6 +29,7 @@ process call, so example text in docstrings and log messages is never flagged.
 from __future__ import annotations
 
 import ast
+import shlex
 from pathlib import Path, PurePosixPath
 
 import wade.services
@@ -35,20 +38,42 @@ _SERVICES_DIR = Path(wade.services.__file__).parent
 _SRC_ROOT = _SERVICES_DIR.parent.parent  # .../src, so paths render as wade/...
 
 # Callables that spawn a subprocess; we inspect their command (first positional
-# or ``args=``) argument for a git invocation expressed as a string.
-_PROCESS_CALLS = frozenset({"run", "Popen", "call", "check_call", "check_output", "system"})
+# or ``args=``) argument for a git invocation expressed as a string. Includes the
+# shell-string helpers (``getoutput`` / ``getstatusoutput`` / ``os.popen``) so a
+# direct ``subprocess.getoutput("git status")`` cannot slip past the guard.
+_PROCESS_CALLS = frozenset(
+    {
+        "run",
+        "Popen",
+        "call",
+        "check_call",
+        "check_output",
+        "system",
+        "getoutput",
+        "getstatusoutput",
+        "popen",
+    }
+)
 
 
 def _looks_like_git_executable(value: object) -> bool:
     """True if ``value`` is a git shell command or a path to the git binary.
 
     Handles bare ``"git"``, ``"git status --porcelain"``, and absolute/relative
-    paths to the executable (``"/usr/bin/git"``) via basename comparison. Tokens
-    like ``"github"`` or ``"gitignore"`` are not git and are left alone.
+    paths to the executable (``"/usr/bin/git"``) via basename comparison. Uses
+    shell-aware tokenization so quoted forms — ``"'git' status"`` or
+    ``'"/usr/bin/git" log'`` — resolve to their unquoted first token instead of
+    being read literally (``"'git'"`` never equals ``"git"``). Tokens like
+    ``"github"`` or ``"gitignore"`` are not git and are left alone.
     """
     if not isinstance(value, str):
         return False
-    tokens = value.strip().split()
+    try:
+        tokens = shlex.split(value)
+    except ValueError:
+        # Unbalanced quotes etc. — fall back to naive splitting rather than
+        # letting an unparsable string silently evade the guard.
+        tokens = value.strip().split()
     if not tokens:
         return False
     return PurePosixPath(tokens[0]).name == "git"
@@ -118,12 +143,14 @@ def test_git_argv_detection_catches_string_and_path_forms() -> None:
     """
     source = '''\
 """A module docstring mentioning git status must never be flagged."""
+import os
 import subprocess
 
 
 def allowed() -> None:
     subprocess.run(["gh", "pr", "view"])
     subprocess.run("gh pr view", shell=True)
+    subprocess.getoutput("gh pr view")
 
 
 def offenders() -> None:
@@ -132,8 +159,16 @@ def offenders() -> None:
     subprocess.run("git status", shell=True)
     subprocess.run(["/usr/bin/git", "status"])
     subprocess.Popen("/usr/bin/git log", shell=True)
+    subprocess.getoutput("git status")
+    subprocess.getstatusoutput("git rev-parse HEAD")
+    os.popen("git status")
+    subprocess.run("'git' status", shell=True)
+    subprocess.Popen('"/usr/bin/git" log', shell=True)
 '''
     tree = ast.parse(source)
     hits = _git_argv_literal_lines(tree)
-    # Five offending git call sites; the docstring and gh calls are not flagged.
-    assert len(hits) == 5
+    # Ten offending git call sites — argv lists/tuples, bare and absolute-path
+    # shell strings, the getoutput/getstatusoutput/os.popen string helpers, and
+    # quoted forms. The docstring and the gh calls (including gh via getoutput)
+    # are not flagged.
+    assert len(hits) == 10
