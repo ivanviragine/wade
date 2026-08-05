@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.39.0] — 2026-08-05
+
+### Features
+
+- offer only tool-valid reasoning-effort levels in wade init (#371) (cb6458a)
+
 ## [v0.38.1] — 2026-08-04
 
 ### Bug Fixes
