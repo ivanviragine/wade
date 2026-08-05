@@ -327,3 +327,9 @@ tests/e2e/mock_gh_script.py _handle_pr "view" must print a "no pull requests fou
 crossby 0.17.1+ adds AIToolCapabilities.supported_efforts: tuple[EffortLevel, ...], defaulting to the FULL 5-tuple for every tool; only antigravity-cli restricts it to (low, medium, high). wade's four effort-PROMPT sites (prompts_ai._prompt_ai_section/_prompt_model_mapping, prompts_setup._ask_effort_and_permission_mode, ai_resolution._prompt_effort_selection) now offer only these via ai_resolution.valid_effort_levels(tool); autocomplete.py (tool-agnostic completion) and check_service.py (config validation) legitimately still use the full EffortLevel enum. Test gotcha: AbstractAITool.get is patched on the SHARED class (a patch in any test module affects it everywhere), and a bare MagicMock caps makes list(caps.supported_efforts) == [] (MagicMock.__iter__ yields empty) — collapsing offered levels to none, so capability mocks MUST set supported_efforts explicitly (None falls back to all five).
 
 ---
+
+## c164ea0c | 2026-08-05 | implementation | tags: testing, crossby, gotcha | Issue #359
+
+tests/unit/test_services/test_bootstrap_allowlist.py::TestBootstrapPlanMode::test_cursor_write_guard_is_fail_closed fails with KeyError: "preToolUse" in the current dev venv (crossby 0.12.x) — the installed crossby cursor-hooks writer emits a .cursor/hooks.json shape without a top-level "preToolUse" key, while the test expects one. This is unrelated to wade-side changes: it fails identically on a clean base checkout (verified via git stash). Before assuming your change caused a bootstrap/allowlist test failure, re-run it against the stashed base; the fix belongs in crossby (or a pin bump), not wade.
+
+---
