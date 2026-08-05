@@ -309,3 +309,21 @@ wade config-key validity is declared in THREE independent places that can drift:
 git stash push reports 'could not write index' (NOT 'Unable to create index.lock') when the shared $GIT_COMMON_DIR index lock is held by another worktree/process — unlike 'git add' which says 'Unable to create .git/index.lock: File exists'. Any lock-contention retry matcher (git/repo.py _LOCK_PATTERNS) must include 'could not write index' or autostash (git stash push via _run_git_with_retry) silently fails to retry on real contention. Verified in the #357 concurrency lane by pre-creating .git/index.lock.
 
 ---
+
+## 5b61c9c6 | 2026-08-04 | implementation | tags: config, validation, gotcha | Issue #368
+
+wade config-key validity lives in three places that can drift: the Pydantic models (src/wade/models/config.py AICommandConfig/AIConfig), the loader (config/loader.py _validated_* helpers), and the standalone validator (services/check_service.py). As of issue #368 the validator AI-section allowlists are DERIVED from the models — _VALID_AI_COMMAND_KEYS = frozenset(AICommandConfig.model_fields) and _VALID_AI_SCALAR_KEYS = AIConfig.model_fields minus AI_COMMAND_NAMES — so any new ai or ai.<cmd> field is accepted automatically (guarded by the *_stay_in_sync_with_model tests in test_check.py). The other sections (project/provider/hooks/knowledge/permissions) still hand-maintain literal valid_keys sets that can silently drift from their models.
+
+---
+
+## f0acd93a | 2026-08-04 | implementation | tags: testing, e2e, gh | Issue #357
+
+tests/e2e/mock_gh_script.py _handle_pr "view" must print a "no pull requests found for branch" stderr (not exit 1 silently) when a branch has no PR — get_pr_for_branch (git/pr.py) keys on _NO_PR_SIGNALS to tell a genuine "no PR" (lookup_failed=False) from a transient failure (lookup_failed=True). A silent non-zero exit is classified as lookup_failed=True, which the #357 lookup_failed guards in core.py/draft_pr.py/review_service.py/batch_review_service.py treat as an abort — silently masked before those guards existed, so it surfaces as ~18 e2e contract failures (implement/plan/review/smart_start) the moment any lookup_failed handling is added.
+
+---
+
+## b545203e | 2026-08-04 | implementation | tags: crossby, ai-tools, effort, testing | Issue #370
+
+crossby 0.17.1+ adds AIToolCapabilities.supported_efforts: tuple[EffortLevel, ...], defaulting to the FULL 5-tuple for every tool; only antigravity-cli restricts it to (low, medium, high). wade's four effort-PROMPT sites (prompts_ai._prompt_ai_section/_prompt_model_mapping, prompts_setup._ask_effort_and_permission_mode, ai_resolution._prompt_effort_selection) now offer only these via ai_resolution.valid_effort_levels(tool); autocomplete.py (tool-agnostic completion) and check_service.py (config validation) legitimately still use the full EffortLevel enum. Test gotcha: AbstractAITool.get is patched on the SHARED class (a patch in any test module affects it everywhere), and a bare MagicMock caps makes list(caps.supported_efforts) == [] (MagicMock.__iter__ yields empty) — collapsing offered levels to none, so capability mocks MUST set supported_efforts explicitly (None falls back to all five).
+
+---

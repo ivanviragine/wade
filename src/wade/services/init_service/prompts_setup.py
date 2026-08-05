@@ -15,6 +15,7 @@ from crossby.ai_tools import AbstractAITool
 
 from wade.git import repo
 from wade.models.config import ComplexityModelMapping, ProjectSettings
+from wade.services.ai_resolution import valid_effort_levels
 from wade.services.init_service.auth import (
     _check_gh_auth,
     _save_token_to_env,
@@ -482,9 +483,10 @@ def _prompt_command_overrides(
         current_cmd = current.get(cmd_name, {})
 
         if caps.supports_effort:
-            from crossby.models.ai import EffortLevel
-
-            effort_choices = ["Skip (inherit defaults)", *[e.value for e in EffortLevel]]
+            effort_choices = [
+                "Skip (inherit defaults)",
+                *[e.value for e in valid_effort_levels(effective_tool)],
+            ]
             current_effort = current_cmd.get("effort")
             effort_default_idx = 0
             if current_effort and current_effort in effort_choices:
