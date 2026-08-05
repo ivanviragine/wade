@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.39.1] — 2026-08-05
+
+### Bug Fixes
+
+- allow shell reads outside the worktree, block only writes (#373) (d9dc842)
+
 ## [v0.39.0] — 2026-08-05
 
 ### Features
