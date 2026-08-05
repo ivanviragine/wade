@@ -229,10 +229,16 @@ def review_implementation(
         repo_root = git_repo.get_repo_root(Path.cwd())
         diff_content = git_repo.diff_worktree(repo_root, staged=staged).strip()
     except GitError as exc:
-        console.error(f"git diff failed: {exc}")
+        # ``GitError`` already names the exact command that failed (e.g.
+        # "git diff ... failed (exit N): ..." or "git rev-parse ... failed"),
+        # so surface it directly rather than hard-coding "git diff failed",
+        # which would mis-attribute a repo-root failure and double-prefix a
+        # diff failure.
+        message = f"Could not read changes to review: {exc}"
+        console.error(message)
         return DelegationResult(
             success=False,
-            feedback=f"git diff failed: {exc}",
+            feedback=message,
             mode=DelegationMode.PROMPT,
             exit_code=1,
         )
