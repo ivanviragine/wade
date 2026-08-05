@@ -287,7 +287,7 @@ Description body here. Sub-headings, code blocks, anything markdown.
 
 ## Agent Skills
 
-`wade init` installs Skills that teach your AI agent the workflow — issue format, planning rules, implementation session rules, and dependency analysis. Skills, the `AGENTS.md` workflow pointer, and any tool-specific configuration are set up automatically for every supported tool. Nothing to configure manually.
+wade installs Skills that teach your AI agent the workflow — issue format, planning rules, implementation session rules, and dependency analysis. Skills, the `AGENTS.md` workflow pointer, and any tool-specific configuration are set up automatically for every session (when you run `wade plan`/`wade implement`/`wade review`, or a standalone `wade task deps`), for every supported tool. Nothing to configure manually.
 
 | Skill | Purpose |
 |-------|---------|

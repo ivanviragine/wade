@@ -123,9 +123,18 @@ src/wade/
     └── install.py       # Self-upgrade helpers (venv/source detection, re-exec)
 ```
 
+> **The `db/` package is unused scaffolding** — deliberately omitted from the
+> tree above. No code path under `services/` or `cli/` writes
+> session/worktree/PR rows, so its sole reader
+> (`implementation_service/cleanup._preserve_session_data`, a single
+> `SessionRepository.get_by_worktree_path` call) always gets an empty result and
+> falls back to directory-presence detection. Real persisted state lives in
+> GitHub (PR/issue body markers, labels) and worktree files, not SQLite. The
+> `db/` code still exists but is inert; removal is tracked as **#357 C5**.
+
 ## AI Tool Layer (external: crossby)
 
-AI tool adapters, model/effort resolution primitives, the model registry, and per-tool config (allowlists, hooks, defaults) are **not** part of this repo. They live in the external [`crossby`](https://github.com/ivanviragine/crossby) package, pinned in `pyproject.toml` (`crossby>=0.17.1,<0.18.0`). This replaced wade's formerly-internal `ai_tools/` and parts of `config/` and `data/` (see `feat: replace internal AI tool layer with the crossby dependency (#215)`).
+AI tool adapters, model/effort resolution primitives, the model registry, and per-tool config (allowlists, hooks, defaults) are **not** part of this repo. They live in the external [`crossby`](https://github.com/ivanviragine/crossby) package. The exact version range is pinned in `pyproject.toml` (the `crossby` dependency entry) — that pin is the single source of truth; this doc intentionally does not restate the range so the two cannot drift. This replaced wade's formerly-internal `ai_tools/` and parts of `config/` and `data/` (see `feat: replace internal AI tool layer with the crossby dependency (#215)`).
 
 | What | Lives in crossby | Used from wade via |
 |------|-------------------|---------------------|
@@ -313,18 +322,29 @@ knowledge:
 
 ## Update Flow
 
-`wade update` performs 11 steps:
+`wade update` performs 12 steps (see the `update()` docstring in
+`init_service/commands.py`):
 
-1. Self-upgrade if source version differs (see below)
-2. Validate repo + config existence
-3. Read old version from manifest
-4. Show version transition message
-5. Run config migration pipeline
-6. Reload config + backfill probed models
-7. Refresh skill files
-8. Configure AI tool allowlists (Claude via `claude_allowlist.py`, Cursor via `cursor_allowlist.py`)
-9. Refresh .gitignore + AGENTS.md pointer
-10. Rebuild manifest with version
+1.  Self-upgrade check (runs before project validation; see below)
+2.  Validate repo + config existence
+3.  Read old version from manifest
+4.  Show version transition message
+5.  Run config migration pipeline
+6.  Reload config + backfill probed models
+7.  Warn about removed AI tools still referenced in config
+8.  **Migrate** — remove old skill files from main (skills now live in worktrees only)
+9.  **Migrate** — remove the stale committed `.gitignore` block, if present
+10. Make `.wade/` self-ignoring (idempotent)
+11. **Migrate** — remove AI-tool + leftover Gemini artifacts from the main checkout
+12. Rebuild manifest with version (no skills on main)
+
+Steps 8, 9, and 11 are one-way **migrations that *remove*** artifacts from main —
+earlier wade versions committed skills, a `.gitignore` block, and AI-tool files
+there; those now live only in per-session worktrees (installed by worktree
+bootstrap — see `docs/dev/skills-system.md`). `wade update` does **not** install
+or refresh skills, allowlists, or the `AGENTS.md` pointer; that is bootstrap's job,
+run per session by `wade implement`/`wade plan`/`wade review` (and by a standalone
+`wade task deps`).
 
 **Self-upgrade mechanism**: `utils/install.py:detect_install_method()` inspects `sys.executable` to determine how wade was installed (`uv-tool`, `pipx`, `brew`, or `editable`). On `wade update`, `self_upgrade()` runs the appropriate package manager command (e.g. `uv tool upgrade wade`), then `re_exec()` replaces the current process via `os.execv()` so the new code is loaded. Editable installs skip this naturally. Pass `--skip-self-upgrade` to bypass.
 
@@ -377,7 +397,7 @@ When adding new functionality, ask: "Can an AI agent get this wrong by reasoning
 
 This is why `wade implementation-session sync` exists as a CLI command rather than instructions for agents to run raw git commands — the sequence (preflight -> fetch -> merge -> conflict detection -> event emission) is deterministic and must not vary between agent sessions.
 
-When wade installs skills into a target project (`wade init`), the skills reference `wade <command>` — they do **not** bundle standalone copies of the logic. The wade CLI is the single source of truth for deterministic operations.
+When wade installs skills into a target project (per session, via worktree bootstrap), the skills reference `wade <command>` — they do **not** bundle standalone copies of the logic. The wade CLI is the single source of truth for deterministic operations.
 
 ## CLI Flag Reference
 

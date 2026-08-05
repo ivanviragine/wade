@@ -58,6 +58,11 @@
   down: 0
   stale: 0
   up: 6
+4f9e5c6c:
+  down: 0
+  stale: 0
+  superseded_by: 6f3be049
+  up: 1
 54326c98:
   down: 1
   stale: 1
@@ -107,7 +112,7 @@ ae5df2be:
 b2fd3ce3:
   down: 0
   stale: 0
-  up: 1
+  up: 2
 b545203e:
   down: 0
   stale: 0
