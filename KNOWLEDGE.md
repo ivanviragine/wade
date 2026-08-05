@@ -327,3 +327,21 @@ tests/e2e/mock_gh_script.py _handle_pr "view" must print a "no pull requests fou
 crossby 0.17.1+ adds AIToolCapabilities.supported_efforts: tuple[EffortLevel, ...], defaulting to the FULL 5-tuple for every tool; only antigravity-cli restricts it to (low, medium, high). wade's four effort-PROMPT sites (prompts_ai._prompt_ai_section/_prompt_model_mapping, prompts_setup._ask_effort_and_permission_mode, ai_resolution._prompt_effort_selection) now offer only these via ai_resolution.valid_effort_levels(tool); autocomplete.py (tool-agnostic completion) and check_service.py (config validation) legitimately still use the full EffortLevel enum. Test gotcha: AbstractAITool.get is patched on the SHARED class (a patch in any test module affects it everywhere), and a bare MagicMock caps makes list(caps.supported_efforts) == [] (MagicMock.__iter__ yields empty) — collapsing offered levels to none, so capability mocks MUST set supported_efforts explicitly (None falls back to all five).
 
 ---
+
+## c164ea0c | 2026-08-05 | implementation | tags: testing, crossby, gotcha | Issue #359
+
+tests/unit/test_services/test_bootstrap_allowlist.py::TestBootstrapPlanMode::test_cursor_write_guard_is_fail_closed fails with KeyError: "preToolUse" in the current dev venv (crossby 0.12.x) — the installed crossby cursor-hooks writer emits a .cursor/hooks.json shape without a top-level "preToolUse" key, while the test expects one. This is unrelated to wade-side changes: it fails identically on a clean base checkout (verified via git stash). Before assuming your change caused a bootstrap/allowlist test failure, re-run it against the stashed base; the fix belongs in crossby (or a pin bump), not wade.
+
+---
+
+## 4f9e5c6c | 2026-08-05 | plan | tags: hooks, worktree-safety, gotcha
+
+shell_containment's generic path-arg containment (rule 4 in src/wade/hooks/policies.py) checks BOTH reads and writes, which incidentally MASKS that the write enumerations are incomplete: _PLAN_WRITE_COMMANDS lacks mkdir and _GIT_WRITE_SUBCOMMANDS lacks clone/init/worktree, and spaced 'git -C <outside> <write-subcmd>' has no dedicated handling. Any change that stops containing reads (to allow reading siblings like ../crossby) MUST first complete those write enumerations and buffer 'git -C' (deny only when a write subcommand follows in the same segment) or they become silent write-escapes — 'git worktree add /outside' is the worst, a literal worktree escape. 'find <root> -delete/-exec' stays a documented gap because find's positional arg is normally a read root, so blanket-listing find would re-block legitimate reads.
+
+---
+
+## 6f3be049 | 2026-08-05 | implementation | tags: hooks, worktree-safety, gotcha | Issue #372
+
+shell_containment (src/wade/hooks/policies.py) now ALLOWS reads outside the worktree and contains only writes: a read command's path operand is skipped entirely; only output redirects, cd/pushd targets, and operands of _PLAN_WRITE_COMMANDS (incl. mkdir) / _GIT_WRITE_SUBCOMMANDS (incl. clone/init/worktree) / in-place editors are checked. Two shapes a tokenizer can't classify positionally get special handling: in-place editors (sed -i) set is_write_command in BOTH modes (was plan-only), and spaced 'git -C DIR' is buffered and denied only when a git write subcommand follows in the same segment (git -C SIBLING log stays allowed). Accepted residual write-escapes, documented NOT fixed: WRAPPED writers (sudo rm, env cp, xargs rm — the wrapper becomes command_name, hiding the real writer), UNENUMERATED writers (zip, git bundle create, git format-patch -o), spaced output flags (curl -o OUTSIDE), tar -C / unzip -d / make -C, and find -delete/-exec — only enumerated writers (_PLAN_WRITE_COMMANDS / _GIT_WRITE_SUBCOMMANDS / in-place editors) and the GLUED flag forms (-oOUTSIDE, git -COUTSIDE via _embedded_path) stay contained. The guard is best-effort defense-in-depth, NOT a security boundary (python -c / eval / $(...) also escape).
+
+---
