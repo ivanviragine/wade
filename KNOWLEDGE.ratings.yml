@@ -9,11 +9,11 @@
 129ab9bd:
   down: 0
   stale: 0
-  up: 1
+  up: 2
 '13459084':
   down: 0
   stale: 0
-  up: 1
+  up: 3
 164c355e:
   down: 0
   stale: 0
@@ -70,6 +70,10 @@
   down: 0
   stale: 0
   up: 1
+801e1af0:
+  down: 0
+  stale: 0
+  up: 1
 8ee8260b:
   down: 0
   stale: 0
@@ -82,7 +86,7 @@
 9b40e000:
   down: 0
   stale: 0
-  up: 3
+  up: 4
 9f5e5e2c:
   down: 0
   stale: 0
@@ -95,6 +99,10 @@ a24d65b0:
   down: 0
   stale: 0
   superseded_by: c71d1a70
+  up: 1
+ae5df2be:
+  down: 0
+  stale: 0
   up: 1
 b61e247e:
   down: 0
@@ -109,11 +117,16 @@ b6a3a637:
 b6ca74e5:
   down: 0
   stale: 0
-  up: 3
+  up: 4
 bcfa4bb3:
   down: 0
   stale: 0
   up: 2
+ca245d6a:
+  down: 0
+  stale: 0
+  superseded_by: 5b61c9c6
+  up: 1
 cae0f47a:
   down: 0
   stale: 0
