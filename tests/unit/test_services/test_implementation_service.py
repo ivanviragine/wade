@@ -30,6 +30,7 @@ from wade.services.implementation_service import (
     _BATCH_STATUS_IN_PROGRESS,
     _BATCH_STATUS_MERGED,
     _BATCH_STATUS_NOT_STARTED,
+    _BATCH_STATUS_UNKNOWN,
     ImplementResult,
     _build_graph_from_issues,
     _build_implementation_issue_context_header,
@@ -38,10 +39,13 @@ from wade.services.implementation_service import (
     _classify_issue_status,
     _effective_copy_files,
     _find_tracking_issue,
+    _get_remote_branches,
+    _is_merged_to_main,
     _parse_overwrite_paths,
     _post_implementation_lifecycle_direct,
     _post_implementation_lifecycle_pr,
     _pull_main_after_merge,
+    _query_branches,
     _resolve_task_target,
     _resolve_worktrees_dir,
     batch,
@@ -1118,6 +1122,94 @@ class TestClassifyIssueStatus:
             result = _classify_issue_status("1", {}, set(), "main", tmp_path)
         assert result == _BATCH_STATUS_DONE
 
+    def test_branch_query_failed_is_unknown(self, tmp_path: Path) -> None:
+        """A failed branch query (branch_set=None) must not report NOT_STARTED."""
+        result = _classify_issue_status("1", {}, None, "main", tmp_path)
+        assert result == _BATCH_STATUS_UNKNOWN
+
+    def test_pr_classification_ignores_none_branch_set(self, tmp_path: Path) -> None:
+        """When a PR exists, a failed branch query is irrelevant to the status."""
+        pr_by_issue = {"1": _make_pr(mergedAt="2024-01-01", state="MERGED")}
+        result = _classify_issue_status("1", pr_by_issue, None, "main", tmp_path)
+        assert result == _BATCH_STATUS_MERGED
+
+
+class TestBranchQueryHelpers:
+    """Tests for _get_remote_branches() and _query_branches()."""
+
+    def test_get_remote_branches_delegates_to_git_layer(self, tmp_path: Path) -> None:
+        with patch(
+            "wade.services.implementation_service.batch.git_branch.list_branch_names",
+            return_value={"main", "origin/feat/1-x"},
+        ) as mock_list:
+            result = _get_remote_branches(tmp_path)
+        assert result == {"main", "origin/feat/1-x"}
+        mock_list.assert_called_once_with(tmp_path)
+
+    def test_get_remote_branches_propagates_git_error(self, tmp_path: Path) -> None:
+        with (
+            patch(
+                "wade.services.implementation_service.batch.git_branch.list_branch_names",
+                side_effect=GitError("boom"),
+            ),
+            pytest.raises(GitError),
+        ):
+            _get_remote_branches(tmp_path)
+
+    def test_query_branches_returns_fresh_on_success(self, tmp_path: Path) -> None:
+        with patch(
+            "wade.services.implementation_service.batch._get_remote_branches",
+            return_value={"main"},
+        ):
+            result = _query_branches(tmp_path, previous={"stale"})
+        assert result == {"main"}
+
+    def test_query_branches_keeps_previous_on_error(self, tmp_path: Path) -> None:
+        with patch(
+            "wade.services.implementation_service.batch._get_remote_branches",
+            side_effect=GitError("lock"),
+        ):
+            result = _query_branches(tmp_path, previous={"main"})
+        assert result == {"main"}
+
+    def test_query_branches_returns_none_on_first_cycle_error(self, tmp_path: Path) -> None:
+        """First cycle has no prior snapshot — a failure stays None, not empty set."""
+        with patch(
+            "wade.services.implementation_service.batch._get_remote_branches",
+            side_effect=GitError("lock"),
+        ):
+            result = _query_branches(tmp_path, previous=None)
+        assert result is None
+
+
+class TestIsMergedToMain:
+    """Tests for _is_merged_to_main() routed through the git layer."""
+
+    def test_matches_issue_number_in_log(self, tmp_path: Path) -> None:
+        with patch(
+            "wade.services.implementation_service.batch.git_repo.log_oneline",
+            return_value="abc123 Merge feat/1-add-auth\n",
+        ) as mock_log:
+            result = _is_merged_to_main(tmp_path, "1", "main")
+        assert result is True
+        mock_log.assert_called_once_with(tmp_path, "origin/main", limit=100)
+
+    def test_no_match_returns_false(self, tmp_path: Path) -> None:
+        with patch(
+            "wade.services.implementation_service.batch.git_repo.log_oneline",
+            return_value="abc123 Merge feat/99-other\n",
+        ):
+            result = _is_merged_to_main(tmp_path, "1", "main")
+        assert result is False
+
+    def test_empty_log_returns_false(self, tmp_path: Path) -> None:
+        with patch(
+            "wade.services.implementation_service.batch.git_repo.log_oneline",
+            return_value="",
+        ):
+            result = _is_merged_to_main(tmp_path, "1", "main")
+        assert result is False
+
 
 class TestBuildPrIndex:
     """Tests for _build_pr_index()."""
@@ -1225,6 +1317,31 @@ class TestPollBatchCompletion:
                 timeout=1,
             )
         mock_review.assert_called_once_with("100", project_root=tmp_path)
+
+    def test_branch_query_error_does_not_crash_or_complete(self, tmp_path: Path) -> None:
+        """A failed branch query is handled (unknown), never crashes, and does not
+
+        auto-trigger the coherence review (the issue is not counted as done).
+        """
+        with (
+            patch("wade.services.implementation_service.batch._build_pr_index", return_value={}),
+            patch(
+                "wade.services.implementation_service.batch._get_remote_branches",
+                side_effect=GitError("could not write index"),
+            ),
+            patch("wade.services.implementation_service.batch.git_sync.fetch_origin"),
+            patch("wade.services.implementation_service.batch.time.sleep"),
+            patch("wade.services.batch_review_service.review_batch") as mock_review,
+        ):
+            poll_batch_completion(
+                issue_numbers=["1"],
+                repo_root=tmp_path,
+                config=ProjectConfig(),
+                tracking_id="100",
+                poll_interval=0,
+                timeout=1,
+            )
+        mock_review.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

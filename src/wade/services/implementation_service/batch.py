@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import contextlib
 import re
-import subprocess
 import time
 from pathlib import Path
 
@@ -46,6 +45,7 @@ __all__ = [
     "_BATCH_STATUS_IN_PROGRESS",
     "_BATCH_STATUS_MERGED",
     "_BATCH_STATUS_NOT_STARTED",
+    "_BATCH_STATUS_UNKNOWN",
     "_POLL_INTERVAL_SECONDS",
     "_POLL_TIMEOUT_SECONDS",
     "_build_graph_from_issues",
@@ -54,6 +54,7 @@ __all__ = [
     "_find_tracking_issue",
     "_get_remote_branches",
     "_is_merged_to_main",
+    "_query_branches",
     "batch",
     "check_tracking_issue_and_batch",
     "poll_batch_completion",
@@ -290,6 +291,7 @@ _BATCH_STATUS_NOT_STARTED = "not_started"
 _BATCH_STATUS_IN_PROGRESS = "in_progress"
 _BATCH_STATUS_DONE = "done"
 _BATCH_STATUS_MERGED = "merged"
+_BATCH_STATUS_UNKNOWN = "unknown"
 
 _POLL_INTERVAL_SECONDS = 30
 _POLL_TIMEOUT_SECONDS = 4 * 60 * 60  # 4 hours
@@ -301,28 +303,24 @@ def _is_merged_to_main(repo_root: Path, issue_num: str, main_branch: str) -> boo
     Searches recent merge commits on ``origin/<main_branch>`` for the typical
     branch-name pattern (e.g. "feat/227-..." or "fix/227-...").
     """
-    try:
-        result = subprocess.run(
-            ["git", "log", f"origin/{main_branch}", "--oneline", "-100"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        pattern = rf"/0*{re.escape(issue_num)}(?:[^0-9]|$)"
-        return bool(re.search(pattern, result.stdout))
-    except FileNotFoundError:
-        return False
+    log_output = git_repo.log_oneline(repo_root, f"origin/{main_branch}", limit=100)
+    pattern = rf"/0*{re.escape(issue_num)}(?:[^0-9]|$)"
+    return bool(re.search(pattern, log_output))
 
 
 def _classify_issue_status(
     issue_num: str,
     pr_by_issue: dict[str, git_pr.PRSummary],
-    branch_set: set[str],
+    branch_set: set[str] | None,
     main_branch: str,
     repo_root: Path,
 ) -> str:
     """Classify the status of a single issue in a batch.
+
+    ``branch_set`` is the set of known branch names, or ``None`` when the branch
+    query failed this cycle. For an issue with no (usable) PR we need the branch
+    list to decide; if it is unavailable we return ``_BATCH_STATUS_UNKNOWN``
+    rather than falsely reporting ``_BATCH_STATUS_NOT_STARTED``.
 
     Returns one of the _BATCH_STATUS_* constants.
     """
@@ -337,7 +335,11 @@ def _classify_issue_status(
             return _BATCH_STATUS_DONE
         # CLOSED without merged_at — PR was abandoned; fall through to branch check
 
-    # No PR (or abandoned PR) — check if branch exists
+    # No PR (or abandoned PR) — branch existence decides. If the branch query
+    # failed we cannot tell "no branch" from "query failed", so report unknown.
+    if branch_set is None:
+        return _BATCH_STATUS_UNKNOWN
+
     pattern = rf"/0*{re.escape(issue_num)}(?:-|$)"
     matching_branches = [b for b in branch_set if re.search(pattern, b)]
     if matching_branches:
@@ -376,24 +378,32 @@ def _build_pr_index(
 
 
 def _get_remote_branches(repo_root: Path) -> set[str]:
-    """Get the set of remote and local branch names."""
-    branches: set[str] = set()
-    for args in (
-        ["git", "branch", "-r", "--format=%(refname:short)"],
-        ["git", "branch", "--format=%(refname:short)"],
-    ):
-        try:
-            result = subprocess.run(
-                args,
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            branches.update(line.strip() for line in result.stdout.splitlines() if line.strip())
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            pass
-    return branches
+    """Get the set of remote and local branch names.
+
+    Delegates to the git layer (``git_branch.list_branch_names``), which retries
+    on lock contention and raises ``GitError`` on failure. The failure is
+    propagated — not swallowed into an empty set — so ``poll_batch_completion``
+    can distinguish "no branches" from "the query failed".
+
+    Raises:
+        GitError: If the branch listing fails.
+    """
+    return git_branch.list_branch_names(repo_root)
+
+
+def _query_branches(repo_root: Path, *, previous: set[str] | None) -> set[str] | None:
+    """Query branch names, falling back to the last good snapshot on failure.
+
+    Returns the freshly queried branch set on success. On a git failure it keeps
+    ``previous`` (which may be ``None`` on the first cycle, meaning "still
+    unknown") so a transient lock/query error does not misclassify issues as
+    "not started".
+    """
+    try:
+        return _get_remote_branches(repo_root)
+    except GitError:
+        logger.warning("batch.branch_query_failed", exc_info=True)
+        return previous
 
 
 def poll_batch_completion(
@@ -424,7 +434,10 @@ def poll_batch_completion(
     interrupted = False
     elapsed = 0
     pr_index: dict[str, git_pr.PRSummary] = {}
-    branch_set: set[str] = set()
+    # None means "no successful branch query yet" — distinct from an empty set
+    # (a repo with genuinely no branches). Kept across cycles so a transient
+    # failure falls back to the last good snapshot instead of misclassifying.
+    branch_set: set[str] | None = None
 
     try:
         while elapsed < timeout:
@@ -433,7 +446,7 @@ def poll_batch_completion(
                 git_sync.fetch_origin(repo_root)
 
             pr_index = _build_pr_index(repo_root, issue_numbers)
-            branch_set = _get_remote_branches(repo_root)
+            branch_set = _query_branches(repo_root, previous=branch_set)
 
             statuses: dict[str, str] = {}
             for num in issue_numbers:
@@ -446,11 +459,13 @@ def poll_batch_completion(
             )
             in_progress = sum(1 for s in statuses.values() if s == _BATCH_STATUS_IN_PROGRESS)
             not_started = sum(1 for s in statuses.values() if s == _BATCH_STATUS_NOT_STARTED)
+            unknown = sum(1 for s in statuses.values() if s == _BATCH_STATUS_UNKNOWN)
             total = len(issue_numbers)
 
+            unknown_suffix = f", {unknown} unknown" if unknown else ""
             console.step(
                 f"Waiting... ({done_count}/{total} done, "
-                f"{in_progress} in progress, {not_started} pending)"
+                f"{in_progress} in progress, {not_started} pending{unknown_suffix})"
             )
 
             if done_count == total:
@@ -465,7 +480,7 @@ def poll_batch_completion(
 
     # Print final summary
     pr_index = _build_pr_index(repo_root, issue_numbers) if not interrupted else pr_index
-    branch_set = _get_remote_branches(repo_root) if not interrupted else branch_set
+    branch_set = _query_branches(repo_root, previous=branch_set) if not interrupted else branch_set
     final_statuses: dict[str, str] = {}
     for num in issue_numbers:
         final_statuses[num] = _classify_issue_status(
@@ -484,6 +499,7 @@ def poll_batch_completion(
             _BATCH_STATUS_MERGED: "merged",
             _BATCH_STATUS_IN_PROGRESS: "in progress",
             _BATCH_STATUS_NOT_STARTED: "not started",
+            _BATCH_STATUS_UNKNOWN: "status unknown",
         }.get(status, status)
         pr = pr_index.get(num)
         url = f" {pr.url}" if pr and pr.url else ""

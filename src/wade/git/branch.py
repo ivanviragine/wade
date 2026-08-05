@@ -115,6 +115,35 @@ def create_scaffold_commit(
     _run_git("update-ref", f"refs/heads/{branch_name}", commit, cwd=repo_root)
 
 
+def list_branch_names(repo_root: Path) -> set[str]:
+    """Return the set of all local and remote branch short-names.
+
+    Runs ``git branch`` and ``git branch -r`` with lock-contention retry —
+    this is called during batch polling while parallel sessions may hold git
+    locks. An empty set means the repo genuinely has no branches; a query
+    failure raises ``GitError`` so callers can distinguish "no branch exists"
+    from "the branch query failed" (the latter must not be read as
+    "not started").
+
+    Args:
+        repo_root: Repository root directory.
+
+    Returns:
+        Union of local and remote branch short-names (e.g. ``"main"``,
+        ``"origin/feat/42-add-auth"``).
+
+    Raises:
+        GitError: If either branch listing fails.
+    """
+    names: set[str] = set()
+    for extra_args in (["-r"], []):
+        result = _run_git_with_retry(
+            "branch", *extra_args, "--format=%(refname:short)", cwd=repo_root
+        )
+        names.update(line.strip() for line in result.stdout.splitlines() if line.strip())
+    return names
+
+
 def commits_ahead(repo_root: Path, branch: str, base: str) -> int:
     """Count commits on *branch* that are not on *base*.
 

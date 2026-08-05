@@ -11,8 +11,10 @@ from wade.git.repo import (
     GitError,
     _run_git_with_retry,
     diff_between,
+    diff_worktree,
     get_main_worktree_path,
     is_head_attached,
+    log_oneline,
     stash,
     stash_pop,
 )
@@ -32,6 +34,47 @@ class TestDiffBetween:
             mock_run.return_value.returncode = 128
             mock_run.return_value.stdout = ""
             result = diff_between(tmp_path, "main", "HEAD")
+            assert result == ""
+
+
+class TestDiffWorktree:
+    def test_unstaged_calls_git_diff(self, tmp_path: Path) -> None:
+        with patch("wade.git.repo._run_git") as mock_run:
+            mock_run.return_value.stdout = "diff --git a/f.py b/f.py\n+line\n"
+            result = diff_worktree(tmp_path)
+            mock_run.assert_called_once_with("diff", cwd=tmp_path)
+            assert "diff --git" in result
+
+    def test_staged_appends_flag(self, tmp_path: Path) -> None:
+        with patch("wade.git.repo._run_git") as mock_run:
+            mock_run.return_value.stdout = ""
+            diff_worktree(tmp_path, staged=True)
+            mock_run.assert_called_once_with("diff", "--staged", cwd=tmp_path)
+
+    def test_propagates_git_error(self, tmp_path: Path) -> None:
+        with (
+            patch("wade.git.repo._run_git", side_effect=GitError("not a repo")),
+            pytest.raises(GitError),
+        ):
+            diff_worktree(tmp_path)
+
+
+class TestLogOneline:
+    def test_returns_output(self, tmp_path: Path) -> None:
+        with patch("wade.git.repo._run_git") as mock_run:
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stdout = "abc123 Merge feat/1-x\n"
+            result = log_oneline(tmp_path, "origin/main", limit=50)
+            mock_run.assert_called_once_with(
+                "log", "origin/main", "--oneline", "-50", cwd=tmp_path, check=False
+            )
+            assert "feat/1-x" in result
+
+    def test_returns_empty_on_failure(self, tmp_path: Path) -> None:
+        with patch("wade.git.repo._run_git") as mock_run:
+            mock_run.return_value.returncode = 128
+            mock_run.return_value.stdout = ""
+            result = log_oneline(tmp_path, "origin/nope")
             assert result == ""
 
 

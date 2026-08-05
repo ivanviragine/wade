@@ -16,8 +16,8 @@ Two distinct worlds interact in this codebase. Always be clear which one you are
 | **the WADE repo** / **this project** | This source repository — `src/wade/`, `templates/`, `tests/`, `scripts/` |
 | **inited project** / **target project** | Any third-party repo that has run `wade init` to adopt the workflow |
 | **skill templates** | Markdown files in `templates/skills/` — the source of truth, part of the WADE repo |
-| **installed skills** | Copies (or symlinks) of skill templates placed in a project's `.claude/skills/` by `wade init` |
-| **AGENTS.md pointer** | A short `## Git Workflow` block that `wade init` injects into an inited project's `AGENTS.md` |
+| **installed skills** | Copies (or symlinks) of skill templates placed in a project's `.claude/skills/` **per session by worktree bootstrap** (`bootstrap_worktree`), not by `wade init` |
+| **AGENTS.md pointer** | A short `## Git Workflow` block that **worktree bootstrap** injects into an inited project's `AGENTS.md` per session, not by `wade init` |
 
 **This `AGENTS.md` governs development of WADE itself.** Skills, the pointer, and the progressive disclosure architecture are all *outputs* of WADE — artifacts installed into inited projects, not rules for developing WADE.
 
@@ -62,6 +62,15 @@ Models Layer   ->  can import: nothing (leaf dependency)
 
 No circular dependencies. Models are pure data. Services orchestrate. **Never import a higher layer from a lower layer.**
 
+> **The DB Layer (`db/`) is currently unused scaffolding.** No code path under
+> `services/` or `cli/` writes session/worktree/PR rows, so its sole reader
+> (`implementation_service/cleanup._preserve_session_data`, a single
+> `SessionRepository.get_by_worktree_path` call) always gets an empty result and
+> falls back to directory-presence detection. Real persisted state lives in
+> GitHub (PR/issue body markers, labels) and worktree files, **not** SQLite. It
+> stays in the layering rules for when it is wired up — do not treat it as
+> load-bearing. Removal is tracked as #357 C5.
+
 AI tool adapters are not part of this repo — they live in the external [`crossby`](https://github.com/ivanviragine/crossby) package (`pyproject.toml`). See `docs/dev/architecture.md` for what moved there.
 
 CLI modules are thin dispatch — they parse flags via Typer, then call service methods. Business logic lives in `services/`, not in `cli/`.
@@ -99,6 +108,8 @@ Everything in this repo exists in one of two worlds:
 | `AGENTS.md` (this file) | target project's own `AGENTS.md` |
 
 When developing WADE, **only touch the left column**. Always edit `templates/skills/<name>/SKILL.md` directly — never edit files inside `.claude/skills/` (those are symlinks in this repo, copies in inited projects).
+
+The right-column artifacts (installed skills, the `## Git Workflow` pointer, and the Claude/Cursor allowlists) are produced **per session by worktree bootstrap** (`bootstrap_worktree` in `implementation_service/bootstrap.py`, invoked by `wade implement`/`wade plan`/`wade review`), *not* by `wade init`. `wade init` writes only `.wade.yml`, optional provider/knowledge files, and the `.wade/` manifest.
 
 > Skills system deep dive (symlinks, pointer markers, installation lifecycle): see `docs/dev/skills-system.md`
 

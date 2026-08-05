@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from crossby.models.ai import EffortLevel
 
+from wade.git.repo import GitError
 from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationResult
 from wade.services.review_delegation_service import (
@@ -302,15 +303,18 @@ class TestReviewPlan:
 class TestReviewCode:
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service._committed_diff_fallback")
-    @patch("wade.services.review_delegation_service.run")
+    @patch("wade.git.repo.diff_worktree")
+    @patch("wade.git.repo.get_repo_root")
     def test_no_diff_warns(
         self,
-        mock_run: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_diff: MagicMock,
         mock_fallback: MagicMock,
         mock_config: MagicMock,
     ) -> None:
         mock_config.return_value = _review_config(review_implementation_enabled=True)
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        mock_repo_root.return_value = Path("/repo")
+        mock_diff.return_value = ""
         mock_fallback.return_value = ""
         result = review_implementation()
         assert result.success is True
@@ -318,33 +322,34 @@ class TestReviewCode:
         mock_fallback.assert_called_once_with()
 
     @patch("wade.services.review_delegation_service.load_config")
-    @patch("wade.services.review_delegation_service.run")
+    @patch("wade.git.repo.diff_worktree")
+    @patch("wade.git.repo.get_repo_root")
     def test_git_diff_failure_returns_error(
-        self, mock_run: MagicMock, mock_config: MagicMock
+        self, mock_repo_root: MagicMock, mock_diff: MagicMock, mock_config: MagicMock
     ) -> None:
         mock_config.return_value = _review_config(review_implementation_enabled=True)
-        mock_run.return_value = MagicMock(
-            returncode=128, stdout="", stderr="fatal: not a git repository"
-        )
+        mock_repo_root.return_value = Path("/repo")
+        mock_diff.side_effect = GitError("git diff failed (exit 128): fatal: not a git repository")
         result = review_implementation()
         assert result.success is False
         assert "git diff failed" in result.feedback
-        assert result.exit_code == 128
+        assert result.exit_code == 1
 
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.load_prompt_template")
-    @patch("wade.services.review_delegation_service.run")
+    @patch("wade.git.repo.diff_worktree")
+    @patch("wade.git.repo.get_repo_root")
     def test_code_review_with_diff(
         self,
-        mock_run: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_diff: MagicMock,
         mock_template: MagicMock,
         mock_config: MagicMock,
         mock_delegate: MagicMock,
     ) -> None:
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="diff --git a/foo.py b/foo.py\n+new line\n"
-        )
+        mock_repo_root.return_value = Path("/repo")
+        mock_diff.return_value = "diff --git a/foo.py b/foo.py\n+new line\n"
         mock_template.return_value = "Review:\n{diff_content}"
         mock_config.return_value = _review_config(review_implementation_enabled=True)
         mock_delegate.return_value = DelegationResult(
@@ -361,13 +366,16 @@ class TestReviewCode:
         assert call_args.mode == DelegationMode.PROMPT
 
     @patch("wade.services.review_delegation_service.load_config")
-    @patch("wade.services.review_delegation_service.run")
-    def test_staged_flag_passed_to_git(self, mock_run: MagicMock, mock_config: MagicMock) -> None:
+    @patch("wade.git.repo.diff_worktree")
+    @patch("wade.git.repo.get_repo_root")
+    def test_staged_flag_passed_to_git(
+        self, mock_repo_root: MagicMock, mock_diff: MagicMock, mock_config: MagicMock
+    ) -> None:
         mock_config.return_value = _review_config(review_implementation_enabled=True)
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        mock_repo_root.return_value = Path("/repo")
+        mock_diff.return_value = ""
         review_implementation(staged=True)
-        cmd = mock_run.call_args[0][0]
-        assert "--staged" in cmd
+        assert mock_diff.call_args.kwargs["staged"] is True
 
     @patch("wade.services.review_delegation_service.load_config")
     def test_enabled_false_skips_before_git_diff(
@@ -384,14 +392,17 @@ class TestReviewCode:
 
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.load_prompt_template")
-    @patch("wade.services.review_delegation_service.run")
+    @patch("wade.git.repo.diff_worktree")
+    @patch("wade.git.repo.get_repo_root")
     def test_invalid_mode_returns_error(
         self,
-        mock_run: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_diff: MagicMock,
         mock_template: MagicMock,
         mock_config: MagicMock,
     ) -> None:
-        mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
+        mock_repo_root.return_value = Path("/repo")
+        mock_diff.return_value = "diff --git a/f.py\n+line\n"
         mock_template.return_value = "{diff_content}"
         mock_config.return_value = _review_config(review_implementation_enabled=True)
 
@@ -403,16 +414,19 @@ class TestReviewCode:
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.load_prompt_template")
-    @patch("wade.services.review_delegation_service.run")
+    @patch("wade.git.repo.diff_worktree")
+    @patch("wade.git.repo.get_repo_root")
     def test_prompt_mode_works_without_ai_tool_config(
         self,
-        mock_run: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_diff: MagicMock,
         mock_template: MagicMock,
         mock_config: MagicMock,
         mock_delegate: MagicMock,
     ) -> None:
         """Prompt-mode implementation review should not require an AI tool config."""
-        mock_run.return_value = MagicMock(returncode=0, stdout="diff --git a/f.py\n+line\n")
+        mock_repo_root.return_value = Path("/repo")
+        mock_diff.return_value = "diff --git a/f.py\n+line\n"
         mock_template.return_value = "{diff_content}"
         mock_config.return_value = _review_config(
             review_implementation_enabled=True,
@@ -695,16 +709,19 @@ class TestReviewImplementationFallback:
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.load_prompt_template")
     @patch("wade.services.review_delegation_service._committed_diff_fallback")
-    @patch("wade.services.review_delegation_service.run")
+    @patch("wade.git.repo.diff_worktree")
+    @patch("wade.git.repo.get_repo_root")
     def test_fallback_used_when_working_tree_empty(
         self,
-        mock_run: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_diff: MagicMock,
         mock_fallback: MagicMock,
         mock_template: MagicMock,
         mock_config: MagicMock,
         mock_delegate: MagicMock,
     ) -> None:
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        mock_repo_root.return_value = Path("/repo")
+        mock_diff.return_value = ""
         mock_fallback.return_value = "diff --git a/f.py b/f.py\n+committed line\n"
         mock_template.return_value = "Review:\n{diff_content}"
         mock_config.return_value = ProjectConfig(
@@ -722,13 +739,16 @@ class TestReviewImplementationFallback:
         assert "committed line" in call_args.prompt
 
     @patch("wade.services.review_delegation_service._committed_diff_fallback")
-    @patch("wade.services.review_delegation_service.run")
+    @patch("wade.git.repo.diff_worktree")
+    @patch("wade.git.repo.get_repo_root")
     def test_fallback_not_called_in_staged_mode(
         self,
-        mock_run: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_diff: MagicMock,
         mock_fallback: MagicMock,
     ) -> None:
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        mock_repo_root.return_value = Path("/repo")
+        mock_diff.return_value = ""
         mock_fallback.return_value = "should not be used"
 
         result = review_implementation(staged=True)
@@ -740,18 +760,19 @@ class TestReviewImplementationFallback:
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.load_prompt_template")
     @patch("wade.services.review_delegation_service._committed_diff_fallback")
-    @patch("wade.services.review_delegation_service.run")
+    @patch("wade.git.repo.diff_worktree")
+    @patch("wade.git.repo.get_repo_root")
     def test_working_tree_diff_takes_priority(
         self,
-        mock_run: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_diff: MagicMock,
         mock_fallback: MagicMock,
         mock_template: MagicMock,
         mock_config: MagicMock,
         mock_delegate: MagicMock,
     ) -> None:
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="diff --git a/f.py b/f.py\n+working tree line\n"
-        )
+        mock_repo_root.return_value = Path("/repo")
+        mock_diff.return_value = "diff --git a/f.py b/f.py\n+working tree line\n"
         mock_fallback.return_value = "should not be used"
         mock_template.return_value = "Review:\n{diff_content}"
         mock_config.return_value = ProjectConfig(
@@ -769,13 +790,16 @@ class TestReviewImplementationFallback:
         assert "working tree line" in call_args.prompt
 
     @patch("wade.services.review_delegation_service._committed_diff_fallback")
-    @patch("wade.services.review_delegation_service.run")
+    @patch("wade.git.repo.diff_worktree")
+    @patch("wade.git.repo.get_repo_root")
     def test_fallback_returns_empty_skips_review(
         self,
-        mock_run: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_diff: MagicMock,
         mock_fallback: MagicMock,
     ) -> None:
-        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        mock_repo_root.return_value = Path("/repo")
+        mock_diff.return_value = ""
         mock_fallback.return_value = ""
 
         result = review_implementation()

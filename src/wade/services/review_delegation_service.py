@@ -21,7 +21,6 @@ from wade.services.ai_resolution import (
 from wade.services.delegation_service import delegate, resolve_mode
 from wade.skills.installer import load_prompt_template
 from wade.ui.console import console
-from wade.utils.process import run
 
 logger = structlog.get_logger()
 
@@ -226,22 +225,17 @@ def review_implementation(
     if skip is not None:
         return skip
 
-    diff_cmd = ["git", "diff"]
-    if staged:
-        diff_cmd.append("--staged")
-
-    result = run(diff_cmd, check=False)
-    if result.returncode != 0:
-        stderr = result.stderr.strip() if result.stderr else "unknown error"
-        console.error(f"git diff failed: {stderr}")
+    try:
+        repo_root = git_repo.get_repo_root(Path.cwd())
+        diff_content = git_repo.diff_worktree(repo_root, staged=staged).strip()
+    except GitError as exc:
+        console.error(f"git diff failed: {exc}")
         return DelegationResult(
             success=False,
-            feedback=f"git diff failed: {stderr}",
+            feedback=f"git diff failed: {exc}",
             mode=DelegationMode.PROMPT,
-            exit_code=result.returncode,
+            exit_code=1,
         )
-
-    diff_content = result.stdout.strip() if result.stdout else ""
 
     if not diff_content and not staged:
         diff_content = _committed_diff_fallback()

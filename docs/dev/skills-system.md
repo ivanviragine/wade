@@ -14,17 +14,17 @@ This boundary is critical. Everything in this repo exists in one of two worlds:
 | `AGENTS.md` (this file) | target project's own `AGENTS.md` (different content) |
 | `.wade.yml` (this repo's config) | target project's own `.wade.yml` |
 
-When developing wade, **only touch the left column**. The right column is what users get after running `wade init` in their own projects.
+When developing wade, **only touch the left column**. The right column is what a project gets after adopting wade — `wade init` writes `.wade.yml` and the manifest, then worktree bootstrap (per `wade implement`/`plan`/`review` session) installs the skills, pointer, and allowlists.
 
 ## AGENTS.md and CLAUDE.md
 
 `AGENTS.md` is the canonical agent guidance file for this repo. `CLAUDE.md` is a committed symlink -> `AGENTS.md`, providing Claude Code discovery without duplicating content. **Always edit `AGENTS.md` directly** — changes reflect in `CLAUDE.md` automatically via the symlink.
 
-In inited projects, `wade init` writes the workflow pointer to whichever of `AGENTS.md` / `CLAUDE.md` already exists (preferring `AGENTS.md`), or creates `AGENTS.md` if neither exists.
+In inited projects, **worktree bootstrap** (not `wade init`) writes the workflow pointer per session to whichever of `AGENTS.md` / `CLAUDE.md` already exists (preferring `AGENTS.md`), or creates `AGENTS.md` if neither exists.
 
 ## Skill File Symlink Structure
 
-When `wade init` runs on this repo (self-init mode), the installer creates symlinks so edits to skill templates are reflected immediately:
+When a session bootstraps a worktree in this repo (self-init mode), the installer creates symlinks *in the worktree* so edits to skill templates are reflected immediately:
 
 ```
 .claude/skills/plan-session              ->  processed copy (self-init exception via INJECT_SKILLS)
@@ -38,15 +38,15 @@ When `wade init` runs on this repo (self-init mode), the installer creates symli
 .cursor/skills/              ->  (same targets, separate symlinks)
 ```
 
-Note: These symlinks are created by `wade init` with `is_self_init=True`. If they don't exist, run `wade init` in this repo to create them.
+Note: These symlinks are created **per session by worktree bootstrap** (`install_skills(..., is_self_init=True)`), not by `wade init`. They live in the session's worktree, not on main; a fresh session recreates them.
 
-**Always edit `templates/skills/<name>/SKILL.md`** — never edit files inside `.claude/skills/`, `.github/skills/`, `.agents/skills/`, or `.cursor/skills/` directly. In this repo those are symlinks back to templates; in inited projects they are copies that would be overwritten by `wade update`.
+**Always edit `templates/skills/<name>/SKILL.md`** — never edit files inside `.claude/skills/`, `.github/skills/`, `.agents/skills/`, or `.cursor/skills/` directly. In this repo those are symlinks back to templates; in inited projects they are copies re-installed each session.
 
-In inited projects (normal init), `wade init` copies skill files (not symlinks), so agents in those projects read standalone files that don't change unless `wade update` is run.
+In inited projects, worktree bootstrap copies skill files (not symlinks) into each session's worktree, so agents read standalone files. They are refreshed every session, and skills no longer live on main at all (`wade update` actively migrates any legacy on-main skills off).
 
 ## Skill Installation Lifecycle
 
-`wade init` installs skills file-by-file via the `skills/installer.py` module. When adding a new skill:
+**Worktree bootstrap** installs skills file-by-file via the `skills/installer.py` module — per session, into the session's worktree. (`install_skills()` is called only from `bootstrap_worktree` in `implementation_service/bootstrap.py`, never from `wade init`.) When adding a new skill:
 
 1. Create the skill template in `templates/skills/<name>/SKILL.md`
 2. Register the skill in `skills/installer.py` — add it to `SKILL_FILES` and optionally `ALWAYS_OVERWRITE`
@@ -73,9 +73,9 @@ The installer expands these placeholders when copying skill files to a project. 
 
 ## Agent Skills (templates/skills/)
 
-> **Scope: inited projects.** The skill templates in `templates/skills/` are installed into inited projects by `wade init`. They are *not* guidance for developing wade itself — they teach AI agents in target projects how to use the wade workflow. When you are developing wade, treat these files as **output artifacts** you are authoring, not as rules you follow.
+> **Scope: inited projects.** The skill templates in `templates/skills/` are installed into inited projects **per session by worktree bootstrap**. They are *not* guidance for developing wade itself — they teach AI agents in target projects how to use the wade workflow. When you are developing wade, treat these files as **output artifacts** you are authoring, not as rules you follow.
 
-Skill templates are Markdown files installed to an inited project's `.claude/skills/` by `wade init`, with symlinks from `.github/skills/`, `.agents/skills/`, and `.cursor/skills/` for cross-tool discovery. They teach AI agents the wade workflow via phase-specific session skills and on-demand task skills.
+Skill templates are Markdown files installed to an inited project's `.claude/skills/` **per session by worktree bootstrap** (`bootstrap_worktree`), with symlinks from `.github/skills/`, `.agents/skills/`, and `.cursor/skills/` for cross-tool discovery. They teach AI agents the wade workflow via phase-specific session skills and on-demand task skills.
 
 ### Phase-Specific Skill Architecture (for inited projects)
 
@@ -83,7 +83,7 @@ Skill templates are Markdown files installed to an inited project's `.claude/ski
 
 Skills are organized into **phase skills** (one per session type) and **task skills** (on-demand reference):
 
-1. **AGENTS.md pointer** — `wade init` reads `templates/agents-pointer.md` and inserts its content into the target project's `AGENTS.md`. It directs agents to read the skill referenced in their clipboard prompt. **To change what gets injected into inited projects, edit `templates/agents-pointer.md`** — not this repo's own `## Git Workflow` section, which is only the self-installed copy for this repo.
+1. **AGENTS.md pointer** — **worktree bootstrap** (via `pointer.ensure_pointer`) reads `templates/agents-pointer.md` and inserts its content into the target project's `AGENTS.md` per session. It directs agents to read the skill referenced in their clipboard prompt. **To change what gets injected into inited projects, edit `templates/agents-pointer.md`** — not this repo's own `## Git Workflow` section, which is only the self-installed copy for this repo.
 2. **`templates/skills/plan-session/SKILL.md`** — Self-contained rules for planning sessions (`wade plan`). Covers plan file format, complexity tagging, session boundaries. No implementation rules.
 3. **`templates/skills/implementation-session/SKILL.md`** — Self-contained rules for implementation sessions (`wade implement`). Covers worktree safety, commit conventions, syncing, PR summaries, and session closing. No planning rules.
 4. **`templates/skills/review-pr-comments-session/SKILL.md`** — Self-contained rules for review sessions (`wade review pr-comments`). Covers review fetching, thread resolution, syncing, and session closing. No planning or implementation rules.

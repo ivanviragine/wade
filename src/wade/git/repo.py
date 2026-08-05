@@ -460,6 +460,39 @@ def diff_between(repo_root: Path, base: str, head: str) -> str:
     return result.stdout if result.returncode == 0 else ""
 
 
+def diff_worktree(repo_root: Path, *, staged: bool = False) -> str:
+    """Return ``git diff`` output for the working tree (or the staged index).
+
+    Args:
+        repo_root: Repository root directory (or any dir inside the repo).
+        staged: If True, diff the staged index (``git diff --staged``) instead
+            of the unstaged working tree.
+
+    Returns:
+        The raw diff text (empty string when there are no changes).
+
+    Raises:
+        GitError: If the diff command fails (e.g. not a git repository). Callers
+            surface this rather than confusing it with an empty diff.
+    """
+    args = ["diff"]
+    if staged:
+        args.append("--staged")
+    result = _run_git(*args, cwd=repo_root)
+    return result.stdout
+
+
+def log_oneline(repo_root: Path, ref: str, limit: int = 100) -> str:
+    """Return ``git log <ref> --oneline -<limit>`` output.
+
+    Returns an empty string if the log command fails (e.g. the ref does not
+    exist), so callers doing a best-effort history scan treat "no matching
+    history" and "query failed" alike where a conservative ``False`` is fine.
+    """
+    result = _run_git("log", ref, "--oneline", f"-{limit}", cwd=repo_root, check=False)
+    return result.stdout if result.returncode == 0 else ""
+
+
 def pull_ff_only(repo_root: Path) -> subprocess.CompletedProcess[str]:
     """Pull with fast-forward only.
 
