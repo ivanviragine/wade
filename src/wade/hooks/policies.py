@@ -239,11 +239,13 @@ _IN_PLACE_COMMANDS = frozenset({"sed", "gsed", "perl", "ruby", "yq"})
 # common shell idiom an agent emits, and denying it breaks ordinary sessions.
 _ALWAYS_ALLOWED_PATH_PREFIXES = ("/dev/",)
 
-# Commands that write their path operands. In plan mode those operands must be plan
+# Commands whose path operands are *writes*, so their operands stay contained even
+# after the read relaxation. In plan mode those operands must additionally be plan
 # artifacts, otherwise `cp PLAN.md src/app.py` edits source without a write tool.
 # Deletion counts as a write: `rm src/app.py` destroys source just as surely as
 # overwriting it, and omitting it left the mildest command (`touch`) guarded while
-# the most destructive one was not.
+# the most destructive one was not. `mkdir` is here for the same reason — it
+# creates a directory, a write, and `mkdir /outside/dir` must not escape.
 _PLAN_WRITE_COMMANDS = frozenset(
     {
         "tee",
@@ -260,10 +262,16 @@ _PLAN_WRITE_COMMANDS = frozenset(
         "rmdir",
         "unlink",
         "shred",
+        "mkdir",
     }
 )
-# `git <sub> -- <path>` forms that overwrite working-tree files.
-_GIT_WRITE_SUBCOMMANDS = frozenset({"checkout", "restore", "apply", "mv", "rm", "clean"})
+# git subcommands that write the working tree or filesystem. `checkout`/`restore`/
+# `apply`/`mv`/`rm`/`clean` overwrite or delete tracked files; `clone`/`init`/
+# `worktree` create files at a positional target (`git worktree add /outside` is a
+# literal worktree escape — exactly what this guard exists to prevent).
+_GIT_WRITE_SUBCOMMANDS = frozenset(
+    {"checkout", "restore", "apply", "mv", "rm", "clean", "clone", "init", "worktree"}
+)
 
 
 def _tokenize(command: str) -> list[str]:
@@ -399,26 +407,44 @@ def shell_containment(
     :func:`plan_artifact_only` never inspect them. Without this predicate a single
     ``printf ... > ../main-repo/src/app.py`` defeats both guards.
 
+    **Reads outside the worktree are allowed; only writes are contained.** Reading
+    a sibling repo (``cat ../crossby/x``, ``grep -r foo ../crossby``,
+    ``git -C ../crossby log``) never mutates state, so a read operand may resolve
+    anywhere. The guard's job is to keep *writes* inside the root.
+
     Rules, in order (any match denies):
 
     1. The command does not tokenize (unbalanced quotes) — **fail closed**.
-    2. A redirect target (``>``, ``>>``, ``2>``, ``>&file``, glued or spaced)
-       resolves outside the root. Pure fd duplication (``2>&1``, ``>&-``) names no
-       file and is skipped.
+    2. An *output* redirect target (``>``, ``>>``, ``2>``, ``>&file``, glued or
+       spaced) resolves outside the root. An *input* redirect (``< target``) only
+       reads, so its target may live anywhere. Pure fd duplication (``2>&1``,
+       ``>&-``) names no file and is skipped.
     3. ``cd`` / ``pushd`` targets a path outside the root — it would rebase every
        later relative write in the same command. A *bare* ``cd`` (or ``cd -``)
        counts: it lands in ``$HOME``/``$OLDPWD``, equally outside.
-    4. Any remaining path-like argument resolves outside the root, including a path
-       glued to a flag or operand (``--output=/tmp/x``, ``-o/tmp/x``, ``of=/tmp/x``).
-       The *executable* position of each segment is exempt, since binaries
-       legitimately live in ``/usr/bin``, ``/bin``, ``/opt/homebrew/bin`` and denying
-       those breaks every session. Character devices (``/dev/null``) are exempt too —
-       ``>/dev/null 2>&1`` is not an escape.
-    5. In plan mode only: any redirect, an in-place edit flag (``sed -i``,
+    4. An operand of a *write* command resolves outside the root. Write commands
+       are :data:`_PLAN_WRITE_COMMANDS` (``tee``/``cp``/``mv``/``touch``/``mkdir``
+       …), git write subcommands (:data:`_GIT_WRITE_SUBCOMMANDS`:
+       ``checkout``/``clean``/``clone``/``init``/``worktree`` …), and in-place
+       editors (:data:`_IN_PLACE_COMMANDS` carrying an ``-i`` flag). A *read*
+       command's path operand is not checked — reads may resolve anywhere. The
+       *executable* position of each segment is exempt, since binaries legitimately
+       live in ``/usr/bin``, ``/bin``, ``/opt/homebrew/bin`` and denying those
+       breaks every session. Character devices (``/dev/null``) are exempt too.
+    5. A path glued to a flag or operand (``--output=/tmp/x``, ``-o/tmp/x``,
+       ``of=/tmp/x``, ``git -C/tmp/other``) resolves outside the root. The glued
+       form is contained in *all* modes: a tokenizer cannot tell a glued read flag
+       from a glued write flag, so both are denied — this conservatively denies a
+       few glued *reads* too (e.g. ``git -C/tmp/other log``).
+    6. Spaced ``git -C <dir>`` where ``<dir>`` is outside the root **and** a git
+       write subcommand (:data:`_GIT_WRITE_SUBCOMMANDS`) follows in the same
+       segment. ``git -C <outside> log``/``show``/``status``/``diff`` (read
+       subcommands) stay allowed; ``git -C <outside> clean`` would otherwise delete
+       untracked files outside with no later path operand to catch it.
+    7. In plan mode only: any output redirect, an in-place edit flag (``sed -i``,
        ``--in-place``) on a command that *has* one (:data:`_IN_PLACE_COMMANDS` —
        ``grep -i`` and ``ls -i`` are ordinary read flags), or an operand of a write
-       command (``tee``, ``cp``, ``mv``, ``touch``, ``git checkout --`` …) whose
-       path is not a plan artifact.
+       command whose path is not a plan artifact.
 
     **This is defense-in-depth, not a completeness guarantee.** It stops the
     non-obfuscated cases — the ones an agent actually produces — and is trivially
@@ -435,11 +461,39 @@ def shell_containment(
       them, so a symlinked *target* is caught, but a symlink created earlier in the
       same command is not.
     - **Interpreters given inline code** — ``python -c 'open("/etc/x","w")'``.
-    - **Plan mode only:** a write command outside :data:`_PLAN_WRITE_COMMANDS`
-      (the list covers ``tee``/``cp``/``mv``/``touch``/``git checkout --`` and
-      friends), or an in-place editor outside :data:`_IN_PLACE_COMMANDS`. The
-      *worktree* rules still apply to both, so neither can escape the root — they
-      can only write a non-artifact inside it.
+    - **Wrapped write commands** — ``sudo rm /outside``, ``env FOO=bar cp a /outside``,
+      ``xargs rm``, ``nice``/``nohup``/``time``/``command``/``doas``/``timeout`` …
+      The wrapper becomes the detected ``command_name``, so the real writer behind it
+      is invisible and its operands read as *reads*. Unwrapping is a clean fix (it
+      would not re-block any read), but is deliberately not done here — the guard is
+      best-effort, and unwrapping a partial wrapper list gives a false sense of
+      completeness while ``python -c`` and the writers below still escape.
+    - **Unenumerated write commands** — ``zip /outside/a.zip``, ``gzip``, ``split``,
+      ``git bundle create /outside``, ``git format-patch -o /outside``,
+      ``git archive -o /outside``. Only :data:`_PLAN_WRITE_COMMANDS` /
+      :data:`_GIT_WRITE_SUBCOMMANDS` are contained; a writer outside those sets has
+      its operands treated as reads. The sets cover the commands an agent actually
+      produces; some others (``git bundle``/``git worktree`` have read *and* write
+      subcommands) cannot be blanket-added without re-blocking their read forms.
+    - **Spaced output flags on non-write commands** — ``curl -o /outside``,
+      ``gcc -o /outside``, ``wget -O /outside``, ``sort --output /outside``. The
+      *glued* forms stay caught by rule 5; the spaced form is a genuine write-escape
+      the relaxation gives up, because a token after ``-o`` is a read as often as a
+      write (``ls -o ../dir``) and a blanket "``-o`` value is a write target" rule
+      would re-block the reads this guard now allows.
+    - **Directory-context flags on non-git extractors/builders** —
+      ``tar -C /outside -xf a.tar``, ``unzip -d /outside a.zip``, ``make -C /outside``.
+      ``git -C`` is fixed (rule 6) only because git's write subcommands are
+      enumerated; these have no create-vs-extract enumeration to key on.
+    - **Conditional-write ``find``** — ``find ../outside -delete`` /
+      ``-exec rm {} +``. ``find``'s positional argument is normally a *read* root
+      (``find ../crossby -name '*.py'``), so listing ``find`` as a write command
+      would re-block the reads this guard now allows; the write targets are the
+      *found* files, not a single operand, so there is no cheap buffered fix.
+    - **Plan mode only:** a write command outside :data:`_PLAN_WRITE_COMMANDS`, or
+      an in-place editor outside :data:`_IN_PLACE_COMMANDS`. Neither can escape the
+      root (rule 4 still contains enumerated writes) — they can only write a
+      non-artifact inside it.
 
     Args:
         event: Normalized hook event; only :attr:`HookEvent.command` is read.
@@ -470,17 +524,20 @@ def shell_containment(
     def deny_outside(what: str, token: str) -> HookDecision:
         return HookDecision.deny(
             f"BLOCKED by worktree guard: the shell command's {what} ('{token}') resolves "
-            f"outside the worktree at '{root}'. Run commands that read or write only "
-            "inside your worktree."
+            f"outside the worktree at '{root}' — only paths inside the worktree can be "
+            "verified as safe write targets. Reads outside are fine; rewrite this as a "
+            "read, or keep the write inside your worktree."
         )
 
     def check_redirect_target(target: str, op: str) -> HookDecision | None:
-        """Containment (always) + plan-artifact (plan mode, writes only) for a target."""
+        """Containment (writes) + plan-artifact (plan mode) for an output redirect."""
+        # ``<`` only reads its target, so a ``<`` outside the worktree is fine.
+        if op == "<":
+            return None
         resolved = _resolve_shell_path(target, base=base)
         if resolved is None or not _contained(resolved, root):
             return deny_outside("redirect target", target)
-        # ``<`` only reads, so the plan-artifact allowlist does not apply to it.
-        if plan_mode and op != "<" and not _is_plan_artifact_path(resolved, root):
+        if plan_mode and not _is_plan_artifact_path(resolved, root):
             return HookDecision.deny(
                 f"BLOCKED by plan-session guard: redirecting output to '{target}' "
                 "would write a non-artifact file without going through a write tool. "
@@ -506,6 +563,11 @@ def shell_containment(
     is_write_command = False
     awaiting_cd_target = False
     pending_redirect: str | None = None
+    # Spaced ``git -C <dir>``: the next token is the directory (awaiting flag), and
+    # once seen we remember it here iff it resolves outside the root. A read like
+    # ``git -C <outside> log`` is fine; only a later git *write* subcommand denies.
+    awaiting_git_c_dir = False
+    git_c_outside_token: str | None = None
 
     def end_segment() -> HookDecision | None:
         """A segment that ended while `cd` still wanted a target went to $HOME."""
@@ -527,6 +589,8 @@ def shell_containment(
             is_write_command = False
             awaiting_cd_target = False
             pending_redirect = None
+            awaiting_git_c_dir = False
+            git_c_outside_token = None
             continue
 
         redirect = _REDIRECT_RE.match(token)
@@ -578,18 +642,47 @@ def shell_containment(
                 return deny_outside(f"{command_name} target", token)
             continue
 
-        if plan_mode and command_name in _IN_PLACE_COMMANDS and _IN_PLACE_FLAG_RE.match(token):
-            return HookDecision.deny(
-                f"BLOCKED by plan-session guard: in-place editing ('{token}') is not "
-                "allowed in plan mode — it rewrites a file without going through a "
-                "write tool. Only plan artifacts may be written."
-            )
+        # Spaced ``git -C <dir>``: buffer the directory. A read through it is fine
+        # (``git -C ../crossby log``); a later git *write* subcommand in the same
+        # segment turns a buffered *outside* dir into a denial. The glued
+        # ``-C/outside`` form is caught by `_embedded_path` below in every mode.
+        if awaiting_git_c_dir:
+            awaiting_git_c_dir = False
+            resolved = _resolve_shell_path(token, base=base)
+            if resolved is None or not _contained(resolved, root):
+                git_c_outside_token = token
+            continue
+
+        if command_name == "git" and token == "-C":
+            awaiting_git_c_dir = True
+            continue
+
+        # In-place editors (`sed -i`, `perl -i`, `yq -i`, …) rewrite their operands.
+        # Plan mode denies the flag outright; *every* mode marks the command a writer
+        # so its later operands are contained — otherwise the read relaxation would
+        # let `sed -i '' s/a/b/ ../main/file` write outside in implementation mode.
+        if command_name in _IN_PLACE_COMMANDS and _IN_PLACE_FLAG_RE.match(token):
+            if plan_mode:
+                return HookDecision.deny(
+                    f"BLOCKED by plan-session guard: in-place editing ('{token}') is not "
+                    "allowed in plan mode — it rewrites a file without going through a "
+                    "write tool. Only plan artifacts may be written."
+                )
+            is_write_command = True
+            continue
 
         if command_name == "git" and token in _GIT_WRITE_SUBCOMMANDS:
             is_write_command = True
+            # A git write subcommand after a spaced ``-C`` pointing outside the root
+            # (``git -C /outside clean -fd``) writes outside with no later path
+            # operand to catch it — deny on the buffered directory.
+            if git_c_outside_token is not None:
+                return deny_outside("git -C directory", git_c_outside_token)
 
-        # A path glued to a flag or operand (``--output=/tmp/x``, ``of=/tmp/x``) is
-        # invisible to `_looks_like_path`, and `of=/tmp/x` would resolve *relative*.
+        # A path glued to a flag or operand (``--output=/tmp/x``, ``of=/tmp/x``,
+        # ``git -C/tmp/other``) is invisible to `_looks_like_path`, and `of=/tmp/x`
+        # would resolve *relative*. Contained in every mode: a tokenizer cannot tell
+        # a glued read flag from a glued write flag, so both are denied.
         embedded = _embedded_path(token)
         if embedded is not None:
             resolved = _resolve_shell_path(embedded, base=base)
@@ -601,16 +694,17 @@ def shell_containment(
                     return denial
             continue
 
-        if _looks_like_path(token) or (is_write_command and not token.startswith("-")):
-            # A write command's operands are checked even without a `/` — plan mode
-            # must catch `tee app.py`, not just `tee src/app.py`.
+        if is_write_command and not token.startswith("-"):
+            # Only a *write* command's operands are contained; a read command's path
+            # operand may resolve anywhere — reading a sibling repo never mutates
+            # state. Path-like or not: plan mode must catch `tee app.py`, not just
+            # `tee src/app.py`.
             resolved = _resolve_shell_path(token, base=base)
             if resolved is None or not _contained(resolved, root):
                 return deny_outside("path argument", token)
-            if is_write_command:
-                denial = check_non_artifact(f"'{command_name}'", token, resolved)
-                if denial is not None:
-                    return denial
+            denial = check_non_artifact(f"'{command_name}'", token, resolved)
+            if denial is not None:
+                return denial
 
     return end_segment() or HookDecision.allow()
 

@@ -89,16 +89,41 @@ class TestShellContainment:
             "cd ../../elsewhere",
             "cp a /tmp/b",
             "git checkout -- ../main-repo/x",
-            "cat ~/secrets",  # ~ is expanded (shlex does not)
             "echo a | tee /etc/p",
-            "sed -i '' s/a/b/ ../main/file",
+            "sed -i '' s/a/b/ ../main/file",  # in-place edit outside (impl mode)
             "true; cp a /tmp/b",  # ;-chained segment
             "true && cp a /tmp/b",  # &&-chained segment
-            "cat < /etc/passwd",
+            "mkdir /tmp/outside-dir",  # mkdir creates outside
+            "git clone https://example.com/r.git /tmp/outside",  # positional write
+            "git init /tmp/outside",
+            "git worktree add /tmp/outside main",  # literal worktree escape
+            "git -C /tmp/outside clean -fd",  # spaced -C + git write subcommand
+            "git -C /tmp/outside checkout -- file",
         ],
     )
     def test_outside_worktree_denied(self, command: str) -> None:
         assert shell_containment(_shell(command), worktree_root=WT).action == "deny"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "cat ../crossby/x.py",  # reading a sibling repo never mutates state
+            "grep -r foo ../crossby",
+            "rg foo ../crossby",
+            "ls ../crossby",
+            "head ../sib/f",
+            "git -C ../crossby log",  # read subcommand through an outside -C dir
+            "diff ../a ../b",
+            "cat ~/secrets",  # ~ expands outside, but a read is fine
+            "cat < /etc/passwd",  # input redirect only reads its target
+        ],
+    )
+    def test_reads_outside_worktree_allowed(self, command: str) -> None:
+        """Reads outside the worktree are allowed — only writes are contained."""
+        assert shell_containment(_shell(command), worktree_root=WT).action == "allow"
+        # ...and equally in plan mode (which still blocks every non-artifact write).
+        plan = shell_containment(_shell(command), worktree_root=WT, plan_mode=True)
+        assert plan.action == "allow"
 
     @pytest.mark.parametrize("command", ['echo "unterminated', "echo 'unbalanced"])
     def test_unparseable_fails_closed(self, command: str) -> None:
@@ -139,7 +164,21 @@ class TestShellContainment:
         ],
     )
     def test_paths_glued_to_flags_denied(self, command: str) -> None:
-        """A path attached to a flag or operand is still a path."""
+        """A path attached to a flag or operand is still a path.
+
+        These are the *glued* forms, kept contained in every mode because a
+        tokenizer cannot tell a glued read flag from a glued write flag.
+
+        The *spaced* counterparts are accepted residual write-escape risks (not
+        asserted here, documented in the ``shell_containment`` docstring): spaced
+        output flags on non-write commands (``curl -o /outside``,
+        ``sort --output /outside``), directory-context flags on non-git
+        extractors/builders (``tar -C /outside -xf a.tar``, ``unzip -d /outside``,
+        ``make -C /outside``), and conditional-write ``find`` (``find ../outside
+        -delete`` / ``-exec rm {} +``). Each is skipped rather than fixed because a
+        blanket rule would re-block the sibling-repo reads this relaxation exists to
+        allow (``ls -o ../dir``, ``find ../crossby -name '*.py'``).
+        """
         assert shell_containment(_shell(command), worktree_root=WT).action == "deny"
 
     @pytest.mark.parametrize(

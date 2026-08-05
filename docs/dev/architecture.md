@@ -176,20 +176,44 @@ A write reaches the guard through one of two channels, and both must be covered:
   `shell_containment` instead.
 
 `shell_containment` tokenizes with `shlex.split` (failing **closed** on
-unbalanced quotes) and denies redirect targets, `cd`/`pushd` targets, and
-path arguments that resolve outside the worktree — plus, in plan mode,
-redirects/in-place edits/`tee` aimed at non-artifacts.
+unbalanced quotes) and contains **writes** while allowing **reads** anywhere:
+reading a sibling repo (`cat ../crossby/x`, `grep -r foo ../crossby`,
+`git -C ../crossby log`) never mutates state, so a read operand may resolve
+outside the worktree. It denies output redirect targets (`>`, `>>`, `2>`), `<`
+input redirects excepted (a read); `cd`/`pushd` targets; and operands of *write*
+commands — `_PLAN_WRITE_COMMANDS` (`tee`/`cp`/`mv`/`touch`/`mkdir` …), git write
+subcommands `_GIT_WRITE_SUBCOMMANDS` (`checkout`/`clean`/`clone`/`init`/`worktree`
+…), and in-place editors (`sed -i`, `perl -i`) — that resolve outside. In plan
+mode it additionally rejects those same writes when aimed at non-artifacts, and
+denies the in-place `-i` flag outright.
 
-It also unglues paths from flags (`--output=/tmp/x`, `-o/tmp/x`, `of=/tmp/x`),
-treats bash's `>&file` as a write while skipping true fd duplication (`2>&1`),
-denies a bare `cd` (it lands in `$HOME`), and exempts character devices so
-`>/dev/null 2>&1` still works.
+Spaced `git -C <dir>` is buffered: `git -C ../crossby log` (a read subcommand) is
+allowed, but a git *write* subcommand after an outside `-C` (`git -C /outside
+clean -fd`, `git -C /outside checkout -- file`) is denied — there is no later path
+operand to catch it otherwise. It also unglues paths from flags
+(`--output=/tmp/x`, `-o/tmp/x`, `of=/tmp/x`, `git -C/tmp/other`) and keeps those
+**glued** forms contained in every mode (a tokenizer cannot tell a glued read flag
+from a glued write flag, so a few glued reads are denied too), treats bash's
+`>&file` as a write while skipping true fd duplication (`2>&1`), denies a bare
+`cd` (it lands in `$HOME`), and exempts character devices so `>/dev/null 2>&1`
+still works.
 
 **It is defense-in-depth, not a completeness guarantee.** It stops the
 non-obfuscated cases an agent actually produces. Documented residual gaps
 (see the function docstring): env-var indirection (`$HOME/x`), command
 substitution, subshells, here-docs, `$IFS` tricks, `eval`, symlinks created
-within the same command, and interpreters given inline code (`python -c`).
+within the same command, and interpreters given inline code (`python -c`). The
+read relaxation gives up a few more write-escapes rather than re-block the
+sibling-repo reads it exists to allow: **wrapped** write commands (`sudo rm
+/outside`, `env FOO=bar cp a /outside`, `xargs rm` — the wrapper hides the real
+writer), **unenumerated** write commands (`zip`, `git bundle create /outside`,
+`git format-patch -o /outside`), **spaced** output flags on non-write commands
+(`curl -o /outside`), directory-context flags on non-git extractors/builders
+(`tar -C /outside`, `unzip -d /outside`, `make -C /outside`), and conditional-write
+`find` (`find ../outside -delete`). Only enumerated writers
+(`_PLAN_WRITE_COMMANDS` / `_GIT_WRITE_SUBCOMMANDS` / in-place editors) and the
+**glued** output-flag forms stay caught — the guard is best-effort defense-in-depth
+against the writes an agent actually produces, not a security boundary.
 
 ### Per-tool capability matrix
 
