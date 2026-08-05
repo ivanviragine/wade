@@ -113,6 +113,26 @@ def resolve_model(
     return resolved
 
 
+def _tool_honors_effort(tool: str | None, level: EffortLevel) -> bool:
+    """Whether *tool* can actually honor the effort *level*.
+
+    Returns ``False`` when the tool has no effort concept, or restricts its
+    efforts and *level* is excluded (e.g. ``antigravity-cli`` rejects ``xhigh``
+    and ``max`` — ``agy --effort xhigh`` is rejected by the CLI). Unknown or
+    absent tools are treated permissively — capability gating is best-effort,
+    matching the resolvers' other tool lookups.
+    """
+    if not tool:
+        return True
+    try:
+        caps = AbstractAITool.get(AIToolID(tool)).capabilities()
+    except (ValueError, KeyError):
+        return True
+    if not caps.supports_effort:
+        return False
+    return not caps.supported_efforts or level in caps.supported_efforts
+
+
 def resolve_effort(
     effort: str | None,
     config: ProjectConfig,
@@ -130,8 +150,11 @@ def resolve_effort(
       4. Per-complexity-tier config (``models.<tool>.<tier>.effort``)
       5. Global config (``ai.effort``)
 
-    When *tool* is provided and the tool does not support effort, a warning
-    is logged and ``None`` is returned.
+    When *tool* is provided and it cannot honor the resolved level — the tool
+    has no effort concept, or restricts efforts to a subset that excludes the
+    level (e.g. ``antigravity-cli`` rejects ``xhigh``/``max``) — the level is
+    dropped and ``None`` is returned, so config/CLI input can never forward an
+    unsupported level.
     """
     resolved: str | None = effort
 
@@ -162,15 +185,11 @@ def resolve_effort(
         logger.warning("effort.invalid_level", effort=resolved)
         return None
 
-    # Check tool support
-    if tool:
-        try:
-            adapter = AbstractAITool.get(AIToolID(tool))
-            if not adapter.capabilities().supports_effort:
-                logger.info("effort.unsupported_tool", tool=tool, effort=resolved)
-                return None
-        except (ValueError, KeyError):
-            pass
+    # Check tool support — the tool must expose effort AND accept this specific
+    # level (antigravity-cli rejects xhigh/max), else drop it.
+    if tool and not _tool_honors_effort(tool, level):
+        logger.info("effort.unsupported", tool=tool, effort=resolved)
+        return None
 
     return level
 
@@ -332,21 +351,21 @@ def confirm_ai_selection(
             if new_tool != tool:
                 tool = new_tool
                 model = _prompt_model_selection(tool)
-                # Clear stale effort when the new tool doesn't support it. The
-                # permission mode is left as requested — crossby downgrades any
-                # unsupported tier at launch (WADE must not reimplement that).
-                try:
-                    new_adapter = AbstractAITool.get(AIToolID(tool))
-                    if effort is not None and not new_adapter.capabilities().supports_effort:
-                        effort = None
-                except (ValueError, KeyError):
+                # Clear stale effort when the new tool can't honor it — either it
+                # has no effort concept, or it restricts efforts to a subset that
+                # excludes the retained level (e.g. antigravity-cli rejects
+                # xhigh/max). This prevents Proceed from returning an unsupported
+                # level without reopening the effort picker. The permission mode
+                # is left as requested — crossby downgrades any unsupported tier
+                # at launch (WADE must not reimplement that).
+                if effort is not None and not _tool_honors_effort(tool, effort):
                     effort = None
 
         elif choice == "Change model":
             model = _prompt_model_selection(tool)
 
         elif choice == "Change effort":
-            effort = _prompt_effort_selection(effort)
+            effort = _prompt_effort_selection(effort, tool)
 
         elif choice == "Change permission mode":
             permission_mode = _prompt_permission_mode_selection(permission_mode, tool)
@@ -397,14 +416,39 @@ def _prompt_permission_mode_selection(current: PermissionMode, tool: str) -> Per
     return tiers[idx]
 
 
-def _prompt_effort_selection(current: EffortLevel | None) -> EffortLevel | None:
-    """Show an effort level picker and return the chosen level (or None)."""
+def valid_effort_levels(tool: str | None) -> list[EffortLevel]:
+    """Return the effort levels *tool* actually supports.
+
+    Reads crossby's ``capabilities().supported_efforts`` and falls back to the
+    full ``EffortLevel`` set when the tool is unknown or declares no restriction
+    (an empty/unset value). Callers prepend their own skip/none label — this
+    returns only the level list, since those labels differ per call site.
+    """
+    if tool:
+        try:
+            caps = AbstractAITool.get(AIToolID(tool)).capabilities()
+        except (ValueError, KeyError):
+            caps = None
+        if caps is not None and caps.supported_efforts:
+            return list(caps.supported_efforts)
+    return list(EffortLevel)
+
+
+def _prompt_effort_selection(
+    current: EffortLevel | None, tool: str | None = None
+) -> EffortLevel | None:
+    """Show an effort level picker and return the chosen level (or None).
+
+    Only the levels *tool* supports are offered (see :func:`valid_effort_levels`).
+    A *current* level the tool no longer supports is not pre-selected.
+    """
     from wade.ui import prompts
 
-    choices = ["(none — use tool default)", *[e.value for e in EffortLevel]]
+    level_values = [e.value for e in valid_effort_levels(tool)]
+    choices = ["(none — use tool default)", *level_values]
     default_idx = 0
-    if current:
-        default_idx = [e.value for e in EffortLevel].index(current.value) + 1
+    if current is not None and current.value in level_values:
+        default_idx = level_values.index(current.value) + 1
     idx = prompts.select("Select effort level", choices, default=default_idx)
     if idx == 0:
         return None

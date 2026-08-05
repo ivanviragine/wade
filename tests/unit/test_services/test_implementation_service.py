@@ -15,7 +15,7 @@ from crossby.ai_tools.codex import CodexAdapter
 from crossby.ai_tools.copilot import CopilotAdapter
 from crossby.models.ai import ModelBreakdown, TokenUsage
 
-from wade.git.pr import PRSummary
+from wade.git.pr import PRLookup, PRRef, PRSummary
 from wade.git.repo import GitError
 from wade.models.config import (
     HooksConfig,
@@ -40,9 +40,7 @@ from wade.services.implementation_service import (
     _effective_copy_files,
     _find_tracking_issue,
     _get_remote_branches,
-    _is_merged_to_main,
     _parse_overwrite_paths,
-    _post_implementation_lifecycle_direct,
     _post_implementation_lifecycle_pr,
     _pull_main_after_merge,
     _query_branches,
@@ -672,7 +670,7 @@ class TestImplementationStart:
             patch(
                 "wade.services.implementation_service.core._detect_ai_cli_env", return_value=None
             ),
-            patch("wade.git.pr.get_pr_for_branch", return_value=None),
+            patch("wade.git.pr.get_pr_for_branch", return_value=PRLookup(found=False)),
             patch(
                 "wade.services.implementation_service.core.bootstrap_draft_pr",
                 return_value={"number": 1, "url": "http://test"},
@@ -714,7 +712,7 @@ class TestImplementationStart:
             patch(
                 "wade.services.implementation_service.core._detect_ai_cli_env", return_value=None
             ),
-            patch("wade.git.pr.get_pr_for_branch", return_value=None),
+            patch("wade.git.pr.get_pr_for_branch", return_value=PRLookup(found=False)),
             patch(
                 "wade.services.implementation_service.core.bootstrap_draft_pr",
                 return_value={"number": 1, "url": "http://test"},
@@ -746,7 +744,7 @@ class TestImplementationStart:
                 "wade.git.worktree.create_worktree",
                 side_effect=GitError("Branch already exists"),
             ),
-            patch("wade.git.pr.get_pr_for_branch", return_value=None),
+            patch("wade.git.pr.get_pr_for_branch", return_value=PRLookup(found=False)),
             patch(
                 "wade.services.implementation_service.core.bootstrap_draft_pr",
                 return_value={"number": 1, "url": "http://test"},
@@ -781,7 +779,7 @@ class TestImplementationStart:
                 "wade.services.implementation_service.core._detect_ai_cli_env", return_value=None
             ),
             patch("crossby.ai_tools.base.AbstractAITool.get") as mock_get,
-            patch("wade.git.pr.get_pr_for_branch", return_value=None),
+            patch("wade.git.pr.get_pr_for_branch", return_value=PRLookup(found=False)),
             patch(
                 "wade.services.implementation_service.core.bootstrap_draft_pr",
                 return_value={"number": 1, "url": "http://test"},
@@ -822,7 +820,7 @@ class TestImplementationStart:
                 return_value="CLAUDE_CODE",
             ),
             patch("crossby.ai_tools.base.AbstractAITool.get") as mock_get,
-            patch("wade.git.pr.get_pr_for_branch", return_value=None),
+            patch("wade.git.pr.get_pr_for_branch", return_value=PRLookup(found=False)),
             patch(
                 "wade.services.implementation_service.core.bootstrap_draft_pr",
                 return_value={"number": 1, "url": "http://test"},
@@ -852,7 +850,7 @@ class TestImplementationStart:
                 "wade.services.implementation_service.core.get_provider", return_value=mock_provider
             ),
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
-            patch("wade.git.pr.get_pr_for_branch", return_value=None),
+            patch("wade.git.pr.get_pr_for_branch", return_value=PRLookup(found=False)),
             patch("wade.services.implementation_service.core.prompts") as mock_prompts,
             patch("wade.services.implementation_service.core.confirm_ai_selection") as mock_confirm,
             patch("wade.services.plan_service.plan", return_value=True) as mock_plan,
@@ -889,7 +887,7 @@ class TestImplementationStart:
                 "wade.services.implementation_service.core._detect_ai_cli_env", return_value=None
             ),
             patch("crossby.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
-            patch("wade.git.pr.get_pr_for_branch", return_value=None),
+            patch("wade.git.pr.get_pr_for_branch", return_value=PRLookup(found=False)),
             patch(
                 "wade.services.implementation_service.core.bootstrap_draft_pr",
                 return_value={"number": 1, "url": "http://test"},
@@ -921,6 +919,40 @@ class TestImplementationStart:
         mock_confirm.assert_called_once()
         mock_bootstrap.assert_called_once()
         assert call_order == ["confirm", "bootstrap"]
+
+    def test_pr_lookup_failure_aborts_before_bootstrap(self, tmp_path: Path) -> None:
+        """A failed PR lookup must stop — never scaffold a duplicate draft PR.
+
+        On lookup_failed, existing_pr would collapse to None and bootstrap a
+        fresh draft over a branch that may already have an open PR with a plan.
+        """
+        task = self._make_task()
+        mock_provider = MagicMock()
+        mock_provider.read_task.return_value = task
+
+        with (
+            patch(
+                "wade.services.implementation_service.core.load_config",
+                return_value=self._make_config(),
+            ),
+            patch(
+                "wade.services.implementation_service.core.get_provider", return_value=mock_provider
+            ),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch(
+                "wade.git.pr.get_pr_for_branch",
+                return_value=PRLookup(found=False, lookup_failed=True),
+            ),
+            patch("wade.services.implementation_service.core.bootstrap_draft_pr") as mock_bootstrap,
+            patch("wade.services.implementation_service.core.confirm_ai_selection") as mock_confirm,
+            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
+        ):
+            mock_prompts.is_tty.return_value = False
+            result = start("42", project_root=tmp_path)
+
+        assert result.success is False
+        mock_bootstrap.assert_not_called()
+        mock_confirm.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -1180,35 +1212,6 @@ class TestBranchQueryHelpers:
         ):
             result = _query_branches(tmp_path, previous=None)
         assert result is None
-
-
-class TestIsMergedToMain:
-    """Tests for _is_merged_to_main() routed through the git layer."""
-
-    def test_matches_issue_number_in_log(self, tmp_path: Path) -> None:
-        with patch(
-            "wade.services.implementation_service.batch.git_repo.log_oneline",
-            return_value="abc123 Merge feat/1-add-auth\n",
-        ) as mock_log:
-            result = _is_merged_to_main(tmp_path, "1", "main")
-        assert result is True
-        mock_log.assert_called_once_with(tmp_path, "origin/main", limit=100)
-
-    def test_no_match_returns_false(self, tmp_path: Path) -> None:
-        with patch(
-            "wade.services.implementation_service.batch.git_repo.log_oneline",
-            return_value="abc123 Merge feat/99-other\n",
-        ):
-            result = _is_merged_to_main(tmp_path, "1", "main")
-        assert result is False
-
-    def test_empty_log_returns_false(self, tmp_path: Path) -> None:
-        with patch(
-            "wade.services.implementation_service.batch.git_repo.log_oneline",
-            return_value="",
-        ):
-            result = _is_merged_to_main(tmp_path, "1", "main")
-        assert result is False
 
 
 class TestBuildPrIndex:
@@ -1528,7 +1531,7 @@ class TestCapturePostSessionUsage:
         with (
             patch(
                 "wade.services.implementation_service.core.git_pr.get_pr_for_branch",
-                return_value={"number": 7},
+                return_value=PRLookup(found=True, pr=PRRef(number=7, state="OPEN")),
             ),
             patch(
                 "wade.services.implementation_service.core.git_pr.get_pr_body",
@@ -1588,7 +1591,7 @@ class TestCapturePostSessionUsage:
         with (
             patch(
                 "wade.services.implementation_service.core.git_pr.get_pr_for_branch",
-                return_value={"number": 7},
+                return_value=PRLookup(found=True, pr=PRRef(number=7, state="OPEN")),
             ),
             patch(
                 "wade.services.implementation_service.core.git_pr.get_pr_body",
@@ -1638,7 +1641,7 @@ class TestCapturePostSessionUsage:
         with (
             patch(
                 "wade.services.implementation_service.core.git_pr.get_pr_for_branch",
-                return_value={"number": 7},
+                return_value=PRLookup(found=True, pr=PRRef(number=7, state="OPEN")),
             ),
             patch(
                 "wade.services.implementation_service.core.git_pr.get_pr_body",
@@ -1806,7 +1809,7 @@ class TestStartTrackingDetection:
             patch(
                 "wade.services.implementation_service.core._detect_ai_cli_env", return_value=None
             ),
-            patch("wade.git.pr.get_pr_for_branch", return_value=None),
+            patch("wade.git.pr.get_pr_for_branch", return_value=PRLookup(found=False)),
             patch(
                 "wade.services.implementation_service.core.bootstrap_draft_pr",
                 return_value={"number": 1, "url": "http://test"},
@@ -1912,7 +1915,9 @@ class TestPostImplementationLifecyclePr:
         with (
             patch(
                 "wade.git.pr.get_pr_for_branch",
-                return_value={"number": 10, "url": "http://test"},
+                return_value=PRLookup(
+                    found=True, pr=PRRef(number=10, url="http://test", state="OPEN")
+                ),
             ),
             patch("wade.services.implementation_service.lifecycle.prompts") as mock_prompts,
             patch("wade.services.implementation_service.lifecycle.webbrowser.open") as mock_open,
@@ -1935,7 +1940,9 @@ class TestPostImplementationLifecyclePr:
         with (
             patch(
                 "wade.git.pr.get_pr_for_branch",
-                return_value={"number": 10, "url": "http://test"},
+                return_value=PRLookup(
+                    found=True, pr=PRRef(number=10, url="http://test", state="OPEN")
+                ),
             ),
             patch("wade.services.implementation_service.lifecycle.prompts") as mock_prompts,
             patch(
@@ -1959,7 +1966,9 @@ class TestPostImplementationLifecyclePr:
         with (
             patch(
                 "wade.git.pr.get_pr_for_branch",
-                return_value={"number": 10, "url": "http://test"},
+                return_value=PRLookup(
+                    found=True, pr=PRRef(number=10, url="http://test", state="OPEN")
+                ),
             ),
             patch("wade.services.implementation_service.lifecycle.prompts") as mock_prompts,
             patch(
@@ -1983,7 +1992,9 @@ class TestPostImplementationLifecyclePr:
         with (
             patch(
                 "wade.git.pr.get_pr_for_branch",
-                return_value={"number": 10, "url": "http://test"},
+                return_value=PRLookup(
+                    found=True, pr=PRRef(number=10, url="http://test", state="OPEN")
+                ),
             ),
             patch("wade.services.implementation_service.lifecycle.prompts") as mock_prompts,
             patch(
@@ -2030,7 +2041,9 @@ class TestPostImplementationLifecyclePr:
         with (
             patch(
                 "wade.git.pr.get_pr_for_branch",
-                return_value={"number": 10, "url": "http://test"},
+                return_value=PRLookup(
+                    found=True, pr=PRRef(number=10, url="http://test", state="OPEN")
+                ),
             ),
             patch("wade.services.implementation_service.lifecycle.prompts") as mock_prompts,
             patch(
@@ -2076,59 +2089,9 @@ class TestPostImplementationLifecyclePr:
     def test_no_pr_found_returns_not_merged(self, tmp_path: Path) -> None:
         """No open PR → returns NOT_MERGED."""
         mock_provider = MagicMock()
-        with patch("wade.git.pr.get_pr_for_branch", return_value=None):
+        with patch("wade.git.pr.get_pr_for_branch", return_value=PRLookup(found=False)):
             result = _post_implementation_lifecycle_pr(
                 tmp_path, "feat/42", "42", tmp_path / "wt", mock_provider
-            )
-        assert result == MergeStatus.NOT_MERGED
-
-
-class TestPostImplementationLifecycleDirect:
-    """Tests for _post_implementation_lifecycle_direct — merged status propagation."""
-
-    def _make_config(self) -> ProjectConfig:
-        return ProjectConfig(project=ProjectSettings(main_branch="main"))
-
-    def test_merge_returns_merged(self, tmp_path: Path) -> None:
-        """User chooses 'Merge into main' → returns MERGED."""
-        mock_provider = MagicMock()
-        with (
-            patch("wade.git.branch.commits_ahead", return_value=3),
-            patch("wade.services.implementation_service.lifecycle.prompts") as mock_prompts,
-            patch("wade.git.repo.merge_squash"),
-            patch("wade.git.repo.commit_no_edit"),
-            patch("wade.git.repo.push"),
-            patch("wade.services.implementation_service.lifecycle._cleanup_worktree"),
-        ):
-            mock_prompts.select.return_value = 0  # "Merge into main"
-            result = _post_implementation_lifecycle_direct(
-                tmp_path, "feat/42", "42", tmp_path / "wt", self._make_config(), mock_provider
-            )
-        assert result == MergeStatus.MERGED
-
-    def test_skip_returns_not_merged(self, tmp_path: Path) -> None:
-        """User chooses 'Skip' → returns NOT_MERGED."""
-        mock_provider = MagicMock()
-        with (
-            patch("wade.git.branch.commits_ahead", return_value=3),
-            patch("wade.services.implementation_service.lifecycle.prompts") as mock_prompts,
-        ):
-            mock_prompts.select.return_value = 2  # "Skip"
-            result = _post_implementation_lifecycle_direct(
-                tmp_path, "feat/42", "42", tmp_path / "wt", self._make_config(), mock_provider
-            )
-        assert result == MergeStatus.NOT_MERGED
-
-    def test_no_commits_returns_not_merged(self, tmp_path: Path) -> None:
-        """Zero commits ahead → returns NOT_MERGED (nothing merged)."""
-        mock_provider = MagicMock()
-        with (
-            patch("wade.git.branch.commits_ahead", return_value=0),
-            patch("wade.services.implementation_service.lifecycle.prompts") as mock_prompts,
-        ):
-            mock_prompts.confirm.return_value = False  # Don't delete worktree
-            result = _post_implementation_lifecycle_direct(
-                tmp_path, "feat/42", "42", tmp_path / "wt", self._make_config(), mock_provider
             )
         assert result == MergeStatus.NOT_MERGED
 

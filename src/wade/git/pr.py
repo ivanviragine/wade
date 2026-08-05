@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -30,6 +31,112 @@ class PRSummary(BaseModel):
     state: str
     is_draft: bool = Field(alias="isDraft")
     merged_at: str | None = Field(default=None, alias="mergedAt")
+    updated_at: str | None = Field(default=None, alias="updatedAt")
+
+
+class PRRef(BaseModel):
+    """Details of the PR associated with a branch (``gh pr view <branch>``)."""
+
+    model_config = {"populate_by_name": True}
+
+    number: int
+    url: str = ""
+    title: str = ""
+    state: str = ""
+    is_draft: bool = Field(default=False, alias="isDraft")
+
+
+class PRLookup(BaseModel):
+    """Result of looking up the PR for a branch.
+
+    Distinguishes the three realities that the old ``dict | None`` return type
+    conflated:
+
+    - ``found=False, lookup_failed=False`` — no PR exists for the branch.
+    - ``found=False, lookup_failed=True`` — the lookup itself failed (transient
+      ``gh`` error, bad auth, or unparseable output). Callers MUST NOT treat
+      this as "no PR" — retry or report the failure instead.
+    - ``found=True`` — a PR exists; ``pr`` holds its details and ``state`` its
+      ``OPEN`` / ``CLOSED`` / ``MERGED`` state.
+
+    Callers acting on an *open* PR must check :attr:`is_open` (or ``state``)
+    first — a merged or closed PR is ``found`` but not open.
+    """
+
+    found: bool = False
+    lookup_failed: bool = False
+    pr: PRRef | None = None
+
+    @property
+    def state(self) -> str:
+        """The PR's state (``OPEN`` / ``CLOSED`` / ``MERGED``), or ``""``."""
+        return self.pr.state if self.pr else ""
+
+    @property
+    def number(self) -> int | None:
+        """The PR number, or ``None`` when no PR was found."""
+        return self.pr.number if self.pr else None
+
+    @property
+    def url(self) -> str:
+        """The PR URL, or ``""`` when no PR was found."""
+        return self.pr.url if self.pr else ""
+
+    @property
+    def is_draft(self) -> bool:
+        """Whether the found PR is a draft."""
+        return bool(self.pr and self.pr.is_draft)
+
+    @property
+    def is_open(self) -> bool:
+        """Whether a PR exists and is in the OPEN state."""
+        return self.pr is not None and self.pr.state.upper() == "OPEN"
+
+    @property
+    def is_merged(self) -> bool:
+        """Whether a PR exists and has been MERGED."""
+        return self.pr is not None and self.pr.state.upper() == "MERGED"
+
+    @property
+    def is_closed_or_merged(self) -> bool:
+        """Whether a PR exists and is CLOSED or MERGED (not actionable as open)."""
+        return self.pr is not None and self.pr.state.upper() in ("CLOSED", "MERGED")
+
+
+# Stderr substrings that mark a TRANSIENT gh/GitHub failure worth retrying.
+# Permanent failures (404 not found, 422 unprocessable, bad auth) are NOT here —
+# retrying them just wastes time and, for merge_pr, risks acting twice (B4).
+_TRANSIENT_GH_SIGNALS = (
+    "rate limit",
+    "was submitted too quickly",
+    "connection reset",
+    "connection refused",
+    "connection timed out",
+    "timeout",
+    "timed out",
+    "temporary failure",
+    "temporarily unavailable",
+    "service unavailable",
+    "bad gateway",
+    "gateway timeout",
+    "internal server error",
+    "http 500",
+    "http 502",
+    "http 503",
+    "http 504",
+    # Specific EOF phrasings only — a bare "eof" substring also matches benign
+    # tokens (e.g. a branch named ``feat/eof-parser``) echoed back in stderr.
+    "unexpected eof",
+    "eof occurred",
+    "tls handshake",
+    "i/o timeout",
+)
+
+
+def _is_transient_gh_error(stderr: str) -> bool:
+    """Return True when *stderr* indicates a transient (retryable) gh failure."""
+    lowered = stderr.lower()
+    return any(sig in lowered for sig in _TRANSIENT_GH_SIGNALS)
 
 
 def _run_gh(
@@ -44,7 +151,9 @@ def _run_gh(
         *args: gh subcommand and arguments.
         cwd: Working directory for the command.
         check: If True, raise GhCliError on non-zero exit.
-        retries: Number of times to retry on non-zero exit (default 0).
+        retries: Max retries on a **transient** failure (default 0). Permanent
+            failures (404, 422, bad auth) never retry — only stderr matching
+            :data:`_TRANSIENT_GH_SIGNALS` does.
 
     Returns:
         CompletedProcess with captured stdout/stderr.
@@ -66,7 +175,7 @@ def _run_gh(
         except FileNotFoundError as exc:
             raise GhCliError("gh CLI not found — install it from https://cli.github.com/") from exc
 
-        if result.returncode != 0 and attempt < retries:
+        if result.returncode != 0 and attempt < retries and _is_transient_gh_error(result.stderr):
             attempt += 1
             log.warning(
                 "gh.retrying",
@@ -86,6 +195,19 @@ def _run_gh(
         return result
 
 
+def _get_pr_state(repo_root: Path, pr_number: int) -> str | None:
+    """Return a PR's state (``OPEN`` / ``CLOSED`` / ``MERGED``) or None on failure."""
+    result = _run_gh("pr", "view", str(pr_number), "--json", "state", cwd=repo_root, check=False)
+    if result.returncode != 0:
+        return None
+    try:
+        data = json.loads(result.stdout)
+        state: str = data.get("state", "")
+        return state or None
+    except (json.JSONDecodeError, KeyError):
+        return None
+
+
 def create_pr(
     repo_root: Path,
     title: str,
@@ -93,7 +215,7 @@ def create_pr(
     base: str,
     head: str | None = None,
     draft: bool = False,
-) -> dict[str, str | int]:
+) -> dict[str, str | int] | None:
     """Create a pull request via ``gh pr create``.
 
     Args:
@@ -105,7 +227,9 @@ def create_pr(
         draft: If True, create as a draft PR.
 
     Returns:
-        Dict with "number" (int) and "url" (str) keys.
+        Dict with "number" (int) and "url" (str) keys, or ``None`` when the PR
+        number cannot be determined — this function never fabricates a ``#0``
+        (B5). Callers must handle ``None`` and report the failure.
 
     Raises:
         GhCliError: If PR creation fails.
@@ -126,18 +250,60 @@ def create_pr(
         cmd_args.append("--draft")
 
     log.info("pr.create", title=title, base=base, head=head, draft=draft)
-    result = _run_gh(*cmd_args, cwd=repo_root)
+    # gh pr create is NOT idempotent — an attempt that reached GitHub but whose
+    # response was lost must never create a second PR for the branch. So we run
+    # the retry loop here (not inside _run_gh) and, before every retry, re-check
+    # whether a PR for the head branch now exists; if so the earlier attempt
+    # actually succeeded, so we return it instead of creating a duplicate (or
+    # failing with GitHub's "a pull request already exists"). Mirrors merge_pr's
+    # state-aware retry (B4).
+    max_retries = 3
+    attempt = 0
+    while True:
+        result = _run_gh(*cmd_args, cwd=repo_root, check=False)
+        if result.returncode == 0:
+            break
+        if head is not None:
+            existing = get_pr_for_branch(repo_root, head)
+            if existing.found and existing.pr is not None:
+                log.info("pr.create.already_exists", pr_number=existing.pr.number)
+                return {"number": existing.pr.number, "url": existing.pr.url}
+        if attempt < max_retries and _is_transient_gh_error(result.stderr):
+            attempt += 1
+            log.warning(
+                "pr.create.retrying",
+                attempt=attempt,
+                stderr=result.stderr.strip()[:200],
+            )
+            time.sleep(attempt)
+            continue
+        raise GhCliError(f"gh pr create failed (exit {result.returncode}): {result.stderr.strip()}")
 
     # gh pr create prints the PR URL to stdout
     pr_url = result.stdout.strip()
 
-    # Try to get structured info via gh pr view
+    # Prefer structured info via gh pr view.
     pr_info = _get_pr_info_from_url(repo_root, pr_url)
     if pr_info:
         return pr_info
 
-    # Fallback: return URL only (number unknown)
-    return {"number": 0, "url": pr_url}
+    # Second fallback: parse the number straight from the returned URL.
+    number = _parse_pr_number_from_url(pr_url)
+    if number is not None:
+        return {"number": number, "url": pr_url}
+
+    # Never fabricate a PR number — surface the failure to the caller (B5).
+    log.warning("pr.create.number_undeterminable", url=pr_url)
+    return None
+
+
+_PR_URL_NUMBER_RE = re.compile(r"/pull/(\d+)")
+
+
+def _parse_pr_number_from_url(pr_url: str) -> int | None:
+    """Extract the PR number from a ``.../pull/<n>`` URL, or None."""
+    match = _PR_URL_NUMBER_RE.search(pr_url)
+    return int(match.group(1)) if match else None
 
 
 def _get_pr_info_from_url(repo_root: Path, pr_url: str) -> dict[str, str | int] | None:
@@ -194,7 +360,35 @@ def merge_pr(
     ]
     if delete_branch:
         cmd_args.append("--delete-branch")
-    _run_gh(*cmd_args, cwd=repo_root)
+
+    # merge_pr is NOT idempotent — a completed remote merge cannot be re-run.
+    # So we do the retry loop here (not inside _run_gh) and, before every retry,
+    # re-check the PR state: if it is already MERGED the earlier attempt actually
+    # succeeded (its response was just lost to a transient error), so we return
+    # success instead of re-attempting the irreversible merge (knowledge
+    # b6ca74e5). Only transient failures are retried.
+    max_retries = 3
+    attempt = 0
+    while True:
+        result = _run_gh(*cmd_args, cwd=repo_root, check=False)
+        if result.returncode == 0:
+            return
+        if _get_pr_state(repo_root, pr_number) == "MERGED":
+            log.info("pr.merge.already_merged", pr_number=pr_number)
+            return
+        if attempt < max_retries and _is_transient_gh_error(result.stderr):
+            attempt += 1
+            log.warning(
+                "pr.merge.retrying",
+                pr_number=pr_number,
+                attempt=attempt,
+                stderr=result.stderr.strip()[:200],
+            )
+            time.sleep(attempt)
+            continue
+        raise GhCliError(
+            f"gh pr merge {pr_number} failed (exit {result.returncode}): {result.stderr.strip()}"
+        )
 
 
 def update_pr_body(repo_root: Path, pr_number: int, body: str) -> bool:
@@ -221,16 +415,27 @@ def update_pr_body(repo_root: Path, pr_number: int, body: str) -> bool:
     return result.returncode == 0
 
 
-def get_pr_for_branch(repo_root: Path, branch: str) -> dict[str, str | int | bool] | None:
-    """Find an open PR for the given branch.
+# Substrings in ``gh`` stderr that mean "no PR exists for this branch" — a
+# normal, non-error result — as opposed to a transient/permanent lookup failure
+# (network error, bad auth, rate limit). ``gh pr view <branch>`` exits non-zero
+# in BOTH cases, so the message is the only signal that tells them apart.
+_NO_PR_SIGNALS = ("no pull requests found", "no open pull requests")
+
+
+def get_pr_for_branch(repo_root: Path, branch: str) -> PRLookup:
+    """Look up the PR associated with *branch*.
 
     Args:
         repo_root: Repository root directory.
         branch: Branch name to search for.
 
     Returns:
-        Dict with "number" (int), "url" (str), "title" (str),
-        "state" (str), and "isDraft" (bool) keys, or None if no PR exists.
+        A :class:`PRLookup` distinguishing three realities: no PR exists, the
+        lookup failed (transient/permanent ``gh`` error), or a PR exists with a
+        known ``OPEN`` / ``CLOSED`` / ``MERGED`` state. Callers must check
+        :attr:`PRLookup.is_open` before acting on a PR as if it were open, and
+        must handle :attr:`PRLookup.lookup_failed` separately from "no PR"
+        (retry / report — never assume the PR is absent).
     """
     result = _run_gh(
         "pr",
@@ -242,18 +447,23 @@ def get_pr_for_branch(repo_root: Path, branch: str) -> dict[str, str | int | boo
         check=False,
     )
     if result.returncode != 0:
-        return None
+        stderr = result.stderr.lower()
+        if any(sig in stderr for sig in _NO_PR_SIGNALS):
+            return PRLookup(found=False, lookup_failed=False)
+        # Non-zero exit without the "no PR" signal is a real lookup failure.
+        return PRLookup(found=False, lookup_failed=True)
     try:
         data = json.loads(result.stdout)
-        return {
-            "number": data["number"],
-            "url": data["url"],
-            "title": data.get("title", ""),
-            "state": data.get("state", ""),
-            "isDraft": data.get("isDraft", False),
-        }
-    except (json.JSONDecodeError, KeyError):
-        return None
+        pr = PRRef(
+            number=data["number"],
+            url=data.get("url", ""),
+            title=data.get("title", ""),
+            state=data.get("state", ""),
+            isDraft=data.get("isDraft", False),
+        )
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return PRLookup(found=False, lookup_failed=True)
+    return PRLookup(found=True, pr=pr)
 
 
 def list_prs(
@@ -278,7 +488,7 @@ def list_prs(
             "--limit",
             str(limit),
             "--json",
-            "number,url,headRefName,state,isDraft,mergedAt",
+            "number,url,headRefName,state,isDraft,mergedAt,updatedAt",
             cwd=repo_root,
             check=False,
         )

@@ -62,7 +62,6 @@ def done(
     plan: str | None = typer.Option(None, "--plan", help="Plan file to resolve worktree from."),
     no_close: bool = typer.Option(False, "--no-close", help="Don't close the issue on merge."),
     draft: bool = typer.Option(False, "--draft", help="Create PR as draft."),
-    no_cleanup: bool = typer.Option(False, "--no-cleanup", help="Don't remove worktree."),
 ) -> None:
     """Finalize review — push branch and update PR."""
     from wade.services.implementation_service import done as do_done
@@ -72,12 +71,14 @@ def done(
         plan_file=Path(plan) if plan else None,
         no_close=no_close,
         draft=draft,
-        no_cleanup=no_cleanup,
     )
     if success:
+        from wade.cli.session_shared import DOC_PASS_ADVISORY
         from wade.models.review import format_review_status_summary
         from wade.services.review_service import get_review_status
         from wade.ui.console import console
+
+        console.warn(DOC_PASS_ADVISORY)
 
         status = get_review_status()
         if status is not None:

@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.39.0] — 2026-08-05
+
+### Features
+
+- offer only tool-valid reasoning-effort levels in wade init (#371) (cb6458a)
+
+## [v0.38.1] — 2026-08-04
+
+### Bug Fixes
+
+- accept permission_mode key in config validation (#369) (cdeb48e)
+
+### Other Changes
+
+- H2: Git &amp; remote-state hygiene — never lose work, never act on a stale read (+ retire `merge_strategy: direct`) (#362) (6e55893)
+- H1: Hook-layer correctness — capability matrix + fail-closed containment (crossby 0.13) (#363) (623805f)
+
+## [v0.38.0] — 2026-08-03
+
+### Features
+
+- add a documentation update pass to the implementation and pr-comments sessions (#361) (96b6b6d)
+
+### Other Changes
+
+- E: Context budget — slim the skills, say each rule once, load reference just-in-time (#364) (670cc29)
+
 ## [v0.37.0] — 2026-08-01
 
 ### Features

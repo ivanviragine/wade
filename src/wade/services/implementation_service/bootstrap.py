@@ -5,8 +5,13 @@ from __future__ import annotations
 import shutil
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import structlog
+
+if TYPE_CHECKING:
+    from crossby.models.ai import AIToolID
+    from crossby.sync.base import AbstractSyncWriter
 
 from wade.git import repo as git_repo
 from wade.models.config import (
@@ -161,8 +166,56 @@ def write_plan_md(
 
 
 # Canonical write-family tool names the guard scopes to; crossby's hook writers
-# translate these to each tool's native tool names + matcher.
-_GUARD_WRITE_TOOLS = ["Edit", "Write", "Delete", "NotebookEdit"]
+# translate these to each tool's native tool names + matcher (Cursor Edit->Write,
+# Copilot Write->write, agy Write->write_to_file, …).
+#
+# ``Bash`` is the canonical *shell* token, and it is here because a shell call is
+# a write channel: `printf ... > ../main-repo/src/app.py` bypasses every
+# write-tool matcher. crossby maps it per tool (Cursor ``Shell``, agy
+# ``run_command``, Claude/Codex ``Bash`` unchanged), and ``wade-hook`` routes the
+# resulting payload to ``shell_containment`` because crossby deliberately reports
+# ``is_write=False`` for shell tool names.
+_GUARD_SHELL_TOOL = "Bash"
+_GUARD_WRITE_TOOLS = ["Edit", "Write", "Delete", "NotebookEdit", _GUARD_SHELL_TOOL]
+
+# Seconds before a tool abandons the PreToolUse guard. Deliberately short: this
+# runs on every write, and each tool's own default is generous enough (Cursor 60,
+# Codex 600, agy 30, Copilot 30) that a hung hook stalls the agent noticeably.
+# crossby validates > 0 and emits it under each tool's native key.
+_GUARD_HOOK_TIMEOUT_SECONDS = 10
+
+
+def _hook_writers() -> list[tuple[AIToolID, AbstractSyncWriter]]:
+    """Tools wade installs guard hooks into, paired with crossby's writer for each.
+
+    Shared by the PreToolUse and Stop installers so the two lists cannot drift,
+    and read by the dialect-map parity test — a tool added here without matching
+    entries in ``wade.hooks.cli``'s ``_TOOL_DIALECTS`` / ``_TOOL_STOP_DIALECTS``
+    would silently fall back to the default output shape, so the test fails first.
+
+    Imported lazily: ``crossby.sync.hooks`` pulls in every adapter, which is a
+    cost worth paying once per worktree bootstrap but not on every ``wade`` start.
+    """
+    from crossby.models.ai import AIToolID
+    from crossby.sync.hooks import (
+        AntigravityCLIHooksWriter,
+        ClaudeHooksWriter,
+        CodexHooksWriter,
+        CopilotHooksWriter,
+        CursorHooksWriter,
+    )
+
+    # Antigravity CLI joined this list in crossby 0.13, which added agy's native
+    # tool names to ``_TOOL_NAME_MAP`` (``Write`` -> ``write_to_file`` etc.).
+    # Before that the canonical matcher compiled to names agy never emits, so the
+    # hook installed and then never fired — protection in appearance only.
+    return [
+        (AIToolID.CLAUDE, ClaudeHooksWriter()),
+        (AIToolID.CURSOR, CursorHooksWriter()),
+        (AIToolID.COPILOT, CopilotHooksWriter()),
+        (AIToolID.CODEX, CodexHooksWriter()),
+        (AIToolID.ANTIGRAVITY_CLI, AntigravityCLIHooksWriter()),
+    ]
 
 
 def _log_sync_result(result: object, tool_id: object) -> None:
@@ -202,10 +255,12 @@ def _install_guard_hooks(
     format and dialect are handled by crossby's hook writers; the decision logic
     lives in ``wade hook`` / ``wade.hooks.policies``.
 
-    The worktree-containment guard is **skipped** for tools that hard-sandbox
-    writes (e.g. Codex ``--sandbox workspace-write``), where it is redundant. The
-    plan guard is **always** installed — it is finer-grained than any directory
-    sandbox (it must block source writes *inside* the workspace).
+    For tools that hard-sandbox writes (e.g. Codex ``--sandbox workspace-write``)
+    the worktree-containment guard is **narrowed to the shell token** rather than
+    skipped: the sandbox already covers tool-call writes, but it also permits
+    ``/tmp`` and ``$TMPDIR``, so a shell redirect can still land outside the
+    worktree. The plan guard is **always** installed in full — it is finer-grained
+    than any directory sandbox (it must block source writes *inside* the workspace).
 
     Args:
         worktree_path: Worktree directory.
@@ -214,48 +269,41 @@ def _install_guard_hooks(
     import shlex
 
     from crossby.ai_tools import AbstractAITool
-    from crossby.models.ai import AIToolID
     from crossby.models.config import HookEntry
     from crossby.sync.base import SyncData
-    from crossby.sync.hooks import (
-        ClaudeHooksWriter,
-        CodexHooksWriter,
-        CopilotHooksWriter,
-        CursorHooksWriter,
-    )
 
-    # Antigravity CLI (which replaced Gemini) is intentionally absent here even
-    # though crossby 0.12 ships an AntigravityCLIHooksWriter: a PreToolUse guard
-    # is scoped by a tool-name matcher (``_GUARD_WRITE_TOOLS`` — Claude names),
-    # which would not match agy's tool names, so the hook would be an inert no-op
-    # that merely *looks* like protection. agy's own bundled plugin registers no
-    # PreToolUse hook either, so that path is best-effort there. Write containment
-    # for agy is therefore left to its workspace confinement; the reliable
-    # enforcement wade installs for agy is the Stop hook (see _install_stop_hook).
-    writers = [
-        (AIToolID.CLAUDE, ClaudeHooksWriter()),
-        (AIToolID.CURSOR, CursorHooksWriter()),
-        (AIToolID.COPILOT, CopilotHooksWriter()),
-        (AIToolID.CODEX, CodexHooksWriter()),
-    ]
     root = shlex.quote(str(worktree_path))
-    for tool_id, writer in writers:
+    for tool_id, writer in _hook_writers():
         caps = AbstractAITool.get(tool_id).capabilities()
+        tools = _GUARD_WRITE_TOOLS
         if guard_type == "worktree" and caps.sandboxes_writes:
-            # Native sandbox already confines writes to the worktree.
-            continue
+            # A native write sandbox (Codex `--sandbox workspace-write`) already
+            # confines *tool-call* writes to the workspace, so the file-write half
+            # of this guard is redundant. It is not redundant for the shell half:
+            # workspace-write also permits /tmp and $TMPDIR, so
+            # `printf x > /tmp/pwn` is sandbox-legal yet outside the worktree.
+            # Narrow the matcher to the shell token rather than skipping the tool.
+            tools = [_GUARD_SHELL_TOOL]
         command = (
             f"wade-hook pre_tool_use --guard {guard_type} --tool {tool_id.value} --root {root}"
         )
         # fail_closed: block the write if the hook itself crashes/times out. Only
         # Cursor honors this (it defaults to fail-open, which silently defeats a
-        # security guard); other writers ignore the field. Deliberately not set
-        # on the Stop hook, which must stay fail-open so a bug never traps the agent.
+        # security guard); other writers ignore the field because their hooks
+        # already fail closed. Cursor's published docs name `failClosed` only for
+        # beforeShellExecution/beforeMCPExecution/beforeReadFile, but crossby 0.13
+        # confirmed against cursor-agent's bundled hook runtime that preToolUse is
+        # in the fail-closed event set and a failed hook there becomes
+        # {"permission": "deny"} — under-documented, not unsupported.
+        #
+        # Deliberately not set on the Stop hook, which must stay fail-open so a bug
+        # never traps the agent in a session it cannot end.
         hook = HookEntry(
             event="pre_tool_use",
-            tools=_GUARD_WRITE_TOOLS,
+            tools=tools,
             command=command,
             fail_closed=True,
+            timeout=_GUARD_HOOK_TIMEOUT_SECONDS,
         )
         _log_sync_result(writer.sync(SyncData(hooks=[hook]), worktree_path), tool_id)
 
@@ -268,31 +316,23 @@ def _install_stop_hook(worktree_path: Path) -> None:
     On session Stop, ``wade hook stop --guard session-complete`` nudges (once) if
     ``PR-SUMMARY.md`` is missing — enforcing the closing steps rather than relying
     on the skill checklist. Installed only for tools that fire a blocking Stop
-    hook (``supports_stop_hook`` — Claude/Codex/Cursor/Antigravity CLI); Copilot
-    degrades to the skill's closing-steps checklist. Merged alongside the
-    PreToolUse write guard by crossby's hook writers.
+    hook (``supports_stop_hook``), which as of crossby 0.13 is every tool wade
+    drives: Copilot joined once its ``agentStop`` event and blocking
+    ``{"decision": "block", "reason": …}`` contract were confirmed. Merged
+    alongside the PreToolUse write guard by crossby's hook writers.
+
+    The per-tool Stop *shape* differs (Claude/Codex/Copilot block, Cursor sends a
+    ``followup_message``, agy inverts polarity with ``{"decision": "continue"}``);
+    ``wade-hook`` resolves that from its own stop-dialect map, not from here.
     """
     import shlex
 
     from crossby.ai_tools import AbstractAITool
-    from crossby.models.ai import AIToolID
     from crossby.models.config import HookEntry
     from crossby.sync.base import SyncData
-    from crossby.sync.hooks import (
-        AntigravityCLIHooksWriter,
-        ClaudeHooksWriter,
-        CodexHooksWriter,
-        CursorHooksWriter,
-    )
 
-    writers = [
-        (AIToolID.CLAUDE, ClaudeHooksWriter()),
-        (AIToolID.CURSOR, CursorHooksWriter()),
-        (AIToolID.CODEX, CodexHooksWriter()),
-        (AIToolID.ANTIGRAVITY_CLI, AntigravityCLIHooksWriter()),
-    ]
     root = shlex.quote(str(worktree_path))
-    for tool_id, writer in writers:
+    for tool_id, writer in _hook_writers():
         if not AbstractAITool.get(tool_id).capabilities().supports_stop_hook:
             continue
         command = f"wade-hook stop --guard session-complete --tool {tool_id.value} --root {root}"
@@ -530,7 +570,7 @@ def bootstrap_worktree(
     skill_extra_partials: dict[str, str] = {}
     if config.ai.review_plan.enabled is False:
         skill_extra_partials["{review_plan_step}"] = (
-            "5. ~~**Review**~~ — skipped (`review_plan.enabled: false` in `.wade.yml`)."
+            "7. ~~**Review**~~ — skipped (`review_plan.enabled: false` in `.wade.yml`)."
         )
     if config.ai.review_implementation.enabled is False:
         skill_extra_partials["{review_enforcement_rule}"] = ""

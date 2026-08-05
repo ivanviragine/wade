@@ -14,7 +14,6 @@ from wade.git.repo import (
     diff_worktree,
     get_main_worktree_path,
     is_head_attached,
-    log_oneline,
     stash,
     stash_pop,
 )
@@ -57,25 +56,6 @@ class TestDiffWorktree:
             pytest.raises(GitError),
         ):
             diff_worktree(tmp_path)
-
-
-class TestLogOneline:
-    def test_returns_output(self, tmp_path: Path) -> None:
-        with patch("wade.git.repo._run_git") as mock_run:
-            mock_run.return_value.returncode = 0
-            mock_run.return_value.stdout = "abc123 Merge feat/1-x\n"
-            result = log_oneline(tmp_path, "origin/main", limit=50)
-            mock_run.assert_called_once_with(
-                "log", "origin/main", "--oneline", "-50", cwd=tmp_path, check=False
-            )
-            assert "feat/1-x" in result
-
-    def test_returns_empty_on_failure(self, tmp_path: Path) -> None:
-        with patch("wade.git.repo._run_git") as mock_run:
-            mock_run.return_value.returncode = 128
-            mock_run.return_value.stdout = ""
-            result = log_oneline(tmp_path, "origin/nope")
-            assert result == ""
 
 
 class TestStash:
@@ -148,13 +128,20 @@ class TestRunGitWithRetry:
     def test_raises_after_all_retries_exhausted(self, tmp_path: Path) -> None:
         with (
             patch("wade.git.repo._run_git") as mock_run,
-            patch("wade.git.repo.time.sleep"),
+            patch("wade.git.repo.time.sleep") as mock_sleep,
         ):
             lock_err = GitError("Unable to create '/repo/.git/index.lock': File exists")
             mock_run.side_effect = [lock_err, lock_err, lock_err]
             with pytest.raises(GitError, match=r"index\.lock"):
                 _run_git_with_retry("worktree", "add", cwd=tmp_path, retries=3)
             assert mock_run.call_count == 3
+            # The final attempt re-raises immediately — no wasted backoff sleep
+            # after the last try (only retries-1 sleeps).
+            assert mock_sleep.call_count == 2
+
+    def test_raises_on_invalid_retries(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="retries must be at least 1"):
+            _run_git_with_retry("status", cwd=tmp_path, retries=0)
 
 
 class TestGetMainWorktreePath:

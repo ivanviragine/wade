@@ -10,7 +10,7 @@ import pytest
 import yaml
 from crossby.models.ai import AIToolID
 
-from wade.models.config import ComplexityModelMapping
+from wade.models.config import ComplexityModelMapping, ProjectSettings
 from wade.services.init_service import (
     GITIGNORE_ENTRIES,
     GITIGNORE_MARKER_END,
@@ -444,37 +444,38 @@ class TestResolveModels:
 class TestPromptProjectSettings:
     def test_non_interactive_returns_defaults(self, tmp_git_repo: Path) -> None:
         result = _prompt_project_settings(tmp_git_repo, non_interactive=True)
-        assert result["main_branch"] == "main"
-        assert result["merge_strategy"] == "PR"
-        assert result["branch_prefix"] == "feat"
-        assert result["issue_label"] == "feature-plan"
-        assert result["worktrees_dir"] == "../.worktrees"
+        assert result.main_branch == "main"
+        assert result.merge_strategy == "PR"
+        assert result.branch_prefix == "feat"
+        assert result.issue_label == "feature-plan"
+        assert result.worktrees_dir == "../.worktrees"
 
     @patch("wade.ui.prompts.select")
     @patch("wade.ui.prompts.input_prompt")
     def test_interactive_uses_prompts(
         self, mock_input: MagicMock, mock_select: MagicMock, tmp_git_repo: Path
     ) -> None:
-        # merge_strategy uses prompts.select (index 1 = "direct")
-        mock_select.side_effect = [1]
-        # branch_prefix, issue_label, worktrees_dir use input_prompt
+        # merge_strategy is no longer prompted (only "PR" since #357 retired
+        # "direct") — the wizard just collects branch_prefix, issue_label,
+        # worktrees_dir via input_prompt and never calls select here.
         mock_input.side_effect = ["fix", "bug", "../worktrees"]
         result = _prompt_project_settings(tmp_git_repo, non_interactive=False)
-        assert result["merge_strategy"] == "direct"
-        assert result["branch_prefix"] == "fix"
-        assert result["issue_label"] == "bug"
-        assert result["worktrees_dir"] == "../worktrees"
+        assert result.merge_strategy == "PR"
+        assert result.branch_prefix == "fix"
+        assert result.issue_label == "bug"
+        assert result.worktrees_dir == "../worktrees"
         # main_branch is auto-detected, not prompted
-        assert result["main_branch"] == "main"
+        assert result.main_branch == "main"
+        mock_select.assert_not_called()
 
     def test_detects_main_branch_from_git(self, tmp_git_repo: Path) -> None:
         result = _prompt_project_settings(tmp_git_repo, non_interactive=True)
-        assert result["main_branch"] == "main"
+        assert result.main_branch == "main"
 
     def test_fallback_main_branch_without_git(self, tmp_path: Path) -> None:
         """When not in a git repo, should fall back to 'main'."""
         result = _prompt_project_settings(tmp_path, non_interactive=True)
-        assert result["main_branch"] == "main"
+        assert result.main_branch == "main"
 
 
 # ---------------------------------------------------------------------------
@@ -630,6 +631,7 @@ class TestPromptCommandOverrides:
         mock_caps = MagicMock()
         mock_caps.supports_effort = False
         mock_caps.supports_yolo = False
+        mock_caps.supported_efforts = None
         mock_get_tool.return_value.capabilities.return_value = mock_caps
         # tool_options=["claude", "Skip"]
         # model_options=["claude-haiku", "claude-sonnet", "Custom...", "Skip"]
@@ -738,6 +740,7 @@ class TestPromptCommandOverrides:
         mock_caps = MagicMock()
         mock_caps.supports_effort = False
         mock_caps.supports_yolo = True  # would appear if not for headless gating
+        mock_caps.supported_efforts = None
         mock_get_tool.return_value.capabilities.return_value = mock_caps
 
         prompts_asked: list[str] = []
@@ -797,17 +800,16 @@ class TestWriteConfig:
 
     def test_with_project_settings(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
-        settings = {
-            "main_branch": "master",
-            "merge_strategy": "direct",
-            "branch_prefix": "fix",
-            "issue_label": "bug",
-            "worktrees_dir": "../trees",
-        }
+        settings = ProjectSettings(
+            main_branch="master",
+            branch_prefix="fix",
+            issue_label="bug",
+            worktrees_dir="../trees",
+        )
         _write_config(config_path, "claude", ComplexityModelMapping(), project_settings=settings)
         config = yaml.safe_load(config_path.read_text())
         assert config["project"]["main_branch"] == "master"
-        assert config["project"]["merge_strategy"] == "direct"
+        assert config["project"]["merge_strategy"] == "PR"
         assert config["project"]["branch_prefix"] == "fix"
         assert config["project"]["issue_label"] == "bug"
         assert config["project"]["worktrees_dir"] == "../trees"
@@ -1062,13 +1064,12 @@ class TestPatchConfig:
         config_path.write_text(
             "version: 2\nproject:\n  main_branch: master\n  issue_label: old-label\n"
         )
-        settings = {
-            "main_branch": "main",
-            "issue_label": "new-label",
-            "branch_prefix": "feat",
-            "worktrees_dir": "../.worktrees",
-            "merge_strategy": "PR",
-        }
+        settings = ProjectSettings(
+            main_branch="main",
+            issue_label="new-label",
+            branch_prefix="feat",
+            worktrees_dir="../.worktrees",
+        )
         _patch_config(
             config_path, "claude", ComplexityModelMapping(), project_settings=settings, force=True
         )
@@ -1081,10 +1082,7 @@ class TestPatchConfig:
         config_path.write_text(
             "version: 2\nproject:\n  main_branch: master\n  issue_label: custom-label\n"
         )
-        settings = {
-            "main_branch": "main",
-            "issue_label": "new-label",
-        }
+        settings = ProjectSettings(main_branch="main", issue_label="new-label")
         _patch_config(
             config_path, "claude", ComplexityModelMapping(), project_settings=settings, force=False
         )
@@ -2430,6 +2428,7 @@ class TestPromptAiSectionYoloEffort:
         mock_caps = MagicMock()
         mock_caps.supports_effort = True
         mock_caps.supports_yolo = True
+        mock_caps.supported_efforts = None
         mock_get_tool.return_value.capabilities.return_value = mock_caps
         mock_select.return_value = 2  # "medium" effort (index 2 = medium in [none, low, medium...])
         mock_confirm.return_value = True  # yolo = True
@@ -2455,6 +2454,7 @@ class TestPromptAiSectionYoloEffort:
         mock_caps = MagicMock()
         mock_caps.supports_effort = False
         mock_caps.supports_yolo = False
+        mock_caps.supported_efforts = None
         mock_get_tool.return_value.capabilities.return_value = mock_caps
 
         _prompt_ai_section(None, non_interactive=False)
@@ -2475,6 +2475,7 @@ class TestPromptModelMappingPerTierEffort:
     ) -> None:
         mock_caps = MagicMock()
         mock_caps.supports_effort = True
+        mock_caps.supported_efforts = None
         mock_get_tool.return_value.capabilities.return_value = mock_caps
 
         mapping = ComplexityModelMapping(
@@ -2496,6 +2497,7 @@ class TestPromptModelMappingPerTierEffort:
     ) -> None:
         mock_caps = MagicMock()
         mock_caps.supports_effort = False
+        mock_caps.supported_efforts = None
         mock_get_tool.return_value.capabilities.return_value = mock_caps
 
         mapping = ComplexityModelMapping(
@@ -2515,6 +2517,7 @@ class TestPromptModelMappingPerTierEffort:
     ) -> None:
         mock_caps = MagicMock()
         mock_caps.supports_effort = True
+        mock_caps.supported_efforts = None
         mock_get_tool.return_value.capabilities.return_value = mock_caps
 
         mapping = ComplexityModelMapping(
@@ -2558,12 +2561,11 @@ class TestShowInitSummary:
         with patch("wade.services.init_service.manifest.console") as mock_console:
             _show_init_summary(
                 provider_setup={"name": "github"},
-                project_settings={
-                    "main_branch": "main",
-                    "merge_strategy": "PR",
-                    "branch_prefix": "feat",
-                    "worktrees_dir": "../.worktrees",
-                },
+                project_settings=ProjectSettings(
+                    main_branch="main",
+                    branch_prefix="feat",
+                    worktrees_dir="../.worktrees",
+                ),
                 selected_tool=None,
                 default_model=None,
                 default_effort=None,
@@ -2590,12 +2592,11 @@ class TestShowInitSummary:
         with patch("wade.services.init_service.manifest.console") as mock_console:
             _show_init_summary(
                 provider_setup={"name": "github"},
-                project_settings={
-                    "main_branch": "main",
-                    "merge_strategy": "direct",
-                    "branch_prefix": "fix",
-                    "worktrees_dir": "../trees",
-                },
+                project_settings=ProjectSettings(
+                    main_branch="main",
+                    branch_prefix="fix",
+                    worktrees_dir="../trees",
+                ),
                 selected_tool="claude",
                 default_model="claude-sonnet-4-6",
                 default_effort="medium",

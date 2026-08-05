@@ -11,6 +11,7 @@ from crossby.config.defaults import get_defaults
 from crossby.models.ai import AIToolID
 
 from wade.models.config import ComplexityModelMapping
+from wade.services.ai_resolution import valid_effort_levels
 from wade.services.init_service.config_io import _resolve_models
 from wade.ui.console import console
 
@@ -135,11 +136,12 @@ def _prompt_ai_section(
 
         # Prompt for default effort level (only when tool supports it)
         if caps.supports_effort:
-            from crossby.models.ai import EffortLevel
-
             from wade.ui import prompts as ui_prompts
 
-            effort_choices = ["(none — use tool default)", *[e.value for e in EffortLevel]]
+            effort_choices = [
+                "(none — use tool default)",
+                *[e.value for e in valid_effort_levels(selected_tool)],
+            ]
             current_idx = 0
             if current_effort and current_effort in effort_choices:
                 current_idx = effort_choices.index(current_effort)
@@ -243,9 +245,10 @@ def _prompt_model_mapping(
         # Per-tier effort (capability-gated, skippable)
         tier_effort: str | None = current_tier_effort
         if tool_supports_effort:
-            from crossby.models.ai import EffortLevel
-
-            effort_choices = ["Skip (inherit defaults)", *[e.value for e in EffortLevel]]
+            effort_choices = [
+                "Skip (inherit defaults)",
+                *[e.value for e in valid_effort_levels(tool)],
+            ]
             effort_default_idx = 0
             if current_tier_effort and current_tier_effort in effort_choices:
                 effort_default_idx = effort_choices.index(current_tier_effort)

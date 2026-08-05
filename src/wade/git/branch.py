@@ -85,7 +85,8 @@ def delete_branch(
     """
     flag = "-D" if force else "-d"
     log.info("branch.delete", branch=branch_name, force=force)
-    _run_git("branch", flag, branch_name, cwd=repo_root)
+    # Retry transient ref-lock contention from parallel sessions (C3).
+    _run_git_with_retry("branch", flag, branch_name, cwd=repo_root)
 
 
 def create_scaffold_commit(
@@ -142,6 +143,58 @@ def list_branch_names(repo_root: Path) -> set[str]:
         )
         names.update(line.strip() for line in result.stdout.splitlines() if line.strip())
     return names
+
+
+def is_merged_into(repo_root: Path, branch: str, base: str) -> bool | None:
+    """Return whether *branch*'s tip is an ancestor of *base* (i.e. merged in).
+
+    Wraps ``git merge-base --is-ancestor <branch> <base>`` through the git layer
+    (consistent process handling + logging) rather than a raw subprocess call.
+
+    Returns:
+        - ``True``  — branch is fully contained in base (exit 0): merged.
+        - ``False`` — branch is definitively NOT an ancestor of base (exit 1).
+        - ``None``  — indeterminate: a ref could not be resolved / git error
+          (any other exit). Callers may then try a different base.
+    """
+    result = _run_git(
+        "merge-base",
+        "--is-ancestor",
+        branch,
+        base,
+        cwd=repo_root,
+        check=False,
+    )
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    return None
+
+
+def all_patches_present(repo_root: Path, base: str, branch: str) -> bool:
+    """Return True when every commit on *branch* already has a patch on *base*.
+
+    Wraps ``git cherry <base> <branch>``, which compares *patch ids* rather than
+    commit ids — so it recognizes a squash- or rebase-merged branch whose tip is
+    NOT an ancestor of *base*. ``git cherry`` marks an already-applied commit
+    with ``-`` and a genuinely-absent one with ``+``; this returns True only
+    when the command succeeds and no line starts with ``+``.
+
+    Returns False on any git error (fail closed) and when *branch* has no
+    commits to compare (empty output) — an empty result must never read as
+    "safe to delete".
+
+    Caveat: ``git cherry`` compares individual patch ids, so squashing several
+    commits into one may still report ``+`` for each original commit. Treat a
+    True result as authoritative; a False result may still be a squash merge, so
+    callers fall back to it only *after* an exact ancestor check.
+    """
+    result = _run_git("cherry", base, branch, cwd=repo_root, check=False)
+    if result.returncode != 0:
+        return False
+    lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
+    return bool(lines) and not any(ln.startswith("+") for ln in lines)
 
 
 def commits_ahead(repo_root: Path, branch: str, base: str) -> int:

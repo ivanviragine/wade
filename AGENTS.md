@@ -53,23 +53,22 @@ uv run python scripts/auto_version.py patch # Version bump (patch/minor/major)
 
 ```
 CLI Layer      ->  can import: services, models, config, logging, ui
-Service Layer  ->  can import: providers, crossby (AI tool adapters), git, db, models, config, logging
+Service Layer  ->  can import: providers, crossby (AI tool adapters), git, models, config, logging
 Provider Layer ->  can import: models, config, logging  (NO service imports)
 Git Layer      ->  can import: models, config, logging  (NO service imports)
-DB Layer       ->  can import: models, logging           (NO config imports)
 Models Layer   ->  can import: nothing (leaf dependency)
 ```
 
 No circular dependencies. Models are pure data. Services orchestrate. **Never import a higher layer from a lower layer.**
 
-> **The DB Layer (`db/`) is currently unused scaffolding.** No code path under
-> `services/` or `cli/` writes session/worktree/PR rows, so its sole reader
+> **The `db/` package is unused scaffolding** — intentionally left out of the
+> layering rules above. No code path under `services/` or `cli/` writes
+> session/worktree/PR rows, so its sole reader
 > (`implementation_service/cleanup._preserve_session_data`, a single
 > `SessionRepository.get_by_worktree_path` call) always gets an empty result and
 > falls back to directory-presence detection. Real persisted state lives in
-> GitHub (PR/issue body markers, labels) and worktree files, **not** SQLite. It
-> stays in the layering rules for when it is wired up — do not treat it as
-> load-bearing. Removal is tracked as #357 C5.
+> GitHub (PR/issue body markers, labels) and worktree files, **not** SQLite. The
+> code still exists but is inert; removal is tracked as #357 C5.
 
 AI tool adapters are not part of this repo — they live in the external [`crossby`](https://github.com/ivanviragine/crossby) package (`pyproject.toml`). See `docs/dev/architecture.md` for what moved there.
 
@@ -140,6 +139,13 @@ Before considering any work complete:
 - [ ] **`README.md`** — updated if user-facing behavior changed
 - [ ] **`templates/skills/`** — updated if agent-facing rules changed (plan-session for planning, implementation-session for implementation, review-pr-comments-session for reviews)
 - [ ] **Commit** — uses conventional-commit prefix
+
+Note: for inited projects, the doc update pass is now an explicit, mandatory
+closing step in the installed `implementation-session` and
+`review-pr-comments-session` skills (`{doc_update_step}` /
+`templates/skills/_partials/doc-update-step.md`) — not something an agent has
+to remember on its own. This repo's own checklist above is unaffected; it
+still governs what WADE-repo changes require here.
 
 > Full 10-item checklist, documentation rules, feedback loop, and correction-driven docs: see `docs/dev/documentation-policies.md`
 

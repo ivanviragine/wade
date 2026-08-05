@@ -56,8 +56,23 @@ def _run_git(
     return result
 
 
-_LOCK_PATTERNS = ("index.lock", "Unable to create", "lock on reference")
-"""Stderr substrings that indicate a transient git lock contention."""
+_LOCK_PATTERNS = (
+    "index.lock",
+    "Unable to create",
+    "lock on reference",
+    "cannot lock ref",
+    ".lock': File exists",
+    ".lock' failed",
+    # `git stash push` reports this (not the index.lock message) when the shared
+    # index lock is held by another worktree/process.
+    "could not write index",
+)
+"""Stderr substrings that indicate a transient git lock contention.
+
+Covers both the index lock (``index.lock``) and ref locks (``cannot lock ref``,
+``Unable to create '.../refs/....lock'``) that N parallel ``wade implement``
+sessions contend on during startup catchup (C3).
+"""
 
 
 def _run_git_with_retry(
@@ -71,27 +86,43 @@ def _run_git_with_retry(
 
     Uses exponential backoff: *base_delay*, *base_delay * 2*, *base_delay * 4*, etc.
     Only retries when stderr matches known lock-contention patterns; all other
-    errors are raised immediately.
+    errors are raised (check=True) or returned (check=False) immediately.
+
+    Works for both ``check=True`` callers (a lock raises ``GitError`` which is
+    caught and retried) and ``check=False`` callers such as ``merge``/``stash``
+    (a lock yields a non-zero result whose stderr is inspected and retried).
     """
-    last_exc: GitError | None = None
+    if retries < 1:
+        raise ValueError("retries must be at least 1")
     for attempt in range(retries):
         try:
-            return _run_git(*args, cwd=cwd, check=check)
+            result = _run_git(*args, cwd=cwd, check=check)
         except GitError as exc:
-            msg = str(exc)
-            if any(p in msg for p in _LOCK_PATTERNS):
-                last_exc = exc
-                delay = base_delay * (2**attempt)
-                log.debug(
-                    "git.retry",
-                    attempt=attempt + 1,
-                    delay=delay,
-                    cmd=["git", *args],
-                )
-                time.sleep(delay)
+            # Only back off + retry while attempts remain; on the final attempt
+            # re-raise the lock error immediately instead of paying one last
+            # (wasted) backoff sleep — matching the check=False guard below.
+            if attempt < retries - 1 and any(p in str(exc) for p in _LOCK_PATTERNS):
+                _sleep_lock_backoff(attempt, base_delay, args)
                 continue
             raise
-    raise last_exc  # type: ignore[misc]
+        # check=False path: a lock surfaces as a non-zero result, not a raise.
+        if (
+            result.returncode != 0
+            and attempt < retries - 1
+            and any(p in result.stderr for p in _LOCK_PATTERNS)
+        ):
+            _sleep_lock_backoff(attempt, base_delay, args)
+            continue
+        return result
+    # Unreachable: every loop iteration either returns result or re-raises GitError
+    raise RuntimeError("Unreachable _run_git_with_retry termination")
+
+
+def _sleep_lock_backoff(attempt: int, base_delay: float, args: tuple[str, ...]) -> None:
+    """Sleep with exponential backoff between git lock-contention retries."""
+    delay = base_delay * (2**attempt)
+    log.debug("git.retry", attempt=attempt + 1, delay=delay, cmd=["git", *args])
+    time.sleep(delay)
 
 
 def is_git_repo(path: Path) -> bool:
@@ -154,6 +185,11 @@ def get_main_worktree_path(path: Path) -> Path | None:
 def get_repo_root(path: Path) -> Path:
     """Return the repository root (top-level working directory).
 
+    This is the toplevel of *wherever you are*: inside a linked worktree it
+    returns that worktree's root, NOT the main checkout. For operations that
+    must act on the main checkout (pulling main, deleting branches, pruning
+    worktrees, ``gh pr merge`` bookkeeping) use :func:`main_checkout_root`.
+
     Args:
         path: Any directory inside the repo.
 
@@ -165,6 +201,35 @@ def get_repo_root(path: Path) -> Path:
     """
     result = _run_git("rev-parse", "--show-toplevel", cwd=path)
     return Path(result.stdout.strip())
+
+
+def main_checkout_root(path: Path) -> Path:
+    """Return the root of the *main* checkout for the repo containing *path*.
+
+    Unlike :func:`get_repo_root` — which returns the toplevel of wherever you
+    are, so a linked worktree returns its own root — this always resolves the
+    main working tree. When *path* is inside a linked worktree this is the main
+    worktree's path; otherwise (already the main checkout, or a non-worktree
+    repo) it is *path* itself.
+
+    Main-checkout operations must route through this so "toplevel of wherever I
+    am" is never mistaken for "the main checkout": pulling main after a merge,
+    ``gh pr merge --delete-branch`` bookkeeping, branch deletion, and worktree
+    pruning all target the main checkout, and running them against a linked
+    worktree root corrupts state or fails outright.
+
+    Args:
+        path: A repo root (typically the value from :func:`get_repo_root`).
+
+    Returns:
+        Absolute path to the main checkout root.
+    """
+    main = get_main_worktree_path(path)
+    if main is not None:
+        return main
+    # Not a linked worktree (or detection failed) — *path* is already the main
+    # checkout root, so fall back to it directly (no extra git call needed).
+    return path
 
 
 def get_current_branch(path: Path) -> str:
@@ -368,7 +433,7 @@ def push_branch(
         args.extend(["-u", "origin", branch])
     else:
         args.extend(["origin", branch])
-    _run_git(*args, cwd=repo_root)
+    _run_git_with_retry(*args, cwd=repo_root)
 
 
 def checkout(repo_root: Path, branch: str) -> None:
@@ -482,17 +547,6 @@ def diff_worktree(repo_root: Path, *, staged: bool = False) -> str:
     return result.stdout
 
 
-def log_oneline(repo_root: Path, ref: str, limit: int = 100) -> str:
-    """Return ``git log <ref> --oneline -<limit>`` output.
-
-    Returns an empty string if the log command fails (e.g. the ref does not
-    exist), so callers doing a best-effort history scan treat "no matching
-    history" and "query failed" alike where a conservative ``False`` is fine.
-    """
-    result = _run_git("log", ref, "--oneline", f"-{limit}", cwd=repo_root, check=False)
-    return result.stdout if result.returncode == 0 else ""
-
-
 def pull_ff_only(repo_root: Path) -> subprocess.CompletedProcess[str]:
     """Pull with fast-forward only.
 
@@ -548,13 +602,19 @@ def merge_no_edit(repo_root: Path, branch: str) -> None:
 
 
 def stash(repo_root: Path) -> subprocess.CompletedProcess[str]:
-    """Stash local changes. Returns CompletedProcess (no raise on failure)."""
-    return _run_git("stash", "--quiet", cwd=repo_root, check=False)
+    """Stash local changes. Returns CompletedProcess (no raise on failure).
+
+    Retries transient index-lock contention (C3).
+    """
+    return _run_git_with_retry("stash", "--quiet", cwd=repo_root, check=False)
 
 
 def stash_pop(repo_root: Path) -> subprocess.CompletedProcess[str]:
-    """Pop the top stash entry. Returns CompletedProcess (no raise on failure)."""
-    return _run_git("stash", "pop", "--quiet", cwd=repo_root, check=False)
+    """Pop the top stash entry. Returns CompletedProcess (no raise on failure).
+
+    Retries transient index-lock contention (C3).
+    """
+    return _run_git_with_retry("stash", "pop", "--quiet", cwd=repo_root, check=False)
 
 
 def upstream_tracking_status(repo_root: Path, branch: str) -> str | None:

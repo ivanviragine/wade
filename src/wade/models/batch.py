@@ -14,6 +14,7 @@ class BatchIssueContext(BaseModel):
     local_ref_exists: bool = False
     pr_number: int | None = None
     pr_url: str | None = None
+    pr_lookup_failed: bool = False
     diff_stat: str = ""
     merged: bool = False
     conflict: bool = False

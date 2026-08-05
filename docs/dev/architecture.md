@@ -71,10 +71,6 @@ src/wade/
 │   ├── batch.py         # BatchIssueContext, BatchReviewContext
 │   ├── deps.py          # DependencyEdge, DependencyGraph
 │   └── events.py        # Typed event models
-├── db/                  # SQLite via SQLModel — UNUSED scaffolding (see note below)
-│   ├── engine.py        # Engine creation, WAL mode
-│   ├── tables.py        # SQLModel table definitions
-│   └── repositories.py  # Repository classes
 ├── services/            # Business logic (orchestration)
 │   ├── task_service.py  # Task CRUD, plan parsing, labels
 │   ├── implementation_service.py  # Implementation session lifecycle
@@ -100,8 +96,9 @@ src/wade/
 │   ├── branch.py        # Branch naming, creation, deletion
 │   ├── sync.py          # Fetch + merge, conflict detection
 │   └── pr.py            # PR creation, merge
-├── hooks/               # Guard policies (invoked via `wade hook`)
-│   └── policies.py      # worktree_containment / plan_artifact_only / session_complete
+├── hooks/               # Guard policies (invoked via `wade hook` / `wade-hook`)
+│   ├── cli.py           # Lean `wade-hook` entry point (dialect maps, guard routing)
+│   └── policies.py      # worktree_containment / plan_artifact_only / shell_containment / session_complete
 ├── skills/              # Skill file management
 │   ├── installer.py     # Install/update/remove skill files
 │   └── pointer.py       # AGENTS.md pointer insertion/detection
@@ -126,14 +123,14 @@ src/wade/
     └── install.py       # Self-upgrade helpers (venv/source detection, re-exec)
 ```
 
-> **`db/` is unused scaffolding.** No code path under `services/` or `cli/`
-> writes session/worktree/PR rows — the sole reader
+> **The `db/` package is unused scaffolding** — deliberately omitted from the
+> tree above. No code path under `services/` or `cli/` writes
+> session/worktree/PR rows, so its sole reader
 > (`implementation_service/cleanup._preserve_session_data`, a single
-> `SessionRepository.get_by_worktree_path` call) therefore always gets an empty
-> result and falls back to directory-presence detection. Real persisted state
-> lives in GitHub (PR/issue body markers, labels) and worktree files, not
-> SQLite. Removal is tracked as **#357 C5**; treat the layer as inert, not
-> load-bearing.
+> `SessionRepository.get_by_worktree_path` call) always gets an empty result and
+> falls back to directory-presence detection. Real persisted state lives in
+> GitHub (PR/issue body markers, labels) and worktree files, not SQLite. The
+> `db/` code still exists but is inert; removal is tracked as **#357 C5**.
 
 ## AI Tool Layer (external: crossby)
 
@@ -150,6 +147,86 @@ AI tool adapters, model/effort resolution primitives, the model registry, and pe
 Wade still owns a thin `services/ai_resolution.py` rather than delegating outright: wade's `ProjectConfig.ai` uses named per-command fields (e.g. `ai.plan`), while crossby's own config expects a `commands` dict — the two shapes aren't interchangeable yet. See that module's docstring for the up-to-date status.
 
 Adding support for a new AI tool means contributing an adapter to crossby, not to this repo — see `docs/dev/extending.md`.
+
+## Hook Guard Layer
+
+wade installs AI-tool hooks that enforce session rules in *code* rather than
+trusting the agent to follow the skill. The split across the two repos:
+
+| Concern | Lives in | Detail |
+|---------|----------|--------|
+| Guard **policies** (allow/deny) | wade `hooks/policies.py` | Pure predicates over a normalized `HookEvent` |
+| Guard **entry point** | wade `hooks/cli.py` (`wade-hook`) | Argparse, guard routing, dialect selection |
+| Guard **installation** | wade `implementation_service/bootstrap.py` | Per-worktree, at `bootstrap_worktree` time |
+| Hook **dialects** (parse/emit, tool names, events, capabilities) | crossby | `hooks/runtime.py`, `sync/hooks.py`, `ai_tools/*` |
+
+### Guards
+
+| Guard | Event | Failure mode | Blocks |
+|-------|-------|--------------|--------|
+| `worktree` | PreToolUse | **closed** (deny) | Writes resolving outside the worktree |
+| `plan` | PreToolUse | **closed** (deny) | Writes to anything but plan artifacts |
+| `session-complete` | Stop | **open** (allow) | Ending a turn with `PR-SUMMARY.md` missing (once) |
+
+The asymmetry is deliberate and must not regress: a write guard that allows on
+error is worse than useless, while a Stop guard that blocks on error traps the
+agent in a session it cannot exit.
+
+### Two write channels
+
+A write reaches the guard through one of two channels, and both must be covered:
+
+- **`file_path`** — a tool-call write (`Write`, `Edit`, `apply_patch`,
+  `write_to_file`, …). crossby's `HookEvent.is_write` is a **denylist**
+  (`READ_TOOL_NAMES`), so a tool name it has never seen counts as a write.
+- **`command`** — a *shell* write. crossby reports `is_write=False` for shell
+  tool names (`SHELL_TOOL_NAMES`) by design, so the file-path policies would
+  allow it; `wade-hook` routes any payload carrying a `command` to
+  `shell_containment` instead.
+
+`shell_containment` tokenizes with `shlex.split` (failing **closed** on
+unbalanced quotes) and denies redirect targets, `cd`/`pushd` targets, and
+path arguments that resolve outside the worktree — plus, in plan mode,
+redirects/in-place edits/`tee` aimed at non-artifacts.
+
+It also unglues paths from flags (`--output=/tmp/x`, `-o/tmp/x`, `of=/tmp/x`),
+treats bash's `>&file` as a write while skipping true fd duplication (`2>&1`),
+denies a bare `cd` (it lands in `$HOME`), and exempts character devices so
+`>/dev/null 2>&1` still works.
+
+**It is defense-in-depth, not a completeness guarantee.** It stops the
+non-obfuscated cases an agent actually produces. Documented residual gaps
+(see the function docstring): env-var indirection (`$HOME/x`), command
+substitution, subshells, here-docs, `$IFS` tricks, `eval`, symlinks created
+within the same command, and interpreters given inline code (`python -c`).
+
+### Per-tool capability matrix
+
+Two static maps in `hooks/cli.py` mirror crossby's adapter capabilities. They
+are **deliberate copies** — the hot per-edit path must not import
+`crossby.ai_tools` (~450ms vs ~150ms cold start) — so they must be re-verified
+on every crossby bump. `TestPerToolDialectsMatchCrossby` asserts they still
+agree, turning silent drift into a test failure.
+
+| Tool | PreToolUse dialect | Stop dialect | Notes |
+|------|--------------------|--------------|-------|
+| Claude | `hookSpecificOutput` | `{"decision":"block"}` | Extra root-level keys fail schema validation → silent fail-open |
+| Codex | `hookSpecificOutput` | `{"decision":"block"}` | Sandboxes writes; guard narrowed to the shell token |
+| Cursor | `{"permission":…}` | `{"followup_message":…}` | Only tool defaulting to fail-**open**; needs `failClosed` |
+| Copilot | flat `{"permissionDecision":…}` | `{"decision":"block"}` | Never nests under `hookSpecificOutput`; `tools` scope is dropped, so its guard fires on everything |
+| Antigravity CLI (`agy`) | `{"decision":…}` | `{"decision":"continue"}` | Inverted Stop polarity — blocks by saying *continue* |
+
+Codex is the one tool whose worktree guard is **narrowed** rather than skipped:
+`--sandbox workspace-write` already confines tool-call writes, but it also
+permits `/tmp` and `$TMPDIR`, so a shell redirect remains a live escape.
+
+### Upgrade path for already-inited projects
+
+Guards are installed **per-worktree** in `bootstrap_worktree`, not at
+`wade init` time, and nothing guard-related is persisted into a project at init.
+So an existing inited project picks up corrected guards automatically on its
+next `wade implement` / `wade plan` session once wade (and transitively crossby)
+is upgraded — **no re-init, resync, or migration is needed.**
 
 ## Command Dispatch
 
@@ -271,11 +348,11 @@ This avoids requiring the AI to report back which issues it created — the serv
 
 ## Merge Strategy
 
-`MergeStrategy` (config key `project.merge_strategy`) controls how feature branches are merged into main:
-- **`PR`** (default) — The agent runs `wade implementation-session done` during its session to push the branch and update the existing draft PR (or create one if missing). The worktree is **not** cleaned up by `done` — it is cleaned up automatically by `implement` after the human merges the PR. When the tool exits, `implement`'s post-work prompt detects the PR and asks "Do you want to merge this PR?" — if yes, squash-merges via `gh pr merge --squash --delete-branch`.
-- **`direct`** — Merge locally into main, push, and clean up the worktree. Useful for solo projects or repos without branch protection.
+`MergeStrategy` (config key `project.merge_strategy`) has a single value, `PR` — the `direct` strategy was retired in #357. A config that still carries `merge_strategy: direct` is migrated to `PR` with a warning on load (`config/loader.py` `_migrate_merge_strategy`), and `wade check-config` rejects it.
 
-`wade implementation-session done` handles PR creation / direct merge. The post-work lifecycle prompt handles the merge decision (PR strategy) or local merge options (direct strategy).
+- **`PR`** (default and only) — The agent runs `wade implementation-session done` during its session to push the branch and update the existing draft PR (or create one if missing). The worktree is **not** cleaned up by `done` — it is cleaned up automatically by `implement` after the human merges the PR. When the tool exits, `implement`'s post-work prompt detects the PR and asks "Do you want to merge this PR?" — if yes, squash-merges via `gh pr merge --squash --delete-branch`.
+
+`wade implementation-session done` handles PR creation / update. The post-work lifecycle prompt handles the merge decision.
 
 ## Determinism via Services
 
@@ -307,7 +384,6 @@ When wade installs skills into a target project (per session, via worktree boots
 - `target` (positional) — Optional issue number, worktree name, or plan file path. When a file path is given, creates the issue first; when a number/name, finds the worktree; when omitted, detects from current branch.
 - `--no-close` — Don't close the issue on merge.
 - `--draft` — Create PR as draft.
-- `--no-cleanup` — Keep the worktree after direct merge (no effect in PR strategy, which already preserves worktrees).
 
 **`wade implement-batch`:**
 - `--model` — Pass a specific AI model to all parallel sessions.
@@ -337,7 +413,6 @@ Runtime:
 - `typer>=0.12` — CLI framework
 - `pydantic>=2.0` — Data validation and settings
 - `pydantic-settings>=2.0` — Env var overrides
-- `sqlmodel>=0.0.16` — SQLite ORM (SQLAlchemy + Pydantic)
 - `pyyaml>=6.0` — YAML config parsing
 - `rich>=13.0` — Terminal UI (tables, prompts, panels)
 - `questionary>=2.0` — Interactive prompts (select, confirm, input)

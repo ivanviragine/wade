@@ -271,28 +271,37 @@ def _emit_dirty_worktree_error(
 
 
 def _handle_stash_restoration(
-    stash_ref: str,
+    stash_sha: str,
     cwd: Path,
     result_success: bool,
     emit: Any,
     json_output: bool,
 ) -> bool:
-    """Pop the stash and emit events. Returns True if stash was cleanly restored.
+    """Restore the stash by its commit SHA and emit events.
 
-    On a stash-pop conflict the stash is left in place and STASH_LEFT_BEHIND is
-    emitted. Callers should treat a False return as a sync failure.
+    Applies by content-addressed SHA — never a positional ref held from
+    creation, which a concurrent worktree's ``stash push`` could have shifted
+    onto someone else's work (A1) — then drops the entry only after a clean
+    apply. On an apply conflict the stash is left in place and
+    STASH_LEFT_BEHIND is emitted. A clean apply whose drop fails still counts
+    as a restore — the changes are back — but the leftover entry is reported so
+    the user can remove it. Callers should treat a False return as a sync
+    failure.
     """
-    pop_result = git_stash.pop_stash(stash_ref, cwd)
-    if pop_result.returncode == 0:
-        emit(SyncEventType.STASH_RESTORED, stash_ref=stash_ref)
+    apply_result = git_stash.apply_stash_by_sha(stash_sha, cwd)
+    if apply_result.returncode == 0:
+        if not git_stash.drop_stash_by_sha(stash_sha, cwd) and not json_output:
+            console.warn(f"Restored the changes, but the stash entry {stash_sha} remains.")
+            console.hint(f"Remove it with: git stash drop {stash_sha}")
+        emit(SyncEventType.STASH_RESTORED, stash_ref=stash_sha)
         if not json_output:
             console.success("Restored stashed changes.")
         return True
 
-    recovery_cmd = f"git stash apply {stash_ref}"
+    recovery_cmd = f"git stash apply {stash_sha}"
     emit(
         SyncEventType.STASH_LEFT_BEHIND,
-        stash_ref=stash_ref,
+        stash_ref=stash_sha,
         recovery_hint=recovery_cmd,
     )
     if not json_output:
@@ -487,7 +496,7 @@ def sync(
     current = preflight.current_branch
     resolved_main = preflight.resolved_main
 
-    stash_ref: str | None = None
+    stash_sha: str | None = None
     already_fetched = False
 
     if preflight.dirty_category == _DirtyCategory.USER_DIRTY:
@@ -523,10 +532,10 @@ def sync(
 
         if preflight.has_tracked_changes:
             try:
-                stash_ref, stash_name = git_stash.create_named_stash(session_type, current, cwd)
-                emit(SyncEventType.AUTOSTASHED, stash_ref=stash_ref, stash_name=stash_name)
+                stash_sha, stash_name = git_stash.create_named_stash(session_type, current, cwd)
+                emit(SyncEventType.AUTOSTASHED, stash_ref=stash_sha, stash_name=stash_name)
                 if not json_output:
-                    console.info(f"Stashed local changes: {stash_ref}")
+                    console.info(f"Stashed local changes: {stash_sha}")
             except GitError as exc:
                 emit(SyncEventType.ERROR, reason="stash_failed", details=str(exc))
                 if not json_output:
@@ -570,14 +579,14 @@ def sync(
         emit,
         dry_run=dry_run,
         json_output=json_output,
-        abort_on_conflict=stash_ref is not None,
+        abort_on_conflict=stash_sha is not None,
         session_type=session_type,
         already_fetched=already_fetched,
     )
 
-    if stash_ref is not None:
+    if stash_sha is not None:
         if result.success:
-            stash_ok = _handle_stash_restoration(stash_ref, cwd, True, emit, json_output)
+            stash_ok = _handle_stash_restoration(stash_sha, cwd, True, emit, json_output)
             if not stash_ok:
                 return SyncResult(
                     success=False,
@@ -587,7 +596,7 @@ def sync(
                 )
         else:
             # Merge was aborted (abort_on_conflict=True) — restore stash.
-            _handle_stash_restoration(stash_ref, cwd, False, emit, json_output)
+            _handle_stash_restoration(stash_sha, cwd, False, emit, json_output)
 
     return SyncResult(
         success=result.success,
@@ -639,7 +648,7 @@ def catchup(
     current = preflight.current_branch
     resolved_main = preflight.resolved_main
 
-    stash_ref: str | None = None
+    stash_sha: str | None = None
     already_fetched = False
 
     if preflight.dirty_category == _DirtyCategory.USER_DIRTY:
@@ -673,10 +682,10 @@ def catchup(
 
         if preflight.has_tracked_changes:
             try:
-                stash_ref, stash_name = git_stash.create_named_stash("catchup", current, cwd)
-                emit(SyncEventType.AUTOSTASHED, stash_ref=stash_ref, stash_name=stash_name)
+                stash_sha, stash_name = git_stash.create_named_stash("catchup", current, cwd)
+                emit(SyncEventType.AUTOSTASHED, stash_ref=stash_sha, stash_name=stash_name)
                 if not json_output:
-                    console.info(f"Stashed local changes: {stash_ref}")
+                    console.info(f"Stashed local changes: {stash_sha}")
             except GitError as exc:
                 emit(SyncEventType.ERROR, reason="stash_failed", details=str(exc))
                 if not json_output:
@@ -706,10 +715,10 @@ def catchup(
     )
 
     stash_restored = True
-    if stash_ref is not None:
+    if stash_sha is not None:
         # Merge aborted on conflict or succeeded — restore stash either way.
         stash_restored = _handle_stash_restoration(
-            stash_ref, cwd, result.success, emit, json_output
+            stash_sha, cwd, result.success, emit, json_output
         )
 
     return SyncResult(

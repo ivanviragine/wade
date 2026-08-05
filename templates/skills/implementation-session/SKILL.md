@@ -17,18 +17,12 @@ Run `wade` and `gh` commands with the required permissions/capabilities (not
 in sandboxed mode). Do not "try sandbox first" — run them unsandboxed from the
 start.
 
-## Transparency
+## Talking to the user
 
-Always inform the user before running `wade` commands, reviews, or
-session lifecycle operations. Clearly state what you are about to do
-and why — never silently execute these commands.
-
-When starting a workflow step, announce it:
-  "I'm now syncing your branch with main..."
-
-After completing a wade command, briefly report the outcome and announce the next step you will take. The next step depends on where you are in the workflow — for example:
-  "Sync complete — your branch is up to date with main. Now running `wade implementation-session done`..."
-  "Review done — no issues found. Now writing PR-SUMMARY.md..."
+Inform the user before running `wade`/`gh` commands, reviews, or lifecycle
+operations — say what you're doing and why; never run them silently. Announce
+each step as you start it, and after each command report the outcome and the
+next step you'll take.
 
 {user_interaction_prompt}
 - After presenting the workflow recap and state: "Want any further changes, or is the session complete?"
@@ -45,16 +39,12 @@ dependency analysis hooks.
 
 ## Project Knowledge
 
-Read @.claude/skills/knowledge/SKILL.md for knowledge operations (search,
-tagging, rating, adding entries).
-
-At the start of this session, search for knowledge relevant to your task
-(do not dump all entries). **Rating is required for each entry you open and
-evaluate** — not per search call. See the decision tree in
-@.claude/skills/knowledge/SKILL.md for how to decide between up, down, or no
-rating. Before writing `PR-SUMMARY.md`, capture important learnings if knowledge
-is enabled (`.wade.yml` → `knowledge.enabled`).
-Then commit the updated knowledge file alongside your other changes.
+Search for knowledge relevant to your task at session start (do not dump all
+entries), and capture important learnings before writing `PR-SUMMARY.md` when
+knowledge is enabled (`.wade.yml` → `knowledge.enabled`). Rating is required for
+each entry you open and evaluate. See @.claude/skills/knowledge/SKILL.md for
+search syntax, the rating decision tree, and entry style. Commit the updated
+knowledge file with your other changes.
 
 ## First action: check your context
 
@@ -62,166 +52,23 @@ Run `wade implementation-session check` as your **first action**:
 
 - `IN_WORKTREE` — you may proceed with work (code changes, commits, etc.)
 - `IN_MAIN_CHECKOUT` — **editing any source file is forbidden, even before
-  committing**. Tell the human to create a worktree first via
-  `wade implement`.
+  committing**. Tell the human to create a worktree first via `wade implement`.
 - `NOT_IN_GIT_REPO` — you are not inside a git repository.
 
-## Catchup: startup sync with base branch
-
-`wade implement` automatically syncs your worktree branch with the base branch
-at startup (before this session begins). The catchup output appears in the
-startup log.
-
-**Auto-stash**: If the worktree has staged or unstaged user changes, catchup
-automatically stashes them, runs the merge, and restores them. Session
-artifacts (PLAN.md, PR-SUMMARY.md, etc.) are left in place — they are never
-stashed. Use `--no-stash` to get the old strict behavior (fail immediately on
-any uncommitted changes).
-
-**If the startup output reports a merge conflict**, note that the catchup
-command always aborts the merge and leaves the worktree clean — there are no
-conflict markers to resolve. `wade implementation-session catchup --json` is
-inspection-only: it re-runs the same aborted catchup to report which files
-conflict, but the merge will be aborted again.
-
-To produce resolvable conflicts, run the merge manually:
-
-```bash
-git fetch origin
-git merge origin/<main-branch>   # use the actual base branch name
-```
-
-Then resolve using the standard flow:
-1. Run `git diff --name-only --diff-filter=U` to list conflicted files
-2. Read each conflicted file — understand both sides of the conflict
-3. Resolve the conflict markers in each file
-4. Stage only the resolved files: `git add <file1> <file2> ...`
-5. Complete the merge: `git commit --no-edit`
-
-**If catchup reports an `untracked_conflict` error**, untracked files in your
-worktree would be overwritten by the merge. The paths are listed in the error.
-Commit, move, or delete them, then re-run catchup.
-
-**If catchup reports a `stash_left_behind` error**, the stash pop conflicted
-after a merge. Your changes are preserved in the named stash. Recover with:
-
-```bash
-git stash apply <stash-ref>   # ref shown in the error output
-```
-
-The closing `sync` step remains necessary for changes that land on the base
-branch *during* your implementation session.
+`wade implement` auto-syncs your branch with the base branch at startup. If that
+catchup — or the closing sync — reports a conflict or error, see
+@.claude/skills/implementation-session/reference/recovery.md.
 
 ## Worktree safety
 
 All **code changes** (edits, new files, commits) **must** happen in a worktree.
-The human creates worktrees via `wade implement` (single issue) or
-`wade implement-batch` (multiple issues in parallel). **Never** create worktrees
-yourself.
+The human creates worktrees via `wade implement` or `wade implement-batch`.
+**Never** create worktrees yourself.
 
 ## Commit conventions
 
-Use [Conventional Commits](https://www.conventionalcommits.org/) format.
-Prefer `git commit` (which opens an editor) over `git commit -m` for
-multi-line messages.
-
-## PR summary
-
-Before closing the session, write **`PR-SUMMARY.md`** in the worktree root
-(your current working directory). `wade implementation-session done` reads this file to populate
-the PR body. If the file is missing, the PR will have no description.
-
-> **Completion reminder:** on Stop-capable tools, if you end your turn while
-> `PR-SUMMARY.md` is still missing, a Stop hook will remind you once to write it
-> and run `done`. This is a safety net, not an error — if you are pausing to ask
-> a question or are still mid-task, disregard it and continue.
->
-> **Never commit this file** — it is a session artifact (already in `.gitignore`).
-> If you find it is already tracked by git (e.g. `git status` shows it as modified),
-> untrack it first:
->
-> ```bash
-> git rm --cached PR-SUMMARY.md
-> git commit -m "chore: untrack PR-SUMMARY.md (already gitignored)"
-> ```
->
-> Then re-write the file — it will be ignored going forward.
-
-### What to include
-
-1. **What was accomplished** — high-level summary of changes
-2. **Why these changes** — context from the issue/plan
-3. **Key technical decisions** — important implementation choices
-4. **What was tested** — how you verified the changes work
-
-### Format
-
-```markdown
-## What was done
-[High-level summary in 2-3 sentences]
-
-## Changes
-- Added X to improve Y
-- Modified Z to handle edge case W
-
-## Testing
-- Tested scenario A: result
-- Ran test suite: all passing
-
-## Notes for reviewers
-[Optional: anything the reviewer should know]
-```
-
-## Syncing with main
-
-> **Reference section** — this describes how syncing works and how to handle
-> conflicts. The actual sync is performed as part of the closing workflow below
-> (Step 3). Do not run sync separately.
-
-### Step 1: Commit your implementation work
-
-```bash
-git status --porcelain
-```
-
-If there is output from files you authored, stage and commit them before
-syncing. Wade session artifacts (PLAN.md, PR-SUMMARY.md, etc.) can be left
-dirty — sync will skip stashing them.
-
-### Step 2: Run the sync command
-
-```bash
-wade implementation-session sync --json
-```
-
-**Auto-stash**: sync automatically stashes any staged or unstaged tracked user
-changes, runs the merge, then restores them. You do not need to stash manually.
-Add `--no-stash` to disable auto-stash and restore the strict old behavior
-(fail immediately on any uncommitted changes).
-
-### Step 3: Handle the result
-
-**Exit code 0 — Success**: Branch is up to date with main. Proceed to closing.
-
-**Exit code 2 — Conflict**: The merge conflicted. When auto-stash is active the
-merge is aborted and your stash is restored automatically — the worktree is
-clean. Re-run sync after resolving the conflict manually (see Catchup section).
-
-**Exit code 4 — Pre-flight failure**: Report the issue (not in git repo, already
-on main, or `--no-stash` with a dirty worktree) and suggest how to fix it.
-
-**`untracked_conflict` error**: Untracked files in your worktree would be
-overwritten by the incoming merge. Commit, move, or delete the listed paths
-before re-running sync.
-
-**`stash_left_behind` error**: The stash pop conflicted after a successful
-merge. Your changes are preserved. Recover with:
-
-```bash
-git stash apply <stash-ref>   # ref shown in the error output
-```
-
-**Never re-implement git operations yourself.** Always use `wade implementation-session sync`.
+Use [Conventional Commits](https://www.conventionalcommits.org/) format. Prefer
+`git commit` (opens an editor) over `git commit -m` for multi-line messages.
 
 ## Closing the session
 
@@ -232,115 +79,56 @@ To finalize your work, follow these steps in order:
 
 {review_implementation_closing_step}
 
-**Step 2 — Write PR summary:**
+**Step 2 — Documentation pass [MANDATORY]:**
+
+{doc_update_step}
+
+@.claude/skills/implementation-session/reference/doc-update.md
+
+**Step 3 — Write PR summary:**
 
 Write `PR-SUMMARY.md` in the worktree root with a real description of your
-changes (see the format above). If the file already exists, update it.
+changes (format + the "never commit this file" fix:
+@.claude/skills/implementation-session/reference/pr-summary-format.md). If the
+file already exists, update it.
 
-**Step 3 — Sync with main:**
+**Step 4 — Sync with main:**
 
 ```bash
 wade implementation-session sync --json
 ```
 
-**Step 4 — Done:**
+Exit 0 means you're up to date — proceed. For any conflict or error, see
+@.claude/skills/implementation-session/reference/recovery.md. Never re-implement
+git operations yourself.
+
+**Step 5 — Done:**
 
 ```bash
 wade implementation-session done
 ```
 
-`wade implementation-session done` handles pushing the branch, updating the existing draft PR
-(appending a summary and marking it ready). The worktree is **not** deleted —
-it is cleaned up automatically by `implement` after the human merges the PR.
+`done` pushes the branch and updates the existing draft PR (appends a summary,
+marks it ready). The worktree is **not** deleted — `implement` cleans it up after
+merge. This is a **mandatory** step; if it fails, debug and fix it — do NOT bypass.
 
-This is a **mandatory** final step. If `wade implementation-session done` fails, debug and
-fix the error — do NOT bypass it.
-
-**Step 5 — Present results to the user:**
-
-Provide a brief **workflow recap** and **current state summary**, then suggest
-the user exits the session.
-
-Workflow recap (list only the steps you actually performed):
-- Ran self-review (`wade review implementation`)
-- Wrote PR-SUMMARY.md
-- Synced with main (`wade implementation-session sync`)
-- Pushed and opened/updated PR (`wade implementation-session done`)
-
-Current state:
-- PR #{number} is open and ready for review at {url}
-- Issue #{number} will close automatically when the PR is merged
-- Branch: {branch_name}
-
-What happens next:
-- After you exit, wade will monitor the PR for review comments
-- To address review feedback later: `wade review pr-comments <issue>`
-- To check PR status: `wade status <issue>`
-
-Use your tool's native question component to ask: "Want any further changes, or is the session complete?" Apply them and repeat Steps 1–5 if so. Otherwise, suggest the user exits so wade can continue the workflow.
-
-### Working on a child issue (sub-issue of a tracking/epic)
-
-If your issue appears in a parent "Tracking:" issue checklist:
-
-- `wade implementation-session done` **automatically detects** the parent tracking issue and
-  adds `Part of #<parent>` to the PR body alongside `Closes #<child>` — no
-  manual action needed. Pass `--no-close` to leave the issue open.
-- After your PR is merged, update the parent tracking issue's checklist:
-  change `- [ ] #<your-issue>` to `- [x] #<your-issue>` using
-  `gh issue edit <parent-number> --body "<updated-body>"`.
-- If all children are complete, close the parent: `wade task close <parent-number>`.
-
-### Working on the parent/epic tracking issue directly
-
-If you are working on the tracking issue itself (not a specific child):
-- The PR body should reference all child issues and their status.
-- Use `Closes #<tracking-issue>` in the PR body.
-- List child issue statuses using GitHub's tasklist syntax so GitHub renders
-  progress automatically.
-
-## After creating a new plan
-
-If you finalize a plan or feature spec during a work session, you **must**
-create a GitHub Issue from it:
-
-1. Write the plan file to the worktree root (never into the repo's main checkout)
-2. Create the issue via `wade task create` (interactive)
-3. List the created issues and show `wade implement <number>` as a hint.
-   Do **not** run the command yourself — the human starts work sessions.
+**Step 6 — Present results:** give a brief **workflow recap** (only the steps you
+performed) and **current state** (PR number/URL, that the issue closes on merge,
+the branch), then what's next (wade monitors the PR; later feedback →
+`wade review pr-comments <issue>`; status → `wade status <issue>`). Then ask
+(native question component): "Want any further changes, or is the session
+complete?" — apply and repeat Steps 1–6 if so, else suggest the user exits.
 
 ## Wade-managed skills
 
-The following skill directories under `.claude/skills/` are **managed by wade**
-and must not be modified, committed, or deleted:
-`plan-session`, `implementation-session`, `review-pr-comments-session`, `task`, `deps`, `knowledge`.
-
-Wade also installs cross-tool alias symlinks per-session in worktrees:
-`.github/skills`, `.agents/skills`, `.cursor/skills`.
-These point to `.claude/skills/` and are gitignored automatically. Do **not**
-modify, commit, or delete these alias directories — touching their symlinked
-locations can cause surprising `done()` failures.
-
-All of the above are installed per-session in worktrees by wade and are already gitignored.
-User-created custom skills under `.claude/skills/` are not affected.
-
-## Task Tracking
-
-At the start of this session, use your tool's native task/todo tracking
-mechanism to populate a checklist with the workflow steps below. This ensures
-you complete every mandatory step and the user can track progress.
-
-- [ ] Run `wade implementation-session check`
-- [ ] Search relevant knowledge (`wade knowledge get --search <topic>` or `wade knowledge get --tag <tag>`)
-- [ ] Follow the knowledge skill decision tree for evaluated knowledge entries (rate with `wade knowledge rate <id> up/down` when appropriate; otherwise leave the entry unrated)
-- [ ] Implementation tasks from PLAN.md (add each task as a separate item)
-- [ ] Run `wade review implementation` (if `review_implementation.enabled` is not `false`)
-- [ ] Capture knowledge (`wade knowledge add`) (if knowledge capture is enabled)
-- [ ] Write PR-SUMMARY.md
-- [ ] Sync with main (`wade implementation-session sync --json`)
-- [ ] Close session (`wade implementation-session done`)
-- [ ] Present results and suggest exit
+Directories under `.claude/skills/` (and the `.github/skills`, `.agents/skills`,
+`.cursor/skills` aliases) are installed per-session and gitignored. Guard hooks
+enforce this — do not modify, commit, or delete them.
 
 ## Skills reference
 
 - **About to create GitHub Issues** → read @.claude/skills/task/SKILL.md first
+- **Child of a "Tracking:" issue, or the epic itself** →
+  @.claude/skills/implementation-session/reference/tracking-issues.md
+- **Finalized a new plan mid-session** →
+  @.claude/skills/implementation-session/reference/new-plan.md

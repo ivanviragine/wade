@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from wade.git.pr import PRLookup, PRRef
 from wade.models.session import SessionRecord
 from wade.models.task import Task, TaskState
 from wade.services.smart_start import (
@@ -275,7 +276,9 @@ class TestSmartStartResumeIntegration:
         """Full flow: draft PR with worktree + sessions → resume sub-menu → resume."""
         mock_repo_root.return_value = tmp_path
         mock_get_provider.return_value.read_task.return_value = _make_task()
-        mock_pr_for_branch.return_value = {"number": 99, "state": "OPEN", "isDraft": True}
+        mock_pr_for_branch.return_value = PRLookup(
+            found=True, pr=PRRef(number=99, state="OPEN", isDraft=True)
+        )
         mock_pr_body.return_value = _SESSION_BODY
         # First select: "Continue working" (index 0 in main menu)
         # Second select: "Resume last session" (index 0 in sub-menu)
@@ -319,7 +322,9 @@ class TestSmartStartResumeIntegration:
         """Full flow: sessions exist → sub-menu → 'Start new session' → no resume params."""
         mock_repo_root.return_value = tmp_path
         mock_get_provider.return_value.read_task.return_value = _make_task()
-        mock_pr_for_branch.return_value = {"number": 99, "state": "OPEN", "isDraft": True}
+        mock_pr_for_branch.return_value = PRLookup(
+            found=True, pr=PRRef(number=99, state="OPEN", isDraft=True)
+        )
         mock_pr_body.return_value = _SESSION_BODY
         # First select: "Continue working", second: "Start new session"
         mock_select.side_effect = [0, 1]
@@ -361,7 +366,9 @@ class TestSmartStartResumeIntegration:
         """When no sessions exist, 'Continue working' goes straight to new session."""
         mock_repo_root.return_value = tmp_path
         mock_get_provider.return_value.read_task.return_value = _make_task()
-        mock_pr_for_branch.return_value = {"number": 99, "state": "OPEN", "isDraft": True}
+        mock_pr_for_branch.return_value = PRLookup(
+            found=True, pr=PRRef(number=99, state="OPEN", isDraft=True)
+        )
 
         result = smart_start("42", project_root=tmp_path)
 
@@ -397,7 +404,9 @@ class TestSmartStartResumeIntegration:
         mock_repo_root.return_value = tmp_path
         mock_get_provider.return_value.read_task.return_value = _make_task()
         # Non-draft PR so "Continue working" is shown even without a worktree
-        mock_pr_for_branch.return_value = {"number": 99, "state": "OPEN", "isDraft": False}
+        mock_pr_for_branch.return_value = PRLookup(
+            found=True, pr=PRRef(number=99, state="OPEN", isDraft=False)
+        )
         mock_pr_body.return_value = _SESSION_BODY
         # First select: "Continue working" (index 0), second: "Resume last session" (index 0)
         mock_select.side_effect = [0, 0]

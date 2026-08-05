@@ -146,10 +146,19 @@ def gather_batch_context(
             except GitError:
                 logger.debug("batch_review.fetch_failed", branch=branch_name, exc_info=True)
 
-        pr_info = git_pr.get_pr_for_branch(repo, branch_name)
-        pr_number = int(pr_info["number"]) if pr_info and "number" in pr_info else None
-        pr_url = str(pr_info["url"]) if pr_info and "url" in pr_info else None
-        status = str(pr_info.get("state", "")) if pr_info else ""
+        lookup = git_pr.get_pr_for_branch(repo, branch_name)
+        pr_lookup_failed = lookup.lookup_failed
+        if pr_lookup_failed:
+            logger.debug("batch_review.pr_lookup_failed", branch=branch_name)
+            console.warn(
+                f"Could not look up the PR for {branch_name} — its status is unknown, "
+                "not necessarily absent."
+            )
+        pr_number = lookup.number
+        pr_url = lookup.url or None
+        # An explicit "unknown" keeps a failed lookup distinguishable from a
+        # branch that genuinely has no PR (both otherwise leave status empty).
+        status = "unknown" if pr_lookup_failed else lookup.state
 
         # Fetch PR base branch to detect chain structure
         pr_base_branch: str | None = None
@@ -169,6 +178,7 @@ def gather_batch_context(
                 local_ref_exists=branch_available,
                 pr_number=pr_number,
                 pr_url=pr_url,
+                pr_lookup_failed=pr_lookup_failed,
                 diff_stat=diff_stat,
                 status=status,
                 base_branch=pr_base_branch,
@@ -318,12 +328,22 @@ def create_review_pr(
 
     body = "\n".join(body_parts)
 
-    existing = git_pr.get_pr_for_branch(repo_root, ctx.integration_branch)
-    if existing:
-        pr_number = int(existing["number"])
+    lookup = git_pr.get_pr_for_branch(repo_root, ctx.integration_branch)
+    if lookup.lookup_failed:
+        # Unknown state — never fall through to create_pr, which could open a
+        # duplicate integration PR (or fail with "a pull request already
+        # exists") when one is already open.
+        logger.warning("batch_review.integration_pr_lookup_failed", branch=ctx.integration_branch)
+        console.warn(
+            f"Could not look up the integration PR for {ctx.integration_branch} — "
+            "leaving it unchanged to avoid creating a duplicate."
+        )
+        return ctx
+    if lookup.is_open and lookup.pr is not None:
+        pr_number = lookup.pr.number
         git_pr.update_pr_body(repo_root, pr_number, body)
         ctx.pr_number = pr_number
-        ctx.pr_url = str(existing["url"])
+        ctx.pr_url = lookup.pr.url
     else:
         pr_info = git_pr.create_pr(
             repo_root,
@@ -333,8 +353,11 @@ def create_review_pr(
             head=ctx.integration_branch,
             draft=True,
         )
-        ctx.pr_number = int(pr_info["number"])
-        ctx.pr_url = str(pr_info["url"])
+        if pr_info is not None:
+            ctx.pr_number = int(pr_info["number"])
+            ctx.pr_url = str(pr_info["url"])
+        else:
+            logger.warning("batch_review.integration_pr_create_failed")
     return ctx
 
 
@@ -360,7 +383,9 @@ def _format_batch_context(ctx: BatchReviewContext) -> str:
     for issue in ctx.issues:
         lines.append(f"### Issue #{issue.issue_number}: {issue.issue_title}")
         lines.append(f"- **Branch:** {issue.branch_name or '(no branch)'}")
-        if issue.pr_url:
+        if issue.pr_lookup_failed:
+            lines.append("- **PR:** lookup failed — status unknown (a PR may exist)")
+        elif issue.pr_url:
             lines.append(f"- **PR:** {issue.pr_url}")
         if issue.base_branch and issue.base_branch != ctx.main_branch:
             lines.append(f"- **Stacked on:** {issue.base_branch}")

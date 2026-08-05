@@ -22,6 +22,7 @@ from wade.models.config import (
     ProviderConfig,
 )
 from wade.models.permission import coerce_permission_mode
+from wade.models.session import MergeStrategy
 
 logger = structlog.get_logger()
 
@@ -47,6 +48,28 @@ def _validated_permission_mode(raw_value: Any, *, source: str) -> str | None:
         )
         return None
     return mode.value
+
+
+def _migrate_merge_strategy(raw_value: Any) -> MergeStrategy:
+    """Migrate the retired ``direct`` merge strategy to ``PR`` on load.
+
+    The ``direct`` strategy was removed in #357. An existing config that still
+    carries it is silently upgraded to ``PR`` (with a warning) so the project
+    keeps working instead of failing to load. Any other value goes through the
+    normal enum validation — an invalid value raises ``ValueError``, which
+    :func:`parse_config_file` surfaces as a ``ConfigError``.
+    """
+    if raw_value is None:
+        return MergeStrategy.PR
+    value = str(raw_value)
+    if value.strip().lower() == "direct":
+        logger.warning(
+            "config.merge_strategy_direct_retired",
+            value=raw_value,
+            fallback="PR",
+        )
+        return MergeStrategy.PR
+    return MergeStrategy(value)
 
 
 class ConfigError(Exception):
@@ -158,7 +181,7 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
         issue_label=project_raw.get("issue_label", "feature-plan"),
         worktrees_dir=project_raw.get("worktrees_dir", "../.worktrees"),
         branch_prefix=project_raw.get("branch_prefix", "feat"),
-        merge_strategy=project_raw.get("merge_strategy", "PR"),
+        merge_strategy=_migrate_merge_strategy(project_raw.get("merge_strategy")),
     )
 
     # Parse ai section

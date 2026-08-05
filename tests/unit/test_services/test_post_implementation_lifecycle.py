@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from wade.git.pr import PRLookup, PRRef
 from wade.git.repo import GitError
 from wade.models.config import AIConfig, ProjectConfig, ProjectSettings
 from wade.models.session import MergeStatus, MergeStrategy
@@ -15,9 +16,6 @@ _CHECKOUT = "wade.services.implementation_service.lifecycle.git_repo.checkout"
 _CHECKOUT_DETACH = "wade.services.implementation_service.lifecycle.git_repo.checkout_detach"
 _IS_HEAD_ATTACHED = "wade.services.implementation_service.lifecycle.git_repo.is_head_attached"
 _DETECT_MAIN = "wade.services.implementation_service.lifecycle.git_repo.detect_main_branch"
-_MERGE_SQUASH = "wade.services.implementation_service.lifecycle.git_repo.merge_squash"
-_COMMIT_NO_EDIT = "wade.services.implementation_service.lifecycle.git_repo.commit_no_edit"
-_PUSH = "wade.services.implementation_service.lifecycle.git_repo.push"
 
 
 def _config(strategy: MergeStrategy) -> ProjectConfig:
@@ -39,7 +37,9 @@ def _config(strategy: MergeStrategy) -> ProjectConfig:
 @patch("wade.services.implementation_service.lifecycle.webbrowser.open")
 @patch(
     "wade.services.implementation_service.lifecycle.git_pr.get_pr_for_branch",
-    return_value={"number": 99, "url": "https://example/pr/99"},
+    return_value=PRLookup(
+        found=True, pr=PRRef(number=99, url="https://example/pr/99", state="OPEN")
+    ),
 )
 def test_pr_strategy_prompts_merge_on_existing_pr(
     _mock_get_pr: MagicMock,
@@ -61,9 +61,7 @@ def test_pr_strategy_prompts_merge_on_existing_pr(
     wt_path = tmp_path / "wt"
     wt_path.mkdir()  # Needs to exist for is_dir() check
     with patch("wade.services.implementation_service.lifecycle.prompts.is_tty", return_value=True):
-        _post_implementation_lifecycle(
-            repo_root, "feat/42-test", 42, wt_path, _config(MergeStrategy.PR), provider
-        )
+        _post_implementation_lifecycle(repo_root, "feat/42-test", 42, wt_path, provider)
 
     # select is called with "Merge PR" / "Wait for reviews" — user picks 0 (Merge PR)
     mock_select.assert_called_once()
@@ -78,7 +76,10 @@ def test_pr_strategy_prompts_merge_on_existing_pr(
 
 @patch("wade.services.implementation_service.lifecycle.git_pr.merge_pr")
 @patch("wade.services.implementation_service.lifecycle.prompts.confirm")
-@patch("wade.services.implementation_service.lifecycle.git_pr.get_pr_for_branch", return_value=None)
+@patch(
+    "wade.services.implementation_service.lifecycle.git_pr.get_pr_for_branch",
+    return_value=PRLookup(found=False),
+)
 def test_pr_strategy_no_pr_warns_and_returns(
     _mock_get_pr: MagicMock,
     mock_confirm: MagicMock,
@@ -91,7 +92,6 @@ def test_pr_strategy_no_pr_warns_and_returns(
         "feat/42-test",
         42,
         tmp_path / "wt",
-        _config(MergeStrategy.PR),
         provider,
     )
 
@@ -105,7 +105,9 @@ def test_pr_strategy_no_pr_warns_and_returns(
 @patch("wade.services.implementation_service.lifecycle.prompts.confirm", return_value=False)
 @patch(
     "wade.services.implementation_service.lifecycle.git_pr.get_pr_for_branch",
-    return_value={"number": 99, "url": "https://example/pr/99"},
+    return_value=PRLookup(
+        found=True, pr=PRRef(number=99, url="https://example/pr/99", state="OPEN")
+    ),
 )
 def test_pr_strategy_user_declines_merge(
     _mock_get_pr: MagicMock,
@@ -125,7 +127,6 @@ def test_pr_strategy_user_declines_merge(
             "feat/42-test",
             42,
             tmp_path / "wt",
-            _config(MergeStrategy.PR),
             provider,
         )
 
@@ -143,7 +144,9 @@ def test_pr_strategy_user_declines_merge(
 @patch("wade.services.implementation_service.lifecycle.webbrowser.open")
 @patch(
     "wade.services.implementation_service.lifecycle.git_pr.get_pr_for_branch",
-    return_value={"number": 99, "url": "https://example/pr/99"},
+    return_value=PRLookup(
+        found=True, pr=PRRef(number=99, url="https://example/pr/99", state="OPEN")
+    ),
 )
 def test_pr_strategy_merge_failure_preserves_branch(
     _mock_get_pr: MagicMock,
@@ -164,7 +167,6 @@ def test_pr_strategy_merge_failure_preserves_branch(
             "feat/42-test",
             42,
             tmp_path / "wt",
-            _config(MergeStrategy.PR),
             provider,
         )
 
@@ -182,7 +184,9 @@ def test_pr_strategy_merge_failure_preserves_branch(
 @patch("wade.services.implementation_service.lifecycle.webbrowser.open")
 @patch(
     "wade.services.implementation_service.lifecycle.git_pr.get_pr_for_branch",
-    return_value={"number": 99, "url": "https://example/pr/99"},
+    return_value=PRLookup(
+        found=True, pr=PRRef(number=99, url="https://example/pr/99", state="OPEN")
+    ),
 )
 def test_pr_strategy_merge_failure_restores_branch(
     _mock_get_pr: MagicMock,
@@ -208,7 +212,6 @@ def test_pr_strategy_merge_failure_restores_branch(
             "feat/42-test",
             42,
             wt_path,
-            _config(MergeStrategy.PR),
             provider,
         )
 
@@ -228,7 +231,9 @@ def test_pr_strategy_merge_failure_restores_branch(
 @patch("wade.services.implementation_service.lifecycle.webbrowser.open")
 @patch(
     "wade.services.implementation_service.lifecycle.git_pr.get_pr_for_branch",
-    return_value={"number": 99, "url": "https://example/pr/99"},
+    return_value=PRLookup(
+        found=True, pr=PRRef(number=99, url="https://example/pr/99", state="OPEN")
+    ),
 )
 def test_pr_strategy_cleanup_and_pull_after_merge(
     _mock_get_pr: MagicMock,
@@ -251,9 +256,7 @@ def test_pr_strategy_cleanup_and_pull_after_merge(
     wt_path.mkdir()  # Needs to exist for is_dir() check
 
     with patch("wade.services.implementation_service.lifecycle.prompts.is_tty", return_value=True):
-        _post_implementation_lifecycle(
-            repo_root, "feat/42-test", 42, wt_path, _config(MergeStrategy.PR), provider
-        )
+        _post_implementation_lifecycle(repo_root, "feat/42-test", 42, wt_path, provider)
 
     # Worktree is removed AFTER successful merge
     mock_remove_worktree.assert_called_once_with(repo_root, wt_path)
@@ -274,7 +277,9 @@ def test_pr_strategy_cleanup_and_pull_after_merge(
 @patch("wade.services.implementation_service.lifecycle.webbrowser.open")
 @patch(
     "wade.services.implementation_service.lifecycle.git_pr.get_pr_for_branch",
-    return_value={"number": 99, "url": "https://example/pr/99"},
+    return_value=PRLookup(
+        found=True, pr=PRRef(number=99, url="https://example/pr/99", state="OPEN")
+    ),
 )
 def test_pr_strategy_detached_repo_root_reattaches_then_merges(
     _mock_get_pr: MagicMock,
@@ -300,9 +305,7 @@ def test_pr_strategy_detached_repo_root_reattaches_then_merges(
     wt_path.mkdir()
 
     with patch("wade.services.implementation_service.lifecycle.prompts.is_tty", return_value=True):
-        status = _post_implementation_lifecycle(
-            repo_root, "feat/42-test", 42, wt_path, _config(MergeStrategy.PR), provider
-        )
+        status = _post_implementation_lifecycle(repo_root, "feat/42-test", 42, wt_path, provider)
 
     # Re-attached repo_root to the detected default branch BEFORE merging.
     mock_detect_main.assert_called_once_with(repo_root)
@@ -325,7 +328,9 @@ def test_pr_strategy_detached_repo_root_reattaches_then_merges(
 @patch("wade.services.implementation_service.lifecycle.webbrowser.open")
 @patch(
     "wade.services.implementation_service.lifecycle.git_pr.get_pr_for_branch",
-    return_value={"number": 99, "url": "https://example/pr/99"},
+    return_value=PRLookup(
+        found=True, pr=PRRef(number=99, url="https://example/pr/99", state="OPEN")
+    ),
 )
 def test_pr_strategy_detached_repo_root_detect_fails_no_merge(
     _mock_get_pr: MagicMock,
@@ -347,9 +352,7 @@ def test_pr_strategy_detached_repo_root_detect_fails_no_merge(
     wt_path.mkdir()
 
     with patch("wade.services.implementation_service.lifecycle.prompts.is_tty", return_value=True):
-        status = _post_implementation_lifecycle(
-            repo_root, "feat/42-test", 42, wt_path, _config(MergeStrategy.PR), provider
-        )
+        status = _post_implementation_lifecycle(repo_root, "feat/42-test", 42, wt_path, provider)
 
     # No GitHub-side merge and the worktree is left untouched (never detached).
     mock_merge_pr.assert_not_called()
@@ -369,7 +372,9 @@ def test_pr_strategy_detached_repo_root_detect_fails_no_merge(
 @patch("wade.services.implementation_service.lifecycle.webbrowser.open")
 @patch(
     "wade.services.implementation_service.lifecycle.git_pr.get_pr_for_branch",
-    return_value={"number": 99, "url": "https://example/pr/99"},
+    return_value=PRLookup(
+        found=True, pr=PRRef(number=99, url="https://example/pr/99", state="OPEN")
+    ),
 )
 def test_pr_strategy_detached_repo_root_checkout_fails_no_merge(
     _mock_get_pr: MagicMock,
@@ -394,9 +399,7 @@ def test_pr_strategy_detached_repo_root_checkout_fails_no_merge(
         patch(checkout_target, side_effect=GitError("checkout refused: local changes")),
         patch("wade.services.implementation_service.lifecycle.prompts.is_tty", return_value=True),
     ):
-        status = _post_implementation_lifecycle(
-            repo_root, "feat/42-test", 42, wt_path, _config(MergeStrategy.PR), provider
-        )
+        status = _post_implementation_lifecycle(repo_root, "feat/42-test", 42, wt_path, provider)
 
     # Re-attach checkout raised → no merge, worktree never detached.
     mock_merge_pr.assert_not_called()
@@ -419,7 +422,9 @@ def test_pr_strategy_detached_repo_root_checkout_fails_no_merge(
 @patch("wade.services.implementation_service.lifecycle.webbrowser.open")
 @patch(
     "wade.services.implementation_service.lifecycle.git_pr.get_pr_for_branch",
-    return_value={"number": 99, "url": "https://example/pr/99"},
+    return_value=PRLookup(
+        found=True, pr=PRRef(number=99, url="https://example/pr/99", state="OPEN")
+    ),
 )
 def test_pr_strategy_attached_repo_root_skips_reattach(
     _mock_get_pr: MagicMock,
@@ -445,90 +450,13 @@ def test_pr_strategy_attached_repo_root_skips_reattach(
     wt_path.mkdir()
 
     with patch("wade.services.implementation_service.lifecycle.prompts.is_tty", return_value=True):
-        status = _post_implementation_lifecycle(
-            repo_root, "feat/42-test", 42, wt_path, _config(MergeStrategy.PR), provider
-        )
+        status = _post_implementation_lifecycle(repo_root, "feat/42-test", 42, wt_path, provider)
 
     # Attached: never detected the default branch, never re-attached via checkout.
     mock_detect_main.assert_not_called()
     mock_checkout.assert_not_called()
     mock_merge_pr.assert_called_once_with(repo_root=repo_root, pr_number=99, strategy="squash")
     assert status == MergeStatus.MERGED
-
-
-@patch("wade.services.implementation_service.lifecycle.prompts.confirm", return_value=False)
-@patch("wade.services.implementation_service.lifecycle.git_branch.commits_ahead", return_value=0)
-def test_direct_strategy_zero_ahead_offers_delete(
-    _mock_ahead: MagicMock,
-    mock_confirm: MagicMock,
-    tmp_path: Path,
-) -> None:
-    provider = MagicMock()
-
-    _post_implementation_lifecycle(
-        tmp_path / "repo",
-        "feat/42-test",
-        42,
-        tmp_path / "wt",
-        _config(MergeStrategy.DIRECT),
-        provider,
-    )
-
-    assert mock_confirm.called
-    assert "delete" in mock_confirm.call_args[0][0].lower()
-
-
-@patch("wade.services.implementation_service.lifecycle.prompts.select", return_value=2)
-@patch("wade.services.implementation_service.lifecycle.git_branch.commits_ahead", return_value=3)
-def test_direct_strategy_commits_ahead_shows_menu(
-    _mock_ahead: MagicMock,
-    mock_select: MagicMock,
-    tmp_path: Path,
-) -> None:
-    provider = MagicMock()
-
-    _post_implementation_lifecycle(
-        tmp_path / "repo",
-        "feat/42-test",
-        42,
-        tmp_path / "wt",
-        _config(MergeStrategy.DIRECT),
-        provider,
-    )
-
-    choices = mock_select.call_args[0][1]
-    joined = " ".join(choices)
-    assert "Merge" in joined
-    assert "close" in joined
-    assert "Skip" in joined
-
-
-@patch("wade.services.implementation_service.lifecycle._cleanup_worktree")
-@patch("wade.services.implementation_service.lifecycle.prompts.select", return_value=1)
-@patch(_PUSH)
-@patch(_COMMIT_NO_EDIT)
-@patch(_MERGE_SQUASH)
-@patch("wade.services.implementation_service.lifecycle.git_branch.commits_ahead", return_value=3)
-def test_direct_strategy_merge_and_close(
-    _mock_ahead: MagicMock,
-    mock_merge_squash: MagicMock,
-    _mock_commit: MagicMock,
-    _mock_push: MagicMock,
-    _mock_select: MagicMock,
-    mock_cleanup: MagicMock,
-    tmp_path: Path,
-) -> None:
-    repo_root = tmp_path / "repo"
-    wt_path = tmp_path / "wt"
-    provider = MagicMock()
-
-    _post_implementation_lifecycle(
-        repo_root, "feat/42-test", 42, wt_path, _config(MergeStrategy.DIRECT), provider
-    )
-
-    mock_merge_squash.assert_called_once_with(repo_root, "feat/42-test")
-    mock_cleanup.assert_called_once_with(repo_root, wt_path, "main")
-    provider.close_task.assert_called_once_with("42")
 
 
 @patch("wade.services.implementation_service.core.write_plan_md")
@@ -544,7 +472,10 @@ def test_direct_strategy_merge_and_close(
 @patch("wade.services.implementation_service.core._resolve_task_target")
 @patch("wade.services.implementation_service.core.get_provider")
 @patch("wade.services.implementation_service.core.load_config")
-@patch("wade.services.implementation_service.core.git_pr.get_pr_for_branch", return_value=None)
+@patch(
+    "wade.services.implementation_service.core.git_pr.get_pr_for_branch",
+    return_value=PRLookup(found=False),
+)
 @patch(
     "wade.services.implementation_service.core.bootstrap_draft_pr",
     return_value={"number": 1, "url": "http://test"},
@@ -601,7 +532,10 @@ def test_lifecycle_skipped_in_detach_mode(
 @patch("wade.services.implementation_service.core.AbstractAITool.get")
 @patch("wade.services.implementation_service.core.get_provider")
 @patch("wade.services.implementation_service.core.load_config")
-@patch("wade.services.implementation_service.core.git_pr.get_pr_for_branch", return_value=None)
+@patch(
+    "wade.services.implementation_service.core.git_pr.get_pr_for_branch",
+    return_value=PRLookup(found=False),
+)
 @patch(
     "wade.services.implementation_service.core.bootstrap_draft_pr",
     return_value={"number": 1, "url": "http://test"},
