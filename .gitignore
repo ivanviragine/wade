@@ -48,3 +48,7 @@ uv.lock
 
 # Local archive (pre-reset export)
 archive/
+
+# Project knowledge store (per-worktree, causes cross-worktree stash conflicts if tracked)
+KNOWLEDGE.md
+KNOWLEDGE.ratings.yml
