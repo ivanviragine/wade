@@ -108,7 +108,7 @@ Everything in this repo exists in one of two worlds:
 
 When developing WADE, **only touch the left column**. Always edit `templates/skills/<name>/SKILL.md` directly — never edit files inside `.claude/skills/` (those are symlinks in this repo, copies in inited projects).
 
-The right-column artifacts (installed skills, the `## Git Workflow` pointer, and the Claude/Cursor allowlists) are produced **per session by worktree bootstrap** (`bootstrap_worktree` in `implementation_service/bootstrap.py`, invoked by `wade implement`/`wade plan`/`wade review`), *not* by `wade init`. `wade init` writes only `.wade.yml`, optional provider/knowledge files, and the `.wade/` manifest.
+The right-column artifacts (installed skills, the `## Git Workflow` pointer, and the Claude/Cursor allowlists) are produced **per session by worktree bootstrap** (`bootstrap_worktree` in `implementation_service/bootstrap.py`, invoked by `wade implement`/`wade plan`/`wade review` and by a standalone `wade task deps`), *not* by `wade init`. `wade init` writes only `.wade.yml`, optional provider/knowledge files, and the `.wade/` manifest.
 
 > Skills system deep dive (symlinks, pointer markers, installation lifecycle): see `docs/dev/skills-system.md`
 

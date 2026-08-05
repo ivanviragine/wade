@@ -14,7 +14,7 @@ This boundary is critical. Everything in this repo exists in one of two worlds:
 | `AGENTS.md` (this file) | target project's own `AGENTS.md` (different content) |
 | `.wade.yml` (this repo's config) | target project's own `.wade.yml` |
 
-When developing wade, **only touch the left column**. The right column is what a project gets after adopting wade — `wade init` writes `.wade.yml` and the manifest, then worktree bootstrap (per `wade implement`/`plan`/`review` session) installs the skills, pointer, and allowlists.
+When developing wade, **only touch the left column**. The right column is what a project gets after adopting wade — `wade init` writes `.wade.yml` and the manifest, then worktree bootstrap (per `wade implement`/`plan`/`review` session, or a standalone `wade task deps`) installs the skills, pointer, and allowlists.
 
 ## AGENTS.md and CLAUDE.md
 

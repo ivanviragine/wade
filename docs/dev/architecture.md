@@ -319,7 +319,8 @@ earlier wade versions committed skills, a `.gitignore` block, and AI-tool files
 there; those now live only in per-session worktrees (installed by worktree
 bootstrap — see `docs/dev/skills-system.md`). `wade update` does **not** install
 or refresh skills, allowlists, or the `AGENTS.md` pointer; that is bootstrap's job,
-run per session by `wade implement`/`wade plan`/`wade review`.
+run per session by `wade implement`/`wade plan`/`wade review` (and by a standalone
+`wade task deps`).
 
 **Self-upgrade mechanism**: `utils/install.py:detect_install_method()` inspects `sys.executable` to determine how wade was installed (`uv-tool`, `pipx`, `brew`, or `editable`). On `wade update`, `self_upgrade()` runs the appropriate package manager command (e.g. `uv tool upgrade wade`), then `re_exec()` replaces the current process via `os.execv()` so the new code is loaded. Editable installs skip this naturally. Pass `--skip-self-upgrade` to bypass.
 
