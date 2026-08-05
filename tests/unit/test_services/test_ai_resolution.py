@@ -22,6 +22,7 @@ from wade.services.ai_resolution import (
 
 _CLAUDE = "claude"
 _COPILOT = "copilot"
+_ANTIGRAVITY_CLI = "antigravity-cli"
 _MODEL_A = "claude-sonnet-4-6"
 _MODEL_B = "claude-opus-4-6"
 
@@ -437,6 +438,75 @@ class TestChangeEffort:
         assert tool == _COPILOT
         assert model == _MODEL_B
         assert effort is None  # stale effort cleared when copilot doesn't support it
+
+    def test_tool_switch_clears_effort_for_excluded_level(self) -> None:
+        """Switching to a tool that supports effort but excludes the retained
+        level clears it — Proceed must not return an unsupported level."""
+        call_count = 0
+
+        def fake_select(title: str, items: list[str], **kwargs: object) -> int:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return items.index("Change AI tool")
+            if call_count == 2:
+                return items.index(_ANTIGRAVITY_CLI)
+            if call_count == 3:
+                return 0  # first model
+            return 0  # Proceed — does NOT reopen the effort picker
+
+        with (
+            patch(_IS_TTY, return_value=True),
+            patch(_SELECT, side_effect=fake_select),
+            patch(_DETECT, return_value=_make_installed(_CLAUDE, _ANTIGRAVITY_CLI)),
+            patch(_MODELS_FOR_TOOL, return_value=[_MODEL_B]),
+            patch(_CONSOLE_KV),
+        ):
+            tool, _model, effort, _pm = confirm_ai_selection(
+                _CLAUDE,
+                _MODEL_A,
+                tool_explicit=False,
+                model_explicit=False,
+                resolved_effort=EffortLevel.XHIGH,
+                effort_explicit=False,
+            )
+
+        assert tool == _ANTIGRAVITY_CLI
+        assert effort is None  # xhigh is excluded by antigravity-cli → cleared
+
+    def test_tool_switch_keeps_effort_when_new_tool_honors_level(self) -> None:
+        """Switching to a restricted tool keeps a retained level it still honors."""
+        call_count = 0
+
+        def fake_select(title: str, items: list[str], **kwargs: object) -> int:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return items.index("Change AI tool")
+            if call_count == 2:
+                return items.index(_ANTIGRAVITY_CLI)
+            if call_count == 3:
+                return 0  # first model
+            return 0  # Proceed
+
+        with (
+            patch(_IS_TTY, return_value=True),
+            patch(_SELECT, side_effect=fake_select),
+            patch(_DETECT, return_value=_make_installed(_CLAUDE, _ANTIGRAVITY_CLI)),
+            patch(_MODELS_FOR_TOOL, return_value=[_MODEL_B]),
+            patch(_CONSOLE_KV),
+        ):
+            tool, _model, effort, _pm = confirm_ai_selection(
+                _CLAUDE,
+                _MODEL_A,
+                tool_explicit=False,
+                model_explicit=False,
+                resolved_effort=EffortLevel.MEDIUM,
+                effort_explicit=False,
+            )
+
+        assert tool == _ANTIGRAVITY_CLI
+        assert effort is EffortLevel.MEDIUM  # medium is within antigravity-cli's set
 
 
 # ---------------------------------------------------------------------------
