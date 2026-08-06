@@ -388,12 +388,22 @@ def _install_managed_git_hooks(worktree_path: Path, config: ProjectConfig) -> No
         except FileNotFoundError:
             logger.warning("implementation.pre_push_template_missing")
 
+    # build_*_hook_script both call load_hook_template, which raises
+    # FileNotFoundError on a missing template — guard each the same way as the
+    # pre-push branch so a packaging gap degrades to a warning instead of
+    # crashing bootstrap for a project that opted into either gate.
     pre_commit = config.hooks.pre_commit
     if pre_commit.lint or pre_commit.test:
-        hooks["pre-commit"] = build_pre_commit_hook_script(pre_commit.lint, pre_commit.test)
+        try:
+            hooks["pre-commit"] = build_pre_commit_hook_script(pre_commit.lint, pre_commit.test)
+        except FileNotFoundError:
+            logger.warning("implementation.pre_commit_template_missing")
 
     if config.hooks.commit_msg.conventional:
-        hooks["commit-msg"] = build_commit_msg_hook_script()
+        try:
+            hooks["commit-msg"] = build_commit_msg_hook_script()
+        except FileNotFoundError:
+            logger.warning("implementation.commit_msg_template_missing")
 
     try:
         reconcile_worktree_git_hooks(worktree_path, hooks)

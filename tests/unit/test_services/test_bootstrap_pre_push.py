@@ -19,6 +19,7 @@ from wade.models.config import (
     ProjectConfig,
     ProjectSettings,
 )
+from wade.services.implementation_service import bootstrap as bootstrap_mod
 from wade.services.implementation_service import bootstrap_worktree
 
 
@@ -98,3 +99,34 @@ class TestBootstrapManagedGitHooks:
             # A hook-install error must never crash bootstrap.
             bootstrap_worktree(wt, config, repo, plan_mode=False)
         mock_install.assert_called_once()
+
+    def test_missing_gate_template_degrades_without_crashing(self, tmp_path: Path) -> None:
+        # build_pre_commit/commit_msg_hook_script load a template that can be
+        # absent (packaging gap); a FileNotFoundError there must warn-and-skip
+        # that gate, never abort bootstrap — mirroring the pre-push branch. The
+        # pre-push backstop still installs, proving reconcile ran regardless.
+        config = ProjectConfig(
+            project=ProjectSettings(),
+            done=DoneConfig(pre_push_backstop=True),
+            hooks=HooksConfig(
+                pre_commit=PreCommitConfig(lint="./scripts/check.sh --lint"),
+                commit_msg=CommitMsgConfig(conventional=True),
+            ),
+        )
+        with (
+            patch(
+                "wade.skills.installer.build_pre_commit_hook_script",
+                side_effect=FileNotFoundError("no pre-commit template"),
+            ),
+            patch(
+                "wade.skills.installer.build_commit_msg_hook_script",
+                side_effect=FileNotFoundError("no commit-msg template"),
+            ),
+            patch.object(bootstrap_mod.logger, "warning") as warning,
+        ):
+            mock_install = _run(tmp_path, plan_mode=False, config=config)
+        # Both gates degraded; only the healthy pre-push hook was reconciled.
+        assert _installed_hooks(mock_install) == {"pre-push"}
+        warned = {call.args[0] for call in warning.call_args_list}
+        assert "implementation.pre_commit_template_missing" in warned
+        assert "implementation.commit_msg_template_missing" in warned
