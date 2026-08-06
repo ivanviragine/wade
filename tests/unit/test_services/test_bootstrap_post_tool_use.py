@@ -143,10 +143,18 @@ class TestFailOpen:
             return _W()
 
         writers = [(tid, make_writer(tid)) for tid in _ALL_TOOLS]
-        with patch.object(bootstrap_mod, "_hook_writers", lambda: writers):
+        with (
+            patch.object(bootstrap_mod, "_hook_writers", lambda: writers),
+            patch.object(bootstrap_mod.logger, "warning") as warning,
+        ):
             # Must not raise despite CLAUDE's writer erroring.
             bootstrap_mod._install_post_tool_use_lint_hook(wt, config)
 
+        # The swallowed failure must still surface as a warning — a regression that
+        # suppresses the exception without logging would otherwise pass silently.
+        warning.assert_called_once()
+        assert warning.call_args.args[0] == "implementation.post_tool_use_hook_error"
+        assert warning.call_args.kwargs["tool"] == AIToolID.CLAUDE.value
         # Tools processed after the failing one were still reconciled.
         assert AIToolID.CURSOR in synced
 
