@@ -92,6 +92,11 @@ _TOOL_STOP_DIALECTS: dict[str, HookStopDialect] = {
 # PreToolUse write guards fail CLOSED (deny) on any error or misconfiguration.
 _WRITE_GUARDS = frozenset({"worktree", "plan"})
 
+# Fallback timeout (seconds) for the PostToolUse linter when ``--timeout`` is
+# omitted. Bootstrap always bakes an explicit value; this only guards a
+# hand-invoked hook.
+_POST_TOOL_USE_TIMEOUT = 10
+
 
 def _dialect_for(tool: str) -> HookOutputDialect:
     return _TOOL_DIALECTS.get(tool.strip().lower(), HookOutputDialect.HOOK_SPECIFIC_OUTPUT)
@@ -404,6 +409,100 @@ def _run(event: str, guard: str, tool: str, root: str) -> HookEmission:
     return emit_decision(decision, dialect, event=ev.event or event)
 
 
+def _resolve_edited_path(ev: object, root: str) -> str | None:
+    """Resolve the just-edited file path, confined to the worktree, or None.
+
+    Returns the absolute path only when the event names a path-addressed write
+    (:attr:`HookEvent.is_write`) whose target resolves **inside** ``root``. A
+    missing path, a non-write tool call (read/shell), a missing root, or a path
+    that escapes the worktree all yield None — the linter must never run on a
+    file it cannot attribute to this in-worktree edit.
+    """
+    if not root:
+        return None
+    if not getattr(ev, "is_write", False):
+        return None
+    file_path = getattr(ev, "file_path", None)
+    if not file_path:
+        return None
+    root_path = Path(root).resolve()
+    candidate = Path(file_path)
+    if not candidate.is_absolute():
+        candidate = root_path / candidate
+    try:
+        resolved = candidate.resolve()
+    except OSError:
+        return None
+    if resolved != root_path and root_path not in resolved.parents:
+        return None
+    return str(resolved)
+
+
+def _run_post_tool_use(
+    tool: str, root: str, lint_cmd: str | None, timeout: int, *, scoped: bool
+) -> HookEmission:
+    """Run the file-scoped PostToolUse linter — strictly fire-and-forget / fail-open.
+
+    Always exits 0 and never denies. On a non-zero lint exit it returns the lint
+    output as :meth:`HookDecision.context` so the agent can fix the file while the
+    edit is still in working memory; every other outcome — a context-incapable
+    tool, no lint command, unreadable stdin, a non-write / out-of-worktree edit, a
+    timeout, empty output, or any exception — is a silent no-op (empty emit).
+
+    The argv is built **safely**: ``shlex.split(lint_cmd)`` (config-authored,
+    trusted) plus the resolved edited path (tool-emitted, untrusted) as a list,
+    run with ``shell=False``. The path is never string-interpolated into a shell
+    command, so a hostile path cannot inject.
+    """
+    import shlex
+    import subprocess
+
+    dialect = _dialect_for(tool)
+
+    def _noop() -> HookEmission:
+        return emit_decision(HookDecision.allow(), dialect, event="post_tool_use")
+
+    # agy (DECISION dialect) has no context channel; bootstrap already skips it,
+    # but double-guard so a stray install can't fire a per-edit subprocess for it.
+    if dialect is HookOutputDialect.DECISION or not lint_cmd:
+        return _noop()
+
+    try:
+        raw = sys.stdin.read()
+    except (OSError, ValueError):
+        return _noop()
+    ev = parse_event(raw, event="post_tool_use")
+
+    argv = shlex.split(lint_cmd)
+    if not argv:
+        return _noop()
+    if scoped:
+        resolved = _resolve_edited_path(ev, root)
+        if resolved is None:
+            return _noop()
+        argv = [*argv, resolved]
+
+    try:
+        proc = subprocess.run(
+            argv,
+            cwd=root or None,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        # TimeoutExpired is a SubprocessError — skip on overrun, never hang/block.
+        return _noop()
+
+    if proc.returncode == 0:
+        return _noop()
+    output = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    if not output:
+        return _noop()
+    return emit_decision(HookDecision.context(output), dialect, event="post_tool_use")
+
+
 def main(argv: list[str] | None = None) -> int:
     """Parse args, run the guard, emit the decision, return the exit code."""
     parser = argparse.ArgumentParser(
@@ -417,11 +516,28 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--guard",
-        required=True,
+        default="",
         help="Guard policy: worktree | plan | session-complete | plan-complete.",
     )
     parser.add_argument("--tool", required=True, help="AI tool id (selects the output dialect).")
     parser.add_argument("--root", default="", help="Worktree root — required by write guards.")
+    # PostToolUse lint feedback (fail-open, never blocks).
+    parser.add_argument(
+        "--lint-cmd",
+        default=None,
+        help="PostToolUse: lint command; the edited path is appended unless --unscoped.",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=_POST_TOOL_USE_TIMEOUT,
+        help="PostToolUse: seconds before the linter is abandoned (skip on overrun).",
+    )
+    parser.add_argument(
+        "--unscoped",
+        action="store_true",
+        help="PostToolUse: run the lint command whole-repo (do not append the edited path).",
+    )
 
     raw_argv = sys.argv[1:] if argv is None else argv
     try:
@@ -429,15 +545,20 @@ def main(argv: list[str] | None = None) -> int:
     except SystemExit:
         # argparse exits 2 on a usage error. For a PreToolUse write guard that
         # would (via the non-zero code) block the edit, which is the safe
-        # direction, so let it stand. On a *Stop* event it is the opposite: exit 2
-        # means "block the stop", so a malformed invocation (e.g. a worktree path
-        # with a space that the tool's runner word-split) would trap the agent with
-        # an argparse usage message. The Stop channel fails open even here.
-        if _event_from_argv(raw_argv) == "stop":
+        # direction, so let it stand. On a *Stop* or *PostToolUse* event it is the
+        # opposite: those channels are fail-open (PostToolUse must never block —
+        # the tool has already run), so a malformed invocation there returns 0.
+        event_arg = _event_from_argv(raw_argv)
+        if event_arg == "stop" or event_arg.replace("_", "") == "posttooluse":
             return 0
         raise
 
-    emission = _run(ns.event, ns.guard, ns.tool, ns.root)
+    if ns.event.strip().lower().replace("_", "") == "posttooluse":
+        emission = _run_post_tool_use(
+            ns.tool, ns.root, ns.lint_cmd, ns.timeout, scoped=not ns.unscoped
+        )
+    else:
+        emission = _run(ns.event, ns.guard, ns.tool, ns.root)
     if emission.stdout:
         sys.stdout.write(emission.stdout)
     if emission.stderr:

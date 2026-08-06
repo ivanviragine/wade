@@ -67,7 +67,7 @@ fi
 # .git/hooks, so a prior hook would otherwise be silently disabled). Re-emit the
 # exact buffered stdin so the chained hook sees the same ref list, forward the
 # same argv, and honor its exit code. Never silently shadow.
-chain_file=".wade/githooks/.chain"
+chain_file=".wade/githooks/.chain-pre-push"
 if [[ -f "$chain_file" ]]; then
   chained="$(cat "$chain_file")"
   if [[ -n "$chained" && -x "$chained" ]]; then

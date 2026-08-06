@@ -37,6 +37,8 @@ __all__ = [
     "_get_info_exclude_path",
     "_identify_session_dirty_files",
     "_install_guard_hooks",
+    "_install_managed_git_hooks",
+    "_install_post_tool_use_lint_hook",
     "_install_stop_hook",
     "_resolve_worktrees_dir",
     "_suppress_pointer_artifacts",
@@ -350,6 +352,124 @@ def _install_stop_hook(
         _log_sync_result(writer.sync(SyncData(hooks=[hook]), worktree_path), tool_id)
 
     logger.info("implementation.stop_hook_installed", path=str(worktree_path), guard=guard.value)
+
+
+# Canonical write-family tool names the PostToolUse lint feedback fires on. Scoped
+# to file-write tools (not Bash: a shell call has no path to lint; not Delete: the
+# file is gone, so linting it only injects "file not found" noise). crossby's hook
+# writers translate these per tool.
+_LINT_FEEDBACK_TOOLS = ["Edit", "Write", "NotebookEdit"]
+
+
+def _install_managed_git_hooks(worktree_path: Path, config: ProjectConfig) -> None:
+    """Install the pre-push backstop + opt-in pre-commit/commit-msg gates in one batch.
+
+    Gathers the hooks whose config gates are on, then installs them via a single
+    :func:`install_worktree_git_hooks` call — the batch guarantees every prior
+    user hook is captured before wade sets ``core.hooksPath`` (a per-hook
+    capture-after-set would miss a user's custom repo-level hooksPath). All hooks
+    are optional and the installer graceful-degrades on old git, so an install
+    failure is swallowed to a warning and never crashes bootstrap.
+    """
+    from wade.skills.installer import (
+        build_commit_msg_hook_script,
+        build_pre_commit_hook_script,
+        install_worktree_git_hooks,
+        load_hook_template,
+    )
+
+    hooks: dict[str, str] = {}
+
+    if config.done.pre_push_backstop:
+        try:
+            hooks["pre-push"] = load_hook_template("pre-push")
+        except FileNotFoundError:
+            logger.warning("implementation.pre_push_template_missing")
+
+    pre_commit = config.hooks.pre_commit
+    if pre_commit.lint or pre_commit.test:
+        hooks["pre-commit"] = build_pre_commit_hook_script(pre_commit.lint, pre_commit.test)
+
+    if config.hooks.commit_msg.conventional:
+        hooks["commit-msg"] = build_commit_msg_hook_script()
+
+    if not hooks:
+        return
+
+    try:
+        if not install_worktree_git_hooks(worktree_path, hooks):
+            logger.info(
+                "implementation.git_hooks_skipped",
+                path=str(worktree_path),
+                hooks=sorted(hooks),
+            )
+    except Exception:
+        logger.warning(
+            "implementation.git_hooks_error",
+            path=str(worktree_path),
+            hooks=sorted(hooks),
+            exc_info=True,
+        )
+
+
+def _install_post_tool_use_lint_hook(worktree_path: Path, config: ProjectConfig) -> None:
+    """Install PostToolUse in-turn lint feedback into each context-capable tool.
+
+    Opt-in via ``hooks.post_tool_use.enabled``. The lint command is
+    ``post_tool_use.lint_cmd`` (**file-scoped** — the edited path is appended) or,
+    when unset, ``pre_commit.lint`` run **unscoped** (whole-repo, which fires on
+    every edit — prefer configuring a file-scoped ``lint_cmd``). The resolved
+    command + timeout are baked into the hook argv so the lean ``wade-hook`` entry
+    point never loads config. Gated to tools whose output dialect supports context
+    injection (dialect ≠ ``DECISION``), so Antigravity CLI is skipped rather than
+    firing a no-op subprocess per edit. Never fail-closed: this path must not block.
+    """
+    import shlex
+
+    ptu = config.hooks.post_tool_use
+    if not ptu.enabled:
+        return
+    lint_cmd = ptu.lint_cmd or config.hooks.pre_commit.lint
+    if not lint_cmd:
+        return
+
+    from crossby.ai_tools import AbstractAITool
+    from crossby.models.ai import HookOutputDialect
+    from crossby.models.config import HookEntry
+    from crossby.sync.base import SyncData
+
+    scoped = bool(ptu.lint_cmd)  # file-scoped only when an explicit lint_cmd is set
+    root = shlex.quote(str(worktree_path))
+    quoted_cmd = shlex.quote(lint_cmd)
+
+    installed_any = False
+    for tool_id, writer in _hook_writers():
+        # Context-capable tools only. agy's DECISION dialect has no verified
+        # context-injection channel, so a PostToolUse hook there would fire a
+        # subprocess on every edit and discard the result — pure cost.
+        if AbstractAITool.get(tool_id).capabilities().hook_output_dialect is (
+            HookOutputDialect.DECISION
+        ):
+            continue
+        command = (
+            f"wade-hook post_tool_use --tool {tool_id.value} --root {root} "
+            f"--lint-cmd {quoted_cmd} --timeout {ptu.timeout}"
+        )
+        if not scoped:
+            command += " --unscoped"
+        # No fail_closed: PostToolUse must never block. Its own timeout bounds the
+        # per-edit cost at the tool's hook-runner level too.
+        hook = HookEntry(
+            event="post_tool_use",
+            tools=_LINT_FEEDBACK_TOOLS,
+            command=command,
+            timeout=ptu.timeout,
+        )
+        _log_sync_result(writer.sync(SyncData(hooks=[hook]), worktree_path), tool_id)
+        installed_any = True
+
+    if installed_any:
+        logger.info("implementation.post_tool_use_lint_installed", path=str(worktree_path))
 
 
 def _effective_copy_files(config: ProjectConfig) -> list[str]:
@@ -677,22 +797,14 @@ def bootstrap_worktree(
     else:
         _install_stop_hook(worktree_path)
 
-        # ...and the pre-push backstop that makes the `done` gate hard to skip:
-        # a push without a current `.wade/done@<sha>` marker is refused. Optional
-        # (gated on config, graceful-degrades on old git) — must never crash
-        # bootstrap, so any failure is swallowed to a warning.
-        if config.done.pre_push_backstop:
-            from wade.skills.installer import install_pre_push_backstop
+        # Managed git hooks: the pre-push backstop (makes `done` hard to skip) plus
+        # the opt-in pre-commit / commit-msg quality gates. Installed together in
+        # one batch so every prior user hook is captured before wade sets
+        # core.hooksPath. All optional + graceful-degrading — never crash bootstrap.
+        _install_managed_git_hooks(worktree_path, config)
 
-            try:
-                if not install_pre_push_backstop(worktree_path):
-                    logger.info("implementation.pre_push_backstop_skipped", path=str(worktree_path))
-            except Exception:
-                logger.warning(
-                    "implementation.pre_push_backstop_error",
-                    path=str(worktree_path),
-                    exc_info=True,
-                )
+        # PostToolUse in-turn lint feedback (opt-in) for context-capable tools.
+        _install_post_tool_use_lint_hook(worktree_path, config)
 
     # Write worktree gitignore block AFTER all file generation so the entry
     # list is complete (skills, hooks, settings, pointer are all in place).

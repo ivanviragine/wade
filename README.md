@@ -358,6 +358,48 @@ hooks:
 
 See [`templates/setup-worktree.sh.example`](templates/setup-worktree.sh.example) for a starter script.
 
+### Repo-quality gates
+
+Three **opt-in, off-by-default** quality gates enforce code hygiene at the
+commit boundary (and in-turn). Nothing is installed unless you configure it:
+
+```yaml
+hooks:
+  pre_commit:
+    lint: ./scripts/check.sh --lint   # runs on `git commit`; non-zero blocks it
+    test: ./scripts/test.sh           # runs on `git commit`; non-zero blocks it
+  commit_msg:
+    conventional: true                # rejects a non-Conventional-Commit subject
+  post_tool_use:
+    enabled: true                     # feed lint findings back to the agent in-turn
+    lint_cmd: ruff check              # FILE-SCOPED linter (the edited path is appended)
+    timeout: 10                       # seconds; the linter is skipped on overrun
+```
+
+- **`pre_commit`** installs a per-worktree `pre-commit` git hook that runs the
+  configured `lint`, then `test`, command(s). A non-zero exit blocks the commit
+  and surfaces to the agent as a normal error. Set only the step(s) you want.
+  Running the full `test` suite on every commit can be slow — prefer a fast
+  subset there, or use `lint` alone.
+- **`commit_msg`** installs a per-worktree `commit-msg` git hook that validates
+  the subject line against [Conventional Commits](https://www.conventionalcommits.org/)
+  (a `BREAKING CHANGE:` footer is also accepted). A non-conforming subject
+  blocks the commit.
+- **`post_tool_use`** feeds lint findings back to the agent *in-turn* — the
+  cheapest moment to fix them, while the edit is still in working memory. It is
+  **file-scoped**: `lint_cmd` runs on just the edited path (appended as a
+  positional arg), on tools whose hooks can inject context back to the agent
+  (Claude, Cursor, Codex, Copilot; Antigravity CLI is skipped). If `lint_cmd`
+  is unset, wade falls back to `pre_commit.lint` run **whole-repo** on every
+  edit — which is slower and may error on an unexpected positional arg, so
+  prefer configuring a file-scoped `lint_cmd`. This layer never blocks.
+
+Like the pre-push backstop, the git hooks are worktree-scoped (never touch your
+main checkout or sibling worktrees) and chain to any pre-existing hook of the
+same name. **Honesty:** `git commit --no-verify` bypasses the pre-commit and
+commit-msg hooks in one flag — these are **quality** gates that make messy or
+untested commits hard to land, not airtight enforcement boundaries.
+
 ## Shell Integration
 
 To make `wade cd <N>` actually change your directory (instead of just printing the path), add this to your shell profile:

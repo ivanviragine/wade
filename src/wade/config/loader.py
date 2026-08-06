@@ -13,11 +13,14 @@ from wade.models.config import (
     WADE_BASE_ALLOWLIST_PATTERN,
     AICommandConfig,
     AIConfig,
+    CommitMsgConfig,
     ComplexityModelMapping,
     DoneConfig,
     HooksConfig,
     KnowledgeConfig,
     PermissionsConfig,
+    PostToolUseConfig,
+    PreCommitConfig,
     ProjectConfig,
     ProjectSettings,
     ProviderConfig,
@@ -245,11 +248,42 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
         else [WADE_BASE_ALLOWLIST_PATTERN],
     )
 
-    # Parse hooks section
+    # Parse hooks section. The three nested quality-gate subsections
+    # (pre_commit / commit_msg / post_tool_use) all default off, mirroring the
+    # `done` section's null-normalization for booleans so a key present-but-null
+    # falls back to the documented default rather than crashing Pydantic here
+    # (`wade check` still flags an explicit null as invalid).
     hooks_raw = _section_mapping(raw, "hooks")
+
+    def _subsection(key: str) -> dict[str, Any]:
+        value = hooks_raw.get(key)
+        return value if isinstance(value, dict) else {}
+
+    pre_commit_raw = _subsection("pre_commit")
+    pre_commit = PreCommitConfig(
+        lint=pre_commit_raw.get("lint") or None,
+        test=pre_commit_raw.get("test") or None,
+    )
+
+    commit_msg_raw = _subsection("commit_msg")
+    _conventional = commit_msg_raw.get("conventional", False)
+    commit_msg = CommitMsgConfig(conventional=False if _conventional is None else _conventional)
+
+    post_tool_use_raw = _subsection("post_tool_use")
+    _ptu_enabled = post_tool_use_raw.get("enabled", False)
+    _ptu_timeout = post_tool_use_raw.get("timeout", 10)
+    post_tool_use = PostToolUseConfig(
+        enabled=False if _ptu_enabled is None else _ptu_enabled,
+        lint_cmd=post_tool_use_raw.get("lint_cmd") or None,
+        timeout=10 if _ptu_timeout is None else _ptu_timeout,
+    )
+
     hooks = HooksConfig(
         post_worktree_create=hooks_raw.get("post_worktree_create"),
         copy_to_worktree=hooks_raw.get("copy_to_worktree", []),
+        pre_commit=pre_commit,
+        commit_msg=commit_msg,
+        post_tool_use=post_tool_use,
     )
 
     # Parse knowledge section

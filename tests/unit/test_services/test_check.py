@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from wade.models.config import AI_COMMAND_NAMES, AICommandConfig, AIConfig
+from wade.models.config import (
+    AI_COMMAND_NAMES,
+    AICommandConfig,
+    AIConfig,
+    CommitMsgConfig,
+    HooksConfig,
+    PostToolUseConfig,
+    PreCommitConfig,
+)
 from wade.services.check_service import (
     CheckExitCode,
     CheckStatus,
@@ -225,6 +233,102 @@ class TestValidateConfig:
         result = validate_config(tmp_path)
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("done.require_sync" in e and "true or false" in e for e in result.errors)
+
+    def test_valid_hooks_quality_gate_sections(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text(
+            "version: 2\n"
+            "hooks:\n"
+            "  pre_commit:\n"
+            "    lint: ./scripts/check.sh --lint\n"
+            "    test: ./scripts/test.sh\n"
+            "  commit_msg:\n"
+            "    conventional: true\n"
+            "  post_tool_use:\n"
+            "    enabled: true\n"
+            "    lint_cmd: ruff check\n"
+            "    timeout: 15\n"
+        )
+        result = validate_config(tmp_path)
+        assert result.is_valid, f"Errors: {result.errors}"
+
+    def test_pre_commit_lint_must_be_string(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nhooks:\n  pre_commit:\n    lint: true\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("hooks.pre_commit.lint" in e for e in result.errors)
+
+    def test_commit_msg_conventional_must_be_bool(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nhooks:\n  commit_msg:\n    conventional: yes-please\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any(
+            "hooks.commit_msg.conventional" in e and "true or false" in e for e in result.errors
+        )
+
+    def test_post_tool_use_timeout_must_be_positive_int(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nhooks:\n  post_tool_use:\n    timeout: -3\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any(
+            "hooks.post_tool_use.timeout" in e and "positive integer" in e for e in result.errors
+        )
+
+    def test_post_tool_use_timeout_rejects_bool(self, tmp_path: Path) -> None:
+        # bool is an int subclass — a YAML `true` must not sneak through as 1.
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nhooks:\n  post_tool_use:\n    timeout: true\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("hooks.post_tool_use.timeout" in e for e in result.errors)
+
+    def test_unknown_pre_commit_key_rejected(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nhooks:\n  pre_commit:\n    lynt: x\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("hooks.pre_commit.lynt" in e and "unsupported key" in e for e in result.errors)
+
+    def test_hooks_subsection_must_be_mapping(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nhooks:\n  pre_commit: just-a-string\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("hooks.pre_commit" in e and "mapping" in e for e in result.errors)
+
+    def test_hooks_valid_keys_stay_in_sync_with_model(self, tmp_path: Path) -> None:
+        """Every ``HooksConfig`` field must be an accepted top-level ``hooks`` key.
+
+        The validator derives ``_VALID_HOOKS_KEYS`` from the model, so a field
+        added to ``HooksConfig`` must never be rejected as unsupported (#368 /
+        knowledge ca245d6a — config-key validity in three places must not drift).
+        """
+        config = tmp_path / ".wade.yml"
+        for field in HooksConfig.model_fields:
+            config.write_text(f"version: 2\nhooks:\n  {field}: null\n")
+            result = validate_config(tmp_path)
+            assert not any(f"hooks.{field}: unsupported key" in e for e in result.errors), (
+                f"model field '{field}' rejected as an unsupported hooks key"
+            )
+
+    def test_hooks_subsection_keys_stay_in_sync_with_models(self, tmp_path: Path) -> None:
+        """Each nested subsection's allowlist is derived from its Pydantic model."""
+        cases = {
+            "pre_commit": PreCommitConfig,
+            "commit_msg": CommitMsgConfig,
+            "post_tool_use": PostToolUseConfig,
+        }
+        config = tmp_path / ".wade.yml"
+        for section, model in cases.items():
+            for field in model.model_fields:
+                config.write_text(f"version: 2\nhooks:\n  {section}:\n    {field}: null\n")
+                result = validate_config(tmp_path)
+                assert not any(
+                    f"hooks.{section}.{field}: unsupported key" in e for e in result.errors
+                ), f"model field '{field}' rejected as unsupported hooks.{section} key"
 
     def test_valid_full_config(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"

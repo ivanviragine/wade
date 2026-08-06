@@ -174,7 +174,7 @@ class TestChaining:
         prior = self._install_prior_common_hook(main, record)
 
         install_pre_push_backstop(wt)
-        chain = (wt / ".wade" / "githooks" / ".chain").read_text().strip()
+        chain = (wt / ".wade" / "githooks" / ".chain-pre-push").read_text().strip()
         assert chain == str(prior.resolve())
 
         head = _head(wt)
@@ -209,10 +209,10 @@ class TestChaining:
         prior = self._install_prior_common_hook(main, record)
 
         install_pre_push_backstop(wt)
-        first = (wt / ".wade" / "githooks" / ".chain").read_text().strip()
+        first = (wt / ".wade" / "githooks" / ".chain-pre-push").read_text().strip()
         # Re-run bootstrap install against the already-managed worktree.
         install_pre_push_backstop(wt)
-        second = (wt / ".wade" / "githooks" / ".chain").read_text().strip()
+        second = (wt / ".wade" / "githooks" / ".chain-pre-push").read_text().strip()
         # The chain target is captured once and never re-points at wade's own hook.
         assert first == second == str(prior.resolve())
         assert "githooks/pre-push" not in second
