@@ -101,6 +101,22 @@ class TestHookMarkerGate:
         r = _run_hook(wt, stdin)
         assert r.returncode == 0
 
+    def test_refuses_when_marker_is_for_an_older_sha(self, tmp_path: Path) -> None:
+        # The core invariant is sha-keying: a marker written for an earlier
+        # commit must not authorize a push of a newer commit.
+        _main, wt, branch = _main_and_worktree(tmp_path)
+        install_pre_push_backstop(wt)
+        old_head = _head(wt)
+        markers.write_marker(wt, "done", old_head)
+        (wt / "b.txt").write_text("b\n")
+        _git(wt, "add", "-A")
+        _git(wt, "commit", "-m", "b")
+        new_head = _head(wt)
+        stdin = f"refs/heads/{branch} {new_head} refs/heads/{branch} {_ZERO}\n"
+        r = _run_hook(wt, stdin)
+        assert r.returncode == 1
+        assert new_head in r.stderr
+
     def test_other_ref_not_gated(self, tmp_path: Path) -> None:
         _main, wt, _branch = _main_and_worktree(tmp_path)
         install_pre_push_backstop(wt)
@@ -119,6 +135,38 @@ class TestChaining:
         prior.write_text(f"#!/usr/bin/env bash\ncat > '{record}'\nexit 0\n")
         prior.chmod(0o755)
         return prior
+
+    def _install_prior_hook_body(self, main: Path, body: str) -> Path:
+        hooks = main / ".git" / "hooks"
+        hooks.mkdir(parents=True, exist_ok=True)
+        prior = hooks / "pre-push"
+        prior.write_text(body)
+        prior.chmod(0o755)
+        return prior
+
+    def test_chained_hook_that_ignores_stdin_still_allows(self, tmp_path: Path) -> None:
+        # A prior hook that never reads stdin closes the pipe early. Under
+        # `pipefail` the writer's SIGPIPE must NOT mask the hook's 0 exit.
+        main, wt, branch = _main_and_worktree(tmp_path)
+        self._install_prior_hook_body(main, "#!/usr/bin/env bash\nexit 0\n")
+        install_pre_push_backstop(wt)
+        head = _head(wt)
+        markers.write_marker(wt, "done", head)
+        stdin = f"refs/heads/{branch} {head} refs/heads/{branch} {_ZERO}\n"
+        r = _run_hook(wt, stdin)
+        assert r.returncode == 0, r.stderr
+
+    def test_chained_hook_failure_is_propagated(self, tmp_path: Path) -> None:
+        # The mirror case: a non-stdin-reading hook that fails must propagate its
+        # own status, not the writer's.
+        main, wt, branch = _main_and_worktree(tmp_path)
+        self._install_prior_hook_body(main, "#!/usr/bin/env bash\nexit 3\n")
+        install_pre_push_backstop(wt)
+        head = _head(wt)
+        markers.write_marker(wt, "done", head)
+        stdin = f"refs/heads/{branch} {head} refs/heads/{branch} {_ZERO}\n"
+        r = _run_hook(wt, stdin)
+        assert r.returncode == 3
 
     def test_captures_and_chains_to_preexisting_hook(self, tmp_path: Path) -> None:
         main, wt, branch = _main_and_worktree(tmp_path)
@@ -177,3 +225,24 @@ class TestGracefulDegrade:
         monkeypatch.setattr(git_repo, "set_config_value", lambda *a, **k: False)
         # Must warn-and-skip (return False), never raise.
         assert install_pre_push_backstop(wt) is False
+
+    def test_rolls_back_extension_when_hookspath_write_fails(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        # Enabling extensions.worktreeConfig is a repo-WIDE change; if the
+        # follow-up worktree hooksPath write fails, it must be rolled back so a
+        # failed optional backstop leaves no persistent config behind.
+        _main, wt, _branch = _main_and_worktree(tmp_path)
+        assert git_repo.get_config_value(wt, "extensions.worktreeConfig") is None
+
+        real_set = git_repo.set_config_value
+
+        def fake_set(path: Path, key: str, value: str, *, worktree: bool = False) -> bool:
+            if key == "core.hooksPath":
+                return False  # simulate the worktree hooksPath write failing
+            return real_set(path, key, value, worktree=worktree)
+
+        monkeypatch.setattr(git_repo, "set_config_value", fake_set)
+        assert install_pre_push_backstop(wt) is False
+        # The extension was unset (prior value was None), not left enabled.
+        assert git_repo.get_config_value(wt, "extensions.worktreeConfig") is None

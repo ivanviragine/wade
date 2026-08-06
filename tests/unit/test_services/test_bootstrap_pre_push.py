@@ -25,7 +25,9 @@ def _run(tmp_path: Path, *, plan_mode: bool, backstop: bool):
 class TestBootstrapPrePushBackstop:
     def test_installed_for_implementation_session(self, tmp_path: Path) -> None:
         mock_install = _run(tmp_path, plan_mode=False, backstop=True)
-        mock_install.assert_called_once()
+        # Assert the target too: a refactor must not pass the repo root instead
+        # of the worktree path.
+        mock_install.assert_called_once_with(tmp_path / "wt")
 
     def test_not_installed_in_plan_mode(self, tmp_path: Path) -> None:
         mock_install = _run(tmp_path, plan_mode=True, backstop=True)
@@ -40,10 +42,13 @@ class TestBootstrapPrePushBackstop:
         wt.mkdir()
         repo = tmp_path / "repo"
         repo.mkdir()
-        config = ProjectConfig(project=ProjectSettings())
+        # Enable the backstop explicitly so this exercises the failure path
+        # regardless of the DoneConfig default.
+        config = ProjectConfig(project=ProjectSettings(), done=DoneConfig(pre_push_backstop=True))
         with patch(
             "wade.skills.installer.install_pre_push_backstop",
             side_effect=RuntimeError("boom"),
-        ):
+        ) as mock_install:
             # A backstop install error must never crash bootstrap.
             bootstrap_worktree(wt, config, repo, plan_mode=False)
+        mock_install.assert_called_once_with(wt)

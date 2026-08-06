@@ -213,6 +213,11 @@ def install_worktree_git_hook(worktree_path: Path, hook_name: str, script_body: 
 
     # Enable the worktree-config extension (repo-level), then set the worktree
     # hooksPath. Order matters: --worktree writes require the extension first.
+    # Capture the prior extension value first so a failed hooksPath write can roll
+    # the extension back: leaving it enabled is a persistent, repo-WIDE change
+    # (git then reads config.worktree for every worktree) caused by an optional
+    # backstop that did not install.
+    prior_worktree_config = git_repo.get_config_value(worktree_path, "extensions.worktreeConfig")
     if not git_repo.set_config_value(worktree_path, "extensions.worktreeConfig", "true"):
         logger.warning("skills.worktree_config_unsupported", path=str(worktree_path))
         return False
@@ -220,6 +225,14 @@ def install_worktree_git_hook(worktree_path: Path, hook_name: str, script_body: 
         worktree_path, "core.hooksPath", WADE_GITHOOKS_DIR, worktree=True
     ):
         logger.warning("skills.worktree_hookspath_failed", path=str(worktree_path))
+        # Undo the repo-wide extension we just enabled so a failed optional
+        # backstop leaves no persistent config change behind.
+        if prior_worktree_config is None:
+            git_repo.unset_config_value(worktree_path, "extensions.worktreeConfig")
+        else:
+            git_repo.set_config_value(
+                worktree_path, "extensions.worktreeConfig", prior_worktree_config
+            )
         return False
 
     logger.debug("skills.githook_installed", hook=hook_name, path=str(worktree_path))

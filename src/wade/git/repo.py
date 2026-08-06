@@ -678,3 +678,19 @@ def set_config_value(path: Path, key: str, value: str, *, worktree: bool = False
     args.extend([key, value])
     result = _run_git(*args, cwd=path, check=False)
     return result.returncode == 0
+
+
+def unset_config_value(path: Path, key: str, *, worktree: bool = False) -> bool:
+    """Unset a git config value (``git config --unset``); return success.
+
+    With ``worktree=True`` targets the ``--worktree`` scope. Never raises —
+    returns False on any failure (including the key already being absent, which
+    git reports as exit code 5), so callers can best-effort roll back an optional
+    config change without extra guarding.
+    """
+    args = ["config"]
+    if worktree:
+        args.append("--worktree")
+    args.extend(["--unset", key])
+    result = _run_git(*args, cwd=path, check=False)
+    return result.returncode == 0
