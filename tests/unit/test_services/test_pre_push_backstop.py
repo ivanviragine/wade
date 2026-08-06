@@ -246,3 +246,24 @@ class TestGracefulDegrade:
         assert install_pre_push_backstop(wt) is False
         # The extension was unset (prior value was None), not left enabled.
         assert git_repo.get_config_value(wt, "extensions.worktreeConfig") is None
+
+    def test_restores_prior_extension_when_hookspath_write_fails(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        # Mirror of the unset case: when extensions.worktreeConfig was ALREADY
+        # set (here "false"), the failed hooksPath write must restore that prior
+        # value rather than unset the key.
+        _main, wt, _branch = _main_and_worktree(tmp_path)
+        assert git_repo.set_config_value(wt, "extensions.worktreeConfig", "false")
+
+        real_set = git_repo.set_config_value
+
+        def fake_set(path: Path, key: str, value: str, *, worktree: bool = False) -> bool:
+            if key == "core.hooksPath":
+                return False  # simulate the worktree hooksPath write failing
+            return real_set(path, key, value, worktree=worktree)
+
+        monkeypatch.setattr(git_repo, "set_config_value", fake_set)
+        assert install_pre_push_backstop(wt) is False
+        # The extension was restored to its prior value, not unset.
+        assert git_repo.get_config_value(wt, "extensions.worktreeConfig") == "false"
