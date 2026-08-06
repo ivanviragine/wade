@@ -111,7 +111,12 @@ def _stop_dialect_for(tool: str) -> HookStopDialect:
     return _TOOL_STOP_DIALECTS.get(tool.strip().lower(), HookStopDialect.BLOCK_DECISION)
 
 
-_VALUE_FLAGS = ("--guard", "--tool", "--root")
+# Every value-taking flag must be listed so _event_from_argv skips the flag's
+# VALUE when recovering the event positional from a rejected argv — otherwise a
+# value like `--lint-cmd stop` is mistaken for a Stop event and flips a
+# PreToolUse usage error from fail-closed to fail-open. `--unscoped` is a
+# store_true (no value), so it is deliberately absent.
+_VALUE_FLAGS = ("--guard", "--tool", "--root", "--lint-cmd", "--timeout")
 
 
 def _event_from_argv(argv: list[str]) -> str:
