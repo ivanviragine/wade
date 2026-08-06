@@ -40,13 +40,13 @@ from crossby.models.ai import HookOutputDialect, HookStopDialect
 
 from wade.hooks.policies import (
     GUARD_NAMES,
-    StopGuard,
     plan_artifact_only,
     plan_complete,
     session_complete,
     shell_containment,
     worktree_containment,
 )
+from wade.models.hooks import StopGuard
 from wade.utils import markers
 
 # Stop guards fail OPEN — an unknown one must never trap the agent. Derived from

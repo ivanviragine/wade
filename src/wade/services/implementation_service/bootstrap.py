@@ -14,13 +14,13 @@ if TYPE_CHECKING:
     from crossby.sync.base import AbstractSyncWriter
 
 from wade.git import repo as git_repo
-from wade.hooks.policies import StopGuard
 from wade.models.config import (
     AI_COMMAND_NAMES,
     WADE_BASE_ALLOWLIST_PATTERN,
     ProjectConfig,
     with_wade_base_pattern,
 )
+from wade.models.hooks import StopGuard
 from wade.models.task import Task
 from wade.utils.markdown import has_marker_block, remove_marker_block
 
