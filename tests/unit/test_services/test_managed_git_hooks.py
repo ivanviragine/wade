@@ -146,10 +146,19 @@ class TestCommitMsgGate:
         r = _commit(wt, "b.txt", "feat(hooks): add a thing")
         assert r.returncode == 0, r.stderr
 
-    def test_allows_breaking_change_footer_without_type_subject(self, tmp_path: Path) -> None:
+    def test_blocks_untyped_subject_with_breaking_footer(self, tmp_path: Path) -> None:
+        # A BREAKING CHANGE footer marks a typed commit as breaking; it does not
+        # license an untyped subject, which must still be rejected.
         _main, wt = _main_and_worktree(tmp_path)
         self._install(wt)
         r = _commit(wt, "b.txt", "drop the old flag\n\nBREAKING CHANGE: removed --foo")
+        assert r.returncode != 0
+        assert "Conventional Commit" in (r.stdout + r.stderr)
+
+    def test_allows_typed_subject_with_breaking_footer(self, tmp_path: Path) -> None:
+        _main, wt = _main_and_worktree(tmp_path)
+        self._install(wt)
+        r = _commit(wt, "b.txt", "feat: add a thing\n\nBREAKING CHANGE: removed --foo")
         assert r.returncode == 0, r.stderr
 
     def test_allows_bang_breaking_subject(self, tmp_path: Path) -> None:

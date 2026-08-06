@@ -382,9 +382,10 @@ hooks:
   Running the full `test` suite on every commit can be slow — prefer a fast
   subset there, or use `lint` alone.
 - **`commit_msg`** installs a per-worktree `commit-msg` git hook that validates
-  the subject line against [Conventional Commits](https://www.conventionalcommits.org/)
-  (a `BREAKING CHANGE:` footer is also accepted). A non-conforming subject
-  blocks the commit.
+  the subject line against [Conventional Commits](https://www.conventionalcommits.org/).
+  A non-conforming subject blocks the commit. A `BREAKING CHANGE:` footer only
+  marks an already-typed commit as breaking (an alternative to the subject `!`);
+  it does not exempt the subject from the type requirement.
 - **`post_tool_use`** feeds lint findings back to the agent *in-turn* — the
   cheapest moment to fix them, while the edit is still in working memory. It is
   **file-scoped**: `lint_cmd` runs on just the edited path (appended as a

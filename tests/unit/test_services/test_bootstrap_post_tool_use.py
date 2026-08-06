@@ -118,6 +118,39 @@ class TestGating:
         assert set(removes) == set(_ALL_TOOLS)
 
 
+class TestFailOpen:
+    def test_writer_failure_warns_and_continues(self, tmp_path: Path) -> None:
+        # The gate is optional + off-by-default; a writer failure (malformed tool
+        # settings file, OSError on write) must warn-and-continue, never abort
+        # bootstrap — matching _install_managed_git_hooks. The guard is per tool,
+        # so a later tool is still reconciled after an earlier one raises.
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        config = ProjectConfig(
+            project=ProjectSettings(),
+            hooks=HooksConfig(post_tool_use=PostToolUseConfig(enabled=True, lint_cmd="ruff check")),
+        )
+        synced: list[AIToolID] = []
+
+        def make_writer(tid: AIToolID):
+            class _W:
+                def sync(self, data: object, path: Path) -> object:
+                    if tid is AIToolID.CLAUDE:
+                        raise OSError("boom")
+                    synced.append(tid)
+                    return SimpleNamespace(action="noop", message="")
+
+            return _W()
+
+        writers = [(tid, make_writer(tid)) for tid in _ALL_TOOLS]
+        with patch.object(bootstrap_mod, "_hook_writers", lambda: writers):
+            # Must not raise despite CLAUDE's writer erroring.
+            bootstrap_mod._install_post_tool_use_lint_hook(wt, config)
+
+        # Tools processed after the failing one were still reconciled.
+        assert AIToolID.CURSOR in synced
+
+
 class TestRealWriterSmoke:
     def test_claude_config_gets_stable_post_tool_use_hook(self, tmp_path: Path) -> None:
         wt = tmp_path / "wt"

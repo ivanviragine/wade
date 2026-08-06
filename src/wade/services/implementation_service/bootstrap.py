@@ -435,30 +435,42 @@ def _install_post_tool_use_lint_hook(worktree_path: Path, config: ProjectConfig)
     root = shlex.quote(str(worktree_path))
 
     for tool_id, writer in _hook_writers():
-        context_capable = (
-            AbstractAITool.get(tool_id).capabilities().hook_output_dialect
-            is not HookOutputDialect.DECISION
-        )
         command = f"wade-hook post_tool_use --tool {tool_id.value} --root {root}"
-        if enabled and context_capable:
-            # No fail_closed: PostToolUse must never block. The timeout bounds the
-            # per-edit cost at the tool's hook-runner level too.
-            data = SyncData(
-                hooks=[
-                    HookEntry(
-                        event="post_tool_use",
-                        tools=_LINT_FEEDBACK_TOOLS,
-                        command=command,
-                        timeout=ptu.timeout,
-                    )
-                ]
+        # Never fail-closed: a malformed tool settings file or an OSError on write
+        # must not abort bootstrap for this optional, off-by-default gate. Guard
+        # per tool so one tool's failure doesn't skip the rest, mirroring the
+        # warn-and-continue treatment in _install_managed_git_hooks.
+        try:
+            context_capable = (
+                AbstractAITool.get(tool_id).capabilities().hook_output_dialect
+                is not HookOutputDialect.DECISION
             )
-        else:
-            # Gate off, or the tool can't inject context — retract any prior wade
-            # entry. Removing a non-existent entry is a no-op (no config file is
-            # created), so this is safe to run every bootstrap.
-            data = SyncData(hooks_remove=[("post_tool_use", command)])
-        _log_sync_result(writer.sync(data, worktree_path), tool_id)
+            if enabled and context_capable:
+                # No fail_closed: PostToolUse must never block. The timeout bounds
+                # the per-edit cost at the tool's hook-runner level too.
+                data = SyncData(
+                    hooks=[
+                        HookEntry(
+                            event="post_tool_use",
+                            tools=_LINT_FEEDBACK_TOOLS,
+                            command=command,
+                            timeout=ptu.timeout,
+                        )
+                    ]
+                )
+            else:
+                # Gate off, or the tool can't inject context — retract any prior
+                # wade entry. Removing a non-existent entry is a no-op (no config
+                # file is created), so this is safe to run every bootstrap.
+                data = SyncData(hooks_remove=[("post_tool_use", command)])
+            _log_sync_result(writer.sync(data, worktree_path), tool_id)
+        except Exception:
+            logger.warning(
+                "implementation.post_tool_use_hook_error",
+                tool=tool_id.value,
+                path=str(worktree_path),
+                exc_info=True,
+            )
 
     if enabled:
         logger.info("implementation.post_tool_use_lint_installed", path=str(worktree_path))
