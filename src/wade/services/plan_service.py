@@ -155,10 +155,11 @@ def _select_valid_plans(
         - ``None`` when the run is interactive, some files are valid and some are
           not, and the user declined the partial run.
 
-    For both ``[]`` and ``None`` the caller creates nothing, returns ``False``,
-    and cleans up the plan dir/worktree like every other ``plan()`` failure path.
-    The plan is *not* preserved — re-running ``wade plan`` regenerates it; this
-    helper's job is only to keep invalid plans from silently becoming issues.
+    For both ``[]`` and ``None`` the caller creates nothing and returns ``False``,
+    but the generated ``PLAN*.md`` are first salvaged to a stable temp dir (see
+    :func:`_preserve_generated_plans`) so a trivial validation miss doesn't force a
+    full re-run — this helper's job is only to keep invalid plans from silently
+    becoming issues, not to decide their fate.
 
     Every error is surfaced loudly via ``console.error`` (invalid files are never
     silently dropped); warnings via ``console.warn`` do not exclude a file. In a
@@ -510,9 +511,9 @@ def plan(
             console.warn("No plan files found — the AI session may not have produced output.")
         else:
             # Strict gate — drop plans missing complexity / a valid title prefix.
-            # ``None`` (user aborted) or ``[]`` (all invalid) both fall through to
-            # the shared cleanup tail below (the helper already reported why),
-            # mutating no issue — the "No plan files found" line above is skipped.
+            # ``None`` (user aborted) or ``[]`` (all invalid) both bail below via
+            # _preserve_generated_plans (the helper already reported why), mutating
+            # no issue — the "No plan files found" line above is skipped.
             selected = _select_valid_plans(Path(plan_dir), plan_files, yolo=resolved_yolo)
             if selected:
                 plan_files = selected
@@ -556,6 +557,15 @@ def plan(
                 if offer_result is not None:
                     return offer_result
                 return True
+            # Strict gate rejected the batch (all invalid, or the user aborted a
+            # partial run). Preserve the generated files — the helper already
+            # surfaced the reason — so a validation miss doesn't force a full
+            # AI re-planning run.
+            _preserve_generated_plans(plan_dir, repo_root, planning_worktree)
+            stop_title_keeper()
+            return False
+        # Reached only when the session produced no plan files (nothing to
+        # preserve) — clean up like every other failure path.
         _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
         stop_title_keeper()
         return False
@@ -566,7 +576,7 @@ def plan(
     if plan_files:
         # Strict gate — invalid plans (missing complexity / bad title prefix)
         # never silently become issues. ``None`` (aborted) or ``[]`` (all invalid)
-        # fall through to the shared cleanup tail below; the helper already
+        # take the preserve-then-bail else branch below; the helper already
         # surfaced the reason loudly.
         selected = _select_valid_plans(Path(plan_dir), plan_files, yolo=resolved_yolo)
         if selected:
@@ -597,6 +607,14 @@ def plan(
                     return offer_result
                 return True
             console.warn("No issues were created from plan files.")
+        else:
+            # Strict gate rejected the batch (all invalid, or the user aborted a
+            # partial run). Preserve the generated files — the helper already
+            # surfaced the reason — so a validation miss doesn't force a full
+            # AI re-planning run.
+            _preserve_generated_plans(plan_dir, repo_root, planning_worktree)
+            stop_title_keeper()
+            return False
     else:
         console.warn("No plan files found.")
         console.hint("The AI session may not have produced any output.")
@@ -1024,3 +1042,35 @@ def _cleanup_plan_dir(plan_dir: str) -> None:
     """Remove the temporary plan directory."""
     with contextlib.suppress(Exception):
         shutil.rmtree(plan_dir, ignore_errors=True)
+
+
+def _preserve_generated_plans(
+    plan_dir: str,
+    repo_root: Path | None,
+    planning_worktree: Path | None,
+) -> None:
+    """Salvage generated ``PLAN*.md`` before the normal cleanup, then clean up.
+
+    Used when the strict gate (:func:`_select_valid_plans`) rejects a batch — every
+    file failed validation, or the user aborted a partial run. Deleting the plan
+    dir/worktree outright would discard output the user can often repair by hand (a
+    missing ``## Complexity`` header is a one-line edit), forcing a full AI
+    re-planning session for a trivial fix. So copy the files to a stable temp dir
+    first — the same copy-then-clean approach :func:`_warn_token_extraction` uses
+    for transcripts — point the user at them, and only then run the usual cleanup,
+    which keeps the worktree/temp dir from lingering.
+    """
+    generated = discover_plan_files(Path(plan_dir))
+    if generated:
+        try:
+            preserved = Path(tempfile.mkdtemp(prefix="wade-plans-"))
+            for plan_file in generated:
+                shutil.copy2(plan_file, preserved / plan_file.name)
+            console.info(
+                f"Preserved {len(generated)} generated plan file(s) — fix the reported "
+                "errors and re-run `wade plan` instead of regenerating from scratch."
+            )
+            console.hint(f"Plan files: {preserved}")
+        except OSError:
+            logger.warning("plan.preserve_generated_failed", exc_info=True)
+    _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)

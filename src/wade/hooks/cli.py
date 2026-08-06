@@ -40,6 +40,7 @@ from crossby.models.ai import HookOutputDialect, HookStopDialect
 
 from wade.hooks.policies import (
     GUARD_NAMES,
+    StopGuard,
     plan_artifact_only,
     plan_complete,
     session_complete,
@@ -48,10 +49,11 @@ from wade.hooks.policies import (
 )
 from wade.utils import markers
 
-# Stop guards fail OPEN — an unknown one must never trap the agent. Two exist:
-# ``session-complete`` (impl/review) nudges to run ``done``; ``plan-complete``
-# (plan sessions) nudges to write a valid plan file.
-_STOP_GUARDS = frozenset({"session-complete", "plan-complete"})
+# Stop guards fail OPEN — an unknown one must never trap the agent. Derived from
+# :class:`StopGuard` (the shared source of truth) so this set cannot drift from
+# what bootstrap installs. ``session-complete`` (impl/review) nudges to run
+# ``done``; ``plan-complete`` (plan sessions) nudges to write a valid plan file.
+_STOP_GUARDS = frozenset(g.value for g in StopGuard)
 
 # Static ``tool id -> output dialect`` map, mirroring each crossby adapter's
 # ``capabilities().hook_output_dialect``. Inlined so the hot per-edit path never
@@ -309,7 +311,7 @@ def _run(event: str, guard: str, tool: str, root: str) -> HookEmission:
             # trap the agent, which a Stop guard must never do.
             return emit_stop_decision(False, "", stop_dialect)
         try:
-            if guard == "plan-complete":
+            if guard == StopGuard.PLAN_COMPLETE:
                 # Plan-session Stop: nudge unless the plan dir holds a valid plan.
                 # ``has_valid_plan`` pulls in pydantic + models, so it is imported
                 # lazily HERE — never on the hot PreToolUse write path, only on

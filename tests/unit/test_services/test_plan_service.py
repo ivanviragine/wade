@@ -20,6 +20,7 @@ from wade.services.plan_service import (
     _attach_plan_to_existing_issue,
     _finalize_issues,
     _offer_to_implement,
+    _preserve_generated_plans,
     _select_valid_plans,
     _supersede_issue_with_plans,
     _with_supersede_banner,
@@ -1357,6 +1358,45 @@ class TestSelectValidPlans:
         assert result is None  # abort → caller creates nothing
 
 
+class TestPreserveGeneratedPlans:
+    """The strict-gate reject path salvages generated plans before cleanup (E2)."""
+
+    def test_copies_plan_files_to_stable_dir_then_cleans(self, tmp_path: Path) -> None:
+        plan_dir = tmp_path / "plans"
+        plan_dir.mkdir()
+        (plan_dir / "PLAN.md").write_text(_GATE_VALID)
+        (plan_dir / "PLAN-2.md").write_text(_GATE_NO_COMPLEXITY)
+        preserved_dir = tmp_path / "preserved"
+        preserved_dir.mkdir()
+
+        with (
+            patch("wade.services.plan_service.tempfile.mkdtemp", return_value=str(preserved_dir)),
+            patch("wade.services.plan_service._cleanup_plan_dir_or_worktree") as mock_cleanup,
+            patch("wade.services.plan_service.console"),
+        ):
+            _preserve_generated_plans(str(plan_dir), None, None)
+
+        # Files are salvaged to the stable dir, and the normal cleanup still runs
+        # afterwards so no worktree/temp dir lingers.
+        assert (preserved_dir / "PLAN.md").is_file()
+        assert (preserved_dir / "PLAN-2.md").is_file()
+        mock_cleanup.assert_called_once_with(str(plan_dir), None, None)
+
+    def test_no_files_skips_copy_but_still_cleans(self, tmp_path: Path) -> None:
+        plan_dir = tmp_path / "plans"
+        plan_dir.mkdir()  # no PLAN*.md written
+
+        with (
+            patch("wade.services.plan_service.tempfile.mkdtemp") as mock_mkdtemp,
+            patch("wade.services.plan_service._cleanup_plan_dir_or_worktree") as mock_cleanup,
+            patch("wade.services.plan_service.console"),
+        ):
+            _preserve_generated_plans(str(plan_dir), None, None)
+
+        mock_mkdtemp.assert_not_called()  # nothing to preserve
+        mock_cleanup.assert_called_once_with(str(plan_dir), None, None)
+
+
 class TestStrictValidationGateWiring:
     """plan() wires the strict gate at both issue-creation call sites (E2)."""
 
@@ -1474,10 +1514,14 @@ class TestStrictValidationGateWiring:
             create = stack.enter_context(
                 patch("wade.services.plan_service._create_issues_from_plans")
             )
+            preserve = stack.enter_context(
+                patch("wade.services.plan_service._preserve_generated_plans")
+            )
 
             assert plan(project_root=tmp_path) is False
 
         create.assert_not_called()
+        preserve.assert_called_once()  # generated plans salvaged, not discarded
 
     def test_new_issue_mixed_abort_creates_nothing(self, tmp_path: Path) -> None:
         provider = MagicMock()
@@ -1495,10 +1539,14 @@ class TestStrictValidationGateWiring:
             create = stack.enter_context(
                 patch("wade.services.plan_service._create_issues_from_plans")
             )
+            preserve = stack.enter_context(
+                patch("wade.services.plan_service._preserve_generated_plans")
+            )
 
             assert plan(project_root=tmp_path) is False
 
         create.assert_not_called()
+        preserve.assert_called_once()  # generated plans salvaged, not discarded
 
     def test_new_issue_all_valid_passes(self, tmp_path: Path) -> None:
         provider = MagicMock()
@@ -1579,11 +1627,15 @@ class TestStrictValidationGateWiring:
             mock_supersede = stack.enter_context(
                 patch("wade.services.plan_service._supersede_issue_with_plans")
             )
+            preserve = stack.enter_context(
+                patch("wade.services.plan_service._preserve_generated_plans")
+            )
 
             assert plan(project_root=tmp_path, issue_id="330") is False
 
         mock_attach.assert_not_called()
         mock_supersede.assert_not_called()
+        preserve.assert_called_once()  # generated plans salvaged, not discarded
         # Files WERE produced (just invalid), so the misleading "No plan files
         # found" message must not fire — the helper already reported the reason.
         warn_msgs = " ".join(str(c.args[0]) for c in mock_console.warn.call_args_list if c.args)

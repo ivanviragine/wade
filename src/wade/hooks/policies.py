@@ -26,6 +26,7 @@ import os
 import posixpath
 import re
 import shlex
+from enum import StrEnum
 from pathlib import Path
 
 from crossby.hooks.runtime import HookDecision, HookEvent
@@ -34,6 +35,7 @@ from wade.utils import markers
 
 __all__ = [
     "GUARD_NAMES",
+    "StopGuard",
     "plan_artifact_only",
     "plan_complete",
     "session_complete",
@@ -42,11 +44,25 @@ __all__ = [
     "worktree_containment",
 ]
 
+
+class StopGuard(StrEnum):
+    """The Stop-hook guards ``wade-hook stop --guard`` accepts.
+
+    A single source of truth shared by the installer
+    (:func:`wade.services.implementation_service.bootstrap._install_stop_hook`)
+    and the CLI (``wade.hooks.cli._STOP_GUARDS``), so bootstrap cannot install a
+    guard the CLI does not recognize and a typo is a type error rather than a
+    silently fail-open unknown guard. A worktree is only ever one kind of session,
+    so the two guards never share one.
+    """
+
+    SESSION_COMPLETE = "session-complete"  # impl/review sessions — nudge to run ``done``
+    PLAN_COMPLETE = "plan-complete"  # plan sessions — nudge to write a valid plan file
+
+
 # Guard names understood by the ``wade hook`` entry point. ``worktree`` / ``plan``
-# are PreToolUse write guards; ``session-complete`` / ``plan-complete`` are Stop
-# guards (an impl/review session vs a plan session — a worktree is only ever one
-# of the two, so the two Stop guards never share a session).
-GUARD_NAMES = ("worktree", "plan", "session-complete", "plan-complete")
+# are PreToolUse write guards; the Stop guards come from :class:`StopGuard`.
+GUARD_NAMES = ("worktree", "plan", *(g.value for g in StopGuard))
 
 # Name of the single-shot flag marker (under ``.wade/``, gitignored per-session)
 # that records the Stop guard already nudged this worktree. Unlike the sha-keyed

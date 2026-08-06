@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from crossby.sync.base import AbstractSyncWriter
 
 from wade.git import repo as git_repo
+from wade.hooks.policies import StopGuard
 from wade.models.config import (
     AI_COMMAND_NAMES,
     WADE_BASE_ALLOWLIST_PATTERN,
@@ -310,7 +311,9 @@ def _install_guard_hooks(
     logger.info(f"implementation.{guard_type}_guard_hooks_installed", path=str(worktree_path))
 
 
-def _install_stop_hook(worktree_path: Path, *, guard: str = "session-complete") -> None:
+def _install_stop_hook(
+    worktree_path: Path, *, guard: StopGuard = StopGuard.SESSION_COMPLETE
+) -> None:
     """Install a Stop-hook completion reminder into each capable tool.
 
     On session Stop, ``wade hook stop --guard {guard}`` nudges (once) when the
@@ -342,11 +345,11 @@ def _install_stop_hook(worktree_path: Path, *, guard: str = "session-complete") 
     for tool_id, writer in _hook_writers():
         if not AbstractAITool.get(tool_id).capabilities().supports_stop_hook:
             continue
-        command = f"wade-hook stop --guard {guard} --tool {tool_id.value} --root {root}"
+        command = f"wade-hook stop --guard {guard.value} --tool {tool_id.value} --root {root}"
         hook = HookEntry(event="stop", tools=[], command=command)
         _log_sync_result(writer.sync(SyncData(hooks=[hook]), worktree_path), tool_id)
 
-    logger.info("implementation.stop_hook_installed", path=str(worktree_path), guard=guard)
+    logger.info("implementation.stop_hook_installed", path=str(worktree_path), guard=guard.value)
 
 
 def _effective_copy_files(config: ProjectConfig) -> list[str]:
@@ -670,7 +673,7 @@ def bootstrap_worktree(
     # plan sessions nudge to write a valid plan; impl/review sessions nudge to run
     # `done` (and also get the pre-push backstop that hard-enforces it).
     if plan_mode:
-        _install_stop_hook(worktree_path, guard="plan-complete")
+        _install_stop_hook(worktree_path, guard=StopGuard.PLAN_COMPLETE)
     else:
         _install_stop_hook(worktree_path)
 

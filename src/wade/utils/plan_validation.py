@@ -85,7 +85,7 @@ class PlanValidationResult(BaseModel):
 def validate_plan_dir(plan_dir: Path) -> PlanValidationResult:
     """Validate all plan files in the directory.
 
-    Collects all errors and warnings across every ``.md`` file.
+    Collects all errors and warnings across every discovered ``PLAN*.md`` file.
 
     Errors (exit 1):
     - No plan files found
@@ -103,7 +103,7 @@ def validate_plan_dir(plan_dir: Path) -> PlanValidationResult:
             PlanDiagnostic(
                 file="(none)",
                 level=PlanDiagnosticLevel.ERROR,
-                message="No plan files (.md) found in the plan directory.",
+                message="No plan files (PLAN*.md) found in the plan directory.",
             )
         )
         return result

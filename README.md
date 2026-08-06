@@ -225,6 +225,12 @@ before creating issues: a `PLAN*.md` missing a valid `## Complexity` or a
 conventional-commit title is dropped with a loud error instead of silently
 becoming an issue with no complexity label.
 
+If some files pass and others fail, an interactive run asks whether to continue
+with the valid ones; `--yolo` and non-interactive runs continue without asking.
+If you decline, or if every plan file fails validation, no issues are created —
+the generated `PLAN*.md` are preserved to a temp directory so you can fix the
+reported errors and re-run instead of regenerating from scratch.
+
 Both write guards cover **shell commands** as well as file edits, so a redirect
 like `printf x > ../other-repo/app.py` is blocked, not just an `Edit` call. Shell
 coverage is best-effort defense-in-depth: it catches ordinary commands, not

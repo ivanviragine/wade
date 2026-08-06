@@ -89,7 +89,9 @@ class TestBackCompatReExports:
         assert plan_done is pv.plan_done
 
     def test_discover_plan_files_still_works_via_re_export(self, tmp_path: Path) -> None:
+        from wade.services.plan_service import discover_plan_files as ps_discover
+
         _write(tmp_path, "PLAN.md", _VALID)
         _write(tmp_path, "PLAN-2.md", _VALID)
-        found = discover_plan_files(tmp_path)
+        found = ps_discover(tmp_path)
         assert [p.name for p in found] == ["PLAN-2.md", "PLAN.md"]
