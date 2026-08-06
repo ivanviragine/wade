@@ -258,6 +258,33 @@ class TestReconcileDisable:
         assert not (wt / ".wade" / "githooks" / "pre-commit").exists()
         assert _commit(wt, "b.txt", "anything at all goes now").returncode == 0
 
+    def test_uninstall_rolls_back_extension_when_last(self, tmp_path: Path) -> None:
+        # Uninstall leaves no persistent config behind: the repo-wide
+        # extensions.worktreeConfig that install enabled is rolled back once no
+        # worktree still uses a worktree-scoped hooksPath (symmetry with the
+        # install-failure rollback).
+        _main, wt = _main_and_worktree(tmp_path)
+        reconcile_worktree_git_hooks(wt, {"pre-commit": build_pre_commit_hook_script("true", None)})
+        assert git_repo.get_config_value(wt, "extensions.worktreeConfig") == "true"
+
+        assert reconcile_worktree_git_hooks(wt, {}) is False
+        assert git_repo.get_config_value(wt, "extensions.worktreeConfig") is None
+
+    def test_uninstall_keeps_extension_when_sibling_relies_on_it(self, tmp_path: Path) -> None:
+        # The extension is repo-WIDE. If a sibling worktree still carries a
+        # worktree-scoped hooksPath, disabling it would silently stop git reading
+        # that sibling's config — so uninstall must leave it enabled.
+        main, wt = _main_and_worktree(tmp_path)
+        sib = tmp_path / "sib"
+        _git(main, "worktree", "add", "-b", "feat/2-y", str(sib))
+        reconcile_worktree_git_hooks(wt, {"pre-commit": build_pre_commit_hook_script("true", None)})
+        reconcile_worktree_git_hooks(sib, {"commit-msg": build_commit_msg_hook_script()})
+
+        assert reconcile_worktree_git_hooks(wt, {}) is False
+        # Extension stays; the sibling's worktree-scoped hooksPath is still read.
+        assert git_repo.get_config_value(main, "extensions.worktreeConfig") == "true"
+        assert git_repo.get_config_value(sib, "core.hooksPath", worktree=True) == ".wade/githooks"
+
     def test_disabled_gate_preserves_prior_via_passthrough(self, tmp_path: Path) -> None:
         main, wt = _main_and_worktree(tmp_path)
         record = tmp_path / "prior_ran.txt"

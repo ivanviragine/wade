@@ -371,7 +371,10 @@ def _uninstall_worktree_git_hooks(worktree_path: Path) -> bool:
     A no-op when wade does not manage this worktree (so a fresh worktree with no
     configured hooks is untouched). Removes each managed hook script and its chain
     file, then unsets the worktree ``core.hooksPath`` so git falls back to the
-    user's own ``.git/hooks``. Always returns False (no wade hooksPath active).
+    user's own ``.git/hooks``, and rolls back the repo-wide
+    ``extensions.worktreeConfig`` when it is safe (see
+    :func:`_maybe_disable_worktree_config_extension`). Always returns False (no
+    wade hooksPath active).
     """
     from wade.git import repo as git_repo
 
@@ -391,8 +394,41 @@ def _uninstall_worktree_git_hooks(worktree_path: Path) -> bool:
             logger.warning("skills.githook_remove_failed", path=str(target))
 
     git_repo.unset_config_value(worktree_path, "core.hooksPath", worktree=True)
+    _maybe_disable_worktree_config_extension(worktree_path)
     logger.debug("skills.githooks_uninstalled", path=str(worktree_path))
     return False
+
+
+def _maybe_disable_worktree_config_extension(worktree_path: Path) -> None:
+    """Roll back the repo-wide ``extensions.worktreeConfig`` on uninstall — but only
+    when no worktree still relies on a worktree-scoped ``core.hooksPath``.
+
+    :func:`install_worktree_git_hooks` enables this extension repo-wide so it can
+    write a per-worktree ``core.hooksPath``; the install-failure path rolls it back
+    transactionally. Uninstall would similarly like to "leave no persistent config
+    behind", but here the flag is **repo-WIDE and shared**: a sibling worktree (a
+    core wade flow — multiple parallel worktrees) may carry its own worktree-scoped
+    ``core.hooksPath`` that git would silently stop reading if the extension were
+    disabled. So only disable it once *this* uninstall leaves no worktree using a
+    worktree-scoped hooksPath. Best-effort — never raises; if the worktree set
+    can't be enumerated the (inert-without-an-override) flag is simply left as-is.
+    """
+    from wade.git import repo as git_repo
+    from wade.git import worktree as git_worktree
+
+    main = git_repo.get_main_worktree_path(worktree_path) or worktree_path
+    try:
+        worktrees = git_worktree.list_worktrees(main)
+    except Exception:
+        return  # can't enumerate → leave the inert extension in place
+    for wt in worktrees:
+        # A worktree-scoped read needs the extension still enabled — it is, since
+        # we only unset it below. Any lingering hooksPath override (wade's or the
+        # user's) means a sibling still depends on worktree config.
+        if git_repo.get_config_value(Path(wt["path"]), "core.hooksPath", worktree=True):
+            return
+    git_repo.unset_config_value(worktree_path, "extensions.worktreeConfig")
+    logger.debug("skills.worktree_config_extension_disabled", path=str(worktree_path))
 
 
 def _bake_shell_single_quoted(value: str | None) -> str:
