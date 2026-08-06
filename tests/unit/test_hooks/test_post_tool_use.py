@@ -178,6 +178,15 @@ class TestNeverBlocksOrHangs:
         # Findings are surfaced, but the process exit code never blocks.
         assert r.returncode == 0
 
+    def test_malformed_lint_cmd_is_noop_not_crash(self, tmp_path: Path) -> None:
+        # An unbalanced-quote lint_cmd passes config validation (non-empty string)
+        # but breaks shlex.split — the hook must fail open, not crash non-zero.
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        r = _run_ptu("claude", str(wt), "ruff 'check", _write_payload(wt))
+        assert r.returncode == 0
+        assert r.stdout == ""
+
 
 class TestScoping:
     def test_scoped_appends_edited_path(self, tmp_path: Path) -> None:

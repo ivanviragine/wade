@@ -473,7 +473,13 @@ def _run_post_tool_use(
         return _noop()
     ev = parse_event(raw, event="post_tool_use")
 
-    argv = shlex.split(lint_cmd)
+    try:
+        # ValueError on an unbalanced-quote lint_cmd: config validation only
+        # checks the command is a non-empty string, so a malformed value would
+        # otherwise crash the hook with a non-zero exit — violating fail-open.
+        argv = shlex.split(lint_cmd)
+    except ValueError:
+        return _noop()
     if not argv:
         return _noop()
     if scoped:
