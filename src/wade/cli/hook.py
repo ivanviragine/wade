@@ -25,7 +25,7 @@ def hook_command(
     guard: str = typer.Option(
         ...,
         "--guard",
-        help="Guard policy to apply: worktree | plan | session-complete.",
+        help="Guard policy to apply: worktree | plan | session-complete | plan-complete.",
     ),
     tool: str = typer.Option(
         ...,

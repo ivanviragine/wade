@@ -30,20 +30,23 @@ from pathlib import Path
 
 from crossby.hooks.runtime import HookDecision, HookEvent
 
+from wade.models.hooks import StopGuard
 from wade.utils import markers
 
 __all__ = [
     "GUARD_NAMES",
     "plan_artifact_only",
+    "plan_complete",
     "session_complete",
     "shell_containment",
     "stop_nudge_marker_path",
     "worktree_containment",
 ]
 
+
 # Guard names understood by the ``wade hook`` entry point. ``worktree`` / ``plan``
-# are PreToolUse write guards; ``session-complete`` is a Stop guard.
-GUARD_NAMES = ("worktree", "plan", "session-complete")
+# are PreToolUse write guards; the Stop guards come from :class:`StopGuard`.
+GUARD_NAMES = ("worktree", "plan", *(g.value for g in StopGuard))
 
 # Name of the single-shot flag marker (under ``.wade/``, gitignored per-session)
 # that records the Stop guard already nudged this worktree. Unlike the sha-keyed
@@ -762,4 +765,52 @@ def session_complete(
         "`wade review-pr-comments-session done`) to sync, push, and finalize the "
         "PR. If you are pausing to ask a question or are still mid-task, disregard "
         "this and continue."
+    )
+
+
+def plan_complete(
+    event: HookEvent,
+    *,
+    worktree_root: Path,
+    has_valid_plan: bool = False,
+) -> HookDecision:
+    """Stop-hook guard: nudge (once) when a plan session produced no valid plan.
+
+    Mirrors :func:`session_complete` — a pure predicate fed a fact the
+    ``wade-hook`` CLI computes (here ``has_valid_plan``: does the plan dir hold at
+    least one ``PLAN*.md`` with no error-level diagnostics). Returns a ``deny``
+    (which the Stop path renders as *block the stop and feed the reason back*) when
+    the session is about to end with nothing wade can turn into an issue, so the
+    plan-phase requirement is enforced rather than left to the agent's goodwill.
+
+    Allow conditions, in order (same shape as ``session_complete``):
+
+    - ``event.stop_hook_active`` — Claude sets this once its Stop hook has fired
+      and blocked; other tools do not send it. Prevents looping.
+    - ``has_valid_plan`` — the session already wrote a usable plan; nothing to nudge.
+    - the ``.wade/stop-nudged`` single-shot marker — the CLI writes it after this
+      guard blocks, so the second Stop is allowed on *any* tool, not just Claude.
+      This predicate only *reads* the marker; the CLI owns the write. The marker
+      is shared with ``session_complete`` because a worktree is a plan worktree or
+      an impl worktree, never both, so the two guards never collide on it.
+
+    The message is deliberately ignorable so a legitimate pause (e.g. stopping to
+    ask the user a question mid-plan) costs at most one gentle nudge. The hook is
+    only installed in plan-session worktrees on Stop-capable tools, so no
+    session-detection is needed here.
+    """
+    if event.stop_hook_active:
+        return HookDecision.allow()
+
+    if has_valid_plan:
+        return HookDecision.allow()  # a usable plan already exists
+
+    if stop_nudge_present(worktree_root):
+        return HookDecision.allow()  # already nudged once this worktree
+
+    return HookDecision.deny(
+        "Before finishing: write at least one valid `PLAN*.md` (a title with a "
+        "conventional-commit prefix, e.g. `feat: ...`, plus a `## Complexity` "
+        "section) to the plan directory so wade can create the issue. If you are "
+        "pausing to ask a question or are still mid-plan, disregard this and continue."
     )

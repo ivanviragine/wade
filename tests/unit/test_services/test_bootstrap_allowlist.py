@@ -391,9 +391,11 @@ class TestBootstrapPlanMode:
         parsed = tomllib.loads(config.read_text("utf-8"))
         assert parsed["features"]["codex_hooks"] is True
 
-    def test_stop_hook_installed_for_implement_not_plan(self, tmp_path: Path) -> None:
-        """Implement/review sessions install a Stop completion hook; plan sessions do not."""
-        # Implement (worktree) mode → Stop hook present for Stop-capable Claude.
+    def test_stop_hook_guard_differs_by_mode(self, tmp_path: Path) -> None:
+        """Impl/review sessions install a ``session-complete`` Stop hook; plan
+        sessions install a ``plan-complete`` one. Neither carries the other's guard.
+        """
+        # Implement (worktree) mode → session-complete Stop hook for Claude.
         wt = tmp_path / "impl"
         wt.mkdir()
         repo = tmp_path / "repo"
@@ -405,13 +407,17 @@ class TestBootstrapPlanMode:
             "wade-hook stop --guard session-complete" in c and "--tool claude" in c
             for c in commands
         )
+        assert not any("plan-complete" in c for c in commands)
 
-        # Plan mode → no Stop hook.
+        # Plan mode → plan-complete Stop hook (still installed, different guard).
         wt2 = tmp_path / "plan"
         wt2.mkdir()
         with patch("subprocess.run"):
             bootstrap_worktree(wt2, self._config(), repo, plan_mode=True)
         commands2 = self._claude_hook_commands(wt2)
+        assert any(
+            "wade-hook stop --guard plan-complete" in c and "--tool claude" in c for c in commands2
+        )
         assert not any("session-complete" in c for c in commands2)
 
     def test_stop_hook_installed_for_antigravity_cli(self, tmp_path: Path) -> None:

@@ -23,6 +23,7 @@ from wade.models.config import (
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
 from wade.models.deps import DependencyEdge, DependencyGraph
 from wade.models.events import EventType, WorkflowEvent
+from wade.models.hooks import StopGuard
 from wade.models.session import (
     ImplementationSession,
     MergeStrategy,
@@ -59,6 +60,7 @@ __all__ = [
     "ProjectSettings",
     "ProviderConfig",
     "ProviderID",
+    "StopGuard",
     "SyncEvent",
     "SyncResult",
     "Task",

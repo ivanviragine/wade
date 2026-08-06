@@ -41,11 +41,19 @@ from crossby.models.ai import HookOutputDialect, HookStopDialect
 from wade.hooks.policies import (
     GUARD_NAMES,
     plan_artifact_only,
+    plan_complete,
     session_complete,
     shell_containment,
     worktree_containment,
 )
+from wade.models.hooks import StopGuard
 from wade.utils import markers
+
+# Stop guards fail OPEN — an unknown one must never trap the agent. Derived from
+# :class:`StopGuard` (the shared source of truth) so this set cannot drift from
+# what bootstrap installs. ``session-complete`` (impl/review) nudges to run
+# ``done``; ``plan-complete`` (plan sessions) nudges to write a valid plan file.
+_STOP_GUARDS = frozenset(g.value for g in StopGuard)
 
 # Static ``tool id -> output dialect`` map, mirroring each crossby adapter's
 # ``capabilities().hook_output_dialect``. Inlined so the hot per-edit path never
@@ -258,10 +266,11 @@ def _run(event: str, guard: str, tool: str, root: str) -> HookEmission:
       exception, an unknown guard name, a missing ``--root``, or an *unparseable*
       payload denies the write. A guard that silently allows on error is worse
       than useless.
-    - The Stop guard (``session-complete``) fails **open**: a bug, an internal
-      error, a missing ``--root``, *or an unrecognized guard name* must never trap
-      the agent in a session it cannot exit — it emits a non-blocking decision
-      rather than inspecting the CWD (which could spuriously block completion).
+    - The Stop guards (``session-complete`` / ``plan-complete``) fail **open**: a
+      bug, an internal error, a missing ``--root``, *or an unrecognized guard
+      name* must never trap the agent in a session it cannot exit — they emit a
+      non-blocking decision rather than inspecting the CWD (which could spuriously
+      block completion).
 
     Payload handling is asymmetric on purpose. An *empty* payload describes no
     write target, so there is nothing that could escape the worktree — allowing
@@ -286,12 +295,12 @@ def _run(event: str, guard: str, tool: str, root: str) -> HookEmission:
 
     ev = parse_event(raw, event=event)
 
-    # The Stop channel is claimed by either the guard name or the event, so an
+    # The Stop channel is claimed by either a known Stop guard or the event, so an
     # unknown ``--guard`` on a Stop event cannot fall through to the write-guard
     # path below and block session completion (it fails open here instead).
-    if guard == "session-complete" or _is_stop_event(event, ev):
+    if guard in _STOP_GUARDS or _is_stop_event(event, ev):
         stop_dialect = _stop_dialect_for(tool)
-        if guard != "session-complete":
+        if guard not in _STOP_GUARDS:
             # Unrecognized guard on a Stop event — emit a non-blocking decision
             # without evaluating any policy. A Stop guard must never trap the agent.
             return emit_stop_decision(False, "", stop_dialect)
@@ -302,17 +311,33 @@ def _run(event: str, guard: str, tool: str, root: str) -> HookEmission:
             # trap the agent, which a Stop guard must never do.
             return emit_stop_decision(False, "", stop_dialect)
         try:
-            # Git facts feed the predicate: nudge only when the branch has
-            # authored work (commits ahead of base) and no current done marker.
-            # Computed here (lazy subprocess) to keep the predicate pure; any
-            # failure raises and falls through to the fail-open handler below.
-            commits_ahead, done_present = _stop_git_facts(Path(root))
-            decision = session_complete(
-                ev,
-                worktree_root=Path(root),
-                commits_ahead=commits_ahead,
-                done_marker_present=done_present,
-            )
+            if guard == StopGuard.PLAN_COMPLETE:
+                # Plan-session Stop: nudge unless the plan dir holds a valid plan.
+                # ``has_valid_plan`` pulls in pydantic + models, so it is imported
+                # lazily HERE — never on the hot PreToolUse write path, only on
+                # this Stop branch. Any exception falls through to fail-open below.
+                # The plan dir is ``<worktree>/.wade/plans`` because ``plan()`` sets
+                # ``plan_output_dir = planning_worktree / ".wade" / "plans"`` and the
+                # hook is installed with ``--root <planning_worktree>``.
+                from wade.utils.plan_validation import has_valid_plan
+
+                decision = plan_complete(
+                    ev,
+                    worktree_root=Path(root),
+                    has_valid_plan=has_valid_plan(Path(root) / ".wade" / "plans"),
+                )
+            else:
+                # Git facts feed the predicate: nudge only when the branch has
+                # authored work (commits ahead of base) and no current done marker.
+                # Computed here (lazy subprocess) to keep the predicate pure; any
+                # failure raises and falls through to the fail-open handler below.
+                commits_ahead, done_present = _stop_git_facts(Path(root))
+                decision = session_complete(
+                    ev,
+                    worktree_root=Path(root),
+                    commits_ahead=commits_ahead,
+                    done_marker_present=done_present,
+                )
             should_block = decision.action == "deny"
             reason = decision.reason
             if should_block:
@@ -391,7 +416,9 @@ def main(argv: list[str] | None = None) -> int:
         help="Canonical hook event: pre_tool_use, stop, or session_start.",
     )
     parser.add_argument(
-        "--guard", required=True, help="Guard policy: worktree | plan | session-complete."
+        "--guard",
+        required=True,
+        help="Guard policy: worktree | plan | session-complete | plan-complete.",
     )
     parser.add_argument("--tool", required=True, help="AI tool id (selects the output dialect).")
     parser.add_argument("--root", default="", help="Worktree root — required by write guards.")

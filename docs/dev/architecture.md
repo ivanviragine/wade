@@ -117,6 +117,7 @@ src/wade/
     ├── terminal.py      # Tab title, TTY detection, launch_in_new_terminal
     ├── slug.py          # Title -> URL-safe slug
     ├── markdown.py      # Plan file parsing
+    ├── plan_validation.py # Lean plan-file validator (discover/validate/has_valid_plan) — Stop-path safe
     ├── process.py       # Subprocess helpers
     ├── http.py          # HTTPClient for REST API providers
     ├── markers.py       # sha-keyed .wade/<name>@<sha> completion markers (done, reviewed, stop-nudged)
@@ -171,15 +172,23 @@ trusting the agent to follow the skill. The split across the two repos:
 |-------|-------|--------------|--------|
 | `worktree` | PreToolUse | **closed** (deny) | Writes resolving outside the worktree |
 | `plan` | PreToolUse | **closed** (deny) | Writes to anything but plan artifacts |
-| `session-complete` | Stop | **open** (allow) | Ending a turn with commits ahead of base and no current `done` marker (once) |
+| `session-complete` | Stop | **open** (allow) | Ending an impl/review turn with commits ahead of base and no current `done` marker (once) |
+| `plan-complete` | Stop | **open** (allow) | Ending a plan turn with no valid `PLAN*.md` in `.wade/plans` (once) |
 
 The asymmetry is deliberate and must not regress: a write guard that allows on
 error is worse than useless, while a Stop guard that blocks on error traps the
-agent in a session it cannot exit. `session-complete` (`hooks/policies.py`) is a
-pure predicate over `commits_ahead` + `done_marker_present`; the git facts are
-computed in `hooks/cli.py`'s Stop branch via **raw `subprocess`** (never the
-`wade.git` layer, whose `structlog` output would corrupt the lean entry's
-decision-JSON contract) and any failure fails open.
+agent in a session it cannot exit. Both Stop guards live in `hooks/policies.py`
+as pure predicates fed a fact the `hooks/cli.py` Stop branch computes:
+`session-complete` over `commits_ahead` + `done_marker_present` (git facts read
+via **raw `subprocess`** — never the `wade.git` layer, whose `structlog` output
+would corrupt the lean entry's decision-JSON contract), and `plan-complete` over
+`has_valid_plan(.wade/plans)` (via a **lazy** import of
+`wade.utils.plan_validation`, kept off the hot PreToolUse write path). Any
+failure — unresolvable dir, missing `--root`, exception — fails open. The two
+Stop guards share the single-shot `.wade/stop-nudged` marker because a worktree
+is either a plan worktree or an impl worktree, never both. Installation:
+`bootstrap_worktree` installs `session-complete` for impl/review sessions (plus
+the pre-push `done` backstop) and `plan-complete` for plan sessions.
 
 ### Two write channels
 

@@ -59,7 +59,7 @@ if plan_dir is not None:
     (plan_dir / "PLAN-001-deterministic-plan.md").write_text(
         "\\n".join(
             [
-                "# Deterministic plan from fake claude",
+                "# feat: deterministic plan from fake claude",
                 "",
                 "## Complexity",
                 "easy",
@@ -112,7 +112,7 @@ class TestPlanCommand:
 
         issue = issues.get("1")
         assert isinstance(issue, dict)
-        assert issue.get("title") == "Deterministic plan from fake claude"
+        assert issue.get("title") == "feat: deterministic plan from fake claude"
         labels = issue.get("labels", [])
         assert isinstance(labels, list)
         assert "feature-plan" in labels
@@ -124,7 +124,7 @@ class TestPlanCommand:
 
         _assert_gh_called_with(
             mock_gh_cli["log_file"],
-            ["issue", "create", "--title", "Deterministic plan from fake claude"],
+            ["issue", "create", "--title", "feat: deterministic plan from fake claude"],
         )
         _assert_gh_called_with(
             mock_gh_cli["log_file"],

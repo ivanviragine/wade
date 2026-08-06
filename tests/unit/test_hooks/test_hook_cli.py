@@ -292,6 +292,67 @@ class TestStopGuardCLI:
         assert json.loads(r.stdout) == {"continue": True}
 
 
+_VALID_PLAN = "# feat: add retry logic\n\n## Complexity\ncomplex\n\n## Tasks\n- Do it\n"
+
+
+class TestPlanStopGuardCLI:
+    """The ``plan-complete`` Stop guard — nudges when a plan session wrote no plan.
+
+    Unlike ``session-complete`` it needs no git facts: it reads ``has_valid_plan``
+    on ``<root>/.wade/plans``, so a plain temp dir exercises the block path.
+    """
+
+    def _run_stop(self, tool: str, stdin: str, root: str):
+        return _run("stop", "plan-complete", tool, stdin, root=root)
+
+    def _write_valid_plan(self, root: Path) -> None:
+        plans = root / ".wade" / "plans"
+        plans.mkdir(parents=True, exist_ok=True)
+        (plans / "PLAN.md").write_text(_VALID_PLAN)
+
+    def test_blocks_when_no_valid_plan_and_writes_marker(self, tmp_path: Path) -> None:
+        r = self._run_stop("claude", json.dumps({"stop_hook_active": False}), str(tmp_path))
+        assert r.returncode == 0  # Stop blocks via the JSON decision, not exit code
+        payload = json.loads(r.stdout)
+        assert payload["decision"] == "block"
+        assert "PLAN" in payload["reason"]
+        assert (tmp_path / ".wade" / "stop-nudged").is_file()
+
+    def test_allows_when_valid_plan_present(self, tmp_path: Path) -> None:
+        self._write_valid_plan(tmp_path)
+        r = self._run_stop("claude", json.dumps({"stop_hook_active": False}), str(tmp_path))
+        assert r.returncode == 0
+        assert json.loads(r.stdout) == {"continue": True}
+
+    def test_plan_at_root_not_in_plans_dir_still_blocks(self, tmp_path: Path) -> None:
+        # The plan dir is <root>/.wade/plans — a PLAN.md at the worktree root is
+        # not where plan() writes, so it must not satisfy the guard.
+        (tmp_path / "PLAN.md").write_text(_VALID_PLAN)
+        r = self._run_stop("claude", json.dumps({}), str(tmp_path))
+        assert json.loads(r.stdout)["decision"] == "block"
+
+    def test_single_shot_across_tools(self, tmp_path: Path) -> None:
+        # First Stop (no valid plan) blocks and writes the .wade marker...
+        r1 = self._run_stop("claude", json.dumps({}), str(tmp_path))
+        assert json.loads(r1.stdout)["decision"] == "block"
+        assert (tmp_path / ".wade" / "stop-nudged").is_file()
+        # ...so a second Stop is allowed even on a tool that never sends
+        # stop_hook_active (Codex) — the tool-agnostic single-shot.
+        r2 = self._run_stop("codex", json.dumps({}), str(tmp_path))
+        assert r2.returncode == 0
+        assert json.loads(r2.stdout) == {"continue": True}
+
+    def test_missing_root_fails_open(self) -> None:
+        r = _run("stop", "plan-complete", "claude", json.dumps({}), root=None)
+        assert r.returncode == 0
+        assert json.loads(r.stdout) == {"continue": True}
+
+    def test_block_via_lean_entry(self, tmp_path: Path) -> None:
+        r = _run_lean("stop", "plan-complete", "claude", json.dumps({}), str(tmp_path))
+        assert r.returncode == 0
+        assert json.loads(r.stdout)["decision"] == "block"
+
+
 class TestStopReadErrorFailsOpen:
     def test_unreadable_stdin_fails_open(self, monkeypatch, tmp_path: Path) -> None:
         # A stdin read error on the Stop guard must fail open, not block — the

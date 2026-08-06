@@ -13,7 +13,6 @@ import re
 import shutil
 import subprocess
 import tempfile
-from enum import StrEnum
 from pathlib import Path
 
 import structlog
@@ -23,7 +22,6 @@ from crossby.ai_tools.transcript import (
     read_transcript_excerpt,
 )
 from crossby.models.ai import AIToolID, EffortLevel, TokenUsage
-from pydantic import BaseModel
 
 from wade.config.loader import load_config
 from wade.models.config import ProjectConfig
@@ -50,6 +48,13 @@ from wade.services.task_service import (
 from wade.ui import prompts
 from wade.ui.console import console
 from wade.utils.markdown import append_session_to_body
+from wade.utils.plan_validation import PlanDiagnostic as PlanDiagnostic
+from wade.utils.plan_validation import PlanDiagnosticLevel as PlanDiagnosticLevel
+from wade.utils.plan_validation import PlanValidationResult as PlanValidationResult
+from wade.utils.plan_validation import discover_plan_files as discover_plan_files
+from wade.utils.plan_validation import has_valid_plan as has_valid_plan
+from wade.utils.plan_validation import plan_done as plan_done
+from wade.utils.plan_validation import validate_plan_dir as validate_plan_dir
 from wade.utils.process import run_with_transcript
 from wade.utils.terminal import (
     compose_plan_title,
@@ -102,13 +107,13 @@ def _build_issue_context_header(issue: Task) -> str:
 # ---------------------------------------------------------------------------
 # Plan file discovery and validation
 # ---------------------------------------------------------------------------
-
-
-def discover_plan_files(plan_dir: Path) -> list[Path]:
-    """Find PLAN*.md files in the plan directory, sorted by name."""
-    if not plan_dir.is_dir():
-        return []
-    return sorted(plan_dir.glob("PLAN*.md"))
+#
+# ``discover_plan_files`` / ``validate_plan_dir`` / ``plan_done`` and the
+# diagnostic types now live in :mod:`wade.utils.plan_validation` (a lean,
+# UI-free module the ``wade-hook`` Stop path can import cheaply); they are
+# re-exported at the top of this module for back-compat. ``validate_plan_files``
+# stays here because it calls ``console.warn`` — a UI dependency that must not
+# leak into ``utils/``.
 
 
 def validate_plan_files(plan_dir: Path) -> list[PlanFile]:
@@ -129,129 +134,81 @@ def validate_plan_files(plan_dir: Path) -> list[PlanFile]:
     return valid
 
 
-# ---------------------------------------------------------------------------
-# Plan-done validation (deterministic gate for planning sessions)
-# ---------------------------------------------------------------------------
+def _select_valid_plans(
+    plan_dir: Path,
+    plan_files: list[PlanFile],
+    *,
+    yolo: bool,
+) -> list[PlanFile] | None:
+    """Strict-validate discovered plans before wade turns them into issues.
 
-_RECOMMENDED_SECTIONS = ("tasks", "acceptance criteria")
+    This is the enforcement that makes ``## Complexity`` + a conventional-commit
+    title mandatory on the issue-creation path — independent of whether the agent
+    ran ``wade plan-session done``. ``plan_files`` are the title-parseable files
+    from :func:`validate_plan_files`; here we drop any that fail the *strict*
+    :func:`validate_plan_dir` gate (missing/invalid complexity, bad title prefix).
 
-_CONVENTIONAL_COMMIT_RE = re.compile(
-    r"^(feat|fix|docs|refactor|chore|style|perf|test|ci|build|revert|update)(\(.+\))?!?:\s+\S"
-)
+    Returns:
+        - The filtered ``list[PlanFile]`` (only files with no error diagnostics)
+          when at least one valid file remains and the user did not abort.
+        - ``[]`` when **no** valid files remain.
+        - ``None`` when the run is interactive, some files are valid and some are
+          not, and the user declined the partial run.
 
+    For both ``[]`` and ``None`` the caller creates nothing and returns ``False``,
+    but the generated ``PLAN*.md`` are first salvaged to a stable temp dir (see
+    :func:`_preserve_generated_plans`) so a trivial validation miss doesn't force a
+    full re-run — this helper's job is only to keep invalid plans from silently
+    becoming issues, not to decide their fate.
 
-class PlanDiagnosticLevel(StrEnum):
-    ERROR = "error"
-    WARNING = "warning"
-
-
-class PlanDiagnostic(BaseModel):
-    """A single diagnostic message for a plan file."""
-
-    file: str
-    level: PlanDiagnosticLevel
-    message: str
-
-
-class PlanValidationResult(BaseModel):
-    """Aggregated validation result for all plan files in a directory."""
-
-    diagnostics: list[PlanDiagnostic] = []
-
-    @property
-    def errors(self) -> list[PlanDiagnostic]:
-        return [d for d in self.diagnostics if d.level == PlanDiagnosticLevel.ERROR]
-
-    @property
-    def warnings(self) -> list[PlanDiagnostic]:
-        return [d for d in self.diagnostics if d.level == PlanDiagnosticLevel.WARNING]
-
-    @property
-    def has_errors(self) -> bool:
-        return bool(self.errors)
-
-
-def validate_plan_dir(plan_dir: Path) -> PlanValidationResult:
-    """Validate all plan files in the directory.
-
-    Collects all errors and warnings across every ``.md`` file.
-
-    Errors (exit 1):
-    - No plan files found
-    - Missing ``# Title`` heading
-    - Missing or invalid ``## Complexity`` section
-
-    Warnings (exit 0):
-    - Missing recommended sections (``## Tasks``, ``## Acceptance Criteria``)
+    Every error is surfaced loudly via ``console.error`` (invalid files are never
+    silently dropped); warnings via ``console.warn`` do not exclude a file. In a
+    non-TTY or ``yolo`` run the valid subset proceeds after the loud warning, so
+    headless runs never hang on the confirmation prompt.
     """
-    result = PlanValidationResult()
-    md_files = discover_plan_files(plan_dir)
+    result = validate_plan_dir(plan_dir)
+    errors_by_file: dict[str, list[str]] = {}
+    for diag in result.errors:
+        errors_by_file.setdefault(diag.file, []).append(diag.message)
+    for diag in result.warnings:
+        console.warn(f"{diag.file}: {diag.message}")
 
-    if not md_files:
-        result.diagnostics.append(
-            PlanDiagnostic(
-                file="(none)",
-                level=PlanDiagnosticLevel.ERROR,
-                message="No plan files (.md) found in the plan directory.",
-            )
+    valid: list[PlanFile] = []
+    invalid: list[PlanFile] = []
+    for plan in plan_files:
+        file_errors = errors_by_file.get(plan.path.name)
+        if file_errors:
+            invalid.append(plan)
+            for message in file_errors:
+                console.error(f"{plan.path.name}: {message}")
+        else:
+            valid.append(plan)
+
+    if not valid:
+        console.error(
+            f"No valid plan files — all {len(invalid)} failed validation "
+            "(need a '## Complexity' and a conventional-commit title prefix)."
         )
-        return result
+        return []
 
-    for md_file in md_files:
-        try:
-            plan = PlanFile.from_markdown(md_file)
-        except (ValueError, OSError) as e:
-            result.diagnostics.append(
-                PlanDiagnostic(file=md_file.name, level=PlanDiagnosticLevel.ERROR, message=str(e))
+    if invalid:
+        console.warn(
+            f"{len(invalid)} plan file(s) failed validation and will be skipped: "
+            f"{', '.join(p.path.name for p in invalid)}"
+        )
+        if prompts.is_tty() and not yolo:
+            proceed = prompts.confirm(
+                f"{len(invalid)} plan file(s) failed validation and will be skipped — "
+                f"continue with the {len(valid)} valid one(s)?",
+                default=True,
             )
-            continue
-
-        if plan.complexity is None:
-            result.diagnostics.append(
-                PlanDiagnostic(
-                    file=md_file.name,
-                    level=PlanDiagnosticLevel.ERROR,
-                    message=(
-                        "Missing or invalid '## Complexity' section. "
-                        "Must be one of: easy, medium, complex, very_complex."
-                    ),
+            if not proceed:
+                console.info(
+                    "Aborted — no issues created. Re-run `wade plan` to regenerate the plan."
                 )
-            )
+                return None
 
-        if not _CONVENTIONAL_COMMIT_RE.match(plan.title):
-            result.diagnostics.append(
-                PlanDiagnostic(
-                    file=md_file.name,
-                    level=PlanDiagnosticLevel.ERROR,
-                    message=(
-                        f"Title '{plan.title}' does not start with a conventional commit prefix. "
-                        "Use: feat, fix, docs, refactor, chore, style, perf, test, ci, build, "
-                        "revert, update. Example: 'feat: add retry logic to task provider'."
-                    ),
-                )
-            )
-
-        for section in _RECOMMENDED_SECTIONS:
-            if section not in plan.sections:
-                heading = section.title()
-                result.diagnostics.append(
-                    PlanDiagnostic(
-                        file=md_file.name,
-                        level=PlanDiagnosticLevel.WARNING,
-                        message=f"Missing recommended section: '## {heading}'.",
-                    )
-                )
-
-    return result
-
-
-def plan_done(plan_dir: Path) -> PlanValidationResult:
-    """Validate plan files and return aggregated diagnostics.
-
-    The caller is responsible for rendering results and determining the exit code.
-    Use ``result.has_errors`` to check whether validation passed.
-    """
-    return validate_plan_dir(plan_dir)
+    return valid
 
 
 # ---------------------------------------------------------------------------
@@ -550,48 +507,65 @@ def plan(
     # decided the work should be split into multiple issues.
     if existing_issue is not None:
         plan_files = validate_plan_files(Path(plan_dir))
-        if plan_files:
-            console.info(f"Found {len(plan_files)} plan file(s)")
-            if len(plan_files) == 1:
-                _attach_plan_to_existing_issue(
+        if not plan_files:
+            console.warn("No plan files found — the AI session may not have produced output.")
+        else:
+            # Strict gate — drop plans missing complexity / a valid title prefix.
+            # ``None`` (user aborted) or ``[]`` (all invalid) both bail below via
+            # _preserve_generated_plans (the helper already reported why), mutating
+            # no issue — the "No plan files found" line above is skipped.
+            selected = _select_valid_plans(Path(plan_dir), plan_files, yolo=resolved_yolo)
+            if selected:
+                plan_files = selected
+                console.info(f"Found {len(plan_files)} plan file(s)")
+                if len(plan_files) == 1:
+                    _attach_plan_to_existing_issue(
+                        provider=provider,
+                        config=config,
+                        issue=existing_issue,
+                        plan_file=plan_files[0],
+                        repo_root=repo_root,
+                    )
+                    finalize_issue_numbers = [existing_issue.id]
+                else:
+                    finalize_issue_numbers = _supersede_issue_with_plans(
+                        provider=provider,
+                        config=config,
+                        issue=existing_issue,
+                        plan_files=plan_files,
+                        repo_root=repo_root,
+                        yolo=resolved_yolo,
+                    )
+                stop_title_keeper()
+                if not finalize_issue_numbers:
+                    console.warn("No issues were created from plan files.")
+                    _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+                    return False
+                offer_result = _finalize_issues(
                     provider=provider,
                     config=config,
-                    issue=existing_issue,
-                    plan_file=plan_files[0],
+                    issue_numbers=finalize_issue_numbers,
+                    ai_tool=resolved_tool,
+                    model=resolved_model,
+                    usage=usage,
                     repo_root=repo_root,
-                )
-                finalize_issue_numbers = [existing_issue.id]
-            else:
-                finalize_issue_numbers = _supersede_issue_with_plans(
-                    provider=provider,
-                    config=config,
-                    issue=existing_issue,
-                    plan_files=plan_files,
-                    repo_root=repo_root,
+                    planning_worktree=planning_worktree,
+                    effort=resolved_effort,
                     yolo=resolved_yolo,
                 )
-            stop_title_keeper()
-            if not finalize_issue_numbers:
-                console.warn("No issues were created from plan files.")
                 _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
-                return False
-            offer_result = _finalize_issues(
-                provider=provider,
-                config=config,
-                issue_numbers=finalize_issue_numbers,
-                ai_tool=resolved_tool,
-                model=resolved_model,
-                usage=usage,
-                repo_root=repo_root,
-                planning_worktree=planning_worktree,
-                effort=resolved_effort,
-                yolo=resolved_yolo,
-            )
-            _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
-            if offer_result is not None:
-                return offer_result
-            return True
-        console.warn("No plan files found — the AI session may not have produced output.")
+                if offer_result is not None:
+                    return offer_result
+                return True
+            # Strict gate rejected the batch (all invalid, or the user aborted a
+            # partial run). Preserve the generated files — the helper already
+            # surfaced the reason — so a validation miss doesn't force a full
+            # AI re-planning run.
+            _preserve_generated_plans(plan_dir, repo_root, planning_worktree)
+            stop_title_keeper()
+            return False
+        # Reached only when the session produced no plan files (nothing to
+        # preserve) — clean up like every other failure path.
         _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
         stop_title_keeper()
         return False
@@ -600,32 +574,47 @@ def plan(
     plan_files = validate_plan_files(Path(plan_dir))
 
     if plan_files:
-        console.info(f"Found {len(plan_files)} plan file(s)")
-        created_numbers, _failed_files = _create_issues_from_plans(
-            provider=provider,
-            config=config,
-            plan_files=plan_files,
-            repo_root=repo_root,
-        )
-        if created_numbers:
-            stop_title_keeper()
-            offer_result = _finalize_issues(
+        # Strict gate — invalid plans (missing complexity / bad title prefix)
+        # never silently become issues. ``None`` (aborted) or ``[]`` (all invalid)
+        # take the preserve-then-bail else branch below; the helper already
+        # surfaced the reason loudly.
+        selected = _select_valid_plans(Path(plan_dir), plan_files, yolo=resolved_yolo)
+        if selected:
+            plan_files = selected
+            console.info(f"Found {len(plan_files)} plan file(s)")
+            created_numbers, _failed_files = _create_issues_from_plans(
                 provider=provider,
                 config=config,
-                issue_numbers=created_numbers,
-                ai_tool=resolved_tool,
-                model=resolved_model,
-                usage=usage,
+                plan_files=plan_files,
                 repo_root=repo_root,
-                planning_worktree=planning_worktree,
-                effort=resolved_effort,
-                yolo=resolved_yolo,
             )
-            _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
-            if offer_result is not None:
-                return offer_result
-            return True
-        console.warn("No issues were created from plan files.")
+            if created_numbers:
+                stop_title_keeper()
+                offer_result = _finalize_issues(
+                    provider=provider,
+                    config=config,
+                    issue_numbers=created_numbers,
+                    ai_tool=resolved_tool,
+                    model=resolved_model,
+                    usage=usage,
+                    repo_root=repo_root,
+                    planning_worktree=planning_worktree,
+                    effort=resolved_effort,
+                    yolo=resolved_yolo,
+                )
+                _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+                if offer_result is not None:
+                    return offer_result
+                return True
+            console.warn("No issues were created from plan files.")
+        else:
+            # Strict gate rejected the batch (all invalid, or the user aborted a
+            # partial run). Preserve the generated files — the helper already
+            # surfaced the reason — so a validation miss doesn't force a full
+            # AI re-planning run.
+            _preserve_generated_plans(plan_dir, repo_root, planning_worktree)
+            stop_title_keeper()
+            return False
     else:
         console.warn("No plan files found.")
         console.hint("The AI session may not have produced any output.")
@@ -1053,3 +1042,53 @@ def _cleanup_plan_dir(plan_dir: str) -> None:
     """Remove the temporary plan directory."""
     with contextlib.suppress(Exception):
         shutil.rmtree(plan_dir, ignore_errors=True)
+
+
+def _preserve_generated_plans(
+    plan_dir: str,
+    repo_root: Path | None,
+    planning_worktree: Path | None,
+) -> None:
+    """Salvage generated ``PLAN*.md`` before the normal cleanup, then clean up.
+
+    Used when the strict gate (:func:`_select_valid_plans`) rejects a batch — every
+    file failed validation, or the user aborted a partial run. Deleting the plan
+    dir/worktree outright would discard output the user can often repair by hand (a
+    missing ``## Complexity`` header is a one-line edit), forcing a full AI
+    re-planning session for a trivial fix. So copy the files to a stable temp dir
+    first — the same copy-then-clean approach :func:`_warn_token_extraction` uses
+    for transcripts — point the user at them, and only then run the usual cleanup,
+    which keeps the worktree/temp dir from lingering.
+    """
+    generated = discover_plan_files(Path(plan_dir))
+    if not generated:
+        # Nothing to salvage — the usual cleanup can run unconditionally.
+        _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+        return
+
+    try:
+        preserved = Path(tempfile.mkdtemp(prefix="wade-plans-"))
+        for plan_file in generated:
+            shutil.copy2(plan_file, preserved / plan_file.name)
+    except OSError:
+        # A copy failed after mkdtemp, so the temp dir may hold only part of the
+        # batch. Retain the original plan dir/worktree instead of deleting it —
+        # never trade a partial salvage for the intact source — and point the
+        # user at the untouched originals still sitting in ``plan_dir``.
+        logger.warning("plan.preserve_generated_failed", exc_info=True)
+        _report_preserved_plans(len(generated), Path(plan_dir))
+        return
+
+    # Every file copied cleanly — the stable copy now stands in for the source,
+    # so the normal cleanup can remove the worktree/temp dir.
+    _report_preserved_plans(len(generated), preserved)
+    _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+
+
+def _report_preserved_plans(count: int, location: Path) -> None:
+    """Point the user at the ``count`` salvaged plan files under ``location``."""
+    console.info(
+        f"Preserved {count} generated plan file(s) — fix the reported "
+        "errors and re-run `wade plan` instead of regenerating from scratch."
+    )
+    console.hint(f"Plan files: {location}")
