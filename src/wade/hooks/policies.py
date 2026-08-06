@@ -26,10 +26,11 @@ import os
 import posixpath
 import re
 import shlex
-import stat as stat_module
 from pathlib import Path
 
 from crossby.hooks.runtime import HookDecision, HookEvent
+
+from wade.utils import markers
 
 __all__ = [
     "GUARD_NAMES",
@@ -44,48 +45,33 @@ __all__ = [
 # are PreToolUse write guards; ``session-complete`` is a Stop guard.
 GUARD_NAMES = ("worktree", "plan", "session-complete")
 
-# Relative path of the marker that records the Stop guard already nudged this
-# worktree. Lives under ``.wade/`` (gitignored per-session). The read side lives
-# in :func:`session_complete`; the ``wade-hook`` CLI writes it after a block so
-# the nudge is single-shot for *every* tool — not only Claude, which is the only
-# tool that sends ``stop_hook_active``.
-_STOP_NUDGE_MARKER = ".wade/stop-nudged"
+# Name of the single-shot flag marker (under ``.wade/``, gitignored per-session)
+# that records the Stop guard already nudged this worktree. Unlike the sha-keyed
+# ``done`` marker it is a plain single-shot flag, so it rides the generic
+# ``flag_marker_*`` primitives in :mod:`wade.utils.markers` — sharing the
+# race-safe dir-fd handling so the two implementations cannot drift. The read
+# side lives in :func:`session_complete`; the ``wade-hook`` CLI writes it after a
+# block so the nudge is single-shot for *every* tool — not only Claude, which is
+# the only tool that sends ``stop_hook_active``.
+_STOP_NUDGE_NAME = "stop-nudged"
 
 
 def stop_nudge_marker_path(worktree_root: Path) -> Path:
     """Absolute path of the Stop-guard single-shot marker for ``worktree_root``."""
-    return worktree_root / _STOP_NUDGE_MARKER
-
-
-def _dir_fd_supported() -> bool:
-    """True when the platform can open a no-follow dir handle for ``*at`` calls."""
-    return hasattr(os, "O_DIRECTORY") and os.stat in os.supports_dir_fd
+    return markers.flag_marker_path(worktree_root, _STOP_NUDGE_NAME)
 
 
 def stop_nudge_present(worktree_root: Path) -> bool:
     """True if a *trusted* single-shot marker exists — race-safe against symlinks.
 
-    Opens ``.wade`` itself with ``O_DIRECTORY | O_NOFOLLOW`` (so a symlinked
-    ``.wade`` fails outright) and stats the marker relative to that directory
-    handle without following symlinks. Using a handle rather than re-resolving
-    the path closes the TOCTOU window where ``.wade`` is swapped for a symlink
-    between the check and the read. On platforms without ``dir_fd`` support the
-    marker is ignored (treated as absent) rather than followed unsafely — a
-    missed marker only costs one extra nudge, which is harmless.
+    Delegates to :func:`wade.utils.markers.flag_marker_present`, which opens
+    ``.wade`` with ``O_DIRECTORY | O_NOFOLLOW`` and stats the marker relative to
+    that handle without following symlinks (a symlinked ``.wade`` fails
+    outright). On platforms without ``dir_fd`` support the marker is treated as
+    absent rather than followed unsafely — a missed marker only costs one extra
+    nudge, which is harmless.
     """
-    if not _dir_fd_supported():
-        return False
-    marker = stop_nudge_marker_path(worktree_root)
-    dir_fd = None
-    try:
-        dir_fd = os.open(marker.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        st = os.stat(marker.name, dir_fd=dir_fd, follow_symlinks=False)
-    except OSError:
-        return False
-    finally:
-        if dir_fd is not None:
-            os.close(dir_fd)
-    return stat_module.S_ISREG(st.st_mode)
+    return markers.flag_marker_present(worktree_root, _STOP_NUDGE_NAME)
 
 
 # Plan-session artifacts an agent may write while planning (basenames + globs).
@@ -718,22 +704,40 @@ def _is_plan_artifact_path(resolved: Path, root: Path) -> bool:
     return _is_plan_artifact(relative.as_posix())
 
 
-def session_complete(event: HookEvent, *, worktree_root: Path) -> HookDecision:
-    """Stop-hook guard: nudge (once) if the session's closing artifacts are absent.
+def session_complete(
+    event: HookEvent,
+    *,
+    worktree_root: Path,
+    commits_ahead: int = 0,
+    done_marker_present: bool = False,
+) -> HookDecision:
+    """Stop-hook guard: nudge (once) to finalize via ``done`` when work is unfinished.
 
     Returns a ``deny`` decision — which the Stop path renders as *block the stop
-    and feed the reason back* — when ``PR-SUMMARY.md`` is missing from the
-    worktree, so the workflow's closing steps are enforced rather than merely
-    requested by the skill. Otherwise allow.
+    and feed the reason back* — when the branch has commits ahead of its base yet
+    no current ``done`` marker exists, so the workflow's closing step (running
+    ``done``) is enforced rather than merely requested by the skill. Otherwise
+    allow.
 
-    **Single-shot** (never loop the session), via two independent signals:
+    Keyed on the **same completion fact** the ``done`` command writes — the
+    sha-keyed ``.wade/done@<HEAD>`` marker — so there is no split-brain between
+    "did the closing artifact exist" (the old PR-SUMMARY check) and "did the
+    session actually finalize". The git facts (``commits_ahead`` /
+    ``done_marker_present``) are computed by the ``wade-hook`` CLI and passed in,
+    keeping this predicate pure and off the hot per-edit import path.
+
+    Allow conditions, in order:
 
     - ``event.stop_hook_active`` — Claude sets this once its Stop hook has fired
-      and blocked; other tools do not send it.
-    - the ``.wade/stop-nudged`` marker (see :func:`stop_nudge_marker_path`) — the
-      ``wade-hook`` CLI writes it after this guard blocks, so the second Stop is
-      allowed on *any* tool, not just Claude. This predicate only *reads* the
-      marker; the CLI owns the write (keeping this a side-effect-free decision).
+      and blocked; other tools do not send it. Prevents looping.
+    - ``commits_ahead == 0`` — no authored work to finalize (adopts #318's
+      higher-signal condition, so an early "stopping to ask a question" turn does
+      not trigger the nudge).
+    - ``done_marker_present`` — the session was already finalized via ``done``.
+    - the ``.wade/stop-nudged`` single-shot marker — the ``wade-hook`` CLI writes
+      it after this guard blocks, so the second Stop is allowed on *any* tool,
+      not just Claude. This predicate only *reads* the marker; the CLI owns the
+      write (keeping this a side-effect-free decision).
 
     The message is deliberately ignorable so a legitimate pause (e.g. stopping to
     ask the user a question) costs at most one gentle nudge.
@@ -744,16 +748,18 @@ def session_complete(event: HookEvent, *, worktree_root: Path) -> HookDecision:
     if event.stop_hook_active:
         return HookDecision.allow()
 
-    if (worktree_root / "PR-SUMMARY.md").is_file():
-        return HookDecision.allow()
+    if commits_ahead == 0:
+        return HookDecision.allow()  # no work to finalize (#318 signal)
+
+    if done_marker_present:
+        return HookDecision.allow()  # completed via done
 
     if stop_nudge_present(worktree_root):
         return HookDecision.allow()  # already nudged once this worktree
 
     return HookDecision.deny(
-        "Before finishing: PR-SUMMARY.md is not present in the worktree. If your work "
-        "is complete, write PR-SUMMARY.md and run the session's `done` command "
-        "(`wade implementation-session done` or `wade review-pr-comments-session done`) "
-        "to sync, push, and open/update the PR. If you are pausing to ask a question "
-        "or are still mid-task, disregard this and continue."
+        "Before finishing: run `wade implementation-session done` (or "
+        "`wade review-pr-comments-session done`) to sync, push, and finalize the "
+        "PR. If you are pausing to ask a question or are still mid-task, disregard "
+        "this and continue."
     )

@@ -189,6 +189,43 @@ class TestValidateConfig:
         result = validate_config(tmp_path)
         assert result.is_valid, f"Errors: {result.errors}"
 
+    def test_valid_done_section(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text(
+            "version: 2\n"
+            "done:\n"
+            "  require_pr_summary: true\n"
+            "  require_sync: false\n"
+            "  require_review: true\n"
+            "  require_resolved_threads: false\n"
+            "  pre_push_backstop: true\n"
+        )
+        result = validate_config(tmp_path)
+        assert result.is_valid, f"Errors: {result.errors}"
+
+    def test_unknown_done_key_rejected(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\ndone:\n  require_everything: true\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("done.require_everything" in e for e in result.errors)
+
+    def test_non_bool_done_value_rejected(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\ndone:\n  require_sync: sometimes\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("done.require_sync" in e and "true or false" in e for e in result.errors)
+
+    def test_null_done_value_rejected(self, tmp_path: Path) -> None:
+        # An explicit null (`require_sync:` with no value) is a user mistake, not
+        # an unset default — `wade check` must flag it as a non-bool.
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\ndone:\n  require_sync:\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("done.require_sync" in e and "true or false" in e for e in result.errors)
+
     def test_valid_full_config(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"
         config.write_text(

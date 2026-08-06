@@ -21,8 +21,27 @@ from wade.services.ai_resolution import (
 from wade.services.delegation_service import delegate, resolve_mode
 from wade.skills.installer import load_prompt_template
 from wade.ui.console import console
+from wade.utils.markers import write_marker
 
 logger = structlog.get_logger()
+
+
+def _mark_reviewed() -> None:
+    """Record that ``wade review implementation`` ran for the current commit.
+
+    Writes a sha-keyed ``.wade/reviewed@<HEAD>`` marker (best-effort) that the
+    ``done`` review-ran gate later checks. Because it is keyed to the HEAD sha,
+    any commit made while addressing findings invalidates it — forcing a
+    re-review. This records that the command *ran for this sha*, not that
+    findings were addressed (documented honestly; #355 relaxes the phrasing).
+    """
+    try:
+        repo_root = git_repo.get_repo_root(Path.cwd())
+        head = git_repo.rev_parse(repo_root, "HEAD")
+    except GitError:
+        logger.debug("review.reviewed_marker_skipped", exc_info=True)
+        return
+    write_marker(repo_root, "reviewed", head)
 
 
 def _load_review_config(
@@ -249,6 +268,10 @@ def review_implementation(
     if not diff_content:
         label = "staged changes" if staged else "changes"
         console.warn(f"No {label} to review.")
+        # "No diff to review" still counts as review having run for this sha —
+        # there is nothing to critique, so record the marker so `done` isn't
+        # falsely blocked on a review that had no work to do.
+        _mark_reviewed()
         return DelegationResult(
             success=True,
             feedback=f"No {label} to review.",
@@ -259,7 +282,7 @@ def review_implementation(
     template = load_prompt_template("review-code.md")
     prompt = template.replace("{diff_content}", diff_content)
 
-    return _run_review_delegation(
+    result = _run_review_delegation(
         prompt,
         "review_implementation",
         config=config,
@@ -272,3 +295,8 @@ def review_implementation(
         model_explicit=model_explicit,
         effort_explicit=effort_explicit,
     )
+    # Record the review-ran marker on any non-hard-failure result (success),
+    # keyed to the current HEAD sha. The `done` review-ran gate reads it.
+    if result.success:
+        _mark_reviewed()
+    return result

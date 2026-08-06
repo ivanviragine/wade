@@ -14,6 +14,7 @@ from wade.git import repo as git_repo
 from wade.git import sync as git_sync
 from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
+from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.implementation_service._shared import (
     extract_issue_from_branch,
@@ -38,6 +39,7 @@ from wade.services.implementation_service.usage_tracking import IMPL_USAGE_MARKE
 from wade.services.task_service import remove_in_progress_label
 from wade.ui import prompts
 from wade.ui.console import console
+from wade.utils import markers
 from wade.utils.body_markers import build_marked_block, update_body_preserving_markers
 from wade.utils.markdown import remove_marker_block
 
@@ -48,6 +50,10 @@ __all__ = [
     "done",
 ]
 
+# Placeholder sentinels from templates/skills/.../reference/pr-summary-format.md.
+# Their presence means the file is still the template stub, not a real summary.
+_PR_SUMMARY_PLACEHOLDERS = ("[high-level summary", "[optional:")
+
 
 def done(
     target: str | None = None,
@@ -55,12 +61,26 @@ def done(
     no_close: bool = False,
     draft: bool = False,
     project_root: Path | None = None,
+    *,
+    session_type: str = "implementation",
+    skip_review: bool = False,
 ) -> bool:
-    """Complete implementation session — push the branch and finalize the PR.
+    """Complete a session — run the completion gates, push, and finalize the PR.
 
-    Detects the current branch, extracts the issue number, and delegates to
-    ``_done_via_pr`` (PR is the only merge strategy since #357 retired
-    ``direct``).
+    Detects the current branch, extracts the issue number, runs the completion
+    gates (parameterized by ``session_type``), and delegates to ``_done_via_pr``
+    (PR is the only merge strategy since #357 retired ``direct``).
+
+    Both ``implementation-session done`` and ``review-pr-comments-session done``
+    call this same service, so the gate set branches on ``session_type``:
+
+    - ``"implementation"`` — PR-SUMMARY, review-ran (vs pre-sync HEAD), then
+      auto-sync (may advance HEAD).
+    - ``"review-pr-comments"`` — unresolved review threads, then review-ran.
+
+    After all gates pass, ``_done_via_pr`` writes ``.wade/done@<post-sync HEAD>``
+    immediately before pushing, so ``done``'s own push satisfies the pre-push
+    backstop and the Stop hook sees the session as finalized.
 
     Args:
         target: Optional issue number, worktree name, or plan file.
@@ -68,6 +88,9 @@ def done(
         no_close: Don't close the issue on merge.
         draft: Create PR as draft.
         project_root: Repository root.
+        session_type: ``"implementation"`` or ``"review-pr-comments"`` — selects
+            the gate set.
+        skip_review: Escape hatch for the review-ran gate (``--skip-review``).
     """
     config = load_config(project_root)
     provider = get_provider(config)
@@ -207,6 +230,36 @@ def done(
             if stored_base and git_branch.branch_exists(repo_root, stored_base):
                 main_branch = stored_base
 
+    # Completion gates run AFTER the clean + tracked-managed gates and BEFORE
+    # finalize. The worktree root is where PR-SUMMARY.md and .wade/ markers live.
+    worktree_root = wt_path or cwd
+
+    # The review-ran gate checks the sha the agent actually reviewed — the
+    # PRE-SYNC HEAD. Capturing it before the (impl-only) auto-sync means a clean
+    # main-merge does not spuriously invalidate the review just performed.
+    # Resolve ``branch`` (not ``cwd``'s HEAD), matching ``_write_done_marker``: a
+    # ``done <target>`` run from the main checkout leaves ``cwd`` there, where
+    # HEAD is not the branch tip — resolving the branch ref keeps both shas
+    # consistent so the gate compares against the same commit the marker keys to.
+    try:
+        pre_sync_head = git_repo.rev_parse(cwd, branch)
+    except GitError:
+        console.error("Cannot resolve the branch tip to run the completion gates.")
+        return False
+
+    if not _run_completion_gates(
+        session_type=session_type,
+        config=config,
+        provider=provider,
+        repo_root=repo_root,
+        worktree_root=worktree_root,
+        branch=branch,
+        main_branch=main_branch,
+        pre_sync_head=pre_sync_head,
+        skip_review=skip_review,
+    ):
+        return False
+
     console.rule(f"done #{issue_number}")
 
     ok = _done_via_pr(
@@ -240,6 +293,231 @@ def done(
     return True
 
 
+# ---------------------------------------------------------------------------
+# Completion gates (#349) — parameterized by session type
+# ---------------------------------------------------------------------------
+
+
+def _run_completion_gates(
+    *,
+    session_type: str,
+    config: ProjectConfig,
+    provider: AbstractTaskProvider,
+    repo_root: Path,
+    worktree_root: Path,
+    branch: str,
+    main_branch: str,
+    pre_sync_head: str,
+    skip_review: bool,
+) -> bool:
+    """Run the gate set for ``session_type`` in the fixed order. True ⇒ proceed.
+
+    Order matters: auto-sync (implementation only) can advance HEAD via a merge
+    commit, so the review-ran gate — which is keyed to the sha the agent actually
+    reviewed — runs against the **pre-sync HEAD**, before sync. A clean,
+    zero-conflict merge of main is therefore accepted without a fresh review (a
+    main-merge is not new authored work).
+    """
+    if session_type == "review-pr-comments":
+        if not _gate_resolved_threads(config, provider, repo_root, branch):
+            return False
+        return _gate_review_ran(config, worktree_root, pre_sync_head, skip_review)
+
+    # Default: implementation session.
+    if not _gate_pr_summary(config, worktree_root):
+        return False
+    if not _gate_review_ran(config, worktree_root, pre_sync_head, skip_review):
+        return False
+    return _gate_sync(config, repo_root, worktree_root, branch, main_branch, session_type)
+
+
+def _is_placeholder_pr_summary(text: str) -> bool:
+    """True when PR-SUMMARY.md is empty, headings-only, or still a template stub."""
+    stripped = text.strip()
+    if not stripped:
+        return True
+    lowered = stripped.lower()
+    if any(ph in lowered for ph in _PR_SUMMARY_PLACEHOLDERS):
+        return True
+    # Drop heading lines (``## …``), horizontal rules (``---``), and blanks — if
+    # nothing substantive remains, it is a headings-only stub, not a real summary.
+    substantive = [
+        line
+        for line in stripped.splitlines()
+        if line.strip() and not line.lstrip().startswith("#") and set(line.strip()) != {"-"}
+    ]
+    return not substantive
+
+
+def _gate_pr_summary(config: ProjectConfig, worktree_root: Path) -> bool:
+    """Refuse when PR-SUMMARY.md is missing, empty, or a template placeholder."""
+    if not config.done.require_pr_summary:
+        return True
+    path = worktree_root / "PR-SUMMARY.md"
+    if not path.is_file():
+        console.error("PR-SUMMARY.md is missing — the PR would have no description.")
+        console.hint("Write PR-SUMMARY.md in the worktree root, then re-run done.")
+        console.hint("Bypass: set `done.require_pr_summary: false` in .wade.yml.")
+        return False
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        console.error(f"Could not read PR-SUMMARY.md: {exc}")
+        return False
+    if _is_placeholder_pr_summary(text):
+        console.error("PR-SUMMARY.md is empty or still contains template placeholders.")
+        console.hint("Replace the placeholder text with a real summary of your changes.")
+        console.hint("Bypass: set `done.require_pr_summary: false` in .wade.yml.")
+        return False
+    return True
+
+
+def _gate_review_ran(
+    config: ProjectConfig,
+    worktree_root: Path,
+    head_sha: str,
+    skip_review: bool,
+) -> bool:
+    """Refuse unless ``wade review implementation`` ran for ``head_sha``.
+
+    Auto-skipped when reviews are disabled (``review_implementation.enabled:
+    false``) — the marker is not written then either. Hatches: ``--skip-review``
+    and ``done.require_review: false``.
+    """
+    if config.ai.review_implementation.enabled is False:
+        return True  # reviews disabled project-wide → gate off (no marker written)
+    if skip_review or not config.done.require_review:
+        return True
+    if markers.marker_present(worktree_root, "reviewed", head_sha):
+        return True
+    console.error("Review has not run for the current commit.")
+    console.hint("Run `wade review implementation` (or pass --skip-review), then re-run done.")
+    console.detail(
+        "A clean merge of main is accepted without re-review, but new commits "
+        "require a fresh review — the marker is keyed to the commit sha."
+    )
+    console.hint("Bypass: set `done.require_review: false` in .wade.yml.")
+    return False
+
+
+def _behind_count(repo_root: Path, main_branch: str, branch: str) -> int | None:
+    """Commits on the base that ``branch`` lacks — how far *behind* it is.
+
+    ⚠ Argument order: ``commits_ahead(repo, base_in_branch_position, branch)`` —
+    the base ref (``origin/<main>`` or the local ``<main>``) goes in the *branch*
+    position, so it counts commits present on the base but not on the session
+    branch. This is the OPPOSITE role assignment from the Stop hook's ahead-count
+    (``_stop_git_facts``), which puts the session branch in the branch position.
+    Returns None when neither base ref resolves.
+    """
+    for base in (f"origin/{main_branch}", main_branch):
+        try:
+            return git_branch.commits_ahead(repo_root, base, branch)
+        except GitError:
+            continue
+    return None
+
+
+def _gate_sync(
+    config: ProjectConfig,
+    repo_root: Path,
+    worktree_root: Path,
+    branch: str,
+    main_branch: str,
+    session_type: str,
+) -> bool:
+    """Auto-sync a branch behind main; refuse only on conflict."""
+    if not config.done.require_sync:
+        return True
+
+    with contextlib.suppress(GitError):
+        git_sync.fetch_origin(repo_root)
+
+    behind = _behind_count(repo_root, main_branch, branch)
+    if behind is None:
+        console.warn(
+            f"Could not determine whether '{branch}' is behind '{main_branch}' "
+            "— skipping the sync gate."
+        )
+        return True
+    if behind == 0:
+        return True
+
+    console.step(f"Branch is {behind} commit(s) behind {main_branch} — auto-syncing...")
+    # Reuse the existing sync service rather than merging inline (planning
+    # decision: auto-sync, refuse only on conflict).
+    from wade.services.implementation_service.sync import sync as do_sync
+
+    result = do_sync(
+        main_branch=main_branch,
+        session_type=session_type,
+        project_root=worktree_root,
+    )
+    if result.success:
+        console.success(f"Synced with {main_branch}.")
+        return True
+
+    session_cmd = "review-pr-comments" if session_type == "review-pr-comments" else "implementation"
+    if result.conflicts:
+        console.error(f"Sync hit conflicts with {main_branch} — resolve them, then re-run done.")
+        console.hint(
+            f"Resolve via `wade {session_cmd}-session sync`, fix the conflicts, then re-run done."
+        )
+    else:
+        console.error(f"Could not sync with {main_branch}.")
+        console.hint(f"Run `wade {session_cmd}-session sync`, then re-run done.")
+    console.hint("Bypass: set `done.require_sync: false` in .wade.yml.")
+    return False
+
+
+def _gate_resolved_threads(
+    config: ProjectConfig,
+    provider: AbstractTaskProvider,
+    repo_root: Path,
+    branch: str,
+) -> bool:
+    """Refuse on unresolved PR review threads; a transient lookup is non-blocking.
+
+    Consistent with #357 B1/B2 typed-lookup handling: a provider/lookup error is
+    logged and warned, never blocking — a flaky ``gh`` call must not trap
+    completion. Only an actually-fetched, non-empty unresolved-thread list
+    refuses.
+    """
+    if not config.done.require_resolved_threads:
+        return True
+
+    from wade.models.review import filter_unresolved_threads
+
+    try:
+        lookup = git_pr.get_pr_for_branch(repo_root, branch)
+    except Exception:
+        console.warn("Could not look up the PR to check review threads — skipping the thread gate.")
+        logger.debug("done.thread_gate_pr_lookup_failed", exc_info=True)
+        return True
+    if lookup.lookup_failed or not lookup.is_open or lookup.pr is None:
+        # Transient failure or no open PR — non-blocking (nothing to gate on yet).
+        return True
+
+    pr_number = lookup.pr.number
+    try:
+        threads = provider.get_pr_review_threads(pr_number)
+    except Exception as exc:
+        console.warn(f"Could not fetch review threads (non-blocking): {exc}")
+        logger.debug("done.thread_gate_fetch_failed", exc_info=True)
+        return True
+
+    unresolved = filter_unresolved_threads(threads)
+    if unresolved:
+        console.error(f"{len(unresolved)} unresolved review thread(s) remain.")
+        console.hint(
+            "Resolve each via `wade review-pr-comments-session resolve <thread-id>`, "
+            "then re-run done."
+        )
+        console.hint("Bypass: set `done.require_resolved_threads: false` in .wade.yml.")
+        return False
+    return True
+
+
 # A bare "rejected" is intentionally NOT here: it matches every rejection git
 # reports (e.g. a pre-receive hook / branch-protection "push rejected"), which a
 # force-push cannot fix — offering the force-with-lease recovery menu for those
@@ -260,10 +538,26 @@ def _is_non_fast_forward(message: str) -> bool:
     return any(sig in lowered for sig in _NON_FAST_FORWARD_SIGNALS)
 
 
+def _write_done_marker(marker_root: Path, repo_root: Path, branch: str) -> None:
+    """Write ``.wade/done@<branch tip>`` best-effort (clears any prior ``done@*``).
+
+    Resolving ``branch`` (not HEAD) keeps the key correct even when ``done
+    <target>`` runs from the main checkout, where ``repo_root``'s HEAD is not the
+    branch tip.
+    """
+    try:
+        pushed_sha = git_repo.rev_parse(repo_root, branch)
+    except GitError:
+        logger.warning("done.marker_write_head_failed", exc_info=True)
+        return
+    markers.write_marker(marker_root, "done", pushed_sha)
+
+
 def _push_branch_with_recovery(
     repo_root: Path,
     branch: str,
     worktree_path: Path | None,
+    marker_root: Path,
 ) -> bool:
     """Push *branch*, recovering interactively from a non-fast-forward rejection.
 
@@ -271,7 +565,20 @@ def _push_branch_with_recovery(
     We fetch, report the divergence, and — only behind an explicit confirm —
     offer to merge the remote in and retry, or force-push with
     ``--force-with-lease``. wade never force-pushes silently (C4).
+
+    Owns the ``done`` marker lifecycle so the pre-push backstop and Stop hook
+    stay consistent with what is actually on the remote:
+
+    - The marker is written **immediately before each push attempt** (so the
+      worktree's own pre-push backstop passes), keyed to the branch tip being
+      pushed. A recovery merge advances that tip, so the marker is **re-written**
+      for the new sha before the retry — otherwise the backstop would reject
+      ``done``'s own recovery push.
+    - Every failure path **clears** the marker: if nothing reached the remote,
+      no stale ``done@<sha>`` may linger (which would tell the Stop hook the
+      session finished and let the next push skip the backstop).
     """
+    _write_done_marker(marker_root, repo_root, branch)
     try:
         git_repo.push_branch(repo_root, branch, set_upstream=True)
         console.success("Branch pushed.")
@@ -279,6 +586,7 @@ def _push_branch_with_recovery(
     except GitError as e:
         if not _is_non_fast_forward(str(e)):
             console.error(f"Push failed: {e}")
+            markers.clear_markers(marker_root, "done")
             return False
 
     console.warn(f"Push rejected — '{branch}' has diverged from its remote.")
@@ -296,6 +604,7 @@ def _push_branch_with_recovery(
             "Remote branch has diverged. Resolve it manually "
             f"(e.g. `git -C {merge_cwd} pull --no-rebase`), then re-run done."
         )
+        markers.clear_markers(marker_root, "done")
         return False
 
     choice = prompts.select(
@@ -311,22 +620,31 @@ def _push_branch_with_recovery(
             merge_result = git_sync.merge_branch(merge_cwd, f"origin/{branch}")
             if not merge_result.success:
                 console.error("Merge conflicts with the remote branch — resolve them, then re-run.")
+                markers.clear_markers(marker_root, "done")
                 return False
+            # The merge advanced the branch tip — re-key the marker to it so the
+            # retry push satisfies the backstop.
+            _write_done_marker(marker_root, repo_root, branch)
             git_repo.push_branch(repo_root, branch, set_upstream=True)
             console.success("Merged the remote and pushed.")
             return True
         except GitError as e:
             console.error(f"Could not merge and push: {e}")
+            markers.clear_markers(marker_root, "done")
             return False
     if choice == 1:
+        # Force-push sends the same local tip, so the marker from the initial
+        # write still matches — no re-write needed.
         try:
             git_repo.push_branch(repo_root, branch, set_upstream=True, force=True)
             console.success("Force-pushed with lease.")
             return True
         except GitError as e:
             console.error(f"Force push failed: {e}")
+            markers.clear_markers(marker_root, "done")
             return False
     console.info("Push cancelled — the branch was not updated on the remote.")
+    markers.clear_markers(marker_root, "done")
     return False
 
 
@@ -359,9 +677,14 @@ def _done_via_pr(
         return False
 
     # Push branch (with non-fast-forward divergence recovery — never a silent
-    # force-push).
+    # force-push). `_push_branch_with_recovery` owns the `done` marker: it writes
+    # `.wade/done@<pushed sha>` right before each push (so `done`'s own push
+    # satisfies the pre-push backstop and the Stop hook reads the session as
+    # finalized) and clears it on any push failure. A new commit changes the sha
+    # and invalidates the marker.
+    marker_root = worktree_path or repo_root
     console.step("Pushing branch...")
-    if not _push_branch_with_recovery(repo_root, branch, worktree_path):
+    if not _push_branch_with_recovery(repo_root, branch, worktree_path, marker_root):
         return False
 
     # Check for existing PR (expected from plan or implement bootstrap).

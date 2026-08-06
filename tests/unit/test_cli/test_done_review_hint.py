@@ -124,66 +124,26 @@ class TestPlanSessionDoneReviewHint:
 # ---------------------------------------------------------------------------
 
 
-class TestImplementationSessionDoneReviewHint:
-    """Review hint in ``wade implementation-session done`` output."""
+class TestImplementationSessionDoneNoReviewAdvisory:
+    """The post-done review advisory was removed (#349).
 
-    @patch("wade.config.loader.load_config")
+    The review-ran completion gate inside ``done()`` now enforces that
+    ``wade review implementation`` ran before ``done`` can succeed, so the old
+    "review not confirmed — run wade review implementation" advisory is redundant
+    (and would contradict the gate). On success ``done`` only emits the doc-pass
+    advisory + the SESSION COMPLETE message.
+    """
+
     @patch("wade.services.implementation_service.done", return_value=True)
-    def test_hint_shown_when_review_enabled(
-        self,
-        _mock_done: MagicMock,
-        mock_load_config: MagicMock,
-    ) -> None:
-        mock_load_config.return_value = _config(review_impl_enabled=True)
+    def test_no_review_advisory_on_success(self, _mock_done: MagicMock) -> None:
         result = runner.invoke(app, ["implementation-session", "done"])
         assert result.exit_code == 0
-        assert "wade review implementation" in result.output
-
-    @patch("wade.config.loader.load_config")
-    @patch("wade.services.implementation_service.done", return_value=True)
-    def test_hint_shown_when_review_not_explicitly_set(
-        self,
-        _mock_done: MagicMock,
-        mock_load_config: MagicMock,
-    ) -> None:
-        mock_load_config.return_value = _config(review_impl_enabled=None)
-        result = runner.invoke(app, ["implementation-session", "done"])
-        assert result.exit_code == 0
-        assert "wade review implementation" in result.output
-
-    @patch("wade.config.loader.load_config")
-    @patch("wade.services.implementation_service.done", return_value=True)
-    def test_hint_hidden_when_review_disabled(
-        self,
-        _mock_done: MagicMock,
-        mock_load_config: MagicMock,
-    ) -> None:
-        mock_load_config.return_value = _config(review_impl_enabled=False)
-        result = runner.invoke(app, ["implementation-session", "done"])
-        assert result.exit_code == 0
-        assert "wade review implementation" not in result.output
+        assert "review not confirmed" not in result.output.lower()
+        assert "SESSION COMPLETE" in result.output
 
     @patch("wade.services.implementation_service.done", return_value=False)
-    def test_no_hint_when_done_fails(
-        self,
-        _mock_done: MagicMock,
-    ) -> None:
-        """When done() returns False, no hint should appear."""
+    def test_no_output_when_done_fails(self, _mock_done: MagicMock) -> None:
+        """When done() returns False, none of the closing advisories appear."""
         result = runner.invoke(app, ["implementation-session", "done"])
         assert result.exit_code == 1
-        assert "wade review implementation" not in result.output
-
-    @patch(
-        "wade.config.loader.load_config",
-        side_effect=Exception("config load failed"),
-    )
-    @patch("wade.services.implementation_service.done", return_value=True)
-    def test_hint_skipped_on_config_load_failure(
-        self,
-        _mock_done: MagicMock,
-        _mock_load_config: MagicMock,
-    ) -> None:
-        """Config load failure must not break a successful done."""
-        result = runner.invoke(app, ["implementation-session", "done"])
-        assert result.exit_code == 0
-        assert "wade review implementation" not in result.output
+        assert "SESSION COMPLETE" not in result.output

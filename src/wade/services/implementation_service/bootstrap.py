@@ -313,8 +313,9 @@ def _install_guard_hooks(
 def _install_stop_hook(worktree_path: Path) -> None:
     """Install a Stop-hook workflow-completion reminder into each capable tool.
 
-    On session Stop, ``wade hook stop --guard session-complete`` nudges (once) if
-    ``PR-SUMMARY.md`` is missing — enforcing the closing steps rather than relying
+    On session Stop, ``wade hook stop --guard session-complete`` nudges (once)
+    when the session branch has commits ahead of its base and no current
+    ``.wade/done@<HEAD>`` marker — enforcing the closing steps rather than relying
     on the skill checklist. Installed only for tools that fire a blocking Stop
     hook (``supports_stop_hook``), which as of crossby 0.13 is every tool wade
     drives: Copilot joined once its ``agentStop`` event and blocking
@@ -660,9 +661,26 @@ def bootstrap_worktree(
     _install_guard_hooks(worktree_path, guard_type="plan" if plan_mode else "worktree")
 
     # Implement/review sessions (not plan) also get a Stop-hook completion
-    # reminder that enforces writing PR-SUMMARY.md + running `done` before exit.
+    # reminder that nudges the agent to run `done` before exit.
     if not plan_mode:
         _install_stop_hook(worktree_path)
+
+        # ...and the pre-push backstop that makes the `done` gate hard to skip:
+        # a push without a current `.wade/done@<sha>` marker is refused. Optional
+        # (gated on config, graceful-degrades on old git) — must never crash
+        # bootstrap, so any failure is swallowed to a warning.
+        if config.done.pre_push_backstop:
+            from wade.skills.installer import install_pre_push_backstop
+
+            try:
+                if not install_pre_push_backstop(worktree_path):
+                    logger.info("implementation.pre_push_backstop_skipped", path=str(worktree_path))
+            except Exception:
+                logger.warning(
+                    "implementation.pre_push_backstop_error",
+                    path=str(worktree_path),
+                    exc_info=True,
+                )
 
     # Write worktree gitignore block AFTER all file generation so the entry
     # list is complete (skills, hooks, settings, pointer are all in place).

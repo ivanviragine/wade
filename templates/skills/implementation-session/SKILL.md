@@ -108,9 +108,12 @@ git operations yourself.
 wade implementation-session done
 ```
 
-`done` pushes the branch and updates the existing draft PR (appends a summary,
-marks it ready). The worktree is **not** deleted — `implement` cleans it up after
-merge. This is a **mandatory** step; if it fails, debug and fix it — do NOT bypass.
+`done` is the **authoritative completion gate**: it requires PR-SUMMARY and a
+review for this commit; it auto-syncs a branch behind `main`, refusing only on
+conflict (bypass: `--skip-review`, or a `done.*` toggle in `.wade.yml`). A pre-push
+hook blocks pushes with no `.wade/done@<sha>` marker (`--no-verify` bypasses it).
+The worktree is **not** deleted (cleaned up after merge). **Mandatory**; if it
+fails, fix the cause, do NOT bypass.
 
 **Step 6 — Present results:** give a brief **workflow recap** (only the steps you
 performed) and **current state** (PR number/URL, that the issue closes on merge,

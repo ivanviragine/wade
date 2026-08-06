@@ -156,6 +156,32 @@ class HooksConfig(BaseModel):
     copy_to_worktree: list[str] = []
 
 
+class DoneConfig(BaseModel):
+    """Completion-gate toggles for the session ``done`` command (#349).
+
+    Every gate defaults **on** — enforcing a complete workflow is the point of
+    the ``done`` gate. Each field is an escape hatch a project can flip off in
+    ``.wade.yml`` when a gate does not fit its flow:
+
+    - ``require_pr_summary`` — refuse when ``PR-SUMMARY.md`` is missing, empty, or
+      still a template placeholder (implementation sessions).
+    - ``require_sync`` — auto-sync a branch behind main, refuse only on conflict
+      (implementation sessions).
+    - ``require_review`` — refuse unless ``wade review implementation`` ran for
+      the current sha (both session types).
+    - ``require_resolved_threads`` — refuse on unresolved PR review threads
+      (review-pr-comments sessions).
+    - ``pre_push_backstop`` — install the per-worktree pre-push git hook that
+      refuses a push lacking a current ``.wade/done@<sha>`` marker.
+    """
+
+    require_pr_summary: bool = True
+    require_sync: bool = True
+    require_review: bool = True
+    require_resolved_threads: bool = True
+    pre_push_backstop: bool = True
+
+
 class ProjectSettings(BaseModel):
     """Core project settings section."""
 
@@ -182,6 +208,7 @@ class ProjectConfig(BaseModel):
     permissions: PermissionsConfig = PermissionsConfig()
     hooks: HooksConfig = HooksConfig()
     knowledge: KnowledgeConfig = KnowledgeConfig()
+    done: DoneConfig = DoneConfig()
 
     # Resolved values (set after loading, not in YAML)
     config_path: str | None = Field(default=None, exclude=True)

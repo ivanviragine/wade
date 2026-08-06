@@ -232,7 +232,9 @@ class TestWorkDoneCommand:
         _git(["commit", "-m", f"feat: complete #{issue_number}"], cwd=worktree_path)
         assert _git(["status", "--porcelain"], cwd=worktree_path).stdout.strip() == ""
 
-        result = _run(["implementation-session", "done"], cwd=worktree_path)
+        # --skip-review bypasses the review-ran completion gate — this contract
+        # exercises the done→PR mechanics, not the review gate (covered by unit tests).
+        result = _run(["implementation-session", "done", "--skip-review"], cwd=worktree_path)
         assert result.returncode == 0
         assert _remote_has_branch(origin_repo, branch_name)
         pr_number = _find_mock_pr_number_by_head(mock_gh_cli["state_file"], branch_name)
@@ -303,7 +305,7 @@ class TestWorkDoneCommand:
         _git(["add", "-A"], cwd=worktree_path)
         _git(["commit", "-m", f"feat: complete #{issue_number}"], cwd=worktree_path)
 
-        result = _run(["implementation-session", "done"], cwd=worktree_path)
+        result = _run(["implementation-session", "done", "--skip-review"], cwd=worktree_path)
         assert result.returncode == 0
 
         pr_number = _find_mock_pr_number_by_head(mock_gh_cli["state_file"], branch_name)

@@ -37,6 +37,10 @@ def _run_done(tmp_path: Path, *, pr_result: bool) -> MagicMock:
         stack.enter_context(patch(f"{_DONE}.git_repo.is_clean", return_value=True))
         stack.enter_context(patch(f"{_DONE}._check_tracked_managed_files", return_value=[]))
         stack.enter_context(patch(f"{_DONE}.git_repo.unskip_worktree_file"))
+        # This test isolates strip-deferral behavior; the completion gates have
+        # their own tests, so stub them out (and the HEAD read they precede).
+        stack.enter_context(patch(f"{_DONE}.git_repo.rev_parse", return_value="deadbeef"))
+        stack.enter_context(patch(f"{_DONE}._run_completion_gates", return_value=True))
         strip = stack.enter_context(patch(f"{_DONE}.strip_worktree_gitignore"))
         stack.enter_context(patch(f"{_DONE}._done_via_pr", return_value=pr_result))
         stack.enter_context(patch(f"{_DONE}.console"))
@@ -80,6 +84,8 @@ class TestDoneDefersStrip:
             stack.enter_context(patch(f"{_DONE}.git_repo.is_clean", return_value=True))
             stack.enter_context(patch(f"{_DONE}._check_tracked_managed_files", return_value=[]))
             stack.enter_context(patch(f"{_DONE}.git_repo.unskip_worktree_file"))
+            stack.enter_context(patch(f"{_DONE}.git_repo.rev_parse", return_value="deadbeef"))
+            stack.enter_context(patch(f"{_DONE}._run_completion_gates", return_value=True))
             stack.enter_context(
                 patch(f"{_DONE}.strip_worktree_gitignore", side_effect=OSError("read-only fs"))
             )

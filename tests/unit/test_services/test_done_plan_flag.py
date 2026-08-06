@@ -106,6 +106,10 @@ def test_done_with_plan_flag_resolves_and_delegates() -> None:
         ),
         patch("wade.services.implementation_service.done.git_repo.is_clean", return_value=True),
         patch(
+            "wade.services.implementation_service.done.git_repo.rev_parse", return_value="deadbeef"
+        ),
+        patch("wade.services.implementation_service.done._run_completion_gates", return_value=True),
+        patch(
             "wade.services.implementation_service.done._done_via_pr", return_value=True
         ) as mock_done,
     ):
@@ -150,6 +154,8 @@ def test_cli_plan_flag_passes_to_service() -> None:
         plan_file=Path("/tmp/PLAN.md"),
         no_close=False,
         draft=False,
+        session_type="implementation",
+        skip_review=False,
     )
 
 

@@ -30,6 +30,31 @@ def _run_lean(event: str, guard: str, tool: str, stdin: str, root: str | None = 
     return subprocess.run(cmd, input=stdin, capture_output=True, text=True)
 
 
+def _make_ahead_repo(root: Path) -> None:
+    """Init a git repo at *root* on a branch one commit ahead of main.
+
+    The Stop guard now nudges only when the branch has authored work (commits
+    ahead of base) and no current ``.wade/done@<HEAD>`` marker — so a real repo
+    is required to exercise the block path (a plain temp dir has no git facts and
+    fails open).
+    """
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, text=True)
+
+    root.mkdir(parents=True, exist_ok=True)
+    git("init", "-b", "main")
+    git("config", "user.email", "t@e.st")
+    git("config", "user.name", "T")
+    (root / "base.txt").write_text("base\n")
+    git("add", "-A")
+    git("commit", "-m", "base")
+    git("checkout", "-b", "feat/1-x")
+    (root / "work.txt").write_text("work\n")
+    git("add", "-A")
+    git("commit", "-m", "work")
+
+
 class TestWorktreeGuardCLI:
     def test_inside_allows_exit_zero_clean_stdout(self) -> None:
         r = _run(
@@ -187,14 +212,16 @@ class TestStopGuardCLI:
     def _run_stop(self, tool: str, stdin: str, root: str):
         return _run("stop", "session-complete", tool, stdin, root=root)
 
-    def test_blocks_when_pr_summary_missing(self, tmp_path: Path) -> None:
+    def test_blocks_when_work_and_no_done_marker(self, tmp_path: Path) -> None:
+        _make_ahead_repo(tmp_path)
         r = self._run_stop("claude", json.dumps({"stop_hook_active": False}), str(tmp_path))
         assert r.returncode == 0  # Stop blocks via the JSON decision, not exit code
         payload = json.loads(r.stdout)
         assert payload["decision"] == "block"
-        assert "PR-SUMMARY.md" in payload["reason"]
+        assert "done" in payload["reason"]
 
     def test_cursor_uses_followup_message(self, tmp_path: Path) -> None:
+        _make_ahead_repo(tmp_path)
         r = self._run_stop("cursor", json.dumps({"stop_hook_active": False}), str(tmp_path))
         assert r.returncode == 0
         assert "followup_message" in json.loads(r.stdout)
@@ -214,7 +241,8 @@ class TestStopGuardCLI:
         assert json.loads(r.stdout) == {"continue": True}
 
     def test_marker_makes_nudge_single_shot_across_tools(self, tmp_path: Path) -> None:
-        # First Stop (no summary, no marker) blocks and writes the .wade marker...
+        _make_ahead_repo(tmp_path)
+        # First Stop (work ahead, no done marker) blocks and writes the .wade marker...
         r1 = self._run_stop("claude", json.dumps({}), str(tmp_path))
         assert json.loads(r1.stdout)["decision"] == "block"
         assert (tmp_path / ".wade" / "stop-nudged").is_file()
@@ -228,7 +256,7 @@ class TestStopGuardCLI:
         # If .wade is a symlink out of the worktree, the marker write must refuse
         # rather than truncate a file outside the worktree.
         wt = tmp_path / "wt"
-        wt.mkdir()
+        _make_ahead_repo(wt)
         outside = tmp_path / "outside"
         outside.mkdir()
         (wt / ".wade").symlink_to(outside)
@@ -236,16 +264,28 @@ class TestStopGuardCLI:
         assert json.loads(r.stdout)["decision"] == "block"  # still nudges
         assert not (outside / "stop-nudged").exists()  # but never wrote outside
 
-    def test_allows_when_pr_summary_present(self, tmp_path: Path) -> None:
-        (tmp_path / "PR-SUMMARY.md").write_text("done")
+    def test_allows_when_no_commits_ahead(self, tmp_path: Path) -> None:
+        # A repo sitting on main with no authored work ahead of base: nothing to
+        # finalize, so the Stop guard allows (adopts #318's higher-signal check).
+        def git(*args: str) -> None:
+            subprocess.run(
+                ["git", "-C", str(tmp_path), *args], check=True, capture_output=True, text=True
+            )
+
+        git("init", "-b", "main")
+        git("config", "user.email", "t@e.st")
+        git("config", "user.name", "T")
+        (tmp_path / "base.txt").write_text("base\n")
+        git("add", "-A")
+        git("commit", "-m", "base")
         r = self._run_stop("claude", json.dumps({"stop_hook_active": False}), str(tmp_path))
         assert r.returncode == 0
         assert json.loads(r.stdout) == {"continue": True}
 
     def test_codex_noop_emits_valid_json_not_empty(self, tmp_path: Path) -> None:
         # Codex rejects an empty-stdout Stop hook ("invalid stop hook JSON
-        # output"), so a clean stop on Codex must emit {"continue": true}.
-        (tmp_path / "PR-SUMMARY.md").write_text("done")
+        # output"), so a clean stop on Codex must emit {"continue": true}. A plain
+        # temp dir has no git facts, so the guard fails open (allow) here.
         r = self._run_stop("codex", json.dumps({}), str(tmp_path))
         assert r.returncode == 0
         assert r.stdout != ""
@@ -294,6 +334,7 @@ class TestLeanEntryParity:
         assert json.loads(lean.stdout)["permission"] == "deny"
 
     def test_stop_block_via_lean_entry(self, tmp_path: Path) -> None:
+        _make_ahead_repo(tmp_path)
         r = _run_lean(
             "stop",
             "session-complete",
@@ -421,6 +462,7 @@ class TestPerToolDialectsMatchCrossby:
 
     def test_copilot_stop_hook_blocks(self, tmp_path: Path) -> None:
         """Copilot gained supports_stop_hook in 0.13 — its Stop must actually block."""
+        _make_ahead_repo(tmp_path)
         r = _run_lean("stop", "session-complete", "copilot", "{}", str(tmp_path))
         assert r.returncode == 0
         assert json.loads(r.stdout)["decision"] == "block"

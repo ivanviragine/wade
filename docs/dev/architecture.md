@@ -119,10 +119,15 @@ src/wade/
     ├── markdown.py      # Plan file parsing
     ├── process.py       # Subprocess helpers
     ├── http.py          # HTTPClient for REST API providers
+    ├── markers.py       # sha-keyed .wade/<name>@<sha> completion markers (done, reviewed, stop-nudged)
     ├── update_check.py  # Version checking, self-upgrade hints
     └── install.py       # Self-upgrade helpers (venv/source detection, re-exec)
 ```
 
+> `templates/hooks/pre-push` is the completion-gate backstop script installed
+> per-worktree at `.wade/githooks/pre-push` (see *Completion Gates & the
+> `done`-marker* below).
+>
 > **The `db/` package is unused scaffolding** — deliberately omitted from the
 > tree above. No code path under `services/` or `cli/` writes
 > session/worktree/PR rows, so its sole reader
@@ -166,11 +171,15 @@ trusting the agent to follow the skill. The split across the two repos:
 |-------|-------|--------------|--------|
 | `worktree` | PreToolUse | **closed** (deny) | Writes resolving outside the worktree |
 | `plan` | PreToolUse | **closed** (deny) | Writes to anything but plan artifacts |
-| `session-complete` | Stop | **open** (allow) | Ending a turn with `PR-SUMMARY.md` missing (once) |
+| `session-complete` | Stop | **open** (allow) | Ending a turn with commits ahead of base and no current `done` marker (once) |
 
 The asymmetry is deliberate and must not regress: a write guard that allows on
 error is worse than useless, while a Stop guard that blocks on error traps the
-agent in a session it cannot exit.
+agent in a session it cannot exit. `session-complete` (`hooks/policies.py`) is a
+pure predicate over `commits_ahead` + `done_marker_present`; the git facts are
+computed in `hooks/cli.py`'s Stop branch via **raw `subprocess`** (never the
+`wade.git` layer, whose `structlog` output would corrupt the lean entry's
+decision-JSON contract) and any failure fails open.
 
 ### Two write channels
 
@@ -252,6 +261,53 @@ So an existing inited project picks up corrected guards automatically on its
 next `wade implement` / `wade plan` session once wade (and transitively crossby)
 is upgraded — **no re-init, resync, or migration is needed.**
 
+## Completion Gates & the `done`-marker
+
+`done` (`implementation_service/done.py`) is the authoritative completion gate.
+Both `implementation-session done` and `review-pr-comments-session done` call the
+same `done()` service, parameterized by `session_type`; the gate set branches on
+it and runs in a **fixed order** (a clean main-merge in the sync step advances
+HEAD, so any sha-keyed check must precede it):
+
+1. **PR-SUMMARY** (implementation) — present, non-empty, non-placeholder.
+2. **unresolved-threads** (review-pr-comments only, runs *first* for that
+   session type) — a transient provider error is non-blocking.
+3. **review-ran** (both) — `marker_present(worktree, "reviewed", pre-sync HEAD)`.
+   Checked against the pre-sync HEAD so a clean main-merge doesn't invalidate the
+   review just performed.
+4. **sync** (implementation only) — auto-sync via the existing `do_sync` service
+   when `behind > 0`, refuse only on conflict.
+5. `_done_via_pr` writes `.wade/done@<post-sync HEAD>` immediately before pushing.
+
+The **done-marker primitive** lives in `utils/markers.py` — a pure-stdlib leaf
+(so the lean `wade-hook` can import it cheaply). A marker is a zero-byte file
+`.wade/<name>@<sha>` meaning "the `<name>` gates passed for `<sha>`"; a new commit
+changes the sha and invalidates every prior marker (**missing/stale ⇒ not done**).
+All reads/writes go through an `O_DIRECTORY | O_NOFOLLOW` handle on `.wade` so a
+symlinked `.wade` can never redirect them — there is deliberately **no** path-based
+fallback (following the symlink is worse than not writing). The same module backs
+the single-shot `.wade/stop-nudged` flag (`flag_marker_*`), so the Stop-nudge and
+done-marker implementations can't drift.
+
+⚠ **`commits_ahead` argument order differs by call site** and is pinned by a test:
+the sync gate's behind-count is `commits_ahead(repo, origin/<main>, branch)`
+(base in the *branch* position); the Stop hook's ahead-count puts the session
+branch in the branch position. Inverting either is a silent bug.
+
+The **pre-push backstop** (`templates/hooks/pre-push`, installed by
+`skills/installer.py:install_worktree_git_hook`) makes the gate hard to skip: git
+runs it with cwd at the worktree top, so it tests `[[ -f ".wade/done@${sha}" ]]`
+in pure shell. It is wired per-worktree via `extensions.worktreeConfig` +
+`git config --worktree core.hooksPath .wade/githooks` (git ≥ 2.20; **graceful
+degrade** to warn-and-skip otherwise), so it never leaks to the main checkout or
+sibling worktrees. Because `core.hooksPath` *replaces* `.git/hooks`, the installer
+detects any pre-existing hook once at first install, persists it to
+`.wade/githooks/.chain`, and the wade hook **chains** to it (re-emitting the exact
+buffered stdin) rather than silently shadowing it. The reusable installer core is
+designed for #352 to add `pre-commit`/`commit-msg` hooks. **Honesty:**
+`git push --no-verify` bypasses it in one flag — a quality/backstop layer, not a
+boundary.
+
 ## Command Dispatch
 
 `src/wade/cli/main.py` is the root Typer application. It registers subcommand groups (`task`, `worktree`, `plan-session`, `implementation-session`, `review-pr-comments-session`, `review`) and admin commands (`init`, `update`, `deinit`, `check-config`, `shell-init`). The `tasks` alias is registered as a hidden Typer group pointing to the same `task_app`. The `wade` entry point (defined in `pyproject.toml` as `wade.cli.main:cli_main`) invokes the root app.
@@ -298,7 +354,20 @@ hooks:
 knowledge:
   enabled: true
   path: KNOWLEDGE.md
+done:                        # completion-gate toggles (all default true)
+  require_pr_summary: true
+  require_sync: true
+  require_review: true
+  require_resolved_threads: true
+  pre_push_backstop: true
 ```
+
+**`done` section** (`DoneConfig`): completion-gate escape hatches, all default
+on. Per knowledge `ca245d6a`, config-key validity lives in **three** places that
+can drift — the Pydantic model (`models/config.py`), the loader
+(`config/loader.py`), and the `check_service.py` validator. The `done` validator
+allowlist is **derived** from `DoneConfig.model_fields`, so a new field is
+accepted automatically.
 
 **Model complexity mapping**: The `models` section maps AI tool names to complexity-tiered model IDs (`easy`, `medium`, `complex`, `very_complex`). When `wade implement` is invoked, the service reads the `complexity:X` label from the issue (falling back to `## Complexity` in the body), maps it to the appropriate configured model, and passes it as `--model` to the AI tool — unless the user explicitly passed `--model` themselves.
 

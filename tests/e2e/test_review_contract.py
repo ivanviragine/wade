@@ -883,7 +883,9 @@ class TestReviewPrCommentsSessionCommands:
         _git(["add", "-A"], cwd=worktree_path)
         _git(["commit", "-m", "fix: address review comments"], cwd=worktree_path)
 
-        result = _run(["review-pr-comments-session", "done"], cwd=worktree_path)
+        # --skip-review bypasses the review-ran gate; this contract exercises the
+        # done→PR mechanics (thread gate + push + PR update), not the review gate.
+        result = _run(["review-pr-comments-session", "done", "--skip-review"], cwd=worktree_path)
 
         assert result.returncode == 0
         origin_repo = e2e_repo.parent / "origin.git"

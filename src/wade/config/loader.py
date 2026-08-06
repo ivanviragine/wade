@@ -14,6 +14,7 @@ from wade.models.config import (
     AICommandConfig,
     AIConfig,
     ComplexityModelMapping,
+    DoneConfig,
     HooksConfig,
     KnowledgeConfig,
     PermissionsConfig,
@@ -258,6 +259,25 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
         path=knowledge_raw.get("path", "KNOWLEDGE.md"),
     )
 
+    # Parse done section (completion gates). All gates default on. A key present
+    # but null (e.g. `require_sync:` with no value → None) is normalized to the
+    # default so DoneConfig's non-optional bool fields never receive None, which
+    # would raise a cryptic Pydantic error here. `wade check` still flags an
+    # explicit null as invalid via _validate_done_section.
+    done_raw = _section_mapping(raw, "done")
+
+    def _done_flag(key: str) -> Any:
+        value = done_raw.get(key, True)
+        return True if value is None else value
+
+    done = DoneConfig(
+        require_pr_summary=_done_flag("require_pr_summary"),
+        require_sync=_done_flag("require_sync"),
+        require_review=_done_flag("require_review"),
+        require_resolved_threads=_done_flag("require_resolved_threads"),
+        pre_push_backstop=_done_flag("pre_push_backstop"),
+    )
+
     return ProjectConfig(
         version=version,
         project=project,
@@ -267,6 +287,7 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
         permissions=permissions,
         hooks=hooks,
         knowledge=knowledge,
+        done=done,
         config_path=str(config_path),
         project_root=str(config_path.parent),
     )
