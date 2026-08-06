@@ -1396,6 +1396,33 @@ class TestPreserveGeneratedPlans:
         mock_mkdtemp.assert_not_called()  # nothing to preserve
         mock_cleanup.assert_called_once_with(str(plan_dir), None, None)
 
+    def test_copy_failure_retains_source_and_skips_cleanup(self, tmp_path: Path) -> None:
+        # A mid-copy failure must never cost the user their generated plans: the
+        # temp dir may hold only a partial batch, so the original plan
+        # dir/worktree is retained (cleanup skipped) and its path reported —
+        # never deleted after a partial salvage.
+        plan_dir = tmp_path / "plans"
+        plan_dir.mkdir()
+        (plan_dir / "PLAN.md").write_text(_GATE_VALID)
+        (plan_dir / "PLAN-2.md").write_text(_GATE_NO_COMPLEXITY)
+        preserved_dir = tmp_path / "preserved"
+        preserved_dir.mkdir()
+
+        with (
+            patch("wade.services.plan_service.tempfile.mkdtemp", return_value=str(preserved_dir)),
+            patch("wade.services.plan_service.shutil.copy2", side_effect=OSError("disk full")),
+            patch("wade.services.plan_service._cleanup_plan_dir_or_worktree") as mock_cleanup,
+            patch("wade.services.plan_service.console") as mock_console,
+        ):
+            _preserve_generated_plans(str(plan_dir), None, None)
+
+        # Cleanup is skipped, so the intact originals survive in place...
+        mock_cleanup.assert_not_called()
+        assert (plan_dir / "PLAN.md").is_file()
+        assert (plan_dir / "PLAN-2.md").is_file()
+        # ...and the user is pointed at where they still live, not the temp dir.
+        mock_console.hint.assert_called_once_with(f"Plan files: {plan_dir}")
+
 
 class TestStrictValidationGateWiring:
     """plan() wires the strict gate at both issue-creation call sites (E2)."""

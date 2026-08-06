@@ -1061,16 +1061,34 @@ def _preserve_generated_plans(
     which keeps the worktree/temp dir from lingering.
     """
     generated = discover_plan_files(Path(plan_dir))
-    if generated:
-        try:
-            preserved = Path(tempfile.mkdtemp(prefix="wade-plans-"))
-            for plan_file in generated:
-                shutil.copy2(plan_file, preserved / plan_file.name)
-            console.info(
-                f"Preserved {len(generated)} generated plan file(s) — fix the reported "
-                "errors and re-run `wade plan` instead of regenerating from scratch."
-            )
-            console.hint(f"Plan files: {preserved}")
-        except OSError:
-            logger.warning("plan.preserve_generated_failed", exc_info=True)
+    if not generated:
+        # Nothing to salvage — the usual cleanup can run unconditionally.
+        _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+        return
+
+    try:
+        preserved = Path(tempfile.mkdtemp(prefix="wade-plans-"))
+        for plan_file in generated:
+            shutil.copy2(plan_file, preserved / plan_file.name)
+    except OSError:
+        # A copy failed after mkdtemp, so the temp dir may hold only part of the
+        # batch. Retain the original plan dir/worktree instead of deleting it —
+        # never trade a partial salvage for the intact source — and point the
+        # user at the untouched originals still sitting in ``plan_dir``.
+        logger.warning("plan.preserve_generated_failed", exc_info=True)
+        _report_preserved_plans(len(generated), Path(plan_dir))
+        return
+
+    # Every file copied cleanly — the stable copy now stands in for the source,
+    # so the normal cleanup can remove the worktree/temp dir.
+    _report_preserved_plans(len(generated), preserved)
     _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+
+
+def _report_preserved_plans(count: int, location: Path) -> None:
+    """Point the user at the ``count`` salvaged plan files under ``location``."""
+    console.info(
+        f"Preserved {count} generated plan file(s) — fix the reported "
+        "errors and re-run `wade plan` instead of regenerating from scratch."
+    )
+    console.hint(f"Plan files: {location}")
