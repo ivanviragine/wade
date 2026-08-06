@@ -534,10 +534,26 @@ def _is_non_fast_forward(message: str) -> bool:
     return any(sig in lowered for sig in _NON_FAST_FORWARD_SIGNALS)
 
 
+def _write_done_marker(marker_root: Path, repo_root: Path, branch: str) -> None:
+    """Write ``.wade/done@<branch tip>`` best-effort (clears any prior ``done@*``).
+
+    Resolving ``branch`` (not HEAD) keeps the key correct even when ``done
+    <target>`` runs from the main checkout, where ``repo_root``'s HEAD is not the
+    branch tip.
+    """
+    try:
+        pushed_sha = git_repo.rev_parse(repo_root, branch)
+    except GitError:
+        logger.warning("done.marker_write_head_failed", exc_info=True)
+        return
+    markers.write_marker(marker_root, "done", pushed_sha)
+
+
 def _push_branch_with_recovery(
     repo_root: Path,
     branch: str,
     worktree_path: Path | None,
+    marker_root: Path,
 ) -> bool:
     """Push *branch*, recovering interactively from a non-fast-forward rejection.
 
@@ -545,7 +561,20 @@ def _push_branch_with_recovery(
     We fetch, report the divergence, and — only behind an explicit confirm —
     offer to merge the remote in and retry, or force-push with
     ``--force-with-lease``. wade never force-pushes silently (C4).
+
+    Owns the ``done`` marker lifecycle so the pre-push backstop and Stop hook
+    stay consistent with what is actually on the remote:
+
+    - The marker is written **immediately before each push attempt** (so the
+      worktree's own pre-push backstop passes), keyed to the branch tip being
+      pushed. A recovery merge advances that tip, so the marker is **re-written**
+      for the new sha before the retry — otherwise the backstop would reject
+      ``done``'s own recovery push.
+    - Every failure path **clears** the marker: if nothing reached the remote,
+      no stale ``done@<sha>`` may linger (which would tell the Stop hook the
+      session finished and let the next push skip the backstop).
     """
+    _write_done_marker(marker_root, repo_root, branch)
     try:
         git_repo.push_branch(repo_root, branch, set_upstream=True)
         console.success("Branch pushed.")
@@ -553,6 +582,7 @@ def _push_branch_with_recovery(
     except GitError as e:
         if not _is_non_fast_forward(str(e)):
             console.error(f"Push failed: {e}")
+            markers.clear_markers(marker_root, "done")
             return False
 
     console.warn(f"Push rejected — '{branch}' has diverged from its remote.")
@@ -570,6 +600,7 @@ def _push_branch_with_recovery(
             "Remote branch has diverged. Resolve it manually "
             f"(e.g. `git -C {merge_cwd} pull --no-rebase`), then re-run done."
         )
+        markers.clear_markers(marker_root, "done")
         return False
 
     choice = prompts.select(
@@ -585,22 +616,31 @@ def _push_branch_with_recovery(
             merge_result = git_sync.merge_branch(merge_cwd, f"origin/{branch}")
             if not merge_result.success:
                 console.error("Merge conflicts with the remote branch — resolve them, then re-run.")
+                markers.clear_markers(marker_root, "done")
                 return False
+            # The merge advanced the branch tip — re-key the marker to it so the
+            # retry push satisfies the backstop.
+            _write_done_marker(marker_root, repo_root, branch)
             git_repo.push_branch(repo_root, branch, set_upstream=True)
             console.success("Merged the remote and pushed.")
             return True
         except GitError as e:
             console.error(f"Could not merge and push: {e}")
+            markers.clear_markers(marker_root, "done")
             return False
     if choice == 1:
+        # Force-push sends the same local tip, so the marker from the initial
+        # write still matches — no re-write needed.
         try:
             git_repo.push_branch(repo_root, branch, set_upstream=True, force=True)
             console.success("Force-pushed with lease.")
             return True
         except GitError as e:
             console.error(f"Force push failed: {e}")
+            markers.clear_markers(marker_root, "done")
             return False
     console.info("Push cancelled — the branch was not updated on the remote.")
+    markers.clear_markers(marker_root, "done")
     return False
 
 
@@ -632,23 +672,15 @@ def _done_via_pr(
         console.error(f"Cannot read issue #{issue_number}: {e}")
         return False
 
-    # Write the sha-keyed done-marker keyed to the branch tip being pushed,
-    # immediately before pushing, so `done`'s own push satisfies the pre-push
-    # backstop (which tests `.wade/done@<pushed sha>`) and the Stop hook reads
-    # the session as finalized. Resolving `branch` (not HEAD) keeps this correct
-    # even when `done <target>` runs from the main checkout, where `repo_root`'s
-    # HEAD is not the branch tip. A new commit changes the sha and invalidates it.
-    marker_root = worktree_path or repo_root
-    try:
-        pushed_sha = git_repo.rev_parse(repo_root, branch)
-        markers.write_marker(marker_root, "done", pushed_sha)
-    except GitError:
-        logger.warning("done.marker_write_head_failed", exc_info=True)
-
     # Push branch (with non-fast-forward divergence recovery — never a silent
-    # force-push).
+    # force-push). `_push_branch_with_recovery` owns the `done` marker: it writes
+    # `.wade/done@<pushed sha>` right before each push (so `done`'s own push
+    # satisfies the pre-push backstop and the Stop hook reads the session as
+    # finalized) and clears it on any push failure. A new commit changes the sha
+    # and invalidates the marker.
+    marker_root = worktree_path or repo_root
     console.step("Pushing branch...")
-    if not _push_branch_with_recovery(repo_root, branch, worktree_path):
+    if not _push_branch_with_recovery(repo_root, branch, worktree_path, marker_root):
         return False
 
     # Check for existing PR (expected from plan or implement bootstrap).
