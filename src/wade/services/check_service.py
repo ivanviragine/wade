@@ -655,12 +655,18 @@ def _validate_knowledge_section(
 
 
 def _validate_done_section(done: dict[str, Any], errors: list[str]) -> None:
-    """Validate the ``done`` completion-gate section (all fields are booleans)."""
+    """Validate the ``done`` completion-gate section (all fields are booleans).
+
+    Iterating ``done.items()`` only sees keys the user explicitly wrote, so an
+    explicit null (``require_sync:`` with no value) is a user mistake, not an
+    "unset" default — reject it. This keeps `wade check` aligned with the loader,
+    which normalizes such a null to the documented default rather than crashing.
+    """
     for key, value in done.items():
         if key not in _VALID_DONE_KEYS:
             errors.append(
                 f"done.{key}: unsupported key. "
                 f"Supported keys: {', '.join(sorted(_VALID_DONE_KEYS))}"
             )
-        elif value is not None and not isinstance(value, bool):
+        elif not isinstance(value, bool):
             errors.append(f"done.{key}: must be true or false")

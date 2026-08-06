@@ -313,8 +313,9 @@ def _install_guard_hooks(
 def _install_stop_hook(worktree_path: Path) -> None:
     """Install a Stop-hook workflow-completion reminder into each capable tool.
 
-    On session Stop, ``wade hook stop --guard session-complete`` nudges (once) if
-    ``PR-SUMMARY.md`` is missing — enforcing the closing steps rather than relying
+    On session Stop, ``wade hook stop --guard session-complete`` nudges (once)
+    when the session branch has commits ahead of its base and no current
+    ``.wade/done@<HEAD>`` marker — enforcing the closing steps rather than relying
     on the skill checklist. Installed only for tools that fire a blocking Stop
     hook (``supports_stop_hook``), which as of crossby 0.13 is every tool wade
     drives: Copilot joined once its ``agentStop`` event and blocking

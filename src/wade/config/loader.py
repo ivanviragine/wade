@@ -259,14 +259,23 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
         path=knowledge_raw.get("path", "KNOWLEDGE.md"),
     )
 
-    # Parse done section (completion gates). All gates default on.
+    # Parse done section (completion gates). All gates default on. A key present
+    # but null (e.g. `require_sync:` with no value → None) is normalized to the
+    # default so DoneConfig's non-optional bool fields never receive None, which
+    # would raise a cryptic Pydantic error here. `wade check` still flags an
+    # explicit null as invalid via _validate_done_section.
     done_raw = _section_mapping(raw, "done")
+
+    def _done_flag(key: str) -> Any:
+        value = done_raw.get(key, True)
+        return True if value is None else value
+
     done = DoneConfig(
-        require_pr_summary=done_raw.get("require_pr_summary", True),
-        require_sync=done_raw.get("require_sync", True),
-        require_review=done_raw.get("require_review", True),
-        require_resolved_threads=done_raw.get("require_resolved_threads", True),
-        pre_push_backstop=done_raw.get("pre_push_backstop", True),
+        require_pr_summary=_done_flag("require_pr_summary"),
+        require_sync=_done_flag("require_sync"),
+        require_review=_done_flag("require_review"),
+        require_resolved_threads=_done_flag("require_resolved_threads"),
+        pre_push_backstop=_done_flag("pre_push_backstop"),
     )
 
     return ProjectConfig(

@@ -163,6 +163,16 @@ class TestParseConfigFile:
         assert config.done.require_resolved_threads is False
         assert config.done.pre_push_backstop is False
 
+    def test_done_flag_null_normalized_to_default(self, tmp_path: Path) -> None:
+        # `require_sync:` with no value parses to None. DoneConfig's fields are
+        # non-optional bools, so the loader must normalize None to the default
+        # (True) rather than crash with a cryptic Pydantic error.
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\ndone:\n  require_sync:\n")
+
+        config = parse_config_file(config_path)
+        assert config.done.require_sync is True
+
     def test_empty_file(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text("")

@@ -217,6 +217,15 @@ class TestValidateConfig:
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("done.require_sync" in e and "true or false" in e for e in result.errors)
 
+    def test_null_done_value_rejected(self, tmp_path: Path) -> None:
+        # An explicit null (`require_sync:` with no value) is a user mistake, not
+        # an unset default — `wade check` must flag it as a non-bool.
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\ndone:\n  require_sync:\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("done.require_sync" in e and "true or false" in e for e in result.errors)
+
     def test_valid_full_config(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"
         config.write_text(

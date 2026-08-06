@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from wade.git import branch as git_branch
 from wade.models.config import AICommandConfig, AIConfig, DoneConfig, ProjectConfig, ProjectSettings
@@ -18,6 +18,7 @@ from wade.services.implementation_service.done import (
     _gate_review_ran,
     _gate_sync,
     _is_placeholder_pr_summary,
+    _run_completion_gates,
 )
 from wade.utils import markers
 
@@ -264,3 +265,54 @@ class TestSyncGate:
     def test_hatch_disables_gate(self, tmp_path: Path) -> None:
         config = self._config(require=False)
         assert _gate_sync(config, tmp_path, tmp_path, "feat", "main", "implementation") is True
+
+
+# ---------------------------------------------------------------------------
+# _run_completion_gates dispatch order (load-bearing)
+# ---------------------------------------------------------------------------
+
+
+class TestRunCompletionGatesOrder:
+    """Pin the fixed gate order per session type.
+
+    The order is load-bearing: review-ran must run against the pre-sync HEAD
+    *before* the sync gate can advance it, and review sessions must run the
+    unresolved-threads gate first. Testing each gate in isolation would not catch
+    a reordering of the calls inside ``_run_completion_gates``.
+    """
+
+    def _order(self, session_type: str) -> list[str]:
+        calls: list[str] = []
+
+        def _record(name: str):
+            return lambda *a, **k: (calls.append(name), True)[1]
+
+        with (
+            patch.object(done_mod, "_gate_pr_summary", side_effect=_record("pr_summary")),
+            patch.object(
+                done_mod, "_gate_resolved_threads", side_effect=_record("resolved_threads")
+            ),
+            patch.object(done_mod, "_gate_review_ran", side_effect=_record("review_ran")),
+            patch.object(done_mod, "_gate_sync", side_effect=_record("sync")),
+        ):
+            assert (
+                _run_completion_gates(
+                    session_type=session_type,
+                    config=ProjectConfig(),
+                    provider=MagicMock(),
+                    repo_root=Path("/repo"),
+                    worktree_root=Path("/wt"),
+                    branch="feat/x",
+                    main_branch="main",
+                    pre_sync_head="abc123",
+                    skip_review=False,
+                )
+                is True
+            )
+        return calls
+
+    def test_implementation_runs_pr_summary_review_then_sync(self) -> None:
+        assert self._order("implementation") == ["pr_summary", "review_ran", "sync"]
+
+    def test_review_runs_threads_then_review_and_never_syncs(self) -> None:
+        assert self._order("review-pr-comments") == ["resolved_threads", "review_ran"]

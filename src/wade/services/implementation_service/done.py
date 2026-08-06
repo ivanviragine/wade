@@ -237,10 +237,14 @@ def done(
     # The review-ran gate checks the sha the agent actually reviewed — the
     # PRE-SYNC HEAD. Capturing it before the (impl-only) auto-sync means a clean
     # main-merge does not spuriously invalidate the review just performed.
+    # Resolve ``branch`` (not ``cwd``'s HEAD), matching ``_write_done_marker``: a
+    # ``done <target>`` run from the main checkout leaves ``cwd`` there, where
+    # HEAD is not the branch tip — resolving the branch ref keeps both shas
+    # consistent so the gate compares against the same commit the marker keys to.
     try:
-        pre_sync_head = git_repo.rev_parse(cwd, "HEAD")
+        pre_sync_head = git_repo.rev_parse(cwd, branch)
     except GitError:
-        console.error("Cannot resolve HEAD to run the completion gates.")
+        console.error("Cannot resolve the branch tip to run the completion gates.")
         return False
 
     if not _run_completion_gates(
