@@ -127,7 +127,7 @@ src/wade/
 > `templates/hooks/pre-push` is the completion-gate backstop script installed
 > per-worktree at `.wade/githooks/pre-push` (see *Completion Gates & the
 > `done`-marker* below).
-
+>
 > **The `db/` package is unused scaffolding** — deliberately omitted from the
 > tree above. No code path under `services/` or `cli/` writes
 > session/worktree/PR rows, so its sole reader
@@ -270,13 +270,14 @@ it and runs in a **fixed order** (a clean main-merge in the sync step advances
 HEAD, so any sha-keyed check must precede it):
 
 1. **PR-SUMMARY** (implementation) — present, non-empty, non-placeholder.
-2. **review-ran** (both) — `marker_present(worktree, "reviewed", pre-sync HEAD)`.
+2. **unresolved-threads** (review-pr-comments only, runs *first* for that
+   session type) — a transient provider error is non-blocking.
+3. **review-ran** (both) — `marker_present(worktree, "reviewed", pre-sync HEAD)`.
    Checked against the pre-sync HEAD so a clean main-merge doesn't invalidate the
    review just performed.
-3. **sync** (implementation) — auto-sync via the existing `do_sync` service when
-   `behind > 0`, refuse only on conflict. Also runs the **unresolved-threads**
-   gate for review sessions (a transient provider error is non-blocking).
-4. `_done_via_pr` writes `.wade/done@<post-sync HEAD>` immediately before pushing.
+4. **sync** (implementation only) — auto-sync via the existing `do_sync` service
+   when `behind > 0`, refuse only on conflict.
+5. `_done_via_pr` writes `.wade/done@<post-sync HEAD>` immediately before pushing.
 
 The **done-marker primitive** lives in `utils/markers.py` — a pure-stdlib leaf
 (so the lean `wade-hook` can import it cheaply). A marker is a zero-byte file

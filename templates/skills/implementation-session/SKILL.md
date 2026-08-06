@@ -108,9 +108,9 @@ git operations yourself.
 wade implementation-session done
 ```
 
-`done` is the **authoritative completion gate**: it refuses to finalize unless
-PR-SUMMARY is present, the branch is synced with `main`, and review ran for this
-commit (bypass: `--skip-review`, or a `done.*` toggle in `.wade.yml`). A pre-push
+`done` is the **authoritative completion gate**: it requires PR-SUMMARY and a
+review for this commit; it auto-syncs a branch behind `main`, refusing only on
+conflict (bypass: `--skip-review`, or a `done.*` toggle in `.wade.yml`). A pre-push
 hook blocks pushes with no `.wade/done@<sha>` marker (`--no-verify` bypasses it).
 The worktree is **not** deleted (cleaned up after merge). **Mandatory**; if it
 fails, fix the cause, do NOT bypass.
