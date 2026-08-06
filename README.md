@@ -208,13 +208,22 @@ enough to pick up improvements, with no re-init or migration.
 |-------|----------------|
 | Worktree containment | Writes that land outside your worktree |
 | Plan-artifact | During `wade plan`, writes to anything but plan artifacts |
-| Session completion | Finishing a session with unfinished work not yet run through `done` (nudges once) |
+| Session completion | Finishing an implement/review session with unfinished work not yet run through `done` (nudges once) |
+| Plan completion | Finishing a `wade plan` session that produced no valid `PLAN*.md` yet (nudges once) |
 
 The session-completion guard keys on the same fact `done` records — a sha-keyed
 `.wade/done@<HEAD>` marker written when `done`'s gates pass — so it nudges only
 when the branch has commits ahead of its base **and** `done` has not finalized
 the current commit. An early "stopping to ask a question" turn (no commits ahead)
-never triggers it.
+never triggers it. The plan-completion guard is the planning counterpart: it
+nudges once if a plan session is about to end with no valid plan file (a title
+with a conventional-commit prefix plus a `## Complexity`). Both fail **open** — a
+session is never trapped.
+
+Independently of that nudge, `wade plan` now **strictly validates** plan files
+before creating issues: a `PLAN*.md` missing a valid `## Complexity` or a
+conventional-commit title is dropped with a loud error instead of silently
+becoming an issue with no complexity label.
 
 Both write guards cover **shell commands** as well as file edits, so a redirect
 like `printf x > ../other-repo/app.py` is blocked, not just an `Edit` call. Shell

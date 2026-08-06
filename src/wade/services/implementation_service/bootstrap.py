@@ -310,15 +310,21 @@ def _install_guard_hooks(
     logger.info(f"implementation.{guard_type}_guard_hooks_installed", path=str(worktree_path))
 
 
-def _install_stop_hook(worktree_path: Path) -> None:
-    """Install a Stop-hook workflow-completion reminder into each capable tool.
+def _install_stop_hook(worktree_path: Path, *, guard: str = "session-complete") -> None:
+    """Install a Stop-hook completion reminder into each capable tool.
 
-    On session Stop, ``wade hook stop --guard session-complete`` nudges (once)
-    when the session branch has commits ahead of its base and no current
-    ``.wade/done@<HEAD>`` marker — enforcing the closing steps rather than relying
-    on the skill checklist. Installed only for tools that fire a blocking Stop
-    hook (``supports_stop_hook``), which as of crossby 0.13 is every tool wade
-    drives: Copilot joined once its ``agentStop`` event and blocking
+    On session Stop, ``wade hook stop --guard {guard}`` nudges (once) when the
+    session's closing artifact is missing — enforcing the closing step rather than
+    relying on the skill checklist. Two guards share this installer:
+
+    - ``session-complete`` (impl/review sessions) nudges when the branch has
+      commits ahead of its base and no current ``.wade/done@<HEAD>`` marker.
+    - ``plan-complete`` (plan sessions) nudges when the plan dir holds no valid
+      ``PLAN*.md`` yet.
+
+    Installed only for tools that fire a blocking Stop hook
+    (``supports_stop_hook``), which as of crossby 0.13 is every tool wade drives:
+    Copilot joined once its ``agentStop`` event and blocking
     ``{"decision": "block", "reason": …}`` contract were confirmed. Merged
     alongside the PreToolUse write guard by crossby's hook writers.
 
@@ -336,11 +342,11 @@ def _install_stop_hook(worktree_path: Path) -> None:
     for tool_id, writer in _hook_writers():
         if not AbstractAITool.get(tool_id).capabilities().supports_stop_hook:
             continue
-        command = f"wade-hook stop --guard session-complete --tool {tool_id.value} --root {root}"
+        command = f"wade-hook stop --guard {guard} --tool {tool_id.value} --root {root}"
         hook = HookEntry(event="stop", tools=[], command=command)
         _log_sync_result(writer.sync(SyncData(hooks=[hook]), worktree_path), tool_id)
 
-    logger.info("implementation.stop_hook_installed", path=str(worktree_path))
+    logger.info("implementation.stop_hook_installed", path=str(worktree_path), guard=guard)
 
 
 def _effective_copy_files(config: ProjectConfig) -> list[str]:
@@ -660,9 +666,12 @@ def bootstrap_worktree(
     # overwrite the guarded config files.
     _install_guard_hooks(worktree_path, guard_type="plan" if plan_mode else "worktree")
 
-    # Implement/review sessions (not plan) also get a Stop-hook completion
-    # reminder that nudges the agent to run `done` before exit.
-    if not plan_mode:
+    # Every session gets a Stop-hook completion reminder, but the guard differs:
+    # plan sessions nudge to write a valid plan; impl/review sessions nudge to run
+    # `done` (and also get the pre-push backstop that hard-enforces it).
+    if plan_mode:
+        _install_stop_hook(worktree_path, guard="plan-complete")
+    else:
         _install_stop_hook(worktree_path)
 
         # ...and the pre-push backstop that makes the `done` gate hard to skip:

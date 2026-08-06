@@ -9,6 +9,7 @@ from crossby.hooks.runtime import HookEvent
 
 from wade.hooks.policies import (
     plan_artifact_only,
+    plan_complete,
     session_complete,
     shell_containment,
     worktree_containment,
@@ -477,3 +478,76 @@ class TestSessionComplete:
             commits_ahead=1,
         )
         assert d.action == "allow"
+
+
+class TestPlanComplete:
+    def test_blocks_when_no_valid_plan(self, tmp_path: Path) -> None:
+        # No valid PLAN*.md + no prior nudge -> nudge to write one.
+        d = plan_complete(HookEvent(event="stop"), worktree_root=tmp_path, has_valid_plan=False)
+        assert d.action == "deny"  # deny == block the stop
+        assert "PLAN" in d.reason
+        assert "Complexity" in d.reason
+
+    def test_allows_when_valid_plan_present(self, tmp_path: Path) -> None:
+        # The session already produced something wade can turn into an issue.
+        d = plan_complete(HookEvent(event="stop"), worktree_root=tmp_path, has_valid_plan=True)
+        assert d.action == "allow"
+
+    def test_allows_when_stop_hook_already_fired(self, tmp_path: Path) -> None:
+        # No valid plan, but Claude's Stop hook already fired -> never loop.
+        d = plan_complete(
+            HookEvent(event="stop", stop_hook_active=True),
+            worktree_root=tmp_path,
+            has_valid_plan=False,
+        )
+        assert d.action == "allow"
+
+    def test_allows_when_nudge_marker_present(self, tmp_path: Path) -> None:
+        # Tool-agnostic single-shot: once the shared marker exists, allow even
+        # without Claude's stop_hook_active — the same marker session_complete uses.
+        from wade.hooks.policies import stop_nudge_marker_path
+
+        marker = stop_nudge_marker_path(tmp_path)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("")
+        d = plan_complete(HookEvent(event="stop"), worktree_root=tmp_path, has_valid_plan=False)
+        assert d.action == "allow"
+
+    def test_symlinked_marker_not_trusted(self, tmp_path: Path) -> None:
+        # A planted symlink at the marker path must not count as "already nudged".
+        from wade.hooks.policies import stop_nudge_marker_path
+
+        real = tmp_path / "elsewhere"
+        real.write_text("")
+        marker = stop_nudge_marker_path(tmp_path)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.symlink_to(real)
+        d = plan_complete(HookEvent(event="stop"), worktree_root=tmp_path, has_valid_plan=False)
+        assert d.action == "deny"
+
+    def test_symlinked_wade_dir_not_trusted(self, tmp_path: Path) -> None:
+        # A symlinked .wade directory must not let an outside file skip the nudge.
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "stop-nudged").write_text("")
+        (tmp_path / ".wade").symlink_to(outside)
+        d = plan_complete(HookEvent(event="stop"), worktree_root=tmp_path, has_valid_plan=False)
+        assert d.action == "deny"
+
+
+class TestPlanModeSourceWriteRegression:
+    """E2 acceptance: a source-file write during a plan session is blocked on every
+    tool — via ``Edit``/``Write``, via unrecognized write tools (``apply_patch``),
+    and via a shell redirect. The plan-artifact guard already contains these
+    post-#356; these tests pin that so E2 enforcement rests on a verified base.
+    """
+
+    @pytest.mark.parametrize("tool_name", ["Edit", "Write", "apply_patch", "write_to_file"])
+    def test_write_tool_to_source_denied_in_plan_mode(self, tool_name: str) -> None:
+        d = plan_artifact_only(_write("/repo/wt/src/app.py", tool_name), worktree_root=WT)
+        assert d.action == "deny"
+        assert "plan-session guard" in d.reason
+
+    def test_shell_redirect_to_source_denied_in_plan_mode(self) -> None:
+        d = shell_containment(_shell("printf x > src/app.py"), worktree_root=WT, plan_mode=True)
+        assert d.action == "deny"

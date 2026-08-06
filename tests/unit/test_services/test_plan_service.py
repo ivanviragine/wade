@@ -11,12 +11,16 @@ import pytest
 from crossby.models.ai import TokenUsage
 
 from wade.models.config import AIConfig, ProjectConfig
-from wade.models.task import CloseReason, PlanFile, Task
+from wade.models.task import CloseReason, Complexity, PlanFile, Task
 from wade.services.ai_resolution import resolve_ai_tool, resolve_model
 from wade.services.plan_service import (
+    PlanDiagnostic,
+    PlanDiagnosticLevel,
+    PlanValidationResult,
     _attach_plan_to_existing_issue,
     _finalize_issues,
     _offer_to_implement,
+    _select_valid_plans,
     _supersede_issue_with_plans,
     _with_supersede_banner,
     discover_plan_files,
@@ -741,6 +745,11 @@ class TestPlanOrchestrator:
                 return_value=TokenUsage(total_tokens=123),
             ),
             patch("wade.services.plan_service.validate_plan_files", return_value=[plan_file]),
+            # Strict gate sees no error diagnostics → the plan file passes through.
+            patch(
+                "wade.services.plan_service.validate_plan_dir",
+                return_value=PlanValidationResult(),
+            ),
             patch(
                 "wade.services.plan_service._create_issues_from_plans",
                 return_value=(["101"], []),
@@ -1142,6 +1151,11 @@ class TestPlanExistingIssueBranch:
                 return_value=TokenUsage(total_tokens=123),
             ),
             patch("wade.services.plan_service.validate_plan_files", return_value=plan_files),
+            # Strict gate sees no error diagnostics → all plan files pass through.
+            patch(
+                "wade.services.plan_service.validate_plan_dir",
+                return_value=PlanValidationResult(),
+            ),
             patch("wade.services.plan_service._cleanup_plan_dir_or_worktree"),
             patch("wade.services.plan_service.set_terminal_title"),
             patch("wade.services.plan_service.start_title_keeper"),
@@ -1251,3 +1265,326 @@ class TestPlanExistingIssueBranch:
             assert plan(project_root=tmp_path, issue_id="330") is False
 
         mock_finalize.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _select_valid_plans — the strict gate before issue creation (E2)
+# ---------------------------------------------------------------------------
+
+_GATE_VALID = "# feat: add retry logic\n\n## Complexity\ncomplex\n\n## Tasks\n- a\n"
+_GATE_NO_COMPLEXITY = "# feat: add retry logic\n\n## Tasks\n- a\n"
+_GATE_BAD_TITLE = "# add retry logic\n\n## Complexity\ncomplex\n\n## Tasks\n- a\n"
+
+
+class TestSelectValidPlans:
+    """Unit tests for the strict validation gate that runs on real plan dirs."""
+
+    def _plan(self, plan_dir: Path, name: str, content: str) -> PlanFile:
+        p = plan_dir / name
+        p.write_text(content)
+        return PlanFile.from_markdown(p)
+
+    def test_all_valid_returns_all_without_prompt(self, tmp_path: Path) -> None:
+        a = self._plan(tmp_path, "PLAN.md", _GATE_VALID)
+        b = self._plan(tmp_path, "PLAN-2.md", _GATE_VALID)
+        with (
+            patch("wade.services.plan_service.prompts") as mock_prompts,
+            patch("wade.services.plan_service.console"),
+        ):
+            result = _select_valid_plans(tmp_path, [a, b], yolo=False)
+        assert result == [a, b]
+        mock_prompts.confirm.assert_not_called()  # nothing invalid → no prompt
+
+    def test_all_invalid_returns_empty_and_surfaces_errors(self, tmp_path: Path) -> None:
+        a = self._plan(tmp_path, "PLAN.md", _GATE_NO_COMPLEXITY)
+        b = self._plan(tmp_path, "PLAN-2.md", _GATE_BAD_TITLE)
+        with (
+            patch("wade.services.plan_service.prompts") as mock_prompts,
+            patch("wade.services.plan_service.console") as mock_console,
+        ):
+            result = _select_valid_plans(tmp_path, [a, b], yolo=False)
+        assert result == []
+        mock_prompts.confirm.assert_not_called()
+        assert mock_console.error.called  # errors are surfaced loudly
+
+    def test_mixed_non_tty_proceeds_with_valid_subset(self, tmp_path: Path) -> None:
+        good = self._plan(tmp_path, "PLAN.md", _GATE_VALID)
+        bad = self._plan(tmp_path, "PLAN-2.md", _GATE_NO_COMPLEXITY)
+        with (
+            patch("wade.services.plan_service.prompts") as mock_prompts,
+            patch("wade.services.plan_service.console"),
+        ):
+            mock_prompts.is_tty.return_value = False
+            result = _select_valid_plans(tmp_path, [good, bad], yolo=False)
+        assert result == [good]
+        mock_prompts.confirm.assert_not_called()  # never hang headless
+
+    def test_mixed_yolo_proceeds_with_valid_subset(self, tmp_path: Path) -> None:
+        good = self._plan(tmp_path, "PLAN.md", _GATE_VALID)
+        bad = self._plan(tmp_path, "PLAN-2.md", _GATE_BAD_TITLE)
+        with (
+            patch("wade.services.plan_service.prompts") as mock_prompts,
+            patch("wade.services.plan_service.console"),
+        ):
+            mock_prompts.is_tty.return_value = True
+            result = _select_valid_plans(tmp_path, [good, bad], yolo=True)
+        assert result == [good]
+        mock_prompts.confirm.assert_not_called()  # yolo skips the prompt
+
+    def test_mixed_tty_confirm_proceeds(self, tmp_path: Path) -> None:
+        good = self._plan(tmp_path, "PLAN.md", _GATE_VALID)
+        bad = self._plan(tmp_path, "PLAN-2.md", _GATE_NO_COMPLEXITY)
+        with (
+            patch("wade.services.plan_service.prompts") as mock_prompts,
+            patch("wade.services.plan_service.console"),
+        ):
+            mock_prompts.is_tty.return_value = True
+            mock_prompts.confirm.return_value = True
+            result = _select_valid_plans(tmp_path, [good, bad], yolo=False)
+        assert result == [good]
+        mock_prompts.confirm.assert_called_once()
+
+    def test_mixed_tty_decline_aborts_with_none(self, tmp_path: Path) -> None:
+        good = self._plan(tmp_path, "PLAN.md", _GATE_VALID)
+        bad = self._plan(tmp_path, "PLAN-2.md", _GATE_NO_COMPLEXITY)
+        with (
+            patch("wade.services.plan_service.prompts") as mock_prompts,
+            patch("wade.services.plan_service.console"),
+        ):
+            mock_prompts.is_tty.return_value = True
+            mock_prompts.confirm.return_value = False
+            result = _select_valid_plans(tmp_path, [good, bad], yolo=False)
+        assert result is None  # abort → caller creates nothing
+
+
+class TestStrictValidationGateWiring:
+    """plan() wires the strict gate at both issue-creation call sites (E2)."""
+
+    def _adapter(self) -> MagicMock:
+        adapter = MagicMock()
+        adapter.capabilities.return_value = MagicMock(blocks_until_exit=True)
+        return adapter
+
+    def _valid(self, tmp_path: Path, name: str = "PLAN.md") -> PlanFile:
+        return PlanFile(
+            path=tmp_path / name,
+            title="feat: good",
+            complexity=Complexity.COMPLEX,
+            body="body",
+            sections={},
+        )
+
+    def _invalid(self, tmp_path: Path, name: str = "PLAN-2.md") -> PlanFile:
+        # Title-parseable (survives validate_plan_files) but strict-invalid.
+        return PlanFile(
+            path=tmp_path / name,
+            title="bad title without prefix",
+            complexity=None,
+            body="body",
+            sections={},
+        )
+
+    def _errors_for(self, *names: str) -> PlanValidationResult:
+        return PlanValidationResult(
+            diagnostics=[
+                PlanDiagnostic(
+                    file=n,
+                    level=PlanDiagnosticLevel.ERROR,
+                    message="Missing or invalid '## Complexity' section.",
+                )
+                for n in names
+            ]
+        )
+
+    def _base_patches(
+        self,
+        tmp_path: Path,
+        provider: MagicMock,
+        adapter: MagicMock,
+        plan_files: list[PlanFile],
+        validation: PlanValidationResult,
+    ) -> list[contextlib.AbstractContextManager[MagicMock]]:
+        return [
+            patch(
+                "wade.services.plan_service.load_config",
+                return_value=ProjectConfig(ai=AIConfig(default_tool="claude")),
+            ),
+            patch("wade.services.plan_service.get_provider", return_value=provider),
+            patch("wade.services.plan_service.resolve_ai_tool", return_value="claude"),
+            patch("wade.services.plan_service.resolve_model", return_value=None),
+            patch(
+                "wade.services.plan_service.confirm_ai_selection",
+                return_value=("claude", None, None, False),
+            ),
+            patch("wade.services.plan_service.ensure_task_label"),
+            patch("wade.services.plan_service.run_ai_planning_session", return_value=0),
+            patch("wade.services.plan_service.AbstractAITool.get", return_value=adapter),
+            patch(
+                "wade.services.plan_service._extract_token_usage",
+                return_value=TokenUsage(total_tokens=123),
+            ),
+            patch("wade.services.plan_service.validate_plan_files", return_value=plan_files),
+            patch("wade.services.plan_service.validate_plan_dir", return_value=validation),
+            patch("wade.services.plan_service._cleanup_plan_dir_or_worktree"),
+            patch("wade.services.plan_service.set_terminal_title"),
+            patch("wade.services.plan_service.start_title_keeper"),
+            patch("wade.services.plan_service.stop_title_keeper"),
+            patch("wade.services.plan_service.console"),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+        ]
+
+    def test_new_issue_invalid_plan_skipped_only_valid_created(self, tmp_path: Path) -> None:
+        provider = MagicMock()
+        adapter = self._adapter()
+        good = self._valid(tmp_path)
+        bad = self._invalid(tmp_path)
+        validation = self._errors_for("PLAN-2.md")
+
+        with contextlib.ExitStack() as stack:
+            for p in self._base_patches(tmp_path, provider, adapter, [good, bad], validation):
+                stack.enter_context(p)
+            mock_prompts = stack.enter_context(patch("wade.services.plan_service.prompts"))
+            mock_prompts.is_tty.return_value = False
+            create = stack.enter_context(
+                patch(
+                    "wade.services.plan_service._create_issues_from_plans",
+                    return_value=(["101"], []),
+                )
+            )
+            stack.enter_context(
+                patch("wade.services.plan_service._finalize_issues", return_value=None)
+            )
+
+            assert plan(project_root=tmp_path) is True
+
+        create.assert_called_once()
+        assert create.call_args.kwargs["plan_files"] == [good]  # invalid dropped
+
+    def test_new_issue_all_invalid_creates_nothing(self, tmp_path: Path) -> None:
+        provider = MagicMock()
+        adapter = self._adapter()
+        bad = self._invalid(tmp_path, "PLAN.md")
+        validation = self._errors_for("PLAN.md")
+
+        with contextlib.ExitStack() as stack:
+            for p in self._base_patches(tmp_path, provider, adapter, [bad], validation):
+                stack.enter_context(p)
+            mock_prompts = stack.enter_context(patch("wade.services.plan_service.prompts"))
+            mock_prompts.is_tty.return_value = False
+            create = stack.enter_context(
+                patch("wade.services.plan_service._create_issues_from_plans")
+            )
+
+            assert plan(project_root=tmp_path) is False
+
+        create.assert_not_called()
+
+    def test_new_issue_mixed_abort_creates_nothing(self, tmp_path: Path) -> None:
+        provider = MagicMock()
+        adapter = self._adapter()
+        good = self._valid(tmp_path)
+        bad = self._invalid(tmp_path)
+        validation = self._errors_for("PLAN-2.md")
+
+        with contextlib.ExitStack() as stack:
+            for p in self._base_patches(tmp_path, provider, adapter, [good, bad], validation):
+                stack.enter_context(p)
+            mock_prompts = stack.enter_context(patch("wade.services.plan_service.prompts"))
+            mock_prompts.is_tty.return_value = True
+            mock_prompts.confirm.return_value = False  # user declines the partial run
+            create = stack.enter_context(
+                patch("wade.services.plan_service._create_issues_from_plans")
+            )
+
+            assert plan(project_root=tmp_path) is False
+
+        create.assert_not_called()
+
+    def test_new_issue_all_valid_passes(self, tmp_path: Path) -> None:
+        provider = MagicMock()
+        adapter = self._adapter()
+        good = self._valid(tmp_path)
+        clean = PlanValidationResult()
+
+        with contextlib.ExitStack() as stack:
+            for p in self._base_patches(tmp_path, provider, adapter, [good], clean):
+                stack.enter_context(p)
+            mock_prompts = stack.enter_context(patch("wade.services.plan_service.prompts"))
+            mock_prompts.is_tty.return_value = True
+            create = stack.enter_context(
+                patch(
+                    "wade.services.plan_service._create_issues_from_plans",
+                    return_value=(["101"], []),
+                )
+            )
+            stack.enter_context(
+                patch("wade.services.plan_service._finalize_issues", return_value=None)
+            )
+
+            assert plan(project_root=tmp_path) is True
+
+        create.assert_called_once()
+        assert create.call_args.kwargs["plan_files"] == [good]
+        mock_prompts.confirm.assert_not_called()  # nothing invalid → no prompt
+
+    def test_existing_issue_path_filters_invalid(self, tmp_path: Path) -> None:
+        provider = MagicMock()
+        existing = Task(id="330", title="Some bug", body="Original")
+        provider.read_task.return_value = existing
+        adapter = self._adapter()
+        good = self._valid(tmp_path)
+        bad = self._invalid(tmp_path)
+        validation = self._errors_for("PLAN-2.md")
+
+        with contextlib.ExitStack() as stack:
+            for p in self._base_patches(tmp_path, provider, adapter, [good, bad], validation):
+                stack.enter_context(p)
+            mock_prompts = stack.enter_context(patch("wade.services.plan_service.prompts"))
+            mock_prompts.is_tty.return_value = False
+            mock_attach = stack.enter_context(
+                patch("wade.services.plan_service._attach_plan_to_existing_issue")
+            )
+            mock_supersede = stack.enter_context(
+                patch("wade.services.plan_service._supersede_issue_with_plans")
+            )
+            stack.enter_context(
+                patch("wade.services.plan_service._finalize_issues", return_value=None)
+            )
+
+            assert plan(project_root=tmp_path, issue_id="330") is True
+
+        # One valid file remains → single-plan attach, not supersede.
+        mock_attach.assert_called_once()
+        assert mock_attach.call_args.kwargs["plan_file"] is good
+        mock_supersede.assert_not_called()
+
+    def test_existing_issue_all_invalid_mutates_nothing(self, tmp_path: Path) -> None:
+        provider = MagicMock()
+        existing = Task(id="330", title="Some bug", body="Original")
+        provider.read_task.return_value = existing
+        adapter = self._adapter()
+        bad = self._invalid(tmp_path, "PLAN.md")
+        validation = self._errors_for("PLAN.md")
+
+        with contextlib.ExitStack() as stack:
+            for p in self._base_patches(tmp_path, provider, adapter, [bad], validation):
+                stack.enter_context(p)
+            mock_prompts = stack.enter_context(patch("wade.services.plan_service.prompts"))
+            mock_prompts.is_tty.return_value = False
+            # Override the base console patch so we can inspect the messages.
+            mock_console = stack.enter_context(patch("wade.services.plan_service.console"))
+            mock_attach = stack.enter_context(
+                patch("wade.services.plan_service._attach_plan_to_existing_issue")
+            )
+            mock_supersede = stack.enter_context(
+                patch("wade.services.plan_service._supersede_issue_with_plans")
+            )
+
+            assert plan(project_root=tmp_path, issue_id="330") is False
+
+        mock_attach.assert_not_called()
+        mock_supersede.assert_not_called()
+        # Files WERE produced (just invalid), so the misleading "No plan files
+        # found" message must not fire — the helper already reported the reason.
+        warn_msgs = " ".join(str(c.args[0]) for c in mock_console.warn.call_args_list if c.args)
+        assert "No plan files found" not in warn_msgs
