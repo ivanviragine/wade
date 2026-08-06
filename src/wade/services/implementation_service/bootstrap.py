@@ -457,7 +457,12 @@ def _install_post_tool_use_lint_hook(worktree_path: Path, config: ProjectConfig)
             )
             if enabled and context_capable:
                 # No fail_closed: PostToolUse must never block. The timeout bounds
-                # the per-edit cost at the tool's hook-runner level too.
+                # the per-edit cost at the tool's hook-runner level too. Note this
+                # OUTER (tool-runner) bound is baked at bootstrap, unlike wade-hook's
+                # INNER subprocess timeout, which re-resolves from .wade.yml every
+                # run — so raising post_tool_use.timeout without re-bootstrapping
+                # leaves the old outer bound in place until the next bootstrap.
+                # Fails open either way, so this is a latent staleness, not a bug.
                 data = SyncData(
                     hooks=[
                         HookEntry(
