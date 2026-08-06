@@ -289,6 +289,112 @@ def install_worktree_git_hook(worktree_path: Path, hook_name: str, script_body: 
     return install_worktree_git_hooks(worktree_path, {hook_name: script_body})
 
 
+# The full namespace of git hooks wade may manage per worktree. Reconciliation
+# (:func:`reconcile_worktree_git_hooks`) walks this set so a hook whose config
+# gate was turned off since a prior bootstrap is neutralized, not left firing.
+_MANAGED_GITHOOK_NAMES: tuple[str, ...] = ("pre-push", "pre-commit", "commit-msg")
+
+
+def _passthrough_hook_script(hook_name: str) -> str:
+    """A wade hook body that only chains to a captured prior (its gate disabled).
+
+    Written in place of a stale gate when its ``.wade.yml`` toggle is turned off
+    but ``core.hooksPath`` stays wade-managed for *other* hooks: it drops wade's
+    gate yet still runs any pre-existing user hook of the same name (recorded in
+    ``.chain-<hook_name>``), so disabling a wade gate never silently shadows a
+    user's own hook.
+    """
+    chain_file = _chain_file(hook_name)
+    return (
+        "#!/usr/bin/env bash\n"
+        f"# wade passthrough for '{hook_name}' — its wade quality gate is disabled in\n"
+        "# .wade.yml, but core.hooksPath is wade-managed for other hooks, so this shim\n"
+        "# preserves any pre-existing user hook of the same name.\n"
+        "set -uo pipefail\n"
+        f'chain_file="{chain_file}"\n'
+        'if [[ -f "$chain_file" ]]; then\n'
+        '  chained="$(cat "$chain_file")"\n'
+        '  if [[ -n "$chained" && -x "$chained" ]]; then\n'
+        '    "$chained" "$@"\n'
+        "    exit $?\n"
+        "  fi\n"
+        "fi\n"
+        "exit 0\n"
+    )
+
+
+def reconcile_worktree_git_hooks(worktree_path: Path, desired: dict[str, str]) -> bool:
+    """Install *desired* wade-managed git hooks and neutralize stale ones.
+
+    Idempotent across re-bootstraps of an existing worktree (a supported flow —
+    ``wade implement`` re-bootstraps a reused worktree): a hook whose ``.wade.yml``
+    gate was turned off since a prior session is not left firing. Managed names
+    are :data:`_MANAGED_GITHOOK_NAMES`.
+
+    - When *desired* is non-empty, install those hooks via
+      :func:`install_worktree_git_hooks` (captures priors + sets
+      ``core.hooksPath``), then replace any *existing* wade script for a
+      now-undesired managed hook with a chain-only passthrough so its gate is gone
+      but a captured prior still runs. Scripts are only ever *replaced*, never
+      created, so a fresh worktree gets exactly the desired set.
+    - When *desired* is empty, fully uninstall wade's managed hooks (only if wade
+      set ``core.hooksPath``) so the user's own ``.git/hooks`` are restored.
+
+    Returns True when wade's worktree ``core.hooksPath`` is active afterwards.
+    """
+    if not desired:
+        return _uninstall_worktree_git_hooks(worktree_path)
+
+    ok = install_worktree_git_hooks(worktree_path, desired)
+
+    hooks_dir = worktree_path / WADE_GITHOOKS_DIR
+    for hook_name in _MANAGED_GITHOOK_NAMES:
+        if hook_name in desired:
+            continue
+        stale = hooks_dir / hook_name
+        if not stale.exists():
+            continue  # never wade-managed here — don't create an inert file
+        try:
+            stale.write_text(_passthrough_hook_script(hook_name), encoding="utf-8")
+            stale.chmod(0o755)
+            logger.debug("skills.githook_neutralized", hook=hook_name, path=str(worktree_path))
+        except OSError:
+            logger.warning(
+                "skills.githook_neutralize_failed", hook=hook_name, path=str(worktree_path)
+            )
+    return ok
+
+
+def _uninstall_worktree_git_hooks(worktree_path: Path) -> bool:
+    """Remove wade's managed git hooks and unset the worktree hooksPath, if wade set it.
+
+    A no-op when wade does not manage this worktree (so a fresh worktree with no
+    configured hooks is untouched). Removes each managed hook script and its chain
+    file, then unsets the worktree ``core.hooksPath`` so git falls back to the
+    user's own ``.git/hooks``. Always returns False (no wade hooksPath active).
+    """
+    from wade.git import repo as git_repo
+
+    current = git_repo.get_config_value(worktree_path, "core.hooksPath", worktree=True)
+    if current != WADE_GITHOOKS_DIR:
+        return False  # wade does not manage this worktree — nothing to undo
+
+    hooks_dir = worktree_path / WADE_GITHOOKS_DIR
+    removals = [worktree_path / WADE_HOOK_LEGACY_CHAIN_FILE]
+    for hook_name in _MANAGED_GITHOOK_NAMES:
+        removals.append(hooks_dir / hook_name)
+        removals.append(worktree_path / _chain_file(hook_name))
+    for target in removals:
+        try:
+            target.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("skills.githook_remove_failed", path=str(target))
+
+    git_repo.unset_config_value(worktree_path, "core.hooksPath", worktree=True)
+    logger.debug("skills.githooks_uninstalled", path=str(worktree_path))
+    return False
+
+
 def _bake_shell_single_quoted(value: str | None) -> str:
     """Escape *value* for substitution inside a single-quoted shell literal.
 

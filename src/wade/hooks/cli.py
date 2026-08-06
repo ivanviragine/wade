@@ -98,6 +98,11 @@ _WRITE_GUARDS = frozenset({"worktree", "plan"})
 _POST_TOOL_USE_TIMEOUT = 10
 
 
+def _is_post_tool_use(event: str) -> bool:
+    """True when ``event`` names the PostToolUse hook, in any casing/spelling."""
+    return event.strip().lower().replace("_", "") == "posttooluse"
+
+
 def _dialect_for(tool: str) -> HookOutputDialect:
     return _TOOL_DIALECTS.get(tool.strip().lower(), HookOutputDialect.HOOK_SPECIFIC_OUTPUT)
 
@@ -438,16 +443,48 @@ def _resolve_edited_path(ev: object, root: str) -> str | None:
     return str(resolved)
 
 
+def _resolve_post_tool_use_config(root: str) -> tuple[str, int, bool] | None:
+    """Resolve ``(lint_cmd, timeout, scoped)`` from the worktree's ``.wade.yml``.
+
+    Returns None when PostToolUse is disabled or no lint command resolves, so a
+    stale hook installed by a prior session self-noops once the gate is turned
+    off. ``lint_cmd`` is ``post_tool_use.lint_cmd`` (file-scoped) or, when unset,
+    ``pre_commit.lint`` (whole-repo). Imported lazily so the config loader is only
+    pulled in on this PostToolUse branch — never on the hot PreToolUse write path.
+    """
+    if not root:
+        return None
+    try:
+        from wade.config.loader import load_config
+
+        config = load_config(Path(root))
+    except Exception:
+        return None
+    ptu = config.hooks.post_tool_use
+    if not ptu.enabled:
+        return None
+    lint_cmd = ptu.lint_cmd or config.hooks.pre_commit.lint
+    if not lint_cmd:
+        return None
+    return lint_cmd, ptu.timeout, bool(ptu.lint_cmd)
+
+
 def _run_post_tool_use(
-    tool: str, root: str, lint_cmd: str | None, timeout: int, *, scoped: bool
+    tool: str, root: str, lint_cmd: str | None, timeout: int | None, *, unscoped: bool
 ) -> HookEmission:
     """Run the file-scoped PostToolUse linter — strictly fire-and-forget / fail-open.
 
     Always exits 0 and never denies. On a non-zero lint exit it returns the lint
     output as :meth:`HookDecision.context` so the agent can fix the file while the
     edit is still in working memory; every other outcome — a context-incapable
-    tool, no lint command, unreadable stdin, a non-write / out-of-worktree edit, a
-    timeout, empty output, or any exception — is a silent no-op (empty emit).
+    tool, disabled/no lint command, unreadable stdin, a non-write / out-of-worktree
+    edit, a timeout, empty output, or any exception — is a silent no-op.
+
+    ``lint_cmd`` may be passed explicitly (an override, used by tests); when
+    omitted it is resolved from the worktree's ``.wade.yml`` at ``root``, so the
+    installed hook command is **stable** (``--tool``/``--root`` only). That keeps
+    re-bootstrap idempotent (identical command → crossby dedups) and makes a hook
+    left over from a now-disabled gate self-noop.
 
     The argv is built **safely**: ``shlex.split(lint_cmd)`` (config-authored,
     trusted) plus the resolved edited path (tool-emitted, untrusted) as a list,
@@ -464,7 +501,21 @@ def _run_post_tool_use(
 
     # agy (DECISION dialect) has no context channel; bootstrap already skips it,
     # but double-guard so a stray install can't fire a per-edit subprocess for it.
-    if dialect is HookOutputDialect.DECISION or not lint_cmd:
+    if dialect is HookOutputDialect.DECISION:
+        return _noop()
+
+    if lint_cmd is None:
+        # No explicit override — resolve from config (also self-disables a stale
+        # hook whose gate was turned off).
+        resolved = _resolve_post_tool_use_config(root)
+        if resolved is None:
+            return _noop()
+        lint_cmd, timeout, scoped = resolved
+    else:
+        scoped = not unscoped
+        if timeout is None:
+            timeout = _POST_TOOL_USE_TIMEOUT
+    if not lint_cmd:
         return _noop()
 
     try:
@@ -483,10 +534,10 @@ def _run_post_tool_use(
     if not argv:
         return _noop()
     if scoped:
-        resolved = _resolve_edited_path(ev, root)
-        if resolved is None:
+        edited_path = _resolve_edited_path(ev, root)
+        if edited_path is None:
             return _noop()
-        argv = [*argv, resolved]
+        argv = [*argv, edited_path]
 
     try:
         proc = subprocess.run(
@@ -527,22 +578,24 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--tool", required=True, help="AI tool id (selects the output dialect).")
     parser.add_argument("--root", default="", help="Worktree root — required by write guards.")
-    # PostToolUse lint feedback (fail-open, never blocks).
+    # PostToolUse lint feedback (fail-open, never blocks). The installed hook
+    # passes neither --lint-cmd nor --timeout (a stable, config-driven command);
+    # these remain as explicit overrides (used by tests / manual invocation).
     parser.add_argument(
         "--lint-cmd",
         default=None,
-        help="PostToolUse: lint command; the edited path is appended unless --unscoped.",
+        help="PostToolUse override: lint command; the edited path is appended unless --unscoped.",
     )
     parser.add_argument(
         "--timeout",
         type=int,
-        default=_POST_TOOL_USE_TIMEOUT,
-        help="PostToolUse: seconds before the linter is abandoned (skip on overrun).",
+        default=None,
+        help="PostToolUse override: seconds before the linter is abandoned (skip on overrun).",
     )
     parser.add_argument(
         "--unscoped",
         action="store_true",
-        help="PostToolUse: run the lint command whole-repo (do not append the edited path).",
+        help="PostToolUse override: run the lint command whole-repo (do not append the path).",
     )
 
     raw_argv = sys.argv[1:] if argv is None else argv
@@ -555,13 +608,13 @@ def main(argv: list[str] | None = None) -> int:
         # opposite: those channels are fail-open (PostToolUse must never block —
         # the tool has already run), so a malformed invocation there returns 0.
         event_arg = _event_from_argv(raw_argv)
-        if event_arg == "stop" or event_arg.replace("_", "") == "posttooluse":
+        if event_arg == "stop" or _is_post_tool_use(event_arg):
             return 0
         raise
 
-    if ns.event.strip().lower().replace("_", "") == "posttooluse":
+    if _is_post_tool_use(ns.event):
         emission = _run_post_tool_use(
-            ns.tool, ns.root, ns.lint_cmd, ns.timeout, scoped=not ns.unscoped
+            ns.tool, ns.root, ns.lint_cmd, ns.timeout, unscoped=ns.unscoped
         )
     else:
         emission = _run(ns.event, ns.guard, ns.tool, ns.root)

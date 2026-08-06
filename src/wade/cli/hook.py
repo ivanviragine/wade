@@ -20,10 +20,10 @@ import typer
 def hook_command(
     event: str = typer.Argument(
         ...,
-        help="Canonical hook event: pre_tool_use, stop, or session_start.",
+        help="Canonical hook event: pre_tool_use, post_tool_use, stop, or session_start.",
     ),
     guard: str = typer.Option(
-        ...,
+        "",
         "--guard",
         help="Guard policy to apply: worktree | plan | session-complete | plan-complete.",
     ),
@@ -37,11 +37,34 @@ def hook_command(
         "--root",
         help="Worktree root — required by the worktree/plan guards.",
     ),
+    lint_cmd: str | None = typer.Option(
+        None,
+        "--lint-cmd",
+        help="PostToolUse override: lint command (edited path appended unless --unscoped).",
+    ),
+    timeout: int | None = typer.Option(
+        None,
+        "--timeout",
+        help="PostToolUse override: seconds before the linter is abandoned.",
+    ),
+    unscoped: bool = typer.Option(
+        False,
+        "--unscoped",
+        help="PostToolUse override: run the lint command whole-repo (don't append the path).",
+    ),
 ) -> None:
-    """Apply a wade write-guard to a tool's hook payload read from stdin."""
-    from wade.hooks.cli import _run
+    """Apply a wade hook to a tool's payload read from stdin.
 
-    emission = _run(event, guard, tool, root)
+    Delegates to the same code paths as the lean ``wade-hook`` console script:
+    the fail-open PostToolUse lint-feedback branch for ``post_tool_use``, and the
+    write/stop guard dispatcher otherwise.
+    """
+    from wade.hooks.cli import _is_post_tool_use, _run, _run_post_tool_use
+
+    if _is_post_tool_use(event):
+        emission = _run_post_tool_use(tool, root, lint_cmd, timeout, unscoped=unscoped)
+    else:
+        emission = _run(event, guard, tool, root)
     if emission.stdout:
         sys.stdout.write(emission.stdout)
     if emission.stderr:

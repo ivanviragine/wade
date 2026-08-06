@@ -35,10 +35,10 @@ def _pass_linter(tmp_path: Path) -> str:
 def _run_ptu(
     tool: str,
     root: str,
-    lint_cmd: str,
+    lint_cmd: str | None,
     stdin: str,
     *,
-    timeout: int = 5,
+    timeout: int | None = 5,
     unscoped: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     cmd = [
@@ -50,11 +50,11 @@ def _run_ptu(
         tool,
         "--root",
         root,
-        "--lint-cmd",
-        lint_cmd,
-        "--timeout",
-        str(timeout),
     ]
+    if lint_cmd is not None:
+        cmd += ["--lint-cmd", lint_cmd]
+    if timeout is not None:
+        cmd += ["--timeout", str(timeout)]
     if unscoped:
         cmd.append("--unscoped")
     return subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=30)
@@ -205,6 +205,61 @@ class TestScoping:
         r = _run_ptu("claude", str(wt), echo, _write_payload(wt), unscoped=True)
         ctx = json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
         assert "args=[]" in ctx
+
+
+class TestConfigDrivenRuntime:
+    """The installed hook passes no --lint-cmd; it resolves config at ``root``."""
+
+    def test_resolves_lint_from_config(self, tmp_path: Path) -> None:
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        linter = _fail_linter(tmp_path)
+        (wt / ".wade.yml").write_text(
+            "version: 2\n"
+            "hooks:\n"
+            "  post_tool_use:\n"
+            "    enabled: true\n"
+            f"    lint_cmd: {linter}\n"
+            "    timeout: 5\n"
+        )
+        r = _run_ptu("claude", str(wt), None, _write_payload(wt), timeout=None)
+        assert r.returncode == 0
+        ctx = json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
+        assert "LINT-FINDING" in ctx
+
+    def test_disabled_in_config_is_noop(self, tmp_path: Path) -> None:
+        # A hook left over from a now-disabled gate must self-noop.
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        (wt / ".wade.yml").write_text("version: 2\nhooks:\n  post_tool_use:\n    enabled: false\n")
+        r = _run_ptu("claude", str(wt), None, _write_payload(wt), timeout=None)
+        assert r.returncode == 0
+        assert r.stdout == ""
+
+    def test_missing_config_is_noop(self, tmp_path: Path) -> None:
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        r = _run_ptu("claude", str(wt), None, _write_payload(wt), timeout=None)
+        assert r.returncode == 0
+        assert r.stdout == ""
+
+    def test_falls_back_to_pre_commit_lint_whole_repo(self, tmp_path: Path) -> None:
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        linter = _script(tmp_path / "echo.sh", '#!/usr/bin/env bash\necho "args=[$*]"\nexit 1\n')
+        (wt / ".wade.yml").write_text(
+            "version: 2\n"
+            "hooks:\n"
+            f"  pre_commit:\n    lint: {linter}\n"
+            "  post_tool_use:\n    enabled: true\n"
+        )
+        # No lint_cmd → falls back to pre_commit.lint, run whole-repo: the edited
+        # path must NOT be appended.
+        r = _run_ptu("claude", str(wt), None, _write_payload(wt, "target.py"), timeout=None)
+        assert r.returncode == 0
+        ctx = json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
+        assert "args=[]" in ctx
+        assert str(wt / "target.py") not in ctx
 
 
 class TestInjectionSafety:

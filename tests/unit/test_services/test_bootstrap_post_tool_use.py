@@ -1,9 +1,10 @@
 """Tests for the #352 PostToolUse lint-feedback install (bootstrap side).
 
-Verifies the gating logic — enabled + resolvable lint command → a
-``post_tool_use`` hook is installed only into context-capable tools (agy, whose
-DECISION dialect has no context channel, is skipped) — plus one real-writer
-smoke test that the HookEntry lands in Claude's config.
+The installed command is **stable** (``wade-hook post_tool_use --tool <id>
+--root <root>``) — the lint command/timeout/scope are resolved from ``.wade.yml``
+at runtime — so this asserts the *gating*: enabled + resolvable lint → an add for
+context-capable tools only (agy skipped); disabled / unresolvable → a removal for
+every tool. Plus a real-writer smoke test.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ _ALL_TOOLS = [
     AIToolID.CODEX,
     AIToolID.ANTIGRAVITY_CLI,
 ]
+_CONTEXT_CAPABLE = {AIToolID.CLAUDE, AIToolID.CURSOR, AIToolID.COPILOT, AIToolID.CODEX}
 
 
 def _capturing_writers(captured: list[tuple[AIToolID, object]]):
@@ -56,28 +58,37 @@ def _install(config: ProjectConfig, tmp_path: Path) -> list[tuple[AIToolID, obje
     return captured
 
 
+def _classify(captured: list[tuple[AIToolID, object]]):
+    adds: dict[AIToolID, object] = {}
+    removes: dict[AIToolID, object] = {}
+    for tid, data in captured:
+        if getattr(data, "hooks", None):
+            adds[tid] = data.hooks[0]
+        if getattr(data, "hooks_remove", None):
+            removes[tid] = data.hooks_remove
+    return adds, removes
+
+
 class TestGating:
-    def test_installs_into_context_capable_tools_only(self, tmp_path: Path) -> None:
+    def test_adds_to_context_capable_tools_removes_from_agy(self, tmp_path: Path) -> None:
         config = ProjectConfig(
             project=ProjectSettings(),
             hooks=HooksConfig(
                 post_tool_use=PostToolUseConfig(enabled=True, lint_cmd="ruff check", timeout=12)
             ),
         )
-        captured = _install(config, tmp_path)
-        tools = {tid for tid, _ in captured}
-        # agy (DECISION dialect) is skipped; the other four get the hook.
-        assert AIToolID.ANTIGRAVITY_CLI not in tools
-        assert tools == {AIToolID.CLAUDE, AIToolID.CURSOR, AIToolID.COPILOT, AIToolID.CODEX}
-        # Command shape: file-scoped (no --unscoped), carries lint cmd + timeout.
-        _tid, data = captured[0]
-        entry = data.hooks[0]
+        adds, removes = _classify(_install(config, tmp_path))
+        assert set(adds) == _CONTEXT_CAPABLE
+        assert set(removes) == {AIToolID.ANTIGRAVITY_CLI}
+        # The command is STABLE — tool + root only, no baked lint cmd/timeout/scope.
+        entry = adds[AIToolID.CLAUDE]
         assert entry.event == "post_tool_use"
-        assert "--lint-cmd" in entry.command
-        assert "--timeout 12" in entry.command
+        assert entry.command.startswith("wade-hook post_tool_use --tool claude --root ")
+        assert "--lint-cmd" not in entry.command
+        assert "--timeout" not in entry.command
         assert "--unscoped" not in entry.command
 
-    def test_fallback_to_pre_commit_lint_is_unscoped(self, tmp_path: Path) -> None:
+    def test_fallback_to_pre_commit_lint_still_adds(self, tmp_path: Path) -> None:
         config = ProjectConfig(
             project=ProjectSettings(),
             hooks=HooksConfig(
@@ -85,28 +96,30 @@ class TestGating:
                 post_tool_use=PostToolUseConfig(enabled=True),
             ),
         )
-        captured = _install(config, tmp_path)
-        assert captured, "expected an install when falling back to pre_commit.lint"
-        _tid, data = captured[0]
-        assert "--unscoped" in data.hooks[0].command
+        adds, _removes = _classify(_install(config, tmp_path))
+        assert set(adds) == _CONTEXT_CAPABLE
 
-    def test_disabled_installs_nothing(self, tmp_path: Path) -> None:
+    def test_disabled_removes_from_every_tool(self, tmp_path: Path) -> None:
         config = ProjectConfig(
             project=ProjectSettings(),
             hooks=HooksConfig(post_tool_use=PostToolUseConfig(enabled=False, lint_cmd="ruff")),
         )
-        assert _install(config, tmp_path) == []
+        adds, removes = _classify(_install(config, tmp_path))
+        assert adds == {}
+        assert set(removes) == set(_ALL_TOOLS)
 
-    def test_enabled_without_resolvable_command_installs_nothing(self, tmp_path: Path) -> None:
+    def test_enabled_without_resolvable_command_removes(self, tmp_path: Path) -> None:
         config = ProjectConfig(
             project=ProjectSettings(),
             hooks=HooksConfig(post_tool_use=PostToolUseConfig(enabled=True)),
         )
-        assert _install(config, tmp_path) == []
+        adds, removes = _classify(_install(config, tmp_path))
+        assert adds == {}
+        assert set(removes) == set(_ALL_TOOLS)
 
 
 class TestRealWriterSmoke:
-    def test_claude_config_gets_post_tool_use_hook(self, tmp_path: Path) -> None:
+    def test_claude_config_gets_stable_post_tool_use_hook(self, tmp_path: Path) -> None:
         wt = tmp_path / "wt"
         wt.mkdir()
         config = ProjectConfig(
@@ -119,8 +132,23 @@ class TestRealWriterSmoke:
         settings = wt / ".claude" / "settings.json"
         assert settings.is_file()
         text = settings.read_text()
-        data = json.loads(text)
-        # crossby nests hooks under a "hooks" mapping keyed by the tool's event
-        # name (PostToolUse for Claude). Assert the wade-hook command landed.
-        assert "PostToolUse" in json.dumps(data)
-        assert "wade-hook post_tool_use" in text
+        assert "PostToolUse" in json.dumps(json.loads(text))
+        assert "wade-hook post_tool_use --tool claude --root" in text
+        assert "--lint-cmd" not in text
+
+    def test_disable_removes_previously_installed_hook(self, tmp_path: Path) -> None:
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        enabled = ProjectConfig(
+            project=ProjectSettings(),
+            hooks=HooksConfig(post_tool_use=PostToolUseConfig(enabled=True, lint_cmd="ruff check")),
+        )
+        bootstrap_mod._install_post_tool_use_lint_hook(wt, enabled)
+        assert "wade-hook post_tool_use" in (wt / ".claude" / "settings.json").read_text()
+
+        # Re-bootstrap with the gate turned off — the stale entry must be removed.
+        disabled = ProjectConfig(project=ProjectSettings(), hooks=HooksConfig())
+        bootstrap_mod._install_post_tool_use_lint_hook(wt, disabled)
+        settings = wt / ".claude" / "settings.json"
+        if settings.is_file():
+            assert "wade-hook post_tool_use" not in settings.read_text()

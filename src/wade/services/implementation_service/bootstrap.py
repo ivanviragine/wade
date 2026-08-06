@@ -362,20 +362,22 @@ _LINT_FEEDBACK_TOOLS = ["Edit", "Write", "NotebookEdit"]
 
 
 def _install_managed_git_hooks(worktree_path: Path, config: ProjectConfig) -> None:
-    """Install the pre-push backstop + opt-in pre-commit/commit-msg gates in one batch.
+    """Reconcile the pre-push backstop + opt-in pre-commit/commit-msg gates.
 
-    Gathers the hooks whose config gates are on, then installs them via a single
-    :func:`install_worktree_git_hooks` call — the batch guarantees every prior
-    user hook is captured before wade sets ``core.hooksPath`` (a per-hook
-    capture-after-set would miss a user's custom repo-level hooksPath). All hooks
-    are optional and the installer graceful-degrades on old git, so an install
-    failure is swallowed to a warning and never crashes bootstrap.
+    Gathers the hooks whose config gates are on and hands the full desired set to
+    :func:`reconcile_worktree_git_hooks`, which installs them in one batch
+    (guaranteeing every prior user hook is captured before wade sets
+    ``core.hooksPath``) **and** neutralizes any gate turned off since a prior
+    bootstrap — so re-running ``wade implement`` on a reused worktree honors a
+    disabled gate instead of leaving a stale one firing. All hooks are optional
+    and the installer graceful-degrades on old git, so a failure is swallowed to a
+    warning and never crashes bootstrap.
     """
     from wade.skills.installer import (
         build_commit_msg_hook_script,
         build_pre_commit_hook_script,
-        install_worktree_git_hooks,
         load_hook_template,
+        reconcile_worktree_git_hooks,
     )
 
     hooks: dict[str, str] = {}
@@ -393,16 +395,8 @@ def _install_managed_git_hooks(worktree_path: Path, config: ProjectConfig) -> No
     if config.hooks.commit_msg.conventional:
         hooks["commit-msg"] = build_commit_msg_hook_script()
 
-    if not hooks:
-        return
-
     try:
-        if not install_worktree_git_hooks(worktree_path, hooks):
-            logger.info(
-                "implementation.git_hooks_skipped",
-                path=str(worktree_path),
-                hooks=sorted(hooks),
-            )
+        reconcile_worktree_git_hooks(worktree_path, hooks)
     except Exception:
         logger.warning(
             "implementation.git_hooks_error",
@@ -413,62 +407,60 @@ def _install_managed_git_hooks(worktree_path: Path, config: ProjectConfig) -> No
 
 
 def _install_post_tool_use_lint_hook(worktree_path: Path, config: ProjectConfig) -> None:
-    """Install PostToolUse in-turn lint feedback into each context-capable tool.
+    """Reconcile PostToolUse in-turn lint feedback across each tool.
 
-    Opt-in via ``hooks.post_tool_use.enabled``. The lint command is
-    ``post_tool_use.lint_cmd`` (**file-scoped** — the edited path is appended) or,
-    when unset, ``pre_commit.lint`` run **unscoped** (whole-repo, which fires on
-    every edit — prefer configuring a file-scoped ``lint_cmd``). The resolved
-    command + timeout are baked into the hook argv so the lean ``wade-hook`` entry
-    point never loads config. Gated to tools whose output dialect supports context
-    injection (dialect ≠ ``DECISION``), so Antigravity CLI is skipped rather than
-    firing a no-op subprocess per edit. Never fail-closed: this path must not block.
+    Opt-in via ``hooks.post_tool_use.enabled`` with a resolvable lint command
+    (``post_tool_use.lint_cmd`` file-scoped, or ``pre_commit.lint`` whole-repo).
+    The installed hook command is **stable** — ``wade-hook post_tool_use --tool
+    <id> --root <root>``, with the lint command/timeout/scope resolved from
+    ``.wade.yml`` at runtime — so re-bootstrapping a reused worktree is idempotent
+    (identical command → crossby dedups; no duplicate entry on reconfigure) and a
+    hook left over from a now-disabled gate self-noops.
+
+    Only **context-capable** tools (output dialect ≠ ``DECISION``) get the hook —
+    Antigravity CLI has no verified context channel, so it is skipped. When the
+    gate is off (or the tool can't inject context) any prior wade entry is
+    **removed**; the stable command makes that removal deterministic regardless of
+    the previously-configured lint command. Never fail-closed: this must not block.
     """
     import shlex
-
-    ptu = config.hooks.post_tool_use
-    if not ptu.enabled:
-        return
-    lint_cmd = ptu.lint_cmd or config.hooks.pre_commit.lint
-    if not lint_cmd:
-        return
 
     from crossby.ai_tools import AbstractAITool
     from crossby.models.ai import HookOutputDialect
     from crossby.models.config import HookEntry
     from crossby.sync.base import SyncData
 
-    scoped = bool(ptu.lint_cmd)  # file-scoped only when an explicit lint_cmd is set
+    ptu = config.hooks.post_tool_use
+    enabled = ptu.enabled and bool(ptu.lint_cmd or config.hooks.pre_commit.lint)
     root = shlex.quote(str(worktree_path))
-    quoted_cmd = shlex.quote(lint_cmd)
 
-    installed_any = False
     for tool_id, writer in _hook_writers():
-        # Context-capable tools only. agy's DECISION dialect has no verified
-        # context-injection channel, so a PostToolUse hook there would fire a
-        # subprocess on every edit and discard the result — pure cost.
-        if AbstractAITool.get(tool_id).capabilities().hook_output_dialect is (
-            HookOutputDialect.DECISION
-        ):
-            continue
-        command = (
-            f"wade-hook post_tool_use --tool {tool_id.value} --root {root} "
-            f"--lint-cmd {quoted_cmd} --timeout {ptu.timeout}"
+        context_capable = (
+            AbstractAITool.get(tool_id).capabilities().hook_output_dialect
+            is not HookOutputDialect.DECISION
         )
-        if not scoped:
-            command += " --unscoped"
-        # No fail_closed: PostToolUse must never block. Its own timeout bounds the
-        # per-edit cost at the tool's hook-runner level too.
-        hook = HookEntry(
-            event="post_tool_use",
-            tools=_LINT_FEEDBACK_TOOLS,
-            command=command,
-            timeout=ptu.timeout,
-        )
-        _log_sync_result(writer.sync(SyncData(hooks=[hook]), worktree_path), tool_id)
-        installed_any = True
+        command = f"wade-hook post_tool_use --tool {tool_id.value} --root {root}"
+        if enabled and context_capable:
+            # No fail_closed: PostToolUse must never block. The timeout bounds the
+            # per-edit cost at the tool's hook-runner level too.
+            data = SyncData(
+                hooks=[
+                    HookEntry(
+                        event="post_tool_use",
+                        tools=_LINT_FEEDBACK_TOOLS,
+                        command=command,
+                        timeout=ptu.timeout,
+                    )
+                ]
+            )
+        else:
+            # Gate off, or the tool can't inject context — retract any prior wade
+            # entry. Removing a non-existent entry is a no-op (no config file is
+            # created), so this is safe to run every bootstrap.
+            data = SyncData(hooks_remove=[("post_tool_use", command)])
+        _log_sync_result(writer.sync(data, worktree_path), tool_id)
 
-    if installed_any:
+    if enabled:
         logger.info("implementation.post_tool_use_lint_installed", path=str(worktree_path))
 
 

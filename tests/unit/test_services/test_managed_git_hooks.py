@@ -17,7 +17,10 @@ from wade.skills.installer import (
     build_commit_msg_hook_script,
     build_pre_commit_hook_script,
     install_worktree_git_hooks,
+    reconcile_worktree_git_hooks,
 )
+
+_NOOP_PRE_PUSH = "#!/usr/bin/env bash\nexit 0\n"
 
 
 def _git(root: Path, *args: str) -> str:
@@ -211,6 +214,61 @@ class TestChaining:
         assert (wt / ".wade" / "githooks" / ".chain-pre-commit").read_text().strip() == str(
             prior_commit.resolve()
         )
+
+
+class TestReconcileDisable:
+    """Re-bootstrapping a reused worktree must honor a gate turned off since a
+    prior session — the core fix for the 'disable does nothing' defect."""
+
+    def test_disabling_gate_neutralizes_stale_hook(self, tmp_path: Path) -> None:
+        _main, wt = _main_and_worktree(tmp_path)
+        # Session 1: pre-commit gate ON (a failing lint) alongside pre-push.
+        reconcile_worktree_git_hooks(
+            wt,
+            {
+                "pre-push": _NOOP_PRE_PUSH,
+                "pre-commit": build_pre_commit_hook_script("false", None),
+            },
+        )
+        assert _commit(wt, "b.txt", "chore: b").returncode != 0  # blocked
+
+        # Session 2: pre-commit gate removed from config — must stop firing.
+        reconcile_worktree_git_hooks(wt, {"pre-push": _NOOP_PRE_PUSH})
+        assert _commit(wt, "c.txt", "chore: c").returncode == 0
+
+    def test_uninstall_when_nothing_desired_restores_git_hooks(self, tmp_path: Path) -> None:
+        _main, wt = _main_and_worktree(tmp_path)
+        reconcile_worktree_git_hooks(
+            wt, {"pre-commit": build_pre_commit_hook_script("false", None)}
+        )
+        assert git_repo.get_config_value(wt, "core.hooksPath", worktree=True) == ".wade/githooks"
+
+        # Everything off → full uninstall: hooksPath unset, scripts gone.
+        assert reconcile_worktree_git_hooks(wt, {}) is False
+        assert git_repo.get_config_value(wt, "core.hooksPath", worktree=True) is None
+        assert not (wt / ".wade" / "githooks" / "pre-commit").exists()
+        assert _commit(wt, "b.txt", "anything at all goes now").returncode == 0
+
+    def test_disabled_gate_preserves_prior_via_passthrough(self, tmp_path: Path) -> None:
+        main, wt = _main_and_worktree(tmp_path)
+        record = tmp_path / "prior_ran.txt"
+        hooks = main / ".git" / "hooks"
+        hooks.mkdir(parents=True, exist_ok=True)
+        prior = hooks / "pre-commit"
+        prior.write_text(f"#!/usr/bin/env bash\necho ran > '{record}'\nexit 0\n")
+        prior.chmod(0o755)
+
+        # Session 1: wade pre-commit gate ON (chains to the user's prior).
+        reconcile_worktree_git_hooks(
+            wt,
+            {"pre-push": _NOOP_PRE_PUSH, "pre-commit": build_pre_commit_hook_script("true", None)},
+        )
+        # Session 2: disable the wade gate — the user's prior must still run.
+        reconcile_worktree_git_hooks(wt, {"pre-push": _NOOP_PRE_PUSH})
+        record.unlink(missing_ok=True)
+        r = _commit(wt, "b.txt", "chore: b")
+        assert r.returncode == 0, r.stderr
+        assert record.read_text().strip() == "ran"
 
 
 class TestLegacyChainMigration:
