@@ -132,6 +132,37 @@ class TestParseConfigFile:
         assert config.project.issue_label == "feature-plan"
         assert config.ai.default_tool is None
 
+    def test_done_gates_default_on(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\n")
+
+        config = parse_config_file(config_path)
+        # Every completion gate defaults on — enforcement is the point (#349).
+        assert config.done.require_pr_summary is True
+        assert config.done.require_sync is True
+        assert config.done.require_review is True
+        assert config.done.require_resolved_threads is True
+        assert config.done.pre_push_backstop is True
+
+    def test_done_gates_round_trip(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\n"
+            "done:\n"
+            "  require_pr_summary: false\n"
+            "  require_sync: false\n"
+            "  require_review: false\n"
+            "  require_resolved_threads: false\n"
+            "  pre_push_backstop: false\n"
+        )
+
+        config = parse_config_file(config_path)
+        assert config.done.require_pr_summary is False
+        assert config.done.require_sync is False
+        assert config.done.require_review is False
+        assert config.done.require_resolved_threads is False
+        assert config.done.pre_push_backstop is False
+
     def test_empty_file(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text("")

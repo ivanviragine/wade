@@ -23,6 +23,7 @@ from wade.models.config import (
     LEGACY_AI_COMMAND_ALIASES,
     AICommandConfig,
     AIConfig,
+    DoneConfig,
     ProjectConfig,
 )
 from wade.models.delegation import DelegationMode
@@ -259,6 +260,11 @@ _VALID_AI_TOP_LEVEL_KEYS = frozenset(
     {*_VALID_AI_SCALAR_KEYS, *AI_COMMAND_NAMES, *LEGACY_AI_COMMAND_ALIASES}
 )
 
+# Valid keys for the ``done`` section, derived from the Pydantic model so the
+# validator can't drift from the schema (per knowledge ca245d6a — config-key
+# validity lives in three places; deriving keeps them in sync automatically).
+_VALID_DONE_KEYS = frozenset(DoneConfig.model_fields)
+
 
 def validate_config(cwd: Path | None = None) -> ConfigCheckResult:
     """Validate the project's .wade.yml config.
@@ -379,6 +385,14 @@ def _validate_config_file(config_path: Path) -> list[str]:
         else:
             _validate_knowledge_section(knowledge, config_path, errors)
 
+    # Validate done section
+    done = raw.get("done")
+    if done is not None:
+        if not isinstance(done, dict):
+            errors.append("done: must be a mapping")
+        else:
+            _validate_done_section(done, errors)
+
     # Check for unsupported top-level keys
     supported_keys = {
         "version",
@@ -389,6 +403,7 @@ def _validate_config_file(config_path: Path) -> list[str]:
         "permissions",
         "hooks",
         "knowledge",
+        "done",
     }
     for key in raw:
         if key not in supported_keys:
@@ -637,3 +652,15 @@ def _validate_knowledge_section(
     for key in knowledge:
         if key not in valid_keys:
             errors.append(f"knowledge.{key}: unsupported key")
+
+
+def _validate_done_section(done: dict[str, Any], errors: list[str]) -> None:
+    """Validate the ``done`` completion-gate section (all fields are booleans)."""
+    for key, value in done.items():
+        if key not in _VALID_DONE_KEYS:
+            errors.append(
+                f"done.{key}: unsupported key. "
+                f"Supported keys: {', '.join(sorted(_VALID_DONE_KEYS))}"
+            )
+        elif value is not None and not isinstance(value, bool):
+            errors.append(f"done.{key}: must be true or false")

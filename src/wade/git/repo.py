@@ -632,3 +632,49 @@ def upstream_tracking_status(repo_root: Path, branch: str) -> str | None:
     )
     status = result.stdout.strip()
     return status if status else None
+
+
+def get_git_common_dir(path: Path) -> str | None:
+    """Return the *common* git directory for *path*, or None on failure.
+
+    Unlike :func:`get_git_dir` (which in a linked worktree returns that
+    worktree's private git dir), this returns the shared common dir — the main
+    repo's ``.git`` — where common hooks live (``<common-dir>/hooks``). The
+    result may be relative to *path*; callers resolve it against the worktree.
+    """
+    result = _run_git("rev-parse", "--git-common-dir", cwd=path, check=False)
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def get_config_value(path: Path, key: str, *, worktree: bool = False) -> str | None:
+    """Return a git config value, or None if unset/unreadable.
+
+    With ``worktree=True`` reads the ``--worktree`` scope, which requires
+    ``extensions.worktreeConfig`` to be enabled — when it is not, git errors and
+    this returns None (treated as "unset").
+    """
+    args = ["config"]
+    if worktree:
+        args.append("--worktree")
+    args.extend(["--get", key])
+    result = _run_git(*args, cwd=path, check=False)
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def set_config_value(path: Path, key: str, value: str, *, worktree: bool = False) -> bool:
+    """Set a git config value; return whether it succeeded.
+
+    With ``worktree=True`` writes the ``--worktree`` scope (requires
+    ``extensions.worktreeConfig``). Never raises — returns False on any failure
+    so callers can gracefully skip an optional feature on old/locked-down git.
+    """
+    args = ["config"]
+    if worktree:
+        args.append("--worktree")
+    args.extend([key, value])
+    result = _run_git(*args, cwd=path, check=False)
+    return result.returncode == 0

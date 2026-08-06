@@ -660,9 +660,26 @@ def bootstrap_worktree(
     _install_guard_hooks(worktree_path, guard_type="plan" if plan_mode else "worktree")
 
     # Implement/review sessions (not plan) also get a Stop-hook completion
-    # reminder that enforces writing PR-SUMMARY.md + running `done` before exit.
+    # reminder that nudges the agent to run `done` before exit.
     if not plan_mode:
         _install_stop_hook(worktree_path)
+
+        # ...and the pre-push backstop that makes the `done` gate hard to skip:
+        # a push without a current `.wade/done@<sha>` marker is refused. Optional
+        # (gated on config, graceful-degrades on old git) — must never crash
+        # bootstrap, so any failure is swallowed to a warning.
+        if config.done.pre_push_backstop:
+            from wade.skills.installer import install_pre_push_backstop
+
+            try:
+                if not install_pre_push_backstop(worktree_path):
+                    logger.info("implementation.pre_push_backstop_skipped", path=str(worktree_path))
+            except Exception:
+                logger.warning(
+                    "implementation.pre_push_backstop_error",
+                    path=str(worktree_path),
+                    exc_info=True,
+                )
 
     # Write worktree gitignore block AFTER all file generation so the entry
     # list is complete (skills, hooks, settings, pointer are all in place).

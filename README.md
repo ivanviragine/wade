@@ -208,7 +208,13 @@ enough to pick up improvements, with no re-init or migration.
 |-------|----------------|
 | Worktree containment | Writes that land outside your worktree |
 | Plan-artifact | During `wade plan`, writes to anything but plan artifacts |
-| Session completion | Finishing a session with `PR-SUMMARY.md` missing (nudges once) |
+| Session completion | Finishing a session with unfinished work not yet run through `done` (nudges once) |
+
+The session-completion guard keys on the same fact `done` records — a sha-keyed
+`.wade/done@<HEAD>` marker written when `done`'s gates pass — so it nudges only
+when the branch has commits ahead of its base **and** `done` has not finalized
+the current commit. An early "stopping to ask a question" turn (no commits ahead)
+never triggers it.
 
 Both write guards cover **shell commands** as well as file edits, so a redirect
 like `printf x > ../other-repo/app.py` is blocked, not just an `Edit` call. Shell
@@ -226,6 +232,28 @@ deliberate obfuscation (variable indirection, command substitution, subshells).
 The remaining supported tools (OpenCode, VS Code, Antigravity IDE) expose no hook
 mechanism WADE can install into, so they receive neither guard — session rules
 there rest on the skill files alone.
+
+### Completion gates
+
+`wade implementation-session done` (and `review-pr-comments-session done`) is the
+authoritative completion gate: it refuses to finalize until the work is actually
+ready, then writes the `.wade/done@<HEAD>` marker and pushes. Each gate has an
+escape hatch under a `done:` block in `.wade.yml` (all default on):
+
+| Gate | Refuses when… | Hatch |
+|------|---------------|-------|
+| PR-SUMMARY | `PR-SUMMARY.md` is missing, empty, or still a template placeholder (implementation only) | `done.require_pr_summary: false` |
+| Sync | the branch is behind main — auto-syncs first, refuses only on conflict (implementation only) | `done.require_sync: false` |
+| Review ran | `wade review implementation` did not run for the current commit | `--skip-review`, `done.require_review: false` (auto-off when `ai.review_implementation.enabled: false`) |
+| Resolved threads | unresolved PR review threads remain (review-comments only) | `done.require_resolved_threads: false` |
+
+A **pre-push git hook** (`done.pre_push_backstop`, default on) backs the gate up:
+a push of the session branch without a current `.wade/done@<sha>` marker is
+refused, so committing-and-pushing straight past `done` doesn't work. It is
+worktree-scoped (never touches your main checkout or sibling worktrees) and
+chains to any pre-existing `pre-push` hook. **Honesty:** `git push --no-verify`
+bypasses the backstop in one flag — this is a quality/backstop layer that makes
+the gate hard to skip, not an airtight boundary.
 
 ## Task Providers
 

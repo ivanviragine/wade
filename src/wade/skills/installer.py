@@ -76,6 +76,171 @@ def load_prompt_template(name: str) -> str:
     return template.read_text(encoding="utf-8").strip()
 
 
+def load_hook_template(name: str) -> str:
+    """Load a git-hook script template by name from templates/hooks/.
+
+    Unlike :func:`load_prompt_template`, the content is returned verbatim (no
+    ``.strip()``) — a shell script's leading shebang and trailing newline matter.
+
+    Raises:
+        FileNotFoundError: If the template does not exist.
+    """
+    template = get_templates_dir() / "hooks" / name
+    if not template.is_file():
+        raise FileNotFoundError(f"Hook template not found: {template}")
+    return template.read_text(encoding="utf-8")
+
+
+# --- Per-worktree git-hook install (#349 pre-push backstop, reusable by #352) ---
+
+# Relative to the worktree top. ``core.hooksPath`` is set to this dir per-worktree
+# so a relative path resolves against each working tree's top level and cannot
+# leak to the main checkout or sibling worktrees. ``.wade/`` is already gitignored
+# and flagged-if-tracked, so nothing here appears as untracked or gets committed.
+WADE_GITHOOKS_DIR = ".wade/githooks"
+# File recording the resolved chain target (a pre-existing hook) — written once
+# at first install so the wade hook can invoke it after its own check passes.
+WADE_HOOK_CHAIN_FILE = ".wade/githooks/.chain"
+
+
+def _wade_hooks_managed(worktree_path: Path) -> bool:
+    """True if this worktree's pre-push is already wade-managed.
+
+    Detection must not mistake wade's *own* prior install for a user hook on a
+    re-run: either the ``--worktree core.hooksPath`` already points at
+    ``.wade/githooks`` **or** a ``.chain`` file already exists. Either way the
+    chain target was captured on the first install and must NOT be re-captured
+    (which would now resolve to wade's own hook and self-chain or drop the real
+    original).
+    """
+    from wade.git import repo as git_repo
+
+    if (worktree_path / WADE_HOOK_CHAIN_FILE).exists():
+        return True
+    current = git_repo.get_config_value(worktree_path, "core.hooksPath", worktree=True)
+    return current == WADE_GITHOOKS_DIR
+
+
+def _detect_prior_hook(worktree_path: Path, hook_name: str) -> str | None:
+    """Return the absolute path of a pre-existing ``hook_name`` hook, or None.
+
+    ``core.hooksPath`` *replaces* ``.git/hooks``, so before we point it at
+    ``.wade/githooks`` we must find whatever git would run today and chain to it.
+    Precedence mirrors git's: a prior user-set ``core.hooksPath`` wins over the
+    common-dir ``hooks/`` directory. Called only on first install (before we set
+    our own worktree ``core.hooksPath``), so the merged ``core.hooksPath`` it
+    reads is genuinely the user's, not ours.
+    """
+    from wade.git import repo as git_repo
+
+    candidates: list[Path] = []
+
+    prior_hooks_path = git_repo.get_config_value(worktree_path, "core.hooksPath")
+    if prior_hooks_path and prior_hooks_path != WADE_GITHOOKS_DIR:
+        prior_dir = Path(prior_hooks_path)
+        if not prior_dir.is_absolute():
+            prior_dir = worktree_path / prior_dir
+        candidates.append(prior_dir / hook_name)
+
+    common_dir = git_repo.get_git_common_dir(worktree_path)
+    if common_dir:
+        common_path = Path(common_dir)
+        if not common_path.is_absolute():
+            common_path = worktree_path / common_path
+        candidates.append(common_path / "hooks" / hook_name)
+
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate.resolve())
+    return None
+
+
+def install_worktree_git_hook(worktree_path: Path, hook_name: str, script_body: str) -> bool:
+    """Install a per-worktree git hook via ``core.hooksPath``, chaining any prior hook.
+
+    Reusable core (designed for #352's ``pre-commit``/``commit-msg`` needs):
+
+    1. Write ``script_body`` to ``<worktree>/.wade/githooks/<hook_name>`` (``+x``).
+       Always refreshed so the hook body can never drift from the installed wade.
+    2. On the **first** install only, detect a pre-existing hook (prior
+       ``core.hooksPath`` or common-dir ``hooks/<hook_name>``) and persist its
+       resolved path to ``.wade/githooks/.chain`` so the wade hook can invoke it.
+    3. Enable ``extensions.worktreeConfig`` (repo-level, idempotent) and set
+       ``core.hooksPath .wade/githooks`` in the ``--worktree`` scope.
+
+    **Graceful degrade**: worktree-scoped config needs git ≥ 2.20. If enabling
+    the extension or setting the worktree ``core.hooksPath`` fails for any reason
+    (old git, restricted config), the function warns via the logger, leaves the
+    session's Python ``done`` gates as the sole enforcement, and returns
+    ``False`` — it never raises, so bootstrap can't crash over the optional
+    backstop.
+
+    Returns True when the worktree hooksPath is active, False when the backstop
+    had to be skipped.
+    """
+    from wade.git import repo as git_repo
+
+    hooks_dir = worktree_path / WADE_GITHOOKS_DIR
+    try:
+        hooks_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        logger.warning("skills.githook_dir_failed", path=str(hooks_dir))
+        return False
+
+    already_managed = _wade_hooks_managed(worktree_path)
+
+    # Capture the chain target exactly once, BEFORE writing the hook script so a
+    # detection that scans common-dir/hooks can't pick up our own just-written
+    # file, and BEFORE setting our worktree core.hooksPath so the read reflects
+    # the user's prior config.
+    if not already_managed:
+        chain_target = _detect_prior_hook(worktree_path, hook_name)
+        if chain_target:
+            try:
+                (worktree_path / WADE_HOOK_CHAIN_FILE).write_text(
+                    chain_target + "\n", encoding="utf-8"
+                )
+            except OSError:
+                logger.warning("skills.githook_chain_write_failed", path=str(worktree_path))
+
+    hook_path = hooks_dir / hook_name
+    try:
+        hook_path.write_text(script_body, encoding="utf-8")
+        hook_path.chmod(0o755)
+    except OSError:
+        logger.warning("skills.githook_write_failed", path=str(hook_path))
+        return False
+
+    # Enable the worktree-config extension (repo-level), then set the worktree
+    # hooksPath. Order matters: --worktree writes require the extension first.
+    if not git_repo.set_config_value(worktree_path, "extensions.worktreeConfig", "true"):
+        logger.warning("skills.worktree_config_unsupported", path=str(worktree_path))
+        return False
+    if not git_repo.set_config_value(
+        worktree_path, "core.hooksPath", WADE_GITHOOKS_DIR, worktree=True
+    ):
+        logger.warning("skills.worktree_hookspath_failed", path=str(worktree_path))
+        return False
+
+    logger.debug("skills.githook_installed", hook=hook_name, path=str(worktree_path))
+    return True
+
+
+def install_pre_push_backstop(worktree_path: Path) -> bool:
+    """Install the ``done`` pre-push backstop hook into a worktree.
+
+    Loads the ``pre-push`` template and delegates to
+    :func:`install_worktree_git_hook`. Returns whatever that reports (False when
+    the backstop had to be skipped).
+    """
+    try:
+        script = load_hook_template("pre-push")
+    except FileNotFoundError:
+        logger.warning("skills.pre_push_template_missing")
+        return False
+    return install_worktree_git_hook(worktree_path, "pre-push", script)
+
+
 # --- Skill registry: name → list of files ---
 
 SKILL_FILES: dict[str, list[str]] = {

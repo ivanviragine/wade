@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# wade pre-push backstop — refuses to push the session branch unless `done`
+# wrote a completion marker for the pushed commit (.wade/done@<sha>).
+#
+# Installed per-worktree by wade at <worktree>/.wade/githooks/pre-push and wired
+# via `git config --worktree core.hooksPath .wade/githooks`. git runs the hook
+# with cwd at the worktree top, so the marker check is a plain file test — no
+# python callback needed.
+#
+# Honesty: `git push --no-verify` bypasses this in one flag. This is a
+# quality/backstop layer that makes the `done` gate hard to skip, NOT an
+# airtight boundary.
+#
+# git invokes pre-push as:  pre-push <remote-name> <remote-location>
+# and streams the ref updates on stdin, one per line:
+#   <local_ref> <local_sha> <remote_ref> <remote_sha>
+
+set -euo pipefail
+
+zero_sha="0000000000000000000000000000000000000000"
+
+# Buffer ALL of stdin ONCE. A `git push --all` sends many ref-update lines, and
+# stdin is a single-pass stream: we must consume it for the marker check AND
+# re-emit it verbatim to a chained hook. Reading it twice is impossible.
+#
+# The `; echo X` + `%X` sentinel preserves the exact bytes: plain `$(cat)` would
+# strip the trailing newline(s) git sends, so a chained hook would receive a
+# truncated final line. Appending X, then stripping it, keeps the stream intact.
+stdin_data="$(cat; echo X)"
+stdin_data="${stdin_data%X}"
+
+# Only the session branch is gated. In a wade worktree that is the checked-out
+# branch; other refs (tags, notes) and deletions pass straight through.
+session_branch="$(git symbolic-ref --short HEAD 2>/dev/null || true)"
+
+marker_ok=1
+missing_sha=""
+while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
+  [[ -z "${local_ref:-}" ]] && continue
+  # Deletion (local sha all-zero): nothing is being pushed, so nothing to gate.
+  if [[ "$local_sha" == "$zero_sha" ]]; then
+    continue
+  fi
+  # Skip anything that is not the session branch head.
+  if [[ -z "$session_branch" || "$local_ref" != "refs/heads/${session_branch}" ]]; then
+    continue
+  fi
+  if [[ ! -f ".wade/done@${local_sha}" ]]; then
+    marker_ok=0
+    missing_sha="$local_sha"
+  fi
+done <<<"$stdin_data"
+
+if [[ "$marker_ok" -eq 0 ]]; then
+  echo "[wade] Refusing to push ${missing_sha}: no completion marker (.wade/done@${missing_sha})." >&2
+  echo "[wade] Run \`wade implementation-session done\` (or \`wade review-pr-comments-session done\`) first." >&2
+  echo "[wade] To bypass this backstop for one push: git push --no-verify" >&2
+  exit 1
+fi
+
+# Chain to a pre-existing hook captured at install time (core.hooksPath REPLACES
+# .git/hooks, so a prior hook would otherwise be silently disabled). Re-emit the
+# exact buffered stdin so the chained hook sees the same ref list, forward the
+# same argv, and honor its exit code. Never silently shadow.
+chain_file=".wade/githooks/.chain"
+if [[ -f "$chain_file" ]]; then
+  chained="$(cat "$chain_file")"
+  if [[ -n "$chained" && -x "$chained" ]]; then
+    set +e
+    printf '%s' "$stdin_data" | "$chained" "$@"
+    rc=$?
+    set -e
+    exit "$rc"
+  fi
+fi
+
+exit 0

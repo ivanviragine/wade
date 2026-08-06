@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -44,9 +43,9 @@ from wade.hooks.policies import (
     plan_artifact_only,
     session_complete,
     shell_containment,
-    stop_nudge_marker_path,
     worktree_containment,
 )
+from wade.utils import markers
 
 # Static ``tool id -> output dialect`` map, mirroring each crossby adapter's
 # ``capabilities().hook_output_dialect``. Inlined so the hot per-edit path never
@@ -154,35 +153,100 @@ def _is_stop_event(event: str, ev: object) -> bool:
 def _mark_stop_nudged(worktree_root: Path) -> None:
     """Write the single-shot Stop marker; best-effort and race-safe against symlinks.
 
-    Opens ``.wade`` itself with ``O_DIRECTORY | O_NOFOLLOW`` and creates the
-    marker *relative to that directory handle*, so a repo-controlled symlink
-    swapped in for ``.wade`` can neither redirect the write outside the worktree
-    nor slip through a TOCTOU window between checking and creating (the parent
-    handle is the trusted anchor). A failed or unsupported write is harmless — we
-    simply nudge again next time.
+    Delegates to :func:`wade.utils.markers.write_flag_marker`, which creates the
+    marker relative to an ``O_DIRECTORY | O_NOFOLLOW`` handle on ``.wade`` so a
+    repo-controlled symlink swapped in for ``.wade`` can neither redirect the
+    write outside the worktree nor slip through a TOCTOU window. A failed or
+    unsupported write is harmless — we simply nudge again next time.
     """
-    if not (hasattr(os, "O_DIRECTORY") and os.open in os.supports_dir_fd):
-        return  # no atomic no-follow path available; skip rather than risk a follow
-    marker = stop_nudge_marker_path(worktree_root)
+    markers.write_flag_marker(worktree_root, "stop-nudged")
+
+
+def _git_out(root: Path, *args: str) -> str | None:
+    """Run a read-only ``git`` command in ``root``; return stripped stdout or None.
+
+    Deliberately a raw ``subprocess`` call rather than the ``wade.git`` layer: it
+    runs on the Stop path and must stay cheap and dependency-light. Any failure
+    (non-zero exit, missing git, timeout) returns ``None`` so the caller can fail
+    open.
+    """
+    import subprocess
+
     try:
-        marker.parent.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        return
-    dir_fd = None
-    try:
-        dir_fd = os.open(marker.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        fd = os.open(
-            marker.name,
-            os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW,
-            0o600,
-            dir_fd=dir_fd,
+        proc = subprocess.run(
+            ["git", "-C", str(root), *args],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
         )
-        os.close(fd)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip()
+
+
+def _resolve_stop_base_ref(root: Path) -> str | None:
+    """Resolve the base ref the session branch is measured against, or None.
+
+    Honors a stacked ``.wade/base_branch`` when present; otherwise detects
+    ``main``/``master`` (preferring the ``origin/`` remote-tracking ref). Returns
+    ``None`` when nothing resolves so the caller fails open.
+    """
+    base_name: str | None = None
+    base_file = root / ".wade" / "base_branch"
+    try:
+        if base_file.is_file():
+            content = base_file.read_text(encoding="utf-8").strip()
+            if content:
+                base_name = content
     except OSError:
-        pass  # a failed write just means we nudge again next time — still safe
-    finally:
-        if dir_fd is not None:
-            os.close(dir_fd)
+        base_name = None
+
+    if base_name:
+        candidates = [f"origin/{base_name}", base_name]
+    else:
+        candidates = ["origin/main", "origin/master", "main", "master"]
+
+    for ref in candidates:
+        if ref and _git_out(root, "rev-parse", "--verify", "--quiet", ref) is not None:
+            return ref
+    return None
+
+
+def _stop_git_facts(root: Path) -> tuple[int, bool]:
+    """Compute ``(commits_ahead_of_base, done_marker_present)`` for the Stop guard.
+
+    All git calls go through :func:`_git_out` (raw ``subprocess``), NOT the
+    ``wade.git`` layer: this runs in the lean entry point, which deliberately
+    leaves ``structlog`` unconfigured, so a ``wade.git`` call's ``git.run`` debug
+    line would print to stdout and corrupt the decision-JSON contract.
+
+    ⚠ The ahead-count is ``git rev-list --count <base>..HEAD`` — commits on the
+    session branch (HEAD) not on base — equivalent to
+    ``commits_ahead(root, branch, base)`` with the **session branch in the branch
+    position**. That is the *opposite* role assignment from the sync gate's
+    behind-count (:func:`wade.services.implementation_service.done._behind_count`),
+    which passes ``origin/<main>`` in the branch position. The ``done`` marker is
+    checked against the current HEAD sha.
+
+    Raises on any failure (detached HEAD, unresolvable base, git error) so the
+    Stop branch can fail open — a Stop guard must never trap the agent.
+    """
+    head = _git_out(root, "rev-parse", "HEAD")
+    if head is None:
+        raise RuntimeError("cannot resolve HEAD")
+    if _git_out(root, "symbolic-ref", "-q", "HEAD") is None:
+        raise RuntimeError("detached HEAD")  # no session branch to finalize
+    base_ref = _resolve_stop_base_ref(root)
+    if base_ref is None:
+        raise RuntimeError("cannot resolve base ref")
+    count = _git_out(root, "rev-list", "--count", f"{base_ref}..HEAD")
+    if count is None:
+        raise RuntimeError("cannot count commits")
+    done_present = markers.marker_present(root, "done", head)
+    return int(count), done_present
 
 
 def _run(event: str, guard: str, tool: str, root: str) -> HookEmission:
@@ -238,7 +302,17 @@ def _run(event: str, guard: str, tool: str, root: str) -> HookEmission:
             # trap the agent, which a Stop guard must never do.
             return emit_stop_decision(False, "", stop_dialect)
         try:
-            decision = session_complete(ev, worktree_root=Path(root))
+            # Git facts feed the predicate: nudge only when the branch has
+            # authored work (commits ahead of base) and no current done marker.
+            # Computed here (lazy subprocess) to keep the predicate pure; any
+            # failure raises and falls through to the fail-open handler below.
+            commits_ahead, done_present = _stop_git_facts(Path(root))
+            decision = session_complete(
+                ev,
+                worktree_root=Path(root),
+                commits_ahead=commits_ahead,
+                done_marker_present=done_present,
+            )
             should_block = decision.action == "deny"
             reason = decision.reason
             if should_block:

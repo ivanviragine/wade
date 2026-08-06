@@ -152,6 +152,18 @@ wade review-pr-comments-session done
 `done` pushes changes to the existing PR branch. This is a **mandatory** step; if
 it fails, debug and fix it — do NOT bypass.
 
+`done` is a completion gate here too. It refuses when:
+
+- **unresolved review threads remain** → resolve each one (see *Resolving
+  threads* above), then re-run `done`. A transient `gh` lookup failure does not
+  block. Hatch: `done.require_resolved_threads: false` in `.wade.yml`.
+- `wade review implementation` has not run for the current commit → run it, or
+  pass `--skip-review`. Hatch: `done.require_review: false`.
+
+A **pre-push git hook** refuses a push of the session branch without a current
+`.wade/done@<sha>` marker (`done` writes it). `git push --no-verify` bypasses it
+in one flag — it is a quality layer, not a boundary; do not route around it.
+
 **Step 5 — Present results:** give a brief **workflow recap** (only the steps you
 performed) and **current state** (PR number/URL, threads resolved and remaining),
 then note what's next (wade keeps monitoring the PR; reviewers are notified of

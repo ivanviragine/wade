@@ -415,14 +415,26 @@ class TestPlanArtifactOnly:
 
 
 class TestSessionComplete:
-    def test_blocks_when_pr_summary_missing(self, tmp_path: Path) -> None:
-        d = session_complete(HookEvent(event="stop"), worktree_root=tmp_path)
+    def test_blocks_when_work_and_no_done_marker(self, tmp_path: Path) -> None:
+        # Commits ahead of base + no done marker + no nudge -> nudge to run `done`.
+        d = session_complete(HookEvent(event="stop"), worktree_root=tmp_path, commits_ahead=1)
         assert d.action == "deny"  # deny == block the stop
-        assert "PR-SUMMARY.md" in d.reason
+        assert "done" in d.reason
+        assert "PR-SUMMARY" not in d.reason  # split-brain gone
 
-    def test_allows_when_pr_summary_present(self, tmp_path: Path) -> None:
-        (tmp_path / "PR-SUMMARY.md").write_text("done")
-        d = session_complete(HookEvent(event="stop"), worktree_root=tmp_path)
+    def test_allows_when_no_commits_ahead(self, tmp_path: Path) -> None:
+        # No authored work to finalize (#318 higher-signal condition).
+        d = session_complete(HookEvent(event="stop"), worktree_root=tmp_path, commits_ahead=0)
+        assert d.action == "allow"
+
+    def test_allows_when_done_marker_present(self, tmp_path: Path) -> None:
+        # The session was already finalized via `done` — same completion fact.
+        d = session_complete(
+            HookEvent(event="stop"),
+            worktree_root=tmp_path,
+            commits_ahead=1,
+            done_marker_present=True,
+        )
         assert d.action == "allow"
 
     def test_allows_when_nudge_marker_present(self, tmp_path: Path) -> None:
@@ -433,7 +445,7 @@ class TestSessionComplete:
         marker = stop_nudge_marker_path(tmp_path)
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text("")
-        d = session_complete(HookEvent(event="stop"), worktree_root=tmp_path)
+        d = session_complete(HookEvent(event="stop"), worktree_root=tmp_path, commits_ahead=1)
         assert d.action == "allow"
 
     def test_symlinked_marker_not_trusted(self, tmp_path: Path) -> None:
@@ -445,7 +457,7 @@ class TestSessionComplete:
         marker = stop_nudge_marker_path(tmp_path)
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.symlink_to(real)
-        d = session_complete(HookEvent(event="stop"), worktree_root=tmp_path)
+        d = session_complete(HookEvent(event="stop"), worktree_root=tmp_path, commits_ahead=1)
         assert d.action == "deny"
 
     def test_symlinked_wade_dir_not_trusted(self, tmp_path: Path) -> None:
@@ -454,10 +466,14 @@ class TestSessionComplete:
         outside.mkdir()
         (outside / "stop-nudged").write_text("")
         (tmp_path / ".wade").symlink_to(outside)
-        d = session_complete(HookEvent(event="stop"), worktree_root=tmp_path)
+        d = session_complete(HookEvent(event="stop"), worktree_root=tmp_path, commits_ahead=1)
         assert d.action == "deny"
 
     def test_single_shot_allows_when_already_fired(self, tmp_path: Path) -> None:
-        # PR-SUMMARY.md still missing, but a Stop hook already fired -> never loop.
-        d = session_complete(HookEvent(event="stop", stop_hook_active=True), worktree_root=tmp_path)
+        # Work still unfinished, but a Stop hook already fired -> never loop.
+        d = session_complete(
+            HookEvent(event="stop", stop_hook_active=True),
+            worktree_root=tmp_path,
+            commits_ahead=1,
+        )
         assert d.action == "allow"

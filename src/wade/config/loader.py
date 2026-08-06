@@ -14,6 +14,7 @@ from wade.models.config import (
     AICommandConfig,
     AIConfig,
     ComplexityModelMapping,
+    DoneConfig,
     HooksConfig,
     KnowledgeConfig,
     PermissionsConfig,
@@ -258,6 +259,16 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
         path=knowledge_raw.get("path", "KNOWLEDGE.md"),
     )
 
+    # Parse done section (completion gates). All gates default on.
+    done_raw = _section_mapping(raw, "done")
+    done = DoneConfig(
+        require_pr_summary=done_raw.get("require_pr_summary", True),
+        require_sync=done_raw.get("require_sync", True),
+        require_review=done_raw.get("require_review", True),
+        require_resolved_threads=done_raw.get("require_resolved_threads", True),
+        pre_push_backstop=done_raw.get("pre_push_backstop", True),
+    )
+
     return ProjectConfig(
         version=version,
         project=project,
@@ -267,6 +278,7 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
         permissions=permissions,
         hooks=hooks,
         knowledge=knowledge,
+        done=done,
         config_path=str(config_path),
         project_root=str(config_path.parent),
     )
