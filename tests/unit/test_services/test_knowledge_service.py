@@ -1587,14 +1587,18 @@ class TestValidateKnowledgeFile:
         problems = validate_knowledge_file(path)
         assert any("Duplicate entry ID 'abcd1234'" in p for p in problems)
 
-    def test_malformed_dated_heading_is_flagged(self, tmp_path: Path) -> None:
+    def test_heading_shaped_body_line_is_not_a_false_positive(self, tmp_path: Path) -> None:
+        # An entry body may legitimately quote the heading format (e.g. an entry about
+        # the knowledge schema). parse_entries accepts such lines as plain headings, so
+        # validation must NOT flag them — a false positive would block done.
         path = tmp_path / "KNOWLEDGE.md"
         path.write_text(
-            "# Project Knowledge\n\n## broken | 2026-13-99 | \n\nbody\n\n---\n",
+            "# Project Knowledge\n\n"
+            "## abcd1234 | 2026-01-01 | plan\n\n"
+            "Entry headings look like: ## someid | 2026-01-01 | plan | tags: git\n\n---\n",
             encoding="utf-8",
         )
-        problems = validate_knowledge_file(path)
-        assert any("Malformed entry heading" in p for p in problems)
+        assert validate_knowledge_file(path) == []
 
     def test_conflict_markers_are_flagged(self, tmp_path: Path) -> None:
         path = tmp_path / "KNOWLEDGE.md"

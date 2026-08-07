@@ -570,6 +570,16 @@ def _carry_forward_pending_votes(
         if not pending:
             return
 
+        # Restore main's tracked ratings to committed state FIRST, and only carry the
+        # votes into the worktree if that succeeded. Ordering matters: if we wrote to
+        # the worktree first and the restore then failed, the same lines would remain
+        # in main and be re-detected as "pending" at the next bootstrap — carried into
+        # a SECOND worktree and double-counted. A failed restore instead leaves the
+        # votes untouched in main for a later bootstrap to retry (no loss, no double).
+        if not git_repo.checkout_paths(repo_root, relpath):
+            logger.warning("implementation.ratings_carry_restore_failed", path=relpath)
+            return
+
         worktree_ratings = resolve_ratings_path(
             resolve_knowledge_path(worktree_path, config.knowledge)
         )
@@ -581,10 +591,6 @@ def _carry_forward_pending_votes(
             prefix = "" if (content == "" or content.endswith("\n")) else "\n"
             with worktree_ratings.open("a", encoding="utf-8") as fd:
                 fd.write(prefix + "".join(f"{ln}\n" for ln in to_add))
-
-        # Restore main's tracked ratings to committed state, clearing wade's vote-dirt.
-        if not git_repo.checkout_paths(repo_root, relpath):
-            logger.debug("implementation.ratings_carry_restore_failed", path=relpath)
         logger.debug("implementation.ratings_votes_carried_forward", count=len(pending))
 
 

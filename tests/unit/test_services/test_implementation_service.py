@@ -2388,3 +2388,30 @@ class TestCarryForwardPendingVotes:
         wt2_text = (wt2 / "KNOWLEDGE.ratings.jsonl").read_text(encoding="utf-8")
         assert wt1_text.count(pending_line) == 1
         assert wt2_text.count(pending_line) == 0
+
+    def test_failed_main_restore_carries_nothing(self, tmp_path: Path) -> None:
+        # If restoring main fails, the votes must NOT be carried into the worktree —
+        # otherwise they stay in main and get re-carried into a second worktree,
+        # double-counting. They remain in main for a later bootstrap to retry.
+        from unittest.mock import patch
+
+        from wade.models.config import KnowledgeConfig, ProjectConfig
+        from wade.services.implementation_service.bootstrap import _carry_forward_pending_votes
+
+        main = self._make_main_with_committed_ratings(tmp_path)
+        ratings = main / "KNOWLEDGE.ratings.jsonl"
+        pending_line = '{"dir": "down", "id": "e", "ts": "pending"}'
+        ratings.write_text(ratings.read_text() + pending_line + "\n", encoding="utf-8")
+
+        worktree = tmp_path / "wt"
+        self._git(main, "worktree", "add", "-b", "feat/1", str(worktree))
+        config = ProjectConfig(knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"))
+
+        with patch("wade.git.repo.checkout_paths", return_value=False):
+            _carry_forward_pending_votes(worktree, main, config)
+
+        # The pending vote was NOT carried into the worktree (its ratings stays the
+        # committed version), and it remains in main for a later bootstrap to retry.
+        wt_text = (worktree / "KNOWLEDGE.ratings.jsonl").read_text(encoding="utf-8")
+        assert pending_line not in wt_text
+        assert pending_line in ratings.read_text(encoding="utf-8")

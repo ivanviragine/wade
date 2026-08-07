@@ -348,8 +348,6 @@ def find_entry_id(knowledge_path: Path, entry_id: str) -> bool:
 # Matches a line that opens a VCS conflict hunk. ``merge=union`` never emits these,
 # but a non-union merge of the knowledge file might — cheap to catch here.
 _CONFLICT_MARKER_RE = re.compile(r"^(<{7}|={7}|>{7})", re.MULTILINE)
-# A structured entry heading always carries an ISO date.
-_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 def validate_knowledge_file(path: Path) -> list[str]:
@@ -363,10 +361,14 @@ def validate_knowledge_file(path: Path) -> list[str]:
     pre-push) so it cannot reach main.
 
     Checks:
-      - **duplicate entry IDs** — the union double-heading signal;
-      - **malformed structured headings** — a dated ``## <id> | <date> | …`` line
-        that fails to parse;
+      - **duplicate entry IDs** — the union double-heading signal (two copies of one
+        heading share its id); this is the reliable structural-corruption detector;
       - **unresolved conflict markers** — a defensive backstop for a non-union merge.
+
+    Deliberately does **not** flag "malformed headings" by re-scanning raw lines:
+    ``parse_entries`` accepts any ``## <alnum>…`` line as a plain heading, so a
+    heading-shaped line quoted inside an entry *body* is legitimate — flagging it
+    would be a false positive that blocks an otherwise-valid PR at ``done``.
     """
     problems: list[str] = []
     if not path.is_file():
@@ -381,16 +383,6 @@ def validate_knowledge_file(path: Path) -> list[str]:
     for entry_id, count in sorted(counts.items()):
         if count > 1:
             problems.append(f"Duplicate entry ID '{entry_id}' appears {count} times")
-
-    for line in text.split("\n"):
-        if not line.startswith("## "):
-            continue
-        # A structured entry heading carries a date and pipe-delimited fields. If it
-        # looks structured (has a date + ` | `) but matches neither the dated nor
-        # plain heading regex, it is corrupted. Plain hand-authored `## Title`
-        # headings (no date) are never flagged.
-        if _DATE_RE.search(line) and " | " in line and not _ENTRY_HEADING_RE.match(line):
-            problems.append(f"Malformed entry heading: {line.strip()}")
 
     if _CONFLICT_MARKER_RE.search(text):
         problems.append("Unresolved VCS conflict markers present")
@@ -485,6 +477,11 @@ def read_ratings(ratings_path: Path) -> dict[str, EntryRating]:
     if ratings_path.is_dir():
         raise ValueError(f"Ratings path {ratings_path!s} points to a directory, not a file")
     if ratings_path.exists():
+        # .jsonl wins over a still-present legacy .yml, never folding both. The
+        # write-path migration git-rm's the .yml when it seeds the .jsonl, so a
+        # both-present state is only a transient/botched migration commit — and there
+        # the .jsonl is authoritative (it already carries the .yml's counts as a
+        # seed). Folding both would double-count that seed.
         return _fold_jsonl_ratings(ratings_path)
     return _read_legacy_yaml_ratings(_legacy_ratings_path(ratings_path))
 
