@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import tempfile
 from pathlib import Path
 
@@ -168,7 +169,7 @@ class TestShellContainment:
     def test_system_tmpdir_writes_allowed(self) -> None:
         """``$TMPDIR`` — not just the literal ``/tmp`` — is allowed, cross-platform."""
         target = f"{tempfile.gettempdir()}/wade-scratch.log"
-        d = shell_containment(_shell(f"printf x > {target}"), worktree_root=WT)
+        d = shell_containment(_shell(f"printf x > {shlex.quote(target)}"), worktree_root=WT)
         assert d.action == "allow"
 
     def test_temp_dir_writes_still_denied_in_plan_mode(self) -> None:
