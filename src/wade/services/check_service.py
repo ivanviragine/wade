@@ -742,12 +742,14 @@ def _validate_knowledge_section(
 
 
 def _validate_done_section(done: dict[str, Any], errors: list[str]) -> None:
-    """Validate the ``done`` completion-gate section (all fields are booleans).
+    """Validate the ``done`` completion-gate section.
 
-    Iterating ``done.items()`` only sees keys the user explicitly wrote, so an
-    explicit null (``require_sync:`` with no value) is a user mistake, not an
-    "unset" default — reject it. This keeps `wade check` aligned with the loader,
-    which normalizes such a null to the documented default rather than crashing.
+    Every field is a boolean gate toggle **except** ``max_review_passes``, which
+    is a positive int (#384). Iterating ``done.items()`` only sees keys the user
+    explicitly wrote, so an explicit null (``require_sync:`` with no value) is a
+    user mistake, not an "unset" default — reject it. This keeps `wade check`
+    aligned with the loader, which normalizes such a null to the documented
+    default rather than crashing.
     """
     for key, value in done.items():
         if key not in _VALID_DONE_KEYS:
@@ -755,5 +757,10 @@ def _validate_done_section(done: dict[str, Any], errors: list[str]) -> None:
                 f"done.{key}: unsupported key. "
                 f"Supported keys: {', '.join(sorted(_VALID_DONE_KEYS))}"
             )
+        elif key == "max_review_passes":
+            # Reject bool explicitly — it is an int subclass, so a bare
+            # `isinstance(value, int)` would wrongly accept `true`/`false`.
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                errors.append(f"done.{key}: must be a positive integer")
         elif not isinstance(value, bool):
             errors.append(f"done.{key}: must be true or false")

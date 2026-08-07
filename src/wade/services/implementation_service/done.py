@@ -321,12 +321,18 @@ def _run_completion_gates(
     if session_type == "review-pr-comments":
         if not _gate_resolved_threads(config, provider, repo_root, branch):
             return False
-        return _gate_review_ran(config, worktree_root, pre_sync_head, skip_review)
+        # review-pr-comments keeps the unbounded fast-path-or-refuse behavior:
+        # the review-pass cap (#384) is scoped to the implementation path only.
+        return _gate_review_ran(
+            config, worktree_root, pre_sync_head, skip_review, session_type=session_type
+        )
 
     # Default: implementation session.
     if not _gate_pr_summary(config, worktree_root):
         return False
-    if not _gate_review_ran(config, worktree_root, pre_sync_head, skip_review):
+    if not _gate_review_ran(
+        config, worktree_root, pre_sync_head, skip_review, session_type=session_type
+    ):
         return False
     return _gate_sync(config, repo_root, worktree_root, branch, main_branch, session_type)
 
@@ -377,8 +383,27 @@ def _gate_review_ran(
     worktree_root: Path,
     head_sha: str,
     skip_review: bool,
+    *,
+    session_type: str = "implementation",
 ) -> bool:
     """Refuse unless ``wade review implementation`` ran for ``head_sha``.
+
+    Fast path (**both** session types): an exact-sha ``reviewed@<head_sha>``
+    marker means done — a review for the current commit always passes on the
+    first try.
+
+    Implementation sessions additionally apply a **code-enforced pass cap** so the
+    review→fix→re-review loop is bounded (#384). Committing after the last review
+    moves the tip sha and invalidates the exact-sha marker; without a bound the
+    agent re-reviews, re-commits, and loops forever. Once
+    ``done.max_review_passes`` distinct commits have carried a delegation-backed
+    ``review-pass@<sha>`` marker, ``done`` completes **anyway** — with a prominent
+    notice — rather than looping. ``review-pr-comments`` sessions keep the
+    unbounded fast-path-or-refuse behavior; #384 is scoped to impl sessions and
+    this gate is shared (knowledge 851bb6ec), so the cap branch is impl-only.
+
+    The pass count is the number of distinct ``review-pass@*`` markers; a listdir
+    failure yields ``0`` (fail toward re-gating), never a false "cap reached".
 
     Auto-skipped when reviews are disabled (``review_implementation.enabled:
     false``) — the marker is not written then either. Hatches: ``--skip-review``
@@ -390,6 +415,46 @@ def _gate_review_ran(
         return True
     if markers.marker_present(worktree_root, "reviewed", head_sha):
         return True
+
+    # review-pr-comments: unchanged fast-path-or-refuse (no cap — out of scope).
+    if session_type != "implementation":
+        _print_review_refusal()
+        return False
+
+    # Implementation session: apply the bounded review-pass cap (done.max_review_passes).
+    passes = markers.count_review_passes(worktree_root)
+    limit = config.done.max_review_passes
+    if passes >= limit:
+        console.warn(
+            f"Review-pass safety limit reached ({passes} of {limit}) — the current "
+            "commit was not re-reviewed."
+        )
+        console.detail(
+            f"{passes} commit(s) have been reviewed on this worktree; the cap bounds "
+            "the review→fix→re-review loop so `done` can't be blocked indefinitely. "
+            "Completing without requiring another review."
+        )
+        console.hint(
+            "Raise the cap with `done.max_review_passes`, or bypass this run with "
+            "`wade implementation-session done --skip-review`."
+        )
+        return True
+
+    console.error(f"Review has not run for the current commit (review pass {passes} of {limit}).")
+    console.hint("Run `wade review implementation` (or pass --skip-review), then re-run done.")
+    console.detail(
+        "A clean merge of main is accepted without re-review, but new commits "
+        "require a fresh review — the marker is keyed to the commit sha."
+    )
+    console.hint(
+        "If review keeps looping, break it with `wade implementation-session done --skip-review`."
+    )
+    console.hint("Bypass: set `done.require_review: false` in .wade.yml.")
+    return False
+
+
+def _print_review_refusal() -> None:
+    """Print the standard review-ran refusal (fast-path-or-refuse, no cap)."""
     console.error("Review has not run for the current commit.")
     console.hint("Run `wade review implementation` (or pass --skip-review), then re-run done.")
     console.detail(
@@ -397,7 +462,6 @@ def _gate_review_ran(
         "require a fresh review — the marker is keyed to the commit sha."
     )
     console.hint("Bypass: set `done.require_review: false` in .wade.yml.")
-    return False
 
 
 def _behind_count(repo_root: Path, main_branch: str, branch: str) -> int | None:

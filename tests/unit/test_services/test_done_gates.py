@@ -107,6 +107,120 @@ class TestReviewRanGate:
         assert _gate_review_ran(config, tmp_path, "abc", skip_review=False) is True
 
 
+def _captured_text(capsys) -> str:
+    """Combined stdout+stderr with whitespace collapsed (survives rich wrapping).
+
+    ``console.error``/``warn`` go to stderr while ``hint``/``detail`` go to
+    stdout, and rich soft-wraps long lines — so join both streams and normalize
+    whitespace before substring-matching a phrase.
+    """
+    captured = capsys.readouterr()
+    return " ".join((captured.out + "\n" + captured.err).split())
+
+
+class TestReviewRanCap:
+    """The code-enforced review-pass cap (``done.max_review_passes``, default 2) on
+    the implementation path (#384)."""
+
+    def test_refuses_before_cap_with_pass_count(self, tmp_path: Path, capsys) -> None:
+        # One prior pass, no exact-sha marker, limit 2 → refuse "pass 1 of 2".
+        markers.record_review_pass(tmp_path, "sha1")
+        assert (
+            _gate_review_ran(
+                ProjectConfig(),
+                tmp_path,
+                "newhead",
+                skip_review=False,
+                session_type="implementation",
+            )
+            is False
+        )
+        text = _captured_text(capsys)
+        assert "review pass 1 of 2" in text
+        assert "--skip-review" in text
+
+    def test_passes_at_cap_with_notice(self, tmp_path: Path, capsys) -> None:
+        # Two distinct reviewed commits reach the cap → complete anyway + notice.
+        markers.record_review_pass(tmp_path, "sha1")
+        markers.record_review_pass(tmp_path, "sha2")
+        assert (
+            _gate_review_ran(
+                ProjectConfig(),
+                tmp_path,
+                "newhead",
+                skip_review=False,
+                session_type="implementation",
+            )
+            is True
+        )
+        text = _captured_text(capsys)
+        assert "safety limit reached (2 of 2)" in text
+        assert "not re-reviewed" in text.lower()
+        assert "--skip-review" in text
+
+    def test_exact_sha_fast_path_wins_over_cap(self, tmp_path: Path, capsys) -> None:
+        # An exact-sha reviewed marker passes even when the review-pass cap is
+        # already exhausted — the fast path precedes the cap check.
+        markers.record_review_pass(tmp_path, "sha1")
+        markers.record_review_pass(tmp_path, "sha2")  # cap (default 2) reached
+        markers.write_marker(tmp_path, "reviewed", "head")
+        assert (
+            _gate_review_ran(
+                ProjectConfig(), tmp_path, "head", skip_review=False, session_type="implementation"
+            )
+            is True
+        )
+        # Took the exact-sha fast path, not the cap branch (no safety-limit notice).
+        assert "safety limit reached" not in _captured_text(capsys)
+
+    def test_custom_max_review_passes_honored(self, tmp_path: Path) -> None:
+        config = ProjectConfig(done=DoneConfig(max_review_passes=3))
+        markers.record_review_pass(tmp_path, "sha1")
+        markers.record_review_pass(tmp_path, "sha2")
+        # 2 passes < limit 3 → still refuses.
+        assert (
+            _gate_review_ran(
+                config, tmp_path, "newhead", skip_review=False, session_type="implementation"
+            )
+            is False
+        )
+        markers.record_review_pass(tmp_path, "sha3")
+        # 3 passes == limit 3 → passes.
+        assert (
+            _gate_review_ran(
+                config, tmp_path, "newhead", skip_review=False, session_type="implementation"
+            )
+            is True
+        )
+
+    def test_fail_safe_count_never_false_caps(self, tmp_path: Path) -> None:
+        # A `.wade` that is a regular file makes the listing fail → count 0 →
+        # refuse (never a false "cap reached").
+        (tmp_path / ".wade").write_text("")
+        assert (
+            _gate_review_ran(
+                ProjectConfig(), tmp_path, "head", skip_review=False, session_type="implementation"
+            )
+            is False
+        )
+
+    def test_review_pr_comments_path_never_caps(self, tmp_path: Path) -> None:
+        # Even with passes >= limit, the review-pr-comments path keeps the
+        # unbounded fast-path-or-refuse behavior — the cap is impl-only.
+        markers.record_review_pass(tmp_path, "sha1")
+        markers.record_review_pass(tmp_path, "sha2")
+        assert (
+            _gate_review_ran(
+                ProjectConfig(),
+                tmp_path,
+                "newhead",
+                skip_review=False,
+                session_type="review-pr-comments",
+            )
+            is False
+        )
+
+
 # ---------------------------------------------------------------------------
 # review-thread gate (review-pr-comments sessions)
 # ---------------------------------------------------------------------------

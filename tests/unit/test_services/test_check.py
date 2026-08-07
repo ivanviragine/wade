@@ -234,6 +234,29 @@ class TestValidateConfig:
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("done.require_sync" in e and "true or false" in e for e in result.errors)
 
+    def test_max_review_passes_positive_int_accepted(self, tmp_path: Path) -> None:
+        # `max_review_passes` is an int, not a bool — a positive int must pass
+        # `wade check` (the old bool-only validator would have flagged it).
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\ndone:\n  max_review_passes: 3\n")
+        result = validate_config(tmp_path)
+        assert result.is_valid, f"Errors: {result.errors}"
+
+    def test_max_review_passes_zero_rejected(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\ndone:\n  max_review_passes: 0\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("done.max_review_passes" in e and "positive integer" in e for e in result.errors)
+
+    def test_max_review_passes_bool_rejected(self, tmp_path: Path) -> None:
+        # `true` is an int subclass — it must NOT sneak through as a valid count.
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\ndone:\n  max_review_passes: true\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("done.max_review_passes" in e and "positive integer" in e for e in result.errors)
+
     def test_valid_hooks_quality_gate_sections(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"
         config.write_text(

@@ -218,12 +218,15 @@ Spaced `git -C <dir>` is buffered: `git -C ../crossby log` (a read subcommand) i
 allowed, but a git *write* subcommand after an outside `-C` (`git -C /outside
 clean -fd`, `git -C /outside checkout -- file`) is denied — there is no later path
 operand to catch it otherwise. It also unglues paths from flags
-(`--output=/tmp/x`, `-o/tmp/x`, `of=/tmp/x`, `git -C/tmp/other`) and keeps those
+(`--output=/etc/x`, `-o/etc/x`, `of=/etc/x`, `git -C/etc/other`) and keeps those
 **glued** forms contained in every mode (a tokenizer cannot tell a glued read flag
 from a glued write flag, so a few glued reads are denied too), treats bash's
 `>&file` as a write while skipping true fd duplication (`2>&1`), denies a bare
-`cd` (it lands in `$HOME`), and exempts character devices so `>/dev/null 2>&1`
-still works.
+`cd` (it lands in `$HOME`), and exempts character devices (`>/dev/null 2>&1`) plus
+system temp dirs (`/tmp`, `$TMPDIR`) — shared scratch space where writes are always
+allowed (plan mode still denies them as non-artifacts). The temp exemption is
+scoped to `shell_containment` (via `_ALWAYS_ALLOWED_PATH_PREFIXES`); the file-path
+guard `worktree_containment` stays strictly worktree-only.
 
 **It is defense-in-depth, not a completeness guarantee.** It stops the
 non-obfuscated cases an agent actually produces. Documented residual gaps
@@ -283,7 +286,21 @@ HEAD, so any sha-keyed check must precede it):
    session type) — a transient provider error is non-blocking.
 3. **review-ran** (both) — `marker_present(worktree, "reviewed", pre-sync HEAD)`.
    Checked against the pre-sync HEAD so a clean main-merge doesn't invalidate the
-   review just performed.
+   review just performed. **Implementation sessions add a code-enforced review-pass
+   cap (`done.max_review_passes`, default 2) (#384):** past the exact-sha fast
+   path, the gate counts distinct
+   `review-pass@<sha>` markers (written by each delegation-backed
+   `wade review implementation`, independent of its success — so a headless
+   timeout still counts) and, once `done.max_review_passes` (default 2) is
+   reached, completes anyway with a notice rather than looping. `wade review
+   implementation` surfaces the running budget after each pass ("review pass N of
+   M — K left"), so the count is visible from the command rather than only from
+   the skill prose or the `done`-time notice. A listdir failure
+   counts as 0 — as does a symlinked `.wade` or a platform without descriptor-based
+directory reads (fail closed toward re-gating, so tampering can't satisfy the
+cap). `review-pr-comments` keeps the unbounded
+   fast-path-or-refuse behavior — the gate is shared, so the cap branch is
+   scoped to `session_type == "implementation"`.
 4. **sync** (implementation only) — auto-sync via the existing `do_sync` service
    when `behind > 0`, refuse only on conflict.
 5. `_done_via_pr` writes `.wade/done@<post-sync HEAD>` immediately before pushing.
@@ -378,6 +395,7 @@ done:                        # completion-gate toggles (all default true)
   require_review: true
   require_resolved_threads: true
   pre_push_backstop: true
+  max_review_passes: 2       # impl-session review→fix loop cap (#384); strict positive int
 ```
 
 **`done` section** (`DoneConfig`): completion-gate escape hatches, all default
@@ -389,7 +407,7 @@ accepted automatically.
 
 **Model complexity mapping**: The `models` section maps AI tool names to complexity-tiered model IDs (`easy`, `medium`, `complex`, `very_complex`). When `wade implement` is invoked, the service reads the `complexity:X` label from the issue (falling back to `## Complexity` in the body), maps it to the appropriate configured model, and passes it as `--model` to the AI tool — unless the user explicitly passed `--model` themselves.
 
-**Per-command AI tool and model overrides**: The `ai` section supports `plan`, `deps`, `implement`, `review_plan`, `review_implementation`, and `review_batch` sub-sections, with optional `tool`, `model`, `mode`, `effort`, `enabled`, `yolo`, `permission_mode`, and `timeout` keys as applicable. The fallback chain is: CLI `--ai`/`--model` flag -> command-specific config -> global `default_tool`. This is implemented in `ProjectConfig.get_ai_tool(command)` and `ProjectConfig.get_model(command)`. When `mode` is omitted, `review_plan` and `review_implementation` default to `prompt`, while `review_batch` defaults to `interactive`.
+**Per-command AI tool and model overrides**: The `ai` section supports `plan`, `deps`, `implement`, `review_plan`, `review_implementation`, and `review_batch` sub-sections, with optional `tool`, `model`, `mode`, `effort`, `enabled`, `yolo`, `permission_mode`, and `timeout` keys as applicable. `timeout` bounds a headless subprocess (seconds) and defaults to **600s** (`DelegationRequest.timeout`) — large enough for a high-effort review/deps run over a big diff to finish rather than tripping mid-run. The fallback chain is: CLI `--ai`/`--model` flag -> command-specific config -> global `default_tool`. This is implemented in `ProjectConfig.get_ai_tool(command)` and `ProjectConfig.get_model(command)`. When `mode` is omitted, `review_plan` and `review_implementation` default to `prompt`, while `review_batch` defaults to `interactive`.
 
 **Permission (autonomy) mode vs. delegation `mode` — two orthogonal axes**: The `mode` key (`DelegationMode`: `prompt`/`interactive`/`headless`, `models/delegation.py`) governs *how* a tool is dispatched. `permission_mode` (`PermissionMode`: `default`/`accept-edits`/`auto`/`yolo`, `models/permission.py`) governs *how much* the tool may do without prompting — the autonomy axis crossby exposes via the `yolo`/`auto`/`accept_edits` launch booleans. Do **not** conflate them: they live in separate modules on purpose. Resolution (`resolve_permission_mode()` in `ai_resolution.py`) follows CLI `--permission-mode` > `--yolo` alias > command config > global config > `default`; `permission_mode` wins over the legacy `yolo` alias at any level, and `get_yolo()`/`resolve_yolo()` are thin shims that derive from the resolved mode so the alias has a single source of truth. WADE forwards only the *requested* tier and does **not** gate on per-tool capability — crossby owns capability-aware downgrades and warnings (`_autonomy_launch_args`), so `auto` on a non-Claude tool downgrades to `accept-edits` instead of WADE silently disabling it. The headless delegation path always forces `default` (no autonomy grant) regardless of config, since `deps`/`review_*` are read/analytical. `plan` is intentionally excluded from `PermissionMode` (WADE drives plan mode separately via `plan_service` → `plan_mode=True`); a configured or CLI-supplied `permission_mode: plan` (or any invalid value) warns and falls back to `default`.
 

@@ -259,7 +259,7 @@ escape hatch under a `done:` block in `.wade.yml` (all default on):
 |------|---------------|-------|
 | PR-SUMMARY | `PR-SUMMARY.md` is missing, empty, or still a template placeholder (implementation only) | `done.require_pr_summary: false` |
 | Sync | the branch is behind main — auto-syncs first, refuses only on conflict (implementation only) | `done.require_sync: false` |
-| Review ran | `wade review implementation` did not run for the current commit | `--skip-review`, `done.require_review: false` (auto-off when `ai.review_implementation.enabled: false`) |
+| Review ran | `wade review implementation` did not run for the current commit. **Implementation sessions bound this loop:** after `done.max_review_passes` (default 2) review→fix→re-review cycles, `done` completes anyway with a notice instead of looping forever | `--skip-review`, `done.require_review: false` (auto-off when `ai.review_implementation.enabled: false`) |
 | Resolved threads | unresolved PR review threads remain (review-comments only) | `done.require_resolved_threads: false` |
 
 A **pre-push git hook** (`done.pre_push_backstop`, default on) backs the gate up:

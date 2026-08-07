@@ -12,20 +12,18 @@ Run `wade review implementation` to review your changes and check the exit code:
 For staged-only review: `wade review implementation --staged`.
 
 **Headless review can be slow.** When `review_implementation.mode` is `headless`,
-this launches an external AI subprocess that may run for a few minutes. wade
-prints the exact budget when it starts ("can take up to Ns"). Keep the command in
-the foreground and allow more than that before timing out — raise your shell/tool
-timeout if needed. Do not kill it early or move it to the background; a premature
-kill is an infra timeout, not a review result. The budget is
-`ai.review_implementation.timeout` in `.wade.yml` (default 300s).
+it launches an external AI subprocess that may run for a few minutes. wade prints
+the budget when it starts ("can take up to Ns"). Keep it in the foreground and
+allow more than that before timing out. Do not kill it early or background it — a
+premature kill is an infra timeout, not a review result. Budget:
+`ai.review_implementation.timeout` (600s).
 
-**Run at most 2 times total**:
-- If findings are **minor** (style, small fixes): Address them and proceed to
-  Step 2; no re-review needed.
-- If findings are **major** (logic errors, architectural issues): Address them
-  and re-run once. Always proceed to Step 2 after the 2nd run, regardless of
-  new findings.
-- Do not run a third time.
+**Bounded by `done.max_review_passes` (default 2) — code-enforced.** `wade review
+implementation` prints your budget each pass ("review pass N of M — K left").
+After fixing a finding, commit and re-review (the commit stales the `reviewed`
+marker); major findings, re-run once. Once spent, `done` completes anyway (with a
+notice) instead of looping — break a stuck loop with `wade implementation-session
+done --skip-review`.
 
 **This step is mandatory when `review_implementation.enabled` is not `false`.
 Do NOT proceed to Step 2 until this step is complete and any actionable

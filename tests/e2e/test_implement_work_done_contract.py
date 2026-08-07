@@ -316,6 +316,104 @@ class TestWorkDoneCommand:
         assert isinstance(pr_data, dict)
         assert "Part of #100" in str(pr_data.get("body", ""))
 
+    def test_done_escapes_review_loop_after_two_passes(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """#384: review→commit→done refuses once, then completes on the 2nd pass.
+
+        The default review mode is ``prompt`` (self-review, no AI subprocess), so
+        each ``wade review implementation`` exits 2 and records a delegation-backed
+        ``review-pass@<HEAD>`` marker. Committing after each review invalidates the
+        exact-sha ``reviewed`` marker — the exact loop the cap must bound.
+        """
+        issue_number = 84
+        issue_title = "Bound the review loop"
+        _seed_mock_issue(
+            mock_gh_cli["state_file"],
+            issue_number=issue_number,
+            title=issue_title,
+            body="## Tasks\n- Cap the review loop\n",
+        )
+        origin_repo = _init_origin_remote(e2e_repo)
+        branch_name = "feat/84-bound-the-review-loop"
+
+        start_result = _run(["implement", str(issue_number), "--cd"], cwd=e2e_repo)
+        assert start_result.returncode == 0
+        worktree_path = Path(start_result.stdout.strip())
+        assert worktree_path.is_dir()
+
+        (worktree_path / "PR-SUMMARY.md").write_text(
+            "Bounded the implementation-session review loop with a 2-pass cap.\n",
+            encoding="utf-8",
+        )
+
+        def _commit(content: str) -> None:
+            (worktree_path / "impl.txt").write_text(content, encoding="utf-8")
+            _git(["add", "-A"], cwd=worktree_path)
+            _git(["commit", "-m", f"feat: impl {content.strip()}"], cwd=worktree_path)
+
+        # --- Pass 1: review, commit AFTER the review, then done must REFUSE. ---
+        _commit("v1\n")
+        review1 = _run(["review", "implementation"], cwd=worktree_path)
+        assert review1.returncode == 2, review1.stdout + review1.stderr
+
+        _commit("v2\n")  # new commit → the reviewed@<sha> marker is now stale
+        done1 = _run(["implementation-session", "done"], cwd=worktree_path)
+        out1 = " ".join((done1.stdout + done1.stderr).split())
+        assert done1.returncode != 0, out1
+        assert "review pass 1 of 2" in out1
+        # Nothing was finalized on the refusal.
+        assert _count_gh_calls(mock_gh_cli["log_file"], ["pr", "ready"]) == 0
+
+        # --- Pass 2: review again, commit again — done SUCCEEDS at the cap. ---
+        review2 = _run(["review", "implementation"], cwd=worktree_path)
+        assert review2.returncode == 2, review2.stdout + review2.stderr
+
+        _commit("v3\n")  # still a newer, un-reviewed commit — but the cap is hit
+        done2 = _run(["implementation-session", "done"], cwd=worktree_path)
+        out2 = " ".join((done2.stdout + done2.stderr).split())
+        assert done2.returncode == 0, out2
+        assert "safety limit reached" in out2
+        assert _remote_has_branch(origin_repo, branch_name)
+
+    def test_review_pass_count_survives_second_implement(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """#384: the review-pass count persists across a second `wade implement`.
+
+        The markers live in the worktree's ``.wade/`` and no code path (bootstrap
+        included) clears the ``review-pass@*`` family, so the idempotent
+        worktree-reuse re-run must not reset the cap to 0.
+        """
+        issue_number = 85
+        _seed_mock_issue(
+            mock_gh_cli["state_file"],
+            issue_number=issue_number,
+            title="Persist review passes",
+            body="## Tasks\n- Keep the count\n",
+        )
+        _init_origin_remote(e2e_repo)
+
+        start_result = _run(["implement", str(issue_number), "--cd"], cwd=e2e_repo)
+        assert start_result.returncode == 0
+        worktree_path = Path(start_result.stdout.strip())
+        assert worktree_path.is_dir()
+
+        # Simulate a completed delegation-backed review pass.
+        marker = worktree_path / ".wade" / ("review-pass@" + "d" * 40)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("", encoding="utf-8")
+
+        again_result = _run(["implement", str(issue_number), "--cd"], cwd=e2e_repo)
+        assert again_result.returncode == 0
+        assert Path(again_result.stdout.strip()) == worktree_path
+        # The marker (and thus the pass count) survived the re-bootstrap.
+        assert marker.is_file()
+
     def test_work_done_fails_when_managed_claude_files_were_force_committed(
         self,
         e2e_repo: Path,

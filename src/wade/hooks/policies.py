@@ -26,6 +26,7 @@ import os
 import posixpath
 import re
 import shlex
+import tempfile
 from pathlib import Path
 
 from crossby.hooks.runtime import HookDecision, HookEvent
@@ -224,9 +225,33 @@ _IN_PLACE_FLAG_RE = re.compile(r"^--in-place(=.*)?$|^-i(\..*)?$")
 # rule 5 only — the worktree rules still apply, so it cannot escape the root.
 _IN_PLACE_COMMANDS = frozenset({"sed", "gsed", "perl", "ruby", "yq"})
 
+
+def _temp_write_prefixes() -> tuple[str, ...]:
+    """Resolved system-temp path prefixes writes may always target.
+
+    System temp dirs sit outside the worktree but are legitimate shared scratch
+    space — agents and wade itself stage throwaway files there (headless-review
+    logs, patches, ``mktemp`` output). Resolved so macOS's ``/tmp``→``/private/tmp``
+    and ``$TMPDIR`` (``/var/folders/…``, itself under a ``/private`` symlink) match
+    the *resolved* path :func:`_contained` compares against; each ends in a
+    separator so ``/tmp/`` never matches a sibling like ``/tmpfoo``.
+    """
+    prefixes: set[str] = set()
+    for raw in ("/tmp", tempfile.gettempdir()):
+        try:
+            resolved = str(Path(raw).resolve())
+        except (OSError, ValueError, RuntimeError):
+            resolved = raw
+        prefixes.add(resolved.rstrip("/") + "/")
+    return tuple(sorted(prefixes))
+
+
 # Character devices are not worktree escapes — `>/dev/null 2>&1` is the single most
-# common shell idiom an agent emits, and denying it breaks ordinary sessions.
-_ALWAYS_ALLOWED_PATH_PREFIXES = ("/dev/",)
+# common shell idiom an agent emits — and system temp dirs are shared scratch space
+# outside the worktree. Writes to either are always allowed; every real
+# project/source path outside the root stays contained. Plan mode is unaffected: a
+# temp path is still not a plan artifact, so the stricter plan gate keeps denying it.
+_ALWAYS_ALLOWED_PATH_PREFIXES = ("/dev/", *_temp_write_prefixes())
 
 # Commands whose path operands are *writes*, so their operands stay contained even
 # after the read relaxation. In plan mode those operands must additionally be plan
@@ -372,7 +397,12 @@ def _resolve_shell_path(token: str, *, base: Path) -> Path | None:
 
 
 def _contained(path: Path, root: Path) -> bool:
-    """True when ``path`` is inside ``root`` (or is an always-allowed device node)."""
+    """True when ``path`` is inside ``root`` (or an always-allowed prefix).
+
+    Always-allowed prefixes (:data:`_ALWAYS_ALLOWED_PATH_PREFIXES`) cover device
+    nodes (``/dev/…``) and system temp dirs (``/tmp``, ``$TMPDIR``) — shared
+    scratch space that is safe to write even though it is outside ``root``.
+    """
     if str(path).startswith(_ALWAYS_ALLOWED_PATH_PREFIXES):
         return True
     try:
@@ -400,6 +430,12 @@ def shell_containment(
     a sibling repo (``cat ../crossby/x``, ``grep -r foo ../crossby``,
     ``git -C ../crossby log``) never mutates state, so a read operand may resolve
     anywhere. The guard's job is to keep *writes* inside the root.
+
+    **System temp dirs are the one write exception.** ``/tmp`` and ``$TMPDIR`` are
+    shared scratch space (:func:`_temp_write_prefixes`, via
+    :data:`_ALWAYS_ALLOWED_PATH_PREFIXES`), so writes there resolve as "contained"
+    even though they sit outside the root — plan mode still denies them as
+    non-artifacts.
 
     Rules, in order (any match denies):
 

@@ -304,12 +304,23 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
         value = done_raw.get(key, True)
         return True if value is None else value
 
+    # `max_review_passes` is an int (default 2), not a bool — it must NOT use
+    # `_done_flag` (which normalizes null to the bool default `True`). An explicit
+    # null normalizes to the documented default 2; any other value is passed
+    # through raw so a bad one (0 / -1 / bool / str / float) fails loudly at
+    # DoneConfig construction via its *strict* positive-int bound rather than
+    # being coerced (a plain PositiveInt would accept `true`/`"2"`/`2.0`).
+    _max_passes = done_raw.get("max_review_passes", 2)
+    if _max_passes is None:
+        _max_passes = 2
+
     done = DoneConfig(
         require_pr_summary=_done_flag("require_pr_summary"),
         require_sync=_done_flag("require_sync"),
         require_review=_done_flag("require_review"),
         require_resolved_threads=_done_flag("require_resolved_threads"),
         pre_push_backstop=_done_flag("pre_push_backstop"),
+        max_review_passes=_max_passes,
     )
 
     return ProjectConfig(
