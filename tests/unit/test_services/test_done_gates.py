@@ -157,8 +157,11 @@ class TestReviewRanCap:
         assert "not re-reviewed" in text.lower()
         assert "--skip-review" in text
 
-    def test_exact_sha_fast_path_wins_over_cap(self, tmp_path: Path) -> None:
-        # An exact-sha reviewed marker passes on the first try regardless of count.
+    def test_exact_sha_fast_path_wins_over_cap(self, tmp_path: Path, capsys) -> None:
+        # An exact-sha reviewed marker passes even when the review-pass cap is
+        # already exhausted — the fast path precedes the cap check.
+        markers.record_review_pass(tmp_path, "sha1")
+        markers.record_review_pass(tmp_path, "sha2")  # cap (default 2) reached
         markers.write_marker(tmp_path, "reviewed", "head")
         assert (
             _gate_review_ran(
@@ -166,6 +169,8 @@ class TestReviewRanCap:
             )
             is True
         )
+        # Took the exact-sha fast path, not the cap branch (no safety-limit notice).
+        assert "safety limit reached" not in _captured_text(capsys)
 
     def test_custom_max_review_passes_honored(self, tmp_path: Path) -> None:
         config = ProjectConfig(done=DoneConfig(max_review_passes=3))
