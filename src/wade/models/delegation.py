@@ -27,7 +27,10 @@ class DelegationRequest(BaseModel):
     model: str | None = None
     effort: str | None = None
     cwd: Path | None = None
-    timeout: int = 300
+    # Default headless subprocess budget, in seconds. 600s (not 300s) so a
+    # high-effort review/deps run over a large diff finishes rather than tripping
+    # the budget mid-run. Override per command via ``ai.<command>.timeout``.
+    timeout: int = 600
     output_file: Path | None = None
     trusted_dirs: list[str] = Field(default_factory=list)
     allowed_commands: list[str] = Field(default_factory=list)

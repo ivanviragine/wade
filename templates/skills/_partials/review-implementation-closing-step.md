@@ -16,7 +16,7 @@ it launches an external AI subprocess that may run for a few minutes. wade print
 the budget when it starts ("can take up to Ns"). Keep it in the foreground and
 allow more than that before timing out. Do not kill it early or background it — a
 premature kill is an infra timeout, not a review result. Budget:
-`ai.review_implementation.timeout` (300s).
+`ai.review_implementation.timeout` (600s).
 
 **Run at most 2 times — code-enforced.** After fixing a finding, commit and
 re-review before proceeding (the commit stales the `reviewed` marker). Major
