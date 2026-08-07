@@ -21,7 +21,7 @@ from wade.services.ai_resolution import (
 from wade.services.delegation_service import delegate, resolve_mode
 from wade.skills.installer import load_prompt_template
 from wade.ui.console import console
-from wade.utils.markers import record_review_pass, write_marker
+from wade.utils.markers import count_review_passes, record_review_pass, write_marker
 
 logger = structlog.get_logger()
 
@@ -44,7 +44,7 @@ def _mark_reviewed() -> None:
     write_marker(repo_root, "reviewed", head)
 
 
-def _record_review_pass() -> None:
+def _record_review_pass() -> int | None:
     """Count one delegation-backed implementation-review pass for the cap (#384).
 
     Writes a ``.wade/review-pass@<HEAD>`` marker **independent of the review's
@@ -52,15 +52,43 @@ def _record_review_pass() -> None:
     ``reviewed`` marker) still consumed a real review→fix cycle, so it must
     advance the pass count that the ``done`` gate's review-pass cap reads. Per-sha and
     idempotent, so re-running review on the same HEAD does not inflate the count.
-    Best-effort: a git failure is logged and skipped.
+
+    Returns the resulting distinct-pass count, or ``None`` if the marker could not
+    be recorded (best-effort: a git failure is logged and skipped).
     """
     try:
         repo_root = git_repo.get_repo_root(Path.cwd())
         head = git_repo.rev_parse(repo_root, "HEAD")
     except GitError:
         logger.debug("review.review_pass_marker_skipped", exc_info=True)
-        return
+        return None
     record_review_pass(repo_root, head)
+    return count_review_passes(repo_root)
+
+
+def _announce_review_pass_budget(passes: int, limit: int) -> None:
+    """Surface the implementation-session review-pass budget from the command (#384).
+
+    The ``done`` cap stops requiring re-review of new commits after
+    ``done.max_review_passes`` passes. Printing the running count here means an
+    agent sees its remaining budget directly from ``wade review implementation``
+    rather than from buried skill/prompt prose. Informational only — the cap is
+    enforced (and scoped to implementation sessions) at ``done`` time.
+    """
+    remaining = max(0, limit - passes)
+    if remaining > 0:
+        plural = "" if remaining == 1 else "es"
+        console.info(
+            f"Review pass {passes} of {limit} recorded — {remaining} pass{plural} left "
+            "before `done` stops requiring re-review of new commits in an "
+            "implementation session. Configure the cap with `done.max_review_passes`."
+        )
+    else:
+        console.warn(
+            f"Review pass {passes} of {limit} recorded — the implementation-session "
+            "review-pass cap is now reached. `done` will complete without requiring "
+            "re-review of further commits. Configure with `done.max_review_passes`."
+        )
 
 
 def _load_review_config(
@@ -318,7 +346,13 @@ def review_implementation(
     # of success — a headless timeout still consumed a review→fix cycle, so it
     # must advance the count (#384). This runs only past the no-diff early return
     # above, so an empty review never spends a cap slot. Per-sha and idempotent.
-    _record_review_pass()
+    passes = _record_review_pass()
+    # Surface the running budget from the command itself so the caller sees how
+    # many passes remain before `done` stops requiring re-review — no need to rely
+    # on the "run at most N times" rule buried in the skill/prompt. Guarded by an
+    # int check so a mocked `_record_review_pass` in tests never triggers it.
+    if isinstance(passes, int):
+        _announce_review_pass_budget(passes, config.done.max_review_passes)
     # Record the review-ran marker on any non-hard-failure result (success),
     # keyed to the current HEAD sha. The `done` review-ran gate reads it.
     if result.success:

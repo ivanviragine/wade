@@ -292,7 +292,10 @@ HEAD, so any sha-keyed check must precede it):
    `review-pass@<sha>` markers (written by each delegation-backed
    `wade review implementation`, independent of its success — so a headless
    timeout still counts) and, once `done.max_review_passes` (default 2) is
-   reached, completes anyway with a notice rather than looping. A listdir failure
+   reached, completes anyway with a notice rather than looping. `wade review
+   implementation` surfaces the running budget after each pass ("review pass N of
+   M — K left"), so the count is visible from the command rather than only from
+   the skill prose or the `done`-time notice. A listdir failure
    counts as 0 — as does a symlinked `.wade` or a platform without descriptor-based
 directory reads (fail closed toward re-gating, so tampering can't satisfy the
 cap). `review-pr-comments` keeps the unbounded

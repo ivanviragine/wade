@@ -426,12 +426,16 @@ def _gate_review_ran(
     limit = config.done.max_review_passes
     if passes >= limit:
         console.warn(
-            f"Review-pass safety limit reached ({passes} of {limit}) — the latest "
-            "commit(s) were NOT re-reviewed."
+            f"Review-pass safety limit reached ({passes} of {limit}) — the current "
+            "commit was not re-reviewed."
         )
-        console.detail("Completing anyway to avoid an unbounded review→fix→re-review loop.")
+        console.detail(
+            f"{passes} commit(s) have been reviewed on this worktree; the cap bounds "
+            "the review→fix→re-review loop so `done` can't be blocked indefinitely. "
+            "Completing without requiring another review."
+        )
         console.hint(
-            "For an explicit full bypass instead, run "
+            "Raise the cap with `done.max_review_passes`, or bypass this run with "
             "`wade implementation-session done --skip-review`."
         )
         return True
