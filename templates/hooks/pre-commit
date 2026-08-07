@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# wade pre-commit quality gate — runs the project's configured lint/test
+# command(s) before a commit is recorded. A non-zero exit blocks the commit.
+#
+# Installed per-worktree by wade at <worktree>/.wade/githooks/pre-commit and
+# wired via `git config --worktree core.hooksPath .wade/githooks`. git runs the
+# hook with cwd at the worktree top. The lint/test commands are baked in at
+# install time from `.wade.yml` (hooks.pre_commit.{lint,test}), so the hook
+# loads no config and calls back into no tooling on every commit.
+#
+# Honesty: `git commit --no-verify` bypasses this in one flag. This is a
+# quality gate that makes untested/messy commits hard to land, NOT an airtight
+# enforcement boundary.
+
+set -uo pipefail
+
+# Baked at install time (an empty string means the step is not configured).
+wade_lint_cmd='__WADE_PRE_COMMIT_LINT__'
+wade_test_cmd='__WADE_PRE_COMMIT_TEST__'
+
+run_step() {
+  local label="$1" cmd="$2"
+  [[ -z "$cmd" ]] && return 0
+  echo "[wade] pre-commit: ${label} → ${cmd}" >&2
+  if ! bash -c "$cmd"; then
+    echo "[wade] pre-commit: ${label} failed — commit blocked." >&2
+    echo "[wade] Fix it and re-commit, or bypass once with: git commit --no-verify" >&2
+    exit 1
+  fi
+}
+
+run_step lint "$wade_lint_cmd"
+run_step test "$wade_test_cmd"
+
+# Chain to a pre-existing pre-commit hook captured at install time (core.hooksPath
+# REPLACES .git/hooks, so a prior hook would otherwise be silently disabled).
+# Forward argv (git passes pre-commit none) and honor the chained exit code so a
+# prior hook can still block the commit. Never silently shadow.
+chain_file=".wade/githooks/.chain-pre-commit"
+if [[ -f "$chain_file" ]]; then
+  chained="$(cat "$chain_file")"
+  if [[ -n "$chained" && -x "$chained" ]]; then
+    "$chained" "$@"
+    exit $?
+  fi
+fi
+
+exit 0

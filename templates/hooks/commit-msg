@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# wade commit-msg quality gate — validates that the commit subject follows
+# Conventional Commits. A non-conforming subject blocks the commit.
+#
+# Installed per-worktree by wade at <worktree>/.wade/githooks/commit-msg and
+# wired via `git config --worktree core.hooksPath .wade/githooks`. Enabled by
+# `.wade.yml` → hooks.commit_msg.conventional: true. Pure bash — no config load,
+# no callback into wade.
+#
+# Honesty: `git commit --no-verify` bypasses this in one flag. This is a
+# quality gate, NOT an airtight enforcement boundary.
+#
+# git invokes commit-msg as:  commit-msg <path-to-commit-message-file>
+
+set -uo pipefail
+
+msg_file="$1"
+subject="$(head -n 1 "$msg_file")"
+
+# Conventional Commits subject:  <type>[(scope)][!]: <description>
+# Types mirror wade's AGENTS.md convention list.
+pattern='^(feat|fix|docs|refactor|test|chore|perf|ci|build|style|revert)(\([^)]+\))?!?: .+'
+
+# The subject must always be a typed Conventional Commit. A `BREAKING CHANGE:` /
+# `BREAKING-CHANGE:` footer only marks an already-typed commit as breaking (an
+# alternative to the subject `!`) — it does NOT license an untyped subject, so it
+# is not consulted here: a typed subject already passes regardless of the footer.
+if [[ "$subject" =~ $pattern ]]; then
+  :
+else
+  echo "[wade] commit-msg: subject is not a Conventional Commit:" >&2
+  echo "         ${subject}" >&2
+  echo "[wade] Expected: <type>[(scope)][!]: <description>" >&2
+  echo "[wade] Types: feat|fix|docs|refactor|test|chore|perf|ci|build|style|revert" >&2
+  echo "[wade] Bypass once with: git commit --no-verify" >&2
+  exit 1
+fi
+
+# Chain to a pre-existing commit-msg hook captured at install time (core.hooksPath
+# REPLACES .git/hooks, so a prior hook would otherwise be silently disabled).
+# Forward the message-file path ($1) and honor the chained exit code. Never
+# silently shadow.
+chain_file=".wade/githooks/.chain-commit-msg"
+if [[ -f "$chain_file" ]]; then
+  chained="$(cat "$chain_file")"
+  if [[ -n "$chained" && -x "$chained" ]]; then
+    "$chained" "$@"
+    exit $?
+  fi
+fi
+
+exit 0

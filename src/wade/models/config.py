@@ -149,11 +149,56 @@ class KnowledgeConfig(BaseModel):
     path: str = "KNOWLEDGE.md"
 
 
+class PreCommitConfig(BaseModel):
+    """``hooks.pre_commit`` — commands run by the managed ``pre-commit`` git hook.
+
+    Both default to unset, so **nothing is installed unless opted in**. When
+    either is set, a per-worktree ``pre-commit`` hook runs the configured
+    command(s); a non-zero exit blocks the commit. This is a **quality** gate,
+    not an enforcement boundary — ``git commit --no-verify`` bypasses it.
+    """
+
+    lint: str | None = None
+    test: str | None = None
+
+
+class CommitMsgConfig(BaseModel):
+    """``hooks.commit_msg`` — the managed ``commit-msg`` git hook.
+
+    ``conventional: true`` installs a per-worktree ``commit-msg`` hook that
+    rejects a subject line which is not a Conventional Commit. Off by default;
+    bypassable with ``git commit --no-verify``.
+    """
+
+    conventional: bool = False
+
+
+class PostToolUseConfig(BaseModel):
+    """``hooks.post_tool_use`` — in-turn lint feedback fed to context-capable tools.
+
+    Off by default. When ``enabled`` and a lint command is resolvable, a
+    PostToolUse hook lints the just-edited file and injects any findings back to
+    the agent as context so it can fix them while the edit is still in working
+    memory. ``lint_cmd`` is a **file-scoped** linter (the edited path is appended
+    as a positional arg); when unset, wade falls back to ``pre_commit.lint`` run
+    **unscoped** (whole-repo). ``timeout`` bounds the per-edit run (skip on
+    overrun). Named ``lint_cmd`` — not ``lint`` — to avoid a string-vs-boolean
+    key collision with :attr:`PreCommitConfig.lint`.
+    """
+
+    enabled: bool = False
+    lint_cmd: str | None = None
+    timeout: int = 10
+
+
 class HooksConfig(BaseModel):
     """Hooks configuration for worktree lifecycle."""
 
     post_worktree_create: str | None = None
     copy_to_worktree: list[str] = []
+    pre_commit: PreCommitConfig = PreCommitConfig()
+    commit_msg: CommitMsgConfig = CommitMsgConfig()
+    post_tool_use: PostToolUseConfig = PostToolUseConfig()
 
 
 class DoneConfig(BaseModel):

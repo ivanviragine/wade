@@ -88,6 +88,60 @@ class TestParseConfigFile:
         assert config.hooks.post_worktree_create == "scripts/setup-worktree.sh"
         assert config.hooks.copy_to_worktree == [".env"]
 
+    def test_hooks_quality_gates_default_off(self, tmp_path: Path) -> None:
+        # A config with no quality-gate keys leaves every gate off/empty, so
+        # nothing is installed unless the project opts in.
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\n")
+        config = parse_config_file(config_path)
+        assert config.hooks.pre_commit.lint is None
+        assert config.hooks.pre_commit.test is None
+        assert config.hooks.commit_msg.conventional is False
+        assert config.hooks.post_tool_use.enabled is False
+        assert config.hooks.post_tool_use.lint_cmd is None
+        assert config.hooks.post_tool_use.timeout == 10
+
+    def test_hooks_quality_gates_parsed(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\n"
+            "hooks:\n"
+            "  pre_commit:\n"
+            "    lint: ./scripts/check.sh --lint\n"
+            "    test: ./scripts/test.sh\n"
+            "  commit_msg:\n"
+            "    conventional: true\n"
+            "  post_tool_use:\n"
+            "    enabled: true\n"
+            "    lint_cmd: ruff check\n"
+            "    timeout: 20\n"
+        )
+        config = parse_config_file(config_path)
+        assert config.hooks.pre_commit.lint == "./scripts/check.sh --lint"
+        assert config.hooks.pre_commit.test == "./scripts/test.sh"
+        assert config.hooks.commit_msg.conventional is True
+        assert config.hooks.post_tool_use.enabled is True
+        assert config.hooks.post_tool_use.lint_cmd == "ruff check"
+        assert config.hooks.post_tool_use.timeout == 20
+
+    def test_hooks_null_booleans_normalized_to_defaults(self, tmp_path: Path) -> None:
+        # A key present-but-null must fall back to the documented default (mirrors
+        # the `done` section) rather than raising a Pydantic error at load time.
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\n"
+            "hooks:\n"
+            "  commit_msg:\n"
+            "    conventional:\n"
+            "  post_tool_use:\n"
+            "    enabled:\n"
+            "    timeout:\n"
+        )
+        config = parse_config_file(config_path)
+        assert config.hooks.commit_msg.conventional is False
+        assert config.hooks.post_tool_use.enabled is False
+        assert config.hooks.post_tool_use.timeout == 10
+
     def test_model_mapping(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text(SAMPLE_V2_CONFIG)

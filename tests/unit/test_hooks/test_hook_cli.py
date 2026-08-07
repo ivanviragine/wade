@@ -593,3 +593,18 @@ class TestStopNeverTrapsOnUsageError:
         """
         r = self._raw("pre_tool_use", "--guard", "worktree", "--root", "stop")
         assert r.returncode == 2
+
+    def test_lint_cmd_value_named_stop_does_not_flip_write_guard_open(self) -> None:
+        """`--lint-cmd stop` (its value) must not be recovered as the event.
+
+        --lint-cmd/--timeout are value-taking flags; if _VALUE_FLAGS omits them,
+        their value is mistaken for the event positional in the argparse-error
+        fallback, flipping a missing-event write guard from fail-closed (exit 2)
+        to fail-open (exit 0).
+        """
+        # Event positional omitted → argparse errors; the recovered event must
+        # not become "stop" via the --lint-cmd value.
+        r = self._raw("--lint-cmd", "stop", "--guard", "worktree", "--tool", "claude")
+        assert r.returncode == 2
+        r = self._raw("--timeout", "stop", "--guard", "worktree", "--tool", "claude")
+        assert r.returncode == 2
