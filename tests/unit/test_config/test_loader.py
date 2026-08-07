@@ -259,6 +259,28 @@ class TestParseConfigFile:
         with pytest.raises(ConfigError):
             parse_config_file(config_path)
 
+    def test_max_review_passes_bool_rejected_at_load(self, tmp_path: Path) -> None:
+        # StrictInt rejects YAML `true` at load — a plain PositiveInt would coerce
+        # it to 1 (bool is an int subclass), silently accepting an invalid value.
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\ndone:\n  max_review_passes: true\n")
+        with pytest.raises(ConfigError):
+            parse_config_file(config_path)
+
+    def test_max_review_passes_string_rejected_at_load(self, tmp_path: Path) -> None:
+        # StrictInt rejects a YAML string; a plain PositiveInt would coerce "2"→2.
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text('version: 2\ndone:\n  max_review_passes: "2"\n')
+        with pytest.raises(ConfigError):
+            parse_config_file(config_path)
+
+    def test_max_review_passes_float_rejected_at_load(self, tmp_path: Path) -> None:
+        # StrictInt rejects a YAML float; a plain PositiveInt would coerce 2.0→2.
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\ndone:\n  max_review_passes: 2.0\n")
+        with pytest.raises(ConfigError):
+            parse_config_file(config_path)
+
     def test_empty_file(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text("")
