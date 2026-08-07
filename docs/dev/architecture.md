@@ -289,7 +289,9 @@ HEAD, so any sha-keyed check must precede it):
    `wade review implementation`, independent of its success — so a headless
    timeout still counts) and, once `done.max_review_passes` (default 2) is
    reached, completes anyway with a notice rather than looping. A listdir failure
-   counts as 0 (fail toward re-gating). `review-pr-comments` keeps the unbounded
+   counts as 0 — as does a symlinked `.wade` or a platform without descriptor-based
+directory reads (fail closed toward re-gating, so tampering can't satisfy the
+cap). `review-pr-comments` keeps the unbounded
    fast-path-or-refuse behavior — the gate is shared, so the cap branch is
    scoped to `session_type == "implementation"`.
 4. **sync** (implementation only) — auto-sync via the existing `do_sync` service
@@ -386,7 +388,7 @@ done:                        # completion-gate toggles (all default true)
   require_review: true
   require_resolved_threads: true
   pre_push_backstop: true
-  max_review_passes: 2       # impl-session review→fix loop cap (#384); positive int
+  max_review_passes: 2       # impl-session review→fix loop cap (#384); strict positive int
 ```
 
 **`done` section** (`DoneConfig`): completion-gate escape hatches, all default
