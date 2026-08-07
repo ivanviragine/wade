@@ -494,23 +494,98 @@ def _install_post_tool_use_lint_hook(worktree_path: Path, config: ProjectConfig)
 def _effective_copy_files(config: ProjectConfig) -> list[str]:
     """Compute the full list of files to copy into a new worktree.
 
-    Merges user-configured copy_to_worktree with internal wade files
-    that must always be present (.wade.yml, knowledge path + ratings when enabled).
+    Merges user-configured ``copy_to_worktree`` with internal wade files that must
+    always be present (``.wade.yml``).
+
+    The knowledge file and its ratings sidecar are **never** copied (#358): they are
+    tracked, so the worktree checkout already has the committed version — copying
+    main's (possibly dirty) copy over it is exactly what manufactured the stale
+    snapshot this issue removes. Any lingering knowledge/ratings entries in a
+    project's ``copy_to_worktree`` (pre-#358 config, before the migration strips
+    them) are filtered out here so the copy can never resurrect the bug.
     """
     from wade.services.knowledge_service import resolve_ratings_path
 
-    internal: list[str] = [".wade.yml"]
+    excluded: set[str] = set()
     if config.knowledge.enabled:
         kpath = config.knowledge.path
         if not kpath.startswith("/") and ".." not in kpath.split("/"):
-            internal.append(kpath)
-            internal.append(str(resolve_ratings_path(Path(kpath))))
+            excluded.add(kpath)
+            excluded.add(str(resolve_ratings_path(Path(kpath))))
+            # Legacy counter-YAML sidecar (pre-#358) may still be listed.
+            excluded.add(str(Path(kpath).with_suffix(".ratings.yml")))
 
-    files: list[str] = list(config.hooks.copy_to_worktree)
+    internal: list[str] = [".wade.yml"]
+    files: list[str] = [f for f in config.hooks.copy_to_worktree if f not in excluded]
     for f in internal:
         if f not in files:
             files.append(f)
     return files
+
+
+def _carry_forward_pending_votes(
+    worktree_path: Path, repo_root: Path, config: ProjectConfig
+) -> None:
+    """Flush main's uncommitted ratings votes into the new worktree, then clean main.
+
+    A throwaway (plan / ``task deps``) ``wade knowledge rate`` appends its vote line
+    to **main's** working-copy ratings log — that is where a detached session's
+    knowledge writes are redirected. Those lines are uncommitted, so they never reach
+    origin on their own. At the next attached worktree's bootstrap we move them into
+    the new worktree's log (so they ride into that branch's PR to origin) and restore
+    main's ratings file to its committed state, returning main to clean.
+
+    Votes are additive, so this is "late but lossless" — the vote lands in origin one
+    attached session later. Serialized by ``file_lock`` on main's ratings file so two
+    concurrent bootstraps can't double-carry: the first carries + clears, the rest see
+    a clean main.
+    """
+    from wade.services.knowledge_service import resolve_knowledge_path, resolve_ratings_path
+    from wade.utils.filelock import file_lock
+
+    try:
+        main_ratings = resolve_ratings_path(resolve_knowledge_path(repo_root, config.knowledge))
+    except ValueError:
+        return
+    if not main_ratings.is_file():
+        return
+    try:
+        relpath = main_ratings.relative_to(repo_root).as_posix()
+    except ValueError:
+        return
+    # Only reconcile a TRACKED ratings file: the carry-forward reverts main's
+    # uncommitted vote lines via ``git checkout``, which only works for a tracked
+    # file. An untracked ratings file is not the throwaway-vote scenario — skip it
+    # rather than risk moving/deleting a file wade doesn't manage.
+    if not git_repo.is_file_tracked(repo_root, relpath):
+        return
+
+    with file_lock(main_ratings):
+        if not main_ratings.is_file():
+            return
+        working_lines = main_ratings.read_text(encoding="utf-8").splitlines()
+        committed_text = git_repo.show_file_at_head(repo_root, relpath)
+        committed = set(committed_text.splitlines()) if committed_text is not None else set()
+        pending = [ln for ln in working_lines if ln.strip() and ln not in committed]
+        if not pending:
+            return
+
+        worktree_ratings = resolve_ratings_path(
+            resolve_knowledge_path(worktree_path, config.knowledge)
+        )
+        worktree_ratings.parent.mkdir(parents=True, exist_ok=True)
+        content = worktree_ratings.read_text(encoding="utf-8") if worktree_ratings.is_file() else ""
+        existing = set(content.splitlines())
+        to_add = [ln for ln in pending if ln not in existing]
+        if to_add:
+            prefix = "" if (content == "" or content.endswith("\n")) else "\n"
+            with worktree_ratings.open("a", encoding="utf-8") as fd:
+                fd.write(prefix + "".join(f"{ln}\n" for ln in to_add))
+
+        # Restore main's tracked ratings to committed state, clearing wade's vote-dirt.
+        if not git_repo.checkout_paths(repo_root, relpath):
+            logger.debug("implementation.ratings_carry_restore_failed", path=relpath)
+        logger.debug("implementation.ratings_votes_carried_forward", count=len(pending))
 
 
 def _get_info_exclude_path(worktree_path: Path) -> Path | None:
@@ -708,6 +783,18 @@ def bootstrap_worktree(
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dest)
             logger.debug("implementation.bootstrap_copy", file=filename)
+
+    # Knowledge lifecycle (#358): worktree-local, merged through the PR. Only for
+    # attached (branch-backed) worktrees — a throwaway detached-HEAD plan/deps
+    # worktree is discarded at session end, so its wade-managed .gitattributes union
+    # block and any carried-forward ratings votes would be lost with it. The
+    # attached/detached split is the same deterministic signal the knowledge layer
+    # uses to decide where reads/writes land (_resolve_knowledge_root).
+    if config.knowledge.enabled and git_repo.is_head_attached(worktree_path):
+        from wade.skills.installer import ensure_knowledge_merge_attributes
+
+        ensure_knowledge_merge_attributes(worktree_path, config)
+        _carry_forward_pending_votes(worktree_path, repo_root, config)
 
     # Install skill files — not tracked by git so worktrees don't inherit them
     from wade.skills.installer import get_wade_repo_root, install_skills

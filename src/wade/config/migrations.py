@@ -53,6 +53,47 @@ def migrate_string_tiers_to_tier_config(raw: dict[str, Any]) -> bool:
     return changed
 
 
+def strip_knowledge_from_copy_to_worktree(raw: dict[str, Any]) -> bool:
+    """Remove the knowledge file + ratings sidecars from ``hooks.copy_to_worktree`` (#358).
+
+    Pre-#358, ``wade init`` added the knowledge file and its ratings sidecar to
+    ``hooks.copy_to_worktree``. #358 stops copying them — they are tracked, so a new
+    worktree already checks out the committed version, and copying main's copy over
+    it manufactures the stale snapshot #358 fixes. Strip them here so an
+    already-inited project stops re-copying on its next bootstrap.
+
+    Pure YAML-dict mutation with no services import (``config`` is a lower layer than
+    ``services``). Derives the file name from ``knowledge.path`` (default
+    ``KNOWLEDGE.md``) and strips it plus its ``.ratings.yml`` / ``.ratings.jsonl``
+    siblings. Idempotent.
+    """
+    hooks = raw.get("hooks")
+    if not isinstance(hooks, dict):
+        return False
+    copy_list = hooks.get("copy_to_worktree")
+    if not isinstance(copy_list, list):
+        return False
+
+    kpath = "KNOWLEDGE.md"
+    knowledge = raw.get("knowledge")
+    if isinstance(knowledge, dict):
+        configured = knowledge.get("path")
+        if isinstance(configured, str) and configured:
+            kpath = configured
+    kfile = Path(kpath)
+    targets = {
+        kpath,
+        str(kfile.with_suffix(".ratings.yml")),
+        str(kfile.with_suffix(".ratings.jsonl")),
+    }
+
+    filtered = [item for item in copy_list if item not in targets]
+    if len(filtered) == len(copy_list):
+        return False
+    hooks["copy_to_worktree"] = filtered
+    return True
+
+
 def run_all_migrations(config_path: Path) -> bool:
     """Run all migrations on a .wade.yml file.
 
@@ -77,6 +118,7 @@ def run_all_migrations(config_path: Path) -> bool:
     try:
         changed = ensure_version(raw)
         changed = migrate_string_tiers_to_tier_config(raw) or changed
+        changed = strip_knowledge_from_copy_to_worktree(raw) or changed
 
         if changed:
             config_path.write_text(

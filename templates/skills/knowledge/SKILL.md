@@ -81,6 +81,8 @@ wade knowledge rate <entry-id> down   # entry is incorrect or misleading
 wade knowledge rate <entry-id> stale  # entry is outdated / no longer applies
 ```
 
+Votes are recorded to an **append-only vote log** (`KNOWLEDGE.ratings.jsonl`), so concurrent sessions never lose a vote when their branches merge — each vote is one appended line and merging is pure concatenation. `wade knowledge rate` is available in **every** session type, including planning: a plan/deps session's vote is carried forward into the next implementation session's PR automatically. Run `wade knowledge status` to see uncommitted knowledge/ratings changes.
+
 **How to decide:**
 
 1. **Was your search appropriate (correct tags/text)?**
@@ -132,6 +134,8 @@ Entry dates (shown in search results) indicate freshness — rate an entry stale
 ```bash
 echo "Your learnings here" | wade knowledge add --session <type> --issue <number> --tag <topic>
 ```
+
+A new entry becomes part of your branch and merges to main with your PR — there is nothing separate to commit or copy. `wade knowledge add`, `tag add`, and `tag remove` are **not** available in a planning or `task deps` session (that worktree is discarded and has no PR); record the learning in the plan file instead so the implementation session captures it.
 
 If a new entry corrects or replaces an existing one:
 ```bash

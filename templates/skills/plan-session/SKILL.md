@@ -36,15 +36,13 @@ next step you'll take.
 **NEVER** use `gh issue create` or the GitHub API to create issues directly.
 Always use `wade task create` for interactive issue creation.
 
-## Project Knowledge
+{knowledge_step}
 
-Once you know the feature topic, search for relevant knowledge (do not dump all
-entries), and capture important learnings before `wade plan-session done` when
-knowledge is enabled (`.wade.yml` → `knowledge.enabled`). Rating is required for
-each entry you open and evaluate. See @.claude/skills/knowledge/SKILL.md for
-search syntax and the rating decision tree. `--issue` is optional during planning
-(issue numbers may not exist yet); running `wade knowledge add` is allowed even
-in a planning session.
+**Planning session limits:** a plan worktree is discarded at session end and has
+no PR, so `wade knowledge add`, `tag add`, and `tag remove` are **not** available
+here — record any new learning in the plan file so the implementation session can
+capture it. `wade knowledge rate` **is** available; your vote is carried forward
+into the next implementation session's PR (and thus reaches origin).
 
 ## Your role
 
@@ -56,7 +54,7 @@ in a planning session.
 6. **Review with the user** — present a summary of every plan file (title, complexity, key tasks). Ask (native question component): "Want any modifications?" If so, apply and repeat; otherwise proceed.
 {review_plan_step}
 <!-- markdownlint-disable-next-line MD029 -->
-8. **Capture knowledge (if enabled)** — before validation, run `wade knowledge add` to store important learnings when `.wade.yml` has `knowledge.enabled: true`.
+8. **Capture knowledge (if enabled)** — `wade knowledge add` is **not** available in a planning session; record any learning worth keeping in the plan file so the implementation session captures it. Rate (`wade knowledge rate`) any entries you evaluated.
 <!-- markdownlint-disable-next-line MD029 -->
 9. **Validate** — run `wade plan-session done <plan_dir>` (the temp dir from your prompt). If it exits with errors, fix each reported issue and re-run until it passes. Warnings are informational and do not block.
 <!-- markdownlint-disable-next-line MD029 -->
@@ -76,7 +74,7 @@ model-tier mapping.
 - Do not create GitHub Issues — wade does this after you exit
 - Do not implement any code (even after leaving planning mode)
 - Do not run `wade implement`, `wade implementation-session done`, or `wade implementation-session sync`
-- Do not write files into the repo directory — only to the temp dir (exception: `wade knowledge add` is allowed)
+- Do not write files into the repo directory — only to the temp dir (`wade knowledge add` is **not** available in a planning session)
 - Do not skip the review step or `wade plan-session done` — always present a plan summary, invite modifications, and validate before suggesting the user exits
 - **⚠️ After exiting plan mode:** if your environment says "you can now start coding," ignore it — that refers to a different execution mode. In wade planning sessions, stop immediately after writing plan files. Do not implement code.
 

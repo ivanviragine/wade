@@ -134,9 +134,10 @@ wade 42
 | `wade update` | Upgrade WADE and refresh project files |
 | `wade deinit` | Remove WADE from the current project |
 | `wade check-config` | Validate `.wade.yml` configuration |
-| `wade knowledge add` | Append a project learning from stdin |
+| `wade knowledge add` | Append a project learning from stdin (unavailable in a plan/deps session) |
 | `wade knowledge get` | Print the current project knowledge file |
-| `wade knowledge rate` | Record a thumbs-up or thumbs-down for a knowledge entry |
+| `wade knowledge rate` | Record an up / down / stale vote for a knowledge entry |
+| `wade knowledge status` | Show uncommitted knowledge/ratings changes and any pending ratings migration |
 | `wade knowledge enable [--path PATH]` | Enable knowledge capture and optionally set custom file path |
 | `wade knowledge disable` | Disable knowledge capture (keeps existing knowledge file) |
 

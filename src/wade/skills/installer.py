@@ -8,7 +8,9 @@ from pathlib import Path
 
 import structlog
 
+from wade.models.config import ProjectConfig
 from wade.skills.doc_targets import detect_doc_targets, format_doc_targets
+from wade.utils.markdown import has_marker_block, remove_marker_block
 
 logger = structlog.get_logger()
 
@@ -20,6 +22,7 @@ _SKILL_PARTIALS: dict[str, str] = {
     "{review_plan_step}": "_partials/review-plan-step.md",
     "{review_implementation_closing_step}": "_partials/review-implementation-closing-step.md",
     "{doc_update_step}": "_partials/doc-update-step.md",
+    "{knowledge_step}": "_partials/knowledge-step.md",
 }
 
 
@@ -599,6 +602,61 @@ def get_worktree_gitignore_entries() -> list[str]:
     )
 
     return entries
+
+
+# --- Knowledge .gitattributes union-merge block (#358) ---
+
+KNOWLEDGE_ATTRIBUTES_MARKER_START = "# wade:knowledge:start"
+KNOWLEDGE_ATTRIBUTES_MARKER_END = "# wade:knowledge:end"
+
+
+def ensure_knowledge_merge_attributes(root: Path, config: ProjectConfig) -> None:
+    """Ensure a wade-managed ``merge=union`` block for the knowledge files in ``.gitattributes``.
+
+    The knowledge file (append-only entries) and its JSONL vote log are append-only
+    logs; two sessions appending is a textbook conflict, and ``merge=union`` keeps
+    **both** sides — exactly right here. Union does the real work locally, where
+    ``catchup``/``sync`` merge the base branch into the worktree and the worktree's
+    ``.gitattributes`` applies.
+
+    ``.gitattributes`` is a **normal tracked repo file** (not gitignored). Bootstrap
+    ensures the block in the worktree so even the first session has it before its
+    first catchup/sync; the session commits it alongside its knowledge edit, so it
+    merges to main and becomes the server-side backstop. Once main has it, later
+    worktrees inherit it and this call is a no-op.
+
+    Idempotent via the shared marker-block helpers. The write is skipped entirely
+    when the on-disk content already matches, so a project that already has the block
+    is never marked dirty. Paths derive from ``config.knowledge.path`` and its
+    ``.ratings.jsonl`` sibling.
+    """
+    knowledge_path = config.knowledge.path
+    ratings_path = str(Path(knowledge_path).with_suffix(".ratings.jsonl"))
+    block = (
+        f"{KNOWLEDGE_ATTRIBUTES_MARKER_START}\n"
+        f"{knowledge_path} merge=union\n"
+        f"{ratings_path} merge=union\n"
+        f"{KNOWLEDGE_ATTRIBUTES_MARKER_END}\n"
+    )
+
+    gitattributes = root / ".gitattributes"
+    existing = ""
+    if gitattributes.is_file():
+        existing = gitattributes.read_text(encoding="utf-8")
+        if has_marker_block(
+            existing, KNOWLEDGE_ATTRIBUTES_MARKER_START, KNOWLEDGE_ATTRIBUTES_MARKER_END
+        ):
+            existing = remove_marker_block(
+                existing, KNOWLEDGE_ATTRIBUTES_MARKER_START, KNOWLEDGE_ATTRIBUTES_MARKER_END
+            )
+
+    new_content = existing.rstrip("\n") + "\n\n" + block if existing.strip() else block
+
+    current = gitattributes.read_text(encoding="utf-8") if gitattributes.is_file() else ""
+    if new_content == current:
+        return  # already correct — don't touch mtime / make the file dirty
+    gitattributes.write_text(new_content, encoding="utf-8")
+    logger.debug("skills.knowledge_merge_attributes_written", path=str(root))
 
 
 def install_skills(

@@ -412,6 +412,50 @@ def unskip_worktree_file(cwd: Path, filename: str) -> None:
     _run_git("update-index", "--no-skip-worktree", filename, cwd=cwd, check=False)
 
 
+def show_file_at_head(cwd: Path, relpath: str) -> str | None:
+    """Return the committed ``HEAD:<relpath>`` blob content, or None if absent.
+
+    None covers an untracked/uncommitted path (or a git failure) — the caller
+    treats that as "no committed version".
+    """
+    result = _run_git("show", f"HEAD:{relpath}", cwd=cwd, check=False)
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
+def checkout_paths(cwd: Path, *paths: str) -> bool:
+    """Restore ``paths`` to their committed state (``git checkout -- <paths>``).
+
+    Returns True on success; False (via ``check=False``) when a pathspec is
+    untracked or the checkout otherwise fails, so callers can fall back.
+    """
+    if not paths:
+        return True
+    result = _run_git("checkout", "--", *paths, cwd=cwd, check=False)
+    return result.returncode == 0
+
+
+def rm_file(cwd: Path, relpath: str) -> bool:
+    """Stage the removal of ``relpath`` (``git rm --force --quiet -- <relpath>``).
+
+    Returns True on success; False when the file is untracked / not a repo, letting
+    callers fall back to a plain unlink.
+    """
+    result = _run_git("rm", "--force", "--quiet", "--", relpath, cwd=cwd, check=False)
+    return result.returncode == 0
+
+
+def status_porcelain_paths(cwd: Path, *paths: str) -> list[str]:
+    """Return ``git status --porcelain`` lines scoped to ``paths`` (empty on failure)."""
+    if not paths:
+        return []
+    result = _run_git("status", "--porcelain", "--", *paths, cwd=cwd, check=False)
+    if result.returncode != 0:
+        return []
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
 def push_branch(
     repo_root: Path, branch: str, set_upstream: bool = False, force: bool = False
 ) -> None:

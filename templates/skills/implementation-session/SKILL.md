@@ -37,14 +37,7 @@ dependency analysis hooks.
 
 {review_enforcement_rule}
 
-## Project Knowledge
-
-Search for knowledge relevant to your task at session start (do not dump all
-entries), and capture important learnings before writing `PR-SUMMARY.md` when
-knowledge is enabled (`.wade.yml` → `knowledge.enabled`). Rating is required for
-each entry you open and evaluate. See @.claude/skills/knowledge/SKILL.md for
-search syntax, the rating decision tree, and entry style. Commit the updated
-knowledge file with your other changes.
+{knowledge_step}
 
 ## First action: check your context
 
