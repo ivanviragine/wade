@@ -227,6 +227,66 @@ def clear_markers(worktree_root: Path, name: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Review-pass markers (#384) — a distinct, *non-clearing* sha-keyed family
+# ---------------------------------------------------------------------------
+#
+# The implementation-session ``done`` review cap counts how many distinct
+# commits went through a delegation-backed review. Unlike ``write_marker`` (which
+# clears any prior ``<name>@*`` first, keeping exactly one marker), each
+# ``review-pass@<sha>`` must *persist* so the count reflects the number of
+# review→fix→new-commit cycles. The name is deliberately different from
+# ``reviewed`` so ``write_marker(..., "reviewed", ...)``'s clear-prior-same-name
+# cleanup never touches this family.
+
+_REVIEW_PASS_NAME = "review-pass"
+
+
+def record_review_pass(worktree_root: Path, sha: str) -> bool:
+    """Record one delegation-backed implementation review for ``sha`` (#384).
+
+    Writes ``.wade/review-pass@<sha>`` **without** clearing prior
+    ``review-pass@*`` markers, so :func:`count_review_passes` reflects the number
+    of distinct commits that were reviewed — the pass count the ``done`` cap
+    reads. Per-sha writes are idempotent (a re-review of the same HEAD reuses the
+    same filename), so same-commit retries never inflate the count. Best-effort:
+    a failed write returns ``False``.
+    """
+    ok = _atomic_write(worktree_root, f"{_REVIEW_PASS_NAME}@{sha}")
+    if not ok:
+        logger.debug("markers.review_pass_write_failed", sha=sha)
+    return ok
+
+
+def count_review_passes(worktree_root: Path) -> int:
+    """Number of distinct ``.wade/review-pass@<sha>`` markers (#384).
+
+    The pass count the implementation-session ``done`` gate compares against the
+    2-pass cap. A directory-listing failure (or a missing/symlinked ``.wade``)
+    yields ``0`` — fail toward re-gating, never a false "cap already reached",
+    matching this module's best-effort convention. ``*.tmp`` scratch files left by
+    a partial :func:`_atomic_write` are excluded.
+    """
+    prefix = f"{_REVIEW_PASS_NAME}@"
+    wade_dir = _wade_dir(worktree_root)
+    if _read_dir_fd_supported() and os.listdir in os.supports_fd:
+        dir_fd = None
+        try:
+            dir_fd = os.open(wade_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            entries = os.listdir(dir_fd)
+        except OSError:
+            return 0
+        finally:
+            if dir_fd is not None:
+                os.close(dir_fd)
+    else:
+        try:
+            entries = [p.name for p in wade_dir.iterdir()]
+        except OSError:
+            return 0
+    return sum(1 for e in entries if e.startswith(prefix) and not e.endswith(".tmp"))
+
+
+# ---------------------------------------------------------------------------
 # Public single-shot flag API (generalizes ``.wade/stop-nudged``)
 # ---------------------------------------------------------------------------
 

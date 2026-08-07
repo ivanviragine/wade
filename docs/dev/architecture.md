@@ -283,7 +283,15 @@ HEAD, so any sha-keyed check must precede it):
    session type) — a transient provider error is non-blocking.
 3. **review-ran** (both) — `marker_present(worktree, "reviewed", pre-sync HEAD)`.
    Checked against the pre-sync HEAD so a clean main-merge doesn't invalidate the
-   review just performed.
+   review just performed. **Implementation sessions add a code-enforced 2-pass cap
+   (#384):** past the exact-sha fast path, the gate counts distinct
+   `review-pass@<sha>` markers (written by each delegation-backed
+   `wade review implementation`, independent of its success — so a headless
+   timeout still counts) and, once `done.max_review_passes` (default 2) is
+   reached, completes anyway with a notice rather than looping. A listdir failure
+   counts as 0 (fail toward re-gating). `review-pr-comments` keeps the unbounded
+   fast-path-or-refuse behavior — the gate is shared, so the cap branch is
+   scoped to `session_type == "implementation"`.
 4. **sync** (implementation only) — auto-sync via the existing `do_sync` service
    when `behind > 0`, refuse only on conflict.
 5. `_done_via_pr` writes `.wade/done@<post-sync HEAD>` immediately before pushing.
@@ -378,6 +386,7 @@ done:                        # completion-gate toggles (all default true)
   require_review: true
   require_resolved_threads: true
   pre_push_backstop: true
+  max_review_passes: 2       # impl-session review→fix loop cap (#384); positive int
 ```
 
 **`done` section** (`DoneConfig`): completion-gate escape hatches, all default

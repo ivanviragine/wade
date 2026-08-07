@@ -21,7 +21,7 @@ from wade.services.ai_resolution import (
 from wade.services.delegation_service import delegate, resolve_mode
 from wade.skills.installer import load_prompt_template
 from wade.ui.console import console
-from wade.utils.markers import write_marker
+from wade.utils.markers import record_review_pass, write_marker
 
 logger = structlog.get_logger()
 
@@ -42,6 +42,25 @@ def _mark_reviewed() -> None:
         logger.debug("review.reviewed_marker_skipped", exc_info=True)
         return
     write_marker(repo_root, "reviewed", head)
+
+
+def _record_review_pass() -> None:
+    """Count one delegation-backed implementation-review pass for the cap (#384).
+
+    Writes a ``.wade/review-pass@<HEAD>`` marker **independent of the review's
+    success** — even a headless timeout (which exits non-zero and writes no
+    ``reviewed`` marker) still consumed a real review→fix cycle, so it must
+    advance the pass count that the ``done`` gate's 2-pass cap reads. Per-sha and
+    idempotent, so re-running review on the same HEAD does not inflate the count.
+    Best-effort: a git failure is logged and skipped.
+    """
+    try:
+        repo_root = git_repo.get_repo_root(Path.cwd())
+        head = git_repo.rev_parse(repo_root, "HEAD")
+    except GitError:
+        logger.debug("review.review_pass_marker_skipped", exc_info=True)
+        return
+    record_review_pass(repo_root, head)
 
 
 def _load_review_config(
@@ -295,6 +314,11 @@ def review_implementation(
         model_explicit=model_explicit,
         effort_explicit=effort_explicit,
     )
+    # Count this delegation-backed pass toward the `done` review cap regardless
+    # of success — a headless timeout still consumed a review→fix cycle, so it
+    # must advance the count (#384). This runs only past the no-diff early return
+    # above, so an empty review never spends a cap slot. Per-sha and idempotent.
+    _record_review_pass()
     # Record the review-ran marker on any non-hard-failure result (success),
     # keyed to the current HEAD sha. The `done` review-ran gate reads it.
     if result.success:

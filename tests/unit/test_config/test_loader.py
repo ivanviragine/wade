@@ -227,6 +227,38 @@ class TestParseConfigFile:
         config = parse_config_file(config_path)
         assert config.done.require_sync is True
 
+    def test_max_review_passes_default(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\n")
+        config = parse_config_file(config_path)
+        assert config.done.max_review_passes == 2
+
+    def test_max_review_passes_override(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\ndone:\n  max_review_passes: 5\n")
+        config = parse_config_file(config_path)
+        assert config.done.max_review_passes == 5
+
+    def test_max_review_passes_null_normalized_to_default(self, tmp_path: Path) -> None:
+        # An explicit null (not a bool default) must normalize to 2, not crash.
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\ndone:\n  max_review_passes:\n")
+        config = parse_config_file(config_path)
+        assert config.done.max_review_passes == 2
+
+    def test_max_review_passes_zero_rejected_at_load(self, tmp_path: Path) -> None:
+        # PositiveInt bound makes a 0 fail loudly at load (wrapped as ConfigError).
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\ndone:\n  max_review_passes: 0\n")
+        with pytest.raises(ConfigError):
+            parse_config_file(config_path)
+
+    def test_max_review_passes_negative_rejected_at_load(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\ndone:\n  max_review_passes: -1\n")
+        with pytest.raises(ConfigError):
+            parse_config_file(config_path)
+
     def test_empty_file(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text("")

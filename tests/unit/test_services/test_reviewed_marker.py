@@ -94,3 +94,61 @@ class TestReviewImplementationWritesMarker:
         ):
             rds.review_implementation()
         mock_mark.assert_not_called()
+
+
+class TestRecordReviewPass:
+    """The review-pass cap marker (#384): counts delegation-backed passes."""
+
+    def test_writes_review_pass_for_head(self, tmp_path: Path, monkeypatch) -> None:
+        repo = tmp_path / "r"
+        _repo(repo)
+        monkeypatch.chdir(repo)
+        rds._record_review_pass()
+        assert markers.marker_present(repo, "review-pass", _head(repo))
+        assert markers.count_review_passes(repo) == 1
+
+    def test_success_path_records_pass(self, tmp_path: Path) -> None:
+        success = DelegationResult(success=True, feedback="ok", mode=DelegationMode.PROMPT)
+        with (
+            patch.object(rds.git_repo, "get_repo_root", return_value=tmp_path),
+            patch.object(rds.git_repo, "diff_worktree", return_value="diff --git a b"),
+            patch.object(rds, "_run_review_delegation", return_value=success),
+            patch.object(rds, "_record_review_pass") as mock_pass,
+        ):
+            rds.review_implementation()
+        mock_pass.assert_called_once()
+
+    def test_headless_timeout_still_records_pass(self, tmp_path: Path) -> None:
+        # A headless timeout exits non-zero (success=False) and writes NO
+        # `reviewed` marker — but it still consumed a review→fix cycle, so the
+        # pass MUST be recorded (this is what breaks the infinite loop).
+        failure = DelegationResult(
+            success=False,
+            feedback="Headless session timed out",
+            mode=DelegationMode.HEADLESS,
+            exit_code=1,
+        )
+        with (
+            patch.object(rds.git_repo, "get_repo_root", return_value=tmp_path),
+            patch.object(rds.git_repo, "diff_worktree", return_value="diff --git a b"),
+            patch.object(rds, "_run_review_delegation", return_value=failure),
+            patch.object(rds, "_record_review_pass") as mock_pass,
+            patch.object(rds, "_mark_reviewed") as mock_mark,
+        ):
+            rds.review_implementation()
+        mock_pass.assert_called_once()
+        mock_mark.assert_not_called()
+
+    def test_no_diff_path_does_not_record_pass(self, tmp_path: Path) -> None:
+        # The no-diff early return writes the exact-sha `reviewed` marker (which
+        # already satisfies the gate) but must NOT consume a cap slot.
+        with (
+            patch.object(rds.git_repo, "get_repo_root", return_value=tmp_path),
+            patch.object(rds.git_repo, "diff_worktree", return_value=""),
+            patch.object(rds, "_committed_diff_fallback", return_value=""),
+            patch.object(rds, "_mark_reviewed"),
+            patch.object(rds, "_record_review_pass") as mock_pass,
+        ):
+            result = rds.review_implementation()
+        assert result.skipped is True
+        mock_pass.assert_not_called()

@@ -56,6 +56,52 @@ class TestShaKeyedMarkers:
         )
 
 
+class TestReviewPassMarkers:
+    """Review-pass counting for the implementation-session done cap (#384)."""
+
+    def test_record_then_count(self, tmp_path: Path) -> None:
+        assert markers.record_review_pass(tmp_path, _SHA_A) is True
+        assert markers.count_review_passes(tmp_path) == 1
+        assert (tmp_path / ".wade" / f"review-pass@{_SHA_A}").is_file()
+
+    def test_distinct_shas_accumulate(self, tmp_path: Path) -> None:
+        # Unlike write_marker, recording a new sha does NOT clear the prior one —
+        # each review→fix→new-commit cycle adds a distinct marker.
+        markers.record_review_pass(tmp_path, _SHA_A)
+        markers.record_review_pass(tmp_path, _SHA_B)
+        assert markers.count_review_passes(tmp_path) == 2
+        assert markers.marker_present(tmp_path, "review-pass", _SHA_A) is True
+        assert markers.marker_present(tmp_path, "review-pass", _SHA_B) is True
+
+    def test_same_sha_is_idempotent(self, tmp_path: Path) -> None:
+        # Two reviews of the SAME HEAD count as one pass (per-sha filename).
+        markers.record_review_pass(tmp_path, _SHA_A)
+        markers.record_review_pass(tmp_path, _SHA_A)
+        assert markers.count_review_passes(tmp_path) == 1
+
+    def test_count_zero_when_no_markers(self, tmp_path: Path) -> None:
+        assert markers.count_review_passes(tmp_path) == 0
+
+    def test_count_zero_when_listing_fails(self, tmp_path: Path) -> None:
+        # A `.wade` that is a regular file (not a dir) makes both the dir-fd and
+        # the iterdir fallback raise → fail-safe 0, never a false "cap reached".
+        (tmp_path / ".wade").write_text("")
+        assert markers.count_review_passes(tmp_path) == 0
+
+    def test_writing_reviewed_marker_does_not_clear_passes(self, tmp_path: Path) -> None:
+        # The `reviewed` clear-prior-same-name cleanup must not touch the
+        # distinct `review-pass@*` family.
+        markers.record_review_pass(tmp_path, _SHA_A)
+        markers.write_marker(tmp_path, "reviewed", _SHA_B)
+        assert markers.count_review_passes(tmp_path) == 1
+
+    def test_count_ignores_temp_files(self, tmp_path: Path) -> None:
+        markers.record_review_pass(tmp_path, _SHA_A)
+        # A leftover scratch file from a partial write must not be counted.
+        (tmp_path / ".wade" / f"review-pass@{_SHA_B}.tmp").write_text("")
+        assert markers.count_review_passes(tmp_path) == 1
+
+
 class TestSymlinkSafety:
     def test_symlinked_marker_not_trusted(self, tmp_path: Path) -> None:
         # A planted symlink at the marker path must not read as present.

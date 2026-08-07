@@ -33,7 +33,7 @@ from __future__ import annotations
 from enum import StrEnum
 
 from crossby.models.config import ComplexityModelMapping as ComplexityModelMapping
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PositiveInt
 
 from wade.models.permission import PermissionMode, coerce_permission_mode
 from wade.models.session import MergeStrategy
@@ -218,6 +218,12 @@ class DoneConfig(BaseModel):
       (review-pr-comments sessions).
     - ``pre_push_backstop`` — install the per-worktree pre-push git hook that
       refuses a push lacking a current ``.wade/done@<sha>`` marker.
+    - ``max_review_passes`` — cap on the review→fix→re-review loop for
+      **implementation sessions** (#384). Once this many distinct commits have
+      been reviewed without an exact-sha ``reviewed`` marker for the current tip,
+      ``done`` completes anyway (with a notice) rather than looping forever. A
+      ``PositiveInt`` — a ``0`` / negative value is rejected at load, not silently
+      accepted.
     """
 
     require_pr_summary: bool = True
@@ -225,6 +231,7 @@ class DoneConfig(BaseModel):
     require_review: bool = True
     require_resolved_threads: bool = True
     pre_push_backstop: bool = True
+    max_review_passes: PositiveInt = 2
 
 
 class ProjectSettings(BaseModel):
