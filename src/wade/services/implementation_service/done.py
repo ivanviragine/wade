@@ -322,7 +322,7 @@ def _run_completion_gates(
         if not _gate_resolved_threads(config, provider, repo_root, branch):
             return False
         # review-pr-comments keeps the unbounded fast-path-or-refuse behavior:
-        # the 2-pass cap (#384) is scoped to the implementation path only.
+        # the review-pass cap (#384) is scoped to the implementation path only.
         return _gate_review_ran(
             config, worktree_root, pre_sync_head, skip_review, session_type=session_type
         )
@@ -421,7 +421,7 @@ def _gate_review_ran(
         _print_review_refusal()
         return False
 
-    # Implementation session: apply the bounded 2-pass cap.
+    # Implementation session: apply the bounded review-pass cap (done.max_review_passes).
     passes = markers.count_review_passes(worktree_root)
     limit = config.done.max_review_passes
     if passes >= limit:

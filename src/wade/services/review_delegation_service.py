@@ -50,7 +50,7 @@ def _record_review_pass() -> None:
     Writes a ``.wade/review-pass@<HEAD>`` marker **independent of the review's
     success** — even a headless timeout (which exits non-zero and writes no
     ``reviewed`` marker) still consumed a real review→fix cycle, so it must
-    advance the pass count that the ``done`` gate's 2-pass cap reads. Per-sha and
+    advance the pass count that the ``done`` gate's review-pass cap reads. Per-sha and
     idempotent, so re-running review on the same HEAD does not inflate the count.
     Best-effort: a git failure is logged and skipped.
     """
