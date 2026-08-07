@@ -368,7 +368,9 @@ def _gate_knowledge_valid(config: ProjectConfig, worktree_root: Path) -> bool:
     problems = validate_knowledge_file(path)
     if not problems:
         return True
-    console.error("KNOWLEDGE.md failed structural validation — a merge may have corrupted it.")
+    console.error(
+        f"{config.knowledge.path} failed structural validation — a merge may have corrupted it."
+    )
     for problem in problems:
         console.detail(problem)
     console.hint("Repair the knowledge file (dedupe entries / fix headings), commit, then re-run.")

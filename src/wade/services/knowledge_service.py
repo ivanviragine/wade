@@ -564,9 +564,6 @@ def record_rating(
     ratings_path: Path,
     entry_id: str,
     direction: str,
-    *,
-    issue: str | None = None,
-    session: str | None = None,
 ) -> None:
     """Append an up/down/stale vote for an entry to the JSONL vote log.
 
@@ -581,10 +578,6 @@ def record_rating(
         "id": entry_id,
         "ts": datetime.now(tz=UTC).isoformat(),
     }
-    if issue:
-        record["issue"] = issue
-    if session:
-        record["session"] = session
     _append_ratings_record(ratings_path, record)
 
 
