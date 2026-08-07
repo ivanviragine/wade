@@ -261,10 +261,11 @@ def count_review_passes(worktree_root: Path) -> int:
     """Number of distinct ``.wade/review-pass@<sha>`` markers (#384).
 
     The pass count the implementation-session ``done`` gate compares against the
-    2-pass cap. A directory-listing failure (or a missing/symlinked ``.wade``)
-    yields ``0`` — fail toward re-gating, never a false "cap already reached",
-    matching this module's best-effort convention. ``*.tmp`` scratch files left by
-    a partial :func:`_atomic_write` are excluded.
+    2-pass cap. A directory-listing failure, a missing/symlinked ``.wade``, or a
+    platform without descriptor-based directory reads all yield ``0`` — fail
+    toward re-gating, never a false "cap already reached", matching this module's
+    best-effort convention. ``*.tmp`` scratch files left by a partial
+    :func:`_atomic_write` are excluded.
     """
     prefix = f"{_REVIEW_PASS_NAME}@"
     wade_dir = _wade_dir(worktree_root)
@@ -279,10 +280,12 @@ def count_review_passes(worktree_root: Path) -> int:
             if dir_fd is not None:
                 os.close(dir_fd)
     else:
-        try:
-            entries = [p.name for p in wade_dir.iterdir()]
-        except OSError:
-            return 0
+        # No safe, descriptor-based directory read available. Fail closed rather
+        # than fall back to path-based ``iterdir()``, which follows a symlinked
+        # ``.wade`` — a crafted worktree could then expose attacker-controlled
+        # ``review-pass@*`` entries and satisfy the cap. Returning 0 keeps the
+        # fail-toward-re-gating convention (never a false "cap already reached").
+        return 0
     return sum(1 for e in entries if e.startswith(prefix) and not e.endswith(".tmp"))
 
 
