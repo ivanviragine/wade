@@ -286,8 +286,9 @@ HEAD, so any sha-keyed check must precede it):
    session type) — a transient provider error is non-blocking.
 3. **review-ran** (both) — `marker_present(worktree, "reviewed", pre-sync HEAD)`.
    Checked against the pre-sync HEAD so a clean main-merge doesn't invalidate the
-   review just performed. **Implementation sessions add a code-enforced 2-pass cap
-   (#384):** past the exact-sha fast path, the gate counts distinct
+   review just performed. **Implementation sessions add a code-enforced review-pass
+   cap (`done.max_review_passes`, default 2) (#384):** past the exact-sha fast
+   path, the gate counts distinct
    `review-pass@<sha>` markers (written by each delegation-backed
    `wade review implementation`, independent of its success — so a headless
    timeout still counts) and, once `done.max_review_passes` (default 2) is

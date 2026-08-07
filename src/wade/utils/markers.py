@@ -261,7 +261,8 @@ def count_review_passes(worktree_root: Path) -> int:
     """Number of distinct ``.wade/review-pass@<sha>`` markers (#384).
 
     The pass count the implementation-session ``done`` gate compares against the
-    2-pass cap. A directory-listing failure, a missing/symlinked ``.wade``, or a
+    configured review-pass cap (``done.max_review_passes``, default 2). A
+    directory-listing failure, a missing/symlinked ``.wade``, or a
     platform without descriptor-based directory reads all yield ``0`` — fail
     toward re-gating, never a false "cap already reached", matching this module's
     best-effort convention. ``*.tmp`` scratch files left by a partial

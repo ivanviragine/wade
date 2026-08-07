@@ -18,12 +18,12 @@ allow more than that before timing out. Do not kill it early or background it �
 premature kill is an infra timeout, not a review result. Budget:
 `ai.review_implementation.timeout` (600s).
 
-**Run at most 2 times — code-enforced.** After fixing a finding, commit and
-re-review before proceeding (the commit stales the `reviewed` marker). Major
-findings: re-run once, then proceed regardless. After `done.max_review_passes`
-(default 2) review→fix cycles, `done` completes anyway (with a notice) instead of
-looping. Break a stuck loop with `wade implementation-session done
---skip-review`.
+**Run at most `done.max_review_passes` times (default 2) — code-enforced.** After
+fixing a finding, commit and re-review before proceeding (the commit stales the
+`reviewed` marker). Major findings: re-run once, then proceed regardless. After
+`done.max_review_passes` review→fix cycles, `done` completes anyway (with a
+notice) instead of looping. Break a stuck loop with `wade
+implementation-session done --skip-review`.
 
 **This step is mandatory when `review_implementation.enabled` is not `false`.
 Do NOT proceed to Step 2 until this step is complete and any actionable

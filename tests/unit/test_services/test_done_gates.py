@@ -119,7 +119,8 @@ def _captured_text(capsys) -> str:
 
 
 class TestReviewRanCap:
-    """The code-enforced 2-pass cap on the implementation path (#384)."""
+    """The code-enforced review-pass cap (``done.max_review_passes``, default 2) on
+    the implementation path (#384)."""
 
     def test_refuses_before_cap_with_pass_count(self, tmp_path: Path, capsys) -> None:
         # One prior pass, no exact-sha marker, limit 2 → refuse "pass 1 of 2".
