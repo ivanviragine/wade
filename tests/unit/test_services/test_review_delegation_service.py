@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from crossby.models.ai import EffortLevel
 
 from wade.git.repo import GitError
@@ -608,6 +609,77 @@ class TestRunReviewDelegationEffort:
 
         call_args = mock_delegate.call_args[0][0]
         assert call_args.effort is None
+
+
+# ---------------------------------------------------------------------------
+# Feedback markup safety (#394)
+# ---------------------------------------------------------------------------
+
+
+class TestFeedbackMarkupSafety:
+    """Untrusted delegation feedback with bracketed tokens must not crash Rich.
+
+    Feedback routinely quotes source code containing Rich-markup-like tokens
+    (e.g. ``console.print("[success]done[/]")``). Printing it with markup
+    enabled made Rich parse ``[/]`` as a closing tag with nothing to close and
+    raise ``rich.errors.MarkupError`` — *after* the review had already run,
+    losing the feedback and the ``reviewed@<sha>`` marker.
+    """
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    def test_success_feedback_with_bracket_markup_does_not_raise(
+        self,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Success branch prints bracketed feedback literally instead of crashing.
+
+        The ``[/]`` is intentionally *unbalanced* (a close tag with nothing to
+        open) — exactly the quoted-code shape that made old Rich raise
+        ``MarkupError: closing tag '[/]' ... has nothing to close``.
+        """
+        mock_config.return_value = _review_config(review_plan_mode="prompt")
+        mock_delegate.return_value = DelegationResult(
+            success=True,
+            feedback="Nit: the quoted snippet result[/] should stay literal",
+            mode=DelegationMode.PROMPT,
+        )
+
+        result = _run_review_delegation("prompt text", "review_plan")
+
+        assert result.success is True
+        # The literal token survives to stdout — not swallowed as styling, not crashed.
+        assert "[/]" in capsys.readouterr().out
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    def test_failure_feedback_with_bracket_markup_does_not_raise(
+        self,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Error branch escapes bracketed feedback so console.error's wrapper still renders.
+
+        The dangling ``[/]`` (nothing to close) is what crashed old Rich; here
+        it must render literally while ``console.error``'s own ``[error]…[/]``
+        styling still applies.
+        """
+        mock_config.return_value = _review_config(review_plan_mode="prompt")
+        mock_delegate.return_value = DelegationResult(
+            success=False,
+            feedback="failed: the token result[/] has nothing to close",
+            mode=DelegationMode.PROMPT,
+            exit_code=1,
+        )
+
+        result = _run_review_delegation("prompt text", "review_plan")
+
+        assert result.success is False
+        # console.error writes to stderr; the escaped token renders literally.
+        assert "[/]" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------
