@@ -117,8 +117,16 @@ def _persist_plan_issue_ref(worktree_root: Path, issue: Task) -> None:
     logged and swallowed so it can never abort the plan session.
     """
     ref_path = worktree_root / PLAN_ISSUE_REF_FILE
+    wade_dir = ref_path.parent
+    # Refuse to write through a symlinked ``.wade``: ``mkdir(exist_ok=True)`` would
+    # accept it (the dir check follows the link) and the write would land at
+    # ``<link-target>/plan-issue.md`` outside the ephemeral planning worktree.
+    # ``is_symlink`` does not follow the link, so this is a no-follow guard.
+    if wade_dir.is_symlink():
+        logger.warning("plan.issue_ref_symlinked_dir_skipped", path=str(wade_dir))
+        return
     try:
-        ref_path.parent.mkdir(parents=True, exist_ok=True)
+        wade_dir.mkdir(parents=True, exist_ok=True)
         ref_path.write_text(f"# Issue #{issue.id}: {issue.title}\n", encoding="utf-8")
     except OSError as e:  # pragma: no cover - defensive; must never break planning
         logger.warning("plan.issue_ref_persist_failed", error=str(e))

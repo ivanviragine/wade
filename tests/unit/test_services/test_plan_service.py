@@ -986,6 +986,19 @@ class TestPersistPlanIssueRef:
         with patch("wade.services.plan_service.Path.write_text", side_effect=OSError("nope")):
             _persist_plan_issue_ref(tmp_path, Task(id="1", title="x", body=""))
 
+    def test_symlinked_wade_dir_is_rejected(self, tmp_path: Path) -> None:
+        # A symlinked `.wade` must not be followed — the write would otherwise land
+        # at `<link-target>/plan-issue.md`, outside the ephemeral planning worktree.
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+        (worktree / ".wade").symlink_to(outside, target_is_directory=True)
+
+        _persist_plan_issue_ref(worktree, Task(id="7", title="x", body=""))
+
+        assert not (outside / "plan-issue.md").exists()
+
 
 # ---------------------------------------------------------------------------
 # _with_supersede_banner — banner idempotency
