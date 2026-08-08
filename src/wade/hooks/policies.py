@@ -886,15 +886,19 @@ def _parse_plan_issue(worktree_root: Path) -> tuple[str, str] | None:
     Reads the file directly — never through the ``wade.git`` layer, whose
     ``git.run`` debug line would print to the lean ``wade-hook`` entry's stdout and
     corrupt its decision-JSON contract (the #349 gotcha). A missing PLAN.md, an
-    unreadable file, or a first line that doesn't match ``# Issue #<id>: <title>``
-    all yield ``None`` so the caller omits the issue line rather than failing.
+    unreadable file (including a non-UTF-8 / binary one), or a first line that
+    doesn't match ``# Issue #<id>: <title>`` all yield ``None`` so the caller omits
+    the issue line rather than failing — the contract holds on this function's own
+    terms, not by accident of the caller's outer catch-all.
     """
     try:
         # utf-8-sig so a stray BOM on the first line never suppresses the issue
-        # ref (decodes plain utf-8 unchanged when no BOM is present).
+        # ref (decodes plain utf-8 unchanged when no BOM is present). A binary /
+        # non-UTF-8 PLAN.md raises UnicodeDecodeError (a ValueError) on read, not
+        # OSError — caught here so the fail-open promise above is self-contained.
         with (worktree_root / "PLAN.md").open(encoding="utf-8-sig") as fd:
             first_line = fd.readline().strip()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None
     match = _ISSUE_LINE_RE.match(first_line)
     if match is None:

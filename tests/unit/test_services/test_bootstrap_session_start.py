@@ -230,14 +230,37 @@ class TestSignalConsistency:
             for call in self._bootstrap_calls(module):
                 seen += 1
                 pm = self._kwarg(call, "plan_mode")
-                plan_mode = bool(pm.value) if isinstance(pm, ast.Constant) else False
-
                 sp = self._kwarg(call, "session_phase")
-                is_plan_phase = (
+
+                # This guard reads the AST statically, so it can only reason about
+                # *literal* arguments. Fail LOUDLY if a call site ever passes either
+                # signal as a variable/expression (e.g. `plan_mode=is_plan`): the
+                # silent fallback below would otherwise read both as falsy and let
+                # the assertion pass on a false premise — disabling the very check
+                # it is named for. A literal `SessionPhase.X`, a bare constant
+                # (`None`/`True`/`False`), or an omitted kwarg are all fine.
+                assert pm is None or isinstance(pm, ast.Constant), (
+                    f"{module.__name__}: plan_mode is a non-literal expression; this "
+                    "AST guard can only verify literals — pass one or verify the "
+                    "invariant another way."
+                )
+                sp_is_phase_literal = (
                     isinstance(sp, ast.Attribute)
-                    and sp.attr == SessionPhase.PLAN.name
                     and isinstance(sp.value, ast.Name)
                     and sp.value.id == "SessionPhase"
+                )
+                assert sp is None or isinstance(sp, ast.Constant) or sp_is_phase_literal, (
+                    f"{module.__name__}: session_phase is a non-literal expression; this "
+                    "AST guard can only verify literals — pass a literal SessionPhase.X "
+                    "(or None) or verify the invariant another way."
+                )
+
+                plan_mode = bool(pm.value) if isinstance(pm, ast.Constant) else False
+                is_plan_phase = (
+                    isinstance(sp, ast.Attribute)
+                    and isinstance(sp.value, ast.Name)
+                    and sp.value.id == "SessionPhase"
+                    and sp.attr == SessionPhase.PLAN.name
                 )
                 assert plan_mode == is_plan_phase, (
                     f"{module.__name__}: plan_mode={plan_mode} but "

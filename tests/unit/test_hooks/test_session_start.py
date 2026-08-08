@@ -339,6 +339,17 @@ class TestBuilderParsing:
         assert payload is not None
         assert "Issue #351" in payload
 
+    def test_binary_plan_md_omits_issue_line_without_raising(self, tmp_path: Path) -> None:
+        # A non-UTF-8 / binary PLAN.md makes readline() raise UnicodeDecodeError
+        # (a ValueError), not OSError. _parse_plan_issue must catch it on its own
+        # terms — the issue line is omitted but the phase reminder still emits, and
+        # the builder never raises (fail-open holds without relying on the caller).
+        (tmp_path / "PLAN.md").write_bytes(b"\xff\xfe# Issue #351: garbled\x00\x80\n")
+        payload = session_start_context(tmp_path, SessionPhase.IMPLEMENT)
+        assert payload is not None
+        assert "Issue #" not in payload
+        assert "wade implementation-session done" in payload
+
 
 class TestBuilderBudget:
     def test_payload_under_cap_even_with_a_huge_title(self, tmp_path: Path) -> None:
