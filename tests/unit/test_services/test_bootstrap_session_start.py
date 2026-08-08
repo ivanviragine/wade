@@ -224,8 +224,20 @@ class TestSignalConsistency:
                 return kw.value
         return None
 
+    # The exact SessionPhase each known caller must install (``None`` = opts out,
+    # i.e. no ``session_phase`` kwarg). Asserting the specific phase — not just the
+    # plan_mode⇔PLAN correlation — catches a caller that silently installs the
+    # *wrong* hook (e.g. REVIEW for a deps session) or omits a required one.
+    _EXPECTED_PHASE: ClassVar[dict[str, SessionPhase | None]] = {
+        core.__name__: SessionPhase.IMPLEMENT,
+        review_service.__name__: SessionPhase.REVIEW,
+        plan_service.__name__: SessionPhase.PLAN,
+        deps_service.__name__: None,
+    }
+
     def test_plan_mode_iff_session_phase_plan(self) -> None:
         seen = 0
+        installed: dict[str, list[SessionPhase | None]] = {}
         for module in self._CALL_SITE_MODULES:
             for call in self._bootstrap_calls(module):
                 seen += 1
@@ -266,6 +278,19 @@ class TestSignalConsistency:
                     f"{module.__name__}: plan_mode={plan_mode} but "
                     f"session_phase==PLAN is {is_plan_phase}"
                 )
+
+                # sp_is_phase_literal ⇒ sp is an ``ast.Attribute`` on ``SessionPhase``
+                # (pinned by the assertion above); re-check via isinstance so the
+                # type checker can narrow ``sp`` before reading ``.attr``.
+                actual_phase: SessionPhase | None = (
+                    getattr(SessionPhase, sp.attr) if isinstance(sp, ast.Attribute) else None
+                )
+                installed.setdefault(module.__name__, []).append(actual_phase)
+
+        # Each known caller installs exactly the phase its session needs — one call
+        # per module, mapped to the phase above. Comparing the whole dict pins both
+        # correctness (right phase) and presence (no module silently dropped).
+        assert installed == {name: [phase] for name, phase in self._EXPECTED_PHASE.items()}
         # Guard the guard: all four known call sites must be present, so a new one
         # added without wiring session_phase trips this count.
         assert seen == 4

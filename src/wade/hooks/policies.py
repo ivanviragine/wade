@@ -31,7 +31,7 @@ from pathlib import Path
 
 from crossby.hooks.runtime import HookDecision, HookEvent
 
-from wade.models.hooks import SessionPhase, StopGuard
+from wade.models.hooks import PLAN_ISSUE_REF_FILE, SessionPhase, StopGuard
 from wade.utils import markers
 
 __all__ = [
@@ -880,23 +880,25 @@ _SESSION_CONTEXT_TEMPLATES: dict[SessionPhase, str] = {
 }
 
 
-def _parse_plan_issue(worktree_root: Path) -> tuple[str, str] | None:
-    """Return ``(issue_id, title)`` from ``<root>/PLAN.md``'s first line, or None.
+def _parse_issue_heading(path: Path) -> tuple[str, str] | None:
+    """Return ``(issue_id, title)`` from ``path``'s first line, or ``None``.
 
-    Reads the file directly — never through the ``wade.git`` layer, whose
-    ``git.run`` debug line would print to the lean ``wade-hook`` entry's stdout and
-    corrupt its decision-JSON contract (the #349 gotcha). A missing PLAN.md, an
-    unreadable file (including a non-UTF-8 / binary one), or a first line that
-    doesn't match ``# Issue #<id>: <title>`` all yield ``None`` so the caller omits
-    the issue line rather than failing — the contract holds on this function's own
-    terms, not by accident of the caller's outer catch-all.
+    The first line must match ``# Issue #<id>: <title>`` — the heading shape
+    ``write_plan_md`` emits into ``PLAN.md`` (impl/review) and ``plan_service``
+    persists into ``.wade/plan-issue.md`` (plan). Reads the file directly — never
+    through the ``wade.git`` layer, whose ``git.run`` debug line would print to the
+    lean ``wade-hook`` entry's stdout and corrupt its decision-JSON contract (the
+    #349 gotcha). A missing file, an unreadable one (including a non-UTF-8 /
+    binary file), or a non-matching first line all yield ``None`` so the caller
+    omits the issue line rather than failing — the contract holds on this
+    function's own terms, not by accident of the caller's outer catch-all.
     """
     try:
         # utf-8-sig so a stray BOM on the first line never suppresses the issue
         # ref (decodes plain utf-8 unchanged when no BOM is present). A binary /
-        # non-UTF-8 PLAN.md raises UnicodeDecodeError (a ValueError) on read, not
+        # non-UTF-8 file raises UnicodeDecodeError (a ValueError) on read, not
         # OSError — caught here so the fail-open promise above is self-contained.
-        with (worktree_root / "PLAN.md").open(encoding="utf-8-sig") as fd:
+        with path.open(encoding="utf-8-sig") as fd:
             first_line = fd.readline().strip()
     except (OSError, UnicodeDecodeError):
         return None
@@ -904,6 +906,14 @@ def _parse_plan_issue(worktree_root: Path) -> tuple[str, str] | None:
     if match is None:
         return None
     return match.group(1), match.group(2).strip()
+
+
+def _issue_line(parsed: tuple[str, str]) -> str:
+    """Render the ``Issue #<id> — <title>`` context line, capping a long title."""
+    issue_id, title = parsed
+    if len(title) > _SESSION_CONTEXT_TITLE_MAX:
+        title = title[: _SESSION_CONTEXT_TITLE_MAX - 1].rstrip() + "…"
+    return f"Issue #{issue_id} — {title}"
 
 
 def session_start_context(worktree_root: Path, phase: SessionPhase) -> str | None:
@@ -922,23 +932,31 @@ def session_start_context(worktree_root: Path, phase: SessionPhase) -> str | Non
     - ``IMPLEMENT`` / ``REVIEW``: the issue ref parsed from ``PLAN.md`` (omitted if
       absent), plus a one-line pointer to the phase's ``done`` command and the gates
       it enforces. ``PLAN.md`` holds the full plan.
-    - ``PLAN``: a detached worktree with no ``PLAN.md`` at the root (so no issue
-      line); a reminder to write a valid ``PLAN*.md`` then run ``plan-session done``.
+    - ``PLAN``: a detached worktree with no ``PLAN.md`` at the root; the issue ref
+      of a ``wade plan --issue-id`` session (parsed from ``.wade/plan-issue.md``,
+      which ``plan_service`` persists — omitted for a from-scratch plan), plus a
+      reminder to write a valid ``PLAN*.md`` then run ``plan-session done``.
 
     Import-light and stdout-safe: it runs on the lean ``wade-hook`` entry point, so
-    it reads ``PLAN.md`` with a plain file read and touches nothing that prints.
-    Returns ``None`` when there is nothing meaningful to say (runtime no-op). The
-    result is hard-capped at :data:`_SESSION_CONTEXT_MAX_CHARS`.
+    it reads the issue-ref file with a plain file read and touches nothing that
+    prints. Returns ``None`` when there is nothing meaningful to say (runtime
+    no-op). The result is hard-capped at :data:`_SESSION_CONTEXT_MAX_CHARS`.
     """
     lines: list[str] = []
 
+    # Where each phase's issue ref lives on disk (impl/review: the root PLAN.md;
+    # plan: the metadata file a ``--issue-id`` session persists). ``None`` → no
+    # issue line for this phase.
+    issue_ref_path: Path | None = None
     if phase in (SessionPhase.IMPLEMENT, SessionPhase.REVIEW):
-        parsed = _parse_plan_issue(worktree_root)
+        issue_ref_path = worktree_root / "PLAN.md"
+    elif phase is SessionPhase.PLAN:
+        issue_ref_path = worktree_root / PLAN_ISSUE_REF_FILE
+
+    if issue_ref_path is not None:
+        parsed = _parse_issue_heading(issue_ref_path)
         if parsed is not None:
-            issue_id, title = parsed
-            if len(title) > _SESSION_CONTEXT_TITLE_MAX:
-                title = title[: _SESSION_CONTEXT_TITLE_MAX - 1].rstrip() + "…"
-            lines.append(f"Issue #{issue_id} — {title}")
+            lines.append(_issue_line(parsed))
 
     template_name = _SESSION_CONTEXT_TEMPLATES.get(phase)
     if template_name is not None:

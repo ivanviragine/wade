@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 from wade.hooks.policies import _SESSION_CONTEXT_MAX_CHARS, session_start_context
-from wade.models.hooks import SessionPhase
+from wade.models.hooks import PLAN_ISSUE_REF_FILE, SessionPhase
 
 _ISSUE_TITLE = "E3: Session-start & resume context injection"
 _PLAN_FIRST_LINE = f"# Issue #351: {_ISSUE_TITLE}"
@@ -75,6 +75,14 @@ def _write_plan(root: Path, first_line: str = _PLAN_FIRST_LINE) -> Path:
     return root
 
 
+def _write_plan_issue_ref(root: Path, first_line: str = _PLAN_FIRST_LINE) -> Path:
+    """Persist the ``.wade/plan-issue.md`` a ``wade plan --issue-id`` session writes."""
+    ref = root / PLAN_ISSUE_REF_FILE
+    ref.parent.mkdir(parents=True, exist_ok=True)
+    ref.write_text(f"{first_line}\n", encoding="utf-8")
+    return ref
+
+
 class TestPerDialect:
     """The four session-start dialects crossby's ``emit_decision`` serializes."""
 
@@ -131,12 +139,24 @@ class TestPhaseContent:
         ctx = self._ctx(_run_ss("claude", str(tmp_path), "review"))
         assert "wade review-pr-comments-session done" in ctx
 
-    def test_plan_has_no_issue_line_and_points_at_plan_done(self, tmp_path: Path) -> None:
-        # Plan is a detached worktree — no PLAN.md at the root, so no issue line.
+    def test_plan_from_scratch_has_no_issue_line_and_points_at_plan_done(
+        self, tmp_path: Path
+    ) -> None:
+        # A from-scratch plan session persists no issue ref, so no issue line — but
+        # the plan reminder (including the plan-dir arg to ``done``) still emits.
         ctx = self._ctx(_run_ss("claude", str(tmp_path), "plan"))
         assert "Issue #" not in ctx
-        assert "wade plan-session done" in ctx
+        assert "wade plan-session done .wade/plans" in ctx
         assert "## Complexity" in ctx
+
+    def test_plan_reinjects_persisted_issue_ref(self, tmp_path: Path) -> None:
+        # A ``wade plan --issue-id`` session persists .wade/plan-issue.md so a
+        # resumed/compacted plan session recovers *which* issue it is planning.
+        _write_plan_issue_ref(tmp_path)
+        ctx = self._ctx(_run_ss("claude", str(tmp_path), "plan"))
+        assert "Issue #351" in ctx
+        assert _ISSUE_TITLE in ctx
+        assert "wade plan-session done .wade/plans" in ctx
 
 
 class TestFailOpen:
@@ -327,13 +347,23 @@ class TestProseSourcedFromTemplates:
             for line in (ln for ln in template.splitlines() if ln.strip()):
                 assert line in payload, f"{phase}: template line missing from payload: {line!r}"
 
+    def test_payload_is_branded(self, tmp_path: Path) -> None:
+        # session_start_context prepends "[wade] " to the first payload line so the
+        # injected block is recognizable in the transcript. A regression that drops
+        # the prefix would otherwise pass the rest of the suite unnoticed.
+        _write_plan(tmp_path)
+        for phase in SessionPhase:
+            payload = session_start_context(tmp_path, phase)
+            assert payload is not None
+            assert payload.startswith("[wade] ")
+
 
 class TestBuilderParsing:
     def test_bom_prefixed_plan_still_parses_issue(self, tmp_path: Path) -> None:
         # A UTF-8 BOM before the "# Issue #..." heading must not suppress the ref
         # (read with utf-8-sig). write_plan_md never emits a BOM, but a hand-edited
         # or tool-converted PLAN.md might.
-        bom = "﻿"
+        bom = "\ufeff"
         (tmp_path / "PLAN.md").write_text(f"{bom}{_PLAN_FIRST_LINE}\n\nbody\n", encoding="utf-8")
         payload = session_start_context(tmp_path, SessionPhase.IMPLEMENT)
         assert payload is not None

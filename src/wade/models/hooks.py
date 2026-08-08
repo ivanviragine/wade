@@ -11,7 +11,20 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-__all__ = ["SessionPhase", "StopGuard"]
+__all__ = ["PLAN_ISSUE_REF_FILE", "SessionPhase", "StopGuard"]
+
+# Path (relative to a detached plan worktree's root) of the compact issue heading
+# a ``wade plan --issue-id`` session persists so the SessionStart hook can
+# re-inject *which* issue is being planned after a resume or compaction. A plan
+# worktree has no root ``PLAN.md`` (its plans go under ``.wade/plans``), so
+# without this the issue reference — pre-loaded into the launch prompt only —
+# cannot be recovered from disk. Its first line matches the ``# Issue #<id>:
+# <title>`` heading shape the impl/review path already parses from ``PLAN.md``.
+# Lives in the leaf ``models`` layer so both the writer
+# (:mod:`wade.services.plan_service`) and the reader
+# (:func:`wade.hooks.policies.session_start_context`) can name it without the
+# service layer importing the hooks layer.
+PLAN_ISSUE_REF_FILE = ".wade/plan-issue.md"
 
 
 class SessionPhase(StrEnum):

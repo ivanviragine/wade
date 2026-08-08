@@ -286,8 +286,11 @@ session from starting.
   parses the issue ref from `PLAN.md`'s first line (`# Issue #<id>: <title>`,
   omitted if absent) and points at the phase's `done` command and the gates it
   enforces; for plan (a detached worktree with no `PLAN.md` at the root) it points
-  at writing a valid `PLAN*.md` then `plan-session done`. Import-light and
-  stdout-safe — it reads `PLAN.md` with a plain file read, never the `wade.git`
+  at writing a valid `PLAN*.md` then `plan-session done .wade/plans`, plus — for a
+  `wade plan --issue-id` session — the issue ref parsed from `.wade/plan-issue.md`
+  (which `plan_service` persists so a resumed/compacted plan session re-injects
+  *which* issue it is planning; omitted for a from-scratch plan). Import-light and
+  stdout-safe — it reads the issue-ref file with a plain file read, never the `wade.git`
   layer (the #349 lean-entry gotcha). The payload is hard-capped at **≤ 800 chars**
   and phrased *distinctly* from the always-loaded SKILL.md (a per-phase test
   asserts no prose line is shared).

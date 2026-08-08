@@ -20,6 +20,7 @@ from wade.services.plan_service import (
     _attach_plan_to_existing_issue,
     _finalize_issues,
     _offer_to_implement,
+    _persist_plan_issue_ref,
     _preserve_generated_plans,
     _select_valid_plans,
     _supersede_issue_with_plans,
@@ -953,6 +954,37 @@ class TestAttachPlanToExistingIssue:
         updated_body = provider.update_task.call_args.kwargs["body"]
         assert "Original body" in updated_body
         assert "PR #99" in updated_body
+
+
+# ---------------------------------------------------------------------------
+# _persist_plan_issue_ref — issue context for resumed plan sessions (#351/#391)
+# ---------------------------------------------------------------------------
+
+
+class TestPersistPlanIssueRef:
+    def test_writes_issue_heading_at_expected_path(self, tmp_path: Path) -> None:
+        from wade.models.hooks import PLAN_ISSUE_REF_FILE
+
+        _persist_plan_issue_ref(tmp_path, Task(id="351", title="E3: session start", body=""))
+        ref = tmp_path / PLAN_ISSUE_REF_FILE
+        assert ref.read_text(encoding="utf-8") == "# Issue #351: E3: session start\n"
+
+    def test_persisted_ref_round_trips_through_session_start_hook(self, tmp_path: Path) -> None:
+        # The whole point: what the plan session writes is exactly what the PLAN
+        # SessionStart hook parses back after a resume/compaction. Persist here,
+        # read via the hook policy, and assert the issue is re-injected.
+        from wade.hooks.policies import session_start_context
+        from wade.models.hooks import SessionPhase
+
+        _persist_plan_issue_ref(tmp_path, Task(id="330", title="Split me", body=""))
+        payload = session_start_context(tmp_path, SessionPhase.PLAN)
+        assert payload is not None
+        assert "Issue #330 — Split me" in payload
+
+    def test_write_failure_is_swallowed(self, tmp_path: Path) -> None:
+        # Best-effort: a persist failure must never abort the plan session.
+        with patch("wade.services.plan_service.Path.write_text", side_effect=OSError("nope")):
+            _persist_plan_issue_ref(tmp_path, Task(id="1", title="x", body=""))
 
 
 # ---------------------------------------------------------------------------
