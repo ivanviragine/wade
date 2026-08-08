@@ -33,12 +33,7 @@ next step you'll take.
 **NEVER** use `gh issue create` or the GitHub API to create issues directly.
 Always use `wade task create` for interactive issue creation.
 
-## Project Knowledge
-
-Before addressing comments, search for knowledge about the files and topics being
-reviewed (do not dump all entries) — past gotchas about the files you're editing
-matter most here. Rating is required for each entry you open and evaluate. See
-@.claude/skills/knowledge/SKILL.md for search syntax and the rating decision tree.
+{knowledge_step}
 
 ## First action: check your context
 

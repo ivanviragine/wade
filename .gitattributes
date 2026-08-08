@@ -1,0 +1,4 @@
+# wade:knowledge:start
+KNOWLEDGE.md merge=union
+KNOWLEDGE.ratings.jsonl merge=union
+# wade:knowledge:end

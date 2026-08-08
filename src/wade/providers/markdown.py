@@ -36,7 +36,6 @@ import functools
 import os
 import re
 import secrets
-import sys
 import tempfile
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -45,15 +44,6 @@ from typing import TYPE_CHECKING
 
 import structlog
 from pydantic import BaseModel, ConfigDict
-
-if sys.platform != "win32":
-    import fcntl
-
-    msvcrt = None
-else:  # pragma: no cover -- exercised only on Windows
-    import msvcrt
-
-    fcntl = None  # type: ignore[assignment]
 
 from wade.models.config import ProviderConfig
 from wade.models.task import (
@@ -67,6 +57,7 @@ from wade.models.task import (
 )
 from wade.providers._pr_delegate import GitHubPRDelegateMixin
 from wade.providers.base import AbstractTaskProvider
+from wade.utils.filelock import file_lock
 from wade.utils.process import run
 
 if TYPE_CHECKING:
@@ -389,36 +380,11 @@ class MarkdownIssueProvider(GitHubPRDelegateMixin, AbstractTaskProvider):
         Two worktrees writing concurrently to the same ``ISSUES.md`` could
         each load a snapshot, mutate in memory, and have the second writer
         clobber the first (atomic write protects torn writes, not lost
-        updates). We block on a sibling ``.lock`` file so the load and
-        persist are observed as one atomic unit.
-
-        Implementation differs by platform but the contract is identical:
-        ``fcntl.flock`` (POSIX) blocks on the open file description;
-        ``msvcrt.locking`` (Windows) byte-locks the first byte of the
-        lock file in blocking-exclusive mode.
+        updates). :func:`wade.utils.filelock.file_lock` blocks on a sibling
+        ``.lock`` file so the load and persist are observed as one atomic unit.
         """
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        lock_path = self._path.with_name(f".{self._path.name}.lock")
-        # Open with O_RDWR | O_CREAT so we can both create and lock the file.
-        fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
-        try:
-            if fcntl is not None:
-                fcntl.flock(fd, fcntl.LOCK_EX)
-            else:  # pragma: no cover -- Windows path
-                # msvcrt locks a byte range; ensure the file has at least 1 byte.
-                if os.fstat(fd).st_size == 0:
-                    os.write(fd, b"\0")
-                os.lseek(fd, 0, os.SEEK_SET)
-                msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+        with file_lock(self._path):
             yield
-        finally:
-            with contextlib.suppress(OSError):
-                if fcntl is not None:
-                    fcntl.flock(fd, fcntl.LOCK_UN)
-                else:  # pragma: no cover -- Windows path
-                    os.lseek(fd, 0, os.SEEK_SET)
-                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-            os.close(fd)
 
     def _persist(self, prelude: str, sections: list[_Section]) -> None:
         """Reassemble the file from prelude + sections and write atomically."""

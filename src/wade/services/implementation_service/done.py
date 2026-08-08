@@ -323,9 +323,11 @@ def _run_completion_gates(
             return False
         # review-pr-comments keeps the unbounded fast-path-or-refuse behavior:
         # the review-pass cap (#384) is scoped to the implementation path only.
-        return _gate_review_ran(
+        if not _gate_review_ran(
             config, worktree_root, pre_sync_head, skip_review, session_type=session_type
-        )
+        ):
+            return False
+        return _gate_knowledge_valid(config, worktree_root)
 
     # Default: implementation session.
     if not _gate_pr_summary(config, worktree_root):
@@ -334,7 +336,45 @@ def _run_completion_gates(
         config, worktree_root, pre_sync_head, skip_review, session_type=session_type
     ):
         return False
-    return _gate_sync(config, repo_root, worktree_root, branch, main_branch, session_type)
+    if not _gate_sync(config, repo_root, worktree_root, branch, main_branch, session_type):
+        return False
+    # Runs LAST — after sync merges the base branch into the worktree, the local
+    # `merge=union` point where a structural corruption of KNOWLEDGE.md could be
+    # introduced. Validating here keeps a union-corrupted file from shipping.
+    return _gate_knowledge_valid(config, worktree_root)
+
+
+def _gate_knowledge_valid(config: ProjectConfig, worktree_root: Path) -> bool:
+    """Refuse when the knowledge file is structurally corrupt (e.g. a union merge).
+
+    ``merge=union`` keeps both sides of a conflict with no structural awareness, so a
+    rewrite-in-place knowledge edit diverging from an append can leave a malformed
+    ``KNOWLEDGE.md`` (duplicate entry headings) that merges cleanly and would ship
+    undetected. This gate runs :func:`validate_knowledge_file` on the worktree's own
+    knowledge file — the one about to be pushed and merged — so such corruption is
+    caught before it reaches main. No-op when knowledge is disabled.
+    """
+    if not config.knowledge.enabled:
+        return True
+    from wade.utils.knowledge_file import (
+        resolve_knowledge_path,
+        validate_knowledge_file,
+    )
+
+    try:
+        path = resolve_knowledge_path(worktree_root, config.knowledge)
+    except ValueError:
+        return True  # misconfigured knowledge.path is not this gate's concern
+    problems = validate_knowledge_file(path)
+    if not problems:
+        return True
+    console.error(
+        f"{config.knowledge.path} failed structural validation — a merge may have corrupted it."
+    )
+    for problem in problems:
+        console.detail(problem)
+    console.hint("Repair the knowledge file (dedupe entries / fix headings), commit, then re-run.")
+    return False
 
 
 def _is_placeholder_pr_summary(text: str) -> bool:

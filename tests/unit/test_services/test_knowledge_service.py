@@ -24,18 +24,21 @@ from wade.services.knowledge_service import (
     ensure_knowledge_file,
     find_entry_id,
     get_annotated_knowledge,
+    knowledge_status,
     list_tags,
     parse_entries,
     read_knowledge,
     read_ratings,
     record_rating,
     record_supersede,
+    refusal_for_throwaway_write,
     remove_tag_from_entry,
     resolve_canonical_knowledge_path,
     resolve_knowledge_path,
     resolve_ratings_path,
     validate_tag,
 )
+from wade.utils.knowledge_file import validate_knowledge_file
 
 
 @pytest.fixture
@@ -79,11 +82,11 @@ class TestResolveKnowledgePathSecurity:
 class TestResolveRatingsPath:
     def test_derives_from_knowledge_path(self) -> None:
         result = resolve_ratings_path(Path("/project/KNOWLEDGE.md"))
-        assert result == Path("/project/KNOWLEDGE.ratings.yml")
+        assert result == Path("/project/KNOWLEDGE.ratings.jsonl")
 
     def test_works_with_custom_name(self) -> None:
         result = resolve_ratings_path(Path("/project/docs/LEARNINGS.md"))
-        assert result == Path("/project/docs/LEARNINGS.ratings.yml")
+        assert result == Path("/project/docs/LEARNINGS.ratings.jsonl")
 
 
 class TestEnsureKnowledgeFile:
@@ -155,7 +158,8 @@ class TestAppendKnowledge:
         )
         assert isinstance(result, KnowledgeEntry)
         assert result.path == (project_root / "KNOWLEDGE.md").resolve()
-        assert re.match(r"^[0-9a-f]{8}$", result.entry_id)
+        # Widened to 12 hex chars (48 bits) for #358 — cross-worktree collision safety.
+        assert re.match(r"^[0-9a-f]{12}$", result.entry_id)
 
     def test_generates_uuid_in_heading(self, project_root: Path, config: KnowledgeConfig) -> None:
         result = append_knowledge(
@@ -354,39 +358,68 @@ class TestFindEntryId:
 
 class TestReadRatings:
     def test_returns_empty_when_file_missing(self, tmp_path: Path) -> None:
-        assert read_ratings(tmp_path / "KNOWLEDGE.ratings.yml") == {}
+        assert read_ratings(tmp_path / "KNOWLEDGE.ratings.jsonl") == {}
 
     def test_returns_empty_for_empty_file(self, tmp_path: Path) -> None:
-        ratings_path = tmp_path / "KNOWLEDGE.ratings.yml"
+        ratings_path = tmp_path / "KNOWLEDGE.ratings.jsonl"
         ratings_path.write_text("", encoding="utf-8")
         assert read_ratings(ratings_path) == {}
 
-    def test_loads_existing_ratings(self, tmp_path: Path) -> None:
-        ratings_path = tmp_path / "KNOWLEDGE.ratings.yml"
-        data = {"a1b2c3d4": {"up": 3, "down": 1}}
-        ratings_path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    def test_folds_jsonl_vote_log(self, tmp_path: Path) -> None:
+        ratings_path = tmp_path / "KNOWLEDGE.ratings.jsonl"
+        ratings_path.write_text(
+            '{"dir": "up", "id": "a1b2c3d4", "ts": "t"}\n'
+            '{"dir": "up", "id": "a1b2c3d4", "ts": "t"}\n'
+            '{"dir": "up", "id": "a1b2c3d4", "ts": "t"}\n'
+            '{"dir": "down", "id": "a1b2c3d4", "ts": "t"}\n',
+            encoding="utf-8",
+        )
         result = read_ratings(ratings_path)
         assert result["a1b2c3d4"].up == 3
         assert result["a1b2c3d4"].down == 1
 
+    def test_skips_malformed_lines_defensively(self, tmp_path: Path) -> None:
+        ratings_path = tmp_path / "KNOWLEDGE.ratings.jsonl"
+        ratings_path.write_text(
+            '{"dir": "up", "id": "a1b2c3d4", "ts": "t"}\n'
+            "not json at all\n"
+            '{"dir": "down", "id": "a1b2c3d4", "ts": "t"}\n',
+            encoding="utf-8",
+        )
+        result = read_ratings(ratings_path)
+        assert result["a1b2c3d4"].up == 1
+        assert result["a1b2c3d4"].down == 1
+
+    def test_folds_legacy_yaml_in_memory_without_writing(self, tmp_path: Path) -> None:
+        # A pre-#358 counter YAML is folded to the same scores on read, and the read
+        # must NOT materialize the .jsonl (reads stay pure — no dirty main).
+        jsonl_path = tmp_path / "KNOWLEDGE.ratings.jsonl"
+        legacy_path = tmp_path / "KNOWLEDGE.ratings.yml"
+        legacy_path.write_text(yaml.safe_dump({"a1b2c3d4": {"up": 3, "down": 1}}), encoding="utf-8")
+        result = read_ratings(jsonl_path)
+        assert result["a1b2c3d4"].up == 3
+        assert result["a1b2c3d4"].down == 1
+        assert not jsonl_path.exists()  # read did not write the .jsonl
+        assert legacy_path.exists()  # legacy left untouched
+
 
 class TestRecordRating:
     def test_creates_file_and_records_up(self, tmp_path: Path) -> None:
-        ratings_path = tmp_path / "KNOWLEDGE.ratings.yml"
+        ratings_path = tmp_path / "KNOWLEDGE.ratings.jsonl"
         record_rating(ratings_path, "a1b2c3d4", "up")
         data = read_ratings(ratings_path)
         assert data["a1b2c3d4"].up == 1
         assert data["a1b2c3d4"].down == 0
 
     def test_records_down(self, tmp_path: Path) -> None:
-        ratings_path = tmp_path / "KNOWLEDGE.ratings.yml"
+        ratings_path = tmp_path / "KNOWLEDGE.ratings.jsonl"
         record_rating(ratings_path, "a1b2c3d4", "down")
         data = read_ratings(ratings_path)
         assert data["a1b2c3d4"].up == 0
         assert data["a1b2c3d4"].down == 1
 
     def test_increments_existing_count(self, tmp_path: Path) -> None:
-        ratings_path = tmp_path / "KNOWLEDGE.ratings.yml"
+        ratings_path = tmp_path / "KNOWLEDGE.ratings.jsonl"
         record_rating(ratings_path, "a1b2c3d4", "up")
         record_rating(ratings_path, "a1b2c3d4", "up")
         record_rating(ratings_path, "a1b2c3d4", "down")
@@ -395,7 +428,7 @@ class TestRecordRating:
         assert data["a1b2c3d4"].down == 1
 
     def test_records_stale(self, tmp_path: Path) -> None:
-        ratings_path = tmp_path / "KNOWLEDGE.ratings.yml"
+        ratings_path = tmp_path / "KNOWLEDGE.ratings.jsonl"
         record_rating(ratings_path, "a1b2c3d4", "stale")
         data = read_ratings(ratings_path)
         assert data["a1b2c3d4"].stale == 1
@@ -403,7 +436,7 @@ class TestRecordRating:
         assert data["a1b2c3d4"].down == 0
 
     def test_stale_does_not_affect_net_score(self, tmp_path: Path) -> None:
-        ratings_path = tmp_path / "KNOWLEDGE.ratings.yml"
+        ratings_path = tmp_path / "KNOWLEDGE.ratings.jsonl"
         record_rating(ratings_path, "a1b2c3d4", "up")
         record_rating(ratings_path, "a1b2c3d4", "stale")
         record_rating(ratings_path, "a1b2c3d4", "stale")
@@ -414,19 +447,19 @@ class TestRecordRating:
         assert data["a1b2c3d4"].up - data["a1b2c3d4"].down == 1  # net score unaffected
 
     def test_stale_increments_independently(self, tmp_path: Path) -> None:
-        ratings_path = tmp_path / "KNOWLEDGE.ratings.yml"
+        ratings_path = tmp_path / "KNOWLEDGE.ratings.jsonl"
         record_rating(ratings_path, "a1b2c3d4", "stale")
         record_rating(ratings_path, "a1b2c3d4", "stale")
         data = read_ratings(ratings_path)
         assert data["a1b2c3d4"].stale == 2
 
     def test_rejects_invalid_direction(self, tmp_path: Path) -> None:
-        ratings_path = tmp_path / "KNOWLEDGE.ratings.yml"
+        ratings_path = tmp_path / "KNOWLEDGE.ratings.jsonl"
         with pytest.raises(ValueError, match="must be 'up', 'down', or 'stale'"):
             record_rating(ratings_path, "a1b2c3d4", "sideways")
 
     def test_multiple_entries(self, tmp_path: Path) -> None:
-        ratings_path = tmp_path / "KNOWLEDGE.ratings.yml"
+        ratings_path = tmp_path / "KNOWLEDGE.ratings.jsonl"
         record_rating(ratings_path, "a1b2c3d4", "up")
         record_rating(ratings_path, "f5e6d7c8", "down")
         data = read_ratings(ratings_path)
@@ -436,13 +469,13 @@ class TestRecordRating:
 
 class TestRecordSupersede:
     def test_records_supersede_link(self, tmp_path: Path) -> None:
-        ratings_path = tmp_path / "KNOWLEDGE.ratings.yml"
+        ratings_path = tmp_path / "KNOWLEDGE.ratings.jsonl"
         record_supersede(ratings_path, "old12345", "new67890")
         data = read_ratings(ratings_path)
         assert data["old12345"].superseded_by == "new67890"
 
     def test_preserves_existing_ratings(self, tmp_path: Path) -> None:
-        ratings_path = tmp_path / "KNOWLEDGE.ratings.yml"
+        ratings_path = tmp_path / "KNOWLEDGE.ratings.jsonl"
         record_rating(ratings_path, "old12345", "down")
         record_rating(ratings_path, "old12345", "down")
         record_supersede(ratings_path, "old12345", "new67890")
@@ -1479,3 +1512,168 @@ class TestPlainEntrySubheadingBehavior:
         assert len(entries) == 2
         assert entries[0].entry_id == "a1b2c3d4"
         assert entries[1].heading_rest == "Background"
+
+
+class TestWritePathMigration:
+    def test_first_write_materializes_seed_and_removes_yaml(self, tmp_path: Path) -> None:
+        # Reads never migrate; the first ratings WRITE converts .yml -> .jsonl.
+        jsonl = tmp_path / "KNOWLEDGE.ratings.jsonl"
+        legacy = tmp_path / "KNOWLEDGE.ratings.yml"
+        legacy.write_text(yaml.safe_dump({"entry1": {"up": 5, "down": 1}}), encoding="utf-8")
+
+        record_rating(jsonl, "entry1", "up")
+
+        assert jsonl.exists()
+        assert not legacy.exists()  # legacy removed as part of the write
+        lines = jsonl.read_text(encoding="utf-8").splitlines()
+        # A byte-deterministic seed (no ts) plus the appended vote line.
+        expected_seed = (
+            '{"down": 1, "id": "entry1", "seed": true, "stale": 0, "superseded_by": null, "up": 5}'
+        )
+        assert expected_seed in lines
+        folded = read_ratings(jsonl)
+        assert folded["entry1"].up == 6  # 5 seed + 1 vote
+        assert folded["entry1"].down == 1
+
+    def test_seed_is_byte_deterministic_across_runs(self, tmp_path: Path) -> None:
+        # Two independent migrations of the same legacy yml produce identical seed bytes.
+        def _seed_line(dir_: Path) -> str:
+            dir_.mkdir()
+            legacy = dir_ / "KNOWLEDGE.ratings.yml"
+            legacy.write_text(
+                yaml.safe_dump({"e": {"up": 2, "down": 3, "stale": 1}}), encoding="utf-8"
+            )
+            jsonl = dir_ / "KNOWLEDGE.ratings.jsonl"
+            record_rating(jsonl, "e", "up")
+            return jsonl.read_text(encoding="utf-8").splitlines()[0]
+
+        assert _seed_line(tmp_path / "a") == _seed_line(tmp_path / "b")
+
+    def test_write_does_not_migrate_when_jsonl_present(self, tmp_path: Path) -> None:
+        # A legacy yml alongside an existing jsonl is left untouched (already migrated).
+        jsonl = tmp_path / "KNOWLEDGE.ratings.jsonl"
+        jsonl.write_text('{"dir": "up", "id": "e", "ts": "t"}\n', encoding="utf-8")
+        legacy = tmp_path / "KNOWLEDGE.ratings.yml"
+        legacy.write_text("stale-legacy: {}\n", encoding="utf-8")
+
+        record_rating(jsonl, "e", "down")
+
+        assert legacy.exists()  # not touched — jsonl already exists
+        folded = read_ratings(jsonl)
+        assert folded["e"].up == 1
+        assert folded["e"].down == 1
+
+
+class TestValidateKnowledgeFile:
+    def test_valid_file_has_no_problems(self, tmp_path: Path) -> None:
+        path = tmp_path / "KNOWLEDGE.md"
+        path.write_text(
+            "# Project Knowledge\n\n## abcd1234 | 2026-01-01 | plan\n\nbody\n\n---\n",
+            encoding="utf-8",
+        )
+        assert validate_knowledge_file(path) == []
+
+    def test_missing_file_has_no_problems(self, tmp_path: Path) -> None:
+        assert validate_knowledge_file(tmp_path / "nope.md") == []
+
+    def test_duplicate_entry_id_is_flagged(self, tmp_path: Path) -> None:
+        # A union merge of a rewrite-in-place + append can leave two copies of one heading.
+        path = tmp_path / "KNOWLEDGE.md"
+        path.write_text(
+            "# Project Knowledge\n\n"
+            "## abcd1234 | 2026-01-01 | plan\n\nbody one\n\n---\n"
+            "## abcd1234 | 2026-01-01 | plan | tags: git\n\nbody two\n\n---\n",
+            encoding="utf-8",
+        )
+        problems = validate_knowledge_file(path)
+        assert any("Duplicate entry ID 'abcd1234'" in p for p in problems)
+
+    def test_heading_shaped_body_line_is_not_a_false_positive(self, tmp_path: Path) -> None:
+        # An entry body may legitimately quote the heading format (e.g. an entry about
+        # the knowledge schema). parse_entries accepts such lines as plain headings, so
+        # validation must NOT flag them — a false positive would block done.
+        path = tmp_path / "KNOWLEDGE.md"
+        path.write_text(
+            "# Project Knowledge\n\n"
+            "## abcd1234 | 2026-01-01 | plan\n\n"
+            "Entry headings look like: ## someid | 2026-01-01 | plan | tags: git\n\n---\n",
+            encoding="utf-8",
+        )
+        assert validate_knowledge_file(path) == []
+
+    def test_conflict_markers_are_flagged(self, tmp_path: Path) -> None:
+        path = tmp_path / "KNOWLEDGE.md"
+        path.write_text(
+            "# Project Knowledge\n\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\n",
+            encoding="utf-8",
+        )
+        problems = validate_knowledge_file(path)
+        assert any("conflict markers" in p for p in problems)
+
+    def test_decorative_separator_is_not_a_false_positive(self, tmp_path: Path) -> None:
+        # A long run of `=` in an entry body is a decorative separator, NOT a git
+        # conflict marker (git writes markers as exactly seven chars). Validation must
+        # not flag it — a false positive would block an otherwise-valid PR at `done`.
+        path = tmp_path / "KNOWLEDGE.md"
+        path.write_text(
+            "# Project Knowledge\n\n"
+            "## abcd1234 | 2026-01-01 | plan\n\n"
+            "Section divider:\n====================\nmore body\n\n---\n",
+            encoding="utf-8",
+        )
+        assert validate_knowledge_file(path) == []
+
+
+class TestRefusalForThrowawayWrite:
+    """`refusal_for_throwaway_write` — the detached-session write policy (service layer)."""
+
+    def test_none_outside_git_repo(self, tmp_path: Path) -> None:
+        # A non-repo / git-unavailable path is not a throwaway session — allow the write.
+        with patch("wade.git.repo.get_git_dir", return_value=None):
+            assert refusal_for_throwaway_write(tmp_path, "wade knowledge add") is None
+
+    def test_none_when_head_attached(self, tmp_path: Path) -> None:
+        # A branch-backed worktree (or the main checkout) carries the edit — allow it.
+        with (
+            patch("wade.git.repo.get_git_dir", return_value=".git"),
+            patch("wade.git.repo.is_head_attached", return_value=True),
+        ):
+            assert refusal_for_throwaway_write(tmp_path, "wade knowledge add") is None
+
+    def test_refuses_detached_without_plan_hint(self, tmp_path: Path) -> None:
+        # A detached HEAD with no plan dir (task deps) refuses, and gives no plan hint.
+        with (
+            patch("wade.git.repo.get_git_dir", return_value=".git"),
+            patch("wade.git.repo.is_head_attached", return_value=False),
+        ):
+            refusal = refusal_for_throwaway_write(tmp_path, "wade knowledge add")
+        assert refusal is not None
+        assert refusal.command == "wade knowledge add"
+        assert refusal.plan_hint is False
+
+    def test_refuses_detached_with_plan_hint(self, tmp_path: Path) -> None:
+        # A detached HEAD with a plan dir (plan session) refuses AND flags the plan hint.
+        (tmp_path / ".wade" / "plans").mkdir(parents=True)
+        with (
+            patch("wade.git.repo.get_git_dir", return_value=".git"),
+            patch("wade.git.repo.is_head_attached", return_value=False),
+        ):
+            refusal = refusal_for_throwaway_write(tmp_path, "wade knowledge tag add")
+        assert refusal is not None
+        assert refusal.plan_hint is True
+
+
+class TestKnowledgeStatus:
+    def test_clean_when_no_changes(self, tmp_path: Path, config: KnowledgeConfig) -> None:
+        # Not a git repo → scoped porcelain returns nothing, and no legacy pending.
+        result = knowledge_status(tmp_path, config)
+        assert result.dirty_paths == []
+        assert result.legacy_migration_pending is False
+
+    def test_reports_pending_legacy_migration(
+        self, tmp_path: Path, config: KnowledgeConfig
+    ) -> None:
+        # A legacy .yml with no .jsonl yet is reported as pending on-disk migration.
+        (tmp_path / "KNOWLEDGE.ratings.yml").write_text("e: {up: 1}\n", encoding="utf-8")
+        result = knowledge_status(tmp_path, config)
+        assert result.legacy_migration_pending is True

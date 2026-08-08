@@ -158,8 +158,10 @@ class TestKnowledgeRate:
         result = runner.invoke(app, ["knowledge", "rate", "a1b2c3d4", "up"])
 
         assert result.exit_code == 0
-        ratings = yaml.safe_load((tmp_wade_project / "KNOWLEDGE.ratings.yml").read_text())
-        assert ratings["a1b2c3d4"]["up"] == 1
+        from wade.services.knowledge_service import read_ratings
+
+        ratings = read_ratings(tmp_wade_project / "KNOWLEDGE.ratings.jsonl")
+        assert ratings["a1b2c3d4"].up == 1
 
     def test_rate_invalid_path_exits_cleanly(
         self, tmp_wade_project: Path, monkeypatch: pytest.MonkeyPatch

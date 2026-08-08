@@ -11,6 +11,7 @@ from wade.config.migrations import (
     ensure_version,
     migrate_string_tiers_to_tier_config,
     run_all_migrations,
+    strip_knowledge_from_copy_to_worktree,
 )
 
 # ---------------------------------------------------------------------------
@@ -182,3 +183,66 @@ class TestMigrateStringTiersToTierConfig:
         migrated = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         assert migrated["models"]["claude"]["easy"] == {"model": "haiku", "effort": None}
         assert migrated["models"]["claude"]["complex"] == {"model": "sonnet", "effort": None}
+
+
+# ---------------------------------------------------------------------------
+# strip_knowledge_from_copy_to_worktree (#358)
+# ---------------------------------------------------------------------------
+
+
+class TestStripKnowledgeFromCopyToWorktree:
+    def test_strips_default_knowledge_and_ratings(self) -> None:
+        raw: dict = {
+            "hooks": {
+                "copy_to_worktree": [
+                    ".env",
+                    "KNOWLEDGE.md",
+                    "KNOWLEDGE.ratings.yml",
+                    "KNOWLEDGE.ratings.jsonl",
+                ]
+            }
+        }
+        assert strip_knowledge_from_copy_to_worktree(raw) is True
+        assert raw["hooks"]["copy_to_worktree"] == [".env"]
+
+    def test_strips_custom_knowledge_path(self) -> None:
+        raw: dict = {
+            "knowledge": {"enabled": True, "path": "docs/LEARNINGS.md"},
+            "hooks": {"copy_to_worktree": ["docs/LEARNINGS.md", "docs/LEARNINGS.ratings.yml"]},
+        }
+        assert strip_knowledge_from_copy_to_worktree(raw) is True
+        assert raw["hooks"]["copy_to_worktree"] == []
+
+    def test_strips_when_config_path_has_contained_dotdot(self) -> None:
+        # #358 review: a contained ``..`` in the config path must canonicalize so the
+        # plainly-spelled copy entries are still stripped — the same policy bootstrap's
+        # copy-exclusion applies, so a redundant-``..`` spelling can't bypass either site.
+        raw: dict = {
+            "knowledge": {"enabled": True, "path": "docs/../KNOWLEDGE.md"},
+            "hooks": {"copy_to_worktree": ["KNOWLEDGE.md", "KNOWLEDGE.ratings.jsonl", ".env"]},
+        }
+        assert strip_knowledge_from_copy_to_worktree(raw) is True
+        assert raw["hooks"]["copy_to_worktree"] == [".env"]
+
+    def test_noop_when_nothing_to_strip(self) -> None:
+        raw: dict = {"hooks": {"copy_to_worktree": [".env", ".secrets"]}}
+        assert strip_knowledge_from_copy_to_worktree(raw) is False
+        assert raw["hooks"]["copy_to_worktree"] == [".env", ".secrets"]
+
+    def test_noop_when_no_hooks_section(self) -> None:
+        raw: dict = {"project": {}}
+        assert strip_knowledge_from_copy_to_worktree(raw) is False
+
+    def test_run_all_migrations_strips_knowledge_copy_entries(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\n"
+            "hooks:\n"
+            "  copy_to_worktree:\n"
+            "  - .env\n"
+            "  - KNOWLEDGE.md\n"
+            "  - KNOWLEDGE.ratings.yml\n"
+        )
+        assert run_all_migrations(config_path) is True
+        migrated = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert migrated["hooks"]["copy_to_worktree"] == [".env"]

@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from pathlib import Path
 
 import structlog
 
+from wade.models.config import ProjectConfig
 from wade.skills.doc_targets import detect_doc_targets, format_doc_targets
+from wade.utils.markdown import has_marker_block, remove_marker_block
 
 logger = structlog.get_logger()
 
@@ -20,6 +23,7 @@ _SKILL_PARTIALS: dict[str, str] = {
     "{review_plan_step}": "_partials/review-plan-step.md",
     "{review_implementation_closing_step}": "_partials/review-implementation-closing-step.md",
     "{doc_update_step}": "_partials/doc-update-step.md",
+    "{knowledge_step}": "_partials/knowledge-step.md",
 }
 
 
@@ -599,6 +603,99 @@ def get_worktree_gitignore_entries() -> list[str]:
     )
 
     return entries
+
+
+# --- Knowledge .gitattributes union-merge block (#358) ---
+
+KNOWLEDGE_ATTRIBUTES_MARKER_START = "# wade:knowledge:start"
+KNOWLEDGE_ATTRIBUTES_MARKER_END = "# wade:knowledge:end"
+
+
+def _gitattributes_pattern(rel_path: Path) -> str:
+    """Render a repo-relative path as a *literal* ``.gitattributes`` pattern.
+
+    Escapes gitattributes glob metacharacters (``\\ * ? [``) so the path matches only
+    itself, then C-quotes the whole token when it contains whitespace, a double quote, a
+    control character, or a leading ``#``/``!`` — any of which would otherwise let git's
+    line parser mis-split the pattern from its attributes (a path with a space would read
+    only its first whitespace-delimited token as the pattern, orphaning ``merge=union``).
+    A plain path — the common case, e.g. ``KNOWLEDGE.md`` — is returned unchanged. git
+    C-unquotes a double-quoted pattern *before* glob-matching, so the two escapes compose.
+    """
+    posix = rel_path.as_posix()
+    escaped = re.sub(r"([\\*?\[])", r"\\\1", posix)
+    needs_quote = (
+        any(ch.isspace() or ord(ch) < 0x20 for ch in posix)
+        or '"' in posix
+        or posix.startswith(("#", "!"))
+    )
+    if not needs_quote:
+        return escaped
+    body = escaped.replace("\\", "\\\\").replace('"', '\\"')
+    body = body.replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
+    return f'"{body}"'
+
+
+def ensure_knowledge_merge_attributes(root: Path, config: ProjectConfig) -> None:
+    """Ensure a wade-managed ``merge=union`` block for the knowledge files in ``.gitattributes``.
+
+    The knowledge file (append-only entries) and its JSONL vote log are append-only
+    logs; two sessions appending is a textbook conflict, and ``merge=union`` keeps
+    **both** sides — exactly right here. Union does the real work locally, where
+    ``catchup``/``sync`` merge the base branch into the worktree and the worktree's
+    ``.gitattributes`` applies.
+
+    ``.gitattributes`` is a **normal tracked repo file** (not gitignored). Bootstrap
+    ensures the block in the worktree so even the first session has it before its
+    first catchup/sync; the session commits it alongside its knowledge edit, so it
+    merges to main and becomes the server-side backstop. Once main has it, later
+    worktrees inherit it and this call is a no-op.
+
+    Idempotent via the shared marker-block helpers. The write is skipped entirely
+    when the on-disk content already matches, so a project that already has the block
+    is never marked dirty. Paths derive from ``config.knowledge.path`` and its
+    ``.ratings.jsonl`` sibling, validated and escaped as literal gitattributes patterns.
+    """
+    from wade.utils.knowledge_file import resolve_knowledge_path, resolve_ratings_path
+
+    # Resolve + validate the knowledge path the same way knowledge resolution does — an
+    # absolute or root-escaping path is rejected, and we write no block rather than a
+    # bogus attributes line. Both patterns are rendered relative to root and escaped so a
+    # path with a space or a glob metacharacter can't alter what ``merge=union`` matches.
+    try:
+        knowledge_abs = resolve_knowledge_path(root, config.knowledge)
+    except ValueError:
+        logger.debug("skills.knowledge_merge_attributes_invalid_path", path=str(root))
+        return
+    root_abs = root.resolve()
+    ratings_abs = resolve_ratings_path(knowledge_abs)
+    knowledge_pattern = _gitattributes_pattern(knowledge_abs.relative_to(root_abs))
+    ratings_pattern = _gitattributes_pattern(ratings_abs.relative_to(root_abs))
+    block = (
+        f"{KNOWLEDGE_ATTRIBUTES_MARKER_START}\n"
+        f"{knowledge_pattern} merge=union\n"
+        f"{ratings_pattern} merge=union\n"
+        f"{KNOWLEDGE_ATTRIBUTES_MARKER_END}\n"
+    )
+
+    gitattributes = root / ".gitattributes"
+    existing = ""
+    if gitattributes.is_file():
+        existing = gitattributes.read_text(encoding="utf-8")
+        if has_marker_block(
+            existing, KNOWLEDGE_ATTRIBUTES_MARKER_START, KNOWLEDGE_ATTRIBUTES_MARKER_END
+        ):
+            existing = remove_marker_block(
+                existing, KNOWLEDGE_ATTRIBUTES_MARKER_START, KNOWLEDGE_ATTRIBUTES_MARKER_END
+            )
+
+    new_content = existing.rstrip("\n") + "\n\n" + block if existing.strip() else block
+
+    current = gitattributes.read_text(encoding="utf-8") if gitattributes.is_file() else ""
+    if new_content == current:
+        return  # already correct — don't touch mtime / make the file dirty
+    gitattributes.write_text(new_content, encoding="utf-8")
+    logger.debug("skills.knowledge_merge_attributes_written", path=str(root))
 
 
 def install_skills(
