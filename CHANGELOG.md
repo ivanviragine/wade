@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.39.3] — 2026-08-07
+
+### Bug Fixes
+
+- bound implementation-session review loop with a code-enforced 2-pass cap (#385) (3ed4f04)
+
+### Other Changes
+
+- E4: Repo-quality gates — pre-commit + commit-msg git hooks, and PostToolUse feedback (#381) (123727a)
+- E2: Plan-phase enforcement (auto-validate + plan Stop guard) (#378) (92e6b43)
+- E1: Make `done` the authoritative completion gate (+ pre-push backstop, + realign Stop) (#375) (2445c55)
+
 ## [v0.39.2] — 2026-08-05
 
 ### Chores
@@ -64,16 +76,6 @@ The format is based on [Conventional Commits](https://conventionalcommits.org/).
 ### Chores
 
 - bump crossby to v0.11.0 and adopt newer models (Opus 5) (#345) (d9ac8a5)
-
-## [v0.35.2] — 2026-07-24
-
-### Bug Fixes
-
-- exclude scaffold-branch commits from generated changelog (c40a9ca)
-
-### Chores
-
-- bump crossby to v0.11.0 and adopt newer models (Opus 5) (ff0ab48)
 
 ## [v0.35.1] — 2026-07-24
 
