@@ -41,6 +41,7 @@ from wade.providers.registry import get_provider
 from wade.services.ai_resolution import (
     confirm_ai_selection,
     resolve_ai_tool,
+    resolve_effort,
     resolve_model,
     resolve_permission_mode,
 )
@@ -497,6 +498,8 @@ def start(
     *,
     ai_explicit: bool = False,
     model_explicit: bool = False,
+    effort: str | None = None,
+    effort_explicit: bool = False,
     yolo: bool | None = None,
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
@@ -660,6 +663,8 @@ def start(
             detach=detach,
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
+            effort=effort,
+            effort_explicit=effort_explicit,
             permission_mode=permission_mode,
             permission_mode_explicit=permission_mode_explicit,
         )
@@ -685,23 +690,55 @@ def start(
         worktree_path, config, repo_root, skills=REVIEW_SKILLS, session_phase=SessionPhase.REVIEW
     )
 
-    # 6. Resolve AI tool and model
-    resolved_tool = resolve_ai_tool(ai_tool, config, "implement")
+    # 6. Resolve AI tool, model, effort, and autonomy under the dedicated
+    # ``review_pr_comments`` config key (#389) so this auto-launched session
+    # honors ``ai.review_pr_comments.*`` rather than inheriting ``ai.implement.*``.
+    #
+    # Gate every inherited value on explicitness. The implementation flow
+    # forwards its *already-resolved* tool / model / permission-mode (concrete
+    # values, e.g. ``"copilot"`` / ``"default"``, never ``None``); passed through
+    # unconditionally they short-circuit the resolvers (which honor a non-``None``
+    # first arg) and shadow ``ai.review_pr_comments`` entirely — so switching the
+    # command key alone is a no-op. Honor an inherited value only when the user
+    # set it explicitly (``--ai`` / ``--model`` / ``--permission-mode`` /
+    # ``--yolo``); otherwise pass ``None`` so the review config (then global
+    # ``ai.*``, then ``default`` / auto-detect) governs. (``effort`` is never
+    # inherited as a concrete value — no caller forwards it — so it needs no gate.)
+    effective_ai_tool = ai_tool if ai_explicit else None
+    effective_model = model if model_explicit else None
+    effective_pm = permission_mode if permission_mode_explicit else None
+    resolved_tool = resolve_ai_tool(effective_ai_tool, config, "review_pr_comments")
     resolved_model = resolve_model(
-        model,
+        effective_model,
         config,
-        "implement",
+        "review_pr_comments",
         tool=resolved_tool,
         complexity=task.complexity.value if task.complexity else None,
     )
-    resolved_permission_mode = resolve_permission_mode(permission_mode, yolo, config, "implement")
+    resolved_effort = resolve_effort(
+        effort,
+        config,
+        "review_pr_comments",
+        tool=resolved_tool,
+        complexity=task.complexity.value if task.complexity else None,
+    )
+    resolved_permission_mode = resolve_permission_mode(
+        effective_pm, yolo, config, "review_pr_comments"
+    )
 
     if not detach:
-        resolved_tool, resolved_model, _effort, resolved_permission_mode = confirm_ai_selection(
+        (
+            resolved_tool,
+            resolved_model,
+            resolved_effort,
+            resolved_permission_mode,
+        ) = confirm_ai_selection(
             resolved_tool,
             resolved_model,
             tool_explicit=ai_explicit,
             model_explicit=model_explicit,
+            resolved_effort=resolved_effort,
+            effort_explicit=effort_explicit,
             resolved_permission_mode=resolved_permission_mode,
             permission_mode_explicit=permission_mode_explicit or yolo is not None,
         )
@@ -755,6 +792,7 @@ def start(
                 model=resolved_model,
                 trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
                 initial_message=prompt,
+                effort=resolved_effort,
                 **permission_mode_launch_kwargs(resolved_permission_mode),
             )
         except (ValueError, KeyError):
@@ -784,6 +822,7 @@ def start(
                 prompt=prompt,
                 transcript_path=transcript_path,
                 trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
+                effort=resolved_effort,
                 **permission_mode_launch_kwargs(resolved_permission_mode),
             )
             launch_completed = True
@@ -942,6 +981,8 @@ def _quiet_next_steps_prompt(
     detach: bool = False,
     ai_explicit: bool = False,
     model_explicit: bool = False,
+    effort: str | None = None,
+    effort_explicit: bool = False,
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
 ) -> None:
@@ -987,6 +1028,8 @@ def _quiet_next_steps_prompt(
                         detach=detach,
                         ai_explicit=ai_explicit,
                         model_explicit=model_explicit,
+                        effort=effort,
+                        effort_explicit=effort_explicit,
                         permission_mode=permission_mode,
                         permission_mode_explicit=permission_mode_explicit,
                     )
@@ -1018,7 +1061,15 @@ def _post_review_lifecycle(
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
 ) -> None:
-    """Post-review lifecycle menu: Merge PR or wait for new reviews."""
+    """Post-review lifecycle menu: Merge PR or wait for new reviews.
+
+    Effort is intentionally *not* threaded through here (#389). A review session
+    never carries an explicit effort — ``wade review pr-comments`` has no
+    ``--effort`` flag and the post-``done`` auto-launch never passes one — so on a
+    "wait for new reviews" re-launch the recursed ``start()`` re-resolves effort
+    from ``ai.review_pr_comments.effort`` (config governs). That matches how a
+    non-explicit ``permission_mode`` re-resolves under the gating in ``start``.
+    """
     from wade.ui import prompts
 
     if not prompts.is_tty():

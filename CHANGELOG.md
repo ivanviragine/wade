@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.40.0] — 2026-08-08
+
+### Features
+
+- honor a dedicated ai.review_pr_comments config for the auto-launched review session (#390) (d6b920e)
+
+### Other Changes
+
+- H3: Knowledge lifecycle — worktree-local, reviewed and merged through the PR (#386) (26af39f)
+
 ## [v0.39.3] — 2026-08-07
 
 ### Bug Fixes

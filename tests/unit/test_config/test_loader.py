@@ -339,6 +339,29 @@ class TestParseCommandConfig:
         assert config.ai.review_implementation.tool == "copilot"
         assert config.ai.review_implementation.mode == "headless"
 
+    def test_review_pr_comments_parsed(self, tmp_path: Path) -> None:
+        """The dedicated ``ai.review_pr_comments`` section (#389) round-trips.
+
+        The loader iterates ``AI_COMMAND_NAMES`` and spreads the parsed sections
+        onto ``AIConfig`` by name, so the new section maps onto
+        ``AIConfig.review_pr_comments`` with no loader edit.
+        """
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\n"
+            "ai:\n"
+            "  review_pr_comments:\n"
+            "    tool: claude\n"
+            "    model: claude-sonnet-5\n"
+            "    effort: high\n"
+            "    permission_mode: yolo\n"
+        )
+        config = parse_config_file(config_path)
+        assert config.ai.review_pr_comments.tool == "claude"
+        assert config.ai.review_pr_comments.model == "claude-sonnet-5"
+        assert config.ai.review_pr_comments.effort == "high"
+        assert config.ai.review_pr_comments.permission_mode == "yolo"
+
     def test_review_batch_and_yolo_parsed(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text(

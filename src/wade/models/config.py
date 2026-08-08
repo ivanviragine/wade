@@ -108,6 +108,7 @@ AI_COMMAND_NAMES: tuple[str, ...] = (
     "review_plan",
     "review_implementation",
     "review_batch",
+    "review_pr_comments",
 )
 """Canonical per-command AI config sections supported by WADE."""
 
@@ -130,6 +131,7 @@ class AIConfig(BaseModel):
     review_plan: AICommandConfig = AICommandConfig()
     review_implementation: AICommandConfig = AICommandConfig()
     review_batch: AICommandConfig = AICommandConfig()
+    review_pr_comments: AICommandConfig = AICommandConfig()
 
 
 class PermissionsConfig(BaseModel):
