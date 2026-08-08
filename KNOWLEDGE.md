@@ -399,3 +399,15 @@ is_head_attached(path) returns False for BOTH a detached HEAD and a non-git-repo
 Under git merge=union, an IDENTICAL add/add of a file (same blob on both branches) resolves cleanly to ONE copy (git dedups identical blobs, no conflict), but a DIVERGENT add/add concatenates both sides' full content. So #358's .ratings.yml->.jsonl migration seed is byte-deterministic (json.dumps sort_keys, no ts) AND read_ratings folds seeds idempotently per entry-id (knowledge_service._fold_jsonl_ratings tracks a 'seeded' set) — belt-and-suspenders, because if two branches also add distinct vote lines the seed block is no longer an identical add/add and union would otherwise double-count it.
 
 ---
+
+## e544857ed654 | 2026-08-08 | implementation | tags: hooks, crossby, session-start | Issue #351
+
+As of crossby 0.17, E3 session-start context injection needed NO crossby change or pin bump: emit_decision(action="context") already serializes all four session-start dialects — nested hookSpecificOutput.additionalContext (Claude/Codex), flat additionalContext (Copilot), Cursor additional_context (gated to _CURSOR_CONTEXT_EVENTS = {session_start, post_tool_use}), agy DECISION = {} no-op. Every hook writer supports the session_start event; agy drops it. AIToolCapabilities.supports_session_start_hook is the install-time gate (True for Claude/Codex/Copilot/Cursor, default False for agy), mirroring supports_stop_hook. Lesson: a wade issue naming crossby files does NOT always need a crossby split — read the installed version first.
+
+---
+
+## 0978baa4a888 | 2026-08-08 | implementation | tags: hooks, session-start, gotcha | Issue #351
+
+tools=[] on a session_start HookEntry (bootstrap._install_session_start_hook) is LOAD-BEARING: crossby's _tools_to_matcher([]) returns ".*", and a SessionStart matcher is tested against the session SOURCE (startup/resume/compact/clear/fork), not a tool name — so ".*" is exactly what makes the context re-inject on resume and after compaction. Narrowing tools=[...] would compile a tool-name matcher that never matches a source, silently dropping compaction re-injection (the single largest context loss). Same load-bearing pattern as the Stop hook's tools=[].
+
+---

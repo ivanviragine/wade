@@ -23,6 +23,7 @@ from wade.git import repo as git_repo
 from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
+from wade.models.hooks import SessionPhase
 from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 from wade.models.review import (
     PollOutcome,
@@ -680,7 +681,9 @@ def start(
     # 5. Re-bootstrap skills (ensures review-pr-comments-session skill is installed)
     from wade.skills.installer import REVIEW_SKILLS
 
-    bootstrap_worktree(worktree_path, config, repo_root, skills=REVIEW_SKILLS)
+    bootstrap_worktree(
+        worktree_path, config, repo_root, skills=REVIEW_SKILLS, session_phase=SessionPhase.REVIEW
+    )
 
     # 6. Resolve AI tool and model
     resolved_tool = resolve_ai_tool(ai_tool, config, "implement")

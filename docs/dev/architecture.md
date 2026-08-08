@@ -265,6 +265,57 @@ Codex is the one tool whose worktree guard is **narrowed** rather than skipped:
 `--sandbox workspace-write` already confines tool-call writes, but it also
 permits `/tmp` and `$TMPDIR`, so a shell redirect remains a live escape.
 
+### Session-start context injection (#351)
+
+The launch prompt injects the task **once**. Nothing re-injects it on **resume**
+or after **compaction** — and compaction is the largest single context loss.
+`bootstrap_worktree` therefore installs a **SessionStart** hook (`wade-hook
+session_start`) that re-injects a compact, phase-gated reminder as
+`additionalContext` on every session-start source. It is **non-blocking** (like
+the Stop hook, no `fail_closed`) and **fail-open**: a missing `--root`/`--phase`,
+an unreadable `PLAN.md`, or any exception yields exit 0, so it can never trap a
+session from starting.
+
+- **Policy** (`hooks/policies.py::session_start_context`): builds the text by
+  `SessionPhase` (`implement` / `review` / `plan`, baked into the installed
+  command as `--phase`). For impl/review it parses the issue ref from `PLAN.md`'s
+  first line (`# Issue #<id>: <title>`, omitted if absent) and points at the
+  phase's `done` command and the gates it enforces; for plan (a detached worktree
+  with no `PLAN.md` at the root) it points at writing a valid `PLAN*.md` then
+  `plan-session done`. Import-light and stdout-safe — it reads `PLAN.md` with a
+  plain file read, never the `wade.git` layer (the #349 lean-entry gotcha). The
+  payload is hard-capped at **≤ 800 chars** and phrased *distinctly* from the
+  always-loaded SKILL.md (a per-phase test asserts no prose line is shared).
+- **Install** (`bootstrap.py::_install_session_start_hook`): gated on
+  `supports_session_start_hook` (mirroring how the Stop hook gates on
+  `supports_stop_hook`). `tools=[]` is **load-bearing** — `_tools_to_matcher([])`
+  → `.*`, and the SessionStart matcher is tested against the *source*, so `.*`
+  re-fires on `startup`/`resume`/`compact`/`clear`/`fork`. Narrowing it would
+  silently drop compaction re-injection.
+- **Sessions**: installed for implementation, review, and plan sessions (each
+  passes a `session_phase` to `bootstrap_worktree`). `wade task deps` passes
+  `None` and opts out (short, detached, no completion-gate decay). `plan_mode` and
+  `session_phase` stay independent signals — the invariant `plan_mode is True` iff
+  `session_phase is SessionPhase.PLAN` is pinned by a test, not derived in code.
+
+Per-tool payload shape (all delegated to crossby's `emit_decision`; **no crossby
+change or pin bump** was needed — as of crossby 0.17 it already serializes
+`action="context"` for every session-start dialect):
+
+| Tool | Event | Payload key |
+|------|-------|-------------|
+| Claude, Codex | `SessionStart` | nested `hookSpecificOutput.additionalContext` |
+| Copilot | `sessionStart` | flat `additionalContext` |
+| Cursor | `sessionStart` | `additional_context` (gated to the events Cursor reads it on) |
+| Antigravity CLI (`agy`) | — | no hook installed (`DECISION` dialect has no context channel); **degrades to the always-loaded skill** |
+
+**Deferred (evaluated, not built):** `SessionStart.initialUserMessage` as a
+stronger resume carrier — crossby's `emit_decision` has no such channel, so it
+would need a crossby change; `additionalContext` covers resume *and* compaction
+uniformly and is the verified channel. `UserPromptSubmit` per-turn injection —
+the wiring exists but injecting on every prompt conflicts with the "compact,
+say-it-once, low-cost" goal.
+
 ### Upgrade path for already-inited projects
 
 Guards are installed **per-worktree** in `bootstrap_worktree`, not at

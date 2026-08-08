@@ -25,6 +25,7 @@ from crossby.models.ai import AIToolID, EffortLevel, TokenUsage
 
 from wade.config.loader import load_config
 from wade.models.config import ProjectConfig
+from wade.models.hooks import SessionPhase
 from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 from wade.models.task import CloseReason, PlanFile, Task
 from wade.providers.base import AbstractTaskProvider
@@ -441,7 +442,12 @@ def plan(
                 worktree_dir=planning_worktree_dir,
             )
             bootstrap_worktree(
-                planning_worktree, config, repo_root, skills=PLAN_SKILLS, plan_mode=True
+                planning_worktree,
+                config,
+                repo_root,
+                skills=PLAN_SKILLS,
+                plan_mode=True,
+                session_phase=SessionPhase.PLAN,
             )
             console.kv("Planning worktree", str(planning_worktree))
         except Exception as e:

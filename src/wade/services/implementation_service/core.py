@@ -25,6 +25,7 @@ from wade.git import repo as git_repo
 from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
+from wade.models.hooks import SessionPhase
 from wade.models.permission import permission_mode_launch_kwargs
 from wade.models.session import ImplementResult, MergeStatus
 from wade.models.task import Task
@@ -495,6 +496,7 @@ def start(
             repo_root,
             skills=IMPLEMENT_SKILLS,
             selected_ai_tool=resolved_tool,
+            session_phase=SessionPhase.IMPLEMENT,
         )
 
         # Store stacked base branch metadata so sync can use it instead of main

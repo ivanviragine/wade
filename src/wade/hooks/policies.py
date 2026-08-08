@@ -31,7 +31,7 @@ from pathlib import Path
 
 from crossby.hooks.runtime import HookDecision, HookEvent
 
-from wade.models.hooks import StopGuard
+from wade.models.hooks import SessionPhase, StopGuard
 from wade.utils import markers
 
 __all__ = [
@@ -39,6 +39,7 @@ __all__ = [
     "plan_artifact_only",
     "plan_complete",
     "session_complete",
+    "session_start_context",
     "shell_containment",
     "stop_nudge_marker_path",
     "worktree_containment",
@@ -850,3 +851,111 @@ def plan_complete(
         "section) to the plan directory so wade can create the issue. If you are "
         "pausing to ask a question or are still mid-plan, disregard this and continue."
     )
+
+
+# --- Session-start context injection (#351) ---------------------------------
+
+# Hard cap on the injected context payload. Deliberately small: this is a
+# compact, say-it-once reminder re-injected on every SessionStart source
+# (startup/resume/compact/clear/fork) to keep baseline adherence high — NOT a
+# second copy of the always-loaded skill. The builder truncates to this so the
+# acceptance budget can never regress.
+_SESSION_CONTEXT_MAX_CHARS = 800
+
+# Cap the echoed issue title so one very long title cannot dominate the budget.
+_SESSION_CONTEXT_TITLE_MAX = 140
+
+# ``write_plan_md`` writes ``# Issue #<id>: <title>`` as PLAN.md's first line.
+_ISSUE_LINE_RE = re.compile(r"^#\s*Issue\s+#(\d+):\s*(.+)$")
+
+
+def _parse_plan_issue(worktree_root: Path) -> tuple[str, str] | None:
+    """Return ``(issue_id, title)`` from ``<root>/PLAN.md``'s first line, or None.
+
+    Reads the file directly — never through the ``wade.git`` layer, whose
+    ``git.run`` debug line would print to the lean ``wade-hook`` entry's stdout and
+    corrupt its decision-JSON contract (the #349 gotcha). A missing PLAN.md, an
+    unreadable file, or a first line that doesn't match ``# Issue #<id>: <title>``
+    all yield ``None`` so the caller omits the issue line rather than failing.
+    """
+    try:
+        with (worktree_root / "PLAN.md").open(encoding="utf-8") as fd:
+            first_line = fd.readline().strip()
+    except OSError:
+        return None
+    match = _ISSUE_LINE_RE.match(first_line)
+    if match is None:
+        return None
+    return match.group(1), match.group(2).strip()
+
+
+def session_start_context(worktree_root: Path, phase: SessionPhase) -> str | None:
+    """Build the compact context re-injected at session start / resume / compaction.
+
+    Returned as ``additionalContext`` (per each tool's dialect, by crossby's
+    ``emit_decision``) so the task ref and the phase's closing gate stay in context
+    over a long session — the largest single context loss being *compaction*, which
+    fires ``SessionStart`` with ``source: "compact"``.
+
+    Content by phase (phrased *distinctly* from the always-loaded SKILL.md — these
+    are pointers/reminders, not restatements):
+
+    - ``IMPLEMENT`` / ``REVIEW``: the issue ref parsed from ``PLAN.md`` (omitted if
+      absent), plus a one-line pointer to the phase's ``done`` command and the gates
+      it enforces. ``PLAN.md`` holds the full plan.
+    - ``PLAN``: a detached worktree with no ``PLAN.md`` at the root (so no issue
+      line); a reminder to write a valid ``PLAN*.md`` then run ``plan-session done``.
+
+    Import-light and stdout-safe: it runs on the lean ``wade-hook`` entry point, so
+    it reads ``PLAN.md`` with a plain file read and touches nothing that prints.
+    Returns ``None`` when there is nothing meaningful to say (runtime no-op). The
+    result is hard-capped at :data:`_SESSION_CONTEXT_MAX_CHARS`.
+    """
+    lines: list[str] = []
+
+    if phase in (SessionPhase.IMPLEMENT, SessionPhase.REVIEW):
+        parsed = _parse_plan_issue(worktree_root)
+        if parsed is not None:
+            issue_id, title = parsed
+            if len(title) > _SESSION_CONTEXT_TITLE_MAX:
+                title = title[: _SESSION_CONTEXT_TITLE_MAX - 1].rstrip() + "…"
+            lines.append(f"Issue #{issue_id} — {title}")
+
+    if phase is SessionPhase.IMPLEMENT:
+        lines.append("Implementation phase; the full plan lives in PLAN.md at the worktree root.")
+        lines.append(
+            "Wrap up with `wade implementation-session done`: it syncs onto base, pushes, and "
+            "opens or updates the PR — skip the manual `git push` / `gh pr create`."
+        )
+        lines.append(
+            "Expect gates first: review findings to resolve, a base-branch sync/rebase, and a "
+            "pre-push backstop that refuses an unmarked push."
+        )
+    elif phase is SessionPhase.REVIEW:
+        lines.append("PR-comment review phase; task context is in PLAN.md.")
+        lines.append(
+            "Work through the unresolved review threads, then wrap up with "
+            "`wade review-pr-comments-session done`."
+        )
+    elif phase is SessionPhase.PLAN:
+        lines.append(
+            "Planning phase in a detached worktree (no PLAN.md at the root; plans go under "
+            "the plan directory)."
+        )
+        lines.append(
+            "Produce at least one valid PLAN*.md — a conventional-commit title plus a "
+            "`## Complexity` section — then run `wade plan-session done`; wade turns the plan "
+            "file(s) into issue(s) once you exit."
+        )
+
+    if not lines:
+        return None
+
+    # Brand the payload so the injected block is recognizable in the transcript.
+    if not lines[0].startswith("[wade]"):
+        lines[0] = f"[wade] {lines[0]}"
+
+    payload = "\n".join(lines)
+    if len(payload) > _SESSION_CONTEXT_MAX_CHARS:
+        payload = payload[: _SESSION_CONTEXT_MAX_CHARS - 1].rstrip() + "…"
+    return payload

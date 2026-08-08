@@ -24,6 +24,7 @@ alias that delegates here.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import sys
 from pathlib import Path
@@ -43,10 +44,11 @@ from wade.hooks.policies import (
     plan_artifact_only,
     plan_complete,
     session_complete,
+    session_start_context,
     shell_containment,
     worktree_containment,
 )
-from wade.models.hooks import StopGuard
+from wade.models.hooks import SessionPhase, StopGuard
 from wade.utils import markers
 
 # Stop guards fail OPEN — an unknown one must never trap the agent. Derived from
@@ -103,6 +105,11 @@ def _is_post_tool_use(event: str) -> bool:
     return event.strip().lower().replace("_", "") == "posttooluse"
 
 
+def _is_session_start(event: str) -> bool:
+    """True when ``event`` names the SessionStart hook, in any casing/spelling."""
+    return event.strip().lower().replace("_", "") == "sessionstart"
+
+
 def _dialect_for(tool: str) -> HookOutputDialect:
     return _TOOL_DIALECTS.get(tool.strip().lower(), HookOutputDialect.HOOK_SPECIFIC_OUTPUT)
 
@@ -116,7 +123,7 @@ def _stop_dialect_for(tool: str) -> HookStopDialect:
 # value like `--lint-cmd stop` is mistaken for a Stop event and flips a
 # PreToolUse usage error from fail-closed to fail-open. `--unscoped` is a
 # store_true (no value), so it is deliberately absent.
-_VALUE_FLAGS = ("--guard", "--tool", "--root", "--lint-cmd", "--timeout")
+_VALUE_FLAGS = ("--guard", "--tool", "--root", "--lint-cmd", "--timeout", "--phase")
 
 
 def _event_from_argv(argv: list[str]) -> str:
@@ -565,6 +572,54 @@ def _run_post_tool_use(
     return emit_decision(HookDecision.context(output), dialect, event="post_tool_use")
 
 
+def _run_session_start(tool: str, root: str, phase: str) -> HookEmission:
+    """Emit the SessionStart context payload — strictly non-blocking / fail-open.
+
+    Re-injects a compact, phase-gated task reminder on every SessionStart source
+    (startup / resume / compact / clear / fork — the installed hook uses a ``.*``
+    matcher). Always exit 0: ``context`` and ``allow`` are both non-blocking, so
+    this channel can never trap a session from starting. Any problem — a
+    context-incapable tool (agy), a missing ``--root`` / ``--phase``, an
+    unrecognized phase, an unreadable ``PLAN.md``, or any exception — degrades to a
+    no-op ``allow``.
+
+    All dialect/shape logic is crossby's: ``emit_decision`` serializes
+    :meth:`HookDecision.context` as nested ``hookSpecificOutput.additionalContext``
+    (Claude/Codex), flat ``additionalContext`` (Copilot), or ``additional_context``
+    (Cursor, gated to the events it reads it on). wade owns only the *policy* (the
+    text, by phase) and the *install*.
+    """
+    dialect = _dialect_for(tool)
+
+    def _noop() -> HookEmission:
+        return emit_decision(HookDecision.allow(), dialect, event="session_start")
+
+    # agy (DECISION dialect) has no verified context channel; bootstrap already
+    # skips it via supports_session_start_hook, but double-guard so a stray install
+    # can never emit anything.
+    if dialect is HookOutputDialect.DECISION:
+        return _noop()
+
+    # Read + discard stdin best-effort (consistency with the other branches; the
+    # payload is built from --root/--phase, not stdin).
+    with contextlib.suppress(OSError, ValueError):
+        sys.stdin.read()
+
+    if not root or not phase:
+        return _noop()  # nothing to inject / no phase — never block startup
+
+    try:
+        payload = session_start_context(Path(root), SessionPhase(phase))
+    except Exception:
+        # Fail open on ANY error (unknown phase, unreadable payload, …): a
+        # SessionStart hook must never block a session from starting.
+        return _noop()
+
+    if not payload:
+        return _noop()
+    return emit_decision(HookDecision.context(payload), dialect, event="session_start")
+
+
 def main(argv: list[str] | None = None) -> int:
     """Parse args, run the guard, emit the decision, return the exit code."""
     parser = argparse.ArgumentParser(
@@ -574,15 +629,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "event",
-        help="Canonical hook event: pre_tool_use, stop, or session_start.",
+        help="Canonical hook event: pre_tool_use, post_tool_use, stop, or session_start.",
     )
     parser.add_argument(
         "--guard",
         default="",
-        help="Guard policy: worktree | plan | session-complete | plan-complete.",
+        help=(
+            "Guard policy: worktree | plan | session-complete | plan-complete "
+            "(| context for session_start context injection)."
+        ),
     )
     parser.add_argument("--tool", required=True, help="AI tool id (selects the output dialect).")
     parser.add_argument("--root", default="", help="Worktree root — required by write guards.")
+    parser.add_argument(
+        "--phase",
+        default="",
+        help="Session phase for session_start context: plan | implement | review.",
+    )
     # PostToolUse lint feedback (fail-open, never blocks). The installed hook
     # passes neither --lint-cmd nor --timeout (a stable, config-driven command);
     # these remain as explicit overrides (used by tests / manual invocation).
@@ -609,11 +672,12 @@ def main(argv: list[str] | None = None) -> int:
     except SystemExit:
         # argparse exits 2 on a usage error. For a PreToolUse write guard that
         # would (via the non-zero code) block the edit, which is the safe
-        # direction, so let it stand. On a *Stop* or *PostToolUse* event it is the
-        # opposite: those channels are fail-open (PostToolUse must never block —
-        # the tool has already run), so a malformed invocation there returns 0.
+        # direction, so let it stand. On a *Stop*, *PostToolUse*, or *SessionStart*
+        # event it is the opposite: those channels are fail-open (PostToolUse must
+        # never block — the tool has already run; SessionStart must never block a
+        # session from starting), so a malformed invocation there returns 0.
         event_arg = _event_from_argv(raw_argv)
-        if event_arg == "stop" or _is_post_tool_use(event_arg):
+        if event_arg == "stop" or _is_post_tool_use(event_arg) or _is_session_start(event_arg):
             return 0
         raise
 
@@ -621,6 +685,8 @@ def main(argv: list[str] | None = None) -> int:
         emission = _run_post_tool_use(
             ns.tool, ns.root, ns.lint_cmd, ns.timeout, unscoped=ns.unscoped
         )
+    elif _is_session_start(ns.event):
+        emission = _run_session_start(ns.tool, ns.root, ns.phase)
     else:
         emission = _run(ns.event, ns.guard, ns.tool, ns.root)
     if emission.stdout:

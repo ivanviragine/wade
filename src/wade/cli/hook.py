@@ -25,7 +25,10 @@ def hook_command(
     guard: str = typer.Option(
         "",
         "--guard",
-        help="Guard policy to apply: worktree | plan | session-complete | plan-complete.",
+        help=(
+            "Guard policy to apply: worktree | plan | session-complete | plan-complete "
+            "(| context for session_start context injection)."
+        ),
     ),
     tool: str = typer.Option(
         ...,
@@ -36,6 +39,11 @@ def hook_command(
         "",
         "--root",
         help="Worktree root — required by the worktree/plan guards.",
+    ),
+    phase: str = typer.Option(
+        "",
+        "--phase",
+        help="Session phase for session_start context: plan | implement | review.",
     ),
     lint_cmd: str | None = typer.Option(
         None,
@@ -56,13 +64,22 @@ def hook_command(
     """Apply a wade hook to a tool's payload read from stdin.
 
     Delegates to the same code paths as the lean ``wade-hook`` console script:
-    the fail-open PostToolUse lint-feedback branch for ``post_tool_use``, and the
+    the fail-open PostToolUse lint-feedback branch for ``post_tool_use``, the
+    fail-open SessionStart context-injection branch for ``session_start``, and the
     write/stop guard dispatcher otherwise.
     """
-    from wade.hooks.cli import _is_post_tool_use, _run, _run_post_tool_use
+    from wade.hooks.cli import (
+        _is_post_tool_use,
+        _is_session_start,
+        _run,
+        _run_post_tool_use,
+        _run_session_start,
+    )
 
     if _is_post_tool_use(event):
         emission = _run_post_tool_use(tool, root, lint_cmd, timeout, unscoped=unscoped)
+    elif _is_session_start(event):
+        emission = _run_session_start(tool, root, phase)
     else:
         emission = _run(event, guard, tool, root)
     if emission.stdout:
