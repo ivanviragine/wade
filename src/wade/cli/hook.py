@@ -1,10 +1,25 @@
 """``wade hook`` — discoverable alias for the lean ``wade-hook`` entry point.
 
-The write-guard logic lives in :mod:`wade.hooks.cli` (the dedicated ``wade-hook``
-console script), which is what tools' PreToolUse/Stop hooks actually invoke — it
-imports only the runtime contract + policies so per-edit latency stays low. This
-Typer command exists purely so ``wade hook …`` is discoverable/testable from the
-main CLI; it delegates to the exact same code path.
+The write-guard/context logic lives in :mod:`wade.hooks.cli` (the dedicated
+``wade-hook`` console script), which is what tools' PreToolUse/PostToolUse/Stop/
+SessionStart hooks actually invoke — it imports only the runtime contract +
+policies so per-edit latency stays low. This Typer command exists purely so
+``wade hook …`` is discoverable/testable from the main ``wade`` CLI.
+
+It forwards its **raw, unparsed** arguments straight to that entry point's
+argparse parser (:func:`wade.hooks.cli.main`) instead of re-declaring the flags
+as typed Typer options. That is deliberate. A typed Typer option makes Click
+reject a malformed invocation — ``--phase`` with no value, ``--timeout nope``, a
+missing ``--tool`` — with a usage error (exit 2) *before* the event dispatcher
+runs. For the fail-OPEN events (``session_start`` / ``post_tool_use`` / ``stop``)
+that violates their contract: a usage error there must exit 0 and never block.
+Re-declaring the flags also drifted from the lean parser on every new option
+(each addition had to be mirrored in two places and kept semantically identical).
+Forwarding argv removes that whole class of parity bug: the alias literally runs
+the same parser, dispatch, and fail-open usage-error recovery as ``wade-hook``,
+so ``stop``'s *legitimate* block (exit 2) is preserved while a ``stop`` *usage*
+error still fails open — a distinction a command-boundary interceptor could not
+make, because it cannot tell a parse error from a body exit.
 
 Contract: stdout carries only the decision JSON, and the exit code is the
 universal block signal (2 = deny/block, 0 = allow).
@@ -12,61 +27,19 @@ universal block signal (2 = deny/block, 0 = allow).
 
 from __future__ import annotations
 
-import sys
-
 import typer
 
 
-def hook_command(
-    event: str = typer.Argument(
-        ...,
-        help="Canonical hook event: pre_tool_use, post_tool_use, stop, or session_start.",
-    ),
-    guard: str = typer.Option(
-        "",
-        "--guard",
-        help="Guard policy to apply: worktree | plan | session-complete | plan-complete.",
-    ),
-    tool: str = typer.Option(
-        ...,
-        "--tool",
-        help="AI tool id (selects the output dialect for the decision).",
-    ),
-    root: str = typer.Option(
-        "",
-        "--root",
-        help="Worktree root — required by the worktree/plan guards.",
-    ),
-    lint_cmd: str | None = typer.Option(
-        None,
-        "--lint-cmd",
-        help="PostToolUse override: lint command (edited path appended unless --unscoped).",
-    ),
-    timeout: int | None = typer.Option(
-        None,
-        "--timeout",
-        help="PostToolUse override: seconds before the linter is abandoned.",
-    ),
-    unscoped: bool = typer.Option(
-        False,
-        "--unscoped",
-        help="PostToolUse override: run the lint command whole-repo (don't append the path).",
-    ),
-) -> None:
-    """Apply a wade hook to a tool's payload read from stdin.
+def hook_command(ctx: typer.Context) -> None:
+    """Apply a wade hook to a tool's stdin payload.
 
-    Delegates to the same code paths as the lean ``wade-hook`` console script:
-    the fail-open PostToolUse lint-feedback branch for ``post_tool_use``, and the
-    write/stop guard dispatcher otherwise.
+    Accepts the raw hook argv — EVENT [--guard G] [--tool T] [--root R] [--phase P]
+    [--lint-cmd CMD] [--timeout N] [--unscoped] — and delegates to the exact code
+    path the lean 'wade-hook' console script runs, including its fail-open
+    usage-error recovery. The flags are parsed downstream, so this command lists no
+    per-flag detail; run 'wade-hook --help' for the full parser. (See the module
+    docstring for why the args are forwarded rather than typed here.)
     """
-    from wade.hooks.cli import _is_post_tool_use, _run, _run_post_tool_use
+    from wade.hooks.cli import main
 
-    if _is_post_tool_use(event):
-        emission = _run_post_tool_use(tool, root, lint_cmd, timeout, unscoped=unscoped)
-    else:
-        emission = _run(event, guard, tool, root)
-    if emission.stdout:
-        sys.stdout.write(emission.stdout)
-    if emission.stderr:
-        sys.stderr.write(emission.stderr + "\n")
-    raise typer.Exit(emission.exit_code)
+    raise typer.Exit(main(ctx.args))
