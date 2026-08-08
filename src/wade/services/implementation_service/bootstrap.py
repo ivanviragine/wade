@@ -22,7 +22,7 @@ from wade.models.config import (
     ProjectConfig,
     with_wade_base_pattern,
 )
-from wade.models.hooks import StopGuard
+from wade.models.hooks import SessionPhase, StopGuard
 from wade.models.task import Task
 from wade.utils.markdown import has_marker_block, remove_marker_block
 
@@ -41,6 +41,7 @@ __all__ = [
     "_install_guard_hooks",
     "_install_managed_git_hooks",
     "_install_post_tool_use_lint_hook",
+    "_install_session_start_hook",
     "_install_stop_hook",
     "_resolve_worktrees_dir",
     "_suppress_pointer_artifacts",
@@ -354,6 +355,86 @@ def _install_stop_hook(
         _log_sync_result(writer.sync(SyncData(hooks=[hook]), worktree_path), tool_id)
 
     logger.info("implementation.stop_hook_installed", path=str(worktree_path), guard=guard.value)
+
+
+def _session_start_command(tool_value: str, quoted_root: str, phase_value: str) -> str:
+    """Build the installed ``wade-hook session_start`` command for one tool + phase.
+
+    Single source of truth so the install path and the stale-phase revocation
+    (``hooks_remove``) in :func:`_install_session_start_hook` construct
+    byte-identical commands: crossby matches a removal by exact command string, so
+    any drift between the two would silently fail to reconcile a prior phase's hook.
+
+    ``--guard context`` is a descriptive label, not a dispatch key: the runtime
+    routes session_start by the *event* positional (``_is_session_start``), never by
+    ``--guard``. It documents intent and is asserted by the install tests.
+    """
+    return (
+        f"wade-hook session_start --guard context --tool {tool_value} "
+        f"--root {quoted_root} --phase {phase_value}"
+    )
+
+
+def _install_session_start_hook(worktree_path: Path, *, phase: SessionPhase) -> None:
+    """Install a SessionStart context-injection hook into each capable tool.
+
+    On every SessionStart source (startup / resume / compact / clear / fork),
+    ``wade-hook session_start`` re-injects a compact, phase-gated task reminder as
+    ``additionalContext`` — countering context decay over long sessions, the
+    largest single loss being *compaction*. Non-blocking, like the Stop hook (no
+    ``fail_closed``).
+
+    Installed only for tools that fire a SessionStart hook
+    (``supports_session_start_hook`` — Claude/Codex/Copilot/Cursor as of crossby
+    0.17; **agy is skipped**, its DECISION dialect having no verified context
+    channel, so it degrades to the always-loaded skill). This mirrors how
+    :func:`_install_stop_hook` gates on ``supports_stop_hook``.
+
+    ``tools=[]`` is **load-bearing**: ``_tools_to_matcher([])`` returns ``.*``, so
+    the Claude/Codex SessionStart matcher matches every ``source`` (the matcher is
+    tested against the source, not a tool name). Narrowing it would silently drop
+    resume/compaction re-injection. The per-tool payload *shape* (nested vs flat
+    ``additionalContext`` vs Cursor ``additional_context``) is resolved by
+    ``wade-hook`` / crossby, not here.
+
+    A worktree is only ever one session kind at a time, but an implementation
+    worktree is later **reused** for its review session (``review_service.start``
+    re-bootstraps with ``SessionPhase.REVIEW``). crossby's hook writers dedup by
+    exact command, so a prior ``--phase implement`` entry would survive alongside
+    the new ``--phase review`` one and **both** would fire, injecting contradictory
+    phase reminders. Every other-phase variant is therefore revoked via
+    ``hooks_remove`` so exactly one SessionStart hook remains after re-bootstrap.
+    """
+    import shlex
+
+    from crossby.ai_tools import AbstractAITool
+    from crossby.models.config import HookEntry
+    from crossby.sync.base import SyncData
+
+    root = shlex.quote(str(worktree_path))
+    for tool_id, writer in _hook_writers():
+        if not AbstractAITool.get(tool_id).capabilities().supports_session_start_hook:
+            continue
+        command = _session_start_command(tool_id.value, root, phase.value)
+        hook = HookEntry(event="session_start", tools=[], command=command)
+        # Revoke this tool's SessionStart command for every *other* phase, so a
+        # reused worktree (impl → review) ends up with exactly one entry rather
+        # than a stale phase firing alongside the current one. sync() adds before
+        # it removes, and no removal ever equals `command` (distinct --phase), so
+        # the entry just installed is never clobbered.
+        stale_removals = [
+            ("session_start", _session_start_command(tool_id.value, root, other.value))
+            for other in SessionPhase
+            if other != phase
+        ]
+        _log_sync_result(
+            writer.sync(SyncData(hooks=[hook], hooks_remove=stale_removals), worktree_path),
+            tool_id,
+        )
+
+    logger.info(
+        "implementation.session_start_hook_installed", path=str(worktree_path), phase=phase.value
+    )
 
 
 # Canonical write-family tool names the PostToolUse lint feedback fires on. Scoped
@@ -817,6 +898,7 @@ def bootstrap_worktree(
     skills: list[str] | None = None,
     plan_mode: bool = False,
     selected_ai_tool: str | None = None,
+    session_phase: SessionPhase | None = None,
 ) -> None:
     """Run post-creation bootstrap: copy files, install skills, run hooks.
 
@@ -829,6 +911,13 @@ def bootstrap_worktree(
         selected_ai_tool: Effective AI tool for this session (e.g. ``"cursor"``).
             When provided, takes precedence over persisted config when deciding
             whether to configure tool-specific worktree settings.
+        session_phase: The wade session kind (implement / review / plan). When set,
+            a SessionStart context-injection hook is installed for that phase; when
+            ``None`` (e.g. ``task deps`` sessions) no such hook is installed. This
+            is an **independent** signal from ``plan_mode`` (which selects the
+            write/stop guard) — the two are correlated (``plan_mode is True`` iff
+            ``session_phase is SessionPhase.PLAN``), an invariant pinned by a test
+            rather than derived in code.
     """
     # Copy configured files + internal wade files that must always be present
     copy_files = _effective_copy_files(config)
@@ -967,6 +1056,13 @@ def bootstrap_worktree(
 
         # PostToolUse in-turn lint feedback (opt-in) for context-capable tools.
         _install_post_tool_use_lint_hook(worktree_path, config)
+
+    # SessionStart context injection: re-inject a compact, phase-gated task
+    # reminder on startup/resume/compaction (all sessions with a known phase;
+    # `task deps` passes None and opts out). Independent of plan_mode — a plan
+    # worktree installs both the plan write/stop guards AND this hook.
+    if session_phase is not None:
+        _install_session_start_hook(worktree_path, phase=session_phase)
 
     # Write worktree gitignore block AFTER all file generation so the entry
     # list is complete (skills, hooks, settings, pointer are all in place).

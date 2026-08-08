@@ -6,6 +6,7 @@ from pathlib import Path
 
 import structlog
 from crossby.models.ai import EffortLevel
+from rich.markup import escape
 
 from wade.config.loader import load_config
 from wade.git import repo as git_repo
@@ -199,9 +200,16 @@ def _run_review_delegation(
 
     result = delegate(request)
     if result.success:
-        console.out.print(result.feedback)
+        # Delegation feedback is untrusted, model-authored text/markdown that
+        # routinely quotes source code (e.g. `console.print("[x]done[/]")`).
+        # Rich would parse `[/]` as a closing tag with nothing to close and
+        # raise MarkupError, so print it literally with markup disabled (#394).
+        console.out.print(result.feedback, markup=False)
     else:
-        console.error(result.feedback)
+        # `console.error` interpolates the message into its own `[error]…[/]`
+        # wrapper, so `markup=False` can't apply here — escape the feedback so
+        # bracketed tokens render literally while the wrapper still styles (#394).
+        console.error(escape(result.feedback))
     return result
 
 

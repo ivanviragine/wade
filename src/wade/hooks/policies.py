@@ -31,7 +31,7 @@ from pathlib import Path
 
 from crossby.hooks.runtime import HookDecision, HookEvent
 
-from wade.models.hooks import StopGuard
+from wade.models.hooks import PLAN_ISSUE_REF_FILE, SessionPhase, StopGuard
 from wade.utils import markers
 
 __all__ = [
@@ -39,6 +39,7 @@ __all__ = [
     "plan_artifact_only",
     "plan_complete",
     "session_complete",
+    "session_start_context",
     "shell_containment",
     "stop_nudge_marker_path",
     "worktree_containment",
@@ -850,3 +851,131 @@ def plan_complete(
         "section) to the plan directory so wade can create the issue. If you are "
         "pausing to ask a question or are still mid-plan, disregard this and continue."
     )
+
+
+# --- Session-start context injection (#351) ---------------------------------
+
+# Hard cap on the injected context payload. Deliberately small: this is a
+# compact, say-it-once reminder re-injected on every SessionStart source
+# (startup/resume/compact/clear/fork) to keep baseline adherence high — NOT a
+# second copy of the always-loaded skill. The builder truncates to this so the
+# acceptance budget can never regress.
+_SESSION_CONTEXT_MAX_CHARS = 800
+
+# Cap the echoed issue title so one very long title cannot dominate the budget.
+_SESSION_CONTEXT_TITLE_MAX = 140
+
+# ``write_plan_md`` writes ``# Issue #<id>: <title>`` as PLAN.md's first line.
+_ISSUE_LINE_RE = re.compile(r"^#\s*Issue\s+#(\d+):\s*(.+)$")
+
+# Phase -> the prompt template holding that phase's static instruction prose.
+# The prose is AI-facing content, so it is sourced from ``templates/prompts/``
+# (the repo's prompt source-of-truth per AGENTS.md "Prompts as .md Templates")
+# rather than hard-coded here; :func:`session_start_context` stays limited to
+# loading that prose, prepending the dynamic issue line, branding, and capping.
+_SESSION_CONTEXT_TEMPLATES: dict[SessionPhase, str] = {
+    SessionPhase.IMPLEMENT: "session-start-implement.md",
+    SessionPhase.REVIEW: "session-start-review.md",
+    SessionPhase.PLAN: "session-start-plan.md",
+}
+
+
+def _parse_issue_heading(path: Path) -> tuple[str, str] | None:
+    """Return ``(issue_id, title)`` from ``path``'s first line, or ``None``.
+
+    The first line must match ``# Issue #<id>: <title>`` — the heading shape
+    ``write_plan_md`` emits into ``PLAN.md`` (impl/review) and ``plan_service``
+    persists into ``.wade/plan-issue.md`` (plan). Reads the file directly — never
+    through the ``wade.git`` layer, whose ``git.run`` debug line would print to the
+    lean ``wade-hook`` entry's stdout and corrupt its decision-JSON contract (the
+    #349 gotcha). A missing file, an unreadable one (including a non-UTF-8 /
+    binary file), or a non-matching first line all yield ``None`` so the caller
+    omits the issue line rather than failing — the contract holds on this
+    function's own terms, not by accident of the caller's outer catch-all.
+    """
+    try:
+        # utf-8-sig so a stray BOM on the first line never suppresses the issue
+        # ref (decodes plain utf-8 unchanged when no BOM is present). A binary /
+        # non-UTF-8 file raises UnicodeDecodeError (a ValueError) on read, not
+        # OSError — caught here so the fail-open promise above is self-contained.
+        with path.open(encoding="utf-8-sig") as fd:
+            first_line = fd.readline().strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    match = _ISSUE_LINE_RE.match(first_line)
+    if match is None:
+        return None
+    return match.group(1), match.group(2).strip()
+
+
+def _issue_line(parsed: tuple[str, str]) -> str:
+    """Render the ``Issue #<id> — <title>`` context line, capping a long title."""
+    issue_id, title = parsed
+    if len(title) > _SESSION_CONTEXT_TITLE_MAX:
+        title = title[: _SESSION_CONTEXT_TITLE_MAX - 1].rstrip() + "…"
+    return f"Issue #{issue_id} — {title}"
+
+
+def session_start_context(worktree_root: Path, phase: SessionPhase) -> str | None:
+    """Build the compact context re-injected at session start / resume / compaction.
+
+    Returned as ``additionalContext`` (per each tool's dialect, by crossby's
+    ``emit_decision``) so the task ref and the phase's closing gate stay in context
+    over a long session — the largest single context loss being *compaction*, which
+    fires ``SessionStart`` with ``source: "compact"``.
+
+    Content by phase (authored *distinctly* from the always-loaded SKILL.md —
+    these are pointers/reminders, not restatements — and sourced from
+    ``templates/prompts/session-start-<phase>.md``, see
+    :data:`_SESSION_CONTEXT_TEMPLATES`):
+
+    - ``IMPLEMENT`` / ``REVIEW``: the issue ref parsed from ``PLAN.md`` (omitted if
+      absent), plus a one-line pointer to the phase's ``done`` command and the gates
+      it enforces. ``PLAN.md`` holds the full plan.
+    - ``PLAN``: a detached worktree with no ``PLAN.md`` at the root; the issue ref
+      of a ``wade plan --issue-id`` session (parsed from ``.wade/plan-issue.md``,
+      which ``plan_service`` persists — omitted for a from-scratch plan), plus a
+      reminder to write a valid ``PLAN*.md`` then run ``plan-session done``.
+
+    Import-light and stdout-safe: it runs on the lean ``wade-hook`` entry point, so
+    it reads the issue-ref file with a plain file read and touches nothing that
+    prints. Returns ``None`` when there is nothing meaningful to say (runtime
+    no-op). The result is hard-capped at :data:`_SESSION_CONTEXT_MAX_CHARS`.
+    """
+    lines: list[str] = []
+
+    # Where each phase's issue ref lives on disk (impl/review: the root PLAN.md;
+    # plan: the metadata file a ``--issue-id`` session persists). ``None`` → no
+    # issue line for this phase.
+    issue_ref_path: Path | None = None
+    if phase in (SessionPhase.IMPLEMENT, SessionPhase.REVIEW):
+        issue_ref_path = worktree_root / "PLAN.md"
+    elif phase is SessionPhase.PLAN:
+        issue_ref_path = worktree_root / PLAN_ISSUE_REF_FILE
+
+    if issue_ref_path is not None:
+        parsed = _parse_issue_heading(issue_ref_path)
+        if parsed is not None:
+            lines.append(_issue_line(parsed))
+
+    template_name = _SESSION_CONTEXT_TEMPLATES.get(phase)
+    if template_name is not None:
+        # Lazy import: the prose loader pulls in ``wade.skills.installer``, which
+        # is NOT on the hot PreToolUse write path — only this SessionStart branch
+        # reaches it, once per session start. It adds ~2ms and loads none of the
+        # heavy modules the lean entry avoids (no crossby adapters, no CLI graph).
+        from wade.skills.installer import load_prompt_template
+
+        lines.extend(ln for ln in load_prompt_template(template_name).splitlines() if ln.strip())
+
+    if not lines:
+        return None
+
+    # Brand the payload so the injected block is recognizable in the transcript.
+    if not lines[0].startswith("[wade]"):
+        lines[0] = f"[wade] {lines[0]}"
+
+    payload = "\n".join(lines)
+    if len(payload) > _SESSION_CONTEXT_MAX_CHARS:
+        payload = payload[: _SESSION_CONTEXT_MAX_CHARS - 1].rstrip() + "…"
+    return payload
