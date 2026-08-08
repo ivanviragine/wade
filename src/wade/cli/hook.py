@@ -30,8 +30,17 @@ def hook_command(
             "(| context for session_start context injection)."
         ),
     ),
+    # Deliberately NOT required (the lean ``wade-hook`` argparse parser keeps it
+    # required and recovers in its usage-error branch; Typer has no such branch).
+    # A required option here would make Typer reject a missing ``--tool`` with exit
+    # 2 *before* the event-specific dispatcher runs — which for session_start /
+    # post_tool_use / stop violates their fail-OPEN contract (a usage error there
+    # must exit 0 and never block). Defaulting to "" routes every event to the
+    # dispatcher, where ``_dialect_for("")`` falls back to the universal shape; a
+    # pre_tool_use write with an empty ``--tool`` still fails CLOSED through the
+    # guard logic (unknown guard / pathless payload / escape all deny).
     tool: str = typer.Option(
-        ...,
+        "",
         "--tool",
         help="AI tool id (selects the output dialect for the decision).",
     ),

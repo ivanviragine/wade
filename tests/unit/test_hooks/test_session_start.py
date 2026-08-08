@@ -229,6 +229,27 @@ class TestLeanEntryParity:
         assert lean.returncode == alias.returncode == 0
         assert lean.stdout == alias.stdout == ""
 
+    def test_missing_tool_both_fail_open(self) -> None:
+        # The lean parser rejects a missing --tool (argparse required) and recovers
+        # to exit 0 in its usage-error branch. The Typer alias must reach the same
+        # fail-open outcome — a required --tool there would exit 2 *before* the
+        # session_start dispatcher, contradicting the fail-open contract.
+        args = ["session_start", "--phase", "implement"]
+        lean = subprocess.run(
+            [sys.executable, "-m", "wade.hooks.cli", *args],
+            input="{}",
+            capture_output=True,
+            text=True,
+        )
+        alias = subprocess.run(
+            [sys.executable, "-m", "wade", "hook", *args],
+            input="{}",
+            capture_output=True,
+            text=True,
+        )
+        assert lean.returncode == alias.returncode == 0
+        assert lean.stdout == alias.stdout == ""
+
 
 class TestBuilderParsing:
     def test_bom_prefixed_plan_still_parses_issue(self, tmp_path: Path) -> None:
