@@ -460,6 +460,37 @@ class TestValidateConfig:
         result = validate_config(tmp_path)
         assert result.is_valid, f"Errors: {result.errors}"
 
+    def test_valid_review_pr_comments_keys(self, tmp_path: Path) -> None:
+        """The dedicated ``ai.review_pr_comments`` section (#389) is accepted.
+
+        Adding the section name to ``AI_COMMAND_NAMES`` + the field to
+        ``AIConfig`` is enough — the validator derives its allowlists from the
+        models (#368), so ``wade check`` needs no ``check_service`` change.
+        """
+        config = tmp_path / ".wade.yml"
+        config.write_text(
+            "version: 2\n"
+            "ai:\n"
+            "  review_pr_comments:\n"
+            "    tool: claude\n"
+            "    model: claude-sonnet-5\n"
+            "    effort: high\n"
+            "    mode: interactive\n"
+            "    permission_mode: yolo\n"
+            "    yolo: true\n"
+            "    enabled: true\n"
+            "    timeout: 600\n"
+        )
+        result = validate_config(tmp_path)
+        assert result.is_valid, f"Errors: {result.errors}"
+
+    def test_invalid_review_pr_comments_tool(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nai:\n  review_pr_comments:\n    tool: nonexistent\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("ai.review_pr_comments.tool" in e for e in result.errors)
+
     def test_invalid_review_plan_tool(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"
         config.write_text("version: 2\nai:\n  review_plan:\n    tool: nonexistent\n")
