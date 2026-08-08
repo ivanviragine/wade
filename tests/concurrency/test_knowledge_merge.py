@@ -58,18 +58,18 @@ def test_two_branch_knowledge_appends_both_survive_merge(tmp_path: Path) -> None
     knowledge = repo / "KNOWLEDGE.md"
     knowledge.write_text("# Project Knowledge\n\n", encoding="utf-8")
     _git_ok(repo, "add", "-A")
-    _git_ok(repo, "commit", "-m", "init knowledge + gitattributes")
+    _git_ok(repo, "commit", "-m", "test: init knowledge + gitattributes")
 
     # Branch A appends entry A.
     _git_ok(repo, "checkout", "-b", "feat-a")
     knowledge.write_text(knowledge.read_text() + "## entry-a\nlearning A\n", encoding="utf-8")
-    _git_ok(repo, "commit", "-am", "add entry A")
+    _git_ok(repo, "commit", "-am", "test: add entry A")
 
     # Branch B (from main) appends entry B.
     _git_ok(repo, "checkout", "main")
     _git_ok(repo, "checkout", "-b", "feat-b")
     knowledge.write_text(knowledge.read_text() + "## entry-b\nlearning B\n", encoding="utf-8")
-    _git_ok(repo, "commit", "-am", "add entry B")
+    _git_ok(repo, "commit", "-am", "test: add entry B")
 
     # Merge both into main.
     _git_ok(repo, "checkout", "main")
@@ -90,18 +90,18 @@ def test_two_branch_rating_votes_both_survive_merge(tmp_path: Path) -> None:
     ratings = repo / "KNOWLEDGE.ratings.jsonl"
     ratings.write_text("", encoding="utf-8")
     _git_ok(repo, "add", "-A")
-    _git_ok(repo, "commit", "-m", "init ratings + gitattributes")
+    _git_ok(repo, "commit", "-m", "test: init ratings + gitattributes")
 
     # Branch A votes up on an entry.
     _git_ok(repo, "checkout", "-b", "vote-a")
     record_rating(ratings, "entry1", "up")
-    _git_ok(repo, "commit", "-am", "vote up")
+    _git_ok(repo, "commit", "-am", "test: vote up")
 
     # Branch B (from main) votes down on the same entry.
     _git_ok(repo, "checkout", "main")
     _git_ok(repo, "checkout", "-b", "vote-b")
     record_rating(ratings, "entry1", "down")
-    _git_ok(repo, "commit", "-am", "vote down")
+    _git_ok(repo, "commit", "-am", "test: vote down")
 
     _git_ok(repo, "checkout", "main")
     _git_ok(repo, "merge", "--no-edit", "vote-a")
@@ -123,7 +123,7 @@ def test_concurrent_tag_edit_and_append_union(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     _git_ok(repo, "add", "-A")
-    _git_ok(repo, "commit", "-m", "init knowledge + gitattributes")
+    _git_ok(repo, "commit", "-m", "test: init knowledge + gitattributes")
 
     # Branch A rewrites the heading in place (a `tag add`-style edit).
     _git_ok(repo, "checkout", "-b", "tag-edit")
@@ -132,7 +132,7 @@ def test_concurrent_tag_edit_and_append_union(tmp_path: Path) -> None:
         "## abcd1234 | 2026-01-01 | plan | tags: git",
     )
     knowledge.write_text(edited, encoding="utf-8")
-    _git_ok(repo, "commit", "-am", "tag add")
+    _git_ok(repo, "commit", "-am", "test: tag add")
 
     # Branch B (from main) appends a new entry.
     _git_ok(repo, "checkout", "main")
@@ -141,7 +141,7 @@ def test_concurrent_tag_edit_and_append_union(tmp_path: Path) -> None:
         knowledge.read_text() + "\n## ef567890 | 2026-01-02 | implementation\n\nnew\n\n---\n",
         encoding="utf-8",
     )
-    _git_ok(repo, "commit", "-am", "append entry")
+    _git_ok(repo, "commit", "-am", "test: append entry")
 
     _git_ok(repo, "checkout", "main")
     _git_ok(repo, "merge", "--no-edit", "tag-edit")
@@ -162,7 +162,7 @@ def test_two_branches_migrate_same_legacy_yaml_no_double_count(tmp_path: Path) -
     legacy = repo / "KNOWLEDGE.ratings.yml"
     legacy.write_text("entry1:\n  up: 5\n  down: 1\n", encoding="utf-8")
     _git_ok(repo, "add", "-A")
-    _git_ok(repo, "commit", "-m", "init legacy ratings + gitattributes")
+    _git_ok(repo, "commit", "-m", "test: init legacy ratings + gitattributes")
 
     ratings = repo / "KNOWLEDGE.ratings.jsonl"
 
@@ -170,14 +170,14 @@ def test_two_branches_migrate_same_legacy_yaml_no_double_count(tmp_path: Path) -
     _git_ok(repo, "checkout", "-b", "migrate-a")
     record_rating(ratings, "entry1", "up")
     _git_ok(repo, "add", "-A")
-    _git_ok(repo, "commit", "-m", "migrate + vote up")
+    _git_ok(repo, "commit", "-m", "test: migrate + vote up")
 
     # Branch B (from main): independently migrates the SAME legacy yml, then votes down.
     _git_ok(repo, "checkout", "main")
     _git_ok(repo, "checkout", "-b", "migrate-b")
     record_rating(ratings, "entry1", "down")
     _git_ok(repo, "add", "-A")
-    _git_ok(repo, "commit", "-m", "migrate + vote down")
+    _git_ok(repo, "commit", "-m", "test: migrate + vote down")
 
     _git_ok(repo, "checkout", "main")
     _git_ok(repo, "merge", "--no-edit", "migrate-a")

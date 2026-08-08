@@ -356,7 +356,7 @@ def _gate_knowledge_valid(config: ProjectConfig, worktree_root: Path) -> bool:
     """
     if not config.knowledge.enabled:
         return True
-    from wade.services.knowledge_service import (
+    from wade.utils.knowledge_file import (
         resolve_knowledge_path,
         validate_knowledge_file,
     )

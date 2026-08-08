@@ -262,6 +262,7 @@ escape hatch under a `done:` block in `.wade.yml` (all default on):
 | Sync | the branch is behind main — auto-syncs first, refuses only on conflict (implementation only) | `done.require_sync: false` |
 | Review ran | `wade review implementation` did not run for the current commit. **Implementation sessions bound this loop:** after `done.max_review_passes` (default 2) review→fix→re-review cycles, `done` completes anyway with a notice instead of looping forever | `--skip-review`, `done.require_review: false` (auto-off when `ai.review_implementation.enabled: false`) |
 | Resolved threads | unresolved PR review threads remain (review-comments only) | `done.require_resolved_threads: false` |
+| Knowledge valid | the knowledge file is structurally corrupt — duplicate entry IDs or unresolved conflict markers (e.g. from a `merge=union` merge) | *none — gated by `knowledge.enabled`; no `done.*` hatch* |
 
 A **pre-push git hook** (`done.pre_push_backstop`, default on) backs the gate up:
 a push of the session branch without a current `.wade/done@<sha>` marker is

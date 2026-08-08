@@ -31,13 +31,14 @@ from wade.services.knowledge_service import (
     read_ratings,
     record_rating,
     record_supersede,
+    refusal_for_throwaway_write,
     remove_tag_from_entry,
     resolve_canonical_knowledge_path,
     resolve_knowledge_path,
     resolve_ratings_path,
-    validate_knowledge_file,
     validate_tag,
 )
+from wade.utils.knowledge_file import validate_knowledge_file
 
 
 @pytest.fixture
@@ -1608,6 +1609,58 @@ class TestValidateKnowledgeFile:
         )
         problems = validate_knowledge_file(path)
         assert any("conflict markers" in p for p in problems)
+
+    def test_decorative_separator_is_not_a_false_positive(self, tmp_path: Path) -> None:
+        # A long run of `=` in an entry body is a decorative separator, NOT a git
+        # conflict marker (git writes markers as exactly seven chars). Validation must
+        # not flag it — a false positive would block an otherwise-valid PR at `done`.
+        path = tmp_path / "KNOWLEDGE.md"
+        path.write_text(
+            "# Project Knowledge\n\n"
+            "## abcd1234 | 2026-01-01 | plan\n\n"
+            "Section divider:\n====================\nmore body\n\n---\n",
+            encoding="utf-8",
+        )
+        assert validate_knowledge_file(path) == []
+
+
+class TestRefusalForThrowawayWrite:
+    """`refusal_for_throwaway_write` — the detached-session write policy (service layer)."""
+
+    def test_none_outside_git_repo(self, tmp_path: Path) -> None:
+        # A non-repo / git-unavailable path is not a throwaway session — allow the write.
+        with patch("wade.git.repo.get_git_dir", return_value=None):
+            assert refusal_for_throwaway_write(tmp_path, "wade knowledge add") is None
+
+    def test_none_when_head_attached(self, tmp_path: Path) -> None:
+        # A branch-backed worktree (or the main checkout) carries the edit — allow it.
+        with (
+            patch("wade.git.repo.get_git_dir", return_value=".git"),
+            patch("wade.git.repo.is_head_attached", return_value=True),
+        ):
+            assert refusal_for_throwaway_write(tmp_path, "wade knowledge add") is None
+
+    def test_refuses_detached_without_plan_hint(self, tmp_path: Path) -> None:
+        # A detached HEAD with no plan dir (task deps) refuses, and gives no plan hint.
+        with (
+            patch("wade.git.repo.get_git_dir", return_value=".git"),
+            patch("wade.git.repo.is_head_attached", return_value=False),
+        ):
+            refusal = refusal_for_throwaway_write(tmp_path, "wade knowledge add")
+        assert refusal is not None
+        assert refusal.command == "wade knowledge add"
+        assert refusal.plan_hint is False
+
+    def test_refuses_detached_with_plan_hint(self, tmp_path: Path) -> None:
+        # A detached HEAD with a plan dir (plan session) refuses AND flags the plan hint.
+        (tmp_path / ".wade" / "plans").mkdir(parents=True)
+        with (
+            patch("wade.git.repo.get_git_dir", return_value=".git"),
+            patch("wade.git.repo.is_head_attached", return_value=False),
+        ):
+            refusal = refusal_for_throwaway_write(tmp_path, "wade knowledge tag add")
+        assert refusal is not None
+        assert refusal.plan_hint is True
 
 
 class TestKnowledgeStatus:

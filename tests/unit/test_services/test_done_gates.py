@@ -482,3 +482,14 @@ class TestKnowledgeValidGate:
             encoding="utf-8",
         )
         assert _gate_knowledge_valid(self._config(tmp_path, enabled=True), tmp_path) is False
+
+    def test_refuses_unresolved_conflict_markers(self, tmp_path: Path) -> None:
+        # validate_knowledge_file rejects unresolved VCS conflict markers too (a non-union
+        # merge backstop) — protect that second structural-validation path from regression.
+        (tmp_path / "KNOWLEDGE.md").write_text(
+            "# Project Knowledge\n\n"
+            "## abcd1234 | 2026-01-01 | plan\n\n"
+            "<<<<<<< HEAD\none\n=======\ntwo\n>>>>>>> branch\n\n---\n",
+            encoding="utf-8",
+        )
+        assert _gate_knowledge_valid(self._config(tmp_path, enabled=True), tmp_path) is False

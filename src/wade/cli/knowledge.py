@@ -20,37 +20,23 @@ VALID_SESSION_TYPES = ("plan", "implementation")
 
 
 def _refuse_write_in_throwaway_session(project_root: Path, command: str) -> None:
-    """Refuse a knowledge *write* in a throwaway detached-HEAD session (plan / task deps).
+    """Render + exit when a knowledge *write* is refused in a throwaway detached session.
 
-    A ``wade plan`` or ``wade task deps`` worktree is created with a detached HEAD and
-    discarded at session end — it has no branch/PR to carry an ``add`` / ``tag`` edit,
-    which would otherwise be an unreviewed write to main. ``rate``, ``get``,
-    ``tag list``, and ``status`` stay allowed (a vote is bounded, append-only, and
-    carried forward).
-
-    The base message is **session-agnostic** so it is correct for both plan and
-    ``task deps``; the plan-file hint is appended only when a plan dir is detectable
-    (``<worktree>/.wade/plans``, which ``plan_service`` creates and ``deps`` does not),
-    so a ``task deps`` session never gets a false "put it in the plan file".
+    The git-state policy (is this a throwaway detached-HEAD plan / ``task deps`` worktree?
+    is a plan dir present?) lives in :func:`knowledge_service.refusal_for_throwaway_write`;
+    this CLI helper only renders the returned domain result and performs the Typer exit.
     """
-    from wade.git.repo import get_git_dir, is_head_attached
+    from wade.services.knowledge_service import refusal_for_throwaway_write
     from wade.ui.console import console
 
-    try:
-        # Only gate inside a real git repo: a detached HEAD is the throwaway signal,
-        # but `is_head_attached` is also False for a non-repo / git-unavailable path
-        # (tests, odd setups), which must NOT be treated as a throwaway session.
-        if get_git_dir(project_root) is None:
-            return
-        if is_head_attached(project_root):
-            return
-    except OSError:
-        return  # can't determine git state — don't block
+    refusal = refusal_for_throwaway_write(project_root, command)
+    if refusal is None:
+        return
     console.error(
         "This worktree is discarded at session end and has no PR to carry the edit, "
-        f"so `{command}` is unavailable here."
+        f"so `{refusal.command}` is unavailable here."
     )
-    if (project_root / ".wade" / "plans").is_dir():
+    if refusal.plan_hint:
         console.hint(
             "Record the learning in the plan file; the implementation session will capture it."
         )
@@ -280,7 +266,7 @@ def status() -> None:
             console.detail(line)
     if result.legacy_migration_pending:
         console.info(
-            "A legacy KNOWLEDGE.ratings.yml is pending migration to .ratings.jsonl "
+            "A legacy ratings YAML file is pending migration to .ratings.jsonl "
             "(converts on the next `wade knowledge rate`)."
         )
 

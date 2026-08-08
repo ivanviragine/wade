@@ -10,6 +10,7 @@ implementation to reason about.
 from __future__ import annotations
 
 import contextlib
+import errno
 import hashlib
 import os
 import sys
@@ -61,8 +62,18 @@ def file_lock(path: Path) -> Iterator[None]:
             # msvcrt locks a byte range; ensure the file has at least 1 byte.
             if os.fstat(fd).st_size == 0:
                 os.write(fd, b"\0")
-            os.lseek(fd, 0, os.SEEK_SET)
-            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+            # ``LK_LOCK`` retries only ~10 times (≈10s) before raising ``OSError`` with
+            # ``EDEADLOCK``; loop so ``file_lock`` truly *blocks* until acquisition,
+            # matching the POSIX ``flock`` contract. Only contention is retried — any
+            # other errno (bad fd, invalid arg) is re-raised immediately.
+            while True:
+                os.lseek(fd, 0, os.SEEK_SET)
+                try:
+                    msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+                    break
+                except OSError as exc:
+                    if exc.errno != errno.EDEADLOCK:
+                        raise
         yield
     finally:
         with contextlib.suppress(OSError):

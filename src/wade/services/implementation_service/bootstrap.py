@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import shutil
 import subprocess
+from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -504,23 +506,48 @@ def _effective_copy_files(config: ProjectConfig) -> list[str]:
     project's ``copy_to_worktree`` (pre-#358 config, before the migration strips
     them) are filtered out here so the copy can never resurrect the bug.
     """
-    from wade.services.knowledge_service import resolve_ratings_path
+    from wade.utils.knowledge_file import resolve_ratings_path
+    from wade.utils.paths import normalize_relative_path
 
     excluded: set[str] = set()
     if config.knowledge.enabled:
         kpath = config.knowledge.path
         if not kpath.startswith("/") and ".." not in kpath.split("/"):
-            excluded.add(kpath)
-            excluded.add(str(resolve_ratings_path(Path(kpath))))
+            # Normalize so a ``./``-prefixed (or otherwise differently-spelled) config
+            # path still matches its copy-hook entry — the same normalization the
+            # ``strip_knowledge_from_copy_to_worktree`` migration applies.
+            excluded.add(normalize_relative_path(kpath))
+            excluded.add(normalize_relative_path(str(resolve_ratings_path(Path(kpath)))))
             # Legacy counter-YAML sidecar (pre-#358) may still be listed.
-            excluded.add(str(Path(kpath).with_suffix(".ratings.yml")))
+            excluded.add(normalize_relative_path(str(Path(kpath).with_suffix(".ratings.yml"))))
 
     internal: list[str] = [".wade.yml"]
-    files: list[str] = [f for f in config.hooks.copy_to_worktree if f not in excluded]
+    files: list[str] = [
+        f for f in config.hooks.copy_to_worktree if normalize_relative_path(f) not in excluded
+    ]
     for f in internal:
         if f not in files:
             files.append(f)
     return files
+
+
+def _multiset_difference(lines: list[str], subtract: list[str]) -> list[str]:
+    """Return ``lines`` minus ``subtract`` as MULTISETS — order- and count-preserving.
+
+    Each element of ``subtract`` cancels at most one equal element of ``lines``: a line
+    appearing twice in ``lines`` and once in ``subtract`` yields one occurrence, not
+    zero. The append-only ratings log can legitimately repeat a serialized line, so a
+    plain set difference would silently drop a genuinely-new duplicate vote whose twin
+    is already committed.
+    """
+    remaining = Counter(subtract)
+    result: list[str] = []
+    for line in lines:
+        if remaining.get(line, 0) > 0:
+            remaining[line] -= 1
+        else:
+            result.append(line)
+    return result
 
 
 def _carry_forward_pending_votes(
@@ -540,8 +567,8 @@ def _carry_forward_pending_votes(
     concurrent bootstraps can't double-carry: the first carries + clears, the rest see
     a clean main.
     """
-    from wade.services.knowledge_service import resolve_knowledge_path, resolve_ratings_path
     from wade.utils.filelock import file_lock
+    from wade.utils.knowledge_file import resolve_knowledge_path, resolve_ratings_path
 
     try:
         main_ratings = resolve_ratings_path(resolve_knowledge_path(repo_root, config.knowledge))
@@ -563,10 +590,19 @@ def _carry_forward_pending_votes(
     with file_lock(main_ratings):
         if not main_ratings.is_file():
             return
-        working_lines = main_ratings.read_text(encoding="utf-8").splitlines()
+        # Snapshot main's exact bytes so the whole carry is recoverable: if any step of
+        # the worktree transfer fails AFTER we reset main below, we restore these bytes
+        # so the pending votes survive for a later bootstrap to retry — never lost.
+        original_main_bytes = main_ratings.read_bytes()
+        working_lines = [
+            ln for ln in main_ratings.read_text(encoding="utf-8").splitlines() if ln.strip()
+        ]
         committed_text = git_repo.show_file_at_head(repo_root, relpath)
-        committed = set(committed_text.splitlines()) if committed_text is not None else set()
-        pending = [ln for ln in working_lines if ln.strip() and ln not in committed]
+        committed = committed_text.splitlines() if committed_text is not None else []
+        # Multiset (not set) difference: the append-only log may legitimately repeat a
+        # serialized line, so subtracting the committed lines as a set would drop a
+        # genuinely-new duplicate vote whose identical twin already lives in HEAD.
+        pending = _multiset_difference(working_lines, committed)
         if not pending:
             return
 
@@ -580,17 +616,28 @@ def _carry_forward_pending_votes(
             logger.warning("implementation.ratings_carry_restore_failed", path=relpath)
             return
 
-        worktree_ratings = resolve_ratings_path(
-            resolve_knowledge_path(worktree_path, config.knowledge)
-        )
-        worktree_ratings.parent.mkdir(parents=True, exist_ok=True)
-        content = worktree_ratings.read_text(encoding="utf-8") if worktree_ratings.is_file() else ""
-        existing = set(content.splitlines())
-        to_add = [ln for ln in pending if ln not in existing]
-        if to_add:
-            prefix = "" if (content == "" or content.endswith("\n")) else "\n"
-            with worktree_ratings.open("a", encoding="utf-8") as fd:
-                fd.write(prefix + "".join(f"{ln}\n" for ln in to_add))
+        # main is now reset to HEAD (pending removed). Any failure persisting the
+        # worktree copy from here must roll main back to its snapshot so the votes are
+        # not lost from BOTH locations. The transfer is only "successful" once the
+        # worktree write completes.
+        try:
+            worktree_ratings = resolve_ratings_path(
+                resolve_knowledge_path(worktree_path, config.knowledge)
+            )
+            worktree_ratings.parent.mkdir(parents=True, exist_ok=True)
+            content = (
+                worktree_ratings.read_text(encoding="utf-8") if worktree_ratings.is_file() else ""
+            )
+            to_add = _multiset_difference(pending, content.splitlines())
+            if to_add:
+                prefix = "" if (content == "" or content.endswith("\n")) else "\n"
+                with worktree_ratings.open("a", encoding="utf-8") as fd:
+                    fd.write(prefix + "".join(f"{ln}\n" for ln in to_add))
+        except OSError:
+            with contextlib.suppress(OSError):
+                main_ratings.write_bytes(original_main_bytes)
+            logger.warning("implementation.ratings_carry_transfer_failed", path=relpath)
+            return
         logger.debug("implementation.ratings_votes_carried_forward", count=len(pending))
 
 

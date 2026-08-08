@@ -63,3 +63,27 @@ def test_replaces_stale_block_on_path_change(tmp_path: Path) -> None:
     assert content.count(KNOWLEDGE_ATTRIBUTES_MARKER_START) == 1
     assert "docs/LEARNINGS.md merge=union" in content
     assert "\nKNOWLEDGE.md merge=union" not in content
+
+
+def test_quotes_path_with_space(tmp_path: Path) -> None:
+    # A space in the path is C-quoted so git reads the whole path as one pattern token —
+    # an unquoted space would orphan `merge=union` onto a second token and break the rule.
+    ensure_knowledge_merge_attributes(tmp_path, _config("docs/Knowledge Notes.md"))
+    content = (tmp_path / ".gitattributes").read_text(encoding="utf-8")
+    assert '"docs/Knowledge Notes.md" merge=union' in content
+    assert '"docs/Knowledge Notes.ratings.jsonl" merge=union' in content
+
+
+def test_escapes_glob_metacharacters(tmp_path: Path) -> None:
+    # A glob metacharacter in the path is escaped so the pattern matches the literal
+    # filename rather than acting as a wildcard.
+    ensure_knowledge_merge_attributes(tmp_path, _config("docs/L*.md"))
+    content = (tmp_path / ".gitattributes").read_text(encoding="utf-8")
+    assert r"docs/L\*.md merge=union" in content
+
+
+def test_skips_block_for_root_escaping_path(tmp_path: Path) -> None:
+    # An absolute or root-escaping path is rejected by knowledge resolution — write no
+    # block rather than a bogus attributes line.
+    ensure_knowledge_merge_attributes(tmp_path, _config("../outside.md"))
+    assert not (tmp_path / ".gitattributes").exists()

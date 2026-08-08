@@ -39,7 +39,8 @@ Always use `wade task create` for interactive issue creation.
 {knowledge_step}
 
 **Planning session limits:** a plan worktree is discarded at session end and has
-no PR, so `wade knowledge add`, `tag add`, and `tag remove` are **not** available
+no PR, so `wade knowledge add`, `wade knowledge tag add`, and
+`wade knowledge tag remove` are **not** available
 here — record any new learning in the plan file so the implementation session can
 capture it. `wade knowledge rate` **is** available; your vote is carried forward
 into the next implementation session's PR (and thus reaches origin).

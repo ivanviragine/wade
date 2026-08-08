@@ -2338,7 +2338,7 @@ class TestCarryForwardPendingVotes:
             '{"dir": "up", "id": "e", "ts": "committed"}\n', encoding="utf-8"
         )
         self._git(main, "add", "-A")
-        self._git(main, "commit", "-m", "init")
+        self._git(main, "commit", "-m", "chore: init")
         return main
 
     def test_carries_pending_vote_and_cleans_main(self, tmp_path: Path) -> None:
@@ -2414,4 +2414,31 @@ class TestCarryForwardPendingVotes:
         # committed version), and it remains in main for a later bootstrap to retry.
         wt_text = (worktree / "KNOWLEDGE.ratings.jsonl").read_text(encoding="utf-8")
         assert pending_line not in wt_text
+        assert pending_line in ratings.read_text(encoding="utf-8")
+
+    def test_failed_worktree_transfer_rolls_back_main(self, tmp_path: Path) -> None:
+        # If persisting the votes into the worktree fails AFTER main is reset to HEAD,
+        # main must be rolled back to its snapshot so the pending votes survive for a
+        # later bootstrap — otherwise they'd be lost from BOTH locations.
+        from wade.models.config import KnowledgeConfig, ProjectConfig
+        from wade.services.implementation_service.bootstrap import _carry_forward_pending_votes
+
+        main = self._make_main_with_committed_ratings(tmp_path)
+        ratings = main / "KNOWLEDGE.ratings.jsonl"
+        pending_line = '{"dir": "down", "id": "e", "ts": "pending"}'
+        ratings.write_text(ratings.read_text() + pending_line + "\n", encoding="utf-8")
+
+        worktree = tmp_path / "wt"
+        self._git(main, "worktree", "add", "-b", "feat/1", str(worktree))
+        config = ProjectConfig(knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"))
+
+        # Force the worktree write to fail mid-transfer: replace the checked-out ratings
+        # file with a directory so the append raises OSError (IsADirectoryError).
+        wt_ratings = worktree / "KNOWLEDGE.ratings.jsonl"
+        wt_ratings.unlink()
+        wt_ratings.mkdir()
+
+        _carry_forward_pending_votes(worktree, main, config)
+
+        # main is rolled back to its snapshot — the pending vote survives for a retry.
         assert pending_line in ratings.read_text(encoding="utf-8")

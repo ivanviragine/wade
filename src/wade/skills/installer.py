@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -610,6 +611,31 @@ KNOWLEDGE_ATTRIBUTES_MARKER_START = "# wade:knowledge:start"
 KNOWLEDGE_ATTRIBUTES_MARKER_END = "# wade:knowledge:end"
 
 
+def _gitattributes_pattern(rel_path: Path) -> str:
+    """Render a repo-relative path as a *literal* ``.gitattributes`` pattern.
+
+    Escapes gitattributes glob metacharacters (``\\ * ? [``) so the path matches only
+    itself, then C-quotes the whole token when it contains whitespace, a double quote, a
+    control character, or a leading ``#``/``!`` — any of which would otherwise let git's
+    line parser mis-split the pattern from its attributes (a path with a space would read
+    only its first whitespace-delimited token as the pattern, orphaning ``merge=union``).
+    A plain path — the common case, e.g. ``KNOWLEDGE.md`` — is returned unchanged. git
+    C-unquotes a double-quoted pattern *before* glob-matching, so the two escapes compose.
+    """
+    posix = rel_path.as_posix()
+    escaped = re.sub(r"([\\*?\[])", r"\\\1", posix)
+    needs_quote = (
+        any(ch.isspace() or ord(ch) < 0x20 for ch in posix)
+        or '"' in posix
+        or posix.startswith(("#", "!"))
+    )
+    if not needs_quote:
+        return escaped
+    body = escaped.replace("\\", "\\\\").replace('"', '\\"')
+    body = body.replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
+    return f'"{body}"'
+
+
 def ensure_knowledge_merge_attributes(root: Path, config: ProjectConfig) -> None:
     """Ensure a wade-managed ``merge=union`` block for the knowledge files in ``.gitattributes``.
 
@@ -628,14 +654,27 @@ def ensure_knowledge_merge_attributes(root: Path, config: ProjectConfig) -> None
     Idempotent via the shared marker-block helpers. The write is skipped entirely
     when the on-disk content already matches, so a project that already has the block
     is never marked dirty. Paths derive from ``config.knowledge.path`` and its
-    ``.ratings.jsonl`` sibling.
+    ``.ratings.jsonl`` sibling, validated and escaped as literal gitattributes patterns.
     """
-    knowledge_path = config.knowledge.path
-    ratings_path = str(Path(knowledge_path).with_suffix(".ratings.jsonl"))
+    from wade.utils.knowledge_file import resolve_knowledge_path, resolve_ratings_path
+
+    # Resolve + validate the knowledge path the same way knowledge resolution does — an
+    # absolute or root-escaping path is rejected, and we write no block rather than a
+    # bogus attributes line. Both patterns are rendered relative to root and escaped so a
+    # path with a space or a glob metacharacter can't alter what ``merge=union`` matches.
+    try:
+        knowledge_abs = resolve_knowledge_path(root, config.knowledge)
+    except ValueError:
+        logger.debug("skills.knowledge_merge_attributes_invalid_path", path=str(root))
+        return
+    root_abs = root.resolve()
+    ratings_abs = resolve_ratings_path(knowledge_abs)
+    knowledge_pattern = _gitattributes_pattern(knowledge_abs.relative_to(root_abs))
+    ratings_pattern = _gitattributes_pattern(ratings_abs.relative_to(root_abs))
     block = (
         f"{KNOWLEDGE_ATTRIBUTES_MARKER_START}\n"
-        f"{knowledge_path} merge=union\n"
-        f"{ratings_path} merge=union\n"
+        f"{knowledge_pattern} merge=union\n"
+        f"{ratings_pattern} merge=union\n"
         f"{KNOWLEDGE_ATTRIBUTES_MARKER_END}\n"
     )
 
