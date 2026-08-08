@@ -87,24 +87,35 @@ class TestEffectiveCopyFiles:
         files = _effective_copy_files(config)
         assert files.count(".wade.yml") == 1
 
-    def test_includes_knowledge_path_when_enabled(self) -> None:
+    def test_excludes_knowledge_path_when_enabled(self) -> None:
+        # #358: knowledge file + ratings are NEVER copied (they are tracked; copying
+        # manufactures a stale snapshot). Only .wade.yml is internal.
         config = ProjectConfig(
             hooks=HooksConfig(copy_to_worktree=[".env"]),
             knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
         )
         files = _effective_copy_files(config)
-        assert "KNOWLEDGE.md" in files
-        assert "KNOWLEDGE.ratings.yml" in files
+        assert "KNOWLEDGE.md" not in files
+        assert "KNOWLEDGE.ratings.jsonl" not in files
+        assert "KNOWLEDGE.ratings.yml" not in files
         assert ".wade.yml" in files
+        assert ".env" in files
 
-    def test_nested_knowledge_path_preserves_nested_ratings_path(self) -> None:
+    def test_strips_lingering_knowledge_entries_from_copy_list(self) -> None:
+        # A pre-#358 config may still list the knowledge files; they must be filtered.
         config = ProjectConfig(
+            hooks=HooksConfig(
+                copy_to_worktree=[
+                    ".env",
+                    "docs/LEARNINGS.md",
+                    "docs/LEARNINGS.ratings.yml",
+                    "docs/LEARNINGS.ratings.jsonl",
+                ]
+            ),
             knowledge=KnowledgeConfig(enabled=True, path="docs/LEARNINGS.md"),
         )
         files = _effective_copy_files(config)
-        assert "docs/LEARNINGS.md" in files
-        assert "docs/LEARNINGS.ratings.yml" in files
-        assert "LEARNINGS.ratings.yml" not in files
+        assert files == [".env", ".wade.yml"]
 
     def test_excludes_knowledge_path_when_disabled(self) -> None:
         config = ProjectConfig(
@@ -127,6 +138,17 @@ class TestEffectiveCopyFiles:
         )
         files = _effective_copy_files(config)
         assert "../outside.md" not in files
+
+    def test_folds_contained_dotdot_in_knowledge_path(self) -> None:
+        # #358 review: a contained ``..`` (``docs/../KNOWLEDGE.md``) must canonicalize to
+        # ``KNOWLEDGE.md`` so a plainly-spelled copy entry is still excluded — otherwise the
+        # stale-snapshot copy this lifecycle removes could sneak back in.
+        config = ProjectConfig(
+            hooks=HooksConfig(copy_to_worktree=[".env", "KNOWLEDGE.md", "KNOWLEDGE.ratings.jsonl"]),
+            knowledge=KnowledgeConfig(enabled=True, path="docs/../KNOWLEDGE.md"),
+        )
+        files = _effective_copy_files(config)
+        assert files == [".env", ".wade.yml"]
 
     def test_empty_user_config(self) -> None:
         config = ProjectConfig()
@@ -162,14 +184,16 @@ class TestBootstrapWorktree:
         # Should not raise
         bootstrap_worktree(worktree, config, repo_root)
 
-    def test_copies_knowledge_ratings_sidecar_when_enabled(self, tmp_path: Path) -> None:
+    def test_does_not_copy_knowledge_or_ratings_when_enabled(self, tmp_path: Path) -> None:
+        # #358: the knowledge file + ratings are tracked, so the worktree checkout
+        # already has them — bootstrap must NOT copy main's copy over them.
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
         knowledge_dir = repo_root / "docs"
         knowledge_dir.mkdir()
         (knowledge_dir / "LEARNINGS.md").write_text("# Knowledge\n", encoding="utf-8")
-        (knowledge_dir / "LEARNINGS.ratings.yml").write_text(
-            "a1b2c3d4:\n  up: 1\n",
+        (knowledge_dir / "LEARNINGS.ratings.jsonl").write_text(
+            '{"dir": "up", "id": "a1b2c3d4", "ts": "t"}\n',
             encoding="utf-8",
         )
 
@@ -181,10 +205,9 @@ class TestBootstrapWorktree:
         )
         bootstrap_worktree(worktree, config, repo_root)
 
-        assert (worktree / "docs" / "LEARNINGS.md").read_text(encoding="utf-8") == "# Knowledge\n"
-        assert (worktree / "docs" / "LEARNINGS.ratings.yml").read_text(
-            encoding="utf-8"
-        ) == "a1b2c3d4:\n  up: 1\n"
+        # Neither the knowledge file nor its ratings sidecar are copied into the worktree.
+        assert not (worktree / "docs" / "LEARNINGS.md").exists()
+        assert not (worktree / "docs" / "LEARNINGS.ratings.jsonl").exists()
 
     def test_propagates_allowlist_when_configured(self, tmp_path: Path) -> None:
         """Allowlist is written to worktree using wade's default Bash(wade *) pattern.
@@ -2302,3 +2325,160 @@ class TestChainContinuation:
 
         assert result.exit_code == 1
         assert call_count == 1  # No continuation after failure
+
+
+class TestCarryForwardPendingVotes:
+    """Ratings-only carry-forward (#358): a throwaway `rate` on main is flushed
+    into the next attached worktree's log, and main is restored to clean."""
+
+    @staticmethod
+    def _git(cwd: Path, *args: str) -> None:
+        import subprocess
+
+        result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+
+    def _make_main_with_committed_ratings(self, tmp_path: Path) -> Path:
+        main = tmp_path / "main"
+        main.mkdir()
+        self._git(main, "init", "-b", "main")
+        self._git(main, "config", "user.email", "t@t.com")
+        self._git(main, "config", "user.name", "t")
+        (main / "KNOWLEDGE.md").write_text("# Project Knowledge\n\n", encoding="utf-8")
+        (main / "KNOWLEDGE.ratings.jsonl").write_text(
+            '{"dir": "up", "id": "e", "ts": "committed"}\n', encoding="utf-8"
+        )
+        self._git(main, "add", "-A")
+        self._git(main, "commit", "-m", "chore: init")
+        return main
+
+    def test_carries_pending_vote_and_cleans_main(self, tmp_path: Path) -> None:
+        from wade.models.config import KnowledgeConfig, ProjectConfig
+        from wade.services.implementation_service.bootstrap import _carry_forward_pending_votes
+
+        main = self._make_main_with_committed_ratings(tmp_path)
+        ratings = main / "KNOWLEDGE.ratings.jsonl"
+        # A throwaway `rate` appended one uncommitted vote line to main's working copy.
+        pending_line = '{"dir": "down", "id": "e", "ts": "pending"}'
+        ratings.write_text(ratings.read_text() + pending_line + "\n", encoding="utf-8")
+
+        worktree = tmp_path / "wt"
+        self._git(main, "worktree", "add", "-b", "feat/1", str(worktree))
+
+        config = ProjectConfig(knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"))
+        _carry_forward_pending_votes(worktree, main, config)
+
+        # Pending vote moved into the worktree's log (rides into that branch's PR).
+        assert pending_line in (worktree / "KNOWLEDGE.ratings.jsonl").read_text(encoding="utf-8")
+        # Main restored to its committed state — the pending line is gone.
+        assert pending_line not in ratings.read_text(encoding="utf-8")
+
+    def test_second_carry_is_a_noop(self, tmp_path: Path) -> None:
+        # Serialized by the lock: once the first carry clears main, later bootstraps
+        # see a clean main and do not double-carry.
+        from wade.models.config import KnowledgeConfig, ProjectConfig
+        from wade.services.implementation_service.bootstrap import _carry_forward_pending_votes
+
+        main = self._make_main_with_committed_ratings(tmp_path)
+        ratings = main / "KNOWLEDGE.ratings.jsonl"
+        pending_line = '{"dir": "down", "id": "e", "ts": "pending"}'
+        ratings.write_text(ratings.read_text() + pending_line + "\n", encoding="utf-8")
+
+        config = ProjectConfig(knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"))
+
+        wt1 = tmp_path / "wt1"
+        self._git(main, "worktree", "add", "-b", "feat/1", str(wt1))
+        _carry_forward_pending_votes(wt1, main, config)
+
+        wt2 = tmp_path / "wt2"
+        self._git(main, "worktree", "add", "-b", "feat/2", str(wt2))
+        _carry_forward_pending_votes(wt2, main, config)
+
+        # Only the first worktree got the vote; the second saw a clean main.
+        wt1_text = (wt1 / "KNOWLEDGE.ratings.jsonl").read_text(encoding="utf-8")
+        wt2_text = (wt2 / "KNOWLEDGE.ratings.jsonl").read_text(encoding="utf-8")
+        assert wt1_text.count(pending_line) == 1
+        assert wt2_text.count(pending_line) == 0
+
+    def test_failed_main_restore_carries_nothing(self, tmp_path: Path) -> None:
+        # If restoring main fails, the votes must NOT be carried into the worktree —
+        # otherwise they stay in main and get re-carried into a second worktree,
+        # double-counting. They remain in main for a later bootstrap to retry.
+        from unittest.mock import patch
+
+        from wade.models.config import KnowledgeConfig, ProjectConfig
+        from wade.services.implementation_service.bootstrap import _carry_forward_pending_votes
+
+        main = self._make_main_with_committed_ratings(tmp_path)
+        ratings = main / "KNOWLEDGE.ratings.jsonl"
+        pending_line = '{"dir": "down", "id": "e", "ts": "pending"}'
+        ratings.write_text(ratings.read_text() + pending_line + "\n", encoding="utf-8")
+
+        worktree = tmp_path / "wt"
+        self._git(main, "worktree", "add", "-b", "feat/1", str(worktree))
+        config = ProjectConfig(knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"))
+
+        with patch("wade.git.repo.checkout_paths", return_value=False):
+            _carry_forward_pending_votes(worktree, main, config)
+
+        # The pending vote was NOT carried into the worktree (its ratings stays the
+        # committed version), and it remains in main for a later bootstrap to retry.
+        wt_text = (worktree / "KNOWLEDGE.ratings.jsonl").read_text(encoding="utf-8")
+        assert pending_line not in wt_text
+        assert pending_line in ratings.read_text(encoding="utf-8")
+
+    def test_failed_worktree_transfer_rolls_back_main(self, tmp_path: Path) -> None:
+        # If persisting the votes into the worktree fails AFTER main is reset to HEAD,
+        # main must be rolled back to its snapshot so the pending votes survive for a
+        # later bootstrap — otherwise they'd be lost from BOTH locations.
+        from wade.models.config import KnowledgeConfig, ProjectConfig
+        from wade.services.implementation_service.bootstrap import _carry_forward_pending_votes
+
+        main = self._make_main_with_committed_ratings(tmp_path)
+        ratings = main / "KNOWLEDGE.ratings.jsonl"
+        pending_line = '{"dir": "down", "id": "e", "ts": "pending"}'
+        ratings.write_text(ratings.read_text() + pending_line + "\n", encoding="utf-8")
+
+        worktree = tmp_path / "wt"
+        self._git(main, "worktree", "add", "-b", "feat/1", str(worktree))
+        config = ProjectConfig(knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"))
+
+        # Force the worktree write to fail mid-transfer: replace the checked-out ratings
+        # file with a directory so the append raises OSError (IsADirectoryError).
+        wt_ratings = worktree / "KNOWLEDGE.ratings.jsonl"
+        wt_ratings.unlink()
+        wt_ratings.mkdir()
+
+        _carry_forward_pending_votes(worktree, main, config)
+
+        # main is rolled back to its snapshot — the pending vote survives for a retry.
+        assert pending_line in ratings.read_text(encoding="utf-8")
+
+    def test_carries_pending_vote_identical_to_a_committed_line(self, tmp_path: Path) -> None:
+        # Regression (#358 review): a genuinely-new vote whose serialized line is
+        # IDENTICAL to a line already committed in the worktree must still be carried.
+        # Deduping pending against the worktree's committed records dropped it here while
+        # the main restore removed it too — losing the vote from both places.
+        from wade.models.config import KnowledgeConfig, ProjectConfig
+        from wade.services.implementation_service.bootstrap import _carry_forward_pending_votes
+
+        main = self._make_main_with_committed_ratings(tmp_path)
+        ratings = main / "KNOWLEDGE.ratings.jsonl"
+        # A throwaway `rate` appended a vote whose serialized form equals the already
+        # committed line (same dir/id/ts) — a distinct event that just serializes alike.
+        committed_line = '{"dir": "up", "id": "e", "ts": "committed"}'
+        ratings.write_text(ratings.read_text() + committed_line + "\n", encoding="utf-8")
+
+        worktree = tmp_path / "wt"
+        self._git(main, "worktree", "add", "-b", "feat/1", str(worktree))
+        wt_ratings = worktree / "KNOWLEDGE.ratings.jsonl"
+        # The worktree checkout already carries the committed copy of that line.
+        assert wt_ratings.read_text(encoding="utf-8").count(committed_line) == 1
+
+        config = ProjectConfig(knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"))
+        _carry_forward_pending_votes(worktree, main, config)
+
+        # Both events survive checkout: the worktree's committed copy PLUS the carried one.
+        assert wt_ratings.read_text(encoding="utf-8").count(committed_line) == 2
+        # Main is restored to its single committed line (the pending duplicate removed).
+        assert ratings.read_text(encoding="utf-8").count(committed_line) == 1

@@ -13,6 +13,7 @@ from wade.models.review import ReviewComment, ReviewThread
 from wade.models.session import SyncResult
 from wade.services.implementation_service.done import (
     _behind_count,
+    _gate_knowledge_valid,
     _gate_pr_summary,
     _gate_resolved_threads,
     _gate_review_ran,
@@ -408,6 +409,7 @@ class TestRunCompletionGatesOrder:
             ),
             patch.object(done_mod, "_gate_review_ran", side_effect=_record("review_ran")),
             patch.object(done_mod, "_gate_sync", side_effect=_record("sync")),
+            patch.object(done_mod, "_gate_knowledge_valid", side_effect=_record("knowledge_valid")),
         ):
             assert (
                 _run_completion_gates(
@@ -425,8 +427,69 @@ class TestRunCompletionGatesOrder:
             )
         return calls
 
-    def test_implementation_runs_pr_summary_review_then_sync(self) -> None:
-        assert self._order("implementation") == ["pr_summary", "review_ran", "sync"]
+    def test_implementation_runs_pr_summary_review_sync_then_knowledge(self) -> None:
+        # Knowledge validation runs LAST — after sync merges the base branch (the
+        # local merge=union point where KNOWLEDGE.md could be corrupted).
+        assert self._order("implementation") == [
+            "pr_summary",
+            "review_ran",
+            "sync",
+            "knowledge_valid",
+        ]
 
-    def test_review_runs_threads_then_review_and_never_syncs(self) -> None:
-        assert self._order("review-pr-comments") == ["resolved_threads", "review_ran"]
+    def test_review_runs_threads_review_then_knowledge_and_never_syncs(self) -> None:
+        assert self._order("review-pr-comments") == [
+            "resolved_threads",
+            "review_ran",
+            "knowledge_valid",
+        ]
+
+
+class TestKnowledgeValidGate:
+    """`_gate_knowledge_valid` refuses a structurally corrupt knowledge file (#358)."""
+
+    def _config(self, tmp_path: Path, *, enabled: bool) -> ProjectConfig:
+        from wade.models.config import KnowledgeConfig
+
+        return ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=enabled, path="KNOWLEDGE.md"),
+        )
+
+    def test_noop_when_knowledge_disabled(self, tmp_path: Path) -> None:
+        # A corrupt file is ignored entirely when knowledge is off.
+        (tmp_path / "KNOWLEDGE.md").write_text(
+            "## dup | 2026-01-01 | plan\n\na\n\n---\n## dup | 2026-01-01 | plan\n\nb\n\n---\n",
+            encoding="utf-8",
+        )
+        assert _gate_knowledge_valid(self._config(tmp_path, enabled=False), tmp_path) is True
+
+    def test_passes_for_valid_file(self, tmp_path: Path) -> None:
+        (tmp_path / "KNOWLEDGE.md").write_text(
+            "# Project Knowledge\n\n## abcd1234 | 2026-01-01 | plan\n\nbody\n\n---\n",
+            encoding="utf-8",
+        )
+        assert _gate_knowledge_valid(self._config(tmp_path, enabled=True), tmp_path) is True
+
+    def test_passes_when_file_missing(self, tmp_path: Path) -> None:
+        assert _gate_knowledge_valid(self._config(tmp_path, enabled=True), tmp_path) is True
+
+    def test_refuses_duplicate_entry_id(self, tmp_path: Path) -> None:
+        (tmp_path / "KNOWLEDGE.md").write_text(
+            "# Project Knowledge\n\n"
+            "## abcd1234 | 2026-01-01 | plan\n\none\n\n---\n"
+            "## abcd1234 | 2026-01-01 | plan | tags: git\n\ntwo\n\n---\n",
+            encoding="utf-8",
+        )
+        assert _gate_knowledge_valid(self._config(tmp_path, enabled=True), tmp_path) is False
+
+    def test_refuses_unresolved_conflict_markers(self, tmp_path: Path) -> None:
+        # validate_knowledge_file rejects unresolved VCS conflict markers too (a non-union
+        # merge backstop) — protect that second structural-validation path from regression.
+        (tmp_path / "KNOWLEDGE.md").write_text(
+            "# Project Knowledge\n\n"
+            "## abcd1234 | 2026-01-01 | plan\n\n"
+            "<<<<<<< HEAD\none\n=======\ntwo\n>>>>>>> branch\n\n---\n",
+            encoding="utf-8",
+        )
+        assert _gate_knowledge_valid(self._config(tmp_path, enabled=True), tmp_path) is False

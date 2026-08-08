@@ -348,7 +348,12 @@ class TestInit:
 
         config = yaml.safe_load((tmp_git_repo / ".wade.yml").read_text())
         assert config["knowledge"] == {"enabled": True, "path": "docs/KNOWLEDGE.md"}
-        assert "docs/KNOWLEDGE.md" in config["hooks"]["copy_to_worktree"]
+        # #358: knowledge files are NOT added to copy_to_worktree — they are tracked,
+        # so a worktree gets the committed version; copying manufactures a stale snapshot.
+        copy_list = config["hooks"].get("copy_to_worktree", []) or []
+        assert "docs/KNOWLEDGE.md" not in copy_list
+        assert "docs/KNOWLEDGE.ratings.jsonl" not in copy_list
+        assert "docs/KNOWLEDGE.ratings.yml" not in copy_list
 
         knowledge_path = tmp_git_repo / "docs" / "KNOWLEDGE.md"
         assert knowledge_path.exists()
@@ -1725,23 +1730,24 @@ class TestPatchConfigHooks:
         assert config["version"] == 2
 
     @patch("wade.services.init_service.commands._prompt_knowledge_setup")
-    def test_init_knowledge_nested_path_adds_correct_ratings_to_copy(
+    def test_init_knowledge_nested_path_not_added_to_copy(
         self,
         mock_knowledge_setup: MagicMock,
         tmp_git_repo: Path,
     ) -> None:
-        """init() with nested knowledge path must add the full sidecar path.
+        """init() must NOT add the knowledge file or ratings sidecar to copy_to_worktree.
 
-        Regression guard: a .name-based stripping bug would produce
-        'LEARNINGS.ratings.yml' instead of 'docs/LEARNINGS.ratings.yml'.
+        #358: they are tracked, so a worktree checks out the committed version;
+        copying manufactures the stale snapshot this issue removes.
         """
         mock_knowledge_setup.return_value = {"enabled": True, "path": "docs/LEARNINGS.md"}
         init(project_root=tmp_git_repo, non_interactive=True)
 
         config = yaml.safe_load((tmp_git_repo / ".wade.yml").read_text())
-        copy_list = config["hooks"]["copy_to_worktree"]
-        assert "docs/LEARNINGS.ratings.yml" in copy_list
-        assert "LEARNINGS.ratings.yml" not in copy_list
+        copy_list = config["hooks"].get("copy_to_worktree", []) or []
+        assert "docs/LEARNINGS.md" not in copy_list
+        assert "docs/LEARNINGS.ratings.jsonl" not in copy_list
+        assert "docs/LEARNINGS.ratings.yml" not in copy_list
 
 
 # ---------------------------------------------------------------------------

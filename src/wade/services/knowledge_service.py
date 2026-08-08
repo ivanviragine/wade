@@ -2,20 +2,32 @@
 
 from __future__ import annotations
 
-import fcntl
+import json
 import math
 import re
 import statistics
 import uuid
-from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import structlog
 import yaml
 from pydantic import BaseModel
 
 from wade.models.config import KnowledgeConfig
+from wade.utils.filelock import file_lock
+
+# Pure knowledge-file helpers live in a leaf module (#358 review) so lower-level
+# callers (the ``done`` gate, worktree bootstrap) don't import this service. Re-exported
+# here (explicit ``as`` aliases) so ``knowledge_service``'s public surface is unchanged;
+# ``validate_knowledge_file`` is imported from the leaf module directly by its callers.
+from wade.utils.knowledge_file import ParsedEntry as ParsedEntry
+from wade.utils.knowledge_file import parse_entries as parse_entries
+from wade.utils.knowledge_file import resolve_knowledge_path as resolve_knowledge_path
+from wade.utils.knowledge_file import resolve_ratings_path as resolve_ratings_path
+
+logger = structlog.get_logger()
 
 KNOWLEDGE_TEMPLATE = """\
 # Project Knowledge
@@ -25,17 +37,6 @@ Read this at the start of every session. Add new entries via `wade knowledge add
 
 ---
 """
-
-# Regex to match entry headings: ## <id> | <date> | <rest> [+N/-M]
-# Also matches old-style headings without IDs: ## <date> | <rest>
-# ID can be 8-char hex (legacy), alphanumeric with hyphens and underscores, or absent.
-_ENTRY_HEADING_RE = re.compile(
-    r"^## (?:([a-zA-Z0-9_-]+) \| )?(\d{4}-\d{2}-\d{2}) \| (.+?)(?:\s+\[.*\])?\s*$"
-)
-
-# Fallback regex for hand-authored plain headings with no date or ID: ## Title
-# Title must start with alphanumeric to avoid matching `## ---` separators.
-_PLAIN_ENTRY_HEADING_RE = re.compile(r"^## ([A-Za-z0-9].*?)(?:\s+\[.*\])?\s*$")
 
 # Tag validation: lowercase kebab-case, max 30 chars
 _TAG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -47,17 +48,6 @@ class KnowledgeEntry(BaseModel, frozen=True):
 
     path: Path
     entry_id: str
-
-
-class ParsedEntry(BaseModel, frozen=True):
-    """A parsed knowledge entry from the knowledge file."""
-
-    entry_id: str | None
-    date: str | None
-    heading_rest: str
-    tags: list[str] = []
-    content: str
-    raw: str
 
 
 class AnnotatedKnowledgeResult(BaseModel, frozen=True):
@@ -76,9 +66,31 @@ class EntryRating(BaseModel):
     superseded_by: str | None = None
 
 
+class KnowledgeStatus(BaseModel, frozen=True):
+    """Uncommitted state of the knowledge files on the resolved root.
+
+    ``dirty_paths`` holds ``git status --porcelain`` lines **scoped to only the
+    knowledge and ratings paths** — never the whole checkout, so unrelated dirt is
+    not mislabeled "knowledge state". ``legacy_migration_pending`` is True when a
+    pre-#358 ``.ratings.yml`` is still on disk with no ``.ratings.jsonl`` yet (it
+    converts on the next ratings write).
+    """
+
+    root: Path
+    dirty_paths: list[str] = []
+    legacy_migration_pending: bool = False
+
+
 def _generate_entry_id() -> str:
-    """Generate a short entry ID (first 8 hex chars of uuid4)."""
-    return uuid.uuid4().hex[:8]
+    """Generate a short entry ID (first 12 hex chars of uuid4).
+
+    Widened from 8 to 12 hex chars (32→48 bits) for #358: knowledge files are now
+    worktree-local, so the ID-uniqueness read+append lock only guards writers
+    *within one worktree*; cross-worktree uniqueness rests on ``uuid4`` not
+    colliding. 48 bits keeps that collision probability negligible. Legacy 8-char
+    IDs keep working — ``_ENTRY_HEADING_RE`` matches variable-length IDs.
+    """
+    return uuid.uuid4().hex[:12]
 
 
 def validate_tag(tag: str) -> str | None:
@@ -90,40 +102,6 @@ def validate_tag(tag: str) -> str | None:
     if not _TAG_RE.match(tag):
         return f"Tag '{tag}' must be lowercase kebab-case (alphanumeric and hyphens)"
     return None
-
-
-def _parse_tags_from_heading_rest(heading_rest: str) -> list[str]:
-    """Extract tags from the heading_rest field.
-
-    heading_rest examples:
-      "plan" → []
-      "plan | tags: git, worktree" → ["git", "worktree"]
-      "plan | tags: git, worktree | Issue #7" → ["git", "worktree"]
-    """
-    parts = [p.strip() for p in heading_rest.split("|")]
-    for part in parts:
-        if part.startswith("tags:"):
-            raw_tags = part[5:].strip()
-            if not raw_tags:
-                return []
-            return [t.strip() for t in raw_tags.split(",") if t.strip()]
-    return []
-
-
-def resolve_knowledge_path(project_root: Path, config: KnowledgeConfig) -> Path:
-    """Resolve absolute path to the knowledge file from config.
-
-    Rejects absolute paths and paths that escape the project root via ``..``.
-    """
-    if Path(config.path).is_absolute():
-        raise ValueError(f"Invalid knowledge path {config.path!r}: must be inside project root")
-    root = project_root.resolve()
-    resolved = (root / config.path).resolve()
-    if not resolved.is_relative_to(root):
-        raise ValueError(
-            f"Invalid knowledge path {config.path!r}: must be inside project root {root}"
-        )
-    return resolved
 
 
 def _canonical_project_root(project_root: Path) -> Path:
@@ -145,17 +123,118 @@ def _canonical_project_root(project_root: Path) -> Path:
     return project_root
 
 
-def resolve_canonical_knowledge_path(project_root: Path, config: KnowledgeConfig) -> Path:
-    """Resolve knowledge path, redirecting to main worktree if in a linked worktree."""
-    return resolve_knowledge_path(_canonical_project_root(project_root), config)
+def _resolve_knowledge_root(project_root: Path) -> Path:
+    """Resolve where knowledge reads/writes land, keyed on the HEAD-attachment state.
 
+    Knowledge is worktree-local (#358): the file is tracked, so a branch-backed
+    worktree edits its *own* checkout and the change rides in the PR. Only a
+    **throwaway detached-HEAD worktree** (a ``wade plan`` or ``wade task deps``
+    session — both created via ``create_detached_worktree``) is redirected to the
+    main checkout, because such a worktree is deleted at session end and any write
+    there would be lost.
 
-def resolve_ratings_path(knowledge_path: Path) -> Path:
-    """Derive sidecar ratings file path from knowledge file path.
+    - ``is_head_attached(project_root)`` True (branch-backed worktree *or* the main
+      checkout) → return *project_root* unchanged: edit the file you stand in.
+    - detached HEAD (plan / task deps throwaway) → redirect to the main checkout.
 
-    ``KNOWLEDGE.md`` → ``KNOWLEDGE.ratings.yml``
+    Falls back to *project_root* if the git state can't be determined.
     """
-    return knowledge_path.with_suffix(".ratings.yml")
+    try:
+        from wade.git.repo import is_head_attached
+    except ImportError:
+        return project_root
+    try:
+        if is_head_attached(project_root):
+            return project_root
+    except OSError:
+        return project_root
+    return _canonical_project_root(project_root)
+
+
+def resolve_canonical_knowledge_path(project_root: Path, config: KnowledgeConfig) -> Path:
+    """Resolve the knowledge path for the current session's resolved root.
+
+    In a branch-backed worktree (or the main checkout) this is the local file; in a
+    throwaway detached-HEAD (plan / task deps) worktree it redirects to main. See
+    :func:`_resolve_knowledge_root`.
+    """
+    return resolve_knowledge_path(_resolve_knowledge_root(project_root), config)
+
+
+class ThrowawayWriteRefusal(BaseModel, frozen=True):
+    """Domain result: a knowledge *write* is refused in a throwaway detached-HEAD session.
+
+    A ``wade plan`` / ``wade task deps`` worktree is created with a detached HEAD and
+    discarded at session end — it has no branch/PR to carry an ``add`` / ``tag`` edit,
+    which would otherwise be an unreviewed write to main. ``plan_hint`` is True when a
+    plan dir (``<root>/.wade/plans``, which ``plan_service`` creates and ``deps`` does
+    not) is present, so the CLI can add the "record it in the plan file" hint only for a
+    plan session — never for a ``task deps`` session.
+    """
+
+    command: str
+    plan_hint: bool
+
+
+def refusal_for_throwaway_write(project_root: Path, command: str) -> ThrowawayWriteRefusal | None:
+    """Return a refusal when ``command`` is a knowledge write in a throwaway session, else None.
+
+    A knowledge *write* (``add`` / ``tag add`` / ``tag remove``) must ride to origin in a
+    PR; a throwaway detached-HEAD (plan / task deps) worktree has none, so the write is
+    refused. ``rate``, ``get``, ``tag list``, and ``status`` stay allowed (a vote is
+    bounded, append-only, and carried forward).
+
+    Only gates inside a real git repo with a detached HEAD: a non-repo / git-unavailable
+    path (tests, odd setups) has ``is_head_attached`` False too but must **not** be
+    treated as a throwaway session, so an unresolvable git state returns None (allow).
+    """
+    from wade.git.repo import get_git_dir, is_head_attached
+
+    try:
+        if get_git_dir(project_root) is None:
+            return None
+        if is_head_attached(project_root):
+            return None
+    except OSError:
+        return None  # can't determine git state — don't block
+    return ThrowawayWriteRefusal(
+        command=command,
+        plan_hint=(project_root / ".wade" / "plans").is_dir(),
+    )
+
+
+def _legacy_ratings_path(ratings_path: Path) -> Path:
+    """Derive the legacy counter-YAML path from the JSONL vote-log path.
+
+    ``KNOWLEDGE.ratings.jsonl`` → ``KNOWLEDGE.ratings.yml``. Used only to fold a
+    pre-#358 sidecar into the same scores on read (in memory) and to materialize it
+    to JSONL on the first ratings write.
+    """
+    return ratings_path.with_suffix(".yml")
+
+
+def knowledge_status(project_root: Path, config: KnowledgeConfig) -> KnowledgeStatus:
+    """Report uncommitted knowledge/ratings changes on the resolved root.
+
+    Resolves the root the same way reads/writes do (:func:`_resolve_knowledge_root`),
+    then scopes ``git status --porcelain`` to **only** the knowledge file and its
+    ratings siblings, so unrelated working-tree dirt is never reported as knowledge
+    state. Surfaces pending throwaway-session votes (in the main checkout) and any
+    legacy ``.ratings.yml`` still awaiting on-disk migration.
+    """
+    from wade.git import repo as git_repo
+
+    root = _resolve_knowledge_root(project_root)
+    knowledge_path = resolve_knowledge_path(root, config)
+    ratings_path = resolve_ratings_path(knowledge_path)
+    legacy_path = _legacy_ratings_path(ratings_path)
+    legacy_pending = legacy_path.is_file() and not ratings_path.exists()
+
+    dirty = git_repo.status_porcelain_paths(
+        root, str(knowledge_path), str(ratings_path), str(legacy_path)
+    )
+
+    return KnowledgeStatus(root=root, dirty_paths=dirty, legacy_migration_pending=legacy_pending)
 
 
 def ensure_knowledge_file(project_root: Path, config: KnowledgeConfig) -> Path:
@@ -186,62 +265,6 @@ def read_knowledge(project_root: Path, config: KnowledgeConfig) -> str | None:
     return path.read_text(encoding="utf-8")
 
 
-def parse_entries(text: str) -> list[ParsedEntry]:
-    """Parse knowledge file text into individual entries.
-
-    Handles entries with and without IDs. Skips the template header.
-    Also handles plain ## Title headings with no date or ID.
-    """
-    entries: list[ParsedEntry] = []
-    lines = text.split("\n")
-    i = 0
-    while i < len(lines):
-        match = _ENTRY_HEADING_RE.match(lines[i])
-        plain_match = _PLAIN_ENTRY_HEADING_RE.match(lines[i]) if not match else None
-
-        if match or plain_match:
-            if match:
-                entry_id: str | None = match.group(1)
-                date: str | None = match.group(2)
-                heading_rest = match.group(3)
-            else:
-                assert plain_match is not None
-                entry_id = None
-                date = None
-                heading_rest = plain_match.group(1)
-            heading_line = lines[i]
-
-            # Collect content lines until next heading or end
-            content_lines: list[str] = []
-            i += 1
-            while i < len(lines):
-                if _ENTRY_HEADING_RE.match(lines[i]) or _PLAIN_ENTRY_HEADING_RE.match(lines[i]):
-                    break
-                content_lines.append(lines[i])
-                i += 1
-
-            raw_block = heading_line + "\n" + "\n".join(content_lines)
-            # Strip trailing separator and whitespace from content
-            content_text = "\n".join(content_lines).strip()
-            if content_text.endswith("---"):
-                content_text = content_text[:-3].strip()
-
-            tags = _parse_tags_from_heading_rest(heading_rest)
-            entries.append(
-                ParsedEntry(
-                    entry_id=entry_id,
-                    date=date,
-                    heading_rest=heading_rest,
-                    tags=tags,
-                    content=content_text,
-                    raw=raw_block,
-                )
-            )
-        else:
-            i += 1
-    return entries
-
-
 def find_entry_id(knowledge_path: Path, entry_id: str) -> bool:
     """Check whether an entry ID exists in the knowledge file."""
     if not knowledge_path.is_file():
@@ -251,23 +274,15 @@ def find_entry_id(knowledge_path: Path, entry_id: str) -> bool:
     return any(e.entry_id == entry_id for e in entries)
 
 
-def read_ratings(ratings_path: Path) -> dict[str, EntryRating]:
-    """Load the sidecar ratings YAML file.
+def _read_legacy_yaml_ratings(legacy_path: Path) -> dict[str, EntryRating]:
+    """Fold a pre-#358 counter-YAML sidecar into ``dict[str, EntryRating]``.
 
-    Returns an empty dict if the file doesn't exist.
-    Acquires a shared read lock to prevent observing a partial write.
+    Pure read — never writes. Returns an empty dict on absent/empty/malformed
+    content so a legacy file can never crash a read.
     """
-    if not ratings_path.exists():
+    if not legacy_path.is_file():
         return {}
-    if ratings_path.is_dir():
-        raise ValueError(f"Ratings path {ratings_path!s} points to a directory, not a file")
-    fd = ratings_path.open("r", encoding="utf-8")
-    try:
-        fcntl.flock(fd, fcntl.LOCK_SH)
-        content = fd.read()
-    finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        fd.close()
+    content = legacy_path.read_text(encoding="utf-8")
     if not content.strip():
         return {}
     data: Any = yaml.safe_load(content)
@@ -276,41 +291,154 @@ def read_ratings(ratings_path: Path) -> dict[str, EntryRating]:
     return {k: EntryRating(**v) if isinstance(v, dict) else EntryRating() for k, v in data.items()}
 
 
-def _read_modify_write_ratings(
-    ratings_path: Path,
-    modify_fn: Callable[[dict[str, EntryRating]], None],
-) -> dict[str, EntryRating]:
-    """Read-modify-write the ratings file under an exclusive lock.
+def _fold_jsonl_ratings(ratings_path: Path) -> dict[str, EntryRating]:
+    """Reduce the append-only JSONL vote log into per-entry rating totals.
 
-    ``modify_fn`` receives the current ratings dict and mutates it in place.
+    Fold rule per record (skipping any malformed line defensively — a union merge
+    can concatenate imperfectly, and one bad line must never crash a read):
+
+    - ``dir`` (``up``/``down``/``stale``) → +1 to that counter.
+    - a seed record (``seed: true``) → add its integer ``up``/``down``/``stale``
+      fields **once per entry id**. Seeds are byte-deterministic and idempotent, so
+      a duplicate seed line (e.g. produced when two branches migrate the same
+      legacy ``.yml`` and union-merge) is folded exactly once — never double-counted.
+    - ``superseded_by`` → set the link (last-seen wins).
     """
-    ratings_path.parent.mkdir(parents=True, exist_ok=True)
-    if ratings_path.exists() and ratings_path.is_dir():
-        raise ValueError(f"Ratings path {ratings_path!s} points to a directory, not a file")
-    # Open for read+write, creating if needed
-    with ratings_path.open("a+", encoding="utf-8") as fd:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+    data: dict[str, EntryRating] = {}
+    seeded: set[str] = set()
+    for raw_line in ratings_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
         try:
-            fd.seek(0)
-            content = fd.read()
-            data: dict[str, EntryRating] = {}
-            if content.strip():
-                loaded: Any = yaml.safe_load(content)
-                if isinstance(loaded, dict):
-                    data = {
-                        k: EntryRating(**v) if isinstance(v, dict) else EntryRating()
-                        for k, v in loaded.items()
-                    }
-
-            modify_fn(data)
-
-            fd.seek(0)
-            fd.truncate()
-            raw = {k: v.model_dump(exclude_none=True) for k, v in data.items()}
-            yaml.safe_dump(raw, fd, default_flow_style=False, sort_keys=True)
-        finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            record: Any = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            logger.debug("knowledge.ratings_malformed_line", line=line)
+            continue
+        if not isinstance(record, dict):
+            continue
+        entry_id = record.get("id")
+        if not isinstance(entry_id, str):
+            continue
+        entry = data.setdefault(entry_id, EntryRating())
+        if record.get("seed") is True:
+            if entry_id in seeded:
+                continue  # idempotent — dedupe duplicate seed lines from union merges
+            seeded.add(entry_id)
+            for counter in ("up", "down", "stale"):
+                val = record.get(counter)
+                if isinstance(val, int) and not isinstance(val, bool):
+                    setattr(entry, counter, getattr(entry, counter) + val)
+            sb = record.get("superseded_by")
+            if isinstance(sb, str):
+                entry.superseded_by = sb
+            continue
+        direction = record.get("dir")
+        if direction in ("up", "down", "stale"):
+            setattr(entry, direction, getattr(entry, direction) + 1)
+        sb = record.get("superseded_by")
+        if isinstance(sb, str):
+            entry.superseded_by = sb
     return data
+
+
+def read_ratings(ratings_path: Path) -> dict[str, EntryRating]:
+    """Fold the append-only vote log into per-entry rating totals.
+
+    Reads are **pure** — they never write. Resolution order:
+
+    1. ``.ratings.jsonl`` present → fold every line (see :func:`_fold_jsonl_ratings`).
+    2. Only a legacy ``.ratings.yml`` present → fold its counters **in memory** and
+       return them without writing anything. The on-disk ``.yml``→``.jsonl``
+       conversion is a write-path concern (:func:`_materialize_migration_locked`),
+       so a ``get``/``status`` in the main checkout can never dirty main.
+    3. Neither present → empty dict.
+
+    Return type (``dict[str, EntryRating]``) is unchanged, so
+    ``compute_auto_filter_threshold`` and ``get_annotated_knowledge`` consume it as
+    before.
+    """
+    if ratings_path.is_dir():
+        raise ValueError(f"Ratings path {ratings_path!s} points to a directory, not a file")
+    if ratings_path.exists():
+        # .jsonl wins over a still-present legacy .yml, never folding both. The
+        # write-path migration git-rm's the .yml when it seeds the .jsonl, so a
+        # both-present state is only a transient/botched migration commit — and there
+        # the .jsonl is authoritative (it already carries the .yml's counts as a
+        # seed). Folding both would double-count that seed.
+        return _fold_jsonl_ratings(ratings_path)
+    return _read_legacy_yaml_ratings(_legacy_ratings_path(ratings_path))
+
+
+def _git_rm(path: Path) -> None:
+    """Stage the removal of *path* (``git rm``), falling back to a plain unlink.
+
+    Used when converting a legacy ``.ratings.yml`` to JSONL: staging the delete
+    (rather than renaming to ``.migrated``) makes two branches that migrate the
+    same diverged ``.yml`` merge cleanly — delete/delete plus a byte-identical
+    add/add ``.jsonl`` has no conflict, whereas a ``.migrated`` file would fall
+    outside the ``merge=union`` block. Best-effort: outside a git repo (tests) or
+    for an untracked file, just remove it from disk.
+    """
+    from wade.git import repo as git_repo
+
+    if git_repo.rm_file(path.parent, path.name):
+        return
+    path.unlink(missing_ok=True)
+
+
+def _materialize_migration_locked(ratings_path: Path) -> None:
+    """Convert a legacy ``.ratings.yml`` to a seeded ``.ratings.jsonl`` on first write.
+
+    Caller must hold ``file_lock(ratings_path)``. No-op when ``.jsonl`` already
+    exists or no legacy ``.yml`` is present. The seed block is **byte-deterministic**
+    — one record per entry, sorted by id, ``json.dumps(sort_keys=True)``, and
+    crucially **no ``ts``/wall-clock field** — so two branches migrating the same
+    legacy file independently emit identical bytes that union-merge as a no-op. The
+    legacy ``.yml`` is then ``git rm``'d so the conversion rides in the branch.
+    """
+    if ratings_path.exists():
+        return
+    legacy = _legacy_ratings_path(ratings_path)
+    if not legacy.is_file():
+        return
+    ratings = _read_legacy_yaml_ratings(legacy)
+    seed_lines = [
+        json.dumps(
+            {
+                "id": entry_id,
+                "seed": True,
+                "up": r.up,
+                "down": r.down,
+                "stale": r.stale,
+                "superseded_by": r.superseded_by,
+            },
+            sort_keys=True,
+        )
+        for entry_id, r in sorted(ratings.items())
+    ]
+    ratings_path.write_text(
+        "".join(f"{line}\n" for line in seed_lines),
+        encoding="utf-8",
+    )
+    _git_rm(legacy)
+
+
+def _append_ratings_record(ratings_path: Path, record: dict[str, Any]) -> None:
+    """Append one JSON record as a single line, migrating a legacy ``.yml`` first.
+
+    Wrapped in ``file_lock`` so the migration check + append is atomic against
+    concurrent writers in the same worktree. The append itself is a lone
+    ``O_APPEND`` line write — merging the log is pure concatenation, so no vote is
+    ever lost regardless of merge order or parallelism.
+    """
+    with file_lock(ratings_path):
+        if ratings_path.exists() and ratings_path.is_dir():
+            raise ValueError(f"Ratings path {ratings_path!s} points to a directory, not a file")
+        _materialize_migration_locked(ratings_path)
+        line = json.dumps(record, sort_keys=True)
+        with ratings_path.open("a", encoding="utf-8") as fd:
+            fd.write(f"{line}\n")
 
 
 def record_rating(
@@ -318,23 +446,20 @@ def record_rating(
     entry_id: str,
     direction: str,
 ) -> None:
-    """Increment the up, down, or stale counter for an entry in the sidecar file.
+    """Append an up/down/stale vote for an entry to the JSONL vote log.
 
-    ``direction`` must be ``"up"``, ``"down"``, or ``"stale"``.
+    ``direction`` must be ``"up"``, ``"down"``, or ``"stale"``. A ``ts`` is stamped
+    on the record — each vote is a distinct event (not a re-derivation), so votes
+    are always distinct lines and both survive a union merge.
     """
     if direction not in ("up", "down", "stale"):
         raise ValueError(f"Invalid direction {direction!r}: must be 'up', 'down', or 'stale'")
-
-    def _modify(data: dict[str, EntryRating]) -> None:
-        entry = data.setdefault(entry_id, EntryRating())
-        if direction == "up":
-            entry.up += 1
-        elif direction == "down":
-            entry.down += 1
-        else:
-            entry.stale += 1
-
-    _read_modify_write_ratings(ratings_path, _modify)
+    record: dict[str, Any] = {
+        "dir": direction,
+        "id": entry_id,
+        "ts": datetime.now(tz=UTC).isoformat(),
+    }
+    _append_ratings_record(ratings_path, record)
 
 
 def record_supersede(
@@ -342,13 +467,11 @@ def record_supersede(
     old_id: str,
     new_id: str,
 ) -> None:
-    """Record a supersedes link: old_id is superseded by new_id."""
-
-    def _modify(data: dict[str, EntryRating]) -> None:
-        entry = data.setdefault(old_id, EntryRating())
-        entry.superseded_by = new_id
-
-    _read_modify_write_ratings(ratings_path, _modify)
+    """Append a supersede link (``old_id`` is superseded by ``new_id``) to the log."""
+    _append_ratings_record(
+        ratings_path,
+        {"id": old_id, "superseded_by": new_id, "ts": datetime.now(tz=UTC).isoformat()},
+    )
 
 
 def compute_auto_filter_threshold(
@@ -415,7 +538,7 @@ def get_annotated_knowledge(
     """
     from wade.services.knowledge_search import evaluate_query, parse_query
 
-    project_root = _canonical_project_root(project_root)
+    project_root = _resolve_knowledge_root(project_root)
     path = resolve_knowledge_path(project_root, config)
     if not path.exists():
         return AnnotatedKnowledgeResult(content=None, entries_count=0)
@@ -491,9 +614,11 @@ def get_annotated_knowledge(
             if not matches_search and not matches_tag:
                 continue
 
-        # Re-build the heading with score annotation
-        heading_match = _ENTRY_HEADING_RE.match(entry.raw.split("\n")[0])
-        if heading_match and should_annotate:
+        # Re-build the heading with score annotation. ``should_annotate`` already
+        # implies the entry was parsed from a structured ``## <id> | <date> | …``
+        # heading (only that form yields an entry_id), so re-matching the raw line is
+        # redundant.
+        if should_annotate:
             id_part = f"{entry.entry_id} | " if entry.entry_id else ""
             assert entry.date is not None  # entry_id is always accompanied by a date
             stale_part = f"/stale:{stale}" if stale > 0 else ""
@@ -523,7 +648,7 @@ def append_knowledge(
 
     Returns a KnowledgeEntry with the path and generated entry ID.
     """
-    project_root = _canonical_project_root(project_root)
+    project_root = _resolve_knowledge_root(project_root)
     if tags:
         for tag in tags:
             err = validate_tag(tag)
@@ -532,22 +657,28 @@ def append_knowledge(
 
     path = ensure_knowledge_file(project_root, config)
 
-    existing_ids = {
-        parsed.entry_id
-        for parsed in parse_entries(path.read_text(encoding="utf-8"))
-        if parsed.entry_id is not None
-    }
-    entry_id = _generate_entry_id()
-    while entry_id in existing_ids:
+    # Lock the uniqueness read + append as one unit. With worktree-local files the
+    # lock only guards writers within this worktree; cross-worktree uniqueness
+    # rests on the widened 48-bit id (see ``_generate_entry_id``). Without the lock,
+    # two concurrent adds could each read the same existing-id set and generate
+    # colliding ids before either append lands.
+    with file_lock(path):
+        existing_ids = {
+            parsed.entry_id
+            for parsed in parse_entries(path.read_text(encoding="utf-8"))
+            if parsed.entry_id is not None
+        }
         entry_id = _generate_entry_id()
-    timestamp = datetime.now(tz=UTC).strftime("%Y-%m-%d")
-    tags_part = f" | tags: {', '.join(tags)}" if tags else ""
-    issue_part = f" | Issue #{issue_ref}" if issue_ref else ""
-    header = f"## {entry_id} | {timestamp} | {session_type}{tags_part}{issue_part}"
+        while entry_id in existing_ids:
+            entry_id = _generate_entry_id()
+        timestamp = datetime.now(tz=UTC).strftime("%Y-%m-%d")
+        tags_part = f" | tags: {', '.join(tags)}" if tags else ""
+        issue_part = f" | Issue #{issue_ref}" if issue_ref else ""
+        header = f"## {entry_id} | {timestamp} | {session_type}{tags_part}{issue_part}"
 
-    entry = f"\n{header}\n\n{content.strip()}\n\n---\n"
-    with path.open("a", encoding="utf-8") as f:
-        f.write(entry)
+        entry = f"\n{header}\n\n{content.strip()}\n\n---\n"
+        with path.open("a", encoding="utf-8") as f:
+            f.write(entry)
 
     return KnowledgeEntry(path=path, entry_id=entry_id)
 
@@ -595,41 +726,31 @@ def add_tag_to_entry(
     if err:
         raise ValueError(err)
 
-    with knowledge_path.open("r+", encoding="utf-8") as fd:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        try:
-            content = fd.read()
-            entries = parse_entries(content)
-            target = next((e for e in entries if e.entry_id == entry_id), None)
-            if target is None:
-                raise ValueError(f"Entry ID '{entry_id}' not found")
+    with file_lock(knowledge_path):
+        content = knowledge_path.read_text(encoding="utf-8")
+        entries = parse_entries(content)
+        target = next((e for e in entries if e.entry_id == entry_id), None)
+        if target is None:
+            raise ValueError(f"Entry ID '{entry_id}' not found")
 
-            if tag in target.tags:
-                return  # Already has the tag
+        if tag in target.tags:
+            return  # Already has the tag
 
-            assert target.date is not None  # entries with entry_id always have a date
-            session_type, tags, issue_part = _decompose_heading_rest(target.heading_rest)
-            tags.append(tag)
-            new_heading = _rebuild_heading_line(
-                entry_id, target.date, session_type, tags, issue_part
+        assert target.date is not None  # entries with entry_id always have a date
+        session_type, tags, issue_part = _decompose_heading_rest(target.heading_rest)
+        tags.append(tag)
+        new_heading = _rebuild_heading_line(entry_id, target.date, session_type, tags, issue_part)
+
+        old_heading_line = target.raw.split("\n")[0]
+        entry_start = content.find(target.raw)
+        if entry_start != -1:
+            content = (
+                content[:entry_start] + new_heading + content[entry_start + len(old_heading_line) :]
             )
+        else:
+            content = content.replace(old_heading_line, new_heading, 1)
 
-            old_heading_line = target.raw.split("\n")[0]
-            entry_start = content.find(target.raw)
-            if entry_start != -1:
-                content = (
-                    content[:entry_start]
-                    + new_heading
-                    + content[entry_start + len(old_heading_line) :]
-                )
-            else:
-                content = content.replace(old_heading_line, new_heading, 1)
-
-            fd.seek(0)
-            fd.truncate()
-            fd.write(content)
-        finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+        knowledge_path.write_text(content, encoding="utf-8")
 
 
 def remove_tag_from_entry(
@@ -638,41 +759,31 @@ def remove_tag_from_entry(
     tag: str,
 ) -> None:
     """Remove a tag from an existing entry's heading (in-place file edit with locking)."""
-    with knowledge_path.open("r+", encoding="utf-8") as fd:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        try:
-            content = fd.read()
-            entries = parse_entries(content)
-            target = next((e for e in entries if e.entry_id == entry_id), None)
-            if target is None:
-                raise ValueError(f"Entry ID '{entry_id}' not found")
+    with file_lock(knowledge_path):
+        content = knowledge_path.read_text(encoding="utf-8")
+        entries = parse_entries(content)
+        target = next((e for e in entries if e.entry_id == entry_id), None)
+        if target is None:
+            raise ValueError(f"Entry ID '{entry_id}' not found")
 
-            if tag not in target.tags:
-                raise ValueError(f"Tag '{tag}' not found on entry {entry_id}")
+        if tag not in target.tags:
+            raise ValueError(f"Tag '{tag}' not found on entry {entry_id}")
 
-            assert target.date is not None  # entries with entry_id always have a date
-            session_type, tags, issue_part = _decompose_heading_rest(target.heading_rest)
-            tags.remove(tag)
-            new_heading = _rebuild_heading_line(
-                entry_id, target.date, session_type, tags, issue_part
+        assert target.date is not None  # entries with entry_id always have a date
+        session_type, tags, issue_part = _decompose_heading_rest(target.heading_rest)
+        tags.remove(tag)
+        new_heading = _rebuild_heading_line(entry_id, target.date, session_type, tags, issue_part)
+
+        old_heading_line = target.raw.split("\n")[0]
+        entry_start = content.find(target.raw)
+        if entry_start != -1:
+            content = (
+                content[:entry_start] + new_heading + content[entry_start + len(old_heading_line) :]
             )
+        else:
+            content = content.replace(old_heading_line, new_heading, 1)
 
-            old_heading_line = target.raw.split("\n")[0]
-            entry_start = content.find(target.raw)
-            if entry_start != -1:
-                content = (
-                    content[:entry_start]
-                    + new_heading
-                    + content[entry_start + len(old_heading_line) :]
-                )
-            else:
-                content = content.replace(old_heading_line, new_heading, 1)
-
-            fd.seek(0)
-            fd.truncate()
-            fd.write(content)
-        finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+        knowledge_path.write_text(content, encoding="utf-8")
 
 
 def list_tags(

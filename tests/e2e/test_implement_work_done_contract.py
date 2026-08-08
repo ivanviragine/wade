@@ -142,19 +142,25 @@ class TestImplementTaskCommand:
         assert hook_marker.is_file()
         assert hook_marker.read_text(encoding="utf-8").strip() == "hook-ran"
 
-    def test_implement_task_cd_copies_knowledge_files_and_ratings_sidecar(
+    def test_implement_task_cd_does_not_copy_knowledge_files(
         self,
         e2e_repo: Path,
         mock_gh_cli: MockGhCli,
     ) -> None:
-        """implement --cd should bootstrap managed knowledge files into the worktree."""
+        """implement --cd must NOT copy the knowledge file or ratings sidecar (#358).
+
+        They are tracked files — a new worktree gets the committed version from its
+        checkout. Copying main's (possibly dirty) copy over it is exactly the stale
+        snapshot #358 removes, so an *uncommitted* knowledge file must not appear in
+        the worktree.
+        """
         issue_number = 46
-        issue_title = "Copy knowledge files into worktree"
+        issue_title = "Knowledge files not copied into worktree"
         _seed_mock_issue(
             mock_gh_cli["state_file"],
             issue_number=issue_number,
             title=issue_title,
-            body="## Tasks\n- Verify managed knowledge file bootstrap\n",
+            body="## Tasks\n- Verify managed knowledge file is not copied\n",
         )
 
         config_path = e2e_repo / ".wade.yml"
@@ -173,12 +179,12 @@ class TestImplementTaskCommand:
             "# Project Knowledge\n\n---\n\n## a1b2c3d4 | 2026-03-24 | plan\n\n"
             "Prefer labels.\n\n---\n"
         )
-        ratings_text = "a1b2c3d4:\n  up: 1\n"
+        # Written but NOT committed — with copying removed, an uncommitted knowledge
+        # file does not reach the worktree.
         (knowledge_dir / "LEARNINGS.md").write_text(knowledge_text, encoding="utf-8")
-        (knowledge_dir / "LEARNINGS.ratings.yml").write_text(ratings_text, encoding="utf-8")
 
         _init_origin_remote(e2e_repo)
-        branch_name = "feat/46-copy-knowledge-files-into-worktree"
+        branch_name = "feat/46-knowledge-files-not-copied-into-worktree"
         expected_worktree = (
             e2e_repo.parent / ".worktrees" / e2e_repo.name / branch_name.replace("/", "-")
         )
@@ -187,15 +193,11 @@ class TestImplementTaskCommand:
         assert result.returncode == 0
         assert Path(result.stdout.strip()) == expected_worktree
 
+        # .wade.yml is still copied (internal), but the knowledge file is not.
         copied_config = (expected_worktree / ".wade.yml").read_text(encoding="utf-8")
         assert "knowledge:" in copied_config
         assert "path: docs/LEARNINGS.md" in copied_config
-        assert (expected_worktree / "docs" / "LEARNINGS.md").read_text(
-            encoding="utf-8"
-        ) == knowledge_text
-        assert (expected_worktree / "docs" / "LEARNINGS.ratings.yml").read_text(
-            encoding="utf-8"
-        ) == ratings_text
+        assert not (expected_worktree / "docs" / "LEARNINGS.md").exists()
 
 
 class TestWorkDoneCommand:
