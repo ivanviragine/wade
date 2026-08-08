@@ -90,6 +90,32 @@ def resolve_ratings_path(knowledge_path: Path) -> Path:
     return knowledge_path.with_suffix(".ratings.jsonl")
 
 
+def knowledge_copy_exclusions(kpath: str) -> set[str]:
+    """Canonical ``copy_to_worktree`` entries that name the knowledge file/ratings sidecars.
+
+    The knowledge file plus its ``.ratings.jsonl`` and legacy ``.ratings.yml`` siblings
+    must never be copied into a worktree (#358): they are tracked, so a copy manufactures
+    the stale snapshot the lifecycle removes. Each is canonicalized (folding ``.``/``..``)
+    for equality comparison against ``copy_to_worktree`` entries; an absolute or escaping
+    ``kpath`` yields an empty set (rejected elsewhere). This is the **single** derivation
+    shared by bootstrap's copy-exclusion (``_effective_copy_files``) and the
+    ``strip_knowledge_from_copy_to_worktree`` migration, so the two sites cannot drift.
+    """
+    from wade.utils.paths import collapse_relative_path
+
+    kfile = Path(kpath)
+    exclusions: set[str] = set()
+    for candidate in (
+        kpath,
+        str(resolve_ratings_path(kfile)),
+        str(kfile.with_suffix(".ratings.yml")),
+    ):
+        canonical = collapse_relative_path(candidate)
+        if canonical is not None:
+            exclusions.add(canonical)
+    return exclusions
+
+
 def parse_entries(text: str) -> list[ParsedEntry]:
     """Parse knowledge file text into individual entries.
 

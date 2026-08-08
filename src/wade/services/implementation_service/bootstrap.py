@@ -506,24 +506,20 @@ def _effective_copy_files(config: ProjectConfig) -> list[str]:
     project's ``copy_to_worktree`` (pre-#358 config, before the migration strips
     them) are filtered out here so the copy can never resurrect the bug.
     """
-    from wade.utils.knowledge_file import resolve_ratings_path
-    from wade.utils.paths import normalize_relative_path
+    from wade.utils.knowledge_file import knowledge_copy_exclusions
+    from wade.utils.paths import collapse_relative_path
 
+    # Canonicalized (``.``/``..``-folded) set of knowledge/ratings paths that must never
+    # be copied — the same single derivation the ``strip_knowledge_from_copy_to_worktree``
+    # migration uses, so a redundant-``..`` spelling can't bypass one site and re-copy
+    # main's knowledge file.
     excluded: set[str] = set()
     if config.knowledge.enabled:
-        kpath = config.knowledge.path
-        if not kpath.startswith("/") and ".." not in kpath.split("/"):
-            # Normalize so a ``./``-prefixed (or otherwise differently-spelled) config
-            # path still matches its copy-hook entry — the same normalization the
-            # ``strip_knowledge_from_copy_to_worktree`` migration applies.
-            excluded.add(normalize_relative_path(kpath))
-            excluded.add(normalize_relative_path(str(resolve_ratings_path(Path(kpath)))))
-            # Legacy counter-YAML sidecar (pre-#358) may still be listed.
-            excluded.add(normalize_relative_path(str(Path(kpath).with_suffix(".ratings.yml"))))
+        excluded = knowledge_copy_exclusions(config.knowledge.path)
 
     internal: list[str] = [".wade.yml"]
     files: list[str] = [
-        f for f in config.hooks.copy_to_worktree if normalize_relative_path(f) not in excluded
+        f for f in config.hooks.copy_to_worktree if collapse_relative_path(f) not in excluded
     ]
     for f in internal:
         if f not in files:
@@ -628,11 +624,18 @@ def _carry_forward_pending_votes(
             content = (
                 worktree_ratings.read_text(encoding="utf-8") if worktree_ratings.is_file() else ""
             )
-            to_add = _multiset_difference(pending, content.splitlines())
-            if to_add:
-                prefix = "" if (content == "" or content.endswith("\n")) else "\n"
-                with worktree_ratings.open("a", encoding="utf-8") as fd:
-                    fd.write(prefix + "".join(f"{ln}\n" for ln in to_add))
+            # Append EVERY pending vote — do NOT dedupe against the worktree's committed
+            # records. ``pending`` is already exactly main's uncommitted votes (working
+            # minus main's HEAD), and a rating event can serialize IDENTICALLY to a line
+            # the worktree already committed while still being a genuinely-distinct event.
+            # Subtracting the worktree's copy here would drop that vote, yet the main
+            # restore above already removed it — losing it from both places. Transferring
+            # the same physical line twice is impossible regardless: main is reset to HEAD
+            # (pending removed) BEFORE this append, and a failed append rolls main back, so
+            # each pending line rides across at most once.
+            prefix = "" if (content == "" or content.endswith("\n")) else "\n"
+            with worktree_ratings.open("a", encoding="utf-8") as fd:
+                fd.write(prefix + "".join(f"{ln}\n" for ln in pending))
         except OSError:
             with contextlib.suppress(OSError):
                 main_ratings.write_bytes(original_main_bytes)

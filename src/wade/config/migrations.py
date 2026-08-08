@@ -13,7 +13,8 @@ import structlog
 import yaml
 
 from wade.config.loader import ConfigError, ensure_yaml_mapping
-from wade.utils.paths import normalize_relative_path
+from wade.utils.knowledge_file import knowledge_copy_exclusions
+from wade.utils.paths import collapse_relative_path
 
 logger = structlog.get_logger()
 
@@ -81,21 +82,17 @@ def strip_knowledge_from_copy_to_worktree(raw: dict[str, Any]) -> bool:
         configured = knowledge.get("path")
         if isinstance(configured, str) and configured:
             kpath = configured
-    kfile = Path(kpath)
-    # Normalize both the configured targets and the copy-hook entries before comparing
-    # so equivalent spellings (``./KNOWLEDGE.md`` vs ``KNOWLEDGE.md``) match — otherwise a
-    # ``./``-prefixed config path would slip the filter and bootstrap could re-copy main's
-    # dirty knowledge file. The same normalization runs in bootstrap's ``_effective_copy_files``.
-    targets = {
-        normalize_relative_path(kpath),
-        normalize_relative_path(str(kfile.with_suffix(".ratings.yml"))),
-        normalize_relative_path(str(kfile.with_suffix(".ratings.jsonl"))),
-    }
+    # Canonicalize both the configured targets and the copy-hook entries before comparing
+    # so equivalent spellings (``./KNOWLEDGE.md``, ``docs/../KNOWLEDGE.md`` vs ``KNOWLEDGE.md``)
+    # match — otherwise a ``./``- or ``..``-spelled config path would slip the filter and
+    # bootstrap could re-copy main's dirty knowledge file. ``knowledge_copy_exclusions`` is the
+    # single derivation bootstrap's ``_effective_copy_files`` shares, so the two sites can't drift.
+    targets = knowledge_copy_exclusions(kpath)
 
     filtered = [
         item
         for item in copy_list
-        if not isinstance(item, str) or normalize_relative_path(item) not in targets
+        if not isinstance(item, str) or collapse_relative_path(item) not in targets
     ]
     if len(filtered) == len(copy_list):
         return False

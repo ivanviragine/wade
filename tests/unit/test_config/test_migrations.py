@@ -213,6 +213,17 @@ class TestStripKnowledgeFromCopyToWorktree:
         assert strip_knowledge_from_copy_to_worktree(raw) is True
         assert raw["hooks"]["copy_to_worktree"] == []
 
+    def test_strips_when_config_path_has_contained_dotdot(self) -> None:
+        # #358 review: a contained ``..`` in the config path must canonicalize so the
+        # plainly-spelled copy entries are still stripped — the same policy bootstrap's
+        # copy-exclusion applies, so a redundant-``..`` spelling can't bypass either site.
+        raw: dict = {
+            "knowledge": {"enabled": True, "path": "docs/../KNOWLEDGE.md"},
+            "hooks": {"copy_to_worktree": ["KNOWLEDGE.md", "KNOWLEDGE.ratings.jsonl", ".env"]},
+        }
+        assert strip_knowledge_from_copy_to_worktree(raw) is True
+        assert raw["hooks"]["copy_to_worktree"] == [".env"]
+
     def test_noop_when_nothing_to_strip(self) -> None:
         raw: dict = {"hooks": {"copy_to_worktree": [".env", ".secrets"]}}
         assert strip_knowledge_from_copy_to_worktree(raw) is False
