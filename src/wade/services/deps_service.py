@@ -529,7 +529,10 @@ def analyze_deps(
 
     if delegation_mode == DelegationMode.PROMPT:
         if output:
-            console.out.print(output)
+            # AI-generated analysis is untrusted free-form text that can quote
+            # bracketed markup (e.g. `[/]`); print literally with markup
+            # disabled so Rich doesn't raise MarkupError on it (#394).
+            console.out.print(output, markup=False)
             return DependencyGraph()
         console.error("Could not generate dependency analysis prompt.")
         return None

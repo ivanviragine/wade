@@ -399,3 +399,9 @@ is_head_attached(path) returns False for BOTH a detached HEAD and a non-git-repo
 Under git merge=union, an IDENTICAL add/add of a file (same blob on both branches) resolves cleanly to ONE copy (git dedups identical blobs, no conflict), but a DIVERGENT add/add concatenates both sides' full content. So #358's .ratings.yml->.jsonl migration seed is byte-deterministic (json.dumps sort_keys, no ts) AND read_ratings folds seeds idempotently per entry-id (knowledge_service._fold_jsonl_ratings tracks a 'seeded' set) — belt-and-suspenders, because if two branches also add distinct vote lines the seed block is no longer an identical add/add and union would otherwise double-count it.
 
 ---
+
+## 66c7e8b329cc | 2026-08-08 | implementation | tags: console, error-handling, rich | Issue #394
+
+Never print untrusted AI/delegation output through Rich with markup enabled: `console.out.print(text)` and `console.error(text)` (which wraps its message in `[error]…[/]`) both parse bracketed tokens like `[/]` as markup and raise `MarkupError: closing tag has nothing to close` on quoted source code — crashing *after* the work succeeded. Print such text with `markup=False`, or `rich.markup.escape()` it when it must flow through a method that adds its own markup (`console.error`). Latent twin: `Console.plain()` (src/wade/ui/console.py) sets `highlight=False` but leaves `markup=True`, so it shares the same crash (candidate follow-up); fixed sites are `review_delegation_service.py` success+error branches and `deps_service.py` PROMPT passthrough.
+
+---
