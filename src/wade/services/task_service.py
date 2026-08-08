@@ -19,6 +19,11 @@ from wade.models.task import Complexity, Label, LabelType, PlanFile, Task, TaskS
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.ui.console import console
+from wade.utils.conventional import (
+    ConventionalTitleError,
+    conventional_title_error,
+    is_conventional_title,
+)
 from wade.utils.markdown import remove_marker_block
 from wade.utils.token_usage_markdown import build_token_usage_block
 
@@ -397,7 +402,18 @@ def create_task(
 
     The project issue label is always applied.  ``extra_labels`` are applied
     in addition to it.
+
+    Raises:
+        ConventionalTitleError: If ``title`` is not a conventional-commit title.
+            The PR title is derived from the issue title verbatim, so a
+            non-conventional issue title would fail the ``PR Title Lint`` CI
+            check — enforcement lives here (in code), not in agent guidance.
+            Callers that surface this to the user must catch it and print a
+            clean message (see ``cli/task.py``, ``done()``, ``_resolve_task_target``).
     """
+    if not is_conventional_title(title):
+        raise ConventionalTitleError(title)
+
     config = config or load_config()
     provider = provider or get_provider(config)
 
@@ -434,6 +450,17 @@ def create_interactive(
     if not title:
         console.error("Title is required")
         return None
+    # The PR title is derived from this issue title verbatim, so it must be a
+    # conventional-commit title (or PR Title Lint fails in CI). Re-prompt rather
+    # than raise so an interactive user can correct it in place. In a non-TTY the
+    # prompt returns "" (its default), so this breaks with "Title is required"
+    # instead of looping.
+    while not is_conventional_title(title):
+        console.error(conventional_title_error(title))
+        title = prompts.input_prompt("Task title (conventional-commit format, e.g. 'feat: ...')")
+        if not title:
+            console.error("Title is required")
+            return None
 
     console.hint("Enter task body (press Enter then Ctrl+D when done, or leave empty):")
     body_lines: list[str] = []

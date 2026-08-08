@@ -176,6 +176,13 @@ see @.claude/skills/implementation-session/SKILL.md.
 - **Never create issues without user confirmation** (Step 3 is mandatory).
 - **Always use `wade task create`** — never construct `gh issue create` commands manually.
 - **Every plan file must have a `# Title`** as the first heading (the script requires it).
+- **Issue titles must be [Conventional Commits](https://www.conventionalcommits.org/)
+  format** (`feat:`, `fix:`, `docs:`, `refactor:`, `chore:`, `style:`, `perf:`,
+  `test:`, `ci:`, `build:`, `revert:`, `update:`). The PR title is derived from
+  the issue title verbatim, so a non-conventional title fails the `PR Title Lint`
+  CI check. `wade task create` **enforces this in code** — a non-conventional
+  `--title` is rejected and interactive create re-prompts. Choose the prefix that
+  matches the change; wade never guesses it for you.
 - Keep issue titles concise and actionable (max 256 chars).
 - Each issue should be independently implementable (even if there are dependencies).
 - Include acceptance criteria in every issue.

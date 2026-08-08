@@ -41,6 +41,10 @@ from wade.ui import prompts
 from wade.ui.console import console
 from wade.utils import markers
 from wade.utils.body_markers import build_marked_block, update_body_preserving_markers
+from wade.utils.conventional import (
+    conventional_title_error,
+    is_conventional_title,
+)
 from wade.utils.markdown import remove_marker_block
 
 logger = structlog.get_logger()
@@ -121,9 +125,21 @@ def done(
         target_path = Path(target).expanduser()
         if target_path.is_file():
             from wade.services.task_service import create_from_plan_file
+            from wade.utils.conventional import ConventionalTitleError
 
             console.info(f"Creating issue from plan file: {target}")
-            task = create_from_plan_file(target_path, config=config, provider=provider)
+            # create_from_plan_file now hard-validates the plan's `# Title` — a
+            # non-conventional title raises. Surface it as a clean, actionable
+            # message (not a traceback) with a non-zero exit.
+            try:
+                task = create_from_plan_file(target_path, config=config, provider=provider)
+            except ConventionalTitleError as e:
+                console.error(str(e))
+                console.hint(
+                    f"Fix the plan file's `# Title` heading in {target} to a "
+                    "conventional-commit title, then re-run done."
+                )
+                return False
             if not task:
                 return False
             target = task.id
@@ -255,6 +271,7 @@ def done(
         worktree_root=worktree_root,
         branch=branch,
         main_branch=main_branch,
+        issue_number=issue_number,
         pre_sync_head=pre_sync_head,
         skip_review=skip_review,
     ):
@@ -307,6 +324,7 @@ def _run_completion_gates(
     worktree_root: Path,
     branch: str,
     main_branch: str,
+    issue_number: str,
     pre_sync_head: str,
     skip_review: bool,
 ) -> bool:
@@ -317,8 +335,15 @@ def _run_completion_gates(
     reviewed — runs against the **pre-sync HEAD**, before sync. A clean,
     zero-conflict merge of main is therefore accepted without a fresh review (a
     main-merge is not new authored work).
+
+    The PR-title gate runs first for **both** session types (shared, parameterized
+    ``done()`` — knowledge 851bb6ec): it blocks the earliest on a non-conventional
+    issue title, before any push/PR mutation. Its complementary sync (pushing a
+    corrected title onto an open PR) lives in ``_done_via_pr``.
     """
     if session_type == "review-pr-comments":
+        if not _gate_pr_title(config, provider, issue_number):
+            return False
         if not _gate_resolved_threads(config, provider, repo_root, branch):
             return False
         # review-pr-comments keeps the unbounded fast-path-or-refuse behavior:
@@ -330,6 +355,8 @@ def _run_completion_gates(
         return _gate_knowledge_valid(config, worktree_root)
 
     # Default: implementation session.
+    if not _gate_pr_title(config, provider, issue_number):
+        return False
     if not _gate_pr_summary(config, worktree_root):
         return False
     if not _gate_review_ran(
@@ -374,6 +401,50 @@ def _gate_knowledge_valid(config: ProjectConfig, worktree_root: Path) -> bool:
     for problem in problems:
         console.detail(problem)
     console.hint("Repair the knowledge file (dedupe entries / fix headings), commit, then re-run.")
+    return False
+
+
+def _gate_pr_title(
+    config: ProjectConfig,
+    provider: AbstractTaskProvider,
+    issue_number: str,
+) -> bool:
+    """Refuse when the issue title is not a conventional-commit title.
+
+    The PR title is derived from the issue title verbatim (``_done_via_pr`` opens
+    the PR with ``task.title`` and syncs an existing PR to it), so a
+    non-conventional issue title fails the ``PR Title Lint`` CI check. Blocking
+    here — before push and before any PR mutation — keeps a bad title from ever
+    reaching a PR. wade never guesses a prefix (``feat`` vs ``fix`` is not
+    deterministic); the human/agent owns the title *content*, code owns the
+    *format*.
+
+    A provider read failure is non-blocking, consistent with the other lookup
+    gates: ``_done_via_pr`` reads the same issue and surfaces a hard read error
+    there. No-op when ``done.require_conventional_title`` is disabled.
+    """
+    if not config.done.require_conventional_title:
+        return True
+    try:
+        task = provider.read_task(issue_number)
+    except Exception as exc:
+        console.warn(
+            f"Could not read issue #{issue_number} to validate its title (non-blocking): {exc}"
+        )
+        logger.debug("done.title_gate_read_failed", exc_info=True)
+        return True
+    if is_conventional_title(task.title):
+        return True
+    console.error(
+        f"Issue #{issue_number} title is not a conventional-commit title — "
+        "the PR Title Lint CI check would fail."
+    )
+    console.detail(conventional_title_error(task.title))
+    console.hint(
+        f'Fix it: `gh issue edit {issue_number} --title "<type>: ..."` '
+        "(choose feat/fix/... — wade won't guess), then re-run done."
+    )
+    console.hint("Bypass: set `done.require_conventional_title: false` in .wade.yml.")
     return False
 
 
@@ -824,6 +895,21 @@ def _done_via_pr(
         pr_number = existing_pr.number
         pr_url = existing_pr.url
         console.step(f"Updating existing PR #{pr_number}...")
+
+        # Sync the PR title to the issue title. A PR opened before conventional-
+        # title enforcement — or whose issue title was corrected after the PR
+        # opened — can carry a stale title that fails PR Title Lint. The issue
+        # title was validated by the done() PR-title gate, so pushing it onto the
+        # PR is safe. Non-blocking: a transient gh failure must not fail an
+        # otherwise-complete done (gated by the same toggle as the validation).
+        if config.done.require_conventional_title and existing_pr.title != task.title:
+            if git_pr.update_pr_title(repo_root, pr_number, task.title):
+                console.success(f"PR title synced to issue title: {task.title}")
+            else:
+                console.warn(
+                    "Could not update the PR title to match the issue — "
+                    "update it manually so PR Title Lint passes."
+                )
 
         # Build summary content
         summary_content = ""

@@ -862,8 +862,8 @@ class TestReviewPrCommentsSessionCommands:
     ) -> None:
         """review-pr-comments-session done should push and update the draft PR path."""
         issue_number = 55
-        issue_title = "Finalize review comments session"
-        branch_name = "feat/55-finalize-review-comments-session"
+        issue_title = "fix: finalize review comments session"
+        branch_name = "feat/55-fix-finalize-review-comments-session"
         worktree_path, pr_number = _bootstrap_review_target(
             e2e_repo=e2e_repo,
             mock_gh_cli=mock_gh_cli,

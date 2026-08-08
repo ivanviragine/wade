@@ -18,8 +18,10 @@ msg_file="$1"
 subject="$(head -n 1 "$msg_file")"
 
 # Conventional Commits subject:  <type>[(scope)][!]: <description>
-# Types mirror wade's AGENTS.md convention list.
-pattern='^(feat|fix|docs|refactor|test|chore|perf|ci|build|style|revert)(\([^)]+\))?!?: .+'
+# Types mirror wade's canonical list. Source of truth (Python):
+# src/wade/utils/conventional.py::CONVENTIONAL_COMMIT_TYPES — keep this bash
+# regex in sync with it (this hook is pure bash by design, so it can't import).
+pattern='^(feat|fix|docs|refactor|test|chore|perf|ci|build|style|revert|update)(\([^)]+\))?!?: .+'
 
 # The subject must always be a typed Conventional Commit. A `BREAKING CHANGE:` /
 # `BREAKING-CHANGE:` footer only marks an already-typed commit as breaking (an

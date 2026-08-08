@@ -218,6 +218,11 @@ class DoneConfig(BaseModel):
       the current sha (both session types).
     - ``require_resolved_threads`` — refuse on unresolved PR review threads
       (review-pr-comments sessions).
+    - ``require_conventional_title`` — refuse when the issue title is not a
+      conventional-commit title, and sync an open PR's title to the (validated)
+      issue title so a corrected title reaches the PR (both session types). The
+      PR title is derived from the issue title verbatim, so this is what keeps
+      the ``PR Title Lint`` CI check green.
     - ``pre_push_backstop`` — install the per-worktree pre-push git hook that
       refuses a push lacking a current ``.wade/done@<sha>`` marker.
     - ``max_review_passes`` — cap on the review→fix→re-review loop for
@@ -233,6 +238,7 @@ class DoneConfig(BaseModel):
     require_sync: bool = True
     require_review: bool = True
     require_resolved_threads: bool = True
+    require_conventional_title: bool = True
     pre_push_backstop: bool = True
     max_review_passes: StrictInt = Field(default=2, gt=0)
 

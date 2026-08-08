@@ -420,3 +420,15 @@ The 'wade hook' Typer alias (cli/hook.py) must forward its RAW argv to the lean 
 Never print untrusted AI/delegation output through Rich with markup enabled: `console.out.print(text)` and `console.error(text)` (which wraps its message in `[error]…[/]`) both parse bracketed tokens like `[/]` as markup and raise `MarkupError: closing tag has nothing to close` on quoted source code — crashing *after* the work succeeded. Print such text with `markup=False`, or `rich.markup.escape()` it when it must flow through a method that adds its own markup (`console.error`). Latent twin: `Console.plain()` (src/wade/ui/console.py) sets `highlight=False` but leaves `markup=True`, so it shares the same crash (candidate follow-up); fixed sites are `review_delegation_service.py` success+error branches and `deps_service.py` PROMPT passthrough.
 
 ---
+
+## 40a26d7cfd61 | 2026-08-08 | implementation | tags: conventional-commit, task-creation, gotcha | Issue #392
+
+Conventional-commit TITLE enforcement lives in task_service.create_task (raises ConventionalTitleError from utils/conventional.py), NOT provider.create_task. So deps_service tracking issues ('Tracking: …', deps_service.py:323) and plan_service (pre-validated by _select_valid_plans, plan_service.py:731) call provider.create_task DIRECTLY and are intentionally exempt from the raise — do not move enforcement to the provider layer or you break those system callers. utils/conventional.py is the single Python source of the 12-type list; plan_validation.py imports its regex from there.
+
+---
+
+## ca6b45e9f16f | 2026-08-08 | implementation | tags: done, conventional-commit, gates | Issue #392
+
+done()'s PR-title handling is split in two, both gated by done.require_conventional_title (both session types): (1) _gate_pr_title in _run_completion_gates BLOCKS a non-conventional issue title before push (reads provider.read_task; runs first in both branches); (2) the SYNC — update_pr_title (git/pr.py, 'gh pr edit --title') when the open PR's title differs from the issue title — lives in _done_via_pr's existing_pr branch, reusing the get_pr_for_branch lookup so no extra PR fetch. wade never guesses a prefix; it blocks or syncs only.
+
+---

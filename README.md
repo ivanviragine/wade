@@ -254,6 +254,14 @@ before creating issues: a `PLAN*.md` missing a valid `## Complexity` or a
 conventional-commit title is dropped with a loud error instead of silently
 becoming an issue with no complexity label.
 
+`wade task create` enforces the same conventional-commit **title** rule (the type
+list is the single Python source in `utils/conventional.py`): a non-conventional
+`--title` (or a plan file's `# Title`) is rejected, and interactive create
+re-prompts. The PR title is derived from the issue title verbatim, so this is
+what keeps a wade-opened PR from ever failing the `PR Title Lint` CI check;
+`done` also blocks on — and syncs — a stale non-conventional title on an already
+open PR (see the completion-gate table below).
+
 If some files pass and others fail, an interactive run asks whether to continue
 with the valid ones; `--yolo` and non-interactive runs continue without asking.
 If you decline, or if every plan file fails validation, no issues are created —
@@ -290,6 +298,7 @@ escape hatch under a `done:` block in `.wade.yml` (all default on):
 | Sync | the branch is behind main — auto-syncs first, refuses only on conflict (implementation only) | `done.require_sync: false` |
 | Review ran | `wade review implementation` did not run for the current commit. **Implementation sessions bound this loop:** after `done.max_review_passes` (default 2) review→fix→re-review cycles, `done` completes anyway with a notice instead of looping forever | `--skip-review`, `done.require_review: false` (auto-off when `ai.review_implementation.enabled: false`) |
 | Resolved threads | unresolved PR review threads remain (review-comments only) | `done.require_resolved_threads: false` |
+| Conventional title | the issue title is not a conventional-commit title (the PR title is derived from it, so it would fail `PR Title Lint`) — blocks; when valid but the open PR's title differs, syncs the PR title to match (both session types) | `done.require_conventional_title: false` |
 | Knowledge valid | the knowledge file is structurally corrupt — duplicate entry IDs or unresolved conflict markers (e.g. from a `merge=union` merge) | *none — gated by `knowledge.enabled`; no `done.*` hatch* |
 
 A **pre-push git hook** (`done.pre_push_backstop`, default on) backs the gate up:

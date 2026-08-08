@@ -11,10 +11,12 @@ from wade.git import branch as git_branch
 from wade.models.config import AICommandConfig, AIConfig, DoneConfig, ProjectConfig, ProjectSettings
 from wade.models.review import ReviewComment, ReviewThread
 from wade.models.session import SyncResult
+from wade.models.task import Task
 from wade.services.implementation_service.done import (
     _behind_count,
     _gate_knowledge_valid,
     _gate_pr_summary,
+    _gate_pr_title,
     _gate_resolved_threads,
     _gate_review_ran,
     _gate_sync,
@@ -58,6 +60,36 @@ class TestPrSummaryGate:
     def test_hatch_disables_gate(self, tmp_path: Path) -> None:
         # No PR-SUMMARY.md at all, but the hatch is off → gate passes.
         assert _gate_pr_summary(self._config(require=False), tmp_path) is True
+
+
+class TestPrTitleGate:
+    """`_gate_pr_title` blocks a non-conventional issue title (both session types)."""
+
+    def _provider(self, title: str) -> MagicMock:
+        provider = MagicMock()
+        provider.read_task.return_value = Task(id="42", title=title)
+        return provider
+
+    def test_passes_for_conventional_title(self) -> None:
+        provider = self._provider("feat: add the thing")
+        assert _gate_pr_title(ProjectConfig(), provider, "42") is True
+
+    def test_blocks_non_conventional_title(self) -> None:
+        provider = self._provider("E3: Session-start context injection")
+        assert _gate_pr_title(ProjectConfig(), provider, "42") is False
+
+    def test_read_failure_is_non_blocking(self) -> None:
+        provider = MagicMock()
+        provider.read_task.side_effect = RuntimeError("gh boom")
+        # A flaky provider read must not trap completion — _done_via_pr surfaces
+        # the hard read error later.
+        assert _gate_pr_title(ProjectConfig(), provider, "42") is True
+
+    def test_hatch_disables_gate(self) -> None:
+        config = ProjectConfig(done=DoneConfig(require_conventional_title=False))
+        provider = MagicMock()
+        assert _gate_pr_title(config, provider, "42") is True
+        provider.read_task.assert_not_called()
 
 
 class TestPlaceholderDetection:
@@ -403,6 +435,7 @@ class TestRunCompletionGatesOrder:
             return lambda *a, **k: (calls.append(name), True)[1]
 
         with (
+            patch.object(done_mod, "_gate_pr_title", side_effect=_record("pr_title")),
             patch.object(done_mod, "_gate_pr_summary", side_effect=_record("pr_summary")),
             patch.object(
                 done_mod, "_gate_resolved_threads", side_effect=_record("resolved_threads")
@@ -420,6 +453,7 @@ class TestRunCompletionGatesOrder:
                     worktree_root=Path("/wt"),
                     branch="feat/x",
                     main_branch="main",
+                    issue_number="42",
                     pre_sync_head="abc123",
                     skip_review=False,
                 )
@@ -427,18 +461,21 @@ class TestRunCompletionGatesOrder:
             )
         return calls
 
-    def test_implementation_runs_pr_summary_review_sync_then_knowledge(self) -> None:
-        # Knowledge validation runs LAST — after sync merges the base branch (the
-        # local merge=union point where KNOWLEDGE.md could be corrupted).
+    def test_implementation_runs_title_pr_summary_review_sync_then_knowledge(self) -> None:
+        # Title gate runs first (block earliest on a bad title, before any PR
+        # mutation); knowledge validation runs LAST — after sync merges the base
+        # branch (the local merge=union point where KNOWLEDGE.md could be corrupted).
         assert self._order("implementation") == [
+            "pr_title",
             "pr_summary",
             "review_ran",
             "sync",
             "knowledge_valid",
         ]
 
-    def test_review_runs_threads_review_then_knowledge_and_never_syncs(self) -> None:
+    def test_review_runs_title_threads_review_then_knowledge_and_never_syncs(self) -> None:
         assert self._order("review-pr-comments") == [
+            "pr_title",
             "resolved_threads",
             "review_ran",
             "knowledge_valid",
