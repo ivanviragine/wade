@@ -357,6 +357,24 @@ def _install_stop_hook(
     logger.info("implementation.stop_hook_installed", path=str(worktree_path), guard=guard.value)
 
 
+def _session_start_command(tool_value: str, quoted_root: str, phase_value: str) -> str:
+    """Build the installed ``wade-hook session_start`` command for one tool + phase.
+
+    Single source of truth so the install path and the stale-phase revocation
+    (``hooks_remove``) in :func:`_install_session_start_hook` construct
+    byte-identical commands: crossby matches a removal by exact command string, so
+    any drift between the two would silently fail to reconcile a prior phase's hook.
+
+    ``--guard context`` is a descriptive label, not a dispatch key: the runtime
+    routes session_start by the *event* positional (``_is_session_start``), never by
+    ``--guard``. It documents intent and is asserted by the install tests.
+    """
+    return (
+        f"wade-hook session_start --guard context --tool {tool_value} "
+        f"--root {quoted_root} --phase {phase_value}"
+    )
+
+
 def _install_session_start_hook(worktree_path: Path, *, phase: SessionPhase) -> None:
     """Install a SessionStart context-injection hook into each capable tool.
 
@@ -378,6 +396,14 @@ def _install_session_start_hook(worktree_path: Path, *, phase: SessionPhase) -> 
     resume/compaction re-injection. The per-tool payload *shape* (nested vs flat
     ``additionalContext`` vs Cursor ``additional_context``) is resolved by
     ``wade-hook`` / crossby, not here.
+
+    A worktree is only ever one session kind at a time, but an implementation
+    worktree is later **reused** for its review session (``review_service.start``
+    re-bootstraps with ``SessionPhase.REVIEW``). crossby's hook writers dedup by
+    exact command, so a prior ``--phase implement`` entry would survive alongside
+    the new ``--phase review`` one and **both** would fire, injecting contradictory
+    phase reminders. Every other-phase variant is therefore revoked via
+    ``hooks_remove`` so exactly one SessionStart hook remains after re-bootstrap.
     """
     import shlex
 
@@ -389,16 +415,22 @@ def _install_session_start_hook(worktree_path: Path, *, phase: SessionPhase) -> 
     for tool_id, writer in _hook_writers():
         if not AbstractAITool.get(tool_id).capabilities().supports_session_start_hook:
             continue
-        # ``--guard context`` is a descriptive label, not a dispatch key: the
-        # runtime routes session_start by the *event* positional
-        # (``_is_session_start``), never by ``--guard``. It documents intent and is
-        # asserted by the install tests.
-        command = (
-            f"wade-hook session_start --guard context --tool {tool_id.value} "
-            f"--root {root} --phase {phase.value}"
-        )
+        command = _session_start_command(tool_id.value, root, phase.value)
         hook = HookEntry(event="session_start", tools=[], command=command)
-        _log_sync_result(writer.sync(SyncData(hooks=[hook]), worktree_path), tool_id)
+        # Revoke this tool's SessionStart command for every *other* phase, so a
+        # reused worktree (impl → review) ends up with exactly one entry rather
+        # than a stale phase firing alongside the current one. sync() adds before
+        # it removes, and no removal ever equals `command` (distinct --phase), so
+        # the entry just installed is never clobbered.
+        stale_removals = [
+            ("session_start", _session_start_command(tool_id.value, root, other.value))
+            for other in SessionPhase
+            if other != phase
+        ]
+        _log_sync_result(
+            writer.sync(SyncData(hooks=[hook], hooks_remove=stale_removals), worktree_path),
+            tool_id,
+        )
 
     logger.info(
         "implementation.session_start_hook_installed", path=str(worktree_path), phase=phase.value

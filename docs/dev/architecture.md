@@ -291,7 +291,10 @@ session from starting.
   `supports_stop_hook`). `tools=[]` is **load-bearing** — `_tools_to_matcher([])`
   → `.*`, and the SessionStart matcher is tested against the *source*, so `.*`
   re-fires on `startup`/`resume`/`compact`/`clear`/`fork`. Narrowing it would
-  silently drop compaction re-injection.
+  silently drop compaction re-injection. Because crossby dedups hooks by exact
+  command, a **reused** worktree (impl → review re-bootstraps with a different
+  `--phase`) would otherwise fire *both* phase reminders; the install revokes every
+  other-phase variant via `hooks_remove`, leaving exactly one entry.
 - **Sessions**: installed for implementation, review, and plan sessions (each
   passes a `session_phase` to `bootstrap_worktree`). `wade task deps` passes
   `None` and opts out (short, detached, no completion-gate decay). `plan_mode` and

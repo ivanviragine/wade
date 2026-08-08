@@ -125,6 +125,41 @@ class TestRealWriters:
         assert "antigravity-cli" not in blob
 
 
+class TestPhaseReconciliation:
+    """Re-bootstrapping a reused worktree replaces the prior phase's hook, not stacks it.
+
+    An implementation worktree is later reused for its review session, which
+    re-bootstraps with ``SessionPhase.REVIEW``. crossby dedups by exact command, so
+    the differing ``--phase`` would leave both entries firing unless the install
+    revokes the other-phase variants via ``hooks_remove``.
+    """
+
+    def test_hooks_remove_carries_other_phase_commands(self, tmp_path: Path) -> None:
+        captured = dict(_install(tmp_path, SessionPhase.REVIEW))
+        data = captured[AIToolID.CLAUDE]
+        removed = {cmd for event, cmd in data.hooks_remove}
+        # Exactly the two OTHER phases are revoked; the current phase is not.
+        assert all(event == "session_start" for event, _ in data.hooks_remove)
+        assert any("--phase implement" in c for c in removed)
+        assert any("--phase plan" in c for c in removed)
+        assert not any("--phase review" in c for c in removed)
+
+    def test_reused_worktree_ends_with_single_entry(self, tmp_path: Path) -> None:
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        # Impl session first, then the worktree is reused for review.
+        bootstrap_mod._install_session_start_hook(wt, phase=SessionPhase.IMPLEMENT)
+        bootstrap_mod._install_session_start_hook(wt, phase=SessionPhase.REVIEW)
+
+        claude = json.loads((wt / ".claude" / "settings.json").read_text())
+        entries = claude["hooks"]["SessionStart"]
+        commands = [h["command"] for e in entries for h in e["hooks"]]
+        wade_cmds = [c for c in commands if "wade-hook session_start" in c]
+        assert len(wade_cmds) == 1
+        assert "--phase review" in wade_cmds[0]
+        assert "--phase implement" not in wade_cmds[0]
+
+
 class TestBootstrapWiring:
     def test_no_hook_when_session_phase_unset(self, tmp_path: Path) -> None:
         wt = tmp_path / "worktree"
