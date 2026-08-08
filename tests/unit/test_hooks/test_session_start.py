@@ -230,6 +230,18 @@ class TestLeanEntryParity:
         assert lean.stdout == alias.stdout == ""
 
 
+class TestBuilderParsing:
+    def test_bom_prefixed_plan_still_parses_issue(self, tmp_path: Path) -> None:
+        # A UTF-8 BOM before the "# Issue #..." heading must not suppress the ref
+        # (read with utf-8-sig). write_plan_md never emits a BOM, but a hand-edited
+        # or tool-converted PLAN.md might.
+        bom = "﻿"
+        (tmp_path / "PLAN.md").write_text(f"{bom}{_PLAN_FIRST_LINE}\n\nbody\n", encoding="utf-8")
+        payload = session_start_context(tmp_path, SessionPhase.IMPLEMENT)
+        assert payload is not None
+        assert "Issue #351" in payload
+
+
 class TestBuilderBudget:
     def test_payload_under_cap_even_with_a_huge_title(self, tmp_path: Path) -> None:
         _write_plan(tmp_path, first_line="# Issue #999: " + "x" * 5000)

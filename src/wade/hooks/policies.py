@@ -879,7 +879,9 @@ def _parse_plan_issue(worktree_root: Path) -> tuple[str, str] | None:
     all yield ``None`` so the caller omits the issue line rather than failing.
     """
     try:
-        with (worktree_root / "PLAN.md").open(encoding="utf-8") as fd:
+        # utf-8-sig so a stray BOM on the first line never suppresses the issue
+        # ref (decodes plain utf-8 unchanged when no BOM is present).
+        with (worktree_root / "PLAN.md").open(encoding="utf-8-sig") as fd:
             first_line = fd.readline().strip()
     except OSError:
         return None

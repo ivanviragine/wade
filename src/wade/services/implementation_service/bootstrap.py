@@ -389,6 +389,10 @@ def _install_session_start_hook(worktree_path: Path, *, phase: SessionPhase) -> 
     for tool_id, writer in _hook_writers():
         if not AbstractAITool.get(tool_id).capabilities().supports_session_start_hook:
             continue
+        # ``--guard context`` is a descriptive label, not a dispatch key: the
+        # runtime routes session_start by the *event* positional
+        # (``_is_session_start``), never by ``--guard``. It documents intent and is
+        # asserted by the install tests.
         command = (
             f"wade-hook session_start --guard context --tool {tool_id.value} "
             f"--root {root} --phase {phase.value}"
