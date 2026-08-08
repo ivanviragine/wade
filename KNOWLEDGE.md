@@ -411,3 +411,9 @@ As of crossby 0.17, E3 session-start context injection needed NO crossby change 
 tools=[] on a session_start HookEntry (bootstrap._install_session_start_hook) is LOAD-BEARING: crossby's _tools_to_matcher([]) returns ".*", and a SessionStart matcher is tested against the session SOURCE (startup/resume/compact/clear/fork), not a tool name — so ".*" is exactly what makes the context re-inject on resume and after compaction. Narrowing tools=[...] would compile a tool-name matcher that never matches a source, silently dropping compaction re-injection (the single largest context loss). Same load-bearing pattern as the Stop hook's tools=[].
 
 ---
+
+## 853690560c6b | 2026-08-08 | implementation | tags: hooks, gotcha | Issue #351
+
+The 'wade hook' Typer alias (cli/hook.py) must forward its RAW argv to the lean 'wade-hook' argparse parser (wade.hooks.cli.main via ctx.args), NOT re-declare the hook flags as typed Typer options. Register it with context_settings={allow_extra_args, ignore_unknown_options} so every token after 'hook' lands in ctx.args verbatim. Typed Typer options make Click reject a malformed invocation (--phase with no value, --timeout nope, missing --tool) with a usage error (exit 2) BEFORE the event dispatcher runs — which breaks the fail-OPEN contract for session_start/post_tool_use/stop (a usage error there must exit 0, never block) and drifts from the lean parser on every new flag. Forwarding argv makes the alias share the lean parser + its usage-error recovery, so it also preserves the tricky case a command-boundary interceptor cannot: a stop USAGE error fails open while a legitimate stop BLOCK keeps exit 2 (a cli_main catch can't tell a parse error from a body exit).
+
+---

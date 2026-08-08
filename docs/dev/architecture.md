@@ -276,16 +276,21 @@ the Stop hook, no `fail_closed`) and **fail-open**: a missing `--root`/`--phase`
 an unreadable `PLAN.md`, or any exception yields exit 0, so it can never trap a
 session from starting.
 
-- **Policy** (`hooks/policies.py::session_start_context`): builds the text by
+- **Policy** (`hooks/policies.py::session_start_context`): assembles the text by
   `SessionPhase` (`implement` / `review` / `plan`, baked into the installed
-  command as `--phase`). For impl/review it parses the issue ref from `PLAN.md`'s
-  first line (`# Issue #<id>: <title>`, omitted if absent) and points at the
-  phase's `done` command and the gates it enforces; for plan (a detached worktree
-  with no `PLAN.md` at the root) it points at writing a valid `PLAN*.md` then
-  `plan-session done`. Import-light and stdout-safe — it reads `PLAN.md` with a
-  plain file read, never the `wade.git` layer (the #349 lean-entry gotcha). The
-  payload is hard-capped at **≤ 800 chars** and phrased *distinctly* from the
-  always-loaded SKILL.md (a per-phase test asserts no prose line is shared).
+  command as `--phase`). The AI-facing per-phase prose lives in
+  `templates/prompts/session-start-<phase>.md` (the prompt source-of-truth per the
+  "Prompts as .md Templates" principle) and is loaded via `load_prompt_template`
+  (a lazy import — off the hot PreToolUse path); the builder itself only prepends
+  the dynamic issue line, brands the payload, and caps it. For impl/review it
+  parses the issue ref from `PLAN.md`'s first line (`# Issue #<id>: <title>`,
+  omitted if absent) and points at the phase's `done` command and the gates it
+  enforces; for plan (a detached worktree with no `PLAN.md` at the root) it points
+  at writing a valid `PLAN*.md` then `plan-session done`. Import-light and
+  stdout-safe — it reads `PLAN.md` with a plain file read, never the `wade.git`
+  layer (the #349 lean-entry gotcha). The payload is hard-capped at **≤ 800 chars**
+  and phrased *distinctly* from the always-loaded SKILL.md (a per-phase test
+  asserts no prose line is shared).
 - **Install** (`bootstrap.py::_install_session_start_hook`): gated on
   `supports_session_start_hook` (mirroring how the Stop hook gates on
   `supports_stop_hook`). `tools=[]` is **load-bearing** — `_tools_to_matcher([])`

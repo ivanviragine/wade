@@ -868,6 +868,17 @@ _SESSION_CONTEXT_TITLE_MAX = 140
 # ``write_plan_md`` writes ``# Issue #<id>: <title>`` as PLAN.md's first line.
 _ISSUE_LINE_RE = re.compile(r"^#\s*Issue\s+#(\d+):\s*(.+)$")
 
+# Phase -> the prompt template holding that phase's static instruction prose.
+# The prose is AI-facing content, so it is sourced from ``templates/prompts/``
+# (the repo's prompt source-of-truth per AGENTS.md "Prompts as .md Templates")
+# rather than hard-coded here; :func:`session_start_context` stays limited to
+# loading that prose, prepending the dynamic issue line, branding, and capping.
+_SESSION_CONTEXT_TEMPLATES: dict[SessionPhase, str] = {
+    SessionPhase.IMPLEMENT: "session-start-implement.md",
+    SessionPhase.REVIEW: "session-start-review.md",
+    SessionPhase.PLAN: "session-start-plan.md",
+}
+
 
 def _parse_plan_issue(worktree_root: Path) -> tuple[str, str] | None:
     """Return ``(issue_id, title)`` from ``<root>/PLAN.md``'s first line, or None.
@@ -899,8 +910,10 @@ def session_start_context(worktree_root: Path, phase: SessionPhase) -> str | Non
     over a long session — the largest single context loss being *compaction*, which
     fires ``SessionStart`` with ``source: "compact"``.
 
-    Content by phase (phrased *distinctly* from the always-loaded SKILL.md — these
-    are pointers/reminders, not restatements):
+    Content by phase (authored *distinctly* from the always-loaded SKILL.md —
+    these are pointers/reminders, not restatements — and sourced from
+    ``templates/prompts/session-start-<phase>.md``, see
+    :data:`_SESSION_CONTEXT_TEMPLATES`):
 
     - ``IMPLEMENT`` / ``REVIEW``: the issue ref parsed from ``PLAN.md`` (omitted if
       absent), plus a one-line pointer to the phase's ``done`` command and the gates
@@ -923,32 +936,15 @@ def session_start_context(worktree_root: Path, phase: SessionPhase) -> str | Non
                 title = title[: _SESSION_CONTEXT_TITLE_MAX - 1].rstrip() + "…"
             lines.append(f"Issue #{issue_id} — {title}")
 
-    if phase is SessionPhase.IMPLEMENT:
-        lines.append("Implementation phase; the full plan lives in PLAN.md at the worktree root.")
-        lines.append(
-            "Wrap up with `wade implementation-session done`: it syncs onto base, pushes, and "
-            "opens or updates the PR — skip the manual `git push` / `gh pr create`."
-        )
-        lines.append(
-            "Expect gates first: review findings to resolve, a base-branch sync/rebase, and a "
-            "pre-push backstop that refuses an unmarked push."
-        )
-    elif phase is SessionPhase.REVIEW:
-        lines.append("PR-comment review phase; task context is in PLAN.md.")
-        lines.append(
-            "Work through the unresolved review threads, then wrap up with "
-            "`wade review-pr-comments-session done`."
-        )
-    elif phase is SessionPhase.PLAN:
-        lines.append(
-            "Planning phase in a detached worktree (no PLAN.md at the root; plans go under "
-            "the plan directory)."
-        )
-        lines.append(
-            "Produce at least one valid PLAN*.md — a conventional-commit title plus a "
-            "`## Complexity` section — then run `wade plan-session done`; wade turns the plan "
-            "file(s) into issue(s) once you exit."
-        )
+    template_name = _SESSION_CONTEXT_TEMPLATES.get(phase)
+    if template_name is not None:
+        # Lazy import: the prose loader pulls in ``wade.skills.installer``, which
+        # is NOT on the hot PreToolUse write path — only this SessionStart branch
+        # reaches it, once per session start. It adds ~2ms and loads none of the
+        # heavy modules the lean entry avoids (no crossby adapters, no CLI graph).
+        from wade.skills.installer import load_prompt_template
+
+        lines.extend(ln for ln in load_prompt_template(template_name).splitlines() if ln.strip())
 
     if not lines:
         return None

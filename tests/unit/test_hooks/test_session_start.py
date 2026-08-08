@@ -29,6 +29,14 @@ _PHASE_SKILL = {
     SessionPhase.PLAN: "plan-session",
 }
 
+# Source-of-truth prompt templates holding the phase prose (#391 P1).
+_PROMPTS_DIR = Path(__file__).resolve().parents[3] / "templates" / "prompts"
+_PHASE_TEMPLATE = {
+    SessionPhase.IMPLEMENT: "session-start-implement.md",
+    SessionPhase.REVIEW: "session-start-review.md",
+    SessionPhase.PLAN: "session-start-plan.md",
+}
+
 
 def _run_ss(
     tool: str,
@@ -249,6 +257,75 @@ class TestLeanEntryParity:
         )
         assert lean.returncode == alias.returncode == 0
         assert lean.stdout == alias.stdout == ""
+
+
+class TestAliasUsageErrorParity:
+    """A malformed ``wade hook session_start`` invocation must fail OPEN like the lean entry.
+
+    The alias forwards raw argv to the lean parser, so a Click usage error can no
+    longer exit 2 *before* the session_start dispatcher: a value-taking option with
+    no value (``--phase``), a bad typed value (``--timeout nope``), or a missing
+    ``--tool`` must all recover to exit 0 (never block a session from starting) —
+    matching ``wade-hook``.
+    """
+
+    def _lean(self, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-m", "wade.hooks.cli", *args],
+            input="{}",
+            capture_output=True,
+            text=True,
+        )
+
+    def _alias(self, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-m", "wade", "hook", *args],
+            input="{}",
+            capture_output=True,
+            text=True,
+        )
+
+    def test_missing_phase_value_fails_open_both(self) -> None:
+        args = ("session_start", "--tool", "claude", "--phase")
+        lean, alias = self._lean(*args), self._alias(*args)
+        assert lean.returncode == alias.returncode == 0
+        assert alias.stdout == ""
+
+    def test_bad_timeout_value_fails_open_both(self) -> None:
+        args = ("session_start", "--tool", "claude", "--timeout", "nope")
+        lean, alias = self._lean(*args), self._alias(*args)
+        assert lean.returncode == alias.returncode == 0
+        assert alias.stdout == ""
+
+    def test_pre_tool_use_usage_error_still_fails_closed_via_alias(self) -> None:
+        # The passthrough must NOT flip the fail-closed direction: a PreToolUse
+        # write guard with a bad typed option still denies (exit 2).
+        args = ("pre_tool_use", "--guard", "worktree", "--tool", "claude", "--timeout", "nope")
+        assert self._alias(*args).returncode == 2
+
+    def test_stop_usage_error_fails_open_via_alias(self) -> None:
+        # A Stop *usage* error fails open (exit 0) — while a Stop *block* keeps its
+        # legitimate exit 2 (covered elsewhere); the passthrough preserves both.
+        args = ("stop", "--guard", "session-complete", "--tool", "claude", "--timeout", "nope")
+        assert self._alias(*args).returncode == 0
+
+
+class TestProseSourcedFromTemplates:
+    """The phase prose must come from ``templates/prompts/session-start-*.md``.
+
+    Guards the #351/#391 source-of-truth requirement: the AI-facing instruction
+    prose lives in prompt templates, not inline Python. If someone re-inlines it,
+    the template file drifts from the payload and this fails.
+    """
+
+    def test_every_prose_line_is_loaded_from_its_template(self, tmp_path: Path) -> None:
+        _write_plan(tmp_path)
+        for phase, name in _PHASE_TEMPLATE.items():
+            template = (_PROMPTS_DIR / name).read_text(encoding="utf-8")
+            payload = session_start_context(tmp_path, phase)
+            assert payload is not None
+            for line in (ln for ln in template.splitlines() if ln.strip()):
+                assert line in payload, f"{phase}: template line missing from payload: {line!r}"
 
 
 class TestBuilderParsing:

@@ -659,7 +659,15 @@ app.add_typer(
 )
 
 # ``wade hook`` — hidden write-guard entry point invoked by AI tools' hooks.
-app.command("hook", hidden=True)(hook_command)
+# ``ignore_unknown_options`` + ``allow_extra_args`` route every token after
+# ``hook`` into ``ctx.args`` verbatim (even malformed ones like ``--timeout nope``)
+# so ``hook_command`` can forward them to the lean ``wade-hook`` parser instead of
+# letting Click reject them with a usage error — see :mod:`wade.cli.hook`.
+app.command(
+    "hook",
+    hidden=True,
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)(hook_command)
 
 # Admin commands are registered directly on the root app
 for command in admin_app.registered_commands:
