@@ -528,12 +528,16 @@ class TestPromptModelMapping:
 class TestPromptCommandOverrides:
     def test_non_interactive_returns_empty(self) -> None:
         result = _prompt_command_overrides(["claude"], non_interactive=True)
+        # review_pr_comments (#389) flows through _COMMAND_OVERRIDE_NAMES as an
+        # empty default; the wizard doesn't prompt for it (not in cmd_triples), so
+        # it is never written unless a user sets ai.review_pr_comments by hand.
         assert result == {
             "plan": {},
             "deps": {},
             "review_plan": {},
             "review_implementation": {},
             "review_batch": {},
+            "review_pr_comments": {},
         }
 
     @patch("wade.ui.prompts.select")

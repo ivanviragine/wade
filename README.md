@@ -163,9 +163,37 @@ dispatched: prompt/interactive/headless). The tiers, most→least permissive, ar
 doesn't support is downgraded automatically (e.g. `auto` → `accept-edits` on
 non-Claude tools) with a warning — WADE forwards the requested tier and
 [`crossby`](https://github.com/ivanviragine/crossby) owns the downgrade ladder.
-Headless commands (`deps`, `review_*`) always run at `default`. `plan` is not a
-permission mode — it's driven separately — and is rejected (warn + fall back to
-`default`) if configured.
+Headless commands (`deps`, `review_plan`, `review_implementation`,
+`review_batch`) always run at `default`; the interactively-launched review
+session honors its own tier via `ai.review_pr_comments` (see below). `plan` is
+not a permission mode — it's driven separately — and is rejected (warn + fall
+back to `default`) if configured.
+
+The auto-launched **review session** — the one started when you pick **"Wait
+for reviews"** after `wade implementation-session done` and comments land —
+resolves its tool, model, effort, and autonomy tier from a dedicated
+`ai.review_pr_comments` section (the same keys every `ai.<command>` section
+accepts: `tool`, `model`, `effort`, `mode`, `permission_mode` / `yolo`,
+`enabled`, `timeout`):
+
+```yaml
+ai:
+  review_pr_comments:
+    tool: claude
+    model: claude-sonnet-5
+    effort: high
+    permission_mode: yolo   # auto-launched review runs unattended
+```
+
+With this set, the review session runs in the configured tier even when the
+implementation session ran without it (the `permission_mode: yolo` above starts
+the review session with no prompts). With `ai.review_pr_comments` **unset**,
+tool / model / autonomy fall back to the global `ai.*` defaults (`default_tool`,
+`default_model`, `ai.permission_mode` / `ai.yolo`) — **not** through
+`ai.implement.*`. Projects that relied on `ai.implement.tool` / `model`
+implicitly governing the review session should set `ai.review_pr_comments.tool`
+/ `model` (or the global defaults). An explicit `wade implement --yolo` /
+`--permission-mode` still carries into the auto-launched review session.
 
 `wade plan --issue <N>` re-plans an existing issue. If the session produces a
 single plan file, it's attached to `#N` and the issue stays open. If the
