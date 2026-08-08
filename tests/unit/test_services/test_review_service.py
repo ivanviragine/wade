@@ -656,6 +656,60 @@ class TestReviewServiceStart:
         assert mock_re.call_args.args[2] == "review_pr_comments"
         assert mock_rpm.call_args.args[3] == "review_pr_comments"
 
+    def test_non_explicit_inherited_tool_model_do_not_shadow_config(
+        self, tmp_path: Path, mock_setup: dict[str, MagicMock]
+    ) -> None:
+        """Inherited resolved tool/model (the auto-launch forwards concrete values
+        non-explicitly) must be dropped to None so ai.review_pr_comments governs —
+        the same shadowing trap as permission_mode, for the two fields users set
+        most often."""
+        from wade.models.permission import PermissionMode
+
+        self._seed_actionable_thread(mock_setup)
+        with (
+            patch(
+                "wade.services.review_service.resolve_permission_mode",
+                return_value=PermissionMode.DEFAULT,
+            ),
+            patch("wade.services.review_service.resolve_effort", return_value=None),
+        ):
+            start(
+                target="42",
+                ai_tool="copilot",
+                model="gpt-5",
+                ai_explicit=False,
+                model_explicit=False,
+            )
+
+        # effective tool/model (positional arg 0) must be None, not the inherited values.
+        assert mock_setup["resolve_ai_tool"].call_args.args[0] is None
+        assert mock_setup["resolve_model"].call_args.args[0] is None
+
+    def test_explicit_inherited_tool_model_still_propagate(
+        self, tmp_path: Path, mock_setup: dict[str, MagicMock]
+    ) -> None:
+        """An explicit --ai/--model carried from implement still overrides config."""
+        from wade.models.permission import PermissionMode
+
+        self._seed_actionable_thread(mock_setup)
+        with (
+            patch(
+                "wade.services.review_service.resolve_permission_mode",
+                return_value=PermissionMode.DEFAULT,
+            ),
+            patch("wade.services.review_service.resolve_effort", return_value=None),
+        ):
+            start(
+                target="42",
+                ai_tool="claude",
+                model="claude-sonnet-5",
+                ai_explicit=True,
+                model_explicit=True,
+            )
+
+        assert mock_setup["resolve_ai_tool"].call_args.args[0] == "claude"
+        assert mock_setup["resolve_model"].call_args.args[0] == "claude-sonnet-5"
+
     def test_non_explicit_inherited_mode_does_not_shadow_config(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock]
     ) -> None:
@@ -2255,7 +2309,17 @@ class TestReviewSessionAutonomyE2E:
                 )
             )
         )
-        result, adapter, _ = self._run_detach(config, tmp_path)
+        # Mirror the auto-launch: implement forwards its resolved tool/model
+        # non-explicitly. Config must win over both — not just the model reaching
+        # launch, but the inherited "gpt-5" being dropped rather than shadowing it.
+        result, adapter, _ = self._run_detach(
+            config,
+            tmp_path,
+            ai_tool="copilot",
+            model="gpt-5",
+            ai_explicit=False,
+            model_explicit=False,
+        )
 
         assert result is True
         kwargs = adapter.build_launch_command.call_args.kwargs

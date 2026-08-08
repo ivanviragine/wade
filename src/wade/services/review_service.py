@@ -690,9 +690,23 @@ def start(
     # 6. Resolve AI tool, model, effort, and autonomy under the dedicated
     # ``review_pr_comments`` config key (#389) so this auto-launched session
     # honors ``ai.review_pr_comments.*`` rather than inheriting ``ai.implement.*``.
-    resolved_tool = resolve_ai_tool(ai_tool, config, "review_pr_comments")
+    #
+    # Gate every inherited value on explicitness. The implementation flow
+    # forwards its *already-resolved* tool / model / permission-mode (concrete
+    # values, e.g. ``"copilot"`` / ``"default"``, never ``None``); passed through
+    # unconditionally they short-circuit the resolvers (which honor a non-``None``
+    # first arg) and shadow ``ai.review_pr_comments`` entirely — so switching the
+    # command key alone is a no-op. Honor an inherited value only when the user
+    # set it explicitly (``--ai`` / ``--model`` / ``--permission-mode`` /
+    # ``--yolo``); otherwise pass ``None`` so the review config (then global
+    # ``ai.*``, then ``default`` / auto-detect) governs. (``effort`` is never
+    # inherited as a concrete value — no caller forwards it — so it needs no gate.)
+    effective_ai_tool = ai_tool if ai_explicit else None
+    effective_model = model if model_explicit else None
+    effective_pm = permission_mode if permission_mode_explicit else None
+    resolved_tool = resolve_ai_tool(effective_ai_tool, config, "review_pr_comments")
     resolved_model = resolve_model(
-        model,
+        effective_model,
         config,
         "review_pr_comments",
         tool=resolved_tool,
@@ -705,13 +719,6 @@ def start(
         tool=resolved_tool,
         complexity=task.complexity.value if task.complexity else None,
     )
-    # Gate the inherited permission mode on explicitness. The implementation
-    # flow forwards its *already-resolved* mode (always a concrete value like
-    # ``"default"``, never ``None``); treating that as an override would shadow
-    # ``ai.review_pr_comments`` entirely. Only honor it when the user explicitly
-    # passed ``--permission-mode`` / ``--yolo``; otherwise pass ``None`` so the
-    # review config (then global ``ai.*``, then ``default``) governs.
-    effective_pm = permission_mode if permission_mode_explicit else None
     resolved_permission_mode = resolve_permission_mode(
         effective_pm, yolo, config, "review_pr_comments"
     )
