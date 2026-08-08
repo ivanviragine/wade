@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from wade.models.config import ProjectConfig, ProjectSettings
 from wade.models.delegation import DelegationMode, DelegationResult
 from wade.models.deps import DependencyEdge, DependencyGraph
@@ -482,13 +484,64 @@ class TestAnalyzeDepsMode:
         result = analyze_deps(["1", "2"], mode="prompt")
         assert result is not None
         assert result.edges == []
-        mock_print.assert_called_once_with("raw prompt text")
+        # markup=False keeps untrusted AI output from being parsed as Rich
+        # markup (bracketed tokens would otherwise crash — #394).
+        mock_print.assert_called_once_with("raw prompt text", markup=False)
         mock_resolve_tool.assert_not_called()
         mock_resolve_model.assert_not_called()
         mock_resolve_effort.assert_not_called()
         mock_confirm.assert_not_called()
         mock_apply.assert_not_called()
         mock_tracking.assert_not_called()
+
+    @patch("wade.services.deps_service.create_tracking_issue")
+    @patch("wade.services.deps_service.apply_deps_to_issues")
+    @patch("wade.services.deps_service.delegate")
+    @patch("wade.services.deps_service.confirm_ai_selection")
+    @patch("wade.services.deps_service.resolve_effort")
+    @patch("wade.services.deps_service.resolve_model")
+    @patch("wade.services.deps_service.resolve_ai_tool")
+    @patch("wade.services.deps_service.get_provider")
+    @patch("wade.services.deps_service.load_config")
+    def test_prompt_mode_output_with_bracket_markup_does_not_raise(
+        self,
+        mock_config: MagicMock,
+        mock_provider: MagicMock,
+        mock_resolve_tool: MagicMock,
+        mock_resolve_model: MagicMock,
+        mock_resolve_effort: MagicMock,
+        mock_confirm: MagicMock,
+        mock_delegate: MagicMock,
+        mock_apply: MagicMock,
+        mock_tracking: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Bracketed markup in PROMPT-mode output prints literally, not crash (#394).
+
+        Uses the real console (no ``console.out.print`` mock) so Rich actually
+        renders the untrusted AI output. The ``[/]`` is *unbalanced* (nothing to
+        open) — with ``markup=True`` this raised ``rich.errors.MarkupError``.
+        """
+        from wade.models.config import AICommandConfig, AIConfig
+
+        mock_config.return_value = ProjectConfig(ai=AIConfig(deps=AICommandConfig(tool="claude")))
+        provider = MagicMock()
+        provider.read_task.side_effect = [
+            Task(id="1", title="Auth", body="Login"),
+            Task(id="2", title="DB", body="Schema"),
+        ]
+        mock_provider.return_value = provider
+        mock_delegate.return_value = DelegationResult(
+            success=True,
+            feedback="analysis: the token result[/] must stay literal",
+            mode=DelegationMode.PROMPT,
+        )
+
+        result = analyze_deps(["1", "2"], mode="prompt")
+
+        assert result is not None
+        assert result.edges == []
+        assert "[/]" in capsys.readouterr().out
 
     @patch("wade.services.deps_service.create_tracking_issue")
     @patch("wade.services.deps_service.apply_deps_to_issues")
