@@ -923,15 +923,33 @@ def _done_via_pr(
         # title enforcement — or whose issue title was corrected after the PR
         # opened — can carry a stale title that fails PR Title Lint. The issue
         # title was validated by the done() PR-title gate, so pushing it onto the
-        # PR is safe. Non-blocking: a transient gh failure must not fail an
-        # otherwise-complete done (gated by the same toggle as the validation).
+        # PR is safe.
+        #
+        # The response to a sync failure hinges on whether the *current* PR title
+        # would pass PR Title Lint. The sync fires on any title mismatch, and a
+        # stale PR title may itself already be conventional (e.g. a manually
+        # edited PR title that merely differs from the issue). In that case a
+        # transient gh failure is non-blocking — lint still passes, so warn and
+        # let an otherwise-complete done succeed. But if the stale title is NOT
+        # conventional, lint will fail; failing the sync must then fail done —
+        # that is the whole point of require_conventional_title. The branch and
+        # `.wade/done@<sha>` marker are already pushed, so re-running done retries
+        # the sync idempotently.
         if config.done.require_conventional_title and existing_pr.title != task.title:
             if git_pr.update_pr_title(repo_root, pr_number, task.title):
                 console.success(f"PR title synced to issue title: {task.title}")
+            elif not is_conventional_title(existing_pr.title):
+                console.error(
+                    "Could not sync the PR title to the issue title, and the "
+                    "current PR title is not conventional — PR Title Lint would "
+                    "fail. Re-run done to retry (it is idempotent), or fix the "
+                    "PR title manually."
+                )
+                return False
             else:
                 console.warn(
                     "Could not update the PR title to match the issue — "
-                    "update it manually so PR Title Lint passes."
+                    "update it manually so the PR title tracks the issue."
                 )
 
         # Build summary content
