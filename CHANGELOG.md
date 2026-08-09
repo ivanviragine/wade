@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.41.1] — 2026-08-09
+
+### Bug Fixes
+
+- allow /dev/ device writes in plan-mode write guard (#398) (adc6c61)
+
+### Other Changes
+
+- Lock-retry for `git stash push` is git-version-dependent (follow-up to #357 C3) (#396) (27e0eb9)
+
 ## [v0.41.0] — 2026-08-08
 
 ### Features
