@@ -283,16 +283,6 @@ def install_worktree_git_hooks(worktree_path: Path, hooks: dict[str, str]) -> bo
     return True
 
 
-def install_worktree_git_hook(worktree_path: Path, hook_name: str, script_body: str) -> bool:
-    """Install a single per-worktree git hook. Thin wrapper over the batch call.
-
-    Retained for single-hook callers (and their tests); delegates to
-    :func:`install_worktree_git_hooks` so the chaining/rollback/degrade logic
-    lives in one place.
-    """
-    return install_worktree_git_hooks(worktree_path, {hook_name: script_body})
-
-
 # The full namespace of git hooks wade may manage per worktree. Reconciliation
 # (:func:`reconcile_worktree_git_hooks`) walks this set so a hook whose config
 # gate was turned off since a prior bootstrap is neutralized, not left firing.
@@ -458,21 +448,6 @@ def build_pre_commit_hook_script(lint: str | None, test: str | None) -> str:
 def build_commit_msg_hook_script() -> str:
     """Load the ``commit-msg`` template (pure bash — no command substitution)."""
     return load_hook_template("commit-msg")
-
-
-def install_pre_push_backstop(worktree_path: Path) -> bool:
-    """Install the ``done`` pre-push backstop hook into a worktree.
-
-    Loads the ``pre-push`` template and delegates to
-    :func:`install_worktree_git_hook`. Returns whatever that reports (False when
-    the backstop had to be skipped).
-    """
-    try:
-        script = load_hook_template("pre-push")
-    except FileNotFoundError:
-        logger.warning("skills.pre_push_template_missing")
-        return False
-    return install_worktree_git_hook(worktree_path, "pre-push", script)
 
 
 # --- Skill registry: name → list of files ---

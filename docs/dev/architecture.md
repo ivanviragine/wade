@@ -392,16 +392,18 @@ the sync gate's behind-count is `commits_ahead(repo, origin/<main>, branch)`
 branch in the branch position. Inverting either is a silent bug.
 
 The **pre-push backstop** (`templates/hooks/pre-push`, installed by
-`skills/installer.py:install_worktree_git_hook`) makes the gate hard to skip: git
+`skills/installer.py:install_worktree_git_hooks`) makes the gate hard to skip: git
 runs it with cwd at the worktree top, so it tests `[[ -f ".wade/done@${sha}" ]]`
 in pure shell. It is wired per-worktree via `extensions.worktreeConfig` +
 `git config --worktree core.hooksPath .wade/githooks` (git ≥ 2.20; **graceful
 degrade** to warn-and-skip otherwise), so it never leaks to the main checkout or
 sibling worktrees. Because `core.hooksPath` *replaces* `.git/hooks`, the installer
-detects any pre-existing hook once at first install, persists it to
-`.wade/githooks/.chain`, and the wade hook **chains** to it (re-emitting the exact
-buffered stdin) rather than silently shadowing it. The reusable installer core is
-designed for #352 to add `pre-commit`/`commit-msg` hooks. **Honesty:**
+detects any pre-existing hook once at first install, persisting it per-hook to
+`.wade/githooks/.chain-<hook_name>` (so `pre-push`/`pre-commit`/`commit-msg` each
+chain to their own captured prior), and the wade hook **chains** to it (re-emitting
+the exact buffered stdin) rather than silently shadowing it. The same
+`install_worktree_git_hooks` batch API installs all of `pre-push`, `pre-commit`,
+and `commit-msg` in one call so their chaining stays correct. **Honesty:**
 `git push --no-verify` bypasses it in one flag — a quality/backstop layer, not a
 boundary.
 
