@@ -175,6 +175,42 @@ class TestShellContainment:
     @pytest.mark.parametrize(
         "command",
         [
+            "printf x >/dev/shm/out",  # /dev/shm is a writable tmpfs, not a discard sink
+            "tee /dev/shm/out",
+            "printf x >/dev/mqueue/out",
+            "dd of=/dev/hugepages/out if=README.md",
+        ],
+    )
+    def test_writable_dev_filesystems_denied(self, command: str) -> None:
+        """Linux mounts writable filesystems under ``/dev/`` (``/dev/shm`` tmpfs,
+        ``/dev/mqueue``, ``/dev/hugepages``). A write there persists a real file
+        outside the worktree, so the device allowlist is exact (``/dev/null`` …),
+        not a ``/dev/`` prefix — these must be denied in every mode."""
+        assert shell_containment(_shell(command), worktree_root=WT).action == "deny"
+        plan = shell_containment(_shell(command), worktree_root=WT, plan_mode=True)
+        assert plan.action == "deny"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "printf x >/dev/zero",  # non-``/dev/null`` discard sinks in the allowlist
+            "printf x >/dev/full",
+            "dd of=/dev/zero",
+            "tee /dev/tty",
+        ],
+    )
+    def test_other_discard_devices_allowed_in_plan_mode(self, command: str) -> None:
+        """The allowlist is not just ``/dev/null`` — the other enumerated discard/
+        console sinks persist nothing either, so they stay allowed in plan mode.
+
+        Only self-resolving device *nodes* are listed; the std-stream symlinks
+        (``/dev/stdout`` …) resolve to ``/dev/fd/N`` and are intentionally not here."""
+        d = shell_containment(_shell(command), worktree_root=WT, plan_mode=True)
+        assert d.action == "allow"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
             "printf 'x' > /tmp/out.txt",  # spaced redirect to temp
             "printf 'x' >/tmp/scratch.log",  # glued redirect
             "cp README.md /tmp/backup",  # write command operand into temp
