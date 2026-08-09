@@ -208,7 +208,9 @@ def _select_valid_plans(
         if file_errors:
             invalid.append(plan)
             for message in file_errors:
-                console.error(f"{plan.path.name}: {message}")
+                # Diagnostic messages can embed the plan's own (untrusted) title —
+                # render without Rich markup so bracket tokens aren't parsed.
+                console.error(f"{plan.path.name}: {message}", markup=False)
         else:
             valid.append(plan)
 

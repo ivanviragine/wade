@@ -104,9 +104,20 @@ class Console:
             f"  [success]{self.OK}[/] {message}", no_wrap=True, overflow="ignore", crop=False
         )
 
-    def error(self, message: str) -> None:
-        """Red error line to stderr."""
-        self.err.print(f"  [error]{self.ERR} Error:[/] {message}")
+    def error(self, message: str, *, markup: bool = True) -> None:
+        """Red error line to stderr.
+
+        Pass ``markup=False`` when *message* may contain untrusted text (user- or
+        provider-derived, e.g. an invalid title echoed back). With markup enabled,
+        bracketed tokens like ``[red]`` or an unbalanced ``[/]`` are parsed as Rich
+        markup and raise ``MarkupError``, crashing after the work succeeded. The
+        ``✗ Error:`` prefix stays styled either way.
+        """
+        if markup:
+            self.err.print(f"  [error]{self.ERR} Error:[/] {message}")
+        else:
+            self.err.print(f"  [error]{self.ERR} Error:[/] ", end="")
+            self.err.print(message, markup=False, highlight=False)
 
     def warn(self, message: str) -> None:
         """Yellow warning line to stderr."""
@@ -132,9 +143,17 @@ class Console:
         """Print a blank line."""
         self.out.print()
 
-    def detail(self, message: str) -> None:
-        """Indented detail line (continuation under info/step)."""
-        self.out.print(f"[dim]      {message}[/]")
+    def detail(self, message: str, *, markup: bool = True) -> None:
+        """Indented detail line (continuation under info/step).
+
+        Pass ``markup=False`` for untrusted *message* text so bracketed tokens are
+        shown literally instead of parsed as Rich markup (see :meth:`error`). The
+        dim styling and indentation are preserved either way.
+        """
+        if markup:
+            self.out.print(f"[dim]      {message}[/]")
+        else:
+            self.out.print(f"      {message}", style="dim", markup=False, highlight=False)
 
     def raw(self, text: str) -> None:
         """Print raw text without any formatting or word-wrapping.

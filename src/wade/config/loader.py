@@ -319,6 +319,7 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
         require_sync=_done_flag("require_sync"),
         require_review=_done_flag("require_review"),
         require_resolved_threads=_done_flag("require_resolved_threads"),
+        require_conventional_title=_done_flag("require_conventional_title"),
         pre_push_backstop=_done_flag("pre_push_backstop"),
         max_review_passes=_max_passes,
     )

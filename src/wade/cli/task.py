@@ -142,7 +142,9 @@ def create(
         try:
             task = create_task(title=title, body=resolved_body, extra_labels=list(label or []))
         except ConventionalTitleError as e:
-            console.error(str(e))
+            # The rejected title is echoed in the message — disable Rich markup so
+            # bracket tokens in it can't be parsed as markup (which would crash).
+            console.error(str(e), markup=False)
             console.hint(
                 "The PR title is derived from the issue title, so it must be "
                 "conventional-commit format."

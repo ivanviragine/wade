@@ -196,6 +196,7 @@ class TestParseConfigFile:
         assert config.done.require_sync is True
         assert config.done.require_review is True
         assert config.done.require_resolved_threads is True
+        assert config.done.require_conventional_title is True
         assert config.done.pre_push_backstop is True
 
     def test_done_gates_round_trip(self, tmp_path: Path) -> None:
@@ -207,6 +208,7 @@ class TestParseConfigFile:
             "  require_sync: false\n"
             "  require_review: false\n"
             "  require_resolved_threads: false\n"
+            "  require_conventional_title: false\n"
             "  pre_push_backstop: false\n"
         )
 
@@ -215,6 +217,7 @@ class TestParseConfigFile:
         assert config.done.require_sync is False
         assert config.done.require_review is False
         assert config.done.require_resolved_threads is False
+        assert config.done.require_conventional_title is False
         assert config.done.pre_push_backstop is False
 
     def test_done_flag_null_normalized_to_default(self, tmp_path: Path) -> None:

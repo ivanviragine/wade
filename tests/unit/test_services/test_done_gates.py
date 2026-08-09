@@ -8,7 +8,15 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from wade.git import branch as git_branch
-from wade.models.config import AICommandConfig, AIConfig, DoneConfig, ProjectConfig, ProjectSettings
+from wade.models.config import (
+    AICommandConfig,
+    AIConfig,
+    DoneConfig,
+    ProjectConfig,
+    ProjectSettings,
+    ProviderConfig,
+    ProviderID,
+)
 from wade.models.review import ReviewComment, ReviewThread
 from wade.models.session import SyncResult
 from wade.models.task import Task
@@ -22,6 +30,7 @@ from wade.services.implementation_service.done import (
     _gate_sync,
     _is_placeholder_pr_summary,
     _run_completion_gates,
+    _title_fix_hint,
 )
 from wade.utils import markers
 
@@ -90,6 +99,39 @@ class TestPrTitleGate:
         provider = MagicMock()
         assert _gate_pr_title(config, provider, "42") is True
         provider.read_task.assert_not_called()
+
+    def test_markup_in_title_does_not_crash(self, capsys) -> None:
+        # The rejected title is echoed back through Rich-rendering console methods.
+        # A stray `[/]` is markup that "has nothing to close" and raises
+        # MarkupError when parsed — the gate must render it literally instead of
+        # crashing after the (successful) validation work. See KNOWLEDGE.md.
+        provider = self._provider("[/] not conventional")
+        assert _gate_pr_title(ProjectConfig(), provider, "42") is False
+        out = capsys.readouterr()
+        combined = out.out + out.err
+        # Rendered literally — the raw bracket text survives to the output.
+        assert "[/] not conventional" in combined
+
+
+class TestTitleFixHint:
+    """`_title_fix_hint` points at the configured provider's title-update path."""
+
+    def test_github_uses_gh_issue_edit(self) -> None:
+        config = ProjectConfig(provider=ProviderConfig(name=ProviderID.GITHUB))
+        hint = _title_fix_hint(config, "42")
+        assert "gh issue edit 42" in hint
+
+    def test_clickup_does_not_use_gh(self) -> None:
+        config = ProjectConfig(provider=ProviderConfig(name=ProviderID.CLICKUP))
+        hint = _title_fix_hint(config, "42")
+        assert "gh issue edit" not in hint
+        assert "ClickUp" in hint
+
+    def test_markdown_does_not_use_gh(self) -> None:
+        config = ProjectConfig(provider=ProviderConfig(name=ProviderID.MARKDOWN))
+        hint = _title_fix_hint(config, "42")
+        assert "gh issue edit" not in hint
+        assert "Markdown" in hint
 
 
 class TestPlaceholderDetection:

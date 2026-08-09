@@ -429,6 +429,12 @@ Conventional-commit TITLE enforcement lives in task_service.create_task (raises 
 
 ## ca6b45e9f16f | 2026-08-08 | implementation | tags: done, conventional-commit, gates | Issue #392
 
-done()'s PR-title handling is split in two, both gated by done.require_conventional_title (both session types): (1) _gate_pr_title in _run_completion_gates BLOCKS a non-conventional issue title before push (reads provider.read_task; runs first in both branches); (2) the SYNC — update_pr_title (git/pr.py, 'gh pr edit --title') when the open PR's title differs from the issue title — lives in _done_via_pr's existing_pr branch, reusing the get_pr_for_branch lookup so no extra PR fetch. wade never guesses a prefix; it blocks or syncs only.
+done()'s PR-title handling is split in two, both gated by done.require_conventional_title (both session types): (1) `_gate_pr_title` in `_run_completion_gates` BLOCKS a non-conventional issue title before push (reads provider.read_task; runs first in both branches); (2) the SYNC — `update_pr_title` (git/pr.py, 'gh pr edit --title') when the open PR's title differs from the issue title — lives in `_done_via_pr`'s existing_pr branch, reusing the get_pr_for_branch lookup so no extra PR fetch. wade never guesses a prefix; it blocks or syncs only.
+
+---
+
+## 5f47827434b9 | 2026-08-09 | implementation | tags: console, error-handling, rich, conventional-commit | Issue #392
+
+conventional_title_error() (utils/conventional.py) must NOT escape/sanitize the title it echoes — conventional.py is stdlib-only by contract (wade-hook Stop cold-start), so no rich import even lazily. Instead sanitize untrusted titles at the RENDER boundary: console.error()/console.detail() take a keyword-only markup=False (added #392) that shows bracket tokens like a stray [/] literally while keeping the prefix/dim styling, avoiding the MarkupError crash (see 66c7e8b329cc). Every site that prints a non-conventional title must pass markup=False: task_service.create_interactive, done._gate_pr_title, cli/task + core + done plan-file ConventionalTitleError handlers, plan_service._select_valid_plans, cli/plan_session.done.
 
 ---

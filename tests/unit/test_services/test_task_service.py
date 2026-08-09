@@ -372,7 +372,10 @@ class TestCreateInteractive:
 
         titles = iter(["E3: bad title", "feat: good title"])
         monkeypatch.setattr(prompts, "input_prompt", lambda *a, **k: next(titles))
-        monkeypatch.setattr(prompts, "is_tty", lambda: False)
+        # create_interactive reads sys.stdin.isatty() directly for the body-input
+        # path — patch that (not prompts.is_tty) so it takes the non-interactive
+        # branch (empty body) regardless of the test runner's stdin.
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
 
         task = create_interactive(config=config, provider=mock_provider)
         assert task is not None
@@ -387,7 +390,9 @@ class TestCreateInteractive:
 
         titles = iter(["E3: bad title", ""])
         monkeypatch.setattr(prompts, "input_prompt", lambda *a, **k: next(titles))
-        monkeypatch.setattr(prompts, "is_tty", lambda: False)
+        # See sibling test: patch sys.stdin.isatty (what create_interactive reads),
+        # not prompts.is_tty, so the body-input path is deterministic.
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
 
         task = create_interactive(config=config, provider=mock_provider)
         assert task is None

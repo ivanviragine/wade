@@ -456,7 +456,9 @@ def create_interactive(
     # prompt returns "" (its default), so this breaks with "Title is required"
     # instead of looping.
     while not is_conventional_title(title):
-        console.error(conventional_title_error(title))
+        # The title is user-supplied — render it without Rich markup so a title
+        # like "[wip] foo" is shown literally instead of crashing on markup.
+        console.error(conventional_title_error(title), markup=False)
         title = prompts.input_prompt("Task title (conventional-commit format, e.g. 'feat: ...')")
         if not title:
             console.error("Title is required")

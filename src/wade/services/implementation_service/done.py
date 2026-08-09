@@ -134,7 +134,9 @@ def done(
             try:
                 task = create_from_plan_file(target_path, config=config, provider=provider)
             except ConventionalTitleError as e:
-                console.error(str(e))
+                # Title comes from the plan file — disable Rich markup so bracket
+                # tokens in it are shown literally rather than parsed as markup.
+                console.error(str(e), markup=False)
                 console.hint(
                     f"Fix the plan file's `# Title` heading in {target} to a "
                     "conventional-commit title, then re-run done."
@@ -404,6 +406,28 @@ def _gate_knowledge_valid(config: ProjectConfig, worktree_root: Path) -> bool:
     return False
 
 
+def _title_fix_hint(config: ProjectConfig, issue_number: str) -> str:
+    """Provider-aware instruction for correcting a non-conventional task title.
+
+    The task-provider abstraction means the "task" is a GitHub issue, a ClickUp
+    task, or a row in the central Markdown file — so ``gh issue edit`` is correct
+    only for the GitHub provider. For the others it would fail, leave ``done``
+    blocked, or (worst case) mutate an unrelated GitHub issue with the same id.
+    Point the user at the configured provider's own title-update path instead.
+    """
+    from wade.models.config import ProviderID
+
+    suffix = "(choose feat/fix/... — wade won't guess), then re-run done."
+    if config.provider.name == ProviderID.CLICKUP:
+        return f"Fix it: rename task {issue_number} in ClickUp to `<type>: ...` {suffix}"
+    if config.provider.name == ProviderID.MARKDOWN:
+        return (
+            f"Fix it: edit task {issue_number}'s title in the tasks Markdown file "
+            f"to `<type>: ...` {suffix}"
+        )
+    return f'Fix it: `gh issue edit {issue_number} --title "<type>: ..."` {suffix}'
+
+
 def _gate_pr_title(
     config: ProjectConfig,
     provider: AbstractTaskProvider,
@@ -439,11 +463,10 @@ def _gate_pr_title(
         f"Issue #{issue_number} title is not a conventional-commit title — "
         "the PR Title Lint CI check would fail."
     )
-    console.detail(conventional_title_error(task.title))
-    console.hint(
-        f'Fix it: `gh issue edit {issue_number} --title "<type>: ..."` '
-        "(choose feat/fix/... — wade won't guess), then re-run done."
-    )
+    # The issue title is provider-derived — render without Rich markup so bracket
+    # tokens in it are shown literally, not parsed as markup (which would crash).
+    console.detail(conventional_title_error(task.title), markup=False)
+    console.hint(_title_fix_hint(config, issue_number))
     console.hint("Bypass: set `done.require_conventional_title: false` in .wade.yml.")
     return False
 

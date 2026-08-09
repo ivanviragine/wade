@@ -769,7 +769,9 @@ def _resolve_task_target(
         try:
             task = create_from_plan_file(target_path, config=config, provider=provider)
         except ConventionalTitleError as e:
-            console.error(str(e))
+            # Title comes from the plan file — disable Rich markup so bracket
+            # tokens in it are shown literally rather than parsed as markup.
+            console.error(str(e), markup=False)
             console.hint(
                 f"Fix the plan file's `# Title` heading in {target} to a "
                 "conventional-commit title, then re-run."

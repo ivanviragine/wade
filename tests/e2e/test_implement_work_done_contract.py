@@ -423,7 +423,11 @@ class TestWorkDoneCommand:
     ) -> None:
         """implementation-session done should block tracked wade-managed Claude files."""
         issue_number = 47
-        issue_title = "Block tracked managed Claude files"
+        # Conventional title so the fixture stays realistic and independent of gate
+        # ordering — the tracked-managed-files check runs before the title gate
+        # today, but a conventional title keeps this test asserting the intended
+        # failure even if that order ever changes.
+        issue_title = "fix: block tracked managed Claude files"
         _seed_mock_issue(
             mock_gh_cli["state_file"],
             issue_number=issue_number,
