@@ -17,7 +17,7 @@ from pathlib import Path
 
 import structlog
 
-from wade.git.repo import GitError, _run_git, _run_git_with_retry
+from wade.git.repo import GitError, _index_lock_present, _run_git, _run_git_with_retry
 
 log = structlog.get_logger(__name__)
 
@@ -56,9 +56,23 @@ def create_named_stash(session_type: str, branch: str, cwd: Path) -> tuple[str, 
     """
     message = _stash_message(session_type, branch)
     # Retry transient index-lock contention from parallel worktrees (C3).
-    result = _run_git_with_retry("stash", "push", "-m", message, cwd=cwd, check=False)
+    # probe_index_lock=True: older git (2.43.0) fails `stash push` under a held
+    # index.lock with empty stderr, so stderr matching alone misses the
+    # contention; the direct lock-file probe is version-independent (#374).
+    result = _run_git_with_retry(
+        "stash", "push", "-m", message, cwd=cwd, check=False, probe_index_lock=True
+    )
     if result.returncode != 0:
-        raise GitError(f"git stash push failed: {result.stderr.strip()}")
+        reason = result.stderr.strip()
+        if not reason:
+            # Older git swallows the child's stderr on a locked index, leaving no
+            # reason to surface. Report the exit code and whether a lock file is
+            # present so the failure is never blank (#374).
+            locked = _index_lock_present(cwd)
+            reason = f"exit {result.returncode}, no stderr; " + (
+                "index.lock present (lock contention)" if locked else "no index.lock detected"
+            )
+        raise GitError(f"git stash push failed: {reason}")
     stdout = result.stdout.strip()
     if stdout == "No local changes to save":
         raise GitError("No local changes to save")
