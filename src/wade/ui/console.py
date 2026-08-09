@@ -11,6 +11,7 @@ import sys
 from typing import TYPE_CHECKING, Any
 
 from rich.console import Console as RichConsole
+from rich.markup import escape as _rich_escape
 from rich.theme import Theme
 
 if TYPE_CHECKING:
@@ -98,15 +99,39 @@ class Console:
     # Original methods (unchanged signatures)
     # ------------------------------------------------------------------
 
-    def success(self, message: str) -> None:
-        """Green checkmark line to stdout."""
-        self.out.print(
-            f"  [success]{self.OK}[/] {message}", no_wrap=True, overflow="ignore", crop=False
-        )
+    def success(self, message: str, *, markup: bool = True) -> None:
+        """Green checkmark line to stdout.
 
-    def error(self, message: str) -> None:
-        """Red error line to stderr."""
-        self.err.print(f"  [error]{self.ERR} Error:[/] {message}")
+        Pass ``markup=False`` when *message* may contain untrusted text (user- or
+        provider-derived, e.g. a title echoed back). With markup enabled, bracketed
+        tokens like ``[red]`` or an unbalanced ``[/]`` are parsed as Rich markup and
+        raise ``MarkupError``, crashing after the work succeeded (see :meth:`error`).
+        The ``✓`` prefix stays styled either way.
+        """
+        if markup:
+            self.out.print(
+                f"  [success]{self.OK}[/] {message}", no_wrap=True, overflow="ignore", crop=False
+            )
+        else:
+            self.out.print(f"  [success]{self.OK}[/] ", end="")
+            self.out.print(
+                message, markup=False, highlight=False, no_wrap=True, overflow="ignore", crop=False
+            )
+
+    def error(self, message: str, *, markup: bool = True) -> None:
+        """Red error line to stderr.
+
+        Pass ``markup=False`` when *message* may contain untrusted text (user- or
+        provider-derived, e.g. an invalid title echoed back). With markup enabled,
+        bracketed tokens like ``[red]`` or an unbalanced ``[/]`` are parsed as Rich
+        markup and raise ``MarkupError``, crashing after the work succeeded. The
+        ``✗ Error:`` prefix stays styled either way.
+        """
+        if markup:
+            self.err.print(f"  [error]{self.ERR} Error:[/] {message}")
+        else:
+            self.err.print(f"  [error]{self.ERR} Error:[/] ", end="")
+            self.err.print(message, markup=False, highlight=False)
 
     def warn(self, message: str) -> None:
         """Yellow warning line to stderr."""
@@ -132,9 +157,17 @@ class Console:
         """Print a blank line."""
         self.out.print()
 
-    def detail(self, message: str) -> None:
-        """Indented detail line (continuation under info/step)."""
-        self.out.print(f"[dim]      {message}[/]")
+    def detail(self, message: str, *, markup: bool = True) -> None:
+        """Indented detail line (continuation under info/step).
+
+        Pass ``markup=False`` for untrusted *message* text so bracketed tokens are
+        shown literally instead of parsed as Rich markup (see :meth:`error`). The
+        dim styling and indentation are preserved either way.
+        """
+        if markup:
+            self.out.print(f"[dim]      {message}[/]")
+        else:
+            self.out.print(f"      {message}", style="dim", markup=False, highlight=False)
 
     def raw(self, text: str) -> None:
         """Print raw text without any formatting or word-wrapping.
@@ -179,6 +212,17 @@ class Console:
     def plain(self, message: str) -> None:
         """Plain text to stdout."""
         self.out.print(message, highlight=False)
+
+    def escape_markup(self, text: str) -> str:
+        """Escape Rich markup in untrusted *text* so bracket tokens render literally.
+
+        For free-text that is interpolated INTO a markup-styled string (a title in
+        a panel/kv/step, etc.) rather than passed as a standalone ``message`` — the
+        keyword-only ``markup=False`` on :meth:`error`/:meth:`detail`/:meth:`success`
+        cannot help there because the surrounding string still carries intentional
+        markup. A stray ``[/]`` in the text would otherwise raise ``MarkupError``.
+        """
+        return _rich_escape(text)
 
     # ------------------------------------------------------------------
     # New methods — Phase 1b
@@ -283,10 +327,10 @@ class Console:
             grouped.setdefault(from_id, []).append((to_id, reason))
 
         for from_id, deps in grouped.items():
-            from_label = f"[task.number]#{from_id}[/] {titles.get(from_id, '')}"
+            from_label = f"[task.number]#{from_id}[/] {_rich_escape(titles.get(from_id, ''))}"
             branch = tree.add(from_label)
             for to_id, reason in deps:
-                to_label = f"[task.number]#{to_id}[/] {titles.get(to_id, '')}"
+                to_label = f"[task.number]#{to_id}[/] {_rich_escape(titles.get(to_id, ''))}"
                 if reason:
                     to_label += f"  [dim]({reason})[/]"
                 branch.add(to_label)
@@ -309,10 +353,16 @@ class Console:
         return f"[{style}]\\[{label.upper()}\\][/]"
 
     def issue_ref(self, number: str, title: str = "") -> str:
-        """Return a styled #N Title reference string."""
+        """Return a styled #N Title reference string.
+
+        The title is provider-derived free text — escape it so a bracket token
+        (e.g. a stray ``[/]``) renders literally instead of being parsed as Rich
+        markup and raising ``MarkupError`` at every call site that prints this
+        string with markup enabled (kv/panel/success/…). See :meth:`escape_markup`.
+        """
         ref = f"[task.number]#{number}[/]"
         if title:
-            ref += f"  {title}"
+            ref += f"  {_rich_escape(title)}"
         return ref
 
     def git_ref(self, branch: str) -> str:

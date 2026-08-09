@@ -62,6 +62,8 @@ The human creates worktrees via `wade implement` or `wade implement-batch`.
 
 Use [Conventional Commits](https://www.conventionalcommits.org/) format. Prefer
 `git commit` (opens an editor) over `git commit -m` for multi-line messages.
+The **issue title** must be conventional too — the PR title derives from it, so
+`done` blocks a non-conventional title (fix it as `done` instructs, then re-run).
 
 ## Closing the session
 

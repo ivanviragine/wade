@@ -22,7 +22,12 @@ from wade.skills.installer import (
 )
 
 # Session-start payload ceiling (launch prompt + rendered SKILL.md), in chars.
-BUDGET_CHARS = 8000
+# Bumped 8000 -> 8200 for #392: the implementation-session skill gained a short,
+# load-bearing note that the issue title (and thus the derived PR title) must be
+# conventional-commit format — code now enforces this at `done`, and the note
+# tells the agent how to react. The guard still catches *silent* regressions;
+# this bump is the explicit, reviewed adjustment it is designed to force.
+BUDGET_CHARS = 8200
 
 # (session label, launch prompt template, phase skill dir name)
 _SESSIONS = [

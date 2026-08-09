@@ -1294,7 +1294,7 @@ class TestDone:
         subprocess.run(["git", "commit", "-m", "test"], cwd=wt_dir, check=True)
 
         mock_provider = MagicMock()
-        mock_task = Task(id="2", title="Child", body="", state=TaskState.OPEN)
+        mock_task = Task(id="2", title="feat: child", body="", state=TaskState.OPEN)
         mock_provider.read_task.return_value = mock_task
         mock_provider.find_parent_issue.return_value = None
 

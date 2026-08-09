@@ -25,7 +25,9 @@ def done(
         console.warn(f"{diag.file}: {diag.message}")
 
     for diag in result.errors:
-        console.error(f"{diag.file}: {diag.message}")
+        # A diagnostic can embed the plan's own (untrusted) title — render without
+        # Rich markup so bracket tokens in it aren't parsed as markup.
+        console.error(f"{diag.file}: {diag.message}", markup=False)
 
     if result.has_errors:
         n = len(result.errors)

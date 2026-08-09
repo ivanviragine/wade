@@ -421,6 +421,21 @@ Never print untrusted AI/delegation output through Rich with markup enabled: `co
 
 ---
 
+## 40a26d7cfd61 | 2026-08-08 | implementation | tags: conventional-commit, task-creation, gotcha | Issue #392
+
+Conventional-commit TITLE enforcement lives in task_service.create_task (raises ConventionalTitleError from utils/conventional.py), NOT provider.create_task. So deps_service tracking issues ('Tracking: …', deps_service.py:323) and plan_service (pre-validated by _select_valid_plans, plan_service.py:731) call provider.create_task DIRECTLY and are intentionally exempt from the raise — do not move enforcement to the provider layer or you break those system callers. utils/conventional.py is the single Python source of the 12-type list; plan_validation.py imports its regex from there.
+
+---
+
+## ca6b45e9f16f | 2026-08-08 | implementation | tags: done, conventional-commit, gates | Issue #392
+
+done()'s PR-title handling is split in two, both gated by done.require_conventional_title (both session types): (1) `_gate_pr_title` in `_run_completion_gates` BLOCKS a non-conventional issue title before push (reads provider.read_task; runs first in both branches); (2) the SYNC — `update_pr_title` (git/pr.py, 'gh pr edit --title') when the open PR's title differs from the issue title — lives in `_done_via_pr`'s existing_pr branch, reusing the get_pr_for_branch lookup so no extra PR fetch. wade never guesses a prefix; it blocks or syncs only. GOTCHA: _gate_pr_title is NON-BLOCKING on a provider read failure (returns True), so _done_via_pr cannot assume task.title was validated. task.title becomes the PR title verbatim in BOTH the sync (existing-PR) and create-new-PR branches, so _done_via_pr re-checks is_conventional_title(task.title) ONCE as a BACKSTOP right after its own read — BEFORE the push/PR-lookup — and refuses (return False) for both branches. (Guarding only the sync branch is a bug: the create-fallback would still open a bad-titled PR.) And on a sync-push FAILURE, _done_via_pr fails done only when the CURRENT pr title is itself non-conventional (lint would fail); if the stale pr title is already conventional the failure is non-blocking (warn+continue).
+
+---
+
+## 5f47827434b9 | 2026-08-09 | implementation | tags: console, error-handling, rich, conventional-commit | Issue #392
+
+conventional_title_error() (utils/conventional.py) must NOT escape/sanitize the title it echoes — conventional.py is stdlib-only by contract (wade-hook Stop cold-start), so no rich import even lazily. Instead sanitize untrusted titles at the RENDER boundary. TWO complementary mechanisms (both #392): (1) for a title passed as a standalone `message`, console.error()/console.detail()/console.success() take a keyword-only markup=False that renders it literally while keeping prefix/styling — used by task_service.create_interactive, done._gate_pr_title, done._done_via_pr's PR-title-sync success line, cli/task + core + done plan-file ConventionalTitleError handlers, plan_service._select_valid_plans, cli/plan_session.done. (2) for a title INTERPOLATED INTO a markup string (surrounding markup can't be turned off), escape it with rich.markup.escape — console.issue_ref() and console.dep_tree() escape titles internally (fixing ALL their call sites at once: kv/panel/success in task_service, plan_service, core, done's 'Implementation done' panel, review_service, smart_start), and console.escape_markup() wraps escape for the remaining inline sites (task_service panel title, plan_service kv, deps_service step). Rule of thumb: standalone message -> markup=False; title spliced into a styled f-string -> escape_markup/issue_ref. Avoids the MarkupError crash (see 66c7e8b329cc).
 ## 80bd211a5157 | 2026-08-09 | implementation | tags: git, stash, concurrency | Issue #374
 
 On git 2.43.0, `git stash push` under a held index.lock exits non-zero with EMPTY stdout AND stderr (verified), so _LOCK_PATTERNS stderr matching alone is git-version-dependent for stash push (newer git ~2.50 prints 'could not write index'). wade instead probes the lock file directly via git/repo.py _index_lock_present, opted in with _run_git_with_retry(..., probe_index_lock=True) from create_named_stash. Companion to entry 801e1af0 (which documented only the newer-git message).

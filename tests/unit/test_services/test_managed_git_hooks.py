@@ -146,6 +146,15 @@ class TestCommitMsgGate:
         r = _commit(wt, "b.txt", "feat(hooks): add a thing")
         assert r.returncode == 0, r.stderr
 
+    def test_allows_update_type(self, tmp_path: Path) -> None:
+        # `update` is part of the canonical type list (earns a minor bump) and CI
+        # accepts it; the hook must too. Regression guard for the historical
+        # 11-vs-12-type mismatch where the hook omitted `update`.
+        _main, wt = _main_and_worktree(tmp_path)
+        self._install(wt)
+        r = _commit(wt, "b.txt", "update: refresh dependency pins")
+        assert r.returncode == 0, r.stderr
+
     def test_blocks_untyped_subject_with_breaking_footer(self, tmp_path: Path) -> None:
         # A BREAKING CHANGE footer marks a typed commit as breaking; it does not
         # license an untyped subject, which must still be rejected.

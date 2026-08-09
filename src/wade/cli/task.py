@@ -122,6 +122,7 @@ def create(
         from pathlib import Path
 
         from wade.services.task_service import create_task
+        from wade.utils.conventional import ConventionalTitleError
 
         # Resolve body: --body-file takes precedence over --body
         resolved_body = ""
@@ -138,7 +139,17 @@ def create(
         elif body:
             resolved_body = body
 
-        task = create_task(title=title, body=resolved_body, extra_labels=list(label or []))
+        try:
+            task = create_task(title=title, body=resolved_body, extra_labels=list(label or []))
+        except ConventionalTitleError as e:
+            # The rejected title is echoed in the message — disable Rich markup so
+            # bracket tokens in it can't be parsed as markup (which would crash).
+            console.error(str(e), markup=False)
+            console.hint(
+                "The PR title is derived from the issue title, so it must be "
+                "conventional-commit format."
+            )
+            raise typer.Exit(1) from None
     else:
         from wade.services.task_service import create_interactive
 

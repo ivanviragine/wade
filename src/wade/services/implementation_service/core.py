@@ -763,9 +763,20 @@ def _resolve_task_target(
     target_path = Path(target).expanduser()
     if target_path.is_file():
         from wade.services.task_service import create_from_plan_file
+        from wade.utils.conventional import ConventionalTitleError
 
         console.info(f"Creating issue from plan file: {target}")
-        task = create_from_plan_file(target_path, config=config, provider=provider)
+        try:
+            task = create_from_plan_file(target_path, config=config, provider=provider)
+        except ConventionalTitleError as e:
+            # Title comes from the plan file — disable Rich markup so bracket
+            # tokens in it are shown literally rather than parsed as markup.
+            console.error(str(e), markup=False)
+            console.hint(
+                f"Fix the plan file's `# Title` heading in {target} to a "
+                "conventional-commit title, then re-run."
+            )
+            return None
         return task
 
     # Treat as issue number — strip leading "#" so "#123" and "123" both work

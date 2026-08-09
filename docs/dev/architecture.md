@@ -117,7 +117,8 @@ src/wade/
     ├── terminal.py      # Tab title, TTY detection, launch_in_new_terminal
     ├── slug.py          # Title -> URL-safe slug
     ├── markdown.py      # Plan file parsing
-    ├── plan_validation.py # Lean plan-file validator (discover/validate/has_valid_plan) — Stop-path safe
+    ├── conventional.py  # Canonical conventional-commit TITLE validator (types + is_conventional_title) — stdlib-only, single Python source of truth
+    ├── plan_validation.py # Lean plan-file validator (discover/validate/has_valid_plan) — Stop-path safe; sources its title regex from conventional.py
     ├── process.py       # Subprocess helpers
     ├── http.py          # HTTPClient for REST API providers
     ├── markers.py       # sha-keyed .wade/<name>@<sha> completion markers (done, reviewed, stop-nudged)
@@ -464,6 +465,7 @@ done:                        # completion-gate toggles (all default true)
   require_sync: true
   require_review: true
   require_resolved_threads: true
+  require_conventional_title: true  # block a non-conventional issue title; sync it onto the PR (#392)
   pre_push_backstop: true
   max_review_passes: 2       # impl-session review→fix loop cap (#384); strict positive int
 ```

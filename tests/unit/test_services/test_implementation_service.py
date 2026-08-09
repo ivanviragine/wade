@@ -416,10 +416,10 @@ class TestResolveTarget:
 
     def test_resolves_plan_file(self, tmp_path: Path) -> None:
         plan = tmp_path / "PLAN.md"
-        plan.write_text("# New Feature\n\n## Tasks\n- Do stuff\n")
+        plan.write_text("# feat: new feature\n\n## Tasks\n- Do stuff\n")
 
         provider = MagicMock()
-        provider.create_task.return_value = Task(id="99", title="New Feature")
+        provider.create_task.return_value = Task(id="99", title="feat: new feature")
         config = ProjectConfig(
             project=ProjectSettings(issue_label="feature-plan"),
         )

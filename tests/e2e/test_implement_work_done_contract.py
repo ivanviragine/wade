@@ -210,7 +210,7 @@ class TestWorkDoneCommand:
     ) -> None:
         """implementation-session done should push branch and update draft PR path."""
         issue_number = 43
-        issue_title = "Finalize work done command contract"
+        issue_title = "fix: finalize work done command contract"
         _seed_mock_issue(
             mock_gh_cli["state_file"],
             issue_number=issue_number,
@@ -219,7 +219,7 @@ class TestWorkDoneCommand:
         )
         origin_repo = _init_origin_remote(e2e_repo)
 
-        branch_name = "feat/43-finalize-work-done-command-contract"
+        branch_name = "feat/43-fix-finalize-work-done-command-contract"
 
         start_result = _run(["implement", str(issue_number), "--cd"], cwd=e2e_repo)
         assert start_result.returncode == 0
@@ -273,7 +273,7 @@ class TestWorkDoneCommand:
         """implementation-session done should detect parent issues from modern checklist refs."""
         tracking_issue = 100
         issue_number = 45
-        issue_title = "Finalize parent issue detection"
+        issue_title = "fix: finalize parent issue detection"
         _seed_mock_issue(
             mock_gh_cli["state_file"],
             issue_number=tracking_issue,
@@ -290,7 +290,7 @@ class TestWorkDoneCommand:
         )
         _init_origin_remote(e2e_repo)
 
-        branch_name = "feat/45-finalize-parent-issue-detection"
+        branch_name = "feat/45-fix-finalize-parent-issue-detection"
 
         start_result = _run(["implement", str(issue_number), "--cd"], cwd=e2e_repo)
         assert start_result.returncode == 0
@@ -331,7 +331,7 @@ class TestWorkDoneCommand:
         exact-sha ``reviewed`` marker — the exact loop the cap must bound.
         """
         issue_number = 84
-        issue_title = "Bound the review loop"
+        issue_title = "fix: bound the review loop"
         _seed_mock_issue(
             mock_gh_cli["state_file"],
             issue_number=issue_number,
@@ -339,7 +339,7 @@ class TestWorkDoneCommand:
             body="## Tasks\n- Cap the review loop\n",
         )
         origin_repo = _init_origin_remote(e2e_repo)
-        branch_name = "feat/84-bound-the-review-loop"
+        branch_name = "feat/84-fix-bound-the-review-loop"
 
         start_result = _run(["implement", str(issue_number), "--cd"], cwd=e2e_repo)
         assert start_result.returncode == 0
@@ -423,7 +423,11 @@ class TestWorkDoneCommand:
     ) -> None:
         """implementation-session done should block tracked wade-managed Claude files."""
         issue_number = 47
-        issue_title = "Block tracked managed Claude files"
+        # Conventional title so the fixture stays realistic and independent of gate
+        # ordering — the tracked-managed-files check runs before the title gate
+        # today, but a conventional title keeps this test asserting the intended
+        # failure even if that order ever changes.
+        issue_title = "fix: block tracked managed Claude files"
         _seed_mock_issue(
             mock_gh_cli["state_file"],
             issue_number=issue_number,

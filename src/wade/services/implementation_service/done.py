@@ -41,6 +41,10 @@ from wade.ui import prompts
 from wade.ui.console import console
 from wade.utils import markers
 from wade.utils.body_markers import build_marked_block, update_body_preserving_markers
+from wade.utils.conventional import (
+    conventional_title_error,
+    is_conventional_title,
+)
 from wade.utils.markdown import remove_marker_block
 
 logger = structlog.get_logger()
@@ -121,9 +125,23 @@ def done(
         target_path = Path(target).expanduser()
         if target_path.is_file():
             from wade.services.task_service import create_from_plan_file
+            from wade.utils.conventional import ConventionalTitleError
 
             console.info(f"Creating issue from plan file: {target}")
-            task = create_from_plan_file(target_path, config=config, provider=provider)
+            # create_from_plan_file now hard-validates the plan's `# Title` — a
+            # non-conventional title raises. Surface it as a clean, actionable
+            # message (not a traceback) with a non-zero exit.
+            try:
+                task = create_from_plan_file(target_path, config=config, provider=provider)
+            except ConventionalTitleError as e:
+                # Title comes from the plan file — disable Rich markup so bracket
+                # tokens in it are shown literally rather than parsed as markup.
+                console.error(str(e), markup=False)
+                console.hint(
+                    f"Fix the plan file's `# Title` heading in {target} to a "
+                    "conventional-commit title, then re-run done."
+                )
+                return False
             if not task:
                 return False
             target = task.id
@@ -255,6 +273,7 @@ def done(
         worktree_root=worktree_root,
         branch=branch,
         main_branch=main_branch,
+        issue_number=issue_number,
         pre_sync_head=pre_sync_head,
         skip_review=skip_review,
     ):
@@ -307,6 +326,7 @@ def _run_completion_gates(
     worktree_root: Path,
     branch: str,
     main_branch: str,
+    issue_number: str,
     pre_sync_head: str,
     skip_review: bool,
 ) -> bool:
@@ -317,8 +337,15 @@ def _run_completion_gates(
     reviewed — runs against the **pre-sync HEAD**, before sync. A clean,
     zero-conflict merge of main is therefore accepted without a fresh review (a
     main-merge is not new authored work).
+
+    The PR-title gate runs first for **both** session types (shared, parameterized
+    ``done()`` — knowledge 851bb6ec): it blocks the earliest on a non-conventional
+    issue title, before any push/PR mutation. Its complementary sync (pushing a
+    corrected title onto an open PR) lives in ``_done_via_pr``.
     """
     if session_type == "review-pr-comments":
+        if not _gate_pr_title(config, provider, issue_number):
+            return False
         if not _gate_resolved_threads(config, provider, repo_root, branch):
             return False
         # review-pr-comments keeps the unbounded fast-path-or-refuse behavior:
@@ -330,6 +357,8 @@ def _run_completion_gates(
         return _gate_knowledge_valid(config, worktree_root)
 
     # Default: implementation session.
+    if not _gate_pr_title(config, provider, issue_number):
+        return False
     if not _gate_pr_summary(config, worktree_root):
         return False
     if not _gate_review_ran(
@@ -374,6 +403,71 @@ def _gate_knowledge_valid(config: ProjectConfig, worktree_root: Path) -> bool:
     for problem in problems:
         console.detail(problem)
     console.hint("Repair the knowledge file (dedupe entries / fix headings), commit, then re-run.")
+    return False
+
+
+def _title_fix_hint(config: ProjectConfig, issue_number: str) -> str:
+    """Provider-aware instruction for correcting a non-conventional task title.
+
+    The task-provider abstraction means the "task" is a GitHub issue, a ClickUp
+    task, or a row in the central Markdown file — so ``gh issue edit`` is correct
+    only for the GitHub provider. For the others it would fail, leave ``done``
+    blocked, or (worst case) mutate an unrelated GitHub issue with the same id.
+    Point the user at the configured provider's own title-update path instead.
+    """
+    from wade.models.config import ProviderID
+
+    suffix = "(choose feat/fix/... — wade won't guess), then re-run done."
+    if config.provider.name == ProviderID.CLICKUP:
+        return f"Fix it: rename task {issue_number} in ClickUp to `<type>: ...` {suffix}"
+    if config.provider.name == ProviderID.MARKDOWN:
+        return (
+            f"Fix it: edit task {issue_number}'s title in the tasks Markdown file "
+            f"to `<type>: ...` {suffix}"
+        )
+    return f'Fix it: `gh issue edit {issue_number} --title "<type>: ..."` {suffix}'
+
+
+def _gate_pr_title(
+    config: ProjectConfig,
+    provider: AbstractTaskProvider,
+    issue_number: str,
+) -> bool:
+    """Refuse when the issue title is not a conventional-commit title.
+
+    The PR title is derived from the issue title verbatim (``_done_via_pr`` opens
+    the PR with ``task.title`` and syncs an existing PR to it), so a
+    non-conventional issue title fails the ``PR Title Lint`` CI check. Blocking
+    here — before push and before any PR mutation — keeps a bad title from ever
+    reaching a PR. wade never guesses a prefix (``feat`` vs ``fix`` is not
+    deterministic); the human/agent owns the title *content*, code owns the
+    *format*.
+
+    A provider read failure is non-blocking, consistent with the other lookup
+    gates: ``_done_via_pr`` reads the same issue and surfaces a hard read error
+    there. No-op when ``done.require_conventional_title`` is disabled.
+    """
+    if not config.done.require_conventional_title:
+        return True
+    try:
+        task = provider.read_task(issue_number)
+    except Exception as exc:
+        console.warn(
+            f"Could not read issue #{issue_number} to validate its title (non-blocking): {exc}"
+        )
+        logger.debug("done.title_gate_read_failed", exc_info=True)
+        return True
+    if is_conventional_title(task.title):
+        return True
+    console.error(
+        f"Issue #{issue_number} title is not a conventional-commit title — "
+        "the PR Title Lint CI check would fail."
+    )
+    # The issue title is provider-derived — render without Rich markup so bracket
+    # tokens in it are shown literally, not parsed as markup (which would crash).
+    console.detail(conventional_title_error(task.title), markup=False)
+    console.hint(_title_fix_hint(config, issue_number))
+    console.hint("Bypass: set `done.require_conventional_title: false` in .wade.yml.")
     return False
 
 
@@ -780,6 +874,23 @@ def _done_via_pr(
         console.error(f"Cannot read issue #{issue_number}: {e}")
         return False
 
+    # Backstop for _gate_pr_title's non-blocking read path. task.title becomes the
+    # PR title verbatim — both when syncing an existing PR and when creating a new
+    # one below. The done() gate normally validates it, but that gate returns True
+    # (skips validation) if its own provider.read_task RAISED. If that read failed
+    # in the gate yet the read just above succeeded, task.title is unvalidated —
+    # refuse here, before any push or PR mutation, rather than let a non-conventional
+    # title reach the PR and fail PR Title Lint (which would silently undermine
+    # require_conventional_title). Re-running done re-validates via the gate (whose
+    # read likely succeeds now) for a clean, actionable block.
+    if config.done.require_conventional_title and not is_conventional_title(task.title):
+        console.error(
+            f"Issue #{issue_number} title is not a conventional-commit title — "
+            "refusing to put it on the PR (PR Title Lint would fail)."
+        )
+        console.hint("Re-run done — the title gate will re-validate and guide the fix.")
+        return False
+
     # Push branch (with non-fast-forward divergence recovery — never a silent
     # force-push). `_push_branch_with_recovery` owns the `done` marker: it writes
     # `.wade/done@<pushed sha>` right before each push (so `done`'s own push
@@ -824,6 +935,42 @@ def _done_via_pr(
         pr_number = existing_pr.number
         pr_url = existing_pr.url
         console.step(f"Updating existing PR #{pr_number}...")
+
+        # Sync the PR title to the issue title. A PR opened before conventional-
+        # title enforcement — or whose issue title was corrected after the PR
+        # opened — can carry a stale title that fails PR Title Lint. task.title is
+        # guaranteed conventional here (validated by the done() gate, or by the
+        # backstop above when the gate's read failed), so pushing it is safe.
+        #
+        # The response to a sync failure hinges on whether the *current* PR title
+        # would pass PR Title Lint. The sync fires on any title mismatch, and a
+        # stale PR title may itself already be conventional (e.g. a manually
+        # edited PR title that merely differs from the issue). In that case a
+        # transient gh failure is non-blocking — lint still passes, so warn and
+        # let an otherwise-complete done succeed. But if the stale title is NOT
+        # conventional, lint will fail; failing the sync must then fail done —
+        # that is the whole point of require_conventional_title. The branch and
+        # `.wade/done@<sha>` marker are already pushed, so re-running done retries
+        # the sync idempotently.
+        if config.done.require_conventional_title and existing_pr.title != task.title:
+            if git_pr.update_pr_title(repo_root, pr_number, task.title):
+                # markup=False: the issue title is provider-derived — a bracket
+                # token like `[/]` in it would be parsed as Rich markup and crash
+                # this success line (the very MarkupError class this PR removes).
+                console.success(f"PR title synced to issue title: {task.title}", markup=False)
+            elif not is_conventional_title(existing_pr.title):
+                console.error(
+                    "Could not sync the PR title to the issue title, and the "
+                    "current PR title is not conventional — PR Title Lint would "
+                    "fail. Re-run done to retry (it is idempotent), or fix the "
+                    "PR title manually."
+                )
+                return False
+            else:
+                console.warn(
+                    "Could not update the PR title to match the issue — "
+                    "update it manually so the PR title tracks the issue."
+                )
 
         # Build summary content
         summary_content = ""

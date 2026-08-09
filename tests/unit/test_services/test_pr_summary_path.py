@@ -25,7 +25,9 @@ class TestPrSummaryPathResolution:
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
 
-        task = Task(id="42", title="Add auth", body="## Tasks\n- Login\n")
+        # Conventional title: _done_via_pr's title backstop refuses a
+        # non-conventional title under the default require_conventional_title.
+        task = Task(id="42", title="feat: add auth", body="## Tasks\n- Login\n")
 
         config = ProjectConfig(
             project=ProjectSettings(main_branch="main"),
@@ -76,7 +78,9 @@ class TestPrSummaryPathResolution:
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
 
-        task = Task(id="42", title="Add auth", body="## Tasks\n- Login\n")
+        # Conventional title: _done_via_pr's title backstop refuses a
+        # non-conventional title under the default require_conventional_title.
+        task = Task(id="42", title="feat: add auth", body="## Tasks\n- Login\n")
 
         config = ProjectConfig(
             project=ProjectSettings(main_branch="main"),

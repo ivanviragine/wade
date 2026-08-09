@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from _pytest.capture import CaptureFixture
 from typer.testing import CliRunner
 
 from wade.services import implementation_service
@@ -140,6 +141,35 @@ def test_done_plan_flag_error_returns_false() -> None:
         result = implementation_service.done(plan_file=Path("PLAN.md"))
 
     assert result is False
+
+
+def test_done_target_plan_file_bad_title_fails_clean(
+    tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    """`done <plan_file>` with a non-conventional `# Title` must fail with a clean,
+    actionable message (return False) — not a raw ConventionalTitleError traceback."""
+    from wade.models.config import ProjectConfig
+
+    plan = tmp_path / "PLAN.md"
+    plan.write_text("# E3: Session-start & resume context injection\n\nBody\n", encoding="utf-8")
+
+    with (
+        patch(
+            "wade.services.implementation_service.done.load_config", return_value=ProjectConfig()
+        ),
+        patch("wade.services.implementation_service.done.get_provider", return_value=MagicMock()),
+        patch(
+            "wade.services.implementation_service.done.git_repo.get_repo_root",
+            return_value=tmp_path,
+        ),
+    ):
+        result = implementation_service.done(target=str(plan))
+
+    assert result is False
+    out = capsys.readouterr()
+    combined = out.out + out.err
+    assert "conventional commit prefix" in combined
+    assert "# Title" in combined
 
 
 def test_cli_plan_flag_passes_to_service() -> None:

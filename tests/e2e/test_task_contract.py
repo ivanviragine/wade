@@ -158,7 +158,7 @@ class TestNewTaskCommand:
         mock_gh_cli: MockGhCli,
     ) -> None:
         """task create should create a labeled issue with the provided body text."""
-        title = "Contract test: non-interactive task create"
+        title = "feat: non-interactive task create"
         body = "This issue was created from deterministic e2e."
         result = _run(
             [

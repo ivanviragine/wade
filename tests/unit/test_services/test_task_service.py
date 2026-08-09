@@ -25,6 +25,7 @@ from wade.services.task_service import (
     build_plan_summary_block,
     close_task,
     create_from_plan_file,
+    create_interactive,
     create_task,
     ensure_in_progress_label,
     ensure_task_label,
@@ -33,6 +34,7 @@ from wade.services.task_service import (
     remove_in_progress_label,
     update_task,
 )
+from wade.utils.conventional import ConventionalTitleError
 
 
 @pytest.fixture
@@ -241,26 +243,28 @@ class TestPlanSummary:
 
 class TestCreateTask:
     def test_create_success(self, mock_provider: MagicMock, config: ProjectConfig) -> None:
-        task = create_task("My Bug", body="Details", config=config, provider=mock_provider)
+        task = create_task("fix: my bug", body="Details", config=config, provider=mock_provider)
         assert task is not None
         assert task.id == "42"
         mock_provider.create_task.assert_called_once()
         call_kwargs = mock_provider.create_task.call_args[1]
-        assert call_kwargs["title"] == "My Bug"
+        assert call_kwargs["title"] == "fix: my bug"
         assert call_kwargs["body"] == "Details"
         assert "test-label" in call_kwargs["labels"]
 
     def test_create_applies_project_label(
         self, mock_provider: MagicMock, config: ProjectConfig
     ) -> None:
-        create_task("Fix", config=config, provider=mock_provider)
+        create_task("fix: it", config=config, provider=mock_provider)
         call_kwargs = mock_provider.create_task.call_args[1]
         assert "test-label" in call_kwargs["labels"]
 
     def test_create_applies_extra_labels(
         self, mock_provider: MagicMock, config: ProjectConfig
     ) -> None:
-        create_task("Fix", extra_labels=["bug", "urgent"], config=config, provider=mock_provider)
+        create_task(
+            "fix: it", extra_labels=["bug", "urgent"], config=config, provider=mock_provider
+        )
         call_kwargs = mock_provider.create_task.call_args[1]
         assert "test-label" in call_kwargs["labels"]
         assert "bug" in call_kwargs["labels"]
@@ -269,20 +273,40 @@ class TestCreateTask:
     def test_create_empty_body_by_default(
         self, mock_provider: MagicMock, config: ProjectConfig
     ) -> None:
-        create_task("Fix", config=config, provider=mock_provider)
+        create_task("fix: it", config=config, provider=mock_provider)
         call_kwargs = mock_provider.create_task.call_args[1]
         assert call_kwargs["body"] == ""
 
     def test_create_ensures_label(self, mock_provider: MagicMock, config: ProjectConfig) -> None:
-        create_task("Fix", config=config, provider=mock_provider)
+        create_task("fix: it", config=config, provider=mock_provider)
         mock_provider.ensure_label.assert_called_once()
 
     def test_create_failure_returns_none(
         self, mock_provider: MagicMock, config: ProjectConfig
     ) -> None:
         mock_provider.create_task.side_effect = Exception("API error")
-        task = create_task("Fix", config=config, provider=mock_provider)
+        task = create_task("fix: it", config=config, provider=mock_provider)
         assert task is None
+
+    def test_create_rejects_non_conventional_title(
+        self, mock_provider: MagicMock, config: ProjectConfig
+    ) -> None:
+        """A non-conventional title raises before the provider is ever called —
+        the PR title is derived from it verbatim and would fail PR Title Lint."""
+        with pytest.raises(ConventionalTitleError):
+            create_task("E3: session context", config=config, provider=mock_provider)
+        mock_provider.create_task.assert_not_called()
+        mock_provider.ensure_label.assert_not_called()
+
+    def test_create_error_message_is_actionable(
+        self, mock_provider: MagicMock, config: ProjectConfig
+    ) -> None:
+        with pytest.raises(ConventionalTitleError) as exc_info:
+            create_task("Just a title", config=config, provider=mock_provider)
+        msg = str(exc_info.value)
+        assert "Just a title" in msg
+        assert "conventional commit prefix" in msg
+        assert "feat" in msg
 
 
 class TestCreateFromPlanFile:
@@ -290,14 +314,14 @@ class TestCreateFromPlanFile:
         self, tmp_path: Path, mock_provider: MagicMock, config: ProjectConfig
     ) -> None:
         plan = tmp_path / "PLAN.md"
-        plan.write_text("# My Feature\n\n## Tasks\n\n- Do thing A\n- Do thing B\n")
+        plan.write_text("# feat: my feature\n\n## Tasks\n\n- Do thing A\n- Do thing B\n")
 
         task = create_from_plan_file(plan, config=config, provider=mock_provider)
         assert task is not None
         assert task.id == "42"
         mock_provider.create_task.assert_called_once()
         call_kwargs = mock_provider.create_task.call_args
-        assert call_kwargs[1]["title"] == "My Feature"
+        assert call_kwargs[1]["title"] == "feat: my feature"
         assert "Do thing A" in call_kwargs[1]["body"]
 
     def test_create_invalid_file(
@@ -320,10 +344,59 @@ class TestCreateFromPlanFile:
         self, tmp_path: Path, mock_provider: MagicMock, config: ProjectConfig
     ) -> None:
         plan = tmp_path / "PLAN.md"
-        plan.write_text("# Feature\n\nBody content\n")
+        plan.write_text("# chore: feature\n\nBody content\n")
 
         create_from_plan_file(plan, config=config, provider=mock_provider)
         mock_provider.ensure_label.assert_called_once()
+
+    def test_non_conventional_plan_title_raises(
+        self, tmp_path: Path, mock_provider: MagicMock, config: ProjectConfig
+    ) -> None:
+        """A plan whose `# Title` is not conventional propagates the raise so
+        callers (done()/implement) can surface a clean error, not create an issue."""
+        plan = tmp_path / "PLAN.md"
+        plan.write_text("# E3: Session-start & resume context injection\n\nBody\n")
+
+        with pytest.raises(ConventionalTitleError):
+            create_from_plan_file(plan, config=config, provider=mock_provider)
+        mock_provider.create_task.assert_not_called()
+
+
+class TestCreateInteractive:
+    def test_reprompts_until_conventional(
+        self, monkeypatch: pytest.MonkeyPatch, mock_provider: MagicMock, config: ProjectConfig
+    ) -> None:
+        """A non-conventional title is rejected and the user is re-prompted; the
+        first conventional title is accepted and passed to create_task."""
+        from wade.ui import prompts
+
+        titles = iter(["E3: bad title", "feat: good title"])
+        monkeypatch.setattr(prompts, "input_prompt", lambda *a, **k: next(titles))
+        # create_interactive reads sys.stdin.isatty() directly for the body-input
+        # path — patch that (not prompts.is_tty) so it takes the non-interactive
+        # branch (empty body) regardless of the test runner's stdin.
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+        task = create_interactive(config=config, provider=mock_provider)
+        assert task is not None
+        call_kwargs = mock_provider.create_task.call_args[1]
+        assert call_kwargs["title"] == "feat: good title"
+
+    def test_empty_title_after_bad_aborts(
+        self, monkeypatch: pytest.MonkeyPatch, mock_provider: MagicMock, config: ProjectConfig
+    ) -> None:
+        """A non-conventional title followed by an empty one aborts (no create)."""
+        from wade.ui import prompts
+
+        titles = iter(["E3: bad title", ""])
+        monkeypatch.setattr(prompts, "input_prompt", lambda *a, **k: next(titles))
+        # See sibling test: patch sys.stdin.isatty (what create_interactive reads),
+        # not prompts.is_tty, so the body-input path is deterministic.
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+        task = create_interactive(config=config, provider=mock_provider)
+        assert task is None
+        mock_provider.create_task.assert_not_called()
 
 
 class TestListTasks:
