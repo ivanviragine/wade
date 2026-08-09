@@ -420,3 +420,21 @@ The 'wade hook' Typer alias (cli/hook.py) must forward its RAW argv to the lean 
 Never print untrusted AI/delegation output through Rich with markup enabled: `console.out.print(text)` and `console.error(text)` (which wraps its message in `[error]…[/]`) both parse bracketed tokens like `[/]` as markup and raise `MarkupError: closing tag has nothing to close` on quoted source code — crashing *after* the work succeeded. Print such text with `markup=False`, or `rich.markup.escape()` it when it must flow through a method that adds its own markup (`console.error`). Latent twin: `Console.plain()` (src/wade/ui/console.py) sets `highlight=False` but leaves `markup=True`, so it shares the same crash (candidate follow-up); fixed sites are `review_delegation_service.py` success+error branches and `deps_service.py` PROMPT passthrough.
 
 ---
+
+## 80bd211a5157 | 2026-08-09 | implementation | tags: git, stash, concurrency | Issue #374
+
+On git 2.43.0, `git stash push` under a held index.lock exits non-zero with EMPTY stdout AND stderr (verified), so _LOCK_PATTERNS stderr matching alone is git-version-dependent for stash push (newer git ~2.50 prints 'could not write index'). wade instead probes the lock file directly via git/repo.py _index_lock_present, opted in with _run_git_with_retry(..., probe_index_lock=True) from create_named_stash. Companion to entry 801e1af0 (which documented only the newer-git message).
+
+---
+
+## 20772eaadc78 | 2026-08-09 | implementation | tags: git, stash, worktree | Issue #374
+
+A `git stash push` locks the CURRENT WORKTREE's index, whose index.lock lives in the worktree-private git dir (git rev-parse --git-dir -> .git/worktrees/<name>/), NOT $GIT_COMMON_DIR. They coincide only in the main checkout (--git-dir == .git). To probe for stash-push lock contention robustly, check BOTH get_git_dir(cwd) and get_git_common_dir(cwd) for index.lock, resolving git's possibly-relative paths against cwd (git/repo.py _index_lock_present).
+
+---
+
+## 79d3b566bc32 | 2026-08-09 | implementation | tags: git, stash, concurrency | Issue #374
+
+The #374 probe_index_lock=True fix covers ONLY create_named_stash (git/stash.py). git/repo.py stash() and stash_pop() (repo.py ~695/703, used by lifecycle.py pull-sync) still call _run_git_with_retry WITHOUT probe_index_lock, so on older git (2.43.0) they retain the same silent-stderr (empty stdout+stderr) index-lock gap and can miss a retry. Benign there (a missed retry degrades to _warn_pull_sync_failed, never a crash), and PLAN.md scoped #374 to create_named_stash only — follow-up candidate if pull-sync lock flakiness ever appears.
+
+---
