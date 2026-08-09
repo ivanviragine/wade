@@ -937,7 +937,10 @@ def _done_via_pr(
         # the sync idempotently.
         if config.done.require_conventional_title and existing_pr.title != task.title:
             if git_pr.update_pr_title(repo_root, pr_number, task.title):
-                console.success(f"PR title synced to issue title: {task.title}")
+                # markup=False: the issue title is provider-derived — a bracket
+                # token like `[/]` in it would be parsed as Rich markup and crash
+                # this success line (the very MarkupError class this PR removes).
+                console.success(f"PR title synced to issue title: {task.title}", markup=False)
             elif not is_conventional_title(existing_pr.title):
                 console.error(
                     "Could not sync the PR title to the issue title, and the "

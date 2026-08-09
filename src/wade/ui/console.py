@@ -98,11 +98,24 @@ class Console:
     # Original methods (unchanged signatures)
     # ------------------------------------------------------------------
 
-    def success(self, message: str) -> None:
-        """Green checkmark line to stdout."""
-        self.out.print(
-            f"  [success]{self.OK}[/] {message}", no_wrap=True, overflow="ignore", crop=False
-        )
+    def success(self, message: str, *, markup: bool = True) -> None:
+        """Green checkmark line to stdout.
+
+        Pass ``markup=False`` when *message* may contain untrusted text (user- or
+        provider-derived, e.g. a title echoed back). With markup enabled, bracketed
+        tokens like ``[red]`` or an unbalanced ``[/]`` are parsed as Rich markup and
+        raise ``MarkupError``, crashing after the work succeeded (see :meth:`error`).
+        The ``✓`` prefix stays styled either way.
+        """
+        if markup:
+            self.out.print(
+                f"  [success]{self.OK}[/] {message}", no_wrap=True, overflow="ignore", crop=False
+            )
+        else:
+            self.out.print(f"  [success]{self.OK}[/] ", end="")
+            self.out.print(
+                message, markup=False, highlight=False, no_wrap=True, overflow="ignore", crop=False
+            )
 
     def error(self, message: str, *, markup: bool = True) -> None:
         """Red error line to stderr.
