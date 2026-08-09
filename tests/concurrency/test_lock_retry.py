@@ -24,7 +24,14 @@ import pytest
 
 import wade.git.repo as git_repo
 from wade.git import stash as git_stash
-from wade.git.repo import GitError, _run_git, _run_git_with_retry
+from wade.git.repo import (
+    GitError,
+    _index_lock_present,
+    _run_git,
+    _run_git_with_retry,
+    get_git_common_dir,
+    get_git_dir,
+)
 
 pytestmark = pytest.mark.concurrency
 
@@ -149,3 +156,50 @@ def test_silent_stash_push_failure_message_is_not_blank(
     assert msg.rstrip().rstrip(":") != "git stash push failed"  # not a blank reason
     assert "exit 1" in msg  # exit code is surfaced
     assert "no index.lock detected" in msg  # no lock was present, so reported
+
+
+def test_index_lock_present_detects_lock_in_linked_worktree(
+    tmp_git_repo: Path, tmp_path: Path
+) -> None:
+    # The design's whole point: a `stash push` locks the CURRENT worktree's
+    # index, whose index.lock lives in the worktree-private git dir
+    # (.git/worktrees/<name>/index.lock), NOT $GIT_COMMON_DIR. In a linked
+    # worktree --git-dir and --git-common-dir diverge, so exercise that split
+    # directly — tmp_git_repo alone is a main checkout where they coincide and
+    # the two-directory probe reduces to one path (#374).
+    wt_dir = tmp_path / "linked-wt"
+    subprocess.run(
+        ["git", "worktree", "add", "-b", "wt-branch", str(wt_dir)],
+        cwd=tmp_git_repo,
+        capture_output=True,
+        check=True,
+    )
+
+    raw_git_dir = get_git_dir(wt_dir)
+    raw_common_dir = get_git_common_dir(wt_dir)
+    assert raw_git_dir is not None
+    assert raw_common_dir is not None
+    git_dir = Path(raw_git_dir)
+    common_dir = Path(raw_common_dir)
+    if not git_dir.is_absolute():
+        git_dir = (wt_dir / git_dir).resolve()
+    if not common_dir.is_absolute():
+        common_dir = (wt_dir / common_dir).resolve()
+    # Guard the premise: a linked worktree really has a private git dir distinct
+    # from the common dir, otherwise this test would silently re-test the main
+    # checkout and never exercise the worktree branch.
+    assert git_dir != common_dir
+
+    assert _index_lock_present(wt_dir) is False  # no lock yet
+
+    # A lock in the worktree-private git dir (the case $GIT_COMMON_DIR misses).
+    wt_lock = git_dir / "index.lock"
+    wt_lock.write_text("")
+    assert _index_lock_present(wt_dir) is True
+    wt_lock.unlink()
+
+    # A lock in the common dir alone is also detected (covers the other getter).
+    common_lock = common_dir / "index.lock"
+    common_lock.write_text("")
+    assert _index_lock_present(wt_dir) is True
+    common_lock.unlink()
