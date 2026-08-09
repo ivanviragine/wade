@@ -150,6 +150,31 @@ class TestShellContainment:
     @pytest.mark.parametrize(
         "command",
         [
+            "command -v gh >/dev/null 2>&1",
+            "git rev-parse --show-toplevel 2>/dev/null",
+            "./scripts/test.sh > /dev/null",
+            "make build &>/dev/null",
+        ],
+    )
+    def test_device_redirects_allowed_in_plan_mode(self, command: str) -> None:
+        """Devices are discard sinks, not plan artifacts, but plan mode allows them too.
+
+        Mirrors ``test_device_redirects_allowed`` (worktree/impl mode) — the same
+        idioms must not trip the plan-mode artifact gate.
+        """
+        d = shell_containment(_shell(command), worktree_root=WT, plan_mode=True)
+        assert d.action == "allow"
+
+    @pytest.mark.parametrize("command", ["tee /dev/null", "dd of=/dev/null"])
+    def test_device_write_commands_allowed_in_plan_mode(self, command: str) -> None:
+        """A write command's operand targeting a device is not a plan artifact,
+        but is still allowed — it persists nothing."""
+        d = shell_containment(_shell(command), worktree_root=WT, plan_mode=True)
+        assert d.action == "allow"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
             "printf 'x' > /tmp/out.txt",  # spaced redirect to temp
             "printf 'x' >/tmp/scratch.log",  # glued redirect
             "cp README.md /tmp/backup",  # write command operand into temp

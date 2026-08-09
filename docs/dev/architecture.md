@@ -224,9 +224,14 @@ from a glued write flag, so a few glued reads are denied too), treats bash's
 `>&file` as a write while skipping true fd duplication (`2>&1`), denies a bare
 `cd` (it lands in `$HOME`), and exempts character devices (`>/dev/null 2>&1`) plus
 system temp dirs (`/tmp`, `$TMPDIR`) — shared scratch space where writes are always
-allowed (plan mode still denies them as non-artifacts). The temp exemption is
-scoped to `shell_containment` (via `_ALWAYS_ALLOWED_PATH_PREFIXES`); the file-path
-guard `worktree_containment` stays strictly worktree-only.
+allowed. These two exemptions diverge in plan mode: devices are pure discard sinks
+(nothing is persisted), so plan mode allows them even though they are not plan
+artifacts; temp dirs are real scratch files, so plan mode still denies them as
+non-artifacts. That is why `_ALWAYS_ALLOWED_DEVICE_PREFIXES` (`/dev/`) is a
+separate constant from the temp-dir prefixes, even though both feed the combined
+`_ALWAYS_ALLOWED_PATH_PREFIXES` used for containment. The temp/device exemption is
+scoped to `shell_containment`; the file-path guard `worktree_containment` stays
+strictly worktree-only.
 
 **It is defense-in-depth, not a completeness guarantee.** It stops the
 non-obfuscated cases an agent actually produces. Documented residual gaps
