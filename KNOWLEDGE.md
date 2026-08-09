@@ -438,3 +438,9 @@ A `git stash push` locks the CURRENT WORKTREE's index, whose index.lock lives in
 The #374 probe_index_lock=True fix covers ONLY create_named_stash (git/stash.py). git/repo.py stash() and stash_pop() (repo.py ~695/703, used by lifecycle.py pull-sync) still call _run_git_with_retry WITHOUT probe_index_lock, so on older git (2.43.0) they retain the same silent-stderr (empty stdout+stderr) index-lock gap and can miss a retry. Benign there (a missed retry degrades to _warn_pull_sync_failed, never a crash), and PLAN.md scoped #374 to create_named_stash only — follow-up candidate if pull-sync lock flakiness ever appears.
 
 ---
+
+## 41a06f9bcbc7 | 2026-08-09 | implementation | tags: hooks, worktree-safety, gotcha | Issue #397
+
+shell_containment's device write-exemption (src/wade/hooks/policies.py) is an EXACT allowlist — _ALWAYS_ALLOWED_DEVICES = {/dev/null,/dev/zero,/dev/full,/dev/random,/dev/urandom,/dev/tty} — NOT a /dev/ prefix. Linux mounts writable filesystems under /dev/ (/dev/shm tmpfs, /dev/mqueue, /dev/hugepages) where a write persists a real file OUTSIDE the worktree, so a bare prefix let 'tee /dev/shm/out' escape (both impl and plan mode). Matched against the Path.resolve()-d target via _is_always_allowed_device, so only self-resolving device NODES belong; std-stream symlinks (/dev/stdout -> /dev/fd/N or /proc/self/fd/N) resolve away and are intentionally not listed — following them to the real fd target is safer.
+
+---

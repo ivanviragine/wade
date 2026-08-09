@@ -247,12 +247,51 @@ def _temp_write_prefixes() -> tuple[str, ...]:
     return tuple(sorted(prefixes))
 
 
-# Character devices are not worktree escapes — `>/dev/null 2>&1` is the single most
-# common shell idiom an agent emits — and system temp dirs are shared scratch space
-# outside the worktree. Writes to either are always allowed; every real
-# project/source path outside the root stays contained. Plan mode is unaffected: a
-# temp path is still not a plan artifact, so the stricter plan gate keeps denying it.
-_ALWAYS_ALLOWED_PATH_PREFIXES = ("/dev/", *_temp_write_prefixes())
+# Known discard/console character devices — `>/dev/null 2>&1` is the single most
+# common shell idiom an agent emits. Writing one persists nothing and touches no
+# worktree/repo file, so writes to these exact paths are always allowed; every real
+# project/source path outside the root stays contained. System temp dirs
+# (:func:`_temp_write_prefixes`) are the other write exception — shared scratch
+# space outside the worktree.
+#
+# This is an *exact* allowlist, deliberately not a `/dev/` prefix: Linux mounts
+# writable filesystems under `/dev/` too (`/dev/shm` tmpfs, `/dev/mqueue`,
+# `/dev/hugepages`), where a write persists a real file outside the worktree — a
+# bare prefix match would wave `tee /dev/shm/out` straight through. Devices are the
+# one exception plan mode also honors (not plan artifacts, yet persist nothing);
+# temp dirs are real scratch files and stay denied in plan mode. That difference is
+# why the device set is its own constant rather than folded into the temp prefixes.
+#
+# Only self-resolving character-device *nodes* belong here — the caller matches the
+# ``Path.resolve()``-d target, so the std-stream symlinks (`/dev/stdout` and friends
+# → `/dev/fd/N` / `/proc/self/fd/N`) would never match anyway; following them to the
+# real fd target is the safer behavior (a redirected fd could point at a real file).
+_ALWAYS_ALLOWED_DEVICES = frozenset(
+    {
+        "/dev/null",
+        "/dev/zero",
+        "/dev/full",
+        "/dev/random",
+        "/dev/urandom",
+        "/dev/tty",
+    }
+)
+_ALWAYS_ALLOWED_PATH_PREFIXES = _temp_write_prefixes()
+
+
+def _is_always_allowed_device(path: Path) -> bool:
+    """True when ``path`` is a known discard/console device (e.g. ``/dev/null``).
+
+    Matches an *exact* allowlist (:data:`_ALWAYS_ALLOWED_DEVICES`), not a ``/dev/``
+    prefix: Linux exposes writable filesystems under ``/dev/`` too — ``/dev/shm``
+    (tmpfs), ``/dev/mqueue``, ``/dev/hugepages`` — where a write persists a real
+    file *outside* the worktree. Only these enumerated sinks persist nothing and
+    escape no worktree, so plan mode allows them even though they are not plan
+    artifacts. Temp dirs stay denied in plan mode (they are real scratch files),
+    which is why the device set is split from the temp prefixes.
+    """
+    return str(path) in _ALWAYS_ALLOWED_DEVICES
+
 
 # Commands whose path operands are *writes*, so their operands stay contained even
 # after the read relaxation. In plan mode those operands must additionally be plan
@@ -398,13 +437,15 @@ def _resolve_shell_path(token: str, *, base: Path) -> Path | None:
 
 
 def _contained(path: Path, root: Path) -> bool:
-    """True when ``path`` is inside ``root`` (or an always-allowed prefix).
+    """True when ``path`` is inside ``root`` (or an always-allowed location).
 
-    Always-allowed prefixes (:data:`_ALWAYS_ALLOWED_PATH_PREFIXES`) cover device
-    nodes (``/dev/…``) and system temp dirs (``/tmp``, ``$TMPDIR``) — shared
-    scratch space that is safe to write even though it is outside ``root``.
+    Always-allowed locations cover known discard/console devices
+    (:data:`_ALWAYS_ALLOWED_DEVICES` — ``/dev/null`` …, matched exactly) and system
+    temp dirs (``/tmp``, ``$TMPDIR`` via :data:`_ALWAYS_ALLOWED_PATH_PREFIXES``,
+    matched by prefix) — shared scratch space that is safe to write even though it
+    is outside ``root``.
     """
-    if str(path).startswith(_ALWAYS_ALLOWED_PATH_PREFIXES):
+    if _is_always_allowed_device(path) or str(path).startswith(_ALWAYS_ALLOWED_PATH_PREFIXES):
         return True
     try:
         path.relative_to(root)
@@ -432,11 +473,16 @@ def shell_containment(
     ``git -C ../crossby log``) never mutates state, so a read operand may resolve
     anywhere. The guard's job is to keep *writes* inside the root.
 
-    **System temp dirs are the one write exception.** ``/tmp`` and ``$TMPDIR`` are
-    shared scratch space (:func:`_temp_write_prefixes`, via
-    :data:`_ALWAYS_ALLOWED_PATH_PREFIXES`), so writes there resolve as "contained"
-    even though they sit outside the root — plan mode still denies them as
-    non-artifacts.
+    **System temp dirs and discard/console devices are write exceptions.** ``/tmp``,
+    ``$TMPDIR``, and a small exact allowlist of devices (``/dev/null``, ``/dev/zero`` …)
+    resolve as "contained" even though they sit outside the root
+    (:func:`_temp_write_prefixes` / :data:`_ALWAYS_ALLOWED_DEVICES`, via
+    :data:`_ALWAYS_ALLOWED_PATH_PREFIXES` and :func:`_is_always_allowed_device`). The
+    device allowlist is *exact*, not a ``/dev/`` prefix — Linux mounts writable
+    filesystems there too (``/dev/shm``), so ``tee /dev/shm/out`` stays contained.
+    Plan mode still denies temp-dir writes as non-artifacts (real scratch files);
+    device writes are additionally allowed in plan mode
+    (:func:`_is_always_allowed_device`) since they persist nothing.
 
     Rules, in order (any match denies):
 
@@ -470,7 +516,10 @@ def shell_containment(
     7. In plan mode only: any output redirect, an in-place edit flag (``sed -i``,
        ``--in-place``) on a command that *has* one (:data:`_IN_PLACE_COMMANDS` —
        ``grep -i`` and ``ls -i`` are ordinary read flags), or an operand of a write
-       command whose path is not a plan artifact.
+       command whose path is not a plan artifact — **except a device node**
+       (``/dev/null`` and friends), which stays allowed in plan mode
+       (:func:`_is_always_allowed_device`): it is a discard/console sink, not a
+       plan artifact, but writing it persists nothing.
 
     **This is defense-in-depth, not a completeness guarantee.** It stops the
     non-obfuscated cases — the ones an agent actually produces — and is trivially
@@ -563,7 +612,11 @@ def shell_containment(
         resolved = _resolve_shell_path(target, base=base)
         if resolved is None or not _contained(resolved, root):
             return deny_outside("redirect target", target)
-        if plan_mode and not _is_plan_artifact_path(resolved, root):
+        if (
+            plan_mode
+            and not _is_plan_artifact_path(resolved, root)
+            and not _is_always_allowed_device(resolved)
+        ):
             return HookDecision.deny(
                 f"BLOCKED by plan-session guard: redirecting output to '{target}' "
                 "would write a non-artifact file without going through a write tool. "
@@ -575,7 +628,11 @@ def shell_containment(
 
     def check_non_artifact(what: str, token: str, resolved: Path) -> HookDecision | None:
         """Plan mode: a contained path a write command targets must be an artifact."""
-        if not plan_mode or _is_plan_artifact_path(resolved, root):
+        if (
+            not plan_mode
+            or _is_plan_artifact_path(resolved, root)
+            or _is_always_allowed_device(resolved)
+        ):
             return None
         return HookDecision.deny(
             f"BLOCKED by plan-session guard: {what} would write to '{token}', which is "
