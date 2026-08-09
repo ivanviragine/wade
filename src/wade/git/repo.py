@@ -81,6 +81,7 @@ def _run_git_with_retry(
     check: bool = True,
     retries: int = 3,
     base_delay: float = 0.3,
+    probe_index_lock: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Run a git command with retries on transient lock errors.
 
@@ -91,6 +92,14 @@ def _run_git_with_retry(
     Works for both ``check=True`` callers (a lock raises ``GitError`` which is
     caught and retried) and ``check=False`` callers such as ``merge``/``stash``
     (a lock yields a non-zero result whose stderr is inspected and retried).
+
+    ``probe_index_lock`` (check=False callers only) also retries when
+    :func:`_index_lock_present` reports a held index lock, even if stderr is
+    empty. ``git stash push`` on older git (verified 2.43.0) exits non-zero with
+    empty stdout AND stderr under a held ``index.lock``, so stderr matching alone
+    misses the contention there; the direct probe is version-independent. The
+    probe runs only after a command has already failed, so it adds no cost to the
+    success path and leaves every other caller's behavior unchanged.
     """
     if retries < 1:
         raise ValueError("retries must be at least 1")
@@ -109,7 +118,10 @@ def _run_git_with_retry(
         if (
             result.returncode != 0
             and attempt < retries - 1
-            and any(p in result.stderr for p in _LOCK_PATTERNS)
+            and (
+                any(p in result.stderr for p in _LOCK_PATTERNS)
+                or (probe_index_lock and _index_lock_present(cwd))
+            )
         ):
             _sleep_lock_backoff(attempt, base_delay, args)
             continue
@@ -123,6 +135,36 @@ def _sleep_lock_backoff(attempt: int, base_delay: float, args: tuple[str, ...]) 
     delay = base_delay * (2**attempt)
     log.debug("git.retry", attempt=attempt + 1, delay=delay, cmd=["git", *args])
     time.sleep(delay)
+
+
+def _index_lock_present(cwd: Path) -> bool:
+    """True if an index.lock for *cwd*'s index is currently held.
+
+    ``git stash push`` on older git (verified 2.43.0) fails silently — empty
+    stdout AND stderr — when the index is locked, so there is no stderr for
+    ``_LOCK_PATTERNS`` to match. Probing the lock file is version-independent.
+
+    The index a ``stash push`` locks is the *current worktree's* index, whose
+    lock lives in the worktree-private git dir (``--git-dir``), not
+    ``$GIT_COMMON_DIR``. In the main checkout the two coincide; in a linked
+    worktree they do not, so we check both. Paths from git may be relative to
+    *cwd* and are resolved here.
+
+    Not airtight: the competing process could release the lock between the
+    failed command and this probe, missing a retry. That window is symmetric
+    with the pre-existing stderr-matching path (which checks slightly earlier),
+    so it is not a new risk — just a known, benign gap.
+    """
+    for getter in (get_git_dir, get_git_common_dir):
+        raw = getter(cwd)
+        if not raw:
+            continue
+        d = Path(raw)
+        if not d.is_absolute():
+            d = (cwd / d).resolve()
+        if (d / "index.lock").exists():
+            return True
+    return False
 
 
 def is_git_repo(path: Path) -> bool:
