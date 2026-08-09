@@ -874,6 +874,23 @@ def _done_via_pr(
         console.error(f"Cannot read issue #{issue_number}: {e}")
         return False
 
+    # Backstop for _gate_pr_title's non-blocking read path. task.title becomes the
+    # PR title verbatim — both when syncing an existing PR and when creating a new
+    # one below. The done() gate normally validates it, but that gate returns True
+    # (skips validation) if its own provider.read_task RAISED. If that read failed
+    # in the gate yet the read just above succeeded, task.title is unvalidated —
+    # refuse here, before any push or PR mutation, rather than let a non-conventional
+    # title reach the PR and fail PR Title Lint (which would silently undermine
+    # require_conventional_title). Re-running done re-validates via the gate (whose
+    # read likely succeeds now) for a clean, actionable block.
+    if config.done.require_conventional_title and not is_conventional_title(task.title):
+        console.error(
+            f"Issue #{issue_number} title is not a conventional-commit title — "
+            "refusing to put it on the PR (PR Title Lint would fail)."
+        )
+        console.hint("Re-run done — the title gate will re-validate and guide the fix.")
+        return False
+
     # Push branch (with non-fast-forward divergence recovery — never a silent
     # force-push). `_push_branch_with_recovery` owns the `done` marker: it writes
     # `.wade/done@<pushed sha>` right before each push (so `done`'s own push
@@ -921,10 +938,9 @@ def _done_via_pr(
 
         # Sync the PR title to the issue title. A PR opened before conventional-
         # title enforcement — or whose issue title was corrected after the PR
-        # opened — can carry a stale title that fails PR Title Lint. The issue
-        # title is normally validated by the done() PR-title gate; the backstop
-        # below re-checks it here for the case where that gate skipped validation
-        # (its provider read failed), so a non-conventional title is never pushed.
+        # opened — can carry a stale title that fails PR Title Lint. task.title is
+        # guaranteed conventional here (validated by the done() gate, or by the
+        # backstop above when the gate's read failed), so pushing it is safe.
         #
         # The response to a sync failure hinges on whether the *current* PR title
         # would pass PR Title Lint. The sync fires on any title mismatch, and a
@@ -937,21 +953,6 @@ def _done_via_pr(
         # `.wade/done@<sha>` marker are already pushed, so re-running done retries
         # the sync idempotently.
         if config.done.require_conventional_title and existing_pr.title != task.title:
-            if not is_conventional_title(task.title):
-                # Backstop for _gate_pr_title's non-blocking read path: the gate
-                # validates task.title but returns True (skips validation) if its
-                # provider read RAISES. If that read failed in the gate yet the
-                # read at the top of this function succeeded, task.title is
-                # unvalidated — refuse rather than push a non-conventional title
-                # onto the PR (it would fail PR Title Lint), which would silently
-                # undermine require_conventional_title. Re-running done re-validates
-                # via the gate (whose read likely succeeds now) for a clean block.
-                console.error(
-                    f"Issue #{issue_number} title is not a conventional-commit title — "
-                    "refusing to sync it onto the PR (PR Title Lint would fail)."
-                )
-                console.hint("Re-run done — the title gate will re-validate and guide the fix.")
-                return False
             if git_pr.update_pr_title(repo_root, pr_number, task.title):
                 # markup=False: the issue title is provider-derived — a bracket
                 # token like `[/]` in it would be parsed as Rich markup and crash

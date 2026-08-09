@@ -148,13 +148,12 @@ class TestPrTitleSyncFailure:
         mock_update_title.assert_called_once()
         mock_mark_ready.assert_not_called()
 
-    def test_backstop_refuses_unvalidated_non_conventional_task_title(
-        self, tmp_path: Path
-    ) -> None:
+    def test_backstop_refuses_unvalidated_non_conventional_task_title(self, tmp_path: Path) -> None:
         # Backstop for _gate_pr_title's non-blocking read path: if the gate skipped
         # validation (its provider read failed) and task.title is non-conventional,
-        # _done_via_pr must refuse rather than push an unvalidated title onto the PR
-        # — it must NOT even call update_pr_title, and must not mark ready.
+        # _done_via_pr must refuse before any PR mutation rather than put an
+        # unvalidated title on the PR — it must NOT call update_pr_title or mark
+        # ready. The backstop fires before the sync (existing-PR) branch here.
         result, mock_update_title, mock_mark_ready = _run_done_via_pr(
             tmp_path,
             issue_title="E3: unvalidated non-conventional title",
@@ -164,6 +163,47 @@ class TestPrTitleSyncFailure:
         assert result is False
         mock_update_title.assert_not_called()
         mock_mark_ready.assert_not_called()
+
+    def test_backstop_refuses_non_conventional_title_on_create_new_pr(self, tmp_path: Path) -> None:
+        # Same backstop, create-new-PR branch (no existing PR): a non-conventional
+        # task.title must be refused before create_pr is ever called, so a
+        # bad-titled PR is never opened.
+        worktree_path = tmp_path / "wt-42"
+        worktree_path.mkdir()
+        (worktree_path / "PR-SUMMARY.md").write_text("Real summary of the work.\n")
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        task = Task(id="42", title="E3: unvalidated non-conventional title", body="## Tasks\n- x\n")
+        config = ProjectConfig(project=ProjectSettings(main_branch="main"))
+
+        with ExitStack() as stack:
+            mock_get_provider = stack.enter_context(patch(f"{_DONE}.get_provider"))
+            stack.enter_context(patch(f"{_DONE}.git_repo._run_git"))
+            stack.enter_context(
+                patch(f"{_DONE}.git_pr.get_pr_for_branch", return_value=PRLookup(found=False))
+            )
+            mock_create_pr = stack.enter_context(patch(f"{_DONE}.git_pr.create_pr"))
+            stack.enter_context(patch(f"{_DONE}.remove_in_progress_label"))
+
+            mock_provider = MagicMock()
+            mock_provider.read_task.return_value = task
+            mock_provider.find_parent_issue.return_value = None
+            mock_get_provider.return_value = mock_provider
+
+            result = _done_via_pr(
+                repo_root=repo_root,
+                branch="feat/42-x",
+                issue_number="42",
+                main_branch="main",
+                close_issue=True,
+                draft=False,
+                config=config,
+                worktree_path=worktree_path,
+            )
+
+        assert result is False
+        mock_create_pr.assert_not_called()
 
     def test_continues_when_sync_fails_but_stale_title_already_conventional(
         self, tmp_path: Path
