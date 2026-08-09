@@ -432,3 +432,9 @@ On git 2.43.0, `git stash push` under a held index.lock exits non-zero with EMPT
 A `git stash push` locks the CURRENT WORKTREE's index, whose index.lock lives in the worktree-private git dir (git rev-parse --git-dir -> .git/worktrees/<name>/), NOT $GIT_COMMON_DIR. They coincide only in the main checkout (--git-dir == .git). To probe for stash-push lock contention robustly, check BOTH get_git_dir(cwd) and get_git_common_dir(cwd) for index.lock, resolving git's possibly-relative paths against cwd (git/repo.py _index_lock_present).
 
 ---
+
+## 79d3b566bc32 | 2026-08-09 | implementation | tags: git, stash, concurrency | Issue #374
+
+The #374 probe_index_lock=True fix covers ONLY create_named_stash (git/stash.py). git/repo.py stash() and stash_pop() (repo.py ~695/703, used by lifecycle.py pull-sync) still call _run_git_with_retry WITHOUT probe_index_lock, so on older git (2.43.0) they retain the same silent-stderr (empty stdout+stderr) index-lock gap and can miss a retry. Benign there (a missed retry degrades to _warn_pull_sync_failed, never a crash), and PLAN.md scoped #374 to create_named_stash only — follow-up candidate if pull-sync lock flakiness ever appears.
+
+---
