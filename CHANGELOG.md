@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.42.0] — 2026-08-09
+
+### Features
+
+- enforce conventional-commit PR & issue titles across creation and done (#393) (c3f13d5)
+
 ## [v0.41.1] — 2026-08-09
 
 ### Bug Fixes
