@@ -922,8 +922,9 @@ def _done_via_pr(
         # Sync the PR title to the issue title. A PR opened before conventional-
         # title enforcement — or whose issue title was corrected after the PR
         # opened — can carry a stale title that fails PR Title Lint. The issue
-        # title was validated by the done() PR-title gate, so pushing it onto the
-        # PR is safe.
+        # title is normally validated by the done() PR-title gate; the backstop
+        # below re-checks it here for the case where that gate skipped validation
+        # (its provider read failed), so a non-conventional title is never pushed.
         #
         # The response to a sync failure hinges on whether the *current* PR title
         # would pass PR Title Lint. The sync fires on any title mismatch, and a
@@ -936,6 +937,21 @@ def _done_via_pr(
         # `.wade/done@<sha>` marker are already pushed, so re-running done retries
         # the sync idempotently.
         if config.done.require_conventional_title and existing_pr.title != task.title:
+            if not is_conventional_title(task.title):
+                # Backstop for _gate_pr_title's non-blocking read path: the gate
+                # validates task.title but returns True (skips validation) if its
+                # provider read RAISES. If that read failed in the gate yet the
+                # read at the top of this function succeeded, task.title is
+                # unvalidated — refuse rather than push a non-conventional title
+                # onto the PR (it would fail PR Title Lint), which would silently
+                # undermine require_conventional_title. Re-running done re-validates
+                # via the gate (whose read likely succeeds now) for a clean block.
+                console.error(
+                    f"Issue #{issue_number} title is not a conventional-commit title — "
+                    "refusing to sync it onto the PR (PR Title Lint would fail)."
+                )
+                console.hint("Re-run done — the title gate will re-validate and guide the fix.")
+                return False
             if git_pr.update_pr_title(repo_root, pr_number, task.title):
                 # markup=False: the issue title is provider-derived — a bracket
                 # token like `[/]` in it would be parsed as Rich markup and crash

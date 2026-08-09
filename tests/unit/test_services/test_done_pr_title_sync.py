@@ -148,6 +148,23 @@ class TestPrTitleSyncFailure:
         mock_update_title.assert_called_once()
         mock_mark_ready.assert_not_called()
 
+    def test_backstop_refuses_unvalidated_non_conventional_task_title(
+        self, tmp_path: Path
+    ) -> None:
+        # Backstop for _gate_pr_title's non-blocking read path: if the gate skipped
+        # validation (its provider read failed) and task.title is non-conventional,
+        # _done_via_pr must refuse rather than push an unvalidated title onto the PR
+        # — it must NOT even call update_pr_title, and must not mark ready.
+        result, mock_update_title, mock_mark_ready = _run_done_via_pr(
+            tmp_path,
+            issue_title="E3: unvalidated non-conventional title",
+            pr_title="feat: existing conventional pr title",
+            is_draft=True,
+        )
+        assert result is False
+        mock_update_title.assert_not_called()
+        mock_mark_ready.assert_not_called()
+
     def test_continues_when_sync_fails_but_stale_title_already_conventional(
         self, tmp_path: Path
     ) -> None:

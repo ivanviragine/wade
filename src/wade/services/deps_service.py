@@ -505,7 +505,7 @@ def analyze_deps(
             try:
                 task = provider.read_task(num)
                 task_titles[num] = task.title
-                console.step(f"#{num}: {task.title}")
+                console.step(f"#{num}: {console.escape_markup(task.title)}")
             except Exception:
                 logger.debug("deps.issue_read_failed", issue_num=num, exc_info=True)
                 task_titles[num] = f"Issue #{num}"

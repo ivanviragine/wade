@@ -690,7 +690,7 @@ def read_task(
             lines.append(f"  Labels     {', '.join(label.name for label in task.labels)}")
         if task.url:
             lines.append(f"  URL        [url]{task.url}[/]")
-        console.panel("\n".join(lines), title=f"#{task.id}: {task.title}")
+        console.panel("\n".join(lines), title=f"#{task.id}: {console.escape_markup(task.title)}")
         if task.body:
             console.empty()
             console.markdown(task.body)

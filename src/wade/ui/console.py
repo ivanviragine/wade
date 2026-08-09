@@ -11,6 +11,7 @@ import sys
 from typing import TYPE_CHECKING, Any
 
 from rich.console import Console as RichConsole
+from rich.markup import escape as _rich_escape
 from rich.theme import Theme
 
 if TYPE_CHECKING:
@@ -212,6 +213,17 @@ class Console:
         """Plain text to stdout."""
         self.out.print(message, highlight=False)
 
+    def escape_markup(self, text: str) -> str:
+        """Escape Rich markup in untrusted *text* so bracket tokens render literally.
+
+        For free-text that is interpolated INTO a markup-styled string (a title in
+        a panel/kv/step, etc.) rather than passed as a standalone ``message`` — the
+        keyword-only ``markup=False`` on :meth:`error`/:meth:`detail`/:meth:`success`
+        cannot help there because the surrounding string still carries intentional
+        markup. A stray ``[/]`` in the text would otherwise raise ``MarkupError``.
+        """
+        return _rich_escape(text)
+
     # ------------------------------------------------------------------
     # New methods — Phase 1b
     # ------------------------------------------------------------------
@@ -315,10 +327,10 @@ class Console:
             grouped.setdefault(from_id, []).append((to_id, reason))
 
         for from_id, deps in grouped.items():
-            from_label = f"[task.number]#{from_id}[/] {titles.get(from_id, '')}"
+            from_label = f"[task.number]#{from_id}[/] {_rich_escape(titles.get(from_id, ''))}"
             branch = tree.add(from_label)
             for to_id, reason in deps:
-                to_label = f"[task.number]#{to_id}[/] {titles.get(to_id, '')}"
+                to_label = f"[task.number]#{to_id}[/] {_rich_escape(titles.get(to_id, ''))}"
                 if reason:
                     to_label += f"  [dim]({reason})[/]"
                 branch.add(to_label)
@@ -341,10 +353,16 @@ class Console:
         return f"[{style}]\\[{label.upper()}\\][/]"
 
     def issue_ref(self, number: str, title: str = "") -> str:
-        """Return a styled #N Title reference string."""
+        """Return a styled #N Title reference string.
+
+        The title is provider-derived free text — escape it so a bracket token
+        (e.g. a stray ``[/]``) renders literally instead of being parsed as Rich
+        markup and raising ``MarkupError`` at every call site that prints this
+        string with markup enabled (kv/panel/success/…). See :meth:`escape_markup`.
+        """
         ref = f"[task.number]#{number}[/]"
         if title:
-            ref += f"  {title}"
+            ref += f"  {_rich_escape(title)}"
         return ref
 
     def git_ref(self, branch: str) -> str:

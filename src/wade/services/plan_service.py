@@ -429,7 +429,8 @@ def plan(
     if issue_id:
         try:
             existing_issue = provider.read_task(issue_id)
-            console.kv("Issue", f"#{existing_issue.id}: {existing_issue.title}")
+            safe_title = console.escape_markup(existing_issue.title)
+            console.kv("Issue", f"#{existing_issue.id}: {safe_title}")
         except Exception as e:
             console.error(f"Could not fetch issue #{issue_id}: {e}")
             return False
