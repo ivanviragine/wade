@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.42.4] — 2026-08-10
+
+### Bug Fixes
+
+- restore nested-session guard for Antigravity CLI in wade implement (#405) (8d16c06)
+
 ## [v0.42.3] — 2026-08-10
 
 ### Bug Fixes
