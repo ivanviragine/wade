@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.42.1] — 2026-08-10
+
+### Chores
+
+- remove dead pre-push install wrappers superseded by the batch git-hook API (#399) (e39517a)
+
 ## [v0.42.0] — 2026-08-09
 
 ### Features
