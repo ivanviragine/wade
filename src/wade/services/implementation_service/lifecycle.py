@@ -392,15 +392,17 @@ class ReviewStatus(BaseModel):
 
 
 def _review_pass_phrase(passes: int) -> str:
-    """``N distinct commit(s) reviewed`` — a count of unique reviewed commits, not
-    review invocations. ``markers.record_review_pass`` is per-sha and idempotent
-    (#384), so retrying review against the same HEAD (e.g. two consecutive
-    headless timeouts) reuses one marker and is never double-counted; the phrase
-    says "commits reviewed" rather than "review passes" so it can't be misread
-    as an attempt count.
+    """``review attempted on N distinct commit(s)`` — a count of unique commits a
+    review delegation ran against, not a count of confirmed-successful reviews.
+    ``review_delegation_service._record_review_pass`` writes the
+    ``review-pass@<sha>`` marker *before* checking ``result.success``, so a
+    headless timeout or other delegation failure still advances this count
+    (#384) — the phrase must not claim those commits were actually reviewed,
+    only that a review was attempted. ``markers.record_review_pass`` is per-sha
+    and idempotent, so retrying against the same HEAD is never double-counted.
     """
     noun = "commit" if passes == 1 else "commits"
-    return f"{passes} distinct {noun} reviewed"
+    return f"review attempted on {passes} distinct {noun}"
 
 
 def _render_review_status(status: ReviewStatus) -> str:
@@ -408,13 +410,17 @@ def _render_review_status(status: ReviewStatus) -> str:
 
     The line makes the review outcome legible to a human reading the PR:
     reviewed / skipped / gate-disabled / cap-reached / not-reviewed. For the
-    non-reviewed outcomes it distinguishes "N distinct commit(s) reviewed, final
-    commit not reviewed" (``passes > 0``) from "never tried" (``passes == 0``) —
-    the core #367 legibility fix; see :func:`_review_pass_phrase` for why the
-    count is phrased as distinct commits rather than review attempts. The count
-    is honest for both session types and rendered for the gate-disabled outcomes
-    too (``REQUIRE_OFF``/``DISABLED``), not just the skipped/not-reviewed ones,
-    so a disabled gate never masks an already-recorded review history.
+    non-reviewed outcomes it distinguishes "review attempted on N distinct
+    commit(s), final commit not reviewed" (``passes > 0``) from "never tried"
+    (``passes == 0``) — the core #367 legibility fix; see
+    :func:`_review_pass_phrase` for why the count is phrased as attempted
+    reviews, not confirmed-successful ones. The count is honest for both
+    session types and rendered for the gate-disabled outcomes too
+    (``REQUIRE_OFF``/``DISABLED``), not just the skipped/not-reviewed ones, so a
+    disabled gate never masks an already-recorded review history — and those
+    two branches always state the final commit was not reviewed, without
+    claiming *when* relative to the gate the passes happened: marker files
+    carry no timestamp, so that chronology can't be known (#367 follow-up).
     ``CAP_REACHED`` is only ever produced for implementation sessions (the
     classifier scopes the cap there), so its wording never leaks into a
     review-pr-comments PR.
@@ -431,23 +437,27 @@ def _render_review_status(status: ReviewStatus) -> str:
                 "but the final commit was not reviewed."
             )
         else:
-            line = (
-                "⚠️ Review skipped (`--skip-review`); no commits were reviewed (review never ran)."
-            )
+            line = "⚠️ Review skipped (`--skip-review`); no review was attempted (review never ran)."
     elif kind is ReviewStatusKind.CAP_REACHED:
         line = (
-            f"⚠️ Completed after {_review_pass_phrase(status.passes)} without a fresh "
-            "review of the final commit (`done.max_review_passes` cap reached)."
+            f"⚠️ Completed with {_review_pass_phrase(status.passes)}; the final commit "
+            "was not freshly reviewed (`done.max_review_passes` cap reached)."
         )
     elif kind is ReviewStatusKind.REQUIRE_OFF:
         # The leading info emoji is intentional PR-body markdown, not an identifier.
-        line = "ℹ️ Review gate disabled (`done.require_review: false`)."  # noqa: RUF001
+        line = (
+            "ℹ️ Review gate disabled (`done.require_review: false`); "  # noqa: RUF001
+            "the final commit was not reviewed."
+        )
         if status.passes > 0:
-            line += f" {_review_pass_phrase(status.passes)} before the gate was disabled."
+            line += f" {_review_pass_phrase(status.passes).capitalize()}."
     elif kind is ReviewStatusKind.DISABLED:
-        line = "ℹ️ Review gate disabled (`review_implementation.enabled: false`)."  # noqa: RUF001
+        line = (
+            "ℹ️ Review gate disabled (`review_implementation.enabled: false`); "  # noqa: RUF001
+            "the final commit was not reviewed."
+        )
         if status.passes > 0:
-            line += f" {_review_pass_phrase(status.passes)} before the gate was disabled."
+            line += f" {_review_pass_phrase(status.passes).capitalize()}."
     else:  # NOT_REVIEWED — rendering fallback (the gate would normally have refused).
         if status.passes > 0:
             line = f"⚠️ {_review_pass_phrase(status.passes)}, but the final commit was not reviewed."
