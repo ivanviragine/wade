@@ -7,10 +7,14 @@ import subprocess
 from pathlib import Path
 
 from wade.git import repo as git_repo
-from wade.skills.installer import install_pre_push_backstop
+from wade.skills.installer import install_worktree_git_hooks, load_hook_template
 from wade.utils import markers
 
 _ZERO = "0" * 40
+
+
+def _install_pre_push(wt: Path) -> bool:
+    return install_worktree_git_hooks(wt, {"pre-push": load_hook_template("pre-push")})
 
 
 def _git(root: Path, *args: str) -> str:
@@ -51,7 +55,7 @@ def _run_hook(wt: Path, stdin: str) -> subprocess.CompletedProcess[str]:
 class TestInstallScoping:
     def test_installs_worktree_scoped_hook(self, tmp_path: Path) -> None:
         _main, wt, _branch = _main_and_worktree(tmp_path)
-        assert install_pre_push_backstop(wt) is True
+        assert _install_pre_push(wt) is True
 
         hook = wt / ".wade" / "githooks" / "pre-push"
         assert hook.is_file()
@@ -60,7 +64,7 @@ class TestInstallScoping:
 
     def test_not_leaked_to_main_checkout(self, tmp_path: Path) -> None:
         main, wt, _branch = _main_and_worktree(tmp_path)
-        install_pre_push_backstop(wt)
+        _install_pre_push(wt)
         # The main checkout must not pick up the worktree-scoped hooksPath.
         assert git_repo.get_config_value(main, "core.hooksPath") is None
         assert git_repo.get_config_value(main, "core.hooksPath", worktree=True) is None
@@ -69,7 +73,7 @@ class TestInstallScoping:
         main, wt, _branch = _main_and_worktree(tmp_path)
         sib = tmp_path / "sib"
         _git(main, "worktree", "add", "-b", "feat/2-y", str(sib))
-        install_pre_push_backstop(wt)
+        _install_pre_push(wt)
         assert git_repo.get_config_value(sib, "core.hooksPath", worktree=True) is None
         assert git_repo.get_config_value(sib, "core.hooksPath") is None
 
@@ -77,7 +81,7 @@ class TestInstallScoping:
 class TestHookMarkerGate:
     def test_refuses_without_marker(self, tmp_path: Path) -> None:
         _main, wt, branch = _main_and_worktree(tmp_path)
-        install_pre_push_backstop(wt)
+        _install_pre_push(wt)
         head = _head(wt)
         stdin = f"refs/heads/{branch} {head} refs/heads/{branch} {_ZERO}\n"
         r = _run_hook(wt, stdin)
@@ -86,7 +90,7 @@ class TestHookMarkerGate:
 
     def test_allows_with_marker(self, tmp_path: Path) -> None:
         _main, wt, branch = _main_and_worktree(tmp_path)
-        install_pre_push_backstop(wt)
+        _install_pre_push(wt)
         head = _head(wt)
         markers.write_marker(wt, "done", head)
         stdin = f"refs/heads/{branch} {head} refs/heads/{branch} {_ZERO}\n"
@@ -95,7 +99,7 @@ class TestHookMarkerGate:
 
     def test_deletion_is_skipped(self, tmp_path: Path) -> None:
         _main, wt, branch = _main_and_worktree(tmp_path)
-        install_pre_push_backstop(wt)
+        _install_pre_push(wt)
         # local sha all-zero = branch deletion → nothing pushed, no marker needed.
         stdin = f"refs/heads/{branch} {_ZERO} refs/heads/{branch} {_head(wt)}\n"
         r = _run_hook(wt, stdin)
@@ -105,7 +109,7 @@ class TestHookMarkerGate:
         # The core invariant is sha-keying: a marker written for an earlier
         # commit must not authorize a push of a newer commit.
         _main, wt, branch = _main_and_worktree(tmp_path)
-        install_pre_push_backstop(wt)
+        _install_pre_push(wt)
         old_head = _head(wt)
         markers.write_marker(wt, "done", old_head)
         (wt / "b.txt").write_text("b\n")
@@ -119,7 +123,7 @@ class TestHookMarkerGate:
 
     def test_other_ref_not_gated(self, tmp_path: Path) -> None:
         _main, wt, _branch = _main_and_worktree(tmp_path)
-        install_pre_push_backstop(wt)
+        _install_pre_push(wt)
         head = _head(wt)
         # A ref that isn't the session branch (e.g. a tag push) passes ungated.
         stdin = f"refs/tags/v1 {head} refs/tags/v1 {_ZERO}\n"
@@ -149,7 +153,7 @@ class TestChaining:
         # `pipefail` the writer's SIGPIPE must NOT mask the hook's 0 exit.
         main, wt, branch = _main_and_worktree(tmp_path)
         self._install_prior_hook_body(main, "#!/usr/bin/env bash\nexit 0\n")
-        install_pre_push_backstop(wt)
+        _install_pre_push(wt)
         head = _head(wt)
         markers.write_marker(wt, "done", head)
         stdin = f"refs/heads/{branch} {head} refs/heads/{branch} {_ZERO}\n"
@@ -161,7 +165,7 @@ class TestChaining:
         # own status, not the writer's.
         main, wt, branch = _main_and_worktree(tmp_path)
         self._install_prior_hook_body(main, "#!/usr/bin/env bash\nexit 3\n")
-        install_pre_push_backstop(wt)
+        _install_pre_push(wt)
         head = _head(wt)
         markers.write_marker(wt, "done", head)
         stdin = f"refs/heads/{branch} {head} refs/heads/{branch} {_ZERO}\n"
@@ -173,7 +177,7 @@ class TestChaining:
         record = tmp_path / "chained_stdin.txt"
         prior = self._install_prior_common_hook(main, record)
 
-        install_pre_push_backstop(wt)
+        _install_pre_push(wt)
         chain = (wt / ".wade" / "githooks" / ".chain-pre-push").read_text().strip()
         assert chain == str(prior.resolve())
 
@@ -189,7 +193,7 @@ class TestChaining:
         main, wt, branch = _main_and_worktree(tmp_path)
         record = tmp_path / "chained_stdin.txt"
         self._install_prior_common_hook(main, record)
-        install_pre_push_backstop(wt)
+        _install_pre_push(wt)
 
         head = _head(wt)
         markers.write_marker(wt, "done", head)
@@ -208,10 +212,10 @@ class TestChaining:
         record = tmp_path / "chained_stdin.txt"
         prior = self._install_prior_common_hook(main, record)
 
-        install_pre_push_backstop(wt)
+        _install_pre_push(wt)
         first = (wt / ".wade" / "githooks" / ".chain-pre-push").read_text().strip()
         # Re-run bootstrap install against the already-managed worktree.
-        install_pre_push_backstop(wt)
+        _install_pre_push(wt)
         second = (wt / ".wade" / "githooks" / ".chain-pre-push").read_text().strip()
         # The chain target is captured once and never re-points at wade's own hook.
         assert first == second == str(prior.resolve())
@@ -224,7 +228,7 @@ class TestGracefulDegrade:
         # Simulate old/locked-down git: worktree-scoped config writes fail.
         monkeypatch.setattr(git_repo, "set_config_value", lambda *a, **k: False)
         # Must warn-and-skip (return False), never raise.
-        assert install_pre_push_backstop(wt) is False
+        assert _install_pre_push(wt) is False
 
     def test_rolls_back_extension_when_hookspath_write_fails(
         self, tmp_path: Path, monkeypatch
@@ -243,7 +247,7 @@ class TestGracefulDegrade:
             return real_set(path, key, value, worktree=worktree)
 
         monkeypatch.setattr(git_repo, "set_config_value", fake_set)
-        assert install_pre_push_backstop(wt) is False
+        assert _install_pre_push(wt) is False
         # The extension was unset (prior value was None), not left enabled.
         assert git_repo.get_config_value(wt, "extensions.worktreeConfig") is None
 
@@ -264,6 +268,6 @@ class TestGracefulDegrade:
             return real_set(path, key, value, worktree=worktree)
 
         monkeypatch.setattr(git_repo, "set_config_value", fake_set)
-        assert install_pre_push_backstop(wt) is False
+        assert _install_pre_push(wt) is False
         # The extension was restored to its prior value, not unset.
         assert git_repo.get_config_value(wt, "extensions.worktreeConfig") == "false"

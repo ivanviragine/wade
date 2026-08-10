@@ -459,3 +459,9 @@ The #374 probe_index_lock=True fix covers ONLY create_named_stash (git/stash.py)
 shell_containment's device write-exemption (src/wade/hooks/policies.py) is an EXACT allowlist — _ALWAYS_ALLOWED_DEVICES = {/dev/null,/dev/zero,/dev/full,/dev/random,/dev/urandom,/dev/tty} — NOT a /dev/ prefix. Linux mounts writable filesystems under /dev/ (/dev/shm tmpfs, /dev/mqueue, /dev/hugepages) where a write persists a real file OUTSIDE the worktree, so a bare prefix let 'tee /dev/shm/out' escape (both impl and plan mode). Matched against the Path.resolve()-d target via _is_always_allowed_device, so only self-resolving device NODES belong; std-stream symlinks (/dev/stdout -> /dev/fd/N or /proc/self/fd/N) resolve away and are intentionally not listed — following them to the real fd target is safer.
 
 ---
+
+## baa9a8374b37 | 2026-08-09 | implementation | tags: hooks, installer | Issue #383
+
+install_worktree_git_hook (singular) and install_pre_push_backstop were removed in #383. The sole per-worktree git-hook install core is now the batch install_worktree_git_hooks(worktree_path, hooks: dict[hook_name, script]), which captures every prior hook to per-hook .chain-<hook_name> files before setting core.hooksPath. Bootstrap's _install_managed_git_hooks (bootstrap.py) loads the pre-push template and owns the missing-template degrade. This supersedes the framing in entry c52fac51 (Issue #352), which described the singular wrapper as "the reusable core."
+
+---
