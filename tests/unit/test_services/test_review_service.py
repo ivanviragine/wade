@@ -582,6 +582,34 @@ class TestReviewServiceStart:
         review_file = wt_paths[0] / "REVIEW-COMMENTS.md"
         assert not review_file.exists()
 
+    def test_antigravity_agent_nested_session_skips_ai_launch(
+        self, tmp_path: Path, mock_setup: dict[str, MagicMock], mock_provider: MagicMock
+    ) -> None:
+        """ANTIGRAVITY_AGENT (agy's in-session marker) triggers the nested-session guard.
+
+        Regression test for #341 — _detect_ai_cli_env is one function shared by
+        both wade implement and wade review; this exercises the review call site.
+        """
+        from wade.models.review import PRReviewStatus
+
+        thread = ReviewThread(
+            comments=[ReviewComment(author="alice", body="Fix this", path="main.py", line=10)]
+        )
+        mock_setup["get_comprehensive_review_status"].return_value = PRReviewStatus(
+            actionable_threads=[thread],
+            all_unresolved_threads=[thread],
+        )
+        mock_setup["_detect_ai_cli_env"].return_value = "ANTIGRAVITY_AGENT"
+
+        with patch("wade.services.review_service.console") as mock_console:
+            result = start(target="42")
+
+        assert result is True
+        info_calls = [call.args[0] for call in mock_console.info.call_args_list]
+        assert any("ANTIGRAVITY_AGENT" in msg for msg in info_calls), (
+            f"Expected nested-session guard message in console.info calls, got: {info_calls}"
+        )
+
     def test_outdated_threads_proceed_to_session(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock], mock_provider: MagicMock
     ) -> None:
