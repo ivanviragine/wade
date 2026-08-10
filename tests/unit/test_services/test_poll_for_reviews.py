@@ -514,12 +514,12 @@ def test_bot_completed_but_commit_newer_than_signal_keeps_polling(
     the newest bot signal → must NOT return REVIEW_COMPLETE. It keeps polling and
     eventually hits QUIET_TIMEOUT when no fresh review arrives.
     """
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
-    # Exact crossby #131 timeline: last bot review 09:43:24, HEAD commit 10:04:20,
-    # both comfortably in the past so the commit is not "fresh".
-    last_bot_review = datetime(2026, 8, 10, 9, 43, 24, tzinfo=UTC)
-    head_commit = datetime(2026, 8, 10, 10, 4, 20, tzinfo=UTC)
+    # crossby #131 timeline: HEAD commit ~21 minutes after the last bot review.
+    # Both must be comfortably in the past so the commit is not "fresh".
+    head_commit = datetime.now(UTC) - timedelta(minutes=30)
+    last_bot_review = head_commit - timedelta(minutes=21)
     mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
     mock_status.return_value = PRReviewStatus(
         actionable_threads=[],
