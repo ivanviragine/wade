@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.42.2] — 2026-08-10
+
+### Bug Fixes
+
+- `done` cannot tell a clean review from one that never ran (#400) (8788d52)
+
 ## [v0.42.1] — 2026-08-10
 
 ### Chores
