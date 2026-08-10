@@ -466,6 +466,24 @@ install_worktree_git_hook (singular) and install_pre_push_backstop were removed 
 
 ---
 
+## cc229a279fcb | 2026-08-10 | implementation | tags: review-polling, review, coderabbit | Issue #403
+
+Commit-staleness for review completion is measured against BOT signals only — latest_bot_signal_ts (models/review.py) groups bot_status_ts and submitted_at of is_bot reviews by source (CodeRabbit's summary marker and its own reviews share one "coderabbit" group; every other distinct bot author gets its own group), takes the max within each group, then returns the min across groups — so a fresh signal from one bot can never mask a stale signal from another. Never reuse latest_signal_ts here: it folds in human APPROVED submitted_at, so a fixup commit after a human approval would flip the PR to not-all-clear, which GitHub itself does not do. has_changes_requested gates human reviewers separately.
+
+---
+
+## b3c367938c59 | 2026-08-10 | implementation | tags: review-polling, github, review | Issue #403
+
+Review-author bot classification uses the GraphQL actor `__typename == "Bot"` (with the login-suffix heuristic as fallback), set in `GitHubProvider._fetch_review_status_page`. The login heuristic alone missed chatgpt-codex-connector (Codex), so Codex reviews were treated as human and never counted as bot signals / never tripped IN_PROGRESS. Add `__typename` to any reviews author selection rather than growing a login allowlist.
+
+---
+
+## 7659d4199132 | 2026-08-10 | implementation | tags: review-polling, architecture, review | Issue #403
+
+latest_signal_ts lives in models/review.py (leaf layer), NOT services/review_settle.py, so PRReviewStatus can compute commit-staleness (review_covers_latest_commit / latest_bot_signal_ts) without a model->service import. review_settle re-exports it (services->models is allowed) for the settle-window call sites. PRComment.updated_at + PRReviewStatus.bot_status_ts carry CodeRabbit's summary-comment edit time so a 'found nothing, only touched summary' review still participates in staleness (no thread/review timestamp to lean on).
+
+---
+
 ## 4d419ec6629c | 2026-08-10 | implementation | tags: done, review, markers, pr-body | Issue #367
 
 The durable, human-legible record of session state is the PR body (marker-bounded blocks: wade:summary, wade:review-status, wade:impl-usage), NOT the .wade/ markers — reviewed@<sha>/review-pass@<sha>/done@<sha> are zero-byte, worktree-local, and discarded at session end, so no human ever sees them. To make session state visible to a reviewer, project it into the PR body with a marker-scoped block (build_marked_block + update_body_preserving_markers, idempotent on re-run) rather than a richer on-disk receipt — this is why #367 surfaced review status (reviewed/skipped/gate-disabled + pass count) as a PR-body block. done.py:_classify_review is the single classifier both the review-ran gate and the '## Review Status' renderer read, so the gate decision and the PR-body wording cannot drift.

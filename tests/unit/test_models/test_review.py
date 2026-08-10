@@ -92,7 +92,7 @@ class TestDetectCoderabbitReviewStatus:
                 ),
             )
         ]
-        assert detect_coderabbit_review_status(comments) == ReviewBotStatus.PAUSED
+        assert detect_coderabbit_review_status(comments)[0] == ReviewBotStatus.PAUSED
 
     def test_in_progress_review(self) -> None:
         comments = [
@@ -104,7 +104,7 @@ class TestDetectCoderabbitReviewStatus:
                 ),
             )
         ]
-        assert detect_coderabbit_review_status(comments) == ReviewBotStatus.IN_PROGRESS
+        assert detect_coderabbit_review_status(comments)[0] == ReviewBotStatus.IN_PROGRESS
 
     def test_completed_review_returns_completed(self) -> None:
         comments = [
@@ -116,16 +116,30 @@ class TestDetectCoderabbitReviewStatus:
                 ),
             )
         ]
-        assert detect_coderabbit_review_status(comments) == ReviewBotStatus.COMPLETED
+        assert detect_coderabbit_review_status(comments)[0] == ReviewBotStatus.COMPLETED
+
+    def test_returns_matched_comment_updated_at(self) -> None:
+        """The matched CodeRabbit comment's updated_at is returned as the 2nd tuple item."""
+        ts = datetime(2026, 8, 10, 9, 43, 24, tzinfo=UTC)
+        comments = [
+            PRComment(
+                login="coderabbitai[bot]",
+                body=("<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n"),
+                updated_at=ts,
+            )
+        ]
+        status, updated_at = detect_coderabbit_review_status(comments)
+        assert status == ReviewBotStatus.COMPLETED
+        assert updated_at == ts
 
     def test_no_coderabbit_comments(self) -> None:
         comments = [
             PRComment(login="octocat", body="Looks good to me!"),
         ]
-        assert detect_coderabbit_review_status(comments) is None
+        assert detect_coderabbit_review_status(comments) == (None, None)
 
     def test_empty_comments(self) -> None:
-        assert detect_coderabbit_review_status([]) is None
+        assert detect_coderabbit_review_status([]) == (None, None)
 
     def test_uses_latest_comment(self) -> None:
         """When multiple CodeRabbit comments exist, the latest (last) wins."""
@@ -142,7 +156,7 @@ class TestDetectCoderabbitReviewStatus:
             ),
         ]
         # Latest comment has no paused/in-progress marker -> COMPLETED
-        assert detect_coderabbit_review_status(comments) == ReviewBotStatus.COMPLETED
+        assert detect_coderabbit_review_status(comments)[0] == ReviewBotStatus.COMPLETED
 
     def test_paused_overrides_earlier_completed(self) -> None:
         """A newer paused comment takes precedence over an older completed one."""
@@ -158,7 +172,7 @@ class TestDetectCoderabbitReviewStatus:
                 body=("<!-- This is an auto-generated comment: review paused by coderabbit.ai -->"),
             ),
         ]
-        assert detect_coderabbit_review_status(comments) == ReviewBotStatus.PAUSED
+        assert detect_coderabbit_review_status(comments)[0] == ReviewBotStatus.PAUSED
 
     def test_detection_is_case_insensitive(self) -> None:
         comments = [
@@ -170,7 +184,7 @@ class TestDetectCoderabbitReviewStatus:
                 ),
             )
         ]
-        assert detect_coderabbit_review_status(comments) == ReviewBotStatus.IN_PROGRESS
+        assert detect_coderabbit_review_status(comments)[0] == ReviewBotStatus.IN_PROGRESS
 
 
 # ---------------------------------------------------------------------------
@@ -635,6 +649,211 @@ class TestPRReviewStatus:
 
 
 # ---------------------------------------------------------------------------
+# review_covers_latest_commit (commit-staleness predicate)
+# ---------------------------------------------------------------------------
+
+
+class TestReviewCoversLatestCommit:
+    """Truth table for the bot-signal-only commit-staleness predicate."""
+
+    def _commit(self) -> datetime:
+        return datetime(2026, 8, 10, 10, 4, 20, tzinfo=UTC)
+
+    def test_bot_signal_older_than_commit_not_covered(self) -> None:
+        commit = self._commit()
+        status = PRReviewStatus(
+            bot_status=ReviewBotStatus.COMPLETED,
+            bot_status_ts=commit - timedelta(minutes=20),
+            latest_commit_pushed_at=commit,
+        )
+        assert status.review_covers_latest_commit is False
+
+    def test_bot_signal_at_commit_covered(self) -> None:
+        commit = self._commit()
+        status = PRReviewStatus(
+            bot_status=ReviewBotStatus.COMPLETED,
+            bot_status_ts=commit,
+            latest_commit_pushed_at=commit,
+        )
+        assert status.review_covers_latest_commit is True
+
+    def test_bot_signal_after_commit_covered(self) -> None:
+        commit = self._commit()
+        status = PRReviewStatus(
+            bot_status=ReviewBotStatus.COMPLETED,
+            bot_status_ts=commit + timedelta(seconds=5),
+            latest_commit_pushed_at=commit,
+        )
+        assert status.review_covers_latest_commit is True
+
+    def test_no_commit_timestamp_covered(self) -> None:
+        """Missing latest_commit_pushed_at (legacy providers) → always covered."""
+        status = PRReviewStatus(
+            bot_status=ReviewBotStatus.COMPLETED,
+            bot_status_ts=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        assert status.review_covers_latest_commit is True
+
+    def test_no_bot_signal_covered(self) -> None:
+        """A commit but no bot signal at all → nothing to be stale relative to."""
+        status = PRReviewStatus(latest_commit_pushed_at=self._commit())
+        assert status.review_covers_latest_commit is True
+
+    def test_human_approved_older_than_commit_no_bot_covered(self) -> None:
+        """A stale human APPROVED with no bot never invents staleness."""
+        from wade.models.review import PRReview, ReviewState
+
+        commit = self._commit()
+        status = PRReviewStatus(
+            reviews=[
+                PRReview(
+                    author="alice",
+                    state=ReviewState.APPROVED,
+                    submitted_at=commit - timedelta(minutes=30),
+                    is_bot=False,
+                )
+            ],
+            latest_commit_pushed_at=commit,
+        )
+        assert status.review_covers_latest_commit is True
+
+    def test_bot_review_submitted_at_participates(self) -> None:
+        """A bot PRReview's submitted_at counts as a bot signal (no bot_status_ts)."""
+        from wade.models.review import PRReview, ReviewState
+
+        commit = self._commit()
+        stale = PRReviewStatus(
+            reviews=[
+                PRReview(
+                    author="chatgpt-codex-connector",
+                    state=ReviewState.COMMENTED,
+                    submitted_at=commit - timedelta(minutes=20),
+                    is_bot=True,
+                )
+            ],
+            latest_commit_pushed_at=commit,
+        )
+        assert stale.review_covers_latest_commit is False
+
+        fresh = stale.model_copy(
+            update={
+                "reviews": [
+                    PRReview(
+                        author="chatgpt-codex-connector",
+                        state=ReviewState.COMMENTED,
+                        submitted_at=commit + timedelta(seconds=5),
+                        is_bot=True,
+                    )
+                ]
+            }
+        )
+        assert fresh.review_covers_latest_commit is True
+
+    def test_fresh_human_approval_does_not_rescue_stale_bot(self) -> None:
+        """Human timestamp is ignored: a fresh human APPROVED cannot mask a stale bot."""
+        from wade.models.review import PRReview, ReviewState
+
+        commit = self._commit()
+        status = PRReviewStatus(
+            bot_status=ReviewBotStatus.COMPLETED,
+            bot_status_ts=commit - timedelta(minutes=20),
+            reviews=[
+                PRReview(
+                    author="alice",
+                    state=ReviewState.APPROVED,
+                    submitted_at=commit + timedelta(minutes=5),
+                    is_bot=False,
+                )
+            ],
+            latest_commit_pushed_at=commit,
+        )
+        assert status.review_covers_latest_commit is False
+
+    def test_fresh_second_bot_does_not_rescue_stale_coderabbit(self) -> None:
+        """A fresh Codex review cannot mask a stale CodeRabbit summary marker.
+
+        Regression for the multi-bot gap: taking the max across all bot
+        signals let a fresh signal from one bot paper over another bot's
+        stale one, so ``bot_status == COMPLETED`` (from CodeRabbit's old
+        marker) plus a fresh Codex review wrongly looked "covered".
+        """
+        from wade.models.review import PRReview, ReviewState
+
+        commit = self._commit()
+        status = PRReviewStatus(
+            bot_status=ReviewBotStatus.COMPLETED,
+            bot_status_ts=commit - timedelta(minutes=20),
+            reviews=[
+                PRReview(
+                    author="chatgpt-codex-connector",
+                    state=ReviewState.APPROVED,
+                    submitted_at=commit + timedelta(minutes=5),
+                    is_bot=True,
+                )
+            ],
+            latest_commit_pushed_at=commit,
+        )
+        assert status.review_covers_latest_commit is False
+
+    def test_coderabbit_own_stale_review_does_not_permanently_block_fresh_summary(
+        self,
+    ) -> None:
+        """CodeRabbit's own older formal review must not out-vote its fresher summary edit.
+
+        Regression for double-counting CodeRabbit as two independent "bot
+        sources" (its summary-comment marker vs. its own formal review).
+        CodeRabbit reviewed once early on, then later re-analyzed a newer
+        commit and only touched its summary comment (the "found nothing new"
+        case) — that fresh summary edit must count as CodeRabbit's own latest
+        signal, not get dragged down by its stale first-pass review.
+        """
+        from wade.models.review import PRReview, ReviewState
+
+        commit = self._commit()
+        status = PRReviewStatus(
+            bot_status=ReviewBotStatus.COMPLETED,
+            bot_status_ts=commit + timedelta(minutes=1),
+            reviews=[
+                PRReview(
+                    author="coderabbitai[bot]",
+                    state=ReviewState.COMMENTED,
+                    submitted_at=commit - timedelta(days=1),
+                    is_bot=True,
+                )
+            ],
+            latest_commit_pushed_at=commit,
+        )
+        assert status.review_covers_latest_commit is True
+
+    def test_naive_timestamps_treated_as_utc(self) -> None:
+        commit = self._commit()
+        status = PRReviewStatus(
+            bot_status=ReviewBotStatus.COMPLETED,
+            bot_status_ts=(commit + timedelta(seconds=5)).replace(tzinfo=None),
+            latest_commit_pushed_at=commit.replace(tzinfo=None),
+        )
+        assert status.review_covers_latest_commit is True
+
+    def test_is_all_clear_false_when_bot_stale(self) -> None:
+        commit = self._commit()
+        status = PRReviewStatus(
+            bot_status=ReviewBotStatus.COMPLETED,
+            bot_status_ts=commit - timedelta(minutes=20),
+            latest_commit_pushed_at=commit,
+        )
+        assert status.is_all_clear is False
+
+    def test_is_all_clear_true_when_bot_covers(self) -> None:
+        commit = self._commit()
+        status = PRReviewStatus(
+            bot_status=ReviewBotStatus.COMPLETED,
+            bot_status_ts=commit + timedelta(seconds=5),
+            latest_commit_pushed_at=commit,
+        )
+        assert status.is_all_clear is True
+
+
+# ---------------------------------------------------------------------------
 # PollOutcome
 # ---------------------------------------------------------------------------
 
@@ -766,6 +985,24 @@ class TestFormatReviewStatusSummary:
         status = PRReviewStatus(reviews=[PRReview(author="alice", state=ReviewState.APPROVED)])
         messages = format_review_status_summary(status)
         assert any("SESSION COMPLETE" in m[1] for m in messages)
+
+    def test_stale_bot_shows_not_reviewed_warning_no_session_complete(self) -> None:
+        """A COMPLETED bot older than the latest commit warns and suppresses SESSION COMPLETE."""
+        from wade.models.review import PRReview, ReviewState, format_review_status_summary
+
+        commit = datetime(2026, 8, 10, 10, 4, 20, tzinfo=UTC)
+        status = PRReviewStatus(
+            bot_status=ReviewBotStatus.COMPLETED,
+            bot_status_ts=commit - timedelta(minutes=20),
+            reviews=[PRReview(author="alice", state=ReviewState.APPROVED)],
+            latest_commit_pushed_at=commit,
+        )
+        messages = format_review_status_summary(status)
+        assert any(
+            "latest commit has not been reviewed" in m[1].lower() and m[0] == "warn"
+            for m in messages
+        )
+        assert not any("SESSION COMPLETE" in m[1] for m in messages)
 
 
 # ---------------------------------------------------------------------------
