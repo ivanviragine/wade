@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.42.3] — 2026-08-10
+
+### Bug Fixes
+
+- don't declare review complete when bot hasn't reviewed the latest commit (#404) (f36ed80)
+
 ## [v0.42.2] — 2026-08-10
 
 ### Bug Fixes
