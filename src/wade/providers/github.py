@@ -684,7 +684,7 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
       }
       reviews(last: 100) {
         nodes {
-          author { login }
+          author { login __typename }
           state
           body
           submittedAt
@@ -741,16 +741,23 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
         reviews: list[PRReview] = []
         for rnode in pr_data.get("reviews", {}).get("nodes", []):
             author_login = ""
+            author_typename = ""
             if rnode.get("author"):
                 author_login = rnode["author"].get("login", "")
+                author_typename = rnode["author"].get("__typename", "")
             state_str = rnode.get("state", "COMMENTED")
             try:
                 state = ReviewState(state_str)
             except ValueError:
                 state = ReviewState.COMMENTED
+            # Prefer GitHub's native actor type (``__typename == "Bot"``), which
+            # classifies chatgpt-codex-connector (Codex), CodeRabbit, Copilot,
+            # etc. without an ever-growing login allowlist. Keep the login
+            # heuristic as a fallback for providers/paths without ``__typename``.
             normalized = author_login.lower()
             is_bot = (
-                normalized == "bot"
+                author_typename == "Bot"
+                or normalized == "bot"
                 or normalized.startswith(("bot-", "bot_"))
                 or normalized.endswith(("[bot]", "-bot", "_bot"))
             )

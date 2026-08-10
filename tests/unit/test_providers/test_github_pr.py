@@ -93,6 +93,71 @@ class TestGetPrReviewStatus:
 
         assert status.latest_commit_pushed_at is None
 
+    @patch("wade.providers.github.GitHubProvider.get_pr_issue_comments", return_value=[])
+    @patch("wade.providers.github.GitHubProvider.get_repo_nwo", return_value="owner/repo")
+    @patch("wade.providers.github.run")
+    def test_codex_review_classified_as_bot_via_typename(
+        self,
+        mock_run: MagicMock,
+        _mock_nwo: MagicMock,
+        _mock_comments: MagicMock,
+        provider: GitHubProvider,
+    ) -> None:
+        """chatgpt-codex-connector is classified is_bot=True via __typename == 'Bot'.
+
+        Its login matches none of the login-heuristic patterns, so a PENDING Codex
+        review must also surface as ReviewBotStatus.IN_PROGRESS.
+        """
+        mock_run.return_value = MagicMock(
+            stdout=self._make_graphql_response(
+                reviews=[
+                    {
+                        "author": {"login": "chatgpt-codex-connector", "__typename": "Bot"},
+                        "state": "PENDING",
+                        "body": "",
+                        "submittedAt": "2026-08-10T10:00:00Z",
+                    }
+                ]
+            )
+        )
+
+        status = provider.get_pr_review_status(42)
+
+        from wade.models.review import ReviewBotStatus
+
+        assert len(status.reviews) == 1
+        assert status.reviews[0].is_bot is True
+        # A pending bot review with no CodeRabbit marker → generic IN_PROGRESS.
+        assert status.bot_status == ReviewBotStatus.IN_PROGRESS
+
+    @patch("wade.providers.github.GitHubProvider.get_pr_issue_comments", return_value=[])
+    @patch("wade.providers.github.GitHubProvider.get_repo_nwo", return_value="owner/repo")
+    @patch("wade.providers.github.run")
+    def test_login_heuristic_still_classifies_bracket_bot(
+        self,
+        mock_run: MagicMock,
+        _mock_nwo: MagicMock,
+        _mock_comments: MagicMock,
+        provider: GitHubProvider,
+    ) -> None:
+        """A '[bot]'-suffixed author still classifies via the login fallback (no __typename)."""
+        mock_run.return_value = MagicMock(
+            stdout=self._make_graphql_response(
+                reviews=[
+                    {
+                        "author": {"login": "coderabbitai[bot]"},
+                        "state": "COMMENTED",
+                        "body": "",
+                        "submittedAt": "2026-08-10T10:00:00Z",
+                    }
+                ]
+            )
+        )
+
+        status = provider.get_pr_review_status(42)
+
+        assert status.reviews[0].is_bot is True
+
     @patch("wade.providers.github.GitHubProvider.get_repo_nwo", return_value="owner/repo")
     @patch("wade.providers.github.run")
     def test_bot_status_ts_populated_from_coderabbit_comment(
