@@ -392,8 +392,15 @@ class ReviewStatus(BaseModel):
 
 
 def _review_pass_phrase(passes: int) -> str:
-    """``N review pass(es)`` with correct pluralization."""
-    return f"{passes} review pass{'' if passes == 1 else 'es'}"
+    """``N distinct commit(s) reviewed`` — a count of unique reviewed commits, not
+    review invocations. ``markers.record_review_pass`` is per-sha and idempotent
+    (#384), so retrying review against the same HEAD (e.g. two consecutive
+    headless timeouts) reuses one marker and is never double-counted; the phrase
+    says "commits reviewed" rather than "review passes" so it can't be misread
+    as an attempt count.
+    """
+    noun = "commit" if passes == 1 else "commits"
+    return f"{passes} distinct {noun} reviewed"
 
 
 def _render_review_status(status: ReviewStatus) -> str:
@@ -401,9 +408,13 @@ def _render_review_status(status: ReviewStatus) -> str:
 
     The line makes the review outcome legible to a human reading the PR:
     reviewed / skipped / gate-disabled / cap-reached / not-reviewed. For the
-    non-reviewed outcomes it distinguishes "attempted N times, final commit not
-    reviewed" (``passes > 0``) from "never tried" (``passes == 0``) — the core
-    #367 legibility fix. The pass count is honest for both session types;
+    non-reviewed outcomes it distinguishes "N distinct commit(s) reviewed, final
+    commit not reviewed" (``passes > 0``) from "never tried" (``passes == 0``) —
+    the core #367 legibility fix; see :func:`_review_pass_phrase` for why the
+    count is phrased as distinct commits rather than review attempts. The count
+    is honest for both session types and rendered for the gate-disabled outcomes
+    too (``REQUIRE_OFF``/``DISABLED``), not just the skipped/not-reviewed ones,
+    so a disabled gate never masks an already-recorded review history.
     ``CAP_REACHED`` is only ever produced for implementation sessions (the
     classifier scopes the cap there), so its wording never leaks into a
     review-pr-comments PR.
@@ -416,13 +427,12 @@ def _render_review_status(status: ReviewStatus) -> str:
     elif kind is ReviewStatusKind.SKIPPED_FLAG:
         if status.passes > 0:
             line = (
-                f"⚠️ Review skipped (`--skip-review`); {_review_pass_phrase(status.passes)} "
-                "recorded, but the final commit was not reviewed."
+                f"⚠️ Review skipped (`--skip-review`); {_review_pass_phrase(status.passes)}, "
+                "but the final commit was not reviewed."
             )
         else:
             line = (
-                "⚠️ Review skipped (`--skip-review`); no review passes were recorded "
-                "(review never ran)."
+                "⚠️ Review skipped (`--skip-review`); no commits were reviewed (review never ran)."
             )
     elif kind is ReviewStatusKind.CAP_REACHED:
         line = (
@@ -432,14 +442,15 @@ def _render_review_status(status: ReviewStatus) -> str:
     elif kind is ReviewStatusKind.REQUIRE_OFF:
         # The leading info emoji is intentional PR-body markdown, not an identifier.
         line = "ℹ️ Review gate disabled (`done.require_review: false`)."  # noqa: RUF001
+        if status.passes > 0:
+            line += f" {_review_pass_phrase(status.passes)} before the gate was disabled."
     elif kind is ReviewStatusKind.DISABLED:
         line = "ℹ️ Review gate disabled (`review_implementation.enabled: false`)."  # noqa: RUF001
+        if status.passes > 0:
+            line += f" {_review_pass_phrase(status.passes)} before the gate was disabled."
     else:  # NOT_REVIEWED — rendering fallback (the gate would normally have refused).
         if status.passes > 0:
-            line = (
-                f"⚠️ {_review_pass_phrase(status.passes)} recorded, but the final commit "
-                "was not reviewed."
-            )
+            line = f"⚠️ {_review_pass_phrase(status.passes)}, but the final commit was not reviewed."
         else:
             line = "⚠️ The final commit was not reviewed (review never ran)."
 

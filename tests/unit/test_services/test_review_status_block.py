@@ -179,7 +179,7 @@ class TestRenderReviewStatus:
     def test_skipped_with_passes_is_attempted_not_never(self) -> None:
         out = _render_review_status(_status(ReviewStatusKind.SKIPPED_FLAG, passes=2))
         assert "--skip-review" in out
-        assert "2 review passes recorded" in out
+        assert "2 distinct commits reviewed" in out
         assert "not reviewed" in out
         assert "never ran" not in out
 
@@ -190,26 +190,39 @@ class TestRenderReviewStatus:
 
     def test_skipped_single_pass_is_singular(self) -> None:
         out = _render_review_status(_status(ReviewStatusKind.SKIPPED_FLAG, passes=1))
-        assert "1 review pass recorded" in out
+        assert "1 distinct commit reviewed" in out
 
     def test_cap_reached_mentions_cap_and_count(self) -> None:
         out = _render_review_status(_status(ReviewStatusKind.CAP_REACHED, passes=2))
         assert "done.max_review_passes" in out
-        assert "2 review passes" in out
+        assert "2 distinct commits reviewed" in out
 
     def test_require_off_note(self) -> None:
         out = _render_review_status(_status(ReviewStatusKind.REQUIRE_OFF))
         assert "Review gate disabled" in out
         assert "done.require_review: false" in out
 
+    def test_require_off_with_passes_shows_pass_history(self) -> None:
+        # A gate-disabled outcome must not discard a prior pass history — the
+        # distinction between "review never ran" and "ran, but not for the final
+        # commit" must survive even when the gate itself is off (#367 follow-up).
+        out = _render_review_status(_status(ReviewStatusKind.REQUIRE_OFF, passes=2))
+        assert "Review gate disabled" in out
+        assert "2 distinct commits reviewed" in out
+
     def test_disabled_note(self) -> None:
         out = _render_review_status(_status(ReviewStatusKind.DISABLED))
         assert "Review gate disabled" in out
         assert "review_implementation.enabled: false" in out
 
+    def test_disabled_with_passes_shows_pass_history(self) -> None:
+        out = _render_review_status(_status(ReviewStatusKind.DISABLED, passes=3))
+        assert "Review gate disabled" in out
+        assert "3 distinct commits reviewed" in out
+
     def test_not_reviewed_with_passes(self) -> None:
         out = _render_review_status(_status(ReviewStatusKind.NOT_REVIEWED, passes=3))
-        assert "3 review passes recorded" in out
+        assert "3 distinct commits reviewed" in out
         assert "not reviewed" in out
 
     def test_not_reviewed_without_passes(self) -> None:
@@ -223,7 +236,7 @@ class TestRenderReviewStatus:
         out = _render_review_status(
             _status(ReviewStatusKind.SKIPPED_FLAG, passes=2, session_type="review-pr-comments")
         )
-        assert "2 review passes recorded" in out
+        assert "2 distinct commits reviewed" in out
 
 
 # ---------------------------------------------------------------------------
