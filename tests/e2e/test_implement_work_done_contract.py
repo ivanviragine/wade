@@ -380,6 +380,13 @@ class TestWorkDoneCommand:
         assert "safety limit reached" in out2
         assert _remote_has_branch(origin_repo, branch_name)
 
+        # #367: completing at the cap without a fresh review is recorded in the PR
+        # body as a cap-reached note, not a clean "reviewed" line.
+        body = _pr_body_for_branch(mock_gh_cli["state_file"], branch_name)
+        assert "<!-- wade:review-status:start -->" in body
+        assert "cap reached" in body
+        assert "✅ Reviewed" not in body
+
     def test_review_pass_count_survives_second_implement(
         self,
         e2e_repo: Path,
@@ -464,3 +471,160 @@ class TestWorkDoneCommand:
         assert "git rm --cached .claude/skills/implementation-session/SKILL.md" in output
         assert _count_gh_calls(mock_gh_cli["log_file"], ["pr", "edit"]) == 0
         assert _count_gh_calls(mock_gh_cli["log_file"], ["pr", "ready"]) == 0
+
+
+def _pr_body_for_branch(state_file: Path, branch_name: str) -> str:
+    """Return the stored PR body for the given head branch from mock gh state."""
+    pr_number = _find_mock_pr_number_by_head(state_file, branch_name)
+    state_data = json.loads(state_file.read_text(encoding="utf-8"))
+    prs = state_data.get("prs", {})
+    assert isinstance(prs, dict)
+    pr_data = prs.get(pr_number)
+    assert isinstance(pr_data, dict)
+    return str(pr_data.get("body", ""))
+
+
+class TestReviewStatusBlockContract:
+    """#367: `done` projects the review status into the durable PR body.
+
+    Complements the unit tests (pure classifier + renderer) by exercising the
+    config wiring end to end — the ``done.require_review``/``--skip-review``/
+    reviewed-marker paths all reach the PR body a human reviewer actually sees.
+    """
+
+    _MARKER = "<!-- wade:review-status:start -->"
+
+    def _bootstrap(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+        issue_number: int,
+        issue_title: str,
+    ) -> tuple[Path, str]:
+        """implement → worktree → PR-SUMMARY + one impl commit. Returns (wt, branch)."""
+        _seed_mock_issue(
+            mock_gh_cli["state_file"],
+            issue_number=issue_number,
+            title=issue_title,
+            body="## Tasks\n- Do the work\n",
+        )
+        _init_origin_remote(e2e_repo)
+
+        start_result = _run(["implement", str(issue_number), "--cd"], cwd=e2e_repo)
+        assert start_result.returncode == 0, start_result.stdout + start_result.stderr
+        worktree_path = Path(start_result.stdout.strip())
+        assert worktree_path.is_dir()
+
+        (worktree_path / "PR-SUMMARY.md").write_text(
+            "Implemented the change and validated behavior.\n", encoding="utf-8"
+        )
+        (worktree_path / "impl.txt").write_text("work\n", encoding="utf-8")
+        _git(["add", "-A"], cwd=worktree_path)
+        _git(["commit", "-m", f"feat: complete #{issue_number}"], cwd=worktree_path)
+
+        branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=worktree_path).stdout.strip()
+        return worktree_path, branch
+
+    def test_skip_review_records_skip_notice_in_pr_body(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """A deliberate --skip-review bypass is visible in the PR body (#367)."""
+        worktree_path, branch = self._bootstrap(
+            e2e_repo, mock_gh_cli, 361, "fix: record the review skip"
+        )
+
+        result = _run(["implementation-session", "done", "--skip-review"], cwd=worktree_path)
+        assert result.returncode == 0, result.stdout + result.stderr
+
+        body = _pr_body_for_branch(mock_gh_cli["state_file"], branch)
+        assert self._MARKER in body
+        assert "Review skipped" in body
+        assert "--skip-review" in body
+
+    def test_reviewed_run_records_reviewed_line_in_pr_body(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """A normal reviewed run shows a "Reviewed at <sha>" line (#367)."""
+        worktree_path, branch = self._bootstrap(
+            e2e_repo, mock_gh_cli, 362, "fix: record the reviewed status"
+        )
+
+        # A real self-review pass (default prompt mode, exit 2) writes the
+        # sha-keyed reviewed@<HEAD> marker the done gate later reads.
+        review = _run(["review", "implementation"], cwd=worktree_path)
+        assert review.returncode == 2, review.stdout + review.stderr
+        head = _git(["rev-parse", "HEAD"], cwd=worktree_path).stdout.strip()
+
+        result = _run(["implementation-session", "done"], cwd=worktree_path)
+        assert result.returncode == 0, result.stdout + result.stderr
+
+        body = _pr_body_for_branch(mock_gh_cli["state_file"], branch)
+        assert self._MARKER in body
+        assert f"Reviewed at `{head[:7]}`" in body
+
+    def test_require_review_disabled_records_gate_disabled_note(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """`done.require_review: false` surfaces a "review gate disabled" note (#367).
+
+        Exercises the config wiring end to end (not just the pure classifier): the
+        toggle is set in the project config the worktree inherits, and done — with
+        no review run at all — still records why the gate did not apply.
+        """
+        config_path = e2e_repo / ".wade.yml"
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8") + "\ndone:\n  require_review: false\n",
+            encoding="utf-8",
+        )
+
+        worktree_path, branch = self._bootstrap(
+            e2e_repo, mock_gh_cli, 363, "fix: reflect the disabled review gate"
+        )
+
+        result = _run(["implementation-session", "done"], cwd=worktree_path)
+        assert result.returncode == 0, result.stdout + result.stderr
+
+        body = _pr_body_for_branch(mock_gh_cli["state_file"], branch)
+        assert self._MARKER in body
+        assert "Review gate disabled" in body
+        assert "done.require_review: false" in body
+
+    def test_reviews_disabled_records_gate_disabled_note(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """`ai.review_implementation.enabled: false` surfaces the gate-disabled note (#367).
+
+        Distinct config path from `done.require_review: false`: reviews are off
+        project-wide, so the review-ran gate auto-skips — done still records *why*
+        (the `review_implementation.enabled: false` wording) in the PR body.
+        """
+        config_path = e2e_repo / ".wade.yml"
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8").replace(
+                "ai:\n  default_tool: claude\n",
+                "ai:\n  default_tool: claude\n  review_implementation:\n    enabled: false\n",
+            ),
+            encoding="utf-8",
+        )
+        # Guard against a silent replace-miss producing a confusing downstream fail.
+        assert "review_implementation:" in config_path.read_text(encoding="utf-8")
+
+        worktree_path, branch = self._bootstrap(
+            e2e_repo, mock_gh_cli, 364, "fix: reflect reviews disabled"
+        )
+
+        result = _run(["implementation-session", "done"], cwd=worktree_path)
+        assert result.returncode == 0, result.stdout + result.stderr
+
+        body = _pr_body_for_branch(mock_gh_cli["state_file"], branch)
+        assert self._MARKER in body
+        assert "Review gate disabled" in body
+        assert "review_implementation.enabled: false" in body

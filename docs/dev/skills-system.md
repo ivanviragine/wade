@@ -144,15 +144,18 @@ or they are not installed. Review needs its **own** `reference/recovery.md` and
 `REVIEW_SKILLS` installs only `review-pr-comments-session`, `task`, and
 `knowledge`. Some duplication between the paired files is expected and correct.
 
-### The ≤ 8,000-char budget test
+### The session-start budget test
 
 `tests/integration/test_skill_context_budget.py` pins the combined size of the
 session-start payload — launch prompt + rendered `SKILL.md` (partials expanded,
-reviews enabled) — at **≤ 8,000 chars** for each of implement / plan / review, so
-the budget cannot silently regress. The unit is **chars** (a deliberate proxy for
-tokens; measured token savings differ slightly). If a skill edit pushes a session
-over budget, move the added detail into a `reference/*.md` and leave a one-line
-pointer rather than inflating the always-loaded `SKILL.md`.
+reviews enabled) — under a fixed char ceiling (`BUDGET_CHARS`, currently **8,400**)
+for each of implement / plan / review, so the budget cannot silently regress. The
+unit is **chars** (a deliberate proxy for tokens; measured token savings differ
+slightly). If a skill edit pushes a session over budget, move the added detail
+into a `reference/*.md` and leave a one-line pointer rather than inflating the
+always-loaded `SKILL.md` — or, for a short load-bearing note that must be
+always-loaded, bump `BUDGET_CHARS` with a documented reason (the ceiling exists to
+force that decision to be explicit and reviewed, not to forbid it).
 
 **Computed placeholders must be rendered, not left literal.** `{doc_targets}` is
 resolved per project at install time (see [Documentation
