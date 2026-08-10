@@ -474,7 +474,7 @@ Commit-staleness for review completion is measured against BOT signals only — 
 
 ## b3c367938c59 | 2026-08-10 | implementation | tags: review-polling, github, review | Issue #403
 
-Review-author bot classification uses the GraphQL actor __typename == "Bot" (with the login-suffix heuristic as fallback), set in GitHubProvider._fetch_review_status_page. The login heuristic alone missed chatgpt-codex-connector (Codex), so Codex reviews were treated as human and never counted as bot signals / never tripped IN_PROGRESS. Add __typename to any reviews author selection rather than growing a login allowlist.
+Review-author bot classification uses the GraphQL actor `__typename == "Bot"` (with the login-suffix heuristic as fallback), set in `GitHubProvider._fetch_review_status_page`. The login heuristic alone missed chatgpt-codex-connector (Codex), so Codex reviews were treated as human and never counted as bot signals / never tripped IN_PROGRESS. Add `__typename` to any reviews author selection rather than growing a login allowlist.
 
 ---
 

@@ -795,6 +795,15 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
         # locally, which can predate a bot's review by hours if the commit sat
         # unpushed) — falling back to ``committedDate`` only when GitHub can't
         # report a push date (e.g. commits created via the web UI).
+        #
+        # Known gap: ``pushedDate`` is a property of the commit object, not of
+        # the PR-ref transition. A force-push/fast-forward that reuses a commit
+        # already present in the repo (e.g. a rebase) keeps that commit's
+        # original push date, which can predate when it became *this* PR's
+        # HEAD — a bot signal from before that transition could then look like
+        # it covers HEAD. Not handled: doing so needs a real head-ref-change
+        # signal (e.g. GraphQL timeline events), which this GraphQL query
+        # doesn't fetch.
         latest_commit_pushed_at: datetime | None = None
         commits_nodes = pr_data.get("commits", {}).get("nodes", [])
         if commits_nodes:
