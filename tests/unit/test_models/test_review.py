@@ -769,6 +769,32 @@ class TestReviewCoversLatestCommit:
         )
         assert status.review_covers_latest_commit is False
 
+    def test_fresh_second_bot_does_not_rescue_stale_coderabbit(self) -> None:
+        """A fresh Codex review cannot mask a stale CodeRabbit summary marker.
+
+        Regression for the multi-bot gap: taking the max across all bot
+        signals let a fresh signal from one bot paper over another bot's
+        stale one, so ``bot_status == COMPLETED`` (from CodeRabbit's old
+        marker) plus a fresh Codex review wrongly looked "covered".
+        """
+        from wade.models.review import PRReview, ReviewState
+
+        commit = self._commit()
+        status = PRReviewStatus(
+            bot_status=ReviewBotStatus.COMPLETED,
+            bot_status_ts=commit - timedelta(minutes=20),
+            reviews=[
+                PRReview(
+                    author="chatgpt-codex-connector",
+                    state=ReviewState.APPROVED,
+                    submitted_at=commit + timedelta(minutes=5),
+                    is_bot=True,
+                )
+            ],
+            latest_commit_pushed_at=commit,
+        )
+        assert status.review_covers_latest_commit is False
+
     def test_naive_timestamps_treated_as_utc(self) -> None:
         commit = self._commit()
         status = PRReviewStatus(

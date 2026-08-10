@@ -419,7 +419,7 @@ class PRReviewStatus(BaseModel):
 
     @property
     def review_covers_latest_commit(self) -> bool:
-        """True when the newest *bot* signal is at/after the latest commit.
+        """True when *every* distinct bot signal is at/after the latest commit.
 
         A ``bot_status == COMPLETED`` marker carries no information about *which*
         commit was reviewed, so a completion from before the latest push must not
@@ -428,9 +428,11 @@ class PRReviewStatus(BaseModel):
 
         Covered (``True``) when the commit timestamp is unknown, or no bot signal
         exists (nothing to be stale relative to — a human-only or never-reviewed
-        PR always stays covered), or the newest bot signal is at/after the commit.
-        Not covered (``False``) only when a bot signal exists and is strictly older
-        than the latest commit.
+        PR always stays covered), or every distinct bot source's latest signal is
+        at/after the commit. Not covered (``False``) when any bot source's latest
+        signal is strictly older than the latest commit — a fresh signal from one
+        bot (e.g. Codex) cannot mask a stale one from another (e.g. CodeRabbit);
+        see ``latest_bot_signal_ts``.
 
         Bot signals only (``bot_status_ts`` + bot ``submitted_at``): human review
         timestamps are deliberately excluded so an approve-then-fixup-commit flow
@@ -501,22 +503,33 @@ def latest_signal_ts(status: PRReviewStatus) -> datetime | None:
 
 
 def latest_bot_signal_ts(status: PRReviewStatus) -> datetime | None:
-    """Return the newest *bot* signal timestamp, or ``None`` if there is none.
+    """Return the *oldest* "most-recent signal" among distinct bot sources.
 
-    The max of ``bot_status_ts`` (CodeRabbit summary ``updated_at``) and
-    ``submitted_at`` for every review where ``review.is_bot`` is ``True``. Human
-    review ``submitted_at`` is deliberately excluded — staleness is measured only
-    against bots (see ``review_covers_latest_commit``). Unresolved-thread comment
-    timestamps are moot: every completion/all-clear surface is only reached when
-    there are no unresolved threads, so they cannot contribute.
+    Grouped by source — ``bot_status_ts`` (the CodeRabbit summary marker) is
+    one group, and each distinct bot review author (``review.is_bot``) is
+    another. Within a group the newest ``submitted_at`` wins (a bot may
+    comment more than once); across groups the *oldest* per-group max wins.
+
+    This is deliberately a min-of-maxes, not a global max: when CodeRabbit and
+    another bot (e.g. Codex) are both enabled, a fresh Codex review must not
+    paper over a stale CodeRabbit summary — every bot that has posted a signal
+    has to individually cover the latest commit before the PR counts as
+    reviewed at HEAD (see ``review_covers_latest_commit``). Human review
+    ``submitted_at`` is deliberately excluded from every group — staleness is
+    measured only against bots. Unresolved-thread comment timestamps are moot:
+    every completion/all-clear surface is only reached when there are no
+    unresolved threads, so they cannot contribute.
     """
-    candidates: list[datetime] = []
+    latest_by_source: dict[str, datetime] = {}
     if status.bot_status_ts is not None:
-        candidates.append(_as_utc(status.bot_status_ts))
+        latest_by_source["__coderabbit_summary__"] = _as_utc(status.bot_status_ts)
     for review in status.reviews:
         if review.is_bot and review.submitted_at is not None:
-            candidates.append(_as_utc(review.submitted_at))
-    return max(candidates) if candidates else None
+            source = review.author or "__unknown_bot__"
+            ts = _as_utc(review.submitted_at)
+            if source not in latest_by_source or ts > latest_by_source[source]:
+                latest_by_source[source] = ts
+    return min(latest_by_source.values()) if latest_by_source else None
 
 
 # ---------------------------------------------------------------------------
