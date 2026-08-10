@@ -795,6 +795,36 @@ class TestReviewCoversLatestCommit:
         )
         assert status.review_covers_latest_commit is False
 
+    def test_coderabbit_own_stale_review_does_not_permanently_block_fresh_summary(
+        self,
+    ) -> None:
+        """CodeRabbit's own older formal review must not out-vote its fresher summary edit.
+
+        Regression for double-counting CodeRabbit as two independent "bot
+        sources" (its summary-comment marker vs. its own formal review).
+        CodeRabbit reviewed once early on, then later re-analyzed a newer
+        commit and only touched its summary comment (the "found nothing new"
+        case) — that fresh summary edit must count as CodeRabbit's own latest
+        signal, not get dragged down by its stale first-pass review.
+        """
+        from wade.models.review import PRReview, ReviewState
+
+        commit = self._commit()
+        status = PRReviewStatus(
+            bot_status=ReviewBotStatus.COMPLETED,
+            bot_status_ts=commit + timedelta(minutes=1),
+            reviews=[
+                PRReview(
+                    author="coderabbitai[bot]",
+                    state=ReviewState.COMMENTED,
+                    submitted_at=commit - timedelta(days=1),
+                    is_bot=True,
+                )
+            ],
+            latest_commit_pushed_at=commit,
+        )
+        assert status.review_covers_latest_commit is True
+
     def test_naive_timestamps_treated_as_utc(self) -> None:
         commit = self._commit()
         status = PRReviewStatus(

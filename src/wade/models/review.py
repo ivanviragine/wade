@@ -505,30 +505,46 @@ def latest_signal_ts(status: PRReviewStatus) -> datetime | None:
 def latest_bot_signal_ts(status: PRReviewStatus) -> datetime | None:
     """Return the *oldest* "most-recent signal" among distinct bot sources.
 
-    Grouped by source — ``bot_status_ts`` (the CodeRabbit summary marker) is
-    one group, and each distinct bot review author (``review.is_bot``) is
-    another. Within a group the newest ``submitted_at`` wins (a bot may
-    comment more than once); across groups the *oldest* per-group max wins.
+    Grouped by source — every review author whose login contains
+    "coderabbit" (case-insensitive) shares one ``"coderabbit"`` group with
+    ``bot_status_ts`` (the CodeRabbit summary marker: also that bot's
+    signal), and every other distinct bot review author (``review.is_bot``)
+    gets its own group. Within a group the newest timestamp wins (a bot may
+    post more than one signal — e.g. CodeRabbit's own review plus a later
+    summary-comment edit); across groups the *oldest* per-group max wins.
 
     This is deliberately a min-of-maxes, not a global max: when CodeRabbit and
     another bot (e.g. Codex) are both enabled, a fresh Codex review must not
     paper over a stale CodeRabbit summary — every bot that has posted a signal
     has to individually cover the latest commit before the PR counts as
-    reviewed at HEAD (see ``review_covers_latest_commit``). Human review
+    reviewed at HEAD (see ``review_covers_latest_commit``). Merging CodeRabbit's
+    own review and summary-marker signals into one group (rather than treating
+    them as two independent bots) matters: without it, an old first-pass
+    CodeRabbit review sitting in ``status.reviews`` would permanently drag the
+    min below any later commit even after CodeRabbit re-analyzes and only
+    touches its summary comment (the "found nothing new" case), making
+    ``review_covers_latest_commit`` stuck at ``False`` forever. Human review
     ``submitted_at`` is deliberately excluded from every group — staleness is
     measured only against bots. Unresolved-thread comment timestamps are moot:
     every completion/all-clear surface is only reached when there are no
     unresolved threads, so they cannot contribute.
     """
     latest_by_source: dict[str, datetime] = {}
+
+    def _bump(source: str, ts: datetime) -> None:
+        if source not in latest_by_source or ts > latest_by_source[source]:
+            latest_by_source[source] = ts
+
     if status.bot_status_ts is not None:
-        latest_by_source["__coderabbit_summary__"] = _as_utc(status.bot_status_ts)
+        _bump("coderabbit", _as_utc(status.bot_status_ts))
     for review in status.reviews:
         if review.is_bot and review.submitted_at is not None:
-            source = review.author or "__unknown_bot__"
-            ts = _as_utc(review.submitted_at)
-            if source not in latest_by_source or ts > latest_by_source[source]:
-                latest_by_source[source] = ts
+            source = (
+                "coderabbit"
+                if "coderabbit" in review.author.lower()
+                else (review.author or "__unknown_bot__")
+            )
+            _bump(source, _as_utc(review.submitted_at))
     return min(latest_by_source.values()) if latest_by_source else None
 
 
