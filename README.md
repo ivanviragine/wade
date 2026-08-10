@@ -309,6 +309,13 @@ chains to any pre-existing `pre-push` hook. **Honesty:** `git push --no-verify`
 bypasses the backstop in one flag — this is a quality/backstop layer that makes
 the gate hard to skip, not an airtight boundary.
 
+`done` also writes a **`## Review Status`** line into the PR body recording the
+review outcome — reviewed at `<sha>`, skipped via `--skip-review`, gate disabled
+(`done.require_review: false` / `ai.review_implementation.enabled: false`), or
+completed at the review-pass cap — with the review-pass count. A skipped or
+never-run review is therefore visible to reviewers in the PR itself, not just in
+the worktree-local `.wade/` markers that are discarded when the session ends.
+
 ## Task Providers
 
 WADE can pull tasks from three backends — pick one when you run `wade init`:

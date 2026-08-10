@@ -374,7 +374,27 @@ cap). `review-pr-comments` keeps the unbounded
    scoped to `session_type == "implementation"`.
 4. **sync** (implementation only) — auto-sync via the existing `do_sync` service
    when `behind > 0`, refuse only on conflict.
-5. `_done_via_pr` writes `.wade/done@<post-sync HEAD>` immediately before pushing.
+5. `_done_via_pr` writes `.wade/done@<post-sync HEAD>` immediately before pushing,
+   and projects the review outcome into the PR body as a `wade:review-status`
+   block (see below).
+
+**Review status is legible in the PR body (#367).** The `.wade/` markers
+(`reviewed@<sha>`, `review-pass@<sha>`) are zero-byte and **worktree-local** — no
+human ever sees them, so "attempted twice, timed out twice" was indistinguishable
+from "never tried" in the durable artifact. `done` closes that legibility gap:
+after the gates pass, `_classify_review(config, worktree, pre-sync HEAD,
+skip_review, session_type)` — one pure classifier that the review-ran **gate**
+also decides from, so the two can't drift — returns a frozen `ReviewStatus`
+(`kind`, `passes`, `session_type`, `reviewed_sha`) that `_render_review_status`
+turns into a one-line `## Review Status` section wrapped in
+`wade:review-status:start/end` markers. It records reviewed-at-`<sha>` /
+skipped (`--skip-review`) / gate-disabled (`done.require_review: false` or
+`review_implementation.enabled: false`) / cap-reached, and shows the review-pass
+count so a skipped-but-attempted run reads differently from a never-run one. Like
+the `wade:summary` block it is marker-scoped (upserted before the
+`wade:impl-usage` table, idempotent on re-run, preserving any concurrent edit
+outside the markers) — the PR body, not the discarded `.wade/` markers, is the
+durable receipt.
 
 The **done-marker primitive** lives in `utils/markers.py` — a pure-stdlib leaf
 (so the lean `wade-hook` can import it cheaply). A marker is a zero-byte file

@@ -155,6 +155,11 @@ it fails, debug and fix it — do NOT bypass.
 - `wade review implementation` has not run for the current commit → run it, or
   pass `--skip-review`. Hatch: `done.require_review: false`.
 
+`done` also records the review outcome as a `## Review Status` line in the PR body
+(reviewed at `<sha>` / skipped via `--skip-review` / gate disabled), with the
+review-pass count — so a skipped or never-run review is visible to reviewers, not
+silent.
+
 A **pre-push git hook** refuses a push of the session branch without a current
 `.wade/done@<sha>` marker (`done` writes it). `git push --no-verify` bypasses it
 in one flag — it is a quality layer, not a boundary; do not route around it.
