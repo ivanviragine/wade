@@ -13,6 +13,16 @@ from enum import StrEnum
 from pydantic import BaseModel
 
 
+def _as_utc(ts: datetime) -> datetime:
+    """Treat a naive datetime as UTC; leave aware datetimes untouched.
+
+    Shared normalization for every signal-timestamp comparison in this module
+    (``is_commit_fresh``, ``latest_signal_ts``, ``latest_bot_signal_ts``,
+    ``review_covers_latest_commit``) so they stay consistent.
+    """
+    return ts if ts.tzinfo is not None else ts.replace(tzinfo=UTC)
+
+
 class ReviewComment(BaseModel):
     """A single comment within a PR review thread."""
 
@@ -52,6 +62,7 @@ class PRComment(BaseModel):
 
     login: str
     body: str
+    updated_at: datetime | None = None
 
 
 class ReviewBotStatus(StrEnum):
@@ -78,7 +89,7 @@ RECENT_COMMIT_GRACE_SECONDS = 120
 
 def detect_coderabbit_review_status(
     comments: list[PRComment],
-) -> ReviewBotStatus | None:
+) -> tuple[ReviewBotStatus | None, datetime | None]:
     """Detect CodeRabbit review status from PR issue comments.
 
     Looks for the ``coderabbitai[bot]`` summary comment and checks for
@@ -88,26 +99,31 @@ def detect_coderabbit_review_status(
         comments: List of PR-level comments.
 
     Returns:
-        A :class:`ReviewBotStatus` if CodeRabbit is mid-review, else ``None``.
+        A ``(status, updated_at)`` tuple. ``status`` is a :class:`ReviewBotStatus`
+        when a CodeRabbit summary comment is present, else ``None``. ``updated_at``
+        is the matched comment's ``updated_at`` (CodeRabbit edits its summary in
+        place, so this is the freshest "the bot touched the PR" signal) — used to
+        populate ``PRReviewStatus.bot_status_ts`` for staleness checks. Both are
+        ``None`` when no CodeRabbit comment is found.
     """
     # Find the latest CodeRabbit comment (last in the list = most recent)
-    latest_body: str | None = None
+    latest: PRComment | None = None
     for c in reversed(comments):
         if "coderabbit" in c.login.lower():
-            latest_body = c.body
+            latest = c
             break
 
-    if latest_body is None:
-        return None
+    if latest is None:
+        return None, None
 
-    normalized = latest_body.casefold()
+    normalized = latest.body.casefold()
 
     if "review paused by coderabbit.ai" in normalized:
-        return ReviewBotStatus.PAUSED
+        return ReviewBotStatus.PAUSED, latest.updated_at
     if "review in progress by coderabbit.ai" in normalized:
-        return ReviewBotStatus.IN_PROGRESS
+        return ReviewBotStatus.IN_PROGRESS, latest.updated_at
 
-    return ReviewBotStatus.COMPLETED
+    return ReviewBotStatus.COMPLETED, latest.updated_at
 
 
 # ---------------------------------------------------------------------------
@@ -334,6 +350,7 @@ class PRReviewStatus(BaseModel):
     reviews: list[PRReview] = []
     pending_reviewers: list[PendingReviewer] = []
     bot_status: ReviewBotStatus | None = None
+    bot_status_ts: datetime | None = None
     fetch_failed: bool = False
     latest_commit_pushed_at: datetime | None = None
 
@@ -356,9 +373,7 @@ class PRReviewStatus(BaseModel):
         if self.latest_commit_pushed_at is None:
             return False
         now_ts = datetime.now(UTC)
-        pushed = self.latest_commit_pushed_at
-        if pushed.tzinfo is None:
-            pushed = pushed.replace(tzinfo=UTC)
+        pushed = _as_utc(self.latest_commit_pushed_at)
         return (now_ts - pushed).total_seconds() < grace_seconds
 
     @property
@@ -403,6 +418,34 @@ class PRReviewStatus(BaseModel):
         ]
 
     @property
+    def review_covers_latest_commit(self) -> bool:
+        """True when the newest *bot* signal is at/after the latest commit.
+
+        A ``bot_status == COMPLETED`` marker carries no information about *which*
+        commit was reviewed, so a completion from before the latest push must not
+        count as "done with HEAD". This predicate gates every "review complete /
+        all clear" surface on the bot having actually reviewed the current commit.
+
+        Covered (``True``) when the commit timestamp is unknown, or no bot signal
+        exists (nothing to be stale relative to — a human-only or never-reviewed
+        PR always stays covered), or the newest bot signal is at/after the commit.
+        Not covered (``False``) only when a bot signal exists and is strictly older
+        than the latest commit.
+
+        Bot signals only (``bot_status_ts`` + bot ``submitted_at``): human review
+        timestamps are deliberately excluded so an approve-then-fixup-commit flow
+        does not spuriously flip to "not covered" — GitHub itself does not
+        invalidate approvals on push, and ``has_changes_requested`` gates humans
+        separately.
+        """
+        if self.latest_commit_pushed_at is None:
+            return True
+        bot_ts = latest_bot_signal_ts(self)
+        if bot_ts is None:
+            return True
+        return bot_ts >= _as_utc(self.latest_commit_pushed_at)
+
+    @property
     def is_all_clear(self) -> bool:
         """True when there's nothing blocking the PR.
 
@@ -411,6 +454,8 @@ class PRReviewStatus(BaseModel):
         - No unresolved threads (including outdated ones)
         - No CHANGES_REQUESTED from any reviewer
         - No bot currently processing (IN_PROGRESS)
+        - The latest commit is covered by a bot review (not stale — see
+          ``review_covers_latest_commit``)
 
         Note: pending reviewers do NOT block all-clear (informational only).
         """
@@ -420,7 +465,58 @@ class PRReviewStatus(BaseModel):
             return False
         if self.has_changes_requested:
             return False
+        if not self.review_covers_latest_commit:
+            return False
         return self.bot_status != ReviewBotStatus.IN_PROGRESS
+
+
+# ---------------------------------------------------------------------------
+# Signal-timestamp helpers
+# ---------------------------------------------------------------------------
+#
+# Pure functions of ``PRReviewStatus`` fields. They live here (the leaf models
+# layer) rather than in ``services/review_settle.py`` so ``PRReviewStatus`` can
+# compute commit-staleness without a model->service import. ``review_settle``
+# re-imports ``latest_signal_ts`` from here (services->models is allowed).
+
+
+def latest_signal_ts(status: PRReviewStatus) -> datetime | None:
+    """Return the newest timestamp across all thread comments and reviews.
+
+    Considers ``created_at`` from every comment in
+    ``effective_unresolved_threads`` and ``submitted_at`` from every entry in
+    ``reviews`` (human and bot alike).  Naive datetimes are treated as UTC,
+    matching ``is_commit_fresh()``.  Returns ``None`` when no timestamps are
+    available.  Used by the settle-window logic in ``review_settle.py``.
+    """
+    candidates: list[datetime] = []
+    for thread in status.effective_unresolved_threads:
+        for comment in thread.comments:
+            if comment.created_at is not None:
+                candidates.append(_as_utc(comment.created_at))
+    for review in status.reviews:
+        if review.submitted_at is not None:
+            candidates.append(_as_utc(review.submitted_at))
+    return max(candidates) if candidates else None
+
+
+def latest_bot_signal_ts(status: PRReviewStatus) -> datetime | None:
+    """Return the newest *bot* signal timestamp, or ``None`` if there is none.
+
+    The max of ``bot_status_ts`` (CodeRabbit summary ``updated_at``) and
+    ``submitted_at`` for every review where ``review.is_bot`` is ``True``. Human
+    review ``submitted_at`` is deliberately excluded — staleness is measured only
+    against bots (see ``review_covers_latest_commit``). Unresolved-thread comment
+    timestamps are moot: every completion/all-clear surface is only reached when
+    there are no unresolved threads, so they cannot contribute.
+    """
+    candidates: list[datetime] = []
+    if status.bot_status_ts is not None:
+        candidates.append(_as_utc(status.bot_status_ts))
+    for review in status.reviews:
+        if review.is_bot and review.submitted_at is not None:
+            candidates.append(_as_utc(review.submitted_at))
+    return max(candidates) if candidates else None
 
 
 # ---------------------------------------------------------------------------
@@ -492,6 +588,18 @@ def format_review_status_summary(
             (
                 LEVEL_WARN,
                 "CodeRabbit review is paused — comments may arrive when resumed.",
+            )
+        )
+
+    # Stale coverage: a bot signal exists but predates the latest commit, so the
+    # newest push has not been re-reviewed. Explain it instead of going quiet —
+    # ``is_all_clear`` is already False here, so the SESSION COMPLETE / all-clear
+    # lines below are suppressed.
+    if not status.review_covers_latest_commit:
+        messages.append(
+            (
+                LEVEL_WARN,
+                "Latest commit has not been reviewed yet — an updated review may still arrive.",
             )
         )
 

@@ -92,3 +92,70 @@ class TestGetPrReviewStatus:
         status = provider.get_pr_review_status(42)
 
         assert status.latest_commit_pushed_at is None
+
+    @patch("wade.providers.github.GitHubProvider.get_repo_nwo", return_value="owner/repo")
+    @patch("wade.providers.github.run")
+    def test_bot_status_ts_populated_from_coderabbit_comment(
+        self,
+        mock_run: MagicMock,
+        _mock_nwo: MagicMock,
+        provider: GitHubProvider,
+    ) -> None:
+        """bot_status_ts comes from the matched CodeRabbit summary comment's updated_at."""
+        from datetime import datetime
+
+        from wade.models.review import PRComment
+
+        ts = datetime(2026, 8, 10, 9, 43, 24, tzinfo=UTC)
+        mock_run.return_value = MagicMock(stdout=self._make_graphql_response())
+
+        with patch.object(
+            GitHubProvider,
+            "get_pr_issue_comments",
+            return_value=[
+                PRComment(
+                    login="coderabbitai[bot]",
+                    body="<!-- summarize by coderabbit.ai -->\nWalkthrough",
+                    updated_at=ts,
+                )
+            ],
+        ):
+            status = provider.get_pr_review_status(42)
+
+        from wade.models.review import ReviewBotStatus
+
+        assert status.bot_status == ReviewBotStatus.COMPLETED
+        assert status.bot_status_ts == ts
+
+
+class TestGetPrIssueComments:
+    """Tests for get_pr_issue_comments() — including updated_at projection/parsing."""
+
+    @patch("wade.providers.github.GitHubProvider.get_repo_nwo", return_value="owner/repo")
+    @patch("wade.providers.github.run")
+    def test_updated_at_parsed_into_prcomment(
+        self,
+        mock_run: MagicMock,
+        _mock_nwo: MagicMock,
+        provider: GitHubProvider,
+    ) -> None:
+        """The API's updated_at string is parsed into PRComment.updated_at as a datetime."""
+        from datetime import datetime
+
+        mock_run.return_value = MagicMock(
+            stdout=json.dumps(
+                [
+                    {
+                        "login": "coderabbitai[bot]",
+                        "body": "Walkthrough",
+                        "updated_at": "2026-08-10T09:43:24Z",
+                    },
+                    {"login": "octocat", "body": "lgtm", "updated_at": None},
+                ]
+            )
+        )
+
+        comments = provider.get_pr_issue_comments(42)
+
+        assert comments[0].updated_at == datetime(2026, 8, 10, 9, 43, 24, tzinfo=UTC)
+        assert comments[1].updated_at is None

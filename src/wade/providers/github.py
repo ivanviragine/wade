@@ -543,13 +543,24 @@ mutation($threadId: ID!) {
                     "api",
                     f"repos/{nwo}/issues/{pr_number}/comments",
                     "--jq",
-                    "[.[] | {login: .user.login, body: .body}]",
+                    "[.[] | {login: .user.login, body: .body, updated_at: .updated_at}]",
                 ],
                 check=True,
                 retries=3,
             )
-            raw: list[dict[str, str]] = json.loads(result.stdout)
-            return [PRComment(login=c.get("login", ""), body=c.get("body", "")) for c in raw]
+            raw: list[dict[str, Any]] = json.loads(result.stdout)
+            # ``updated_at`` (not ``created_at``): bots edit their summary comment
+            # in place, so the edit time is the freshest "the bot touched the PR"
+            # signal for commit-staleness detection. Pydantic parses the ISO-8601
+            # string into a datetime; a missing/None value leaves it unset.
+            return [
+                PRComment(
+                    login=c.get("login", ""),
+                    body=c.get("body", ""),
+                    updated_at=c.get("updated_at"),
+                )
+                for c in raw
+            ]
         except (CommandError, json.JSONDecodeError) as e:
             logger.warning(
                 "github.get_pr_issue_comments_failed",
@@ -605,11 +616,15 @@ mutation($threadId: ID!) {
             logger.warning("github.review_status_fetch_failed", error=str(e))
             fetch_failed = True
 
-        # Detect bot status from issue comments
+        # Detect bot status from issue comments. ``bot_status_ts`` is the matched
+        # CodeRabbit summary comment's ``updated_at`` — it lets commit-staleness
+        # detection see "CodeRabbit found nothing and only touched its summary",
+        # a case with no thread or review timestamp to lean on.
         bot_status: ReviewBotStatus | None = None
+        bot_status_ts: datetime | None = None
         try:
             comments = self.get_pr_issue_comments(pr_number)
-            bot_status = detect_coderabbit_review_status(comments)
+            bot_status, bot_status_ts = detect_coderabbit_review_status(comments)
         except Exception:
             logger.debug("github.review_status_bot_check_failed", exc_info=True)
 
@@ -623,6 +638,7 @@ mutation($threadId: ID!) {
             reviews=reviews,
             pending_reviewers=pending_reviewers,
             bot_status=bot_status,
+            bot_status_ts=bot_status_ts,
             fetch_failed=fetch_failed,
             latest_commit_pushed_at=latest_commit_pushed_at,
         )

@@ -1551,7 +1551,7 @@ class TestGetReviewStatus:
         assert result is not None
         assert result.approvals == ["alice"]
 
-    @patch("wade.services.review_service._check_review_bot_status", return_value=None)
+    @patch("wade.services.review_service._check_review_bot_status", return_value=(None, None))
     @patch("wade.services.review_service.filter_actionable_threads")
     @patch("wade.services.review_service.git_pr.get_pr_for_branch")
     @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
@@ -1614,7 +1614,7 @@ class TestGetComprehensiveReviewStatus:
         assert result.has_changes_requested is True
         assert result.changes_requested_by == ["bob"]
 
-    @patch("wade.services.review_service._check_review_bot_status", return_value=None)
+    @patch("wade.services.review_service._check_review_bot_status", return_value=(None, None))
     @patch("wade.services.review_service.filter_actionable_threads", return_value=[])
     def test_fallback_on_not_implemented(
         self,

@@ -157,6 +157,11 @@ def fetch_reviews(
         elif status.bot_status == ReviewBotStatus.IN_PROGRESS:
             print("No unresolved review comments found, but CodeRabbit is still reviewing.")
             print("Try fetching again shortly.")
+        elif not status.review_covers_latest_commit:
+            print(
+                "No unresolved review comments found, but the latest commit has not"
+                " been reviewed yet — an updated review may still arrive."
+            )
         else:
             print("No unresolved review comments found.")
 
@@ -318,12 +323,13 @@ def _fallback_review_status(
 
     actionable = filter_actionable_threads(all_threads)
     all_unresolved = filter_unresolved_threads(all_threads)
-    bot_status = _check_review_bot_status(provider, pr_number)
+    bot_status, bot_status_ts = _check_review_bot_status(provider, pr_number)
 
     return PRReviewStatus(
         actionable_threads=actionable,
         all_unresolved_threads=all_unresolved,
         bot_status=bot_status,
+        bot_status_ts=bot_status_ts,
     )
 
 
@@ -394,8 +400,20 @@ def poll_for_reviews(
                 and not status.has_changes_requested
                 and not status.pending_reviewers
             ):
-                console.info("Review bot completed — no actionable comments found.")
-                return PollOutcome.REVIEW_COMPLETE
+                # A COMPLETED marker carries no info about *which* commit was
+                # reviewed. Only declare completion when the newest bot signal
+                # covers HEAD; otherwise the latest push has not been re-reviewed
+                # yet — fall through to the freshness / quiet-timeout logic
+                # below (is_commit_fresh resets the quiet timer while the commit
+                # is fresh, and QUIET_TIMEOUT eventually fires if no newer review
+                # arrives, so this cannot hang forever).
+                if status.review_covers_latest_commit:
+                    console.info("Review bot completed — no actionable comments found.")
+                    return PollOutcome.REVIEW_COMPLETE
+                console.detail(
+                    "Review bot completed an earlier commit, but the latest commit "
+                    "has not been reviewed yet — waiting for an updated review..."
+                )
 
             if eff_threads or status.has_changes_requested:
                 count = len(eff_threads)
@@ -634,11 +652,17 @@ def start(
             console.warn("CodeRabbit is still reviewing — try again shortly.")
             return True
 
-        # No blocking conditions — message depends on commit freshness.
+        # No blocking conditions — message depends on commit freshness and
+        # whether a bot review actually covers the latest commit.
         if status.is_commit_fresh():
             console.info(
                 "No review comments found yet — the latest commit is less"
                 " than 2 minutes old. Review may still arrive."
+            )
+        elif not status.review_covers_latest_commit:
+            console.info(
+                "No review comments found yet, but the latest commit has not"
+                " been reviewed yet — an updated review may still arrive."
             )
         elif not status.pending_reviewers:
             console.success("All review comments resolved — nothing to address! 🎉")
@@ -1121,13 +1145,17 @@ def _post_review_lifecycle(
 def _check_review_bot_status(
     provider: AbstractTaskProvider,
     pr_number: int,
-) -> ReviewBotStatus | None:
-    """Check if a review bot (e.g. CodeRabbit) has a pending review on the PR."""
+) -> tuple[ReviewBotStatus | None, datetime | None]:
+    """Check if a review bot (e.g. CodeRabbit) has a pending review on the PR.
+
+    Returns ``(status, updated_at)`` — the CodeRabbit summary comment's
+    ``updated_at`` participates in commit-staleness detection.
+    """
     try:
         comments = provider.get_pr_issue_comments(pr_number)
     except Exception:
         logger.debug("review.bot_status_check_failed", exc_info=True)
-        return None
+        return None, None
     return detect_coderabbit_review_status(comments)
 
 

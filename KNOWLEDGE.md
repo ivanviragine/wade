@@ -465,3 +465,21 @@ shell_containment's device write-exemption (src/wade/hooks/policies.py) is an EX
 install_worktree_git_hook (singular) and install_pre_push_backstop were removed in #383. The sole per-worktree git-hook install core is now the batch install_worktree_git_hooks(worktree_path, hooks: dict[hook_name, script]), which captures every prior hook to per-hook .chain-<hook_name> files before setting core.hooksPath. Bootstrap's _install_managed_git_hooks (bootstrap.py) loads the pre-push template and owns the missing-template degrade. This supersedes the framing in entry c52fac51 (Issue #352), which described the singular wrapper as "the reusable core."
 
 ---
+
+## cc229a279fcb | 2026-08-10 | implementation | tags: review-polling, review, coderabbit | Issue #403
+
+Commit-staleness for review completion is measured against BOT signals only — latest_bot_signal_ts (models/review.py) = max(bot_status_ts, submitted_at of is_bot reviews). Never reuse latest_signal_ts here: it folds in human APPROVED submitted_at, so a fixup commit after a human approval would flip the PR to not-all-clear, which GitHub itself does not do. has_changes_requested gates human reviewers separately.
+
+---
+
+## b3c367938c59 | 2026-08-10 | implementation | tags: review-polling, github, review | Issue #403
+
+Review-author bot classification uses the GraphQL actor __typename == "Bot" (with the login-suffix heuristic as fallback), set in GitHubProvider._fetch_review_status_page. The login heuristic alone missed chatgpt-codex-connector (Codex), so Codex reviews were treated as human and never counted as bot signals / never tripped IN_PROGRESS. Add __typename to any reviews author selection rather than growing a login allowlist.
+
+---
+
+## 7659d4199132 | 2026-08-10 | implementation | tags: review-polling, architecture, review | Issue #403
+
+latest_signal_ts lives in models/review.py (leaf layer), NOT services/review_settle.py, so PRReviewStatus can compute commit-staleness (review_covers_latest_commit / latest_bot_signal_ts) without a model->service import. review_settle re-exports it (services->models is allowed) for the settle-window call sites. PRComment.updated_at + PRReviewStatus.bot_status_ts carry CodeRabbit's summary-comment edit time so a 'found nothing, only touched summary' review still participates in staleness (no thread/review timestamp to lean on).
+
+---
