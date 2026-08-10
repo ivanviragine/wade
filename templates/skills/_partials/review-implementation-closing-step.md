@@ -26,8 +26,8 @@ notice) instead of looping — break a stuck loop with `wade implementation-sess
 done --skip-review`.
 
 **Skipping review is visible.** `done` records the outcome (reviewed / skipped /
-gate-disabled) with the pass count as a `## Review Status` line in the PR body, so
-`--skip-review` is not a silent shortcut.
+gate-disabled / cap-reached) with the pass count as a `## Review Status` line in
+the PR body, so `--skip-review` is not a silent shortcut.
 
 **This step is mandatory when `review_implementation.enabled` is not `false`.
 Do NOT proceed to Step 2 until this step is complete and any actionable

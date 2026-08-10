@@ -32,6 +32,7 @@ from wade.services.implementation_service.lifecycle import (
     REVIEW_STATUS_MARKER_START,
     ReviewStatus,
     ReviewStatusKind,
+    SessionType,
     _build_pr_body,
     _render_review_status,
 )
@@ -109,6 +110,30 @@ class TestClassifyReview:
         status = _classify_review(config, tmp_path, "head", skip_review=True)
         assert status.kind is ReviewStatusKind.DISABLED
 
+    def test_reviewed_precedes_skip_flag(self, tmp_path: Path) -> None:
+        # The exact-sha marker is positive evidence and outranks the hatches: a
+        # commit that was actually reviewed must report REVIEWED even when
+        # --skip-review was also passed on this run (#367).
+        markers.write_marker(tmp_path, "reviewed", "head")
+        status = _classify_review(ProjectConfig(), tmp_path, "head", skip_review=True)
+        assert status.kind is ReviewStatusKind.REVIEWED
+
+    def test_reviewed_precedes_require_off(self, tmp_path: Path) -> None:
+        # A project that permanently sets require_review: false must still
+        # report REVIEWED for a commit that was actually reviewed.
+        markers.write_marker(tmp_path, "reviewed", "head")
+        config = ProjectConfig(done=DoneConfig(require_review=False))
+        status = _classify_review(config, tmp_path, "head", skip_review=False)
+        assert status.kind is ReviewStatusKind.REVIEWED
+
+    def test_reviewed_precedes_disabled(self, tmp_path: Path) -> None:
+        # Even with reviews disabled in config, a genuinely-present marker for
+        # this exact sha must still report REVIEWED, not DISABLED.
+        markers.write_marker(tmp_path, "reviewed", "head")
+        config = ProjectConfig(ai=AIConfig(review_implementation=AICommandConfig(enabled=False)))
+        status = _classify_review(config, tmp_path, "head", skip_review=False)
+        assert status.kind is ReviewStatusKind.REVIEWED
+
     def test_carries_session_type_and_passes(self, tmp_path: Path) -> None:
         markers.record_review_pass(tmp_path, "sha1")
         status = _classify_review(
@@ -136,10 +161,12 @@ def _status(
     kind: ReviewStatusKind,
     *,
     passes: int = 0,
-    session_type: str = "implementation",
+    session_type: SessionType | str = SessionType.IMPLEMENTATION,
     sha: str = "abc1234def567",
 ) -> ReviewStatus:
-    return ReviewStatus(kind=kind, passes=passes, session_type=session_type, reviewed_sha=sha)
+    return ReviewStatus(
+        kind=kind, passes=passes, session_type=SessionType(session_type), reviewed_sha=sha
+    )
 
 
 class TestRenderReviewStatus:

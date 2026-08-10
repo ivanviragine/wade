@@ -33,6 +33,7 @@ logger = structlog.get_logger()
 __all__ = [
     "ReviewStatus",
     "ReviewStatusKind",
+    "SessionType",
     "_apply_pr_refs",
     "_build_pr_body",
     "_merge_pr",
@@ -348,6 +349,13 @@ REVIEW_STATUS_MARKER_START = "<!-- wade:review-status:start -->"
 REVIEW_STATUS_MARKER_END = "<!-- wade:review-status:end -->"
 
 
+class SessionType(StrEnum):
+    """The two session kinds the completion gate (``done``) distinguishes."""
+
+    IMPLEMENTATION = "implementation"
+    REVIEW_PR_COMMENTS = "review-pr-comments"
+
+
 class ReviewStatusKind(StrEnum):
     """Outcome of the done-time review-ran classification (#367).
 
@@ -379,7 +387,7 @@ class ReviewStatus(BaseModel):
 
     kind: ReviewStatusKind
     passes: int  # distinct review-pass markers (``count_review_passes()``)
-    session_type: str  # "implementation" | "review-pr-comments"
+    session_type: SessionType
     reviewed_sha: str  # the pre-sync HEAD the agent reviewed (for display)
 
 

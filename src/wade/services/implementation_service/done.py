@@ -35,6 +35,7 @@ from wade.services.implementation_service.lifecycle import (
     SUMMARY_MARKER_START,
     ReviewStatus,
     ReviewStatusKind,
+    SessionType,
     _apply_pr_refs,
     _build_pr_body,
     _render_review_status,
@@ -72,7 +73,7 @@ def done(
     draft: bool = False,
     project_root: Path | None = None,
     *,
-    session_type: str = "implementation",
+    session_type: SessionType | str = SessionType.IMPLEMENTATION,
     skip_review: bool = False,
 ) -> bool:
     """Complete a session — run the completion gates, push, and finalize the PR.
@@ -534,30 +535,33 @@ def _classify_review(
     worktree_root: Path,
     head_sha: str,
     skip_review: bool,
-    session_type: str = "implementation",
+    session_type: SessionType | str = SessionType.IMPLEMENTATION,
 ) -> ReviewStatus:
     """Classify the review-ran outcome for ``head_sha`` — the single source of
     truth shared by :func:`_gate_review_ran` (pass/refuse) and the PR-body
     renderer (:func:`_render_review_status`), so the branching can't drift.
 
     Pure and side-effect-free: it only reads sha-keyed markers and config. The
-    ``kind`` ordering mirrors the gate's short-circuit order exactly — reviews
-    disabled precedes the ``--skip-review`` / ``require_review`` hatches, which
-    precede the exact-sha fast path, which precedes the impl-only pass cap. The
-    pass count (distinct ``review-pass@*`` markers) is read for **both** session
-    types — a listdir failure yields ``0`` (fail toward re-gating), never a false
-    "cap reached" — and carried on the returned object for honest rendering.
+    exact-sha fast path is checked **first** — a ``reviewed@<head_sha>`` marker
+    is positive evidence that review ran, so it outranks the ``--skip-review`` /
+    ``require_review`` hatches and the disabled flag: a reviewed commit must
+    never be reported as skipped/gate-disabled (#367). Only when no marker
+    exists do the hatches and disabled flag take over, followed by the
+    impl-only pass cap. The pass count (distinct ``review-pass@*`` markers) is
+    read for **both** session types — a listdir failure yields ``0`` (fail
+    toward re-gating), never a false "cap reached" — and carried on the
+    returned object for honest rendering.
     """
     passes = markers.count_review_passes(worktree_root)
 
-    if config.ai.review_implementation.enabled is False:
+    if markers.marker_present(worktree_root, "reviewed", head_sha):
+        kind = ReviewStatusKind.REVIEWED
+    elif config.ai.review_implementation.enabled is False:
         kind = ReviewStatusKind.DISABLED
     elif skip_review:
         kind = ReviewStatusKind.SKIPPED_FLAG
     elif not config.done.require_review:
         kind = ReviewStatusKind.REQUIRE_OFF
-    elif markers.marker_present(worktree_root, "reviewed", head_sha):
-        kind = ReviewStatusKind.REVIEWED
     elif session_type == "implementation" and passes >= config.done.max_review_passes:
         kind = ReviewStatusKind.CAP_REACHED
     else:
@@ -566,7 +570,7 @@ def _classify_review(
     return ReviewStatus(
         kind=kind,
         passes=passes,
-        session_type=session_type,
+        session_type=SessionType(session_type),
         reviewed_sha=head_sha,
     )
 
