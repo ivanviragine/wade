@@ -465,3 +465,9 @@ shell_containment's device write-exemption (src/wade/hooks/policies.py) is an EX
 install_worktree_git_hook (singular) and install_pre_push_backstop were removed in #383. The sole per-worktree git-hook install core is now the batch install_worktree_git_hooks(worktree_path, hooks: dict[hook_name, script]), which captures every prior hook to per-hook .chain-<hook_name> files before setting core.hooksPath. Bootstrap's _install_managed_git_hooks (bootstrap.py) loads the pre-push template and owns the missing-template degrade. This supersedes the framing in entry c52fac51 (Issue #352), which described the singular wrapper as "the reusable core."
 
 ---
+
+## 4d419ec6629c | 2026-08-10 | implementation | tags: done, review, markers, pr-body | Issue #367
+
+The durable, human-legible record of session state is the PR body (marker-bounded blocks: wade:summary, wade:review-status, wade:impl-usage), NOT the .wade/ markers — reviewed@<sha>/review-pass@<sha>/done@<sha> are zero-byte, worktree-local, and discarded at session end, so no human ever sees them. To make session state visible to a reviewer, project it into the PR body with a marker-scoped block (build_marked_block + update_body_preserving_markers, idempotent on re-run) rather than a richer on-disk receipt — this is why #367 surfaced review status (reviewed/skipped/gate-disabled + pass count) as a PR-body block. done.py:_classify_review is the single classifier both the review-ran gate and the '## Review Status' renderer read, so the gate decision and the PR-body wording cannot drift.
+
+---

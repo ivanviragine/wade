@@ -10,9 +10,11 @@ import contextlib
 import re
 import shutil
 import webbrowser
+from enum import StrEnum
 from pathlib import Path
 
 import structlog
+from pydantic import BaseModel
 
 from wade.git import pr as git_pr
 from wade.git import repo as git_repo
@@ -29,6 +31,8 @@ from wade.ui.console import console
 logger = structlog.get_logger()
 
 __all__ = [
+    "ReviewStatus",
+    "ReviewStatusKind",
     "_apply_pr_refs",
     "_build_pr_body",
     "_merge_pr",
@@ -36,6 +40,7 @@ __all__ = [
     "_post_implementation_lifecycle",
     "_post_implementation_lifecycle_pr",
     "_pull_main_after_merge",
+    "_render_review_status",
     "_strip_summary_section",
     "_warn_pull_sync_failed",
 ]
@@ -337,6 +342,101 @@ def _merge_pr(
 SUMMARY_MARKER_START = "<!-- wade:summary:start -->"
 SUMMARY_MARKER_END = "<!-- wade:summary:end -->"
 
+# Review-status block (#367) — projects the done-time review outcome into the PR
+# body so a human reviewer can tell a clean review from a skipped/never-run one.
+REVIEW_STATUS_MARKER_START = "<!-- wade:review-status:start -->"
+REVIEW_STATUS_MARKER_END = "<!-- wade:review-status:end -->"
+
+
+class ReviewStatusKind(StrEnum):
+    """Outcome of the done-time review-ran classification (#367).
+
+    A single value the completion gate (:func:`done._gate_review_ran`) turns into
+    pass/refuse and the PR-body renderer (:func:`_render_review_status`) turns
+    into a human-legible line — one source of truth so the two cannot drift.
+    """
+
+    REVIEWED = "reviewed"  # exact-sha ``reviewed@<head>`` marker present
+    SKIPPED_FLAG = "skipped_flag"  # ``--skip-review`` passed
+    REQUIRE_OFF = "require_off"  # ``done.require_review: false``
+    DISABLED = "disabled"  # ``review_implementation.enabled: false``
+    CAP_REACHED = "cap_reached"  # impl-only; pass cap hit with no fresh review
+    NOT_REVIEWED = "not_reviewed"  # gate would refuse (rendering fallback)
+
+
+class ReviewStatus(BaseModel):
+    """Immutable bundle describing whether review ran for the finalized commit.
+
+    Flows gate → ``done()`` → ``_done_via_pr`` → renderer so the branching is
+    decided once (in ``done._classify_review``) and merely rendered downstream —
+    no separate ``session_type``/``passes`` args threaded across the boundary,
+    they ride inside this object. Distinct from :class:`wade.models.review.
+    PRReviewStatus`, which is about PR-level review threads/submissions; this is
+    only about whether ``wade review implementation`` *ran* for the pushed commit.
+    """
+
+    model_config = {"frozen": True}
+
+    kind: ReviewStatusKind
+    passes: int  # distinct review-pass markers (``count_review_passes()``)
+    session_type: str  # "implementation" | "review-pr-comments"
+    reviewed_sha: str  # the pre-sync HEAD the agent reviewed (for display)
+
+
+def _review_pass_phrase(passes: int) -> str:
+    """``N review pass(es)`` with correct pluralization."""
+    return f"{passes} review pass{'' if passes == 1 else 'es'}"
+
+
+def _render_review_status(status: ReviewStatus) -> str:
+    """Render the review-status block body — a ``## Review Status`` heading + one line.
+
+    The line makes the review outcome legible to a human reading the PR:
+    reviewed / skipped / gate-disabled / cap-reached / not-reviewed. For the
+    non-reviewed outcomes it distinguishes "attempted N times, final commit not
+    reviewed" (``passes > 0``) from "never tried" (``passes == 0``) — the core
+    #367 legibility fix. The pass count is honest for both session types;
+    ``CAP_REACHED`` is only ever produced for implementation sessions (the
+    classifier scopes the cap there), so its wording never leaks into a
+    review-pr-comments PR.
+    """
+    kind = status.kind
+    short_sha = status.reviewed_sha[:7] if status.reviewed_sha else "unknown"
+
+    if kind is ReviewStatusKind.REVIEWED:
+        line = f"✅ Reviewed at `{short_sha}` via `wade review implementation`."
+    elif kind is ReviewStatusKind.SKIPPED_FLAG:
+        if status.passes > 0:
+            line = (
+                f"⚠️ Review skipped (`--skip-review`); {_review_pass_phrase(status.passes)} "
+                "recorded, but the final commit was not reviewed."
+            )
+        else:
+            line = (
+                "⚠️ Review skipped (`--skip-review`); no review passes were recorded "
+                "(review never ran)."
+            )
+    elif kind is ReviewStatusKind.CAP_REACHED:
+        line = (
+            f"⚠️ Completed after {_review_pass_phrase(status.passes)} without a fresh "
+            "review of the final commit (`done.max_review_passes` cap reached)."
+        )
+    elif kind is ReviewStatusKind.REQUIRE_OFF:
+        # The leading info emoji is intentional PR-body markdown, not an identifier.
+        line = "ℹ️ Review gate disabled (`done.require_review: false`)."  # noqa: RUF001
+    elif kind is ReviewStatusKind.DISABLED:
+        line = "ℹ️ Review gate disabled (`review_implementation.enabled: false`)."  # noqa: RUF001
+    else:  # NOT_REVIEWED — rendering fallback (the gate would normally have refused).
+        if status.passes > 0:
+            line = (
+                f"⚠️ {_review_pass_phrase(status.passes)} recorded, but the final commit "
+                "was not reviewed."
+            )
+        else:
+            line = "⚠️ The final commit was not reviewed (review never ran)."
+
+    return f"## Review Status\n\n{line}"
+
 
 def _strip_summary_section(body: str) -> str:
     """Remove an existing ``## Summary`` section from a PR body.
@@ -428,34 +528,40 @@ def _build_pr_body(
     pr_summary_path: Path | None = None,
     close_issue: bool = True,
     parent_issue: str | None = None,
+    *,
+    review_status: ReviewStatus | None = None,
 ) -> str:
-    """Compose the PR body.
+    """Compose the PR body (new-PR fallback path).
 
     Order:
     1. Part of #parent (if detected)
     2. Closes #N
     3. ## Summary (from PR-SUMMARY file)
+    4. ## Review Status (from the done-time review classification, if provided)
 
     Plan summary stays on the issue only — not copied into the PR body.
+    ``review_status`` is optional so the many callers that only compose
+    refs/summary need not construct one; ``done()`` always supplies it, so a real
+    PR always carries the review-status block.
     """
     from wade.utils.body_markers import build_marked_block
 
-    lines: list[str] = []
+    parts: list[str] = []
 
+    ref_lines: list[str] = []
     if parent_issue:
-        lines.append(f"Part of #{parent_issue}")
+        ref_lines.append(f"Part of #{parent_issue}")
     if close_issue:
-        lines.append(f"Closes #{task.id}")
-
-    if lines:
-        lines.append("")
+        ref_lines.append(f"Closes #{task.id}")
+    if ref_lines:
+        parts.append("\n".join(ref_lines))
 
     # PR summary from file — wrapped in wade:summary markers so a later `done`
     # rewrites only this block and preserves any concurrent edits (A4).
     if pr_summary_path and pr_summary_path.is_file():
         summary_content = pr_summary_path.read_text(encoding="utf-8").strip()
         if summary_content:
-            lines.append(
+            parts.append(
                 build_marked_block(
                     SUMMARY_MARKER_START,
                     SUMMARY_MARKER_END,
@@ -463,4 +569,14 @@ def _build_pr_body(
                 )
             )
 
-    return "\n".join(lines)
+    # Review-status block — same marker-scoped treatment, placed after the summary.
+    if review_status is not None:
+        parts.append(
+            build_marked_block(
+                REVIEW_STATUS_MARKER_START,
+                REVIEW_STATUS_MARKER_END,
+                _render_review_status(review_status),
+            )
+        )
+
+    return "\n\n".join(parts)
