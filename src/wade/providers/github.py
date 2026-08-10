@@ -628,8 +628,17 @@ mutation($threadId: ID!) {
         except Exception:
             logger.debug("github.review_status_bot_check_failed", exc_info=True)
 
-        # Generic PR-level bot reviews: treat any pending bot review as in-progress
-        if bot_status is None and any(r.is_bot and r.state == ReviewState.PENDING for r in reviews):
+        # Generic PR-level bot reviews: any pending bot review (e.g. Codex,
+        # Copilot) takes precedence over a COMPLETED marker from a *different*
+        # bot (e.g. CodeRabbit) — the PR isn't done until every bot clears, not
+        # just the one that happens to post a summary comment. IN_PROGRESS and
+        # PAUSED are left alone: IN_PROGRESS is already the most blocking state,
+        # and PAUSED is a CodeRabbit-specific signal this generic check
+        # shouldn't override.
+        if any(r.is_bot and r.state == ReviewState.PENDING for r in reviews) and bot_status in (
+            None,
+            ReviewBotStatus.COMPLETED,
+        ):
             bot_status = ReviewBotStatus.IN_PROGRESS
 
         return PRReviewStatus(
@@ -703,6 +712,7 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
         nodes {
           commit {
             committedDate
+            pushedDate
           }
         }
       }
@@ -780,18 +790,23 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
             if name:
                 pending.append(PendingReviewer(name=name, is_team=is_team))
 
-        # Parse latest commit timestamp
+        # Parse latest commit timestamp. Prefer ``pushedDate`` (when the commit
+        # actually reached GitHub) over ``committedDate`` (when it was authored
+        # locally, which can predate a bot's review by hours if the commit sat
+        # unpushed) — falling back to ``committedDate`` only when GitHub can't
+        # report a push date (e.g. commits created via the web UI).
         latest_commit_pushed_at: datetime | None = None
         commits_nodes = pr_data.get("commits", {}).get("nodes", [])
         if commits_nodes:
-            committed_date_str = commits_nodes[0].get("commit", {}).get("committedDate")
-            if committed_date_str:
+            commit_node = commits_nodes[0].get("commit", {})
+            date_str = commit_node.get("pushedDate") or commit_node.get("committedDate")
+            if date_str:
                 try:
                     latest_commit_pushed_at = datetime.fromisoformat(
-                        str(committed_date_str).replace("Z", "+00:00")
+                        str(date_str).replace("Z", "+00:00")
                     )
                 except (ValueError, AttributeError):
-                    logger.debug("github.latest_commit_date_parse_failed", raw=committed_date_str)
+                    logger.debug("github.latest_commit_date_parse_failed", raw=date_str)
 
         # Warn if hard query limits may have been hit (potential truncation)
         if len(reviews) == 100:
