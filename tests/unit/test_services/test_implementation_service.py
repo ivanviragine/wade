@@ -53,6 +53,7 @@ from wade.services.implementation_service import (
     poll_batch_completion,
     start,
 )
+from wade.services.implementation_service.core import _detect_ai_cli_env
 
 # ---------------------------------------------------------------------------
 # Bootstrap helper tests
@@ -653,6 +654,45 @@ class TestImplementationLaunchCommandAssembly:
                 tool = adapter.TOOL_ID
                 assert "--permission-mode" not in cmd, f"{tool}: leaked --permission-mode"
                 assert "--approval-mode" not in cmd, f"{tool}: leaked --approval-mode"
+
+
+# ---------------------------------------------------------------------------
+# Nested AI CLI session detection
+# ---------------------------------------------------------------------------
+
+
+class TestDetectAiCliEnv:
+    """Tests for _detect_ai_cli_env() — the nested-session guard.
+
+    Each test clears every marker var first so leftover env state from other
+    tests (or the host running the suite) can't leak a false positive.
+    """
+
+    _MARKER_VARS = (
+        "CLAUDE_CODE",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "COPILOT_CLI",
+        "CODEX_CLI",
+        "CURSOR_CLI",
+        "ANTIGRAVITY_AGENT",
+    )
+
+    def _clear_markers(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for var in self._MARKER_VARS:
+            monkeypatch.delenv(var, raising=False)
+
+    def test_antigravity_agent_marker_detected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """ANTIGRAVITY_AGENT (agy's in-session marker) is recognized as a nested session."""
+        self._clear_markers(monkeypatch)
+        monkeypatch.setenv("ANTIGRAVITY_AGENT", "1")
+
+        assert _detect_ai_cli_env() == "ANTIGRAVITY_AGENT"
+
+    def test_no_markers_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """With no known marker vars set, detection returns None."""
+        self._clear_markers(monkeypatch)
+
+        assert _detect_ai_cli_env() is None
 
 
 # ---------------------------------------------------------------------------
