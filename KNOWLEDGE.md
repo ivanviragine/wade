@@ -468,7 +468,7 @@ install_worktree_git_hook (singular) and install_pre_push_backstop were removed 
 
 ## cc229a279fcb | 2026-08-10 | implementation | tags: review-polling, review, coderabbit | Issue #403
 
-Commit-staleness for review completion is measured against BOT signals only — latest_bot_signal_ts (models/review.py) = max(bot_status_ts, submitted_at of is_bot reviews). Never reuse latest_signal_ts here: it folds in human APPROVED submitted_at, so a fixup commit after a human approval would flip the PR to not-all-clear, which GitHub itself does not do. has_changes_requested gates human reviewers separately.
+Commit-staleness for review completion is measured against BOT signals only — latest_bot_signal_ts (models/review.py) groups bot_status_ts and submitted_at of is_bot reviews by source (CodeRabbit's summary marker and its own reviews share one "coderabbit" group; every other distinct bot author gets its own group), takes the max within each group, then returns the min across groups — so a fresh signal from one bot can never mask a stale signal from another. Never reuse latest_signal_ts here: it folds in human APPROVED submitted_at, so a fixup commit after a human approval would flip the PR to not-all-clear, which GitHub itself does not do. has_changes_requested gates human reviewers separately.
 
 ---
 
