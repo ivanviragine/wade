@@ -600,8 +600,16 @@ class TestReviewServiceStart:
             all_unresolved_threads=[thread],
         )
         mock_setup["_detect_ai_cli_env"].return_value = "ANTIGRAVITY_AGENT"
+        # A resolved tool (not the fixture's default None) so the guard is the
+        # only thing standing between start() and the inline launch below.
+        mock_setup["resolve_ai_tool"].return_value = "claude"
 
-        with patch("wade.services.review_service.console") as mock_console:
+        from crossby.ai_tools import AbstractAITool
+
+        with (
+            patch("wade.services.review_service.console") as mock_console,
+            patch.object(AbstractAITool, "get") as mock_get,
+        ):
             result = start(target="42")
 
         assert result is True
@@ -609,6 +617,8 @@ class TestReviewServiceStart:
         assert any("ANTIGRAVITY_AGENT" in msg for msg in info_calls), (
             f"Expected nested-session guard message in console.info calls, got: {info_calls}"
         )
+        # The guard must short-circuit before the adapter is ever resolved/launched.
+        mock_get.assert_not_called()
 
     def test_outdated_threads_proceed_to_session(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock], mock_provider: MagicMock
