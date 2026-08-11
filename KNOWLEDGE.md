@@ -513,3 +513,9 @@ The per-tool memory allowlist (`_TOOL_MEMORY_DIRS` in `hooks/cli.py`, threaded a
 The per-tool memory allowlist (`_memory_allow_paths(tool, worktree_root)` in `hooks/cli.py`) must scope to THIS session's own memory leaf, never a shared parent — Claude's is `<config-home>/projects/<encoded-worktree>/memory/` (sibling session transcripts live un-nested one level up, so allowlisting the parent over-grants), Cursor's is `<config-home>/projects/<encoded-worktree>/`, Codex's is `<config-home>/sessions/` (can't be narrowed further — rollouts are filed by date, not by project); `<config-home>` honors each tool's data-home relocation env var (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`) before falling back to `Path.home() / ".<tool>"`. `git -C <dir>` (spaced or glued) must be checked only against `worktree_root`, never `allow_paths` — a `-C`-scoped write can touch every file under `<dir>`, not just a direct memory write, so it stays strict even when `<dir>` is the active tool's own memory root.
 
 ---
+
+## d72ebea928d4 | 2026-08-11 | implementation | tags: hooks, write-guards, memory-allowlist, gotcha | Issue #387
+
+In `_memory_allow_paths` (hooks/cli.py), only Claude's memory allow-root is scoped to BOTH this session AND memory alone — Cursor's allow-root is the whole per-project dir (crossby's own reader globs it for session-transcript JSON too, so a guarded Cursor session can rewrite/delete its own transcripts) and Codex's is the entire `~/.codex/sessions/` tree shared flat across every project on the machine (rollouts are filed by date, not project — no per-project dir exists to key on). This is inherent to how each tool stores data, not a bug; do not assume "memory allowlist" implies session-scoped or memory-only isolation for Codex/Cursor without checking the per-tool breakdown in the function's docstring.
+
+---
