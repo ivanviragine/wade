@@ -564,8 +564,9 @@ def shell_containment(
     plan-artifact rule — checked **before** :func:`_is_plan_artifact_path` (which
     reports any out-of-root path, memory included, as a non-artifact), so a
     plan-mode ``echo x > ~/.claude/.../y.md`` is allowed. ``cd``/``pushd`` and
-    ``git -C`` stay strict (memory writes are direct-path, not cd-relative), so the
-    bypass never loosens directory context.
+    every git directory-redirect flag (``-C``, ``--work-tree=``, ``--git-dir=``)
+    stay strict (memory writes are direct-path, not cd-relative), so the bypass
+    never loosens directory context.
 
     Rules, in order (any match denies):
 
@@ -590,17 +591,21 @@ def shell_containment(
        ``of=/tmp/x``) resolves outside the root. The glued form is contained in
        *all* modes: a tokenizer cannot tell a glued read flag from a glued write
        flag, so both are denied — this conservatively denies a few glued *reads*
-       too. Glued ``git -C<dir>`` (e.g. ``git -C/tmp/other``) is carved out of
-       this rule and handled by rule 6 instead.
-    6. ``git -C <dir>`` — spaced *or* glued — where ``<dir>`` is outside the root
-       **and** a git write subcommand (:data:`_GIT_WRITE_SUBCOMMANDS`) follows in
-       the same segment. ``git -C <outside> log``/``show``/``status``/``diff``
-       (read subcommands) stay allowed; ``git -C <outside> clean`` would otherwise
-       delete untracked files outside with no later path operand to catch it.
-       Checked only against ``root`` — ``allow_paths`` (the memory exception,
-       rule 4/5's `_contained` call) does not apply here: a git write scoped to
-       ``-C`` can touch every file under ``<dir>``, not just a direct memory
-       write, so ``git -C`` stays strict in both forms.
+       too. Every git directory-redirect flag — glued ``-C<dir>`` (e.g.
+       ``git -C/tmp/other``), ``--work-tree=<dir>``, ``--git-dir=<dir>`` — is
+       carved out of this rule and handled by rule 6 instead.
+    6. Any git directory-redirect flag — spaced ``-C <dir>``, glued ``-C<dir>``,
+       ``--work-tree=<dir>``, or ``--git-dir=<dir>`` — where ``<dir>`` is outside
+       the root **and** a git write subcommand (:data:`_GIT_WRITE_SUBCOMMANDS`)
+       follows in the same segment. ``git -C <outside> log``/``show``/``status``/
+       ``diff`` (read subcommands) stay allowed; ``git -C <outside> clean`` would
+       otherwise delete untracked files outside with no later path operand to
+       catch it — and ``--work-tree=<outside>``/``--git-dir=<outside>`` are
+       functionally the same redirection, just spelled differently. Checked only
+       against ``root`` — ``allow_paths`` (the memory exception, rule 4/5's
+       `_contained` call) does not apply to any of these four spellings: a git
+       write scoped to a redirected directory can touch every file under
+       ``<dir>``, not just a direct memory write.
     7. In plan mode only: any output redirect, an in-place edit flag (``sed -i``,
        ``--in-place``) on a command that *has* one (:data:`_IN_PLACE_COMMANDS` —
        ``grep -i`` and ``ls -i`` are ordinary read flags), or an operand of a write
@@ -749,8 +754,10 @@ def shell_containment(
     # Spaced ``git -C <dir>``: the next token is the directory (awaiting flag), and
     # once seen we remember it here iff it resolves outside the root. A read like
     # ``git -C <outside> log`` is fine; only a later git *write* subcommand denies.
+    # Shared with glued ``-C<dir>``/``--work-tree=<dir>``/``--git-dir=<dir>`` below
+    # — all four are directory-redirect flags with the same escape shape.
     awaiting_git_c_dir = False
-    git_c_outside_token: str | None = None
+    git_dir_redirect_outside_token: str | None = None
 
     def end_segment() -> HookDecision | None:
         """A segment that ended while `cd` still wanted a target went to $HOME."""
@@ -773,7 +780,7 @@ def shell_containment(
             awaiting_cd_target = False
             pending_redirect = None
             awaiting_git_c_dir = False
-            git_c_outside_token = None
+            git_dir_redirect_outside_token = None
             continue
 
         redirect = _REDIRECT_RE.match(token)
@@ -833,23 +840,32 @@ def shell_containment(
             awaiting_git_c_dir = False
             resolved = _resolve_shell_path(token, base=base)
             if resolved is None or not _contained(resolved, root):
-                git_c_outside_token = token
+                git_dir_redirect_outside_token = token
             continue
 
         if command_name == "git" and token == "-C":
             awaiting_git_c_dir = True
             continue
 
-        # Glued ``git -C<dir>`` (no space): buffered the same way as the spaced
-        # form above, instead of falling through to the generic `_embedded_path`
-        # branch below. The generic branch checks ``allow_paths``, which would let
-        # ``git -C<memory-dir> clean -fd`` reach the memory exception — a git
-        # write scoped to ``-C`` can touch every file under ``<dir>``, not just a
-        # direct memory write, so this must stay as strict as the spaced form.
-        if command_name == "git" and token.startswith("-C") and token != "-C" and "/" in token:
-            resolved = _resolve_shell_path(token[2:], base=base)
+        # Glued ``git -C<dir>`` (no space, e.g. ``-C..`` or ``-C/tmp/other``) and
+        # ``git --work-tree=<dir>`` / ``git --git-dir=<dir>``: buffered the same
+        # way as spaced ``-C`` above, instead of falling through to the generic
+        # `_embedded_path` branch below. That branch checks ``allow_paths``, which
+        # would let e.g. ``git -C<memory-dir> clean -fd`` or
+        # ``git --work-tree=<memory-dir> clean -fd`` reach the memory exception —
+        # all three flags redirect where git *writes*, so a write reached through
+        # any of them can touch every file under ``<dir>``, not just a direct
+        # memory write; this must stay as strict as spaced ``-C``.
+        if command_name == "git" and token.startswith("-C") and token != "-C":
+            git_dir_redirect = token[2:]
+        elif command_name == "git" and token.startswith(("--work-tree=", "--git-dir=")):
+            _, _, git_dir_redirect = token.partition("=")
+        else:
+            git_dir_redirect = None
+        if git_dir_redirect is not None:
+            resolved = _resolve_shell_path(git_dir_redirect, base=base)
             if resolved is None or not _contained(resolved, root):
-                git_c_outside_token = token[2:]
+                git_dir_redirect_outside_token = git_dir_redirect
             continue
 
         # In-place editors (`sed -i`, `perl -i`, `yq -i`, …) rewrite their operands.
@@ -868,18 +884,20 @@ def shell_containment(
 
         if command_name == "git" and token in _GIT_WRITE_SUBCOMMANDS:
             is_write_command = True
-            # A git write subcommand after a spaced or glued ``-C`` pointing
+            # A git write subcommand after a directory-redirect flag pointing
             # outside the root (``git -C /outside clean -fd``, ``git
-            # -C/outside clean -fd``) writes outside with no later path operand
-            # to catch it — deny on the buffered directory.
-            if git_c_outside_token is not None:
-                return deny_outside("git -C directory", git_c_outside_token)
+            # -C/outside clean -fd``, ``git --work-tree=/outside clean -fd``,
+            # ``git --git-dir=/outside clean -fd``) writes outside with no later
+            # path operand to catch it — deny on the buffered directory.
+            if git_dir_redirect_outside_token is not None:
+                return deny_outside("git directory-redirect flag", git_dir_redirect_outside_token)
 
         # A path glued to a flag or operand (``--output=/tmp/x``, ``of=/tmp/x``)
         # is invisible to `_looks_like_path`, and `of=/tmp/x` would resolve
         # *relative*. Contained in every mode: a tokenizer cannot tell a glued
-        # read flag from a glued write flag, so both are denied. Glued
-        # ``git -C<dir>`` is handled above instead, before this branch.
+        # read flag from a glued write flag, so both are denied. Every git
+        # directory-redirect flag (``-C<dir>``, ``--work-tree=<dir>``,
+        # ``--git-dir=<dir>``) is handled above instead, before this branch.
         embedded = _embedded_path(token)
         if embedded is not None:
             resolved = _resolve_shell_path(embedded, base=base)

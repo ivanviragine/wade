@@ -102,6 +102,10 @@ class TestShellContainment:
             "git worktree add /etc/outside main",  # literal worktree escape
             "git -C /etc/outside clean -fd",  # spaced -C + git write subcommand
             "git -C /etc/outside checkout -- file",
+            "git -C.. clean -fd",  # glued -C, relative, no "/" in the token
+            "git --work-tree=/etc/outside clean -fd",  # equivalent to -C for writes
+            "git --work-tree=/etc/outside checkout -- file",
+            "git --git-dir=/etc/outside clean -fd",
         ],
     )
     def test_outside_worktree_denied(self, command: str) -> None:
@@ -116,6 +120,8 @@ class TestShellContainment:
             "ls ../crossby",
             "head ../sib/f",
             "git -C ../crossby log",  # read subcommand through an outside -C dir
+            "git --work-tree=../crossby log",  # same, via --work-tree=
+            "git --git-dir=../crossby log",  # same, via --git-dir=
             "diff ../a ../b",
             "cat ~/secrets",  # ~ expands outside, but a read is fine
             "cat < /etc/passwd",  # input redirect only reads its target
@@ -761,4 +767,36 @@ class TestMemoryAllowlist:
         # Reads are fine, matching the spaced form (rule 6) — only a later write
         # subcommand turns a buffered outside/memory ``-C`` dir into a denial.
         d = shell_containment(_shell(f"git -C{_MEM} log"), worktree_root=WT, allow_paths=(_MEM,))
+        assert d.action == "allow"
+
+    def test_git_c_relative_glued_no_slash_write_into_memory_still_denied(self) -> None:
+        # ``-C<dir>`` with no "/" in the token (e.g. a relative ".." dir) must not
+        # slip past the glued-``-C`` buffering into the unguarded fallback path.
+        # ``cwd`` puts the command's base one level under the memory root, so
+        # ".." resolves back to the memory root itself.
+        d = shell_containment(
+            _shell("git -C.. clean -fd", cwd=str(_MEM / "sub")),
+            worktree_root=WT,
+            allow_paths=(_MEM,),
+        )
+        assert d.action == "deny"
+
+    def test_git_work_tree_write_into_memory_still_denied(self) -> None:
+        # --work-tree= is functionally equivalent to -C for write purposes — must
+        # get the same strict (root-only, no allow_paths) treatment.
+        d = shell_containment(
+            _shell(f"git --work-tree={_MEM} clean -fd"), worktree_root=WT, allow_paths=(_MEM,)
+        )
+        assert d.action == "deny"
+
+    def test_git_dir_write_into_memory_still_denied(self) -> None:
+        d = shell_containment(
+            _shell(f"git --git-dir={_MEM} clean -fd"), worktree_root=WT, allow_paths=(_MEM,)
+        )
+        assert d.action == "deny"
+
+    def test_git_work_tree_read_into_memory_allowed(self) -> None:
+        d = shell_containment(
+            _shell(f"git --work-tree={_MEM} log"), worktree_root=WT, allow_paths=(_MEM,)
+        )
         assert d.action == "allow"

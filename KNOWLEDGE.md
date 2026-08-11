@@ -519,3 +519,9 @@ The per-tool memory allowlist (`_memory_allow_paths(tool, worktree_root)` in `ho
 In `_memory_allow_paths` (hooks/cli.py), only Claude's memory allow-root is scoped to BOTH this session AND memory alone — Cursor's allow-root is the whole per-project dir (crossby's own reader globs it for session-transcript JSON too, so a guarded Cursor session can rewrite/delete its own transcripts) and Codex's is the entire `~/.codex/sessions/` tree shared flat across every project on the machine (rollouts are filed by date, not project — no per-project dir exists to key on). This is inherent to how each tool stores data, not a bug; do not assume "memory allowlist" implies session-scoped or memory-only isolation for Codex/Cursor without checking the per-tool breakdown in the function's docstring.
 
 ---
+
+## 347c02cc5d78 | 2026-08-11 | implementation | tags: hooks, write-guards, git, gotcha | Issue #387
+
+In shell_containment (policies.py), git's directory-redirect flags — spaced/glued -C<dir>, --work-tree=<dir>, --git-dir=<dir> — are functionally equivalent for containment purposes (all four redirect where git reads/writes) and must ALL be buffered and checked only against worktree_root, never allow_paths, before falling through to the generic _embedded_path check (which honors allow_paths). Hardening only -C left --work-tree=/--git-dir= as an equivalent bypass reaching the memory allow-root via the generic check; found by wade review implementation on the -C fix itself. Also: the glued -C<dir> buffering must not require "/" in the token — a relative dir like -C.. has none and would otherwise fall through unguarded.
+
+---
