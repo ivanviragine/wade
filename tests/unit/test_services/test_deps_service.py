@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -9,6 +10,7 @@ import pytest
 from wade.models.config import ProjectConfig, ProjectSettings
 from wade.models.delegation import DelegationMode, DelegationResult
 from wade.models.deps import DependencyEdge, DependencyGraph
+from wade.models.permission import PermissionMode
 from wade.models.task import Task, TaskState
 from wade.services.deps_service import (
     _find_existing_tracking_issue,
@@ -844,3 +846,127 @@ class TestAnalyzeDepsMode:
         mock_tracking.assert_not_called()
         warn_text = " ".join(str(c.args[0]) for c in mock_console.warn.call_args_list if c.args)
         assert "timed out" in warn_text.lower()
+
+
+# ---------------------------------------------------------------------------
+# analyze_deps permission-mode resolution + forwarding
+# ---------------------------------------------------------------------------
+
+
+def _echo_confirm(
+    resolved_tool: str | None,
+    resolved_model: str | None,
+    *,
+    resolved_effort: object = None,
+    resolved_permission_mode: PermissionMode = PermissionMode.DEFAULT,
+    **_kwargs: object,
+) -> tuple[str | None, str | None, object, PermissionMode]:
+    """confirm_ai_selection stand-in that echoes the display mode it was handed."""
+    return resolved_tool, resolved_model, resolved_effort, resolved_permission_mode
+
+
+class TestAnalyzeDepsPermissionMode:
+    @patch("wade.services.deps_service.create_tracking_issue")
+    @patch("wade.services.deps_service.apply_deps_to_issues")
+    @patch("wade.services.deps_service.delegate")
+    @patch("wade.services.deps_service.confirm_ai_selection")
+    @patch("wade.services.deps_service.resolve_effort")
+    @patch("wade.services.deps_service.resolve_model")
+    @patch("wade.services.deps_service.resolve_ai_tool")
+    @patch("wade.services.deps_service.get_provider")
+    @patch("wade.services.deps_service.load_config")
+    def test_headless_deps_forces_default_even_with_config_yolo(
+        self,
+        mock_config: MagicMock,
+        mock_provider: MagicMock,
+        mock_resolve_tool: MagicMock,
+        mock_resolve_model: MagicMock,
+        mock_resolve_effort: MagicMock,
+        mock_confirm: MagicMock,
+        mock_delegate: MagicMock,
+        mock_apply: MagicMock,
+        mock_tracking: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Headless deps stays read-only: no yolo reaches the request."""
+        from wade.models.config import AICommandConfig, AIConfig
+
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(deps=AICommandConfig(tool="claude", mode="headless", yolo=True))
+        )
+        provider = MagicMock()
+        provider.read_task.side_effect = [
+            Task(id="1", title="Auth", body="Login"),
+            Task(id="2", title="DB", body="Schema"),
+            Task(id="1", title="Auth", body="Login"),
+            Task(id="2", title="DB", body="Schema"),
+        ]
+        mock_provider.return_value = provider
+        mock_resolve_tool.return_value = "claude"
+        mock_resolve_model.return_value = None
+        mock_resolve_effort.return_value = None
+        mock_confirm.side_effect = _echo_confirm
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="1 -> 2 # auth before UI", mode=DelegationMode.HEADLESS
+        )
+        mock_apply.return_value = 2
+        mock_tracking.return_value = "10"
+
+        result = analyze_deps(["1", "2"], planning_worktree=tmp_path)
+        assert result is not None
+        request = mock_delegate.call_args[0][0]
+        assert request.permission_mode == PermissionMode.DEFAULT
+
+    @patch("wade.services.deps_service.create_tracking_issue")
+    @patch("wade.services.deps_service.apply_deps_to_issues")
+    @patch("wade.services.deps_service.delegate")
+    @patch("wade.services.deps_service.confirm_ai_selection")
+    @patch("wade.services.deps_service.resolve_effort")
+    @patch("wade.services.deps_service.resolve_model")
+    @patch("wade.services.deps_service.resolve_ai_tool")
+    @patch("wade.services.deps_service.get_provider")
+    @patch("wade.services.deps_service.load_config")
+    def test_interactive_deps_forwards_config_yolo(
+        self,
+        mock_config: MagicMock,
+        mock_provider: MagicMock,
+        mock_resolve_tool: MagicMock,
+        mock_resolve_model: MagicMock,
+        mock_resolve_effort: MagicMock,
+        mock_confirm: MagicMock,
+        mock_delegate: MagicMock,
+        mock_apply: MagicMock,
+        mock_tracking: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """`wade task deps --mode interactive` with ai.deps.yolo: true launches yolo.
+
+        Intentional, documented behavior change — deps interactive now forwards
+        the resolved autonomy tier to the request (was silently discarded)."""
+        from wade.models.config import AICommandConfig, AIConfig
+
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(deps=AICommandConfig(tool="claude", mode="interactive", yolo=True))
+        )
+        provider = MagicMock()
+        provider.read_task.side_effect = [
+            Task(id="1", title="Auth", body="Login"),
+            Task(id="2", title="DB", body="Schema"),
+            Task(id="1", title="Auth", body="Login"),
+            Task(id="2", title="DB", body="Schema"),
+        ]
+        mock_provider.return_value = provider
+        mock_resolve_tool.return_value = "claude"
+        mock_resolve_model.return_value = None
+        mock_resolve_effort.return_value = None
+        mock_confirm.side_effect = _echo_confirm
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="1 -> 2 # auth before UI", mode=DelegationMode.INTERACTIVE
+        )
+        mock_apply.return_value = 2
+        mock_tracking.return_value = "10"
+
+        result = analyze_deps(["1", "2"], mode="interactive", planning_worktree=tmp_path)
+        assert result is not None
+        request = mock_delegate.call_args[0][0]
+        assert request.permission_mode == PermissionMode.YOLO

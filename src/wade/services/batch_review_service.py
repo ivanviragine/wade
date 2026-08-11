@@ -421,6 +421,9 @@ def run_coherence_review(
     ai_explicit: bool = False,
     model_explicit: bool = False,
     effort_explicit: bool = False,
+    permission_mode: str | None = None,
+    yolo: bool | None = None,
+    permission_mode_explicit: bool = False,
     repo_root: Path | None = None,
 ) -> DelegationResult:
     """Run AI coherence review on the batch context.
@@ -449,6 +452,9 @@ def run_coherence_review(
         ai_explicit=ai_explicit,
         model_explicit=model_explicit,
         effort_explicit=effort_explicit,
+        permission_mode=permission_mode,
+        yolo=yolo,
+        permission_mode_explicit=permission_mode_explicit,
     )
 
     # Post findings only when the AI produced actual review output.
@@ -480,6 +486,9 @@ def review_batch(
     ai_explicit: bool = False,
     model_explicit: bool = False,
     effort_explicit: bool = False,
+    permission_mode: str | None = None,
+    yolo: bool | None = None,
+    permission_mode_explicit: bool = False,
     project_root: Path | None = None,
 ) -> DelegationResult:
     """Main entry point — run full batch coherence review pipeline.
@@ -560,6 +569,9 @@ def review_batch(
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
             effort_explicit=effort_explicit,
+            permission_mode=permission_mode,
+            yolo=yolo,
+            permission_mode_explicit=permission_mode_explicit,
             repo_root=repo_root,
         )
 

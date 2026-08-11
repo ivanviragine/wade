@@ -68,6 +68,13 @@ def review_plan_cmd(
     effort: str | None = typer.Option(
         None, "--effort", help="Effort level for AI.", autocompletion=complete_effort_levels
     ),
+    yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
+    permission_mode: str | None = typer.Option(
+        None,
+        "--permission-mode",
+        help="Autonomy tier: default, accept-edits, auto, or yolo.",
+        autocompletion=complete_permission_modes,
+    ),
 ) -> None:
     """Review a plan file."""
     from wade.services.review_delegation_service import review_plan
@@ -81,6 +88,9 @@ def review_plan_cmd(
         ai_explicit=ai is not None,
         model_explicit=model is not None,
         effort_explicit=effort is not None,
+        yolo=yolo or None,
+        permission_mode=permission_mode,
+        permission_mode_explicit=permission_mode is not None,
     )
     _finalize_review_result(
         result,
@@ -107,6 +117,13 @@ def review_implementation_cmd(
     effort: str | None = typer.Option(
         None, "--effort", help="Effort level for AI.", autocompletion=complete_effort_levels
     ),
+    yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
+    permission_mode: str | None = typer.Option(
+        None,
+        "--permission-mode",
+        help="Autonomy tier: default, accept-edits, auto, or yolo.",
+        autocompletion=complete_permission_modes,
+    ),
 ) -> None:
     """Review code changes."""
     from wade.services.review_delegation_service import review_implementation
@@ -120,6 +137,9 @@ def review_implementation_cmd(
         ai_explicit=ai is not None,
         model_explicit=model is not None,
         effort_explicit=effort is not None,
+        yolo=yolo or None,
+        permission_mode=permission_mode,
+        permission_mode_explicit=permission_mode is not None,
     )
     _finalize_review_result(
         result,
@@ -184,6 +204,13 @@ def review_batch_cmd(
     effort: str | None = typer.Option(
         None, "--effort", help="Effort level for AI.", autocompletion=complete_effort_levels
     ),
+    yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
+    permission_mode: str | None = typer.Option(
+        None,
+        "--permission-mode",
+        help="Autonomy tier: default, accept-edits, auto, or yolo.",
+        autocompletion=complete_permission_modes,
+    ),
 ) -> None:
     """Run coherence review on a batch of parallel implementation branches."""
     from wade.services.batch_review_service import review_batch
@@ -197,6 +224,9 @@ def review_batch_cmd(
         ai_explicit=ai is not None,
         model_explicit=model is not None,
         effort_explicit=effort is not None,
+        yolo=yolo or None,
+        permission_mode=permission_mode,
+        permission_mode_explicit=permission_mode is not None,
     )
     _finalize_review_result(
         result,

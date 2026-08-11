@@ -164,11 +164,22 @@ dispatched: prompt/interactive/headless). The tiers, most→least permissive, ar
 doesn't support is downgraded automatically (e.g. `auto` → `accept-edits` on
 non-Claude tools) with a warning — WADE forwards the requested tier and
 [`crossby`](https://github.com/ivanviragine/crossby) owns the downgrade ladder.
-Headless commands (`deps`, `review_plan`, `review_implementation`,
-`review_batch`) always run at `default`; the interactively-launched review
-session honors its own tier via `ai.review_pr_comments` (see below). `plan` is
-not a permission mode — it's driven separately — and is rejected (warn + fall
-back to `default`) if configured.
+**Headless launches are always read-only** — any of `deps` /
+`review_plan` / `review_implementation` / `review_batch` dispatched in headless
+delegation mode runs at `default` regardless of the configured tier, and no
+`--yolo` is forwarded to the subprocess. The *interactive* variants honor the
+tier: `wade review plan`, `wade review implementation`, `wade review batch`, and
+`wade task deps` all accept `--yolo` / `--permission-mode` (matching `wade review
+pr-comments`), and `ai.review_batch.yolo: true` / `ai.deps.yolo: true` apply when
+those commands run interactively; the auto-launched review session honors its own
+tier via `ai.review_pr_comments` (see below). `plan` is not a permission mode —
+it's driven separately — and is rejected (warn + fall back to `default`) if
+configured.
+
+The **resolved permission mode is always displayed** at launch, on every path
+(TTY, non-TTY, headless, all-flags-explicit), with a one-line descriptor — so a
+`default` session states what `default` means, and what is shown always equals
+what is applied.
 
 Those headless commands **auto-scale** their subprocess budget from the prompt
 size and reasoning effort (600s floor → 1500s ceiling), so a large diff or a
