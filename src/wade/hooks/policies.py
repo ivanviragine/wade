@@ -17,6 +17,20 @@ Guards today:
   for shell tool names by design (``SHELL_TOOL_NAMES``), so a shell call carries
   its target in ``command``, not ``file_path``, and the two path guards above
   would wave it through. This closes that channel.
+
+Memory allowlist (``allow_paths``): all three guards accept an ``allow_paths``
+tuple — the *active* tool's own **memory subtree** (e.g. Claude
+``~/.claude/projects``), resolved by :func:`wade.hooks.cli._memory_allow_paths`.
+A write inside such a subtree is permitted despite containment, and is exempt
+from the plan-artifact rule in plan mode, so a guarded tool can persist memory
+outside the worktree. The allowlist is **deliberately narrow** — the memory
+subtree only, never the tool's config/auth home (``~/.claude/settings.json``
+holds the ``hooks`` block these guards depend on; allowlisting the whole home
+would let a session strip its own guard). Every other out-of-worktree write,
+including the tool's own config, stays denied. The per-tool memory locations are
+mirrored wade-side today (like the dialect maps in :mod:`wade.hooks.cli`); they
+ultimately belong in crossby's ``AIToolCapabilities`` — a follow-up, not on this
+path.
 """
 
 from __future__ import annotations
@@ -101,16 +115,24 @@ def _resolve_path(file_path: str) -> Path:
     return (Path(os.getcwd()) / p).resolve()
 
 
-def worktree_containment(event: HookEvent, *, worktree_root: Path) -> HookDecision:
+def worktree_containment(
+    event: HookEvent, *, worktree_root: Path, allow_paths: tuple[Path, ...] = ()
+) -> HookDecision:
     """Deny writes outside ``worktree_root`` — and writes we cannot locate at all.
 
     A non-write tool call is allowed (nothing to contain). A *write*, however, is
-    denied unless its target resolves to a path inside the worktree: the PreToolUse
-    matcher only fires this hook on write tools, so a write with a missing or
-    unresolvable ``file_path`` is a write we can't verify is contained — failing
-    open would let it through unchecked. (The ``wade-hook`` CLI short-circuits a
-    genuinely *empty* payload to allow before reaching here, so this only sees
-    events that actually described a write.)
+    denied unless its target resolves to a path inside the worktree **or** inside
+    an allowed memory subtree (``allow_paths`` — the active tool's own memory
+    root; see :func:`wade.hooks.cli._memory_allow_paths`): the PreToolUse matcher
+    only fires this hook on write tools, so a write with a missing or unresolvable
+    ``file_path`` is a write we can't verify is contained — failing open would let
+    it through unchecked. (The ``wade-hook`` CLI short-circuits a genuinely
+    *empty* payload to allow before reaching here, so this only sees events that
+    actually described a write.)
+
+    ``allow_paths`` is the **only** relaxation here: unlike the shell channel,
+    this file-path channel does not share the temp-dir / device scratch
+    exemption, so a memory root is the sole out-of-worktree target it permits.
     """
     if not event.is_write:
         return HookDecision.allow()
@@ -132,14 +154,12 @@ def worktree_containment(event: HookEvent, *, worktree_root: Path) -> HookDecisi
         )
 
     root = worktree_root.resolve()
-    try:
-        resolved.relative_to(root)
-    except ValueError:
-        return HookDecision.deny(
-            f"BLOCKED by worktree guard: cannot write to '{event.file_path}'. "
-            f"You should only edit files inside your worktree at '{root}'."
-        )
-    return HookDecision.allow()
+    if _within(resolved, root) or _under_any(resolved, allow_paths):
+        return HookDecision.allow()
+    return HookDecision.deny(
+        f"BLOCKED by worktree guard: cannot write to '{event.file_path}'. "
+        f"You should only edit files inside your worktree at '{root}'."
+    )
 
 
 def _is_plan_artifact(file_path: str) -> bool:
@@ -159,7 +179,9 @@ def _is_plan_artifact(file_path: str) -> bool:
     return any(fnmatch.fnmatch(basename, pattern) for pattern in _ALLOWED_PLAN_BASENAMES)
 
 
-def plan_artifact_only(event: HookEvent, *, worktree_root: Path) -> HookDecision:
+def plan_artifact_only(
+    event: HookEvent, *, worktree_root: Path, allow_paths: tuple[Path, ...] = ()
+) -> HookDecision:
     """During a plan session, deny writes outside the worktree or to non-artifacts.
 
     Plan mode installs this guard *instead of* :func:`worktree_containment`, so it
@@ -168,15 +190,31 @@ def plan_artifact_only(event: HookEvent, *, worktree_root: Path) -> HookDecision
     non-sandboxed tools. Containment also denies a write with no resolvable path,
     so only located, contained writes reach the plan-artifact allowlist below.
 
+    ``allow_paths`` (the active tool's memory subtree) is threaded into
+    containment so a memory write is not rejected as "outside the worktree", and
+    then exempted from the plan-artifact rule **before** it is applied: a memory
+    path resolves outside ``worktree_root``, so :func:`_is_plan_artifact` would
+    never match it and it would be denied as a non-artifact. The exemption keeps
+    memory writable in plan mode without loosening the artifact rule for
+    in-worktree paths.
+
     A non-write tool call is allowed. The ``posixpath`` normalization collapses
     ``../`` traversal so escapes like ``.claude/plans/../../src/x.py`` are blocked.
     """
-    containment = worktree_containment(event, worktree_root=worktree_root)
+    containment = worktree_containment(event, worktree_root=worktree_root, allow_paths=allow_paths)
     if containment.action == "deny":
         return containment
 
     if not event.is_write or not event.file_path:
         return HookDecision.allow()
+
+    if allow_paths:
+        try:
+            resolved = _resolve_path(event.file_path)
+        except (OSError, ValueError):
+            resolved = None
+        if resolved is not None and _under_any(resolved, allow_paths):
+            return HookDecision.allow()  # memory subtree — exempt from artifact rule
 
     if _is_plan_artifact(event.file_path):
         return HookDecision.allow()
@@ -436,22 +474,40 @@ def _resolve_shell_path(token: str, *, base: Path) -> Path | None:
         return None
 
 
-def _contained(path: Path, root: Path) -> bool:
-    """True when ``path`` is inside ``root`` (or an always-allowed location).
+def _within(path: Path, base: Path) -> bool:
+    """True when ``path`` is ``base`` itself or nested under it."""
+    try:
+        path.relative_to(base)
+    except ValueError:
+        return False
+    return True
+
+
+def _under_any(path: Path, roots: tuple[Path, ...]) -> bool:
+    """True when ``path`` is (or is nested under) any root in ``roots``.
+
+    Used for the per-tool **memory allowlist** (``allow_paths`` — see
+    :func:`wade.hooks.cli._memory_allow_paths`): out-of-worktree subtrees the
+    session's active tool may write to despite containment, so a guarded tool can
+    persist its own memory. Deliberately narrow — only the memory subtree, never
+    the tool's config/auth home.
+    """
+    return any(_within(path, r) for r in roots)
+
+
+def _contained(path: Path, root: Path, allow_paths: tuple[Path, ...] = ()) -> bool:
+    """True when ``path`` is inside ``root``, an always-allowed location, or a memory root.
 
     Always-allowed locations cover known discard/console devices
     (:data:`_ALWAYS_ALLOWED_DEVICES` — ``/dev/null`` …, matched exactly) and system
     temp dirs (``/tmp``, ``$TMPDIR`` via :data:`_ALWAYS_ALLOWED_PATH_PREFIXES``,
     matched by prefix) — shared scratch space that is safe to write even though it
-    is outside ``root``.
+    is outside ``root``. ``allow_paths`` are the active tool's memory subtrees
+    (:func:`_under_any`), permitted despite being outside the worktree.
     """
     if _is_always_allowed_device(path) or str(path).startswith(_ALWAYS_ALLOWED_PATH_PREFIXES):
         return True
-    try:
-        path.relative_to(root)
-    except ValueError:
-        return False
-    return True
+    return _within(path, root) or _under_any(path, allow_paths)
 
 
 def shell_containment(
@@ -459,6 +515,7 @@ def shell_containment(
     *,
     worktree_root: Path,
     plan_mode: bool = False,
+    allow_paths: tuple[Path, ...] = (),
 ) -> HookDecision:
     """Deny a shell command that writes outside the worktree (or outside plan artifacts).
 
@@ -483,6 +540,17 @@ def shell_containment(
     Plan mode still denies temp-dir writes as non-artifacts (real scratch files);
     device writes are additionally allowed in plan mode
     (:func:`_is_always_allowed_device`) since they persist nothing.
+
+    **The active tool's memory subtree is also writable.** ``allow_paths`` (the
+    tool's own memory root — see :func:`wade.hooks.cli._memory_allow_paths`) is
+    honored for **redirect targets** and **write-command operands**, so a shell
+    redirect or a write command targeting memory is contained even though it lives
+    outside the root. In plan mode a memory path is additionally exempt from the
+    plan-artifact rule — checked **before** :func:`_is_plan_artifact_path` (which
+    reports any out-of-root path, memory included, as a non-artifact), so a
+    plan-mode ``echo x > ~/.claude/.../y.md`` is allowed. ``cd``/``pushd`` and
+    ``git -C`` stay strict (memory writes are direct-path, not cd-relative), so the
+    bypass never loosens directory context.
 
     Rules, in order (any match denies):
 
@@ -574,6 +642,8 @@ def shell_containment(
         event: Normalized hook event; only :attr:`HookEvent.command` is read.
         worktree_root: The session worktree; writes must stay inside it.
         plan_mode: Apply the stricter plan-session rules (rule 5).
+        allow_paths: Out-of-worktree memory subtrees the active tool may write to
+            (redirect targets / write-command operands only; empty = no bypass).
     """
     command = (event.command or "").strip()
     if not command:
@@ -610,10 +680,14 @@ def shell_containment(
         if op == "<":
             return None
         resolved = _resolve_shell_path(target, base=base)
-        if resolved is None or not _contained(resolved, root):
+        if resolved is None or not _contained(resolved, root, allow_paths):
             return deny_outside("redirect target", target)
+        # Memory membership FIRST: a memory path is outside the root, so
+        # ``_is_plan_artifact_path`` reports it as "not an artifact" and would deny
+        # it — the ordering trap this check exists to avoid.
         if (
             plan_mode
+            and not _under_any(resolved, allow_paths)
             and not _is_plan_artifact_path(resolved, root)
             and not _is_always_allowed_device(resolved)
         ):
@@ -627,9 +701,15 @@ def shell_containment(
         return None
 
     def check_non_artifact(what: str, token: str, resolved: Path) -> HookDecision | None:
-        """Plan mode: a contained path a write command targets must be an artifact."""
+        """Plan mode: a contained path a write command targets must be an artifact.
+
+        A memory path (``allow_paths``) is exempt — checked before
+        :func:`_is_plan_artifact_path`, which reports any out-of-root path (memory
+        included) as a non-artifact.
+        """
         if (
             not plan_mode
+            or _under_any(resolved, allow_paths)
             or _is_plan_artifact_path(resolved, root)
             or _is_always_allowed_device(resolved)
         ):
@@ -769,7 +849,7 @@ def shell_containment(
         embedded = _embedded_path(token)
         if embedded is not None:
             resolved = _resolve_shell_path(embedded, base=base)
-            if resolved is None or not _contained(resolved, root):
+            if resolved is None or not _contained(resolved, root, allow_paths):
                 return deny_outside("path argument", embedded)
             if is_write_command:
                 denial = check_non_artifact(f"'{command_name}'", embedded, resolved)
@@ -783,7 +863,7 @@ def shell_containment(
             # state. Path-like or not: plan mode must catch `tee app.py`, not just
             # `tee src/app.py`.
             resolved = _resolve_shell_path(token, base=base)
-            if resolved is None or not _contained(resolved, root):
+            if resolved is None or not _contained(resolved, root, allow_paths):
                 return deny_outside("path argument", token)
             denial = check_non_artifact(f"'{command_name}'", token, resolved)
             if denial is not None:

@@ -91,6 +91,30 @@ _TOOL_STOP_DIALECTS: dict[str, HookStopDialect] = {
     "antigravity-cli": HookStopDialect.CONTINUE_DECISION,
 }
 
+# Home-relative MEMORY subpaths (NOT the tool's whole config home) where each
+# guarded tool persists memory OUTSIDE the worktree. Deliberately excludes
+# settings/auth files (e.g. ``~/.claude/settings.json`` holds the hooks block this
+# guard depends on; ``~/.codex/*state*.json``, ``~/.cursor/*config*.json``). A
+# session's active tool may write here despite worktree containment; every other
+# out-of-worktree path — including the tool's config home — stays denied.
+# Copilot/Antigravity-CLI keep memory in-repo, so their entry is an intentional
+# empty tuple (present for the coverage test = "no bypass"). Scoped to the 5 tools
+# ``bootstrap._hook_writers`` installs a guard for — not all 8 ``AIToolID`` values.
+#
+# Static (no ``crossby.ai_tools`` import on the hot per-edit path), exactly like
+# :data:`_TOOL_DIALECTS`; a coverage test keeps the key set in sync with
+# ``_hook_writers``. These are the memory *subtrees*, confirmed against crossby:
+# Claude ``~/.claude/projects/<encoded>/memory/`` (claude.py), Cursor
+# ``~/.cursor/projects/<encoded>/`` (cursor.py), Codex
+# ``~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`` (handoff/readers/codex.py).
+_TOOL_MEMORY_DIRS: dict[str, tuple[str, ...]] = {
+    "claude": (".claude/projects",),
+    "codex": (".codex/sessions",),
+    "cursor": (".cursor/projects",),
+    "copilot": (),
+    "antigravity-cli": (),
+}
+
 # PreToolUse write guards fail CLOSED (deny) on any error or misconfiguration.
 _WRITE_GUARDS = frozenset({"worktree", "plan"})
 
@@ -116,6 +140,39 @@ def _dialect_for(tool: str) -> HookOutputDialect:
 
 def _stop_dialect_for(tool: str) -> HookStopDialect:
     return _TOOL_STOP_DIALECTS.get(tool.strip().lower(), HookStopDialect.BLOCK_DECISION)
+
+
+def _memory_allow_paths(tool: str) -> tuple[Path, ...]:
+    """Absolute, resolved memory roots ``tool`` may write to despite containment.
+
+    Expands each home-relative entry in :data:`_TOOL_MEMORY_DIRS` against
+    ``Path.home()`` into an absolute, resolved root (``resolve(strict=False)`` — the
+    dir need not exist yet). Threaded into the three write guards as ``allow_paths``.
+
+    Degrades **safely, never raising** — this runs on the hot PreToolUse path:
+
+    - an unknown tool (or one whose entry is the intentional empty tuple) → ``()``
+      (no bypass);
+    - ``Path.home()`` unresolvable (e.g. HOME unset) → ``()`` (no bypass);
+    - an individual entry that will not resolve is dropped, keeping the rest.
+
+    Kept lean like :func:`_dialect_for`: a plain ``Path.home()`` join, no
+    ``crossby.ai_tools`` import and no config load.
+    """
+    entries = _TOOL_MEMORY_DIRS.get(tool.strip().lower())
+    if not entries:
+        return ()
+    try:
+        home = Path.home()
+    except (RuntimeError, OSError):
+        return ()
+    out: list[Path] = []
+    for entry in entries:
+        try:
+            out.append((home / entry).resolve(strict=False))
+        except (OSError, ValueError, RuntimeError):
+            continue
+    return tuple(out)
 
 
 # Every value-taking flag must be listed so _event_from_argv skips the flag's
@@ -404,11 +461,17 @@ def _run(event: str, guard: str, tool: str, root: str) -> HookEmission:
             json.loads(raw)
             worktree_root = Path(root)
             plan_mode = guard == "plan"
+            # The active tool's own memory subtree(s) — writable despite containment
+            # (see _memory_allow_paths). Computed once; a plain Path.home() join, no
+            # crossby.ai_tools import and no config load, so the hot path stays lean.
+            allow = _memory_allow_paths(tool)
             decision = HookDecision.allow()
             if ev.command:
                 # Shell channel: crossby reports is_write=False for shell tool
                 # names, so the file-path policies below would allow this outright.
-                decision = shell_containment(ev, worktree_root=worktree_root, plan_mode=plan_mode)
+                decision = shell_containment(
+                    ev, worktree_root=worktree_root, plan_mode=plan_mode, allow_paths=allow
+                )
             if decision.action != "deny" and not _is_shell_call(ev):
                 # File-path channel — the only channel for a tool-call write, and a
                 # second check when a payload happens to carry both. Skipped *only*
@@ -416,9 +479,9 @@ def _run(event: str, guard: str, tool: str, root: str) -> HookEmission:
                 # would let a write tool that carries a command and no file_path
                 # through, losing the "deny a write we cannot locate" invariant.
                 decision = (
-                    plan_artifact_only(ev, worktree_root=worktree_root)
+                    plan_artifact_only(ev, worktree_root=worktree_root, allow_paths=allow)
                     if plan_mode
-                    else worktree_containment(ev, worktree_root=worktree_root)
+                    else worktree_containment(ev, worktree_root=worktree_root, allow_paths=allow)
                 )
     except Exception as e:
         decision = HookDecision.deny(f"wade hook guard error: {type(e).__name__}: {e}")

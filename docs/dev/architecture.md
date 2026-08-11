@@ -171,8 +171,8 @@ trusting the agent to follow the skill. The split across the two repos:
 
 | Guard | Event | Failure mode | Blocks |
 |-------|-------|--------------|--------|
-| `worktree` | PreToolUse | **closed** (deny) | Writes resolving outside the worktree |
-| `plan` | PreToolUse | **closed** (deny) | Writes to anything but plan artifacts |
+| `worktree` | PreToolUse | **closed** (deny) | Writes resolving outside the worktree (except the active tool's memory subtree — see [Memory allowlist](#memory-allowlist)) |
+| `plan` | PreToolUse | **closed** (deny) | Writes to anything but plan artifacts (the memory subtree is also exempt) |
 | `session-complete` | Stop | **open** (allow) | Ending an impl/review turn with commits ahead of base and no current `done` marker (once) |
 | `plan-complete` | Stop | **open** (allow) | Ending a plan turn with no valid `PLAN*.md` in `.wade/plans` (once) |
 
@@ -235,7 +235,36 @@ together by `_contained`. The device set is an **exact** allowlist (`/dev/null`,
 `/dev/` too (`/dev/shm` tmpfs, `/dev/mqueue`), where a write persists a real file
 outside the worktree, so a bare prefix would let `tee /dev/shm/out` escape. The
 temp/device exemption is scoped to `shell_containment`; the file-path guard
-`worktree_containment` stays strictly worktree-only.
+`worktree_containment` does **not** share it — its only out-of-worktree exception
+is the memory allowlist below.
+
+### Memory allowlist
+
+All three write guards take an `allow_paths` tuple — the **active tool's own
+memory subtree** — resolved by `_memory_allow_paths(tool)` in `hooks/cli.py` from
+a static per-tool map (`_TOOL_MEMORY_DIRS`) joined against `Path.home()`. A write
+whose resolved path lands inside such a subtree is permitted despite containment,
+and in plan mode is exempt from the plan-artifact rule (checked **before**
+`_is_plan_artifact_path`, which reports any out-of-root path — memory included —
+as a non-artifact). This lets a guarded tool persist the memory it writes
+*outside* the worktree — Claude `~/.claude/projects`, Cursor `~/.cursor/projects`,
+Codex `~/.codex/sessions`; Copilot / Antigravity-CLI keep memory in-repo, so their
+entry is an intentional empty tuple (no bypass). It is threaded into **redirect
+targets** and **write-command operands** on the shell channel; `cd`/`pushd` and
+`git -C` stay strict (memory writes are direct-path, never cd-relative).
+
+The allowlist is **deliberately narrow — the memory subtree only, never the
+tool's config/auth home.** `~/.claude/settings.json` holds the `hooks` block these
+guards depend on; allowlisting the whole `~/.claude` would let a session strip its
+own guard and permanently disable it. The tool's config/auth files
+(`~/.claude/settings.json`, `~/.codex/*state*.json`, `~/.cursor/*config*.json`)
+therefore stay denied. `_memory_allow_paths` degrades safely — an unknown tool, an
+empty entry, or an unresolvable `Path.home()` (HOME unset) all return `()` and
+never raise, so containment behaves exactly as before. Like the dialect maps,
+`_TOOL_MEMORY_DIRS` is a static copy kept off the hot path (no `crossby.ai_tools`
+import); `TestPerToolMemoryDirsCoverHookWriters` fails if its key set drifts from
+`_hook_writers`. These per-tool memory locations ultimately belong in crossby's
+`AIToolCapabilities` (mirrored wade-side today) — a follow-up, not on this path.
 
 **It is defense-in-depth, not a completeness guarantee.** It stops the
 non-obfuscated cases an agent actually produces. Documented residual gaps

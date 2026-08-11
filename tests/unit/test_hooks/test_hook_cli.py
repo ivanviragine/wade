@@ -608,3 +608,102 @@ class TestStopNeverTrapsOnUsageError:
         assert r.returncode == 2
         r = self._raw("--timeout", "stop", "--guard", "worktree", "--tool", "claude")
         assert r.returncode == 2
+
+
+class TestMemoryAllowPathsResolver:
+    """Unit cover for ``_memory_allow_paths`` — the static map + ``Path.home()`` join."""
+
+    def test_claude_resolves_projects_subtree(self) -> None:
+        from wade.hooks.cli import _memory_allow_paths
+
+        assert _memory_allow_paths("claude") == ((Path.home() / ".claude" / "projects").resolve(),)
+
+    def test_case_insensitive_and_trimmed(self) -> None:
+        from wade.hooks.cli import _memory_allow_paths
+
+        assert _memory_allow_paths("  CLAUDE ") == (
+            (Path.home() / ".claude" / "projects").resolve(),
+        )
+
+    def test_empty_tuple_tools_have_no_bypass(self) -> None:
+        # Copilot / Antigravity-CLI keep memory in-repo — intentional empty tuple.
+        from wade.hooks.cli import _memory_allow_paths
+
+        assert _memory_allow_paths("copilot") == ()
+        assert _memory_allow_paths("antigravity-cli") == ()
+
+    def test_unknown_tool_has_no_bypass(self) -> None:
+        from wade.hooks.cli import _memory_allow_paths
+
+        assert _memory_allow_paths("nonesuch") == ()
+
+    def test_home_unresolvable_degrades_to_no_bypass(self, monkeypatch) -> None:
+        """HOME unset → ``Path.home()`` raises; the resolver returns () and never raises."""
+        from wade.hooks import cli
+
+        def _boom() -> Path:
+            raise RuntimeError("home unresolvable")
+
+        monkeypatch.setattr(cli.Path, "home", staticmethod(_boom))
+        assert cli._memory_allow_paths("claude") == ()
+
+
+class TestPerToolMemoryDirsCoverHookWriters:
+    """Mirror of :class:`TestPerToolDialectsMatchCrossby`: the memory map must not drift."""
+
+    def test_memory_dirs_key_set_matches_hook_writers(self) -> None:
+        from wade.hooks.cli import _TOOL_DIALECTS, _TOOL_MEMORY_DIRS
+        from wade.services.implementation_service.bootstrap import _hook_writers
+
+        installed = {tool_id.value for tool_id, _ in _hook_writers()}
+        assert set(_TOOL_MEMORY_DIRS) == installed, set(_TOOL_MEMORY_DIRS) ^ installed
+        # ...and stays aligned with the dialect map (the same 5 guarded tools).
+        assert set(_TOOL_MEMORY_DIRS) == set(_TOOL_DIALECTS)
+
+
+class TestMemoryAllowlistCLI:
+    """End-to-end through the lean entry point: a claude session may write its own
+    memory subtree in both worktree and plan modes; its config/auth files, a sibling
+    repo, and a tool with no memory entry all stay denied.
+    """
+
+    def _mem_write(self) -> str:
+        target = Path.home() / ".claude" / "projects" / "enc" / "memory" / "note.md"
+        return json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(target)}})
+
+    def test_memory_write_allowed_worktree_mode(self) -> None:
+        r = _run_lean("pre_tool_use", "worktree", "claude", self._mem_write())
+        assert r.returncode == 0
+        assert r.stdout == ""
+
+    def test_memory_write_allowed_plan_mode(self) -> None:
+        r = _run_lean("pre_tool_use", "plan", "claude", self._mem_write())
+        assert r.returncode == 0
+        assert r.stdout == ""
+
+    def test_memory_shell_redirect_allowed_plan_mode(self) -> None:
+        # Exercises the shell channel + the _is_plan_artifact_path ordering trap.
+        target = Path.home() / ".claude" / "projects" / "enc" / "memory" / "note.md"
+        stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": f"echo x > {target}"}})
+        r = _run_lean("pre_tool_use", "plan", "claude", stdin)
+        assert r.returncode == 0
+
+    def test_config_file_write_denied(self) -> None:
+        # ~/.claude/settings.json holds the hooks block — outside the memory subtree.
+        settings = str(Path.home() / ".claude" / "settings.json")
+        stdin = json.dumps({"tool_name": "Write", "tool_input": {"file_path": settings}})
+        r = _run_lean("pre_tool_use", "worktree", "claude", stdin)
+        assert r.returncode == 2
+
+    def test_sibling_repo_write_denied(self) -> None:
+        stdin = json.dumps({"tool_name": "Write", "tool_input": {"file_path": "/etc/passwd"}})
+        r = _run_lean("pre_tool_use", "worktree", "claude", stdin)
+        assert r.returncode == 2
+
+    def test_empty_tuple_tool_gets_no_bypass(self) -> None:
+        # Antigravity-CLI has an empty memory entry, so the claude memory path is just
+        # another out-of-worktree write for it — denied.
+        target = str(Path.home() / ".claude" / "projects" / "enc" / "memory" / "note.md")
+        stdin = json.dumps({"tool_name": "Write", "tool_input": {"path": target}})
+        r = _run_lean("pre_tool_use", "worktree", "antigravity-cli", stdin)
+        assert r.returncode == 2

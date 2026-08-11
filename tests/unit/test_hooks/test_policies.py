@@ -644,3 +644,101 @@ class TestPlanModeSourceWriteRegression:
     def test_shell_redirect_to_source_denied_in_plan_mode(self) -> None:
         d = shell_containment(_shell("printf x > src/app.py"), worktree_root=WT, plan_mode=True)
         assert d.action == "deny"
+
+
+# The active tool's memory subtree lives under the real home dir — resolved so it
+# matches what the guards' internal ``resolve()`` produces (no temp-prefix overlap:
+# home is never under ``$TMPDIR``, which would otherwise short-circuit the shell
+# channel's ``_contained`` before ``allow_paths`` is consulted). Nothing is written;
+# the guards only resolve and compare paths.
+_HOME = Path.home()
+_MEM = (_HOME / ".claude" / "projects").resolve()  # allowed: memory subtree
+_MEM_FILE = _MEM / "enc" / "memory" / "note.md"
+_CFG = (_HOME / ".claude" / "settings.json").resolve()  # denied: config/auth, not memory
+_OUTSIDE = Path("/etc/elsewhere/x.md")  # denied: outside worktree, memory, and temp
+
+
+class TestMemoryAllowlist:
+    """``allow_paths`` lets the active tool write its own memory subtree despite
+    containment, while its config/auth files and every other out-of-worktree path
+    stay denied. The allowlist is an allow-only widening — a narrow memory subtree,
+    never the tool's config home.
+    """
+
+    # --- file-path channel (worktree_containment) ---
+
+    def test_memory_write_allowed(self) -> None:
+        d = worktree_containment(_write(str(_MEM_FILE)), worktree_root=WT, allow_paths=(_MEM,))
+        assert d.action == "allow"
+
+    def test_non_memory_outside_still_denied(self) -> None:
+        d = worktree_containment(_write(str(_OUTSIDE)), worktree_root=WT, allow_paths=(_MEM,))
+        assert d.action == "deny"
+
+    def test_config_file_still_denied(self) -> None:
+        # ~/.claude/settings.json holds the hooks block — it sits OUTSIDE the allowed
+        # ~/.claude/projects subtree, so the guard cannot be used to disable itself.
+        d = worktree_containment(_write(str(_CFG)), worktree_root=WT, allow_paths=(_MEM,))
+        assert d.action == "deny"
+
+    def test_empty_allow_paths_no_bypass(self) -> None:
+        d = worktree_containment(_write(str(_MEM_FILE)), worktree_root=WT, allow_paths=())
+        assert d.action == "deny"
+
+    # --- file-path channel, plan mode (plan_artifact_only) ---
+
+    def test_plan_memory_write_allowed(self) -> None:
+        d = plan_artifact_only(_write(str(_MEM_FILE)), worktree_root=WT, allow_paths=(_MEM,))
+        assert d.action == "allow"
+
+    def test_plan_non_artifact_inside_worktree_still_denied(self) -> None:
+        # The memory bypass must not relax the artifact rule for in-worktree paths.
+        d = plan_artifact_only(_write("/repo/wt/src/app.py"), worktree_root=WT, allow_paths=(_MEM,))
+        assert d.action == "deny"
+
+    def test_plan_config_file_still_denied(self) -> None:
+        d = plan_artifact_only(_write(str(_CFG)), worktree_root=WT, allow_paths=(_MEM,))
+        assert d.action == "deny"
+
+    # --- shell channel (shell_containment) ---
+
+    def test_shell_redirect_into_memory_allowed(self) -> None:
+        d = shell_containment(
+            _shell(f"echo x > {_MEM_FILE}"), worktree_root=WT, allow_paths=(_MEM,)
+        )
+        assert d.action == "allow"
+
+    def test_shell_redirect_outside_memory_denied(self) -> None:
+        d = shell_containment(_shell(f"echo x > {_OUTSIDE}"), worktree_root=WT, allow_paths=(_MEM,))
+        assert d.action == "deny"
+
+    def test_shell_write_command_operand_into_memory_allowed(self) -> None:
+        d = shell_containment(
+            _shell(f"cp a.txt {_MEM_FILE}"), worktree_root=WT, allow_paths=(_MEM,)
+        )
+        assert d.action == "allow"
+
+    def test_shell_write_command_operand_outside_denied(self) -> None:
+        d = shell_containment(_shell(f"cp a.txt {_OUTSIDE}"), worktree_root=WT, allow_paths=(_MEM,))
+        assert d.action == "deny"
+
+    def test_shell_config_file_write_denied(self) -> None:
+        d = shell_containment(_shell(f"echo x > {_CFG}"), worktree_root=WT, allow_paths=(_MEM,))
+        assert d.action == "deny"
+
+    def test_plan_shell_redirect_into_memory_allowed(self) -> None:
+        # Ordering trap: memory membership must be checked BEFORE _is_plan_artifact_path
+        # (which reports any out-of-root path, incl. memory, as a non-artifact) —
+        # otherwise this stays denied even after the file-path channel is fixed.
+        d = shell_containment(
+            _shell(f"echo x > {_MEM_FILE}"),
+            worktree_root=WT,
+            plan_mode=True,
+            allow_paths=(_MEM,),
+        )
+        assert d.action == "allow"
+
+    def test_cd_into_memory_still_denied(self) -> None:
+        # cd/pushd stays strict — the bypass is direct-path only, never cd-relative.
+        d = shell_containment(_shell(f"cd {_MEM} && rm x"), worktree_root=WT, allow_paths=(_MEM,))
+        assert d.action == "deny"

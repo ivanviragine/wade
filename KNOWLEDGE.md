@@ -501,3 +501,9 @@ The durable, human-legible record of session state is the PR body (marker-bounde
 Headless review/deps timeout auto-scales from prompt size + reasoning effort (`effective_timeout`/`scaled_timeout`, delegation_service.py, #366) and retries once with a longer budget on timeout. An explicit `ai.<cmd>.timeout` deliberately bypasses BOTH the scaling and the retry — used verbatim. That is the escape hatch for orchestrators with a hard tool-timeout (set it below the harness limit); do not 'fix' it to always scale.
 
 ---
+
+## e59b12e3f67d | 2026-08-11 | implementation | tags: hooks, write-guards | Issue #387
+
+The per-tool memory allowlist (`_TOOL_MEMORY_DIRS` in `hooks/cli.py`, threaded as `allow_paths` into the three write guards) MUST target only the memory subtree (e.g. `~/.claude/projects`), never the tool's config home — `~/.claude/settings.json` holds the `hooks` block, so allowlisting all of `~/.claude` would let a guarded session strip its own guard and permanently disable it. In `shell_containment`, memory membership (`_under_any`) must be checked BEFORE `_is_plan_artifact_path`/`_is_always_allowed_device`, which report any out-of-root path (memory included) as a non-artifact and would otherwise deny a plan-mode memory redirect. Per-tool memory locations are mirrored wade-side (static maps, kept off the hot per-edit path) like the dialect maps; migrating them into crossby's `AIToolCapabilities` is the open follow-up.
+
+---
