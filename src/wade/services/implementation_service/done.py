@@ -29,10 +29,16 @@ from wade.services.implementation_service.bootstrap import (
 )
 from wade.services.implementation_service.core import _resolve_worktree_from_plan
 from wade.services.implementation_service.lifecycle import (
+    REVIEW_STATUS_MARKER_END,
+    REVIEW_STATUS_MARKER_START,
     SUMMARY_MARKER_END,
     SUMMARY_MARKER_START,
+    ReviewStatus,
+    ReviewStatusKind,
+    SessionType,
     _apply_pr_refs,
     _build_pr_body,
+    _render_review_status,
     _strip_summary_section,
 )
 from wade.services.implementation_service.usage_tracking import IMPL_USAGE_MARKER_START
@@ -50,6 +56,7 @@ from wade.utils.markdown import remove_marker_block
 logger = structlog.get_logger()
 
 __all__ = [
+    "_classify_review",
     "_done_via_pr",
     "done",
 ]
@@ -66,7 +73,7 @@ def done(
     draft: bool = False,
     project_root: Path | None = None,
     *,
-    session_type: str = "implementation",
+    session_type: SessionType | str = SessionType.IMPLEMENTATION,
     skip_review: bool = False,
 ) -> bool:
     """Complete a session — run the completion gates, push, and finalize the PR.
@@ -279,6 +286,16 @@ def done(
     ):
         return False
 
+    # Gates passed. Re-classify the review outcome (cheap, idempotent marker
+    # reads) against the SAME pre-sync HEAD the review gate used — the sha the
+    # agent actually reviewed, since an impl-only sync may have advanced HEAD
+    # since — and project it into the PR body so the review status (reviewed /
+    # skipped / gate-disabled / attempted-but-not-passed) is legible to a human
+    # reviewer (#367).
+    review_status = _classify_review(
+        config, worktree_root, pre_sync_head, skip_review, session_type
+    )
+
     console.rule(f"done #{issue_number}")
 
     ok = _done_via_pr(
@@ -290,6 +307,7 @@ def done(
         draft=draft,
         config=config,
         worktree_path=wt_path,
+        review_status=review_status,
     )
     if not ok:
         # Finalize failed — leave the worktree exactly as we found it (gitignore
@@ -512,6 +530,51 @@ def _gate_pr_summary(config: ProjectConfig, worktree_root: Path) -> bool:
     return True
 
 
+def _classify_review(
+    config: ProjectConfig,
+    worktree_root: Path,
+    head_sha: str,
+    skip_review: bool,
+    session_type: SessionType | str = SessionType.IMPLEMENTATION,
+) -> ReviewStatus:
+    """Classify the review-ran outcome for ``head_sha`` — the single source of
+    truth shared by :func:`_gate_review_ran` (pass/refuse) and the PR-body
+    renderer (:func:`_render_review_status`), so the branching can't drift.
+
+    Pure and side-effect-free: it only reads sha-keyed markers and config. The
+    exact-sha fast path is checked **first** — a ``reviewed@<head_sha>`` marker
+    is positive evidence that review ran, so it outranks the ``--skip-review`` /
+    ``require_review`` hatches and the disabled flag: a reviewed commit must
+    never be reported as skipped/gate-disabled (#367). Only when no marker
+    exists do the hatches and disabled flag take over, followed by the
+    impl-only pass cap. The pass count (distinct ``review-pass@*`` markers) is
+    read for **both** session types — a listdir failure yields ``0`` (fail
+    toward re-gating), never a false "cap reached" — and carried on the
+    returned object for honest rendering.
+    """
+    passes = markers.count_review_passes(worktree_root)
+
+    if markers.marker_present(worktree_root, "reviewed", head_sha):
+        kind = ReviewStatusKind.REVIEWED
+    elif config.ai.review_implementation.enabled is False:
+        kind = ReviewStatusKind.DISABLED
+    elif skip_review:
+        kind = ReviewStatusKind.SKIPPED_FLAG
+    elif not config.done.require_review:
+        kind = ReviewStatusKind.REQUIRE_OFF
+    elif session_type == "implementation" and passes >= config.done.max_review_passes:
+        kind = ReviewStatusKind.CAP_REACHED
+    else:
+        kind = ReviewStatusKind.NOT_REVIEWED
+
+    return ReviewStatus(
+        kind=kind,
+        passes=passes,
+        session_type=SessionType(session_type),
+        reviewed_sha=head_sha,
+    )
+
+
 def _gate_review_ran(
     config: ProjectConfig,
     worktree_root: Path,
@@ -536,35 +599,35 @@ def _gate_review_ran(
     unbounded fast-path-or-refuse behavior; #384 is scoped to impl sessions and
     this gate is shared (knowledge 851bb6ec), so the cap branch is impl-only.
 
-    The pass count is the number of distinct ``review-pass@*`` markers; a listdir
-    failure yields ``0`` (fail toward re-gating), never a false "cap reached".
+    The decision is derived from :func:`_classify_review` so the gate and the
+    PR-body review-status block (#367) share one classification; the branches
+    below only translate each ``kind`` into pass/refuse plus its (unchanged)
+    console output.
 
     Auto-skipped when reviews are disabled (``review_implementation.enabled:
     false``) — the marker is not written then either. Hatches: ``--skip-review``
     and ``done.require_review: false``.
     """
-    if config.ai.review_implementation.enabled is False:
-        return True  # reviews disabled project-wide → gate off (no marker written)
-    if skip_review or not config.done.require_review:
-        return True
-    if markers.marker_present(worktree_root, "reviewed", head_sha):
+    status = _classify_review(config, worktree_root, head_sha, skip_review, session_type)
+    kind = status.kind
+
+    # Hatches, disabled, and the exact-sha fast path all pass silently.
+    if kind in (
+        ReviewStatusKind.DISABLED,
+        ReviewStatusKind.SKIPPED_FLAG,
+        ReviewStatusKind.REQUIRE_OFF,
+        ReviewStatusKind.REVIEWED,
+    ):
         return True
 
-    # review-pr-comments: unchanged fast-path-or-refuse (no cap — out of scope).
-    if session_type != "implementation":
-        _print_review_refusal()
-        return False
-
-    # Implementation session: apply the bounded review-pass cap (done.max_review_passes).
-    passes = markers.count_review_passes(worktree_root)
-    limit = config.done.max_review_passes
-    if passes >= limit:
+    if kind is ReviewStatusKind.CAP_REACHED:
+        limit = config.done.max_review_passes
         console.warn(
-            f"Review-pass safety limit reached ({passes} of {limit}) — the current "
+            f"Review-pass safety limit reached ({status.passes} of {limit}) — the current "
             "commit was not re-reviewed."
         )
         console.detail(
-            f"{passes} commit(s) have been reviewed on this worktree; the cap bounds "
+            f"{status.passes} commit(s) have been reviewed on this worktree; the cap bounds "
             "the review→fix→re-review loop so `done` can't be blocked indefinitely. "
             "Completing without requiring another review."
         )
@@ -574,7 +637,15 @@ def _gate_review_ran(
         )
         return True
 
-    console.error(f"Review has not run for the current commit (review pass {passes} of {limit}).")
+    # NOT_REVIEWED — refuse. review-pr-comments keeps the plain refusal (no cap).
+    if session_type != "implementation":
+        _print_review_refusal()
+        return False
+
+    limit = config.done.max_review_passes
+    console.error(
+        f"Review has not run for the current commit (review pass {status.passes} of {limit})."
+    )
     console.hint("Run `wade review implementation` (or pass --skip-review), then re-run done.")
     console.detail(
         "A clean merge of main is accepted without re-review, but new commits "
@@ -855,6 +926,8 @@ def _done_via_pr(
     draft: bool,
     config: ProjectConfig,
     worktree_path: Path | None = None,
+    *,
+    review_status: ReviewStatus | None = None,
 ) -> bool:
     """Finalize implementation — update existing draft PR or create a new one.
 
@@ -862,7 +935,11 @@ def _done_via_pr(
     or implement). This function:
     1. Pushes the branch
     2. Appends PR-SUMMARY content to the existing PR body
-    3. Marks the draft PR as ready for review
+    3. Writes the review-status block (#367) into the PR body
+    4. Marks the draft PR as ready for review
+
+    ``review_status`` is optional so direct callers/tests need not build one;
+    ``done()`` always supplies it, so a real PR always carries the block.
     """
     provider = get_provider(config)
     pr_url = ""
@@ -989,29 +1066,48 @@ def _done_via_pr(
             logger.debug("implementation.parent_issue_detection_failed", exc_info=True)
 
         def _transform(body: str) -> str:
-            # Keep existing content; refresh close/parent refs; rewrite ONLY the
-            # wade:summary block so a concurrent edit elsewhere survives (A4).
+            # Keep existing content; refresh close/parent refs; rewrite ONLY
+            # wade's own marker blocks so a concurrent edit elsewhere survives (A4).
             body = _apply_pr_refs(body, issue_number, close_issue, parent_issue)
-            # Remove the prior marked block FIRST: the legacy heading stripper is
+            # Remove the prior marked blocks FIRST: the legacy heading stripper is
             # not marker-aware, so running it on a body that still contains the
             # marked block would match the `## Summary` *inside* the block,
             # orphan the start marker, and drop the end marker (leaving an
-            # unbalanced pair remove_marker_block can no longer clean). After the
-            # marked block is gone, strip any genuinely legacy unmarked heading.
+            # unbalanced pair remove_marker_block can no longer clean). Removing
+            # both wade blocks up front also keeps re-runs idempotent (the
+            # review-status block is replaced in place, never duplicated). After
+            # the marked blocks are gone, strip any genuinely legacy unmarked
+            # heading.
             body = remove_marker_block(body, SUMMARY_MARKER_START, SUMMARY_MARKER_END)
+            body = remove_marker_block(body, REVIEW_STATUS_MARKER_START, REVIEW_STATUS_MARKER_END)
             body = _strip_summary_section(body)
-            if not summary_content:
+
+            # Compose wade-owned blocks in order: summary, then review-status.
+            blocks: list[str] = []
+            if summary_content:
+                blocks.append(
+                    build_marked_block(
+                        SUMMARY_MARKER_START, SUMMARY_MARKER_END, f"## Summary\n\n{summary_content}"
+                    )
+                )
+            if review_status is not None:
+                blocks.append(
+                    build_marked_block(
+                        REVIEW_STATUS_MARKER_START,
+                        REVIEW_STATUS_MARKER_END,
+                        _render_review_status(review_status),
+                    )
+                )
+            if not blocks:
                 return body.rstrip("\n") + "\n"
-            block = build_marked_block(
-                SUMMARY_MARKER_START, SUMMARY_MARKER_END, f"## Summary\n\n{summary_content}"
-            )
-            # Keep ordering content → summary → impl-usage.
+            joined = "\n\n".join(blocks)
+            # Keep ordering content → [summary, review-status] → impl-usage.
             marker_pos = body.find(IMPL_USAGE_MARKER_START)
             if marker_pos != -1:
                 before = body[:marker_pos].rstrip("\n")
                 after = body[marker_pos:]
-                return f"{before}\n\n{block}\n\n{after}\n"
-            return body.rstrip("\n") + "\n\n" + block + "\n"
+                return f"{before}\n\n{joined}\n\n{after}\n"
+            return body.rstrip("\n") + "\n\n" + joined + "\n"
 
         if not update_body_preserving_markers(
             read_body=lambda: git_pr.get_pr_body(repo_root, pr_number) or "",
@@ -1051,6 +1147,7 @@ def _done_via_pr(
             pr_summary_path=pr_summary_path,
             close_issue=close_issue,
             parent_issue=parent_issue,
+            review_status=review_status,
         )
 
         console.step("Creating pull request...")

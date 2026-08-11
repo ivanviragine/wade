@@ -13,13 +13,20 @@ from wade.git import repo as git_repo
 from wade.git.repo import GitError
 from wade.models.config import AICommandConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
+from wade.models.permission import PermissionMode
 from wade.services.ai_resolution import (
     confirm_ai_selection,
     resolve_ai_tool,
     resolve_effort,
     resolve_model,
+    resolve_permission_mode,
 )
-from wade.services.delegation_service import delegate, resolve_mode
+from wade.services.delegation_service import (
+    delegate,
+    effective_timeout,
+    extended_timeout,
+    resolve_mode,
+)
 from wade.skills.installer import load_prompt_template
 from wade.ui.console import console
 from wade.utils.markers import count_review_passes, record_review_pass, write_marker
@@ -129,6 +136,9 @@ def _run_review_delegation(
     ai_explicit: bool = False,
     model_explicit: bool = False,
     effort_explicit: bool = False,
+    permission_mode: str | None = None,
+    yolo: bool | None = None,
+    permission_mode_explicit: bool = False,
 ) -> DelegationResult:
     """Shared pipeline: config load → mode resolve → AI resolve → confirm → delegate → display."""
     if config is None or cmd_config is None:
@@ -153,45 +163,92 @@ def _run_review_delegation(
     resolved_tool: str | None = None
     resolved_model: str | None = None
     resolved_effort: EffortLevel | None = None
+    effective_permission_mode = PermissionMode.DEFAULT
 
     if delegation_mode != DelegationMode.PROMPT:
         resolved_tool = resolve_ai_tool(ai_tool, config, command=command)
         resolved_model = resolve_model(model, config, command=command, tool=resolved_tool)
         resolved_effort = resolve_effort(effort, config, command=command, tool=resolved_tool)
+        resolved_permission_mode = resolve_permission_mode(
+            permission_mode, yolo, config, command=command
+        )
 
-        resolved_tool, resolved_model, resolved_effort, _yolo = confirm_ai_selection(
-            resolved_tool,
-            resolved_model,
-            tool_explicit=ai_explicit,
-            model_explicit=model_explicit,
-            resolved_effort=resolved_effort,
-            effort_explicit=effort_explicit,
-            mode=delegation_mode,
+        # Effective mode enforces the read-only headless *safety* rule
+        # (delegation_service.py:126 forces DEFAULT for headless launches) — this
+        # is NOT confirm_ai_selection's DelegationMode.HEADLESS display guard,
+        # which is an orthogonal UI concern. Forcing DEFAULT here for the display
+        # value keeps what is shown equal to what is applied (no yolo is ever sent
+        # to a headless review).
+        display_permission_mode = (
+            PermissionMode.DEFAULT
+            if delegation_mode == DelegationMode.HEADLESS
+            else resolved_permission_mode
+        )
+
+        resolved_tool, resolved_model, resolved_effort, confirmed_permission_mode = (
+            confirm_ai_selection(
+                resolved_tool,
+                resolved_model,
+                tool_explicit=ai_explicit,
+                model_explicit=model_explicit,
+                resolved_effort=resolved_effort,
+                effort_explicit=effort_explicit,
+                resolved_permission_mode=display_permission_mode,
+                permission_mode_explicit=permission_mode_explicit,
+                mode=delegation_mode,
+            )
+        )
+
+        # Re-apply the headless safety rule after confirm: interactive changes are
+        # honored, but a headless launch always stays DEFAULT regardless.
+        effective_permission_mode = (
+            PermissionMode.DEFAULT
+            if delegation_mode == DelegationMode.HEADLESS
+            else confirmed_permission_mode
         )
 
     effort_str = resolved_effort.value if isinstance(resolved_effort, EffortLevel) else None
 
+    # An explicit ``ai.<command>.timeout`` is honored verbatim: it bypasses
+    # scaling and — since it is the escape hatch for a hard tool-timeout — the
+    # retry too (see ``_delegate_headless``).
+    explicit_timeout = cmd_config.timeout is not None
     request = DelegationRequest(
         mode=delegation_mode,
         prompt=prompt,
         ai_tool=resolved_tool,
         model=resolved_model,
         effort=effort_str,
-        **({"timeout": cmd_config.timeout} if cmd_config.timeout is not None else {}),
+        permission_mode=effective_permission_mode,
+        timeout=effective_timeout(prompt, cmd_config.timeout, effort_str),
+        explicit_timeout=explicit_timeout,
     )
 
     if delegation_mode == DelegationMode.HEADLESS:
         # This spawns an external AI subprocess bounded by ``request.timeout``.
-        # Announce that budget so the orchestrator driving wade (Claude Code,
-        # Cursor, Copilot, …) allows more than its own shell/tool timeout before
-        # killing the call — otherwise it aborts the review before wade's own
-        # timeout can fire. Configure the budget via ``ai.<command>.timeout``.
-        console.info(
-            "Launching headless AI review — this runs an external AI subprocess "
-            f"that can take up to {request.timeout}s. Keep it in the foreground and "
-            f"allow more than {request.timeout}s before timing out (raise your "
-            "shell/tool timeout if needed). Do not move it to the background."
-        )
+        # Announce a budget the orchestrator driving wade (Claude Code, Cursor,
+        # Copilot, …) must wait out — otherwise it kills the call at its own
+        # shorter timeout. For a scaled budget wade retries once on timeout, so
+        # announce the *worst-case total* (budget + retry); an explicit budget is
+        # verbatim with no retry, so announce it as-is.
+        if explicit_timeout:
+            console.info(
+                "Launching headless AI review — this runs an external AI "
+                f"subprocess bounded by your configured ai.<command>.timeout of "
+                f"{request.timeout}s (no retry). Keep it in the foreground and "
+                f"allow more than {request.timeout}s before timing out. Do not "
+                "move it to the background."
+            )
+        else:
+            worst_case = request.timeout + extended_timeout(request.timeout)
+            console.info(
+                "Launching headless AI review — this runs an external AI "
+                f"subprocess. wade budgets {request.timeout}s and, on timeout, "
+                f"retries once with a longer budget (worst-case total "
+                f"{worst_case}s). Keep it in the foreground and allow more than "
+                f"{worst_case}s before timing out (raise your shell/tool timeout "
+                "if needed). Do not move it to the background."
+            )
     elif delegation_mode == DelegationMode.INTERACTIVE:
         console.info(
             "Launching external AI review session — "
@@ -205,6 +262,18 @@ def _run_review_delegation(
         # Rich would parse `[/]` as a closing tag with nothing to close and
         # raise MarkupError, so print it literally with markup disabled (#394).
         console.out.print(result.feedback, markup=False)
+    elif result.timed_out:
+        # A timed-out review may still carry real partial content — surface it as
+        # a warning + plain text, never as a hard error (#366). Same markup=False
+        # treatment as the success path since the output is untrusted.
+        if result.feedback:
+            console.warn(
+                "Headless review timed out before finishing — the output below is "
+                "partial and may be incomplete:"
+            )
+            console.out.print(result.feedback, markup=False)
+        else:
+            console.warn("Headless review timed out before producing any output.")
     else:
         # `console.error` interpolates the message into its own `[error]…[/]`
         # wrapper, so `markup=False` can't apply here — escape the feedback so
@@ -223,6 +292,9 @@ def review_plan(
     ai_explicit: bool = False,
     model_explicit: bool = False,
     effort_explicit: bool = False,
+    permission_mode: str | None = None,
+    yolo: bool | None = None,
+    permission_mode_explicit: bool = False,
 ) -> DelegationResult:
     """Review a plan file via the delegation infrastructure."""
     config, cmd_config = _load_review_config("review_plan")
@@ -256,6 +328,9 @@ def review_plan(
         ai_explicit=ai_explicit,
         model_explicit=model_explicit,
         effort_explicit=effort_explicit,
+        permission_mode=permission_mode,
+        yolo=yolo,
+        permission_mode_explicit=permission_mode_explicit,
     )
 
 
@@ -292,6 +367,9 @@ def review_implementation(
     ai_explicit: bool = False,
     model_explicit: bool = False,
     effort_explicit: bool = False,
+    permission_mode: str | None = None,
+    yolo: bool | None = None,
+    permission_mode_explicit: bool = False,
 ) -> DelegationResult:
     """Review implementation changes via the delegation infrastructure."""
     config, cmd_config = _load_review_config("review_implementation")
@@ -349,6 +427,9 @@ def review_implementation(
         ai_explicit=ai_explicit,
         model_explicit=model_explicit,
         effort_explicit=effort_explicit,
+        permission_mode=permission_mode,
+        yolo=yolo,
+        permission_mode_explicit=permission_mode_explicit,
     )
     # Count this delegation-backed pass toward the `done` review cap regardless
     # of success — a headless timeout still consumed a review→fix cycle, so it

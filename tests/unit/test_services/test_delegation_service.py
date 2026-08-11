@@ -12,12 +12,19 @@ from wade.models.config import AICommandConfig
 from wade.models.delegation import DelegationMode, DelegationRequest
 from wade.models.permission import PermissionMode
 from wade.services.delegation_service import (
+    TIMEOUT_CEILING,
+    TIMEOUT_FLOOR,
+    TOTAL_TIMEOUT_CAP,
     _delegate_headless,
     _delegate_interactive,
     _delegate_prompt,
     delegate,
+    effective_timeout,
+    extended_timeout,
     resolve_mode,
+    scaled_timeout,
 )
+from wade.utils.process import CommandError
 
 # ---------------------------------------------------------------------------
 # Mode resolution
@@ -150,17 +157,123 @@ class TestDelegateHeadless:
         assert result.success is False
         assert result.exit_code == 1
 
+    @patch("wade.services.delegation_service.console")
     @patch("wade.services.delegation_service.run")
-    def test_headless_timeout(self, mock_run: MagicMock) -> None:
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["claude"], timeout=120)
+    def test_headless_timeout_both_attempts(
+        self, mock_run: MagicMock, mock_console: MagicMock
+    ) -> None:
+        """Both attempts time out → timed_out=True with decoded partial; run twice (#366)."""
+        mock_run.side_effect = subprocess.TimeoutExpired(
+            cmd=["claude"], timeout=600, output=b"partial review"
+        )
         req = DelegationRequest(
             mode=DelegationMode.HEADLESS,
             prompt="Review",
             ai_tool="claude",
+            timeout=600,
         )
         result = _delegate_headless(req)
         assert result.success is False
-        assert "timed out" in result.feedback
+        assert result.timed_out is True
+        assert result.feedback == "partial review"
+        # Retried once with an escalating budget: second == extended_timeout(first).
+        assert mock_run.call_count == 2
+        assert mock_run.call_args_list[0].kwargs["timeout"] == 600
+        assert mock_run.call_args_list[1].kwargs["timeout"] == extended_timeout(600)
+
+    @patch("wade.services.delegation_service.console")
+    @patch("wade.services.delegation_service.run")
+    def test_headless_timeout_then_success(
+        self, mock_run: MagicMock, mock_console: MagicMock
+    ) -> None:
+        """First attempt times out, retry succeeds → success with the retry's output."""
+        mock_run.side_effect = [
+            subprocess.TimeoutExpired(cmd=["claude"], timeout=600, output=b"partial"),
+            MagicMock(returncode=0, stdout="Full review done\n"),
+        ]
+        req = DelegationRequest(
+            mode=DelegationMode.HEADLESS,
+            prompt="Review",
+            ai_tool="claude",
+            timeout=600,
+        )
+        result = _delegate_headless(req)
+        assert result.success is True
+        assert result.timed_out is False
+        assert result.feedback == "Full review done"
+        assert mock_run.call_count == 2
+
+    @patch("wade.services.delegation_service.run")
+    def test_headless_crash_is_not_retried(self, mock_run: MagicMock) -> None:
+        """A crash (CommandError) returns immediately, never retried, timed_out stays False."""
+        mock_run.side_effect = CommandError(["claude"], 127, "Command not found: claude")
+        req = DelegationRequest(
+            mode=DelegationMode.HEADLESS,
+            prompt="Review",
+            ai_tool="claude",
+            timeout=600,
+        )
+        result = _delegate_headless(req)
+        assert result.success is False
+        assert result.timed_out is False
+        assert mock_run.call_count == 1
+
+    @patch("wade.services.delegation_service.run")
+    def test_headless_timeout_over_cap_skips_retry(self, mock_run: MagicMock) -> None:
+        """An explicit budget already at/over the cap gets no retry — partial returned once."""
+        mock_run.side_effect = subprocess.TimeoutExpired(
+            cmd=["claude"], timeout=TOTAL_TIMEOUT_CAP, output=b"partial"
+        )
+        req = DelegationRequest(
+            mode=DelegationMode.HEADLESS,
+            prompt="Review",
+            ai_tool="claude",
+            timeout=TOTAL_TIMEOUT_CAP,
+        )
+        result = _delegate_headless(req)
+        assert result.timed_out is True
+        assert result.feedback == "partial"
+        assert mock_run.call_count == 1
+
+    @patch("wade.services.delegation_service.console")
+    @patch("wade.services.delegation_service.run")
+    def test_headless_explicit_timeout_not_retried(
+        self, mock_run: MagicMock, mock_console: MagicMock
+    ) -> None:
+        """An explicit ai.<cmd>.timeout is honored verbatim — no retry even below the cap."""
+        mock_run.side_effect = subprocess.TimeoutExpired(
+            cmd=["claude"], timeout=900, output=b"partial"
+        )
+        req = DelegationRequest(
+            mode=DelegationMode.HEADLESS,
+            prompt="Review",
+            ai_tool="claude",
+            timeout=900,
+            explicit_timeout=True,
+        )
+        result = _delegate_headless(req)
+        assert result.timed_out is True
+        assert result.feedback == "partial"
+        # extended_timeout(900) > 0, but an explicit budget must not retry.
+        assert extended_timeout(900) > 0
+        assert mock_run.call_count == 1
+
+    @patch("wade.services.delegation_service.console")
+    @patch("wade.services.delegation_service.run")
+    def test_headless_timeout_empty_partial_placeholder(
+        self, mock_run: MagicMock, mock_console: MagicMock
+    ) -> None:
+        """No partial output → a clear placeholder, still flagged timed_out."""
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["claude"], timeout=600)
+        req = DelegationRequest(
+            mode=DelegationMode.HEADLESS,
+            prompt="Review",
+            ai_tool="claude",
+            timeout=600,
+        )
+        result = _delegate_headless(req)
+        assert result.timed_out is True
+        assert result.feedback == "<no output before the budget elapsed>"
 
     @patch("wade.services.delegation_service.run")
     def test_codex_headless_delegation(self, mock_run: MagicMock) -> None:
@@ -359,3 +472,71 @@ class TestDelegateDispatch:
         result = delegate(req)
         assert result.mode == DelegationMode.HEADLESS
         assert result.success is False
+
+
+# ---------------------------------------------------------------------------
+# Timeout scaling + retry helpers (#366)
+# ---------------------------------------------------------------------------
+
+
+class TestScaledTimeout:
+    def test_floor_for_tiny_payload(self) -> None:
+        assert scaled_timeout(0) == TIMEOUT_FLOOR
+        assert scaled_timeout(50) == TIMEOUT_FLOOR
+
+    def test_ceiling_for_huge_payload(self) -> None:
+        assert scaled_timeout(10_000_000) == TIMEOUT_CEILING
+
+    def test_mid_value_for_large_diff(self) -> None:
+        # ~40 KB (~800-line) prompt adds ~300s over the floor.
+        assert scaled_timeout(40_000) == 900
+
+    def test_effort_increases_budget(self) -> None:
+        """The same payload gets a larger budget at high effort than low (#363 repro)."""
+        low = scaled_timeout(40_000, "low")
+        high = scaled_timeout(40_000, "high")
+        assert high > low
+        assert low == 900  # unknown/low effort → multiplier 1.0
+
+    def test_effort_still_bounded_by_ceiling(self) -> None:
+        assert scaled_timeout(10_000_000, "high") == TIMEOUT_CEILING
+
+
+class TestEffectiveTimeout:
+    def test_configured_value_bypasses_scaling(self) -> None:
+        """An explicit ai.<cmd>.timeout is honored verbatim regardless of size/effort."""
+        assert effective_timeout("x" * 100_000, 300, "high") == 300
+
+    def test_scales_from_prompt_when_unset(self) -> None:
+        prompt = "x" * 40_000
+        assert effective_timeout(prompt, None, None) == scaled_timeout(40_000, None)
+
+    def test_scales_with_effort_when_unset(self) -> None:
+        prompt = "x" * 40_000
+        assert effective_timeout(prompt, None, "high") > effective_timeout(prompt, None, "low")
+
+
+class TestExtendedTimeout:
+    def test_sum_never_exceeds_total_cap(self) -> None:
+        for t in [600, 900, 960, 1200, 1500, 2000]:
+            assert t + extended_timeout(t) <= TOTAL_TIMEOUT_CAP
+
+    def test_meaningful_extension_below_cap(self) -> None:
+        # 600 * 1.5 = 900, sum 1500 <= TOTAL_TIMEOUT_CAP.
+        assert extended_timeout(600) == 900
+
+    def test_zero_when_at_or_over_cap(self) -> None:
+        assert extended_timeout(TOTAL_TIMEOUT_CAP) == 0
+        assert extended_timeout(TOTAL_TIMEOUT_CAP + 500) == 0
+
+    def test_retry_always_longer_than_first_attempt(self) -> None:
+        """#366 review: a scaled first attempt must never get a same-or-shorter retry.
+
+        Every real first attempt is a scaled/floor/ceiling-bounded value in
+        [TIMEOUT_FLOOR, TIMEOUT_CEILING] — the cap must accommodate the full
+        multiplier across that whole range, not just below its midpoint.
+        """
+        for t in range(TIMEOUT_FLOOR, TIMEOUT_CEILING + 1, 50):
+            retry = extended_timeout(t)
+            assert retry > t, f"extended_timeout({t}) == {retry}, not longer than {t}"
+            assert retry == round(t * 1.5)

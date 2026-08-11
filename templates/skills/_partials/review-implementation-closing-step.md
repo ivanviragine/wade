@@ -25,6 +25,10 @@ marker); major findings, re-run once. Once spent, `done` completes anyway (with 
 notice) instead of looping — break a stuck loop with `wade implementation-session
 done --skip-review`.
 
+**Skipping review is visible.** `done` records the outcome (reviewed / skipped /
+gate-disabled / cap-reached) with the pass count as a `## Review Status` line in
+the PR body, so `--skip-review` is not a silent shortcut.
+
 **This step is mandatory when `review_implementation.enabled` is not `false`.
 Do NOT proceed to Step 2 until this step is complete and any actionable
 findings are addressed and committed.**

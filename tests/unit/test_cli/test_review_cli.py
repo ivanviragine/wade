@@ -408,6 +408,9 @@ class TestReviewBatchCli:
             ai_explicit=True,
             model_explicit=True,
             effort_explicit=True,
+            yolo=None,
+            permission_mode=None,
+            permission_mode_explicit=False,
         )
 
     @patch("wade.services.batch_review_service.review_batch")
@@ -458,6 +461,9 @@ class TestReviewBatchCli:
             ai_explicit=False,
             model_explicit=False,
             effort_explicit=True,
+            yolo=None,
+            permission_mode=None,
+            permission_mode_explicit=False,
         )
 
 

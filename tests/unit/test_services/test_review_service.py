@@ -582,6 +582,44 @@ class TestReviewServiceStart:
         review_file = wt_paths[0] / "REVIEW-COMMENTS.md"
         assert not review_file.exists()
 
+    def test_antigravity_agent_nested_session_skips_ai_launch(
+        self, tmp_path: Path, mock_setup: dict[str, MagicMock], mock_provider: MagicMock
+    ) -> None:
+        """ANTIGRAVITY_AGENT (agy's in-session marker) triggers the nested-session guard.
+
+        Regression test for #341 — _detect_ai_cli_env is one function shared by
+        both wade implement and wade review; this exercises the review call site.
+        """
+        from wade.models.review import PRReviewStatus
+
+        thread = ReviewThread(
+            comments=[ReviewComment(author="alice", body="Fix this", path="main.py", line=10)]
+        )
+        mock_setup["get_comprehensive_review_status"].return_value = PRReviewStatus(
+            actionable_threads=[thread],
+            all_unresolved_threads=[thread],
+        )
+        mock_setup["_detect_ai_cli_env"].return_value = "ANTIGRAVITY_AGENT"
+        # A resolved tool (not the fixture's default None) so the guard is the
+        # only thing standing between start() and the inline launch below.
+        mock_setup["resolve_ai_tool"].return_value = "claude"
+
+        from crossby.ai_tools import AbstractAITool
+
+        with (
+            patch("wade.services.review_service.console") as mock_console,
+            patch.object(AbstractAITool, "get") as mock_get,
+        ):
+            result = start(target="42")
+
+        assert result is True
+        info_calls = [call.args[0] for call in mock_console.info.call_args_list]
+        assert any("ANTIGRAVITY_AGENT" in msg for msg in info_calls), (
+            f"Expected nested-session guard message in console.info calls, got: {info_calls}"
+        )
+        # The guard must short-circuit before the adapter is ever resolved/launched.
+        mock_get.assert_not_called()
+
     def test_outdated_threads_proceed_to_session(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock], mock_provider: MagicMock
     ) -> None:
@@ -1551,7 +1589,7 @@ class TestGetReviewStatus:
         assert result is not None
         assert result.approvals == ["alice"]
 
-    @patch("wade.services.review_service._check_review_bot_status", return_value=None)
+    @patch("wade.services.review_service._check_review_bot_status", return_value=(None, None))
     @patch("wade.services.review_service.filter_actionable_threads")
     @patch("wade.services.review_service.git_pr.get_pr_for_branch")
     @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
@@ -1614,7 +1652,7 @@ class TestGetComprehensiveReviewStatus:
         assert result.has_changes_requested is True
         assert result.changes_requested_by == ["bob"]
 
-    @patch("wade.services.review_service._check_review_bot_status", return_value=None)
+    @patch("wade.services.review_service._check_review_bot_status", return_value=(None, None))
     @patch("wade.services.review_service.filter_actionable_threads", return_value=[])
     def test_fallback_on_not_implemented(
         self,

@@ -4,6 +4,42 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.42.6] — 2026-08-11
+
+### Bug Fixes
+
+- always surface the resolved permission mode and honor it in review sessions (#380) (01beb8a)
+
+## [v0.42.5] — 2026-08-11
+
+### Bug Fixes
+
+- a timed-out headless review loses everything and is likely to time out again (#406) (1050ff9)
+
+## [v0.42.4] — 2026-08-10
+
+### Bug Fixes
+
+- restore nested-session guard for Antigravity CLI in wade implement (#405) (8d16c06)
+
+## [v0.42.3] — 2026-08-10
+
+### Bug Fixes
+
+- don't declare review complete when bot hasn't reviewed the latest commit (#404) (f36ed80)
+
+## [v0.42.2] — 2026-08-10
+
+### Bug Fixes
+
+- `done` cannot tell a clean review from one that never ran (#400) (8788d52)
+
+## [v0.42.1] — 2026-08-10
+
+### Chores
+
+- remove dead pre-push install wrappers superseded by the batch git-hook API (#399) (e39517a)
+
 ## [v0.42.0] — 2026-08-09
 
 ### Features

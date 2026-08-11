@@ -543,13 +543,24 @@ mutation($threadId: ID!) {
                     "api",
                     f"repos/{nwo}/issues/{pr_number}/comments",
                     "--jq",
-                    "[.[] | {login: .user.login, body: .body}]",
+                    "[.[] | {login: .user.login, body: .body, updated_at: .updated_at}]",
                 ],
                 check=True,
                 retries=3,
             )
-            raw: list[dict[str, str]] = json.loads(result.stdout)
-            return [PRComment(login=c.get("login", ""), body=c.get("body", "")) for c in raw]
+            raw: list[dict[str, Any]] = json.loads(result.stdout)
+            # ``updated_at`` (not ``created_at``): bots edit their summary comment
+            # in place, so the edit time is the freshest "the bot touched the PR"
+            # signal for commit-staleness detection. Pydantic parses the ISO-8601
+            # string into a datetime; a missing/None value leaves it unset.
+            return [
+                PRComment(
+                    login=c.get("login", ""),
+                    body=c.get("body", ""),
+                    updated_at=c.get("updated_at"),
+                )
+                for c in raw
+            ]
         except (CommandError, json.JSONDecodeError) as e:
             logger.warning(
                 "github.get_pr_issue_comments_failed",
@@ -605,16 +616,29 @@ mutation($threadId: ID!) {
             logger.warning("github.review_status_fetch_failed", error=str(e))
             fetch_failed = True
 
-        # Detect bot status from issue comments
+        # Detect bot status from issue comments. ``bot_status_ts`` is the matched
+        # CodeRabbit summary comment's ``updated_at`` — it lets commit-staleness
+        # detection see "CodeRabbit found nothing and only touched its summary",
+        # a case with no thread or review timestamp to lean on.
         bot_status: ReviewBotStatus | None = None
+        bot_status_ts: datetime | None = None
         try:
             comments = self.get_pr_issue_comments(pr_number)
-            bot_status = detect_coderabbit_review_status(comments)
+            bot_status, bot_status_ts = detect_coderabbit_review_status(comments)
         except Exception:
             logger.debug("github.review_status_bot_check_failed", exc_info=True)
 
-        # Generic PR-level bot reviews: treat any pending bot review as in-progress
-        if bot_status is None and any(r.is_bot and r.state == ReviewState.PENDING for r in reviews):
+        # Generic PR-level bot reviews: any pending bot review (e.g. Codex,
+        # Copilot) takes precedence over a COMPLETED marker from a *different*
+        # bot (e.g. CodeRabbit) — the PR isn't done until every bot clears, not
+        # just the one that happens to post a summary comment. IN_PROGRESS and
+        # PAUSED are left alone: IN_PROGRESS is already the most blocking state,
+        # and PAUSED is a CodeRabbit-specific signal this generic check
+        # shouldn't override.
+        if any(r.is_bot and r.state == ReviewState.PENDING for r in reviews) and bot_status in (
+            None,
+            ReviewBotStatus.COMPLETED,
+        ):
             bot_status = ReviewBotStatus.IN_PROGRESS
 
         return PRReviewStatus(
@@ -623,6 +647,7 @@ mutation($threadId: ID!) {
             reviews=reviews,
             pending_reviewers=pending_reviewers,
             bot_status=bot_status,
+            bot_status_ts=bot_status_ts,
             fetch_failed=fetch_failed,
             latest_commit_pushed_at=latest_commit_pushed_at,
         )
@@ -668,7 +693,7 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
       }
       reviews(last: 100) {
         nodes {
-          author { login }
+          author { login __typename }
           state
           body
           submittedAt
@@ -687,6 +712,7 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
         nodes {
           commit {
             committedDate
+            pushedDate
           }
         }
       }
@@ -725,16 +751,23 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
         reviews: list[PRReview] = []
         for rnode in pr_data.get("reviews", {}).get("nodes", []):
             author_login = ""
+            author_typename = ""
             if rnode.get("author"):
                 author_login = rnode["author"].get("login", "")
+                author_typename = rnode["author"].get("__typename", "")
             state_str = rnode.get("state", "COMMENTED")
             try:
                 state = ReviewState(state_str)
             except ValueError:
                 state = ReviewState.COMMENTED
+            # Prefer GitHub's native actor type (``__typename == "Bot"``), which
+            # classifies chatgpt-codex-connector (Codex), CodeRabbit, Copilot,
+            # etc. without an ever-growing login allowlist. Keep the login
+            # heuristic as a fallback for providers/paths without ``__typename``.
             normalized = author_login.lower()
             is_bot = (
-                normalized == "bot"
+                author_typename == "Bot"
+                or normalized == "bot"
                 or normalized.startswith(("bot-", "bot_"))
                 or normalized.endswith(("[bot]", "-bot", "_bot"))
             )
@@ -757,18 +790,32 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
             if name:
                 pending.append(PendingReviewer(name=name, is_team=is_team))
 
-        # Parse latest commit timestamp
+        # Parse latest commit timestamp. Prefer ``pushedDate`` (when the commit
+        # actually reached GitHub) over ``committedDate`` (when it was authored
+        # locally, which can predate a bot's review by hours if the commit sat
+        # unpushed) — falling back to ``committedDate`` only when GitHub can't
+        # report a push date (e.g. commits created via the web UI).
+        #
+        # Known gap: ``pushedDate`` is a property of the commit object, not of
+        # the PR-ref transition. A force-push/fast-forward that reuses a commit
+        # already present in the repo (e.g. a rebase) keeps that commit's
+        # original push date, which can predate when it became *this* PR's
+        # HEAD — a bot signal from before that transition could then look like
+        # it covers HEAD. Not handled: doing so needs a real head-ref-change
+        # signal (e.g. GraphQL timeline events), which this GraphQL query
+        # doesn't fetch.
         latest_commit_pushed_at: datetime | None = None
         commits_nodes = pr_data.get("commits", {}).get("nodes", [])
         if commits_nodes:
-            committed_date_str = commits_nodes[0].get("commit", {}).get("committedDate")
-            if committed_date_str:
+            commit_node = commits_nodes[0].get("commit", {})
+            date_str = commit_node.get("pushedDate") or commit_node.get("committedDate")
+            if date_str:
                 try:
                     latest_commit_pushed_at = datetime.fromisoformat(
-                        str(committed_date_str).replace("Z", "+00:00")
+                        str(date_str).replace("Z", "+00:00")
                     )
                 except (ValueError, AttributeError):
-                    logger.debug("github.latest_commit_date_parse_failed", raw=committed_date_str)
+                    logger.debug("github.latest_commit_date_parse_failed", raw=date_str)
 
         # Warn if hard query limits may have been hit (potential truncation)
         if len(reviews) == 100:

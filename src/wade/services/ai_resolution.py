@@ -24,7 +24,11 @@ from crossby.models.ai import AIToolID, EffortLevel
 
 from wade.models.config import AICommandConfig, ProjectConfig
 from wade.models.delegation import DelegationMode
-from wade.models.permission import PermissionMode, coerce_permission_mode
+from wade.models.permission import (
+    PermissionMode,
+    coerce_permission_mode,
+    describe_permission_mode,
+)
 
 logger = structlog.get_logger()
 
@@ -255,6 +259,36 @@ def resolve_yolo(
     return resolve_permission_mode(None, yolo, config, command) is PermissionMode.YOLO
 
 
+def _display_ai_selection(
+    tool: str | None,
+    model: str | None,
+    effort: EffortLevel | None,
+    permission_mode: PermissionMode,
+) -> None:
+    """Print the resolved AI selection (tool, model, effort, permission mode).
+
+    The permission-mode line is **always** printed with a human-readable
+    descriptor (including ``default``), so every launch states both which tier
+    is active and what it means. When no tool resolved, renders a single
+    ``AI tool: not resolved`` line rather than passing ``None`` to
+    :meth:`console.kv` (which is typed ``str`` and would print a nonsense line).
+    """
+    from wade.ui.console import console
+
+    if tool is None:
+        console.kv("AI tool", "not resolved")
+        return
+    console.kv("AI tool", tool)
+    if model:
+        console.kv("Model", model)
+    if effort:
+        console.kv("Effort", effort.value)
+    console.kv(
+        "Permission mode",
+        f"{permission_mode.value} — {describe_permission_mode(permission_mode)}",
+    )
+
+
 def confirm_ai_selection(
     resolved_tool: str | None,
     resolved_model: str | None,
@@ -267,22 +301,30 @@ def confirm_ai_selection(
     permission_mode_explicit: bool = True,
     mode: DelegationMode | None = None,
 ) -> tuple[str | None, str | None, EffortLevel | None, PermissionMode]:
-    """Interactively confirm/change the resolved AI tool, model, effort, and permission mode.
+    """Display the resolved AI selection, then interactively confirm/change it.
 
-    Fires only when stdin is a TTY and at least one of the flags was not
-    explicitly provided by the caller.  When all flags are explicit (e.g.
-    because ``wade implement-batch`` passes ``--ai``/``--model``/``--effort`` to
-    child calls), this is a no-op. Also a no-op when *mode* is
-    ``DelegationMode.HEADLESS``: headless mode is defined as unattended, so it
-    must never block on a TTY prompt even when one happens to be attached.
+    The resolved selection (tool, model, effort, permission mode) is **always
+    displayed exactly once** — before any skip guard — so it surfaces on every
+    launch path (TTY, non-TTY, headless, all-flags-explicit).
+
+    The interactive change-loop then fires only when stdin is a TTY and at least
+    one of the flags was not explicitly provided by the caller.  When all flags
+    are explicit (e.g. because ``wade implement-batch`` passes
+    ``--ai``/``--model``/``--effort`` to child calls), it is skipped. It is also
+    skipped when *mode* is ``DelegationMode.HEADLESS``: headless mode is defined
+    as unattended, so it must never block on a TTY prompt even when one happens
+    to be attached.
 
     Returns the (tool, model, effort, permission_mode) tuple after any
     user-driven changes.
     """
     from wade.ui import prompts
-    from wade.ui.console import console
 
-    # Skip when non-TTY, no tool resolved, all flags were explicit, or headless.
+    # Always surface the resolved selection once, before the skip guard below.
+    _display_ai_selection(resolved_tool, resolved_model, resolved_effort, resolved_permission_mode)
+
+    # Skip the change-loop when non-TTY, no tool resolved, all flags were
+    # explicit, or headless. The display above has already run regardless.
     all_explicit = tool_explicit and model_explicit and effort_explicit and permission_mode_explicit
     if (
         not prompts.is_tty()
@@ -297,15 +339,14 @@ def confirm_ai_selection(
     effort = resolved_effort
     permission_mode = resolved_permission_mode
 
+    first_render = True
     while True:
-        # Display current selection
-        console.kv("AI tool", tool)
-        if model:
-            console.kv("Model", model)
-        if effort:
-            console.kv("Effort", effort.value)
-        if permission_mode is not PermissionMode.DEFAULT:
-            console.kv("Permission mode", permission_mode.value)
+        # Refresh the displayed selection after an interactive change. The first
+        # iteration was already rendered by the hoisted call above — don't
+        # double-print it.
+        if not first_render:
+            _display_ai_selection(tool, model, effort, permission_mode)
+        first_render = False
 
         # Build menu dynamically based on which flags were NOT explicit.
         menu_items: list[str] = ["Proceed"]

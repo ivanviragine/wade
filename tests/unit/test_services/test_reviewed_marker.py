@@ -137,14 +137,16 @@ class TestRecordReviewPass:
         mock_pass.assert_called_once()
 
     def test_headless_timeout_still_records_pass(self, tmp_path: Path) -> None:
-        # A headless timeout exits non-zero (success=False) and writes NO
-        # `reviewed` marker — but it still consumed a review→fix cycle, so the
-        # pass MUST be recorded (this is what breaks the infinite loop).
+        # A headless timeout exits non-zero (success=False, timed_out=True) and
+        # writes NO `reviewed` marker — but it still consumed a review→fix cycle,
+        # so the pass MUST be recorded (this is what breaks the infinite loop).
+        # #366 keeps timed_out results at success=False so this accounting holds.
         failure = DelegationResult(
             success=False,
-            feedback="Headless session timed out",
+            feedback="partial review output",
             mode=DelegationMode.HEADLESS,
             exit_code=1,
+            timed_out=True,
         )
         with (
             patch.object(rds.git_repo, "get_repo_root", return_value=tmp_path),

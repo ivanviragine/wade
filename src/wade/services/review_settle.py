@@ -9,32 +9,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from wade.models.review import PRReviewStatus, ReviewBotStatus
+from wade.models.review import PRReviewStatus, ReviewBotStatus, latest_signal_ts
 
+__all__ = ["compute_effective_settle", "latest_signal_ts"]
 
-def latest_signal_ts(status: PRReviewStatus) -> datetime | None:
-    """Return the newest timestamp across all thread comments and reviews.
-
-    Considers ``created_at`` from every comment in
-    ``effective_unresolved_threads`` and ``submitted_at`` from every entry in
-    ``reviews``.  Naive datetimes are treated as UTC, matching
-    ``is_commit_fresh()``.  Returns ``None`` when no timestamps are available.
-    """
-    candidates: list[datetime] = []
-    for thread in status.effective_unresolved_threads:
-        for comment in thread.comments:
-            if comment.created_at is not None:
-                ts = comment.created_at
-                if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=UTC)
-                candidates.append(ts)
-    for review in status.reviews:
-        if review.submitted_at is not None:
-            ts = review.submitted_at
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=UTC)
-            candidates.append(ts)
-    return max(candidates) if candidates else None
+# ``latest_signal_ts`` now lives in ``models/review.py`` (the leaf layer) so
+# ``PRReviewStatus`` can share its normalization with the commit-staleness
+# predicate without a model->service import. It is re-exported here for the
+# existing settle-path call sites (and tests) that import it from this module.
 
 
 def compute_effective_settle(

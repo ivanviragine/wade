@@ -38,6 +38,29 @@ class AutonomyLaunchKwargs(TypedDict):
     accept_edits: bool
 
 
+PERMISSION_MODE_DESCRIPTIONS: dict[PermissionMode, str] = {
+    PermissionMode.DEFAULT: "tool prompts before edits & commands",
+    PermissionMode.ACCEPT_EDITS: "auto-applies edits, prompts for commands",
+    PermissionMode.AUTO: "classifier decides per action (Claude only)",
+    PermissionMode.YOLO: "skips all permission prompts",
+}
+"""Short, human-readable descriptor per autonomy tier.
+
+Surfaced next to the bare enum value wherever the resolved permission mode is
+displayed (see ``ai_resolution.confirm_ai_selection``), so a user always knows
+what the mode *means* — in particular what ``default`` implies.
+"""
+
+
+def describe_permission_mode(mode: PermissionMode) -> str:
+    """Return the human-readable descriptor for *mode*.
+
+    Falls back to an empty string for any tier missing from the lookup, so the
+    caller can safely append it without a special-case check.
+    """
+    return PERMISSION_MODE_DESCRIPTIONS.get(mode, "")
+
+
 def coerce_permission_mode(value: str | PermissionMode | None) -> PermissionMode | None:
     """Coerce a raw value to ``PermissionMode``, or ``None`` if it is not one.
 

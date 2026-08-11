@@ -112,6 +112,9 @@ def _detect_ai_cli_env() -> str | None:
     # Cursor CLI
     if os.environ.get("CURSOR_CLI"):
         return "CURSOR_CLI"
+    # Antigravity CLI (agy) sets ANTIGRAVITY_AGENT=1 in its session env
+    if os.environ.get("ANTIGRAVITY_AGENT"):
+        return "ANTIGRAVITY_AGENT"
     return None
 
 

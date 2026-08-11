@@ -164,11 +164,33 @@ dispatched: prompt/interactive/headless). The tiers, most→least permissive, ar
 doesn't support is downgraded automatically (e.g. `auto` → `accept-edits` on
 non-Claude tools) with a warning — WADE forwards the requested tier and
 [`crossby`](https://github.com/ivanviragine/crossby) owns the downgrade ladder.
-Headless commands (`deps`, `review_plan`, `review_implementation`,
-`review_batch`) always run at `default`; the interactively-launched review
-session honors its own tier via `ai.review_pr_comments` (see below). `plan` is
-not a permission mode — it's driven separately — and is rejected (warn + fall
-back to `default`) if configured.
+**Headless launches are always read-only** — any of `deps` /
+`review_plan` / `review_implementation` / `review_batch` dispatched in headless
+delegation mode runs at `default` regardless of the configured tier, and no
+`--yolo` is forwarded to the subprocess. The *interactive* variants honor the
+tier: `wade review plan`, `wade review implementation`, `wade review batch`, and
+`wade task deps` all accept `--yolo` / `--permission-mode` (matching `wade review
+pr-comments`), and `ai.review_batch.yolo: true` / `ai.deps.yolo: true` apply when
+those commands run interactively; the auto-launched review session honors its own
+tier via `ai.review_pr_comments` (see below). `plan` is not a permission mode —
+it's driven separately — and is rejected (warn + fall back to `default`) if
+configured.
+
+The **resolved permission mode is always displayed** at launch, on every path
+(TTY, non-TTY, headless, all-flags-explicit), with a one-line descriptor — so a
+`default` session states what `default` means, and what is shown always equals
+what is applied.
+
+Those headless commands **auto-scale** their subprocess budget from the prompt
+size and reasoning effort (600s floor → 1500s ceiling), so a large diff or a
+high-effort run no longer times out at a flat budget. If a run does time out,
+wade keeps whatever partial output the reviewer produced (rather than discarding
+it) and **retries once** with a longer budget (1.5x the first attempt, always
+strictly more time than the run that just timed out), bounded to a ~62.5-minute
+worst-case total that the pre-launch advisory announces. Set `ai.<command>.timeout`
+(seconds) to override: an explicit value is used verbatim and **turns off both
+the scaling and the retry** — the escape hatch when your terminal/orchestrator
+enforces a hard tool-timeout (set it just under that limit).
 
 The auto-launched **review session** — the one started when you pick **"Wait
 for reviews"** after `wade implementation-session done` and comments land —
@@ -308,6 +330,13 @@ worktree-scoped (never touches your main checkout or sibling worktrees) and
 chains to any pre-existing `pre-push` hook. **Honesty:** `git push --no-verify`
 bypasses the backstop in one flag — this is a quality/backstop layer that makes
 the gate hard to skip, not an airtight boundary.
+
+`done` also writes a **`## Review Status`** line into the PR body recording the
+review outcome — reviewed at `<sha>`, skipped via `--skip-review`, gate disabled
+(`done.require_review: false` / `ai.review_implementation.enabled: false`), or
+completed at the review-pass cap — with the review-pass count. A skipped or
+never-run review is therefore visible to reviewers in the PR itself, not just in
+the worktree-local `.wade/` markers that are discarded when the session ends.
 
 ## Task Providers
 
