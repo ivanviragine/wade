@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.42.5] — 2026-08-11
+
+### Bug Fixes
+
+- a timed-out headless review loses everything and is likely to time out again (#406) (1050ff9)
+
 ## [v0.42.4] — 2026-08-10
 
 ### Bug Fixes
