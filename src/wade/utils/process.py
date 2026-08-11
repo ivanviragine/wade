@@ -62,7 +62,15 @@ def run(
     Raises:
         CommandError: If check=True and the command returns non-zero after all retries.
     """
-    logger.debug("subprocess.run", command=command, cwd=str(cwd) if cwd else None)
+    # Don't log the full command: callers (e.g. headless AI delegation) embed
+    # prompt text — diffs, issue bodies, user input — as args, and this runs on
+    # every call, not just failures (#366 review).
+    logger.debug(
+        "subprocess.run",
+        executable=command[0],
+        argument_count=len(command) - 1,
+        cwd=str(cwd) if cwd else None,
+    )
 
     attempt = 0
     while True:

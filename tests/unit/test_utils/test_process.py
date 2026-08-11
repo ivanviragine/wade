@@ -32,6 +32,29 @@ class TestRun:
         assert exc_info.value.returncode == 127
 
 
+class TestRunDebugLog:
+    def test_debug_log_omits_full_command(self) -> None:
+        """The per-call debug log must not carry full args either — every run()
+
+        call logs it, including headless AI invocations that embed prompt text
+        as command-line arguments (#366 review, same gap as the timeout log).
+        """
+        secret_arg = "DIFF CONTENTS: super-secret-issue-body"
+        with (
+            patch("wade.utils.process.subprocess.run") as mock_run,
+            patch("wade.utils.process.logger") as mock_logger,
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            run(["claude", secret_arg])
+
+        debug_call = mock_logger.debug.call_args
+        assert debug_call.args[0] == "subprocess.run"
+        assert "command" not in debug_call.kwargs
+        assert debug_call.kwargs["executable"] == "claude"
+        assert debug_call.kwargs["argument_count"] == 1
+        assert secret_arg not in str(debug_call)
+
+
 class TestRunTimeoutPartialOutput:
     """On timeout, run() preserves partial output as decoded str (#366)."""
 
