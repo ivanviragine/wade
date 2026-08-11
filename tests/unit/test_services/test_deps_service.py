@@ -365,7 +365,7 @@ class TestFindExistingTrackingIssue:
 
 
 class TestRunDelegation:
-    """Tests for _run_delegation which wraps the generic delegate() infrastructure."""
+    """_run_delegation wraps delegate() and returns the full DelegationResult (#366)."""
 
     @patch("wade.services.deps_service.delegate")
     def test_successful_delegation(self, mock_delegate: MagicMock) -> None:
@@ -375,7 +375,8 @@ class TestRunDelegation:
             mode=DelegationMode.HEADLESS,
         )
         result = _run_delegation("claude", "Analyze deps", DelegationMode.HEADLESS)
-        assert result == "1 -> 2 # auth before UI"
+        assert result.success is True
+        assert result.feedback == "1 -> 2 # auth before UI"
 
         call_args = mock_delegate.call_args[0][0]
         assert call_args.mode == DelegationMode.HEADLESS
@@ -383,7 +384,7 @@ class TestRunDelegation:
         assert call_args.prompt == "Analyze deps"
 
     @patch("wade.services.deps_service.delegate")
-    def test_failed_delegation_returns_none(self, mock_delegate: MagicMock) -> None:
+    def test_failed_delegation_returns_result(self, mock_delegate: MagicMock) -> None:
         mock_delegate.return_value = DelegationResult(
             success=False,
             feedback="AI tool does not support headless mode",
@@ -391,17 +392,33 @@ class TestRunDelegation:
             exit_code=1,
         )
         result = _run_delegation("antigravity-cli", "Analyze deps", DelegationMode.HEADLESS)
-        assert result is None
+        assert result.success is False
+        assert result.timed_out is False
 
     @patch("wade.services.deps_service.delegate")
-    def test_empty_feedback_returns_none(self, mock_delegate: MagicMock) -> None:
+    def test_empty_feedback_returned_verbatim(self, mock_delegate: MagicMock) -> None:
+        """The None-collapsing on empty/failure output now lives in analyze_deps."""
         mock_delegate.return_value = DelegationResult(
             success=True,
             feedback="",
             mode=DelegationMode.HEADLESS,
         )
         result = _run_delegation("claude", "Analyze deps", DelegationMode.HEADLESS)
-        assert result is None
+        assert result.success is True
+        assert result.feedback == ""
+
+    @patch("wade.services.deps_service.delegate")
+    def test_timed_out_delegation_flagged(self, mock_delegate: MagicMock) -> None:
+        mock_delegate.return_value = DelegationResult(
+            success=False,
+            feedback="1 -> 2 # partial",
+            mode=DelegationMode.HEADLESS,
+            exit_code=1,
+            timed_out=True,
+        )
+        result = _run_delegation("claude", "Analyze deps", DelegationMode.HEADLESS)
+        assert result.timed_out is True
+        assert result.feedback == "1 -> 2 # partial"
 
     @patch("wade.services.deps_service.delegate")
     def test_passes_model_and_effort(self, mock_delegate: MagicMock) -> None:
@@ -429,7 +446,7 @@ class TestRunDelegation:
             mode=DelegationMode.INTERACTIVE,
         )
         result = _run_delegation("claude", "Analyze", DelegationMode.INTERACTIVE)
-        assert result == "1 -> 2 # reason"
+        assert result.feedback == "1 -> 2 # reason"
         call_args = mock_delegate.call_args[0][0]
         assert call_args.mode == DelegationMode.INTERACTIVE
 
@@ -649,3 +666,181 @@ class TestAnalyzeDepsMode:
         call_args = mock_delegate.call_args[0][0]
         assert call_args.mode == DelegationMode.HEADLESS
         assert call_args.timeout == 300
+
+    @patch("wade.services.deps_service.create_tracking_issue")
+    @patch("wade.services.deps_service.apply_deps_to_issues")
+    @patch("wade.services.deps_service.delegate")
+    @patch("wade.services.deps_service.confirm_ai_selection")
+    @patch("wade.services.deps_service.resolve_effort")
+    @patch("wade.services.deps_service.resolve_model")
+    @patch("wade.services.deps_service.resolve_ai_tool")
+    @patch("wade.services.deps_service.get_provider")
+    @patch("wade.services.deps_service.load_config")
+    def test_scaled_timeout_when_unset(
+        self,
+        mock_config: MagicMock,
+        mock_provider: MagicMock,
+        mock_resolve_tool: MagicMock,
+        mock_resolve_model: MagicMock,
+        mock_resolve_effort: MagicMock,
+        mock_confirm: MagicMock,
+        mock_delegate: MagicMock,
+        mock_apply: MagicMock,
+        mock_tracking: MagicMock,
+    ) -> None:
+        """With ai.deps.timeout unset, analyze_deps scales the budget from the prompt."""
+        from wade.models.config import AICommandConfig, AIConfig
+        from wade.services.delegation_service import TIMEOUT_FLOOR, effective_timeout
+
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(deps=AICommandConfig(tool="claude", mode="headless"))
+        )
+        provider = MagicMock()
+        provider.read_task.side_effect = [
+            Task(id="1", title="Auth", body="Login"),
+            Task(id="2", title="DB", body="Schema"),
+            Task(id="1", title="Auth", body="Login"),
+            Task(id="2", title="DB", body="Schema"),
+        ]
+        mock_provider.return_value = provider
+        mock_resolve_tool.return_value = "claude"
+        mock_resolve_model.return_value = None
+        mock_resolve_effort.return_value = None
+        mock_confirm.return_value = ("claude", None, None, False)
+        mock_delegate.return_value = DelegationResult(
+            success=True,
+            feedback="1 -> 2 # auth before UI",
+            mode=DelegationMode.HEADLESS,
+        )
+        mock_apply.return_value = 2
+        mock_tracking.return_value = "10"
+
+        result = analyze_deps(["1", "2"])
+        assert result is not None
+        call_args = mock_delegate.call_args[0][0]
+        # Timeout is the scaled value for this exact prompt (not a flat default).
+        assert call_args.timeout == effective_timeout(call_args.prompt, None, None)
+        assert call_args.timeout >= TIMEOUT_FLOOR
+
+    @patch("wade.services.deps_service.console")
+    @patch("wade.services.deps_service.create_tracking_issue")
+    @patch("wade.services.deps_service.apply_deps_to_issues")
+    @patch("wade.services.deps_service.delegate")
+    @patch("wade.services.deps_service.confirm_ai_selection")
+    @patch("wade.services.deps_service.resolve_effort")
+    @patch("wade.services.deps_service.resolve_model")
+    @patch("wade.services.deps_service.resolve_ai_tool")
+    @patch("wade.services.deps_service.get_provider")
+    @patch("wade.services.deps_service.load_config")
+    def test_headless_prints_budget_advisory(
+        self,
+        mock_config: MagicMock,
+        mock_provider: MagicMock,
+        mock_resolve_tool: MagicMock,
+        mock_resolve_model: MagicMock,
+        mock_resolve_effort: MagicMock,
+        mock_confirm: MagicMock,
+        mock_delegate: MagicMock,
+        mock_apply: MagicMock,
+        mock_tracking: MagicMock,
+        mock_console: MagicMock,
+    ) -> None:
+        """#366 review: headless deps must announce the worst-case budget pre-launch,
+
+        the same way _run_review_delegation does, so an agent-driven shell reserves
+        enough time instead of killing the call at its own shorter timeout.
+        """
+        from wade.models.config import AICommandConfig, AIConfig
+        from wade.services.delegation_service import effective_timeout, extended_timeout
+
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(deps=AICommandConfig(tool="claude", mode="headless"))
+        )
+        provider = MagicMock()
+        provider.read_task.side_effect = [
+            Task(id="1", title="Auth", body="Login"),
+            Task(id="2", title="DB", body="Schema"),
+            Task(id="1", title="Auth", body="Login"),
+            Task(id="2", title="DB", body="Schema"),
+        ]
+        mock_provider.return_value = provider
+        mock_resolve_tool.return_value = "claude"
+        mock_resolve_model.return_value = None
+        mock_resolve_effort.return_value = None
+        mock_confirm.return_value = ("claude", None, None, False)
+        mock_delegate.return_value = DelegationResult(
+            success=True,
+            feedback="1 -> 2 # auth before UI",
+            mode=DelegationMode.HEADLESS,
+        )
+        mock_apply.return_value = 2
+        mock_tracking.return_value = "10"
+
+        result = analyze_deps(["1", "2"])
+        assert result is not None
+        call_args = mock_delegate.call_args[0][0]
+        budget = effective_timeout(call_args.prompt, None, None)
+        worst_case = budget + extended_timeout(budget)
+
+        info_calls = [c.args[0] for c in mock_console.info.call_args_list]
+        assert any(str(worst_case) in msg and str(budget) in msg for msg in info_calls), (
+            f"expected an advisory mentioning budget {budget}s / worst-case "
+            f"{worst_case}s, got: {info_calls}"
+        )
+
+    @patch("wade.services.deps_service.console")
+    @patch("wade.services.deps_service.create_tracking_issue")
+    @patch("wade.services.deps_service.apply_deps_to_issues")
+    @patch("wade.services.deps_service.delegate")
+    @patch("wade.services.deps_service.confirm_ai_selection")
+    @patch("wade.services.deps_service.resolve_effort")
+    @patch("wade.services.deps_service.resolve_model")
+    @patch("wade.services.deps_service.resolve_ai_tool")
+    @patch("wade.services.deps_service.get_provider")
+    @patch("wade.services.deps_service.load_config")
+    def test_timed_out_returns_none_without_applying(
+        self,
+        mock_config: MagicMock,
+        mock_provider: MagicMock,
+        mock_resolve_tool: MagicMock,
+        mock_resolve_model: MagicMock,
+        mock_resolve_effort: MagicMock,
+        mock_confirm: MagicMock,
+        mock_delegate: MagicMock,
+        mock_apply: MagicMock,
+        mock_tracking: MagicMock,
+        mock_console: MagicMock,
+    ) -> None:
+        """A timed-out deps run returns None, warns (timeout, not crash), applies nothing."""
+        from wade.models.config import AICommandConfig, AIConfig
+
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(deps=AICommandConfig(tool="claude", mode="headless"))
+        )
+        provider = MagicMock()
+        provider.read_task.side_effect = [
+            Task(id="1", title="Auth", body="Login"),
+            Task(id="2", title="DB", body="Schema"),
+            Task(id="1", title="Auth", body="Login"),
+            Task(id="2", title="DB", body="Schema"),
+        ]
+        mock_provider.return_value = provider
+        mock_resolve_tool.return_value = "claude"
+        mock_resolve_model.return_value = None
+        mock_resolve_effort.return_value = None
+        mock_confirm.return_value = ("claude", None, None, False)
+        mock_delegate.return_value = DelegationResult(
+            success=False,
+            feedback="1 -> 2 # partial",
+            mode=DelegationMode.HEADLESS,
+            exit_code=1,
+            timed_out=True,
+        )
+
+        result = analyze_deps(["1", "2"], mode="headless")
+
+        assert result is None
+        mock_apply.assert_not_called()
+        mock_tracking.assert_not_called()
+        warn_text = " ".join(str(c.args[0]) for c in mock_console.warn.call_args_list if c.args)
+        assert "timed out" in warn_text.lower()

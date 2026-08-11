@@ -489,3 +489,15 @@ latest_signal_ts lives in models/review.py (leaf layer), NOT services/review_set
 The durable, human-legible record of session state is the PR body (marker-bounded blocks: wade:summary, wade:review-status, wade:impl-usage), NOT the .wade/ markers — reviewed@<sha>/review-pass@<sha>/done@<sha> are zero-byte, worktree-local, and discarded at session end, so no human ever sees them. To make session state visible to a reviewer, project it into the PR body with a marker-scoped block (build_marked_block + update_body_preserving_markers, idempotent on re-run) rather than a richer on-disk receipt — this is why #367 surfaced review status (reviewed/skipped/gate-disabled + pass count) as a PR-body block. done.py:_classify_review is the single classifier both the review-ran gate and the '## Review Status' renderer read, so the gate decision and the PR-body wording cannot drift.
 
 ---
+
+## 1d59daa2f837 | 2026-08-11 | implementation | tags: subprocess, timeout, error-handling | Issue #366
+
+`subprocess.TimeoutExpired.stdout`/`.stderr` are `bytes` even when the subprocess ran under `text=True` — the partial buffer is collected before the newline/decode step. `utils/process.run` decodes and reattaches them (errors='replace') on timeout so callers get text; any code reading partial output off a TimeoutExpired must still decode defensively.
+
+---
+
+## fb5582aa12e0 | 2026-08-11 | implementation | tags: review, headless, timeout, deps | Issue #366
+
+Headless review/deps timeout auto-scales from prompt size + reasoning effort (`effective_timeout`/`scaled_timeout`, delegation_service.py, #366) and retries once with a longer budget on timeout. An explicit `ai.<cmd>.timeout` deliberately bypasses BOTH the scaling and the retry — used verbatim. That is the escape hatch for orchestrators with a hard tool-timeout (set it below the harness limit); do not 'fix' it to always scale.
+
+---
