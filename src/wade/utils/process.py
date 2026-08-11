@@ -86,9 +86,13 @@ def run(
             e.stdout = _decode_stream(e.stdout)  # type: ignore[assignment]
             e.stderr = _decode_stream(e.stderr)  # type: ignore[assignment]
             captured = len(e.stdout) if isinstance(e.stdout, str) else 0
+            # Don't log the full command: callers (e.g. headless AI delegation)
+            # embed prompt text — diffs, issue bodies, user input — as args, and
+            # that would land in production error logs (#366 review).
             logger.error(
                 "subprocess.timeout",
-                command=command,
+                executable=command[0],
+                argument_count=len(command) - 1,
                 timeout=timeout,
                 captured_chars=captured,
             )

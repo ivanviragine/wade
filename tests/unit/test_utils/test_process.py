@@ -69,6 +69,31 @@ class TestRunTimeoutPartialOutput:
                 run(["x"], timeout=5)
         assert exc_info.value.stdout == "ok�"
 
+    def test_timeout_log_omits_full_command(self) -> None:
+        """The timeout log must not carry full args — they can embed prompt
+
+        text (diffs, issue bodies, user input) that headless AI delegation
+        passes as command-line arguments, which would otherwise land in
+        production error logs (#366 review).
+        """
+        secret_arg = "DIFF CONTENTS: super-secret-issue-body"
+        with (
+            patch("wade.utils.process.subprocess.run") as mock_run,
+            patch("wade.utils.process.logger") as mock_logger,
+        ):
+            mock_run.side_effect = subprocess.TimeoutExpired(
+                cmd=["claude", secret_arg], timeout=5, output=b"partial"
+            )
+            with pytest.raises(subprocess.TimeoutExpired):
+                run(["claude", secret_arg], timeout=5)
+
+        error_call = mock_logger.error.call_args
+        assert error_call.args[0] == "subprocess.timeout"
+        assert "command" not in error_call.kwargs
+        assert error_call.kwargs["executable"] == "claude"
+        assert error_call.kwargs["argument_count"] == 1
+        assert secret_arg not in str(error_call)
+
 
 class TestRunRetries:
     def test_retries_on_failure_then_succeeds(self) -> None:
