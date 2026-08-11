@@ -282,7 +282,10 @@ guarantee:
 `<encoded-worktree>` mirrors the tool's own CWD-to-directory-name encoding
 (`_encode_claude_project_path` / `_encode_cursor_project_path` in `hooks/cli.py`,
 duplicated from `crossby.ai_tools.claude`/`cursor` rather than imported, for the
-same lean-hot-path reason as the dialect maps below). `<config-home>` is
+same lean-hot-path reason as the dialect maps below) — `worktree_root` is
+**canonicalized (`.resolve()`) before encoding**, so a `worktrees_dir` reached
+through a symlink still encodes the same physical path the launched tool
+observes as its own CWD, not the symlink spelling. `<config-home>` is
 `_tool_config_home`: it honors each tool's data-home relocation env var
 (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`) before falling back to `Path.home() /
 ".<tool>"` — without this, a relocated config dir (e.g. the isolated
@@ -302,7 +305,13 @@ allowlisting all of `~/.claude`, or even all of `~/.claude/projects`, would let
 a session strip its own guard) **— though not uniformly narrow across tools**:
 Claude and Cursor scope to the encoded, per-worktree leaf (also meaning an
 ancestor-directory symlink cannot widen the exception the way a shared parent
-directory could); Codex does not, per above. The tool's config/auth files
+directory could); Codex does not, per above. The leaf itself is never resolved
+through a symlink either — `_memory_allow_paths` resolves only the leaf's
+*parent*, then reattaches the leaf name literally, so a symlink swapped in for
+`memory/` (or the encoded project dir, or `sessions/`) cannot silently
+redirect the allow-root to whatever it points at; a write reaching such a
+symlinked leaf resolves (via `_resolve_path`) to the real target, which no
+longer falls under the allow-root and stays denied. The tool's config/auth files
 (`~/.claude/settings.json`, `~/.codex/*state*.json`, `~/.cursor/*config*.json`)
 stay denied regardless. `_memory_allow_paths` degrades safely — an unrecognized
 tool, an intentional empty policy, an unresolvable

@@ -680,6 +680,78 @@ class TestMemoryAllowPathsResolver:
         monkeypatch.setattr(cli.Path, "home", staticmethod(_boom))
         assert cli._memory_allow_paths("claude", Path(WT)) == ()
 
+    def test_symlinked_worktree_root_is_canonicalized_before_encoding(self, tmp_path) -> None:
+        """A ``worktree_root`` reached through a symlink must encode the canonical path.
+
+        Regression for #388: if ``project.worktrees_dir`` is configured through a
+        symlink, git worktree creation and the launched tool both observe the
+        canonical (resolved) CWD — so the allowlist must encode that same
+        canonical path, not the symlink spelling, or the tool's real memory
+        writes stay denied.
+        """
+        from wade.hooks.cli import _encode_claude_project_path, _memory_allow_paths
+
+        real_root = tmp_path / "real-worktree"
+        real_root.mkdir()
+        link_root = tmp_path / "link-worktree"
+        link_root.symlink_to(real_root)
+
+        encoded = _encode_claude_project_path(real_root.resolve())
+        expected = (Path.home() / ".claude" / "projects" / encoded / "memory").resolve()
+        assert _memory_allow_paths("claude", link_root) == (expected,)
+
+    def test_symlinked_memory_leaf_does_not_widen_the_allowlist(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """A memory leaf that is itself a symlink to a broader dir must not widen the exception.
+
+        Regression for #388: if the computed leaf (``.../memory``) is a symlink
+        to e.g. the tool's whole config home, resolving it here used to widen
+        the exception to that entire target — permitting writes to files like
+        the tool's own hook settings. The fix resolves only the leaf's parent,
+        then reattaches the leaf name literally, so the returned allow-path
+        stays the (unresolved) leaf spelling, never its symlink target.
+        """
+        from wade.hooks.cli import _encode_claude_project_path, _memory_allow_paths
+
+        config_home = tmp_path / "claude-home"
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_home))
+        encoded = _encode_claude_project_path(Path(WT).resolve())
+        project_dir = config_home / "projects" / encoded
+        project_dir.mkdir(parents=True)
+        broad_target = tmp_path / "broad-target"
+        broad_target.mkdir()
+        (project_dir / "memory").symlink_to(broad_target)
+
+        (allowed,) = _memory_allow_paths("claude", Path(WT))
+        assert allowed == project_dir / "memory"
+        assert allowed != broad_target.resolve()
+
+    def test_write_through_symlinked_memory_leaf_stays_denied(self, tmp_path, monkeypatch) -> None:
+        """End-to-end: a write that resolves through a symlinked memory leaf is denied.
+
+        Simulates a compromised session that replaced its own ``memory`` dir
+        with a symlink to a broader directory. Even though the write target's
+        *string* sits under the leaf, ``_resolve_path`` follows the real
+        filesystem symlink to the broader target, which no longer falls under
+        the (unresolved) allow-path — so the write-guard denies it.
+        """
+        from wade.hooks.cli import _encode_claude_project_path
+
+        config_home = tmp_path / "claude-home"
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_home))
+        encoded = _encode_claude_project_path(Path(WT).resolve())
+        project_dir = config_home / "projects" / encoded
+        project_dir.mkdir(parents=True)
+        broad_target = tmp_path / "broad-target"
+        broad_target.mkdir()
+        (project_dir / "memory").symlink_to(broad_target)
+
+        target = project_dir / "memory" / "settings.json"
+        stdin = json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(target)}})
+        r = _run_lean("pre_tool_use", "worktree", "claude", stdin)
+        assert r.returncode == 2
+
 
 class TestPerToolMemoryDirsCoverHookWriters:
     """Mirror of :class:`TestPerToolDialectsMatchCrossby`: the memory map must not drift."""

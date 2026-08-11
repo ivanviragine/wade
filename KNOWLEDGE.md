@@ -531,3 +531,9 @@ In shell_containment (policies.py), git's directory-redirect flags — spaced/gl
 git's own parser (git.c) accepts -C, --work-tree, and --git-dir both spaced (--flag value) and =-joined (--flag=value) identically -- when hardening the memory-write guard's git-directory-redirect handling in shell_containment, ALL SIX spellings (2 flags x 2 join-styles, plus glued -C<dir>) must be buffered the same way (checked only against worktree_root, never allow_paths), not just the =-joined form. A first fix only added --work-tree=/--git-dir= handling and missed the spaced form entirely (git --work-tree /outside clean -fd sailed through with zero containment check) -- found by a second wade review implementation pass on the FIRST fix. When hardening one flag-spelling of a multi-spelling escape, enumerate every spelling git's parser actually accepts before considering it closed.
 
 ---
+
+## a4498637a961 | 2026-08-11 | implementation | tags: hooks, write-guards, memory-allowlist, symlink | Issue #387
+
+In _memory_allow_paths (hooks/cli.py), never .resolve() the full memory allow-path in one call — resolve only the leaf's parent, then reattach the leaf name (memory/, the encoded project dir, sessions/) literally, so a symlink swapped in for the leaf itself cannot silently widen the allow-root to its target (e.g. ~/.claude, exposing settings.json that holds the hooks block). Also resolve worktree_root before encoding it into the Claude/Cursor project-dir name — an unresolved worktree path (e.g. reached through a symlinked worktrees_dir) encodes a different string than the one the launched tool's own CWD resolves to, leaving its real memory writes denied.
+
+---
