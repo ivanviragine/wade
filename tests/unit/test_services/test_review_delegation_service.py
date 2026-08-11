@@ -269,7 +269,7 @@ class TestReviewPlan:
     @patch("wade.services.review_delegation_service.delegate")
     @patch("wade.services.review_delegation_service.load_config")
     @patch("wade.services.review_delegation_service.load_prompt_template")
-    def test_headless_advisory_announces_worst_case_total(
+    def test_scaled_advisory_announces_worst_case_total(
         self,
         mock_template: MagicMock,
         mock_config: MagicMock,
@@ -277,13 +277,48 @@ class TestReviewPlan:
         mock_console: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """The advisory must name the worst-case total (budget + retry), not just the budget.
+        """A scaled budget retries on timeout, so the advisory names the worst-case total.
 
-        wade retries once with a longer budget on timeout; if the orchestrator
-        only reserves the base budget it kills the call before the retry runs.
+        If the orchestrator only reserves the base budget it kills the call
+        before the retry runs.
         """
         from wade.services.delegation_service import extended_timeout
 
+        plan_file = tmp_path / "PLAN.md"
+        plan_file.write_text("# Plan")
+        mock_template.return_value = "{plan_content}"
+        mock_config.return_value = _review_config(
+            review_plan_enabled=True,
+            review_plan_mode="headless",
+            review_plan_timeout=None,  # unset → scaled → retries
+        )
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.HEADLESS
+        )
+
+        review_plan(str(plan_file))
+
+        notices = " ".join(
+            str(call.args[0]) for call in mock_console.info.call_args_list if call.args
+        )
+        # Tiny prompt → floor budget; worst_case = floor + retry.
+        worst_case = 600 + extended_timeout(600)
+        assert str(worst_case) in notices
+        assert "retr" in notices.lower()  # mentions the retry
+
+    @patch("wade.services.review_delegation_service.console")
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    def test_explicit_timeout_advisory_says_no_retry(
+        self,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+        mock_console: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """An explicit budget is verbatim with no retry — the advisory must not promise one."""
         plan_file = tmp_path / "PLAN.md"
         plan_file.write_text("# Plan")
         mock_template.return_value = "{plan_content}"
@@ -301,9 +336,10 @@ class TestReviewPlan:
         notices = " ".join(
             str(call.args[0]) for call in mock_console.info.call_args_list if call.args
         )
-        worst_case = 420 + extended_timeout(420)
-        assert str(worst_case) in notices
-        assert "retr" in notices.lower()  # mentions the retry
+        assert "420" in notices
+        assert "no retry" in notices.lower()
+        # The scaled worst-case (420 + retry = 1050) must NOT be announced.
+        assert "1050" not in notices
 
     @patch("wade.services.review_delegation_service.console")
     @patch("wade.services.review_delegation_service.delegate")

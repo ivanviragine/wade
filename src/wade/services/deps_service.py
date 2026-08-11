@@ -347,12 +347,14 @@ def _run_delegation(
     allowed_commands: list[str] | None = None,
     cwd: Path | None = None,
     timeout: int | None = None,
+    explicit_timeout: bool = False,
 ) -> DelegationResult:
     """Run dependency analysis via the generic delegation infrastructure.
 
     Returns the full ``DelegationResult`` so the caller can distinguish a timeout
     (``timed_out=True``, possibly carrying partial output) from a crash and avoid
-    applying a partial dependency graph.
+    applying a partial dependency graph. ``explicit_timeout`` marks a
+    user-configured ``ai.deps.timeout`` so the headless path skips its retry.
     """
     request = DelegationRequest(
         mode=mode,
@@ -362,6 +364,7 @@ def _run_delegation(
         effort=effort,
         cwd=cwd,
         allowed_commands=allowed_commands or [],
+        explicit_timeout=explicit_timeout,
         **({"timeout": timeout} if timeout is not None else {}),
     )
     result = delegate(request)
@@ -526,9 +529,10 @@ def analyze_deps(
         effort=effort_str,
         allowed_commands=config.permissions.allowed_commands,
         cwd=deps_cwd,
-        # Scale the budget from payload size + effort (an explicit
-        # ``ai.deps.timeout`` bypasses scaling and is honored verbatim).
+        # Scale the budget from payload size + effort; an explicit
+        # ``ai.deps.timeout`` is honored verbatim and bypasses scaling + retry.
         timeout=effective_timeout(prompt, cmd_config.timeout, effort_str),
+        explicit_timeout=cmd_config.timeout is not None,
     )
     output = (
         delegation_result.feedback

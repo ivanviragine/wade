@@ -176,32 +176,45 @@ def _run_review_delegation(
 
     effort_str = resolved_effort.value if isinstance(resolved_effort, EffortLevel) else None
 
+    # An explicit ``ai.<command>.timeout`` is honored verbatim: it bypasses
+    # scaling and — since it is the escape hatch for a hard tool-timeout — the
+    # retry too (see ``_delegate_headless``).
+    explicit_timeout = cmd_config.timeout is not None
     request = DelegationRequest(
         mode=delegation_mode,
         prompt=prompt,
         ai_tool=resolved_tool,
         model=resolved_model,
         effort=effort_str,
-        # Scale the budget from payload size + effort (an explicit
-        # ``ai.<command>.timeout`` bypasses scaling and is honored verbatim).
         timeout=effective_timeout(prompt, cmd_config.timeout, effort_str),
+        explicit_timeout=explicit_timeout,
     )
 
     if delegation_mode == DelegationMode.HEADLESS:
-        # This spawns an external AI subprocess bounded by ``request.timeout``. On
-        # timeout wade retries once at a longer budget, so announce the *worst-case
-        # total* — otherwise the orchestrator driving wade (Claude Code, Cursor,
-        # Copilot, …) kills the call at its own shorter timeout before the retry
-        # can run. Configure the base budget via ``ai.<command>.timeout``.
-        worst_case = request.timeout + extended_timeout(request.timeout)
-        console.info(
-            "Launching headless AI review — this runs an external AI subprocess. "
-            f"wade budgets {request.timeout}s and, on timeout, retries once with a "
-            f"longer budget (worst-case total {worst_case}s). Keep it in the "
-            f"foreground and allow more than {worst_case}s before timing out "
-            "(raise your shell/tool timeout if needed). Do not move it to the "
-            "background."
-        )
+        # This spawns an external AI subprocess bounded by ``request.timeout``.
+        # Announce a budget the orchestrator driving wade (Claude Code, Cursor,
+        # Copilot, …) must wait out — otherwise it kills the call at its own
+        # shorter timeout. For a scaled budget wade retries once on timeout, so
+        # announce the *worst-case total* (budget + retry); an explicit budget is
+        # verbatim with no retry, so announce it as-is.
+        if explicit_timeout:
+            console.info(
+                "Launching headless AI review — this runs an external AI "
+                f"subprocess bounded by your configured ai.<command>.timeout of "
+                f"{request.timeout}s (no retry). Keep it in the foreground and "
+                f"allow more than {request.timeout}s before timing out. Do not "
+                "move it to the background."
+            )
+        else:
+            worst_case = request.timeout + extended_timeout(request.timeout)
+            console.info(
+                "Launching headless AI review — this runs an external AI "
+                f"subprocess. wade budgets {request.timeout}s and, on timeout, "
+                f"retries once with a longer budget (worst-case total "
+                f"{worst_case}s). Keep it in the foreground and allow more than "
+                f"{worst_case}s before timing out (raise your shell/tool timeout "
+                "if needed). Do not move it to the background."
+            )
     elif delegation_mode == DelegationMode.INTERACTIVE:
         console.info(
             "Launching external AI review session — "

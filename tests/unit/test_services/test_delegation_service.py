@@ -237,6 +237,29 @@ class TestDelegateHeadless:
 
     @patch("wade.services.delegation_service.console")
     @patch("wade.services.delegation_service.run")
+    def test_headless_explicit_timeout_not_retried(
+        self, mock_run: MagicMock, mock_console: MagicMock
+    ) -> None:
+        """An explicit ai.<cmd>.timeout is honored verbatim — no retry even below the cap."""
+        mock_run.side_effect = subprocess.TimeoutExpired(
+            cmd=["claude"], timeout=900, output=b"partial"
+        )
+        req = DelegationRequest(
+            mode=DelegationMode.HEADLESS,
+            prompt="Review",
+            ai_tool="claude",
+            timeout=900,
+            explicit_timeout=True,
+        )
+        result = _delegate_headless(req)
+        assert result.timed_out is True
+        assert result.feedback == "partial"
+        # extended_timeout(900) > 0, but an explicit budget must not retry.
+        assert extended_timeout(900) > 0
+        assert mock_run.call_count == 1
+
+    @patch("wade.services.delegation_service.console")
+    @patch("wade.services.delegation_service.run")
     def test_headless_timeout_empty_partial_placeholder(
         self, mock_run: MagicMock, mock_console: MagicMock
     ) -> None:

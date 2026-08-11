@@ -238,11 +238,15 @@ def _delegate_headless(request: DelegationRequest) -> DelegationResult:
     # First attempt at request.timeout; on timeout (never on a crash) retry once
     # at a longer budget. extended_timeout bounds the *sum* of both legs, so the
     # worst case is predictable (<= TOTAL_TIMEOUT_CAP) and matches the pre-run
-    # advisory. A crash or non-zero exit returns immediately — no retry.
+    # advisory. A crash or non-zero exit returns immediately — no retry. An
+    # explicit ai.<cmd>.timeout is honored verbatim with NO retry: it is the
+    # escape hatch for a hard tool-timeout, so a retry that overshoots it would
+    # defeat the purpose (and get killed by the harness anyway).
     attempts = [request.timeout]
-    retry_timeout = extended_timeout(request.timeout)
-    if retry_timeout > 0:
-        attempts.append(retry_timeout)
+    if not request.explicit_timeout:
+        retry_timeout = extended_timeout(request.timeout)
+        if retry_timeout > 0:
+            attempts.append(retry_timeout)
 
     partial = ""
     for index, budget in enumerate(attempts):

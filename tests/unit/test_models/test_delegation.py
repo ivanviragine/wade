@@ -28,6 +28,7 @@ class TestDelegationRequest:
         assert req.ai_tool is None
         assert req.model is None
         assert req.timeout == 600  # default headless budget (s)
+        assert req.explicit_timeout is False
         assert req.trusted_dirs == []
         assert req.allowed_commands == []
         assert req.permission_mode is PermissionMode.DEFAULT

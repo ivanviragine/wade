@@ -34,6 +34,12 @@ class DelegationRequest(BaseModel):
     # (scales from payload size + effort unless a config value is set); this
     # default is the fallback for direct constructions that skip that path.
     timeout: int = 600
+    # True when ``timeout`` came from an explicit ``ai.<command>.timeout`` rather
+    # than from scaling. The headless path honors an explicit budget verbatim —
+    # **no automatic retry** — because it is the escape hatch for orchestrators
+    # with a hard tool-timeout (the user set it to stay under a fixed cap; a
+    # retry would silently blow past that cap). Scaled budgets (this False) retry.
+    explicit_timeout: bool = False
     output_file: Path | None = None
     trusted_dirs: list[str] = Field(default_factory=list)
     allowed_commands: list[str] = Field(default_factory=list)
