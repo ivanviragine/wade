@@ -10,6 +10,7 @@ from crossby.models.ai import EffortLevel
 from wade.git.repo import GitError
 from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationResult
+from wade.models.permission import PermissionMode
 from wade.services.review_delegation_service import (
     _committed_diff_fallback,
     _run_review_delegation,
@@ -472,7 +473,7 @@ class TestDefaultModePerCommand:
         mock_tool.return_value = "claude"
         mock_model.return_value = None
         mock_effort.return_value = None
-        mock_confirm.return_value = ("claude", None, None, False)
+        mock_confirm.return_value = ("claude", None, None, PermissionMode.DEFAULT)
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="ok", mode=DelegationMode.INTERACTIVE
         )
@@ -513,6 +514,136 @@ class TestDefaultModePerCommand:
 
 
 # ---------------------------------------------------------------------------
+# _run_review_delegation permission-mode resolution + forwarding
+# ---------------------------------------------------------------------------
+
+
+def _echo_confirm(
+    resolved_tool: str | None,
+    resolved_model: str | None,
+    *,
+    resolved_effort: object = None,
+    resolved_permission_mode: PermissionMode = PermissionMode.DEFAULT,
+    **_kwargs: object,
+) -> tuple[str | None, str | None, object, PermissionMode]:
+    """confirm_ai_selection stand-in that echoes the display mode it was handed.
+
+    Lets a test exercise the real resolve_permission_mode + effective-mode logic
+    (config → display → request) without driving the interactive UI.
+    """
+    return resolved_tool, resolved_model, resolved_effort, resolved_permission_mode
+
+
+class TestRunReviewDelegationPermissionMode:
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.confirm_ai_selection")
+    @patch("wade.services.review_delegation_service.resolve_effort")
+    @patch("wade.services.review_delegation_service.resolve_model")
+    @patch("wade.services.review_delegation_service.resolve_ai_tool")
+    @patch("wade.services.review_delegation_service.load_config")
+    def test_interactive_forwards_config_yolo(
+        self,
+        mock_config: MagicMock,
+        mock_tool: MagicMock,
+        mock_model: MagicMock,
+        mock_effort: MagicMock,
+        mock_confirm: MagicMock,
+        mock_delegate: MagicMock,
+    ) -> None:
+        """`.wade.yml` ai.review_batch: {mode: interactive, yolo: true} launches yolo."""
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(review_batch=AICommandConfig(mode="interactive", yolo=True, enabled=True))
+        )
+        mock_tool.return_value = "claude"
+        mock_model.return_value = None
+        mock_effort.return_value = None
+        mock_confirm.side_effect = _echo_confirm
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.INTERACTIVE
+        )
+
+        _run_review_delegation("prompt text", "review_batch")
+
+        request = mock_delegate.call_args[0][0]
+        assert request.permission_mode == PermissionMode.YOLO
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.confirm_ai_selection")
+    @patch("wade.services.review_delegation_service.resolve_effort")
+    @patch("wade.services.review_delegation_service.resolve_model")
+    @patch("wade.services.review_delegation_service.resolve_ai_tool")
+    @patch("wade.services.review_delegation_service.load_config")
+    def test_headless_review_forces_default_even_with_config_yolo(
+        self,
+        mock_config: MagicMock,
+        mock_tool: MagicMock,
+        mock_model: MagicMock,
+        mock_effort: MagicMock,
+        mock_confirm: MagicMock,
+        mock_delegate: MagicMock,
+    ) -> None:
+        """Headless review stays read-only: no yolo reaches the request or display."""
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(review_plan=AICommandConfig(mode="headless", yolo=True, enabled=True))
+        )
+        mock_tool.return_value = "claude"
+        mock_model.return_value = None
+        mock_effort.return_value = None
+        mock_confirm.side_effect = _echo_confirm
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.HEADLESS
+        )
+
+        _run_review_delegation("prompt text", "review_plan")
+
+        request = mock_delegate.call_args[0][0]
+        assert request.permission_mode == PermissionMode.DEFAULT
+        # The display mode handed to confirm was also forced to DEFAULT (shown == applied).
+        assert mock_confirm.call_args.kwargs["resolved_permission_mode"] == PermissionMode.DEFAULT
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.confirm_ai_selection")
+    @patch("wade.services.review_delegation_service.resolve_effort")
+    @patch("wade.services.review_delegation_service.resolve_model")
+    @patch("wade.services.review_delegation_service.resolve_ai_tool")
+    @patch("wade.services.review_delegation_service.load_config")
+    def test_explicit_permission_mode_overrides_config(
+        self,
+        mock_config: MagicMock,
+        mock_tool: MagicMock,
+        mock_model: MagicMock,
+        mock_effort: MagicMock,
+        mock_confirm: MagicMock,
+        mock_delegate: MagicMock,
+    ) -> None:
+        """An explicit --permission-mode wins over a conflicting config value."""
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(
+                review_batch=AICommandConfig(
+                    mode="interactive", permission_mode="default", enabled=True
+                )
+            )
+        )
+        mock_tool.return_value = "claude"
+        mock_model.return_value = None
+        mock_effort.return_value = None
+        mock_confirm.side_effect = _echo_confirm
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.INTERACTIVE
+        )
+
+        _run_review_delegation(
+            "prompt text",
+            "review_batch",
+            permission_mode="auto",
+            permission_mode_explicit=True,
+        )
+
+        request = mock_delegate.call_args[0][0]
+        assert request.permission_mode == PermissionMode.AUTO
+
+
+# ---------------------------------------------------------------------------
 # _run_review_delegation effort + confirm tests
 # ---------------------------------------------------------------------------
 
@@ -538,7 +669,7 @@ class TestRunReviewDelegationEffort:
         mock_tool.return_value = "claude"
         mock_model.return_value = None
         mock_effort.return_value = EffortLevel.LOW
-        mock_confirm.return_value = ("claude", None, EffortLevel.LOW, False)
+        mock_confirm.return_value = ("claude", None, EffortLevel.LOW, PermissionMode.DEFAULT)
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="ok", mode=DelegationMode.HEADLESS
         )
@@ -599,7 +730,7 @@ class TestRunReviewDelegationEffort:
         mock_tool.return_value = "claude"
         mock_model.return_value = None
         mock_effort.return_value = None
-        mock_confirm.return_value = ("claude", None, None, False)
+        mock_confirm.return_value = ("claude", None, None, PermissionMode.DEFAULT)
         mock_delegate.return_value = DelegationResult(
             success=True, feedback="ok", mode=DelegationMode.HEADLESS
         )

@@ -17,6 +17,7 @@ from wade.config.loader import load_config
 from wade.models.config import ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationRequest
 from wade.models.deps import DependencyEdge, DependencyGraph
+from wade.models.permission import PermissionMode
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.ai_resolution import (
@@ -24,6 +25,7 @@ from wade.services.ai_resolution import (
     resolve_ai_tool,
     resolve_effort,
     resolve_model,
+    resolve_permission_mode,
 )
 from wade.services.delegation_service import delegate, resolve_mode
 from wade.services.task_service import ensure_task_label
@@ -347,6 +349,7 @@ def _run_delegation(
     allowed_commands: list[str] | None = None,
     cwd: Path | None = None,
     timeout: int | None = None,
+    permission_mode: PermissionMode = PermissionMode.DEFAULT,
 ) -> str | None:
     """Run dependency analysis via the generic delegation infrastructure.
 
@@ -360,6 +363,7 @@ def _run_delegation(
         effort=effort,
         cwd=cwd,
         allowed_commands=allowed_commands or [],
+        permission_mode=permission_mode,
         **({"timeout": timeout} if timeout is not None else {}),
     )
     result = delegate(request)
@@ -386,6 +390,9 @@ def analyze_deps(
     effort: str | None = None,
     effort_explicit: bool = False,
     mode: str | None = None,
+    permission_mode: str | None = None,
+    yolo: bool | None = None,
+    permission_mode_explicit: bool = False,
     planning_worktree: Path | None = None,
 ) -> DependencyGraph | None:
     """Analyze dependencies between issues.
@@ -431,6 +438,7 @@ def analyze_deps(
     resolved_tool: str | None = None
     resolved_model: str | None = None
     resolved_effort: EffortLevel | None = None
+    effective_permission_mode = PermissionMode.DEFAULT
 
     if delegation_mode != DelegationMode.PROMPT:
         resolved_tool = resolve_ai_tool(ai_tool, config, "deps")
@@ -440,23 +448,48 @@ def analyze_deps(
 
         resolved_model = resolve_model(model, config, "deps", tool=resolved_tool)
         resolved_effort = resolve_effort(effort, config, "deps", tool=resolved_tool)
+        resolved_permission_mode = resolve_permission_mode(permission_mode, yolo, config, "deps")
+
+        # Effective mode enforces the read-only headless *safety* rule
+        # (delegation_service.py:126 forces DEFAULT for headless launches) — not
+        # confirm_ai_selection's DelegationMode.HEADLESS display guard, which is
+        # orthogonal. Forcing DEFAULT here keeps the displayed mode equal to the
+        # applied mode. deps defaults to headless, so its applied mode stays
+        # DEFAULT; `--mode interactive` (or config) honors the resolved tier.
+        display_permission_mode = (
+            PermissionMode.DEFAULT
+            if delegation_mode == DelegationMode.HEADLESS
+            else resolved_permission_mode
+        )
 
         console.rule("wade task deps")
         console.kv("Issues", str(len(issue_numbers)))
 
         # Prompt mode is raw prompt generation, so it should not run AI-selection UX.
-        resolved_tool, resolved_model, resolved_effort, _yolo = confirm_ai_selection(
-            resolved_tool,
-            resolved_model,
-            tool_explicit=ai_explicit,
-            model_explicit=model_explicit,
-            resolved_effort=resolved_effort,
-            effort_explicit=effort_explicit,
-            mode=delegation_mode,
+        resolved_tool, resolved_model, resolved_effort, confirmed_permission_mode = (
+            confirm_ai_selection(
+                resolved_tool,
+                resolved_model,
+                tool_explicit=ai_explicit,
+                model_explicit=model_explicit,
+                resolved_effort=resolved_effort,
+                effort_explicit=effort_explicit,
+                resolved_permission_mode=display_permission_mode,
+                permission_mode_explicit=permission_mode_explicit,
+                mode=delegation_mode,
+            )
         )
         if not resolved_tool:
             console.error("No AI tool selected.")
             return None
+
+        # Re-apply the headless safety rule after confirm: interactive changes are
+        # honored, but a headless launch always stays DEFAULT regardless.
+        effective_permission_mode = (
+            PermissionMode.DEFAULT
+            if delegation_mode == DelegationMode.HEADLESS
+            else confirmed_permission_mode
+        )
 
     # Set up worktree for deps analysis
     standalone_worktree: Path | None = None
@@ -525,6 +558,7 @@ def analyze_deps(
         allowed_commands=config.permissions.allowed_commands,
         cwd=deps_cwd,
         timeout=cmd_config.timeout,
+        permission_mode=effective_permission_mode,
     )
 
     if delegation_mode == DelegationMode.PROMPT:

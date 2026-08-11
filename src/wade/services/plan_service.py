@@ -269,8 +269,12 @@ def run_ai_planning_session(
 
     deliver_prompt_if_needed(adapter, prompt)
 
-    # Build command — plan_dir included in trusted_dirs so all flags precede the
-    # initial_message positional arg (many CLIs stop flag-parsing after a positional).
+    # Build command. crossby (>=0.17.1) places the initial_message as the FIRST
+    # positional arg and appends the autonomy/effort/trusted-dir flags AFTER it
+    # (see crossby.ai_tools.base.build_launch_command). plan_dir is included in
+    # trusted_dirs so the plan session can write there. If a "flag ignored after
+    # positional" issue ever reproduces on a directly-wired path, it belongs
+    # upstream in crossby's arg ordering — WADE cannot fix it here.
     cmd = adapter.build_launch_command(
         model=model,
         plan_mode=True,

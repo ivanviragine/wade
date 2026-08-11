@@ -163,9 +163,20 @@ dispatched: prompt/interactive/headless). The tiers, most→least permissive, ar
 doesn't support is downgraded automatically (e.g. `auto` → `accept-edits` on
 non-Claude tools) with a warning — WADE forwards the requested tier and
 [`crossby`](https://github.com/ivanviragine/crossby) owns the downgrade ladder.
-Headless commands (`deps`, `review_*`) always run at `default`. `plan` is not a
-permission mode — it's driven separately — and is rejected (warn + fall back to
-`default`) if configured.
+**Headless launches are always read-only** — any command dispatched in headless
+delegation mode (the default for `deps` and `review_*`) runs at `default`
+regardless of the configured tier, and no `--yolo` is forwarded to the
+subprocess. The *interactive* variants honor the tier: `wade review plan`,
+`wade review implementation`, `wade review batch`, and `wade task deps` all
+accept `--yolo` / `--permission-mode` (matching `wade review pr-comments`), and
+`ai.review_batch.yolo: true` / `ai.deps.yolo: true` apply when those commands
+run interactively. `plan` is not a permission mode — it's driven separately —
+and is rejected (warn + fall back to `default`) if configured.
+
+The **resolved permission mode is always displayed** at launch, on every path
+(TTY, non-TTY, headless, all-flags-explicit), with a one-line descriptor — so a
+`default` session states what `default` means, and what is shown always equals
+what is applied.
 
 `wade plan --issue <N>` re-plans an existing issue. If the session produces a
 single plan file, it's attached to `#N` and the issue stays open. If the

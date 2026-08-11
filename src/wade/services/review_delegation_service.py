@@ -12,11 +12,13 @@ from wade.git import repo as git_repo
 from wade.git.repo import GitError
 from wade.models.config import AICommandConfig, ProjectConfig
 from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
+from wade.models.permission import PermissionMode
 from wade.services.ai_resolution import (
     confirm_ai_selection,
     resolve_ai_tool,
     resolve_effort,
     resolve_model,
+    resolve_permission_mode,
 )
 from wade.services.delegation_service import delegate, resolve_mode
 from wade.skills.installer import load_prompt_template
@@ -81,6 +83,9 @@ def _run_review_delegation(
     ai_explicit: bool = False,
     model_explicit: bool = False,
     effort_explicit: bool = False,
+    permission_mode: str | None = None,
+    yolo: bool | None = None,
+    permission_mode_explicit: bool = False,
 ) -> DelegationResult:
     """Shared pipeline: config load → mode resolve → AI resolve → confirm → delegate → display."""
     if config is None or cmd_config is None:
@@ -105,20 +110,48 @@ def _run_review_delegation(
     resolved_tool: str | None = None
     resolved_model: str | None = None
     resolved_effort: EffortLevel | None = None
+    effective_permission_mode = PermissionMode.DEFAULT
 
     if delegation_mode != DelegationMode.PROMPT:
         resolved_tool = resolve_ai_tool(ai_tool, config, command=command)
         resolved_model = resolve_model(model, config, command=command, tool=resolved_tool)
         resolved_effort = resolve_effort(effort, config, command=command, tool=resolved_tool)
+        resolved_permission_mode = resolve_permission_mode(
+            permission_mode, yolo, config, command=command
+        )
 
-        resolved_tool, resolved_model, resolved_effort, _yolo = confirm_ai_selection(
-            resolved_tool,
-            resolved_model,
-            tool_explicit=ai_explicit,
-            model_explicit=model_explicit,
-            resolved_effort=resolved_effort,
-            effort_explicit=effort_explicit,
-            mode=delegation_mode,
+        # Effective mode enforces the read-only headless *safety* rule
+        # (delegation_service.py:126 forces DEFAULT for headless launches) — this
+        # is NOT confirm_ai_selection's DelegationMode.HEADLESS display guard,
+        # which is an orthogonal UI concern. Forcing DEFAULT here for the display
+        # value keeps what is shown equal to what is applied (no yolo is ever sent
+        # to a headless review).
+        display_permission_mode = (
+            PermissionMode.DEFAULT
+            if delegation_mode == DelegationMode.HEADLESS
+            else resolved_permission_mode
+        )
+
+        resolved_tool, resolved_model, resolved_effort, confirmed_permission_mode = (
+            confirm_ai_selection(
+                resolved_tool,
+                resolved_model,
+                tool_explicit=ai_explicit,
+                model_explicit=model_explicit,
+                resolved_effort=resolved_effort,
+                effort_explicit=effort_explicit,
+                resolved_permission_mode=display_permission_mode,
+                permission_mode_explicit=permission_mode_explicit,
+                mode=delegation_mode,
+            )
+        )
+
+        # Re-apply the headless safety rule after confirm: interactive changes are
+        # honored, but a headless launch always stays DEFAULT regardless.
+        effective_permission_mode = (
+            PermissionMode.DEFAULT
+            if delegation_mode == DelegationMode.HEADLESS
+            else confirmed_permission_mode
         )
 
     effort_str = resolved_effort.value if isinstance(resolved_effort, EffortLevel) else None
@@ -129,6 +162,7 @@ def _run_review_delegation(
         ai_tool=resolved_tool,
         model=resolved_model,
         effort=effort_str,
+        permission_mode=effective_permission_mode,
         **({"timeout": cmd_config.timeout} if cmd_config.timeout is not None else {}),
     )
 
@@ -168,6 +202,9 @@ def review_plan(
     ai_explicit: bool = False,
     model_explicit: bool = False,
     effort_explicit: bool = False,
+    permission_mode: str | None = None,
+    yolo: bool | None = None,
+    permission_mode_explicit: bool = False,
 ) -> DelegationResult:
     """Review a plan file via the delegation infrastructure."""
     config, cmd_config = _load_review_config("review_plan")
@@ -201,6 +238,9 @@ def review_plan(
         ai_explicit=ai_explicit,
         model_explicit=model_explicit,
         effort_explicit=effort_explicit,
+        permission_mode=permission_mode,
+        yolo=yolo,
+        permission_mode_explicit=permission_mode_explicit,
     )
 
 
@@ -237,6 +277,9 @@ def review_implementation(
     ai_explicit: bool = False,
     model_explicit: bool = False,
     effort_explicit: bool = False,
+    permission_mode: str | None = None,
+    yolo: bool | None = None,
+    permission_mode_explicit: bool = False,
 ) -> DelegationResult:
     """Review implementation changes via the delegation infrastructure."""
     config, cmd_config = _load_review_config("review_implementation")
@@ -294,6 +337,9 @@ def review_implementation(
         ai_explicit=ai_explicit,
         model_explicit=model_explicit,
         effort_explicit=effort_explicit,
+        permission_mode=permission_mode,
+        yolo=yolo,
+        permission_mode_explicit=permission_mode_explicit,
     )
     # Record the review-ran marker on any non-hard-failure result (success),
     # keyed to the current HEAD sha. The `done` review-ran gate reads it.
