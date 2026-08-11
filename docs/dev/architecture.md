@@ -215,18 +215,20 @@ subcommands `_GIT_WRITE_SUBCOMMANDS` (`checkout`/`clean`/`clone`/`init`/`worktre
 mode it additionally rejects those same writes when aimed at non-artifacts, and
 denies the in-place `-i` flag outright.
 
-Every git directory-redirect flag is buffered the same way — spaced `-C <dir>`,
-glued `-C<dir>` (including a relative, slash-less form like `-C..`),
-`--work-tree=<dir>`, and `--git-dir=<dir>` are functionally equivalent for this
-purpose (all four redirect where git reads/writes): `git -C ../crossby log` /
-`git --work-tree=../crossby log` (a read subcommand) is allowed, but a git
-*write* subcommand after one of these pointed outside (`git -C /outside clean
--fd`, `git -C/outside clean -fd`, `git --work-tree=/outside clean -fd`, `git
---git-dir=/outside clean -fd`) is denied — there is no later path operand to
-catch it otherwise. Checked only against `worktree_root`, never `allow_paths`:
-a write reached through any of these four spellings can touch every file under
-`<dir>`, not just a direct memory write, so they stay strict even when `<dir>`
-is the active tool's own memory root. It also unglues paths from other flags
+Every git directory-redirect flag is buffered the same way, in every spelling
+git's own parser (`git.c`) accepts: `-C`, `--work-tree`, and `--git-dir` are
+functionally equivalent for this purpose (all three redirect where git
+reads/writes), each spaced (`-C <dir>`) or glued/`=`-joined (`-C<dir>`,
+`--work-tree=<dir>`) — including a relative, slash-less glued `-C` form like
+`-C..`. `git -C ../crossby log` / `git --work-tree ../crossby log` (a read
+subcommand) is allowed, but a git *write* subcommand after one of these
+pointed outside (`git -C /outside clean -fd`, `git -C/outside clean -fd`,
+`git --work-tree /outside clean -fd`, `git --git-dir=/outside clean -fd`) is
+denied — there is no later path operand to catch it otherwise. Checked only
+against `worktree_root`, never `allow_paths`: a write reached through any of
+these six spellings can touch every file under `<dir>`, not just a direct
+memory write, so they stay strict even when `<dir>` is the active tool's own
+memory root. It also unglues paths from other flags
 (`--output=/etc/x`, `-o/etc/x`, `of=/etc/x`) and keeps those **glued** forms
 contained in every mode (a tokenizer cannot tell a glued read flag from a glued
 write flag, so a few glued reads are denied too), treats bash's

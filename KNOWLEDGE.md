@@ -525,3 +525,9 @@ In `_memory_allow_paths` (hooks/cli.py), only Claude's memory allow-root is scop
 In shell_containment (policies.py), git's directory-redirect flags — spaced/glued -C<dir>, --work-tree=<dir>, --git-dir=<dir> — are functionally equivalent for containment purposes (all four redirect where git reads/writes) and must ALL be buffered and checked only against worktree_root, never allow_paths, before falling through to the generic _embedded_path check (which honors allow_paths). Hardening only -C left --work-tree=/--git-dir= as an equivalent bypass reaching the memory allow-root via the generic check; found by wade review implementation on the -C fix itself. Also: the glued -C<dir> buffering must not require "/" in the token — a relative dir like -C.. has none and would otherwise fall through unguarded.
 
 ---
+
+## 2ed460b892d0 | 2026-08-11 | implementation | tags: hooks, write-guards, git, gotcha | Issue #387
+
+git's own parser (git.c) accepts -C, --work-tree, and --git-dir both spaced (--flag value) and =-joined (--flag=value) identically -- when hardening the memory-write guard's git-directory-redirect handling in shell_containment, ALL SIX spellings (2 flags x 2 join-styles, plus glued -C<dir>) must be buffered the same way (checked only against worktree_root, never allow_paths), not just the =-joined form. A first fix only added --work-tree=/--git-dir= handling and missed the spaced form entirely (git --work-tree /outside clean -fd sailed through with zero containment check) -- found by a second wade review implementation pass on the FIRST fix. When hardening one flag-spelling of a multi-spelling escape, enumerate every spelling git's parser actually accepts before considering it closed.
+
+---

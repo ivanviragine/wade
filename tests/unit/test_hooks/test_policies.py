@@ -106,6 +106,8 @@ class TestShellContainment:
             "git --work-tree=/etc/outside clean -fd",  # equivalent to -C for writes
             "git --work-tree=/etc/outside checkout -- file",
             "git --git-dir=/etc/outside clean -fd",
+            "git --work-tree /etc/outside clean -fd",  # spaced form (no "="), same as -C
+            "git --git-dir /etc/outside clean -fd",
         ],
     )
     def test_outside_worktree_denied(self, command: str) -> None:
@@ -122,6 +124,8 @@ class TestShellContainment:
             "git -C ../crossby log",  # read subcommand through an outside -C dir
             "git --work-tree=../crossby log",  # same, via --work-tree=
             "git --git-dir=../crossby log",  # same, via --git-dir=
+            "git --work-tree ../crossby log",  # same, spaced form (no "=")
+            "git --git-dir ../crossby log",
             "diff ../a ../b",
             "cat ~/secrets",  # ~ expands outside, but a read is fine
             "cat < /etc/passwd",  # input redirect only reads its target
@@ -792,6 +796,20 @@ class TestMemoryAllowlist:
     def test_git_dir_write_into_memory_still_denied(self) -> None:
         d = shell_containment(
             _shell(f"git --git-dir={_MEM} clean -fd"), worktree_root=WT, allow_paths=(_MEM,)
+        )
+        assert d.action == "deny"
+
+    def test_git_work_tree_spaced_write_into_memory_still_denied(self) -> None:
+        # Spaced form (no "=") — git's own parser accepts both spellings
+        # identically, so both must get the same strict treatment.
+        d = shell_containment(
+            _shell(f"git --work-tree {_MEM} clean -fd"), worktree_root=WT, allow_paths=(_MEM,)
+        )
+        assert d.action == "deny"
+
+    def test_git_dir_spaced_write_into_memory_still_denied(self) -> None:
+        d = shell_containment(
+            _shell(f"git --git-dir {_MEM} clean -fd"), worktree_root=WT, allow_paths=(_MEM,)
         )
         assert d.action == "deny"
 
