@@ -29,7 +29,10 @@ class DelegationRequest(BaseModel):
     cwd: Path | None = None
     # Default headless subprocess budget, in seconds. 600s (not 300s) so a
     # high-effort review/deps run over a large diff finishes rather than tripping
-    # the budget mid-run. Override per command via ``ai.<command>.timeout``.
+    # the budget mid-run. Override per command via ``ai.<command>.timeout``. The
+    # review/deps services compute the real budget with ``effective_timeout``
+    # (scales from payload size + effort unless a config value is set); this
+    # default is the fallback for direct constructions that skip that path.
     timeout: int = 600
     output_file: Path | None = None
     trusted_dirs: list[str] = Field(default_factory=list)
@@ -45,3 +48,8 @@ class DelegationResult(BaseModel):
     mode: DelegationMode
     exit_code: int = 0
     skipped: bool = False
+    # True only when a headless subprocess exceeded its budget. Stays
+    # ``success=False`` (a timeout is still a non-success), but lets callers tell
+    # a timeout — which may carry partial output and is worth retrying longer —
+    # apart from a crash. A crash (CommandError / non-zero exit) keeps this False.
+    timed_out: bool = False

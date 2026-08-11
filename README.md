@@ -170,6 +170,16 @@ session honors its own tier via `ai.review_pr_comments` (see below). `plan` is
 not a permission mode — it's driven separately — and is rejected (warn + fall
 back to `default`) if configured.
 
+Those headless commands **auto-scale** their subprocess budget from the prompt
+size and reasoning effort (600s floor → 1500s ceiling), so a large diff or a
+high-effort run no longer times out at a flat budget. If a run does time out,
+wade keeps whatever partial output the reviewer produced (rather than discarding
+it) and **retries once** with a longer budget, bounded to a 40-minute worst-case
+total that the pre-launch advisory announces. Set `ai.<command>.timeout`
+(seconds) to override: an explicit value is used verbatim and **turns off both
+the scaling and the retry** — the escape hatch when your terminal/orchestrator
+enforces a hard tool-timeout (set it just under that limit).
+
 The auto-launched **review session** — the one started when you pick **"Wait
 for reviews"** after `wade implementation-session done` and comments land —
 resolves its tool, model, effort, and autonomy tier from a dedicated

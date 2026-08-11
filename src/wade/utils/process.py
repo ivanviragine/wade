@@ -23,6 +23,19 @@ class CommandError(Exception):
         super().__init__(f"Command {command[0]} failed (exit {returncode}): {stderr}")
 
 
+def _decode_stream(value: str | bytes | None) -> str | None:
+    """Decode subprocess output bytes to ``str`` (``errors="replace"``); pass str/None through.
+
+    ``subprocess.TimeoutExpired.stdout``/``.stderr`` carry the partial output the
+    process emitted before the budget elapsed — but as **bytes** even when the
+    call ran under ``text=True`` (the buffer is collected before the decode step).
+    Decoding here keeps that partial output text-consistent for callers.
+    """
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
 def run(
     command: list[str],
     cwd: Path | str | None = None,
@@ -62,8 +75,23 @@ def run(
                 text=True,
                 input=input_text,
             )
-        except subprocess.TimeoutExpired:
-            logger.error("subprocess.timeout", command=command, timeout=timeout)
+        except subprocess.TimeoutExpired as e:
+            # Preserve any partial output produced before the budget elapsed.
+            # TimeoutExpired carries it on .stdout/.stderr but as bytes (collected
+            # pre-decode), so decode and reattach to keep it text-consistent with
+            # this text=True call, then re-raise. No current caller reads these off
+            # the exception (verified), so reattaching is safe.
+            # typeshed types .stdout/.stderr as bytes|None, but the runtime
+            # setters accept anything and we deliberately store decoded str.
+            e.stdout = _decode_stream(e.stdout)  # type: ignore[assignment]
+            e.stderr = _decode_stream(e.stderr)  # type: ignore[assignment]
+            captured = len(e.stdout) if isinstance(e.stdout, str) else 0
+            logger.error(
+                "subprocess.timeout",
+                command=command,
+                timeout=timeout,
+                captured_chars=captured,
+            )
             raise
         except FileNotFoundError as err:
             logger.error("subprocess.not_found", command=command[0])

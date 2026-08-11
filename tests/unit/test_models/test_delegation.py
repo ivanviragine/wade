@@ -89,3 +89,24 @@ class TestDelegationResult:
         )
         assert result.success is True
         assert result.skipped is True
+
+    def test_timed_out_defaults_false(self) -> None:
+        result = DelegationResult(
+            success=True,
+            feedback="ok",
+            mode=DelegationMode.HEADLESS,
+        )
+        assert result.timed_out is False
+
+    def test_timed_out_result_stays_non_success(self) -> None:
+        """A timeout carries partial output but is still a non-success (#366)."""
+        result = DelegationResult(
+            success=False,
+            feedback="partial output",
+            mode=DelegationMode.HEADLESS,
+            exit_code=1,
+            timed_out=True,
+        )
+        assert result.success is False
+        assert result.timed_out is True
+        assert result.feedback == "partial output"

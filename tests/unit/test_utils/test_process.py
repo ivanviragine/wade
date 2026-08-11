@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -29,6 +30,44 @@ class TestRun:
         with pytest.raises(CommandError) as exc_info:
             run(["nonexistent_command_xyz"])
         assert exc_info.value.returncode == 127
+
+
+class TestRunTimeoutPartialOutput:
+    """On timeout, run() preserves partial output as decoded str (#366)."""
+
+    def test_timeout_reattaches_decoded_partial_stdout(self) -> None:
+        """TimeoutExpired.stdout is bytes even under text=True — run() decodes it."""
+        with patch("wade.utils.process.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(
+                cmd=["claude"], timeout=5, output=b"partial output", stderr=b"partial err"
+            )
+            with pytest.raises(subprocess.TimeoutExpired) as exc_info:
+                run(["claude"], timeout=5)
+        assert exc_info.value.stdout == "partial output"
+        assert isinstance(exc_info.value.stdout, str)
+        assert exc_info.value.stderr == "partial err"
+        assert isinstance(exc_info.value.stderr, str)
+
+    def test_timeout_leaves_str_output_untouched(self) -> None:
+        """A str/None stdout is passed through unchanged (no double-decode)."""
+        with patch("wade.utils.process.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(
+                cmd=["x"], timeout=5, output="already text", stderr=None
+            )
+            with pytest.raises(subprocess.TimeoutExpired) as exc_info:
+                run(["x"], timeout=5)
+        assert exc_info.value.stdout == "already text"
+        assert exc_info.value.stderr is None
+
+    def test_timeout_invalid_utf8_uses_replacement(self) -> None:
+        """Undecodable bytes decode with errors='replace' rather than crashing."""
+        with patch("wade.utils.process.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(
+                cmd=["x"], timeout=5, output=b"ok\xff", stderr=None
+            )
+            with pytest.raises(subprocess.TimeoutExpired) as exc_info:
+                run(["x"], timeout=5)
+        assert exc_info.value.stdout == "ok�"
 
 
 class TestRunRetries:

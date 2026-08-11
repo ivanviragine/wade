@@ -19,7 +19,12 @@ from wade.services.ai_resolution import (
     resolve_effort,
     resolve_model,
 )
-from wade.services.delegation_service import delegate, resolve_mode
+from wade.services.delegation_service import (
+    delegate,
+    effective_timeout,
+    extended_timeout,
+    resolve_mode,
+)
 from wade.skills.installer import load_prompt_template
 from wade.ui.console import console
 from wade.utils.markers import count_review_passes, record_review_pass, write_marker
@@ -177,20 +182,25 @@ def _run_review_delegation(
         ai_tool=resolved_tool,
         model=resolved_model,
         effort=effort_str,
-        **({"timeout": cmd_config.timeout} if cmd_config.timeout is not None else {}),
+        # Scale the budget from payload size + effort (an explicit
+        # ``ai.<command>.timeout`` bypasses scaling and is honored verbatim).
+        timeout=effective_timeout(prompt, cmd_config.timeout, effort_str),
     )
 
     if delegation_mode == DelegationMode.HEADLESS:
-        # This spawns an external AI subprocess bounded by ``request.timeout``.
-        # Announce that budget so the orchestrator driving wade (Claude Code,
-        # Cursor, Copilot, …) allows more than its own shell/tool timeout before
-        # killing the call — otherwise it aborts the review before wade's own
-        # timeout can fire. Configure the budget via ``ai.<command>.timeout``.
+        # This spawns an external AI subprocess bounded by ``request.timeout``. On
+        # timeout wade retries once at a longer budget, so announce the *worst-case
+        # total* — otherwise the orchestrator driving wade (Claude Code, Cursor,
+        # Copilot, …) kills the call at its own shorter timeout before the retry
+        # can run. Configure the base budget via ``ai.<command>.timeout``.
+        worst_case = request.timeout + extended_timeout(request.timeout)
         console.info(
-            "Launching headless AI review — this runs an external AI subprocess "
-            f"that can take up to {request.timeout}s. Keep it in the foreground and "
-            f"allow more than {request.timeout}s before timing out (raise your "
-            "shell/tool timeout if needed). Do not move it to the background."
+            "Launching headless AI review — this runs an external AI subprocess. "
+            f"wade budgets {request.timeout}s and, on timeout, retries once with a "
+            f"longer budget (worst-case total {worst_case}s). Keep it in the "
+            f"foreground and allow more than {worst_case}s before timing out "
+            "(raise your shell/tool timeout if needed). Do not move it to the "
+            "background."
         )
     elif delegation_mode == DelegationMode.INTERACTIVE:
         console.info(
@@ -205,6 +215,18 @@ def _run_review_delegation(
         # Rich would parse `[/]` as a closing tag with nothing to close and
         # raise MarkupError, so print it literally with markup disabled (#394).
         console.out.print(result.feedback, markup=False)
+    elif result.timed_out:
+        # A timed-out review may still carry real partial content — surface it as
+        # a warning + plain text, never as a hard error (#366). Same markup=False
+        # treatment as the success path since the output is untrusted.
+        if result.feedback:
+            console.warn(
+                "Headless review timed out before finishing — the output below is "
+                "partial and may be incomplete:"
+            )
+            console.out.print(result.feedback, markup=False)
+        else:
+            console.warn("Headless review timed out before producing any output.")
     else:
         # `console.error` interpolates the message into its own `[error]…[/]`
         # wrapper, so `markup=False` can't apply here — escape the feedback so

@@ -15,7 +15,7 @@ from crossby.models.ai import EffortLevel
 
 from wade.config.loader import load_config
 from wade.models.config import ProjectConfig
-from wade.models.delegation import DelegationMode, DelegationRequest
+from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
 from wade.models.deps import DependencyEdge, DependencyGraph
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
@@ -25,7 +25,7 @@ from wade.services.ai_resolution import (
     resolve_effort,
     resolve_model,
 )
-from wade.services.delegation_service import delegate, resolve_mode
+from wade.services.delegation_service import delegate, effective_timeout, resolve_mode
 from wade.services.task_service import ensure_task_label
 from wade.ui.console import console
 
@@ -347,10 +347,12 @@ def _run_delegation(
     allowed_commands: list[str] | None = None,
     cwd: Path | None = None,
     timeout: int | None = None,
-) -> str | None:
+) -> DelegationResult:
     """Run dependency analysis via the generic delegation infrastructure.
 
-    Returns the AI output text, or None on failure.
+    Returns the full ``DelegationResult`` so the caller can distinguish a timeout
+    (``timed_out=True``, possibly carrying partial output) from a crash and avoid
+    applying a partial dependency graph.
     """
     request = DelegationRequest(
         mode=mode,
@@ -363,11 +365,11 @@ def _run_delegation(
         **({"timeout": timeout} if timeout is not None else {}),
     )
     result = delegate(request)
-    if result.success and result.feedback:
-        return result.feedback
-    if not result.success:
+    if result.timed_out:
+        logger.warning("deps.delegation_timeout", mode=mode.value)
+    elif not result.success:
         logger.warning("deps.delegation_failed", mode=mode.value, feedback=result.feedback)
-    return None
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -516,7 +518,7 @@ def analyze_deps(
         console.step(
             f"Running {resolved_tool} ({delegation_mode.value}) for dependency analysis..."
         )
-    output = _run_delegation(
+    delegation_result = _run_delegation(
         resolved_tool,
         prompt,
         delegation_mode,
@@ -524,7 +526,14 @@ def analyze_deps(
         effort=effort_str,
         allowed_commands=config.permissions.allowed_commands,
         cwd=deps_cwd,
-        timeout=cmd_config.timeout,
+        # Scale the budget from payload size + effort (an explicit
+        # ``ai.deps.timeout`` bypasses scaling and is honored verbatim).
+        timeout=effective_timeout(prompt, cmd_config.timeout, effort_str),
+    )
+    output = (
+        delegation_result.feedback
+        if delegation_result.success and delegation_result.feedback
+        else None
     )
 
     if delegation_mode == DelegationMode.PROMPT:
@@ -539,6 +548,18 @@ def analyze_deps(
 
     if output:
         console.success(f"Analysis complete ({delegation_mode.value} mode).")
+    elif delegation_result.timed_out:
+        # A timed-out deps run may carry *partial* output, but applying an
+        # incomplete dependency graph to issue bodies is worse than applying
+        # none — a half-finished graph silently overwrites real cross-refs. The
+        # bigger budget + one retry (both in the shared headless path) already
+        # make a clean run far more likely, so surface the timeout (distinct from
+        # a crash) and drop the partial rather than parsing half a graph.
+        console.warn(
+            f"Dependency analysis timed out ({delegation_mode.value} mode) before "
+            "completing — no dependency graph was applied. Re-run, or raise "
+            "ai.deps.timeout."
+        )
     else:
         console.error(f"Delegation failed ({delegation_mode.value} mode).")
 
@@ -550,6 +571,12 @@ def analyze_deps(
 
             repo_root = git_repo.get_repo_root(project_root or Path.cwd())
             git_worktree.remove_worktree(repo_root, standalone_worktree, force=True)
+
+    # A timeout is a hard failure (not "no deps found"), so return None rather
+    # than an empty graph — callers must not treat it as an authoritative result.
+    # Cleanup above already ran.
+    if delegation_result.timed_out:
+        return None
 
     # Parse edges
     edges = parse_deps_output(output, valid_numbers) if output else []
