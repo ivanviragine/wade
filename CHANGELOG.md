@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.42.6] — 2026-08-11
+
+### Bug Fixes
+
+- always surface the resolved permission mode and honor it in review sessions (#380) (01beb8a)
+
 ## [v0.42.5] — 2026-08-11
 
 ### Bug Fixes
