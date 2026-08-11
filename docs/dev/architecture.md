@@ -244,22 +244,34 @@ is the memory allowlist below.
 
 ### Memory allowlist
 
-All three write guards take an `allow_paths` tuple — **this session's own memory
-location for the active tool**, never a shared parent — resolved by
-`_memory_allow_paths(tool, worktree_root)` in `hooks/cli.py`. A write whose
-resolved path lands inside it is permitted despite containment, and in plan mode
-is exempt from the plan-artifact rule (checked **before** `_is_plan_artifact_path`,
-which reports any out-of-root path — memory included — as a non-artifact). The
-resolved path is tool-specific and scoped to *this* worktree's encoded project
-directory, not the whole per-tool tree:
+All three write guards take an `allow_paths` tuple — the active tool's memory
+allow-root — resolved by `_memory_allow_paths(tool, worktree_root)` in
+`hooks/cli.py`. A write whose resolved path lands inside it is permitted
+despite containment, and in plan mode is exempt from the plan-artifact rule
+(checked **before** `_is_plan_artifact_path`, which reports any out-of-root
+path — memory included — as a non-artifact). The resolved path is tool-specific
+and, where the tool's own storage layout allows it, scoped to *this* worktree's
+encoded project directory — but the three tools do **not** get the same
+guarantee:
 
 - **Claude** — `<config-home>/projects/<encoded-worktree>/memory/`. Sibling
   session transcripts live un-nested at `<encoded-worktree>/`, so the allow-root
-  stops at `memory/`, not its parent.
-- **Cursor** — `<config-home>/projects/<encoded-worktree>/` (its per-project dir
-  *is* the memory location — no separate `memory/` subfolder to narrow to).
+  stops at `memory/`, not its parent. The only one of the three scoped to both
+  this session **and** memory alone.
+- **Cursor** — `<config-home>/projects/<encoded-worktree>/`. Its per-project dir
+  *is* the memory location (no separate `memory/` subfolder to narrow to), but
+  crossby's own reader globs that same directory for session-transcript JSON —
+  so this is scoped to *this session's project* (narrower than the old code,
+  which allowlisted every Cursor project on the machine) but not to memory
+  alone: a guarded Cursor session can also rewrite/delete its own transcripts.
 - **Codex** — `<config-home>/sessions/` — rollouts are filed by date, not by
-  project, so this cannot be narrowed further per-worktree.
+  project, and shared flat across *every* project on the machine (crossby
+  filters by a `cwd` field inside each file, not by directory). Unlike
+  Claude/Cursor, this is **not scoped to this session at all** — every other
+  project's Codex rollouts are writable too. Accepted because Codex's storage
+  has no per-project boundary to key on; the alternative is dropping Codex from
+  the allowlist entirely (like Copilot/Antigravity-CLI), not approximating a
+  guarantee it cannot provide.
 
 `<encoded-worktree>` mirrors the tool's own CWD-to-directory-name encoding
 (`_encode_claude_project_path` / `_encode_cursor_project_path` in `hooks/cli.py`,
@@ -276,16 +288,16 @@ channel; `cd`/`pushd` and `git -C` (spaced *and* glued) stay strict — checked 
 against `worktree_root`, never `allow_paths` — since a `git -C`-scoped write can
 touch every file under the target directory, not just a direct memory write.
 
-The allowlist is **deliberately narrow — this session's own memory location only,
-never the tool's config/auth home or its other sessions' memory.** `~/.claude/
-settings.json` holds the `hooks` block these guards depend on; allowlisting all of
-`~/.claude`, or even all of `~/.claude/projects`, would let a session strip its
-own guard (or read/write another project's memory) — scoping to the encoded,
-per-worktree `memory/` leaf also means an ancestor-directory symlink cannot widen
-the exception the way a shared parent directory could. The tool's config/auth
-files (`~/.claude/settings.json`, `~/.codex/*state*.json`,
-`~/.cursor/*config*.json`) therefore stay denied. `_memory_allow_paths` degrades
-safely — an unrecognized tool, an intentional empty policy, an unresolvable
+The allowlist is **deliberately narrow — never the tool's config/auth home**
+(`~/.claude/settings.json` holds the `hooks` block these guards depend on;
+allowlisting all of `~/.claude`, or even all of `~/.claude/projects`, would let
+a session strip its own guard) **— though not uniformly narrow across tools**:
+Claude and Cursor scope to the encoded, per-worktree leaf (also meaning an
+ancestor-directory symlink cannot widen the exception the way a shared parent
+directory could); Codex does not, per above. The tool's config/auth files
+(`~/.claude/settings.json`, `~/.codex/*state*.json`, `~/.cursor/*config*.json`)
+stay denied regardless. `_memory_allow_paths` degrades safely — an unrecognized
+tool, an intentional empty policy, an unresolvable
 `Path.home()` (HOME unset), or a path that will not resolve all return `()` and
 never raise, so containment behaves exactly as before. Like the dialect maps,
 `_TOOL_MEMORY_DIRS` (now a plain key set, not a path map) is kept off the hot path

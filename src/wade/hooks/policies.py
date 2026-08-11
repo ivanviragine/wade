@@ -19,18 +19,28 @@ Guards today:
   would wave it through. This closes that channel.
 
 Memory allowlist (``allow_paths``): all three guards accept an ``allow_paths``
-tuple — the *active* tool's own **memory subtree** (e.g. Claude
-``~/.claude/projects``), resolved by :func:`wade.hooks.cli._memory_allow_paths`.
-A write inside such a subtree is permitted despite containment, and is exempt
-from the plan-artifact rule in plan mode, so a guarded tool can persist memory
-outside the worktree. The allowlist is **deliberately narrow** — the memory
-subtree only, never the tool's config/auth home (``~/.claude/settings.json``
-holds the ``hooks`` block these guards depend on; allowlisting the whole home
-would let a session strip its own guard). Every other out-of-worktree write,
-including the tool's own config, stays denied. The per-tool memory locations are
-mirrored wade-side today (like the dialect maps in :mod:`wade.hooks.cli`); they
-ultimately belong in crossby's ``AIToolCapabilities`` — a follow-up, not on this
-path.
+tuple — the *active* tool's own memory location for *this session*, resolved by
+:func:`wade.hooks.cli._memory_allow_paths` (e.g. Claude
+``~/.claude/projects/<encoded-worktree>/memory``). A write inside it is
+permitted despite containment, and is exempt from the plan-artifact rule in plan
+mode, so a guarded tool can persist memory outside the worktree. On the shell
+channel this is honored for redirect targets and write-command operands — but
+also, incidentally, for any *glued* flag value targeting the allow-root (e.g.
+``curl -o <memory-path>``), since the glued-path check does not distinguish a
+write flag from a read one (see :func:`shell_containment`'s rule 5); this only
+*narrows* what such a command would otherwise be denied for, never widens it
+past the allow-root itself. The allowlist is **deliberately narrow — never the
+tool's config/auth home** (``~/.claude/settings.json`` holds the ``hooks`` block
+these guards depend on; allowlisting the whole home would let a session strip
+its own guard) **— but not uniformly scoped to "memory only" across tools**:
+Claude's allow-root is memory alone; Cursor's and Codex's are, respectively, the
+session's whole project dir and the tool's whole (cross-project) sessions tree,
+because neither tool's storage draws a finer boundary to key on (see
+:func:`wade.hooks.cli._memory_allow_paths` for the per-tool breakdown). Every
+other out-of-worktree write, including the tool's own config, stays denied. The
+per-tool memory locations are mirrored wade-side today (like the dialect maps in
+:mod:`wade.hooks.cli`); they ultimately belong in crossby's
+``AIToolCapabilities`` — a follow-up, not on this path.
 """
 
 from __future__ import annotations
@@ -541,11 +551,16 @@ def shell_containment(
     device writes are additionally allowed in plan mode
     (:func:`_is_always_allowed_device`) since they persist nothing.
 
-    **The active tool's memory subtree is also writable.** ``allow_paths`` (the
-    tool's own memory root — see :func:`wade.hooks.cli._memory_allow_paths`) is
-    honored for **redirect targets** and **write-command operands**, so a shell
-    redirect or a write command targeting memory is contained even though it lives
-    outside the root. In plan mode a memory path is additionally exempt from the
+    **The active tool's memory allow-root is also writable.** ``allow_paths`` (the
+    tool's own allow-root for this session — see
+    :func:`wade.hooks.cli._memory_allow_paths`) is honored for **redirect
+    targets** and **write-command operands**, so a shell redirect or a write
+    command targeting it is contained even though it lives outside the root
+    (a glued flag value pointing there also passes, incidentally, via the
+    generic glued-path check in rule 5 below — that check cannot distinguish a
+    write flag from a read one, so it does not enforce the "redirect targets and
+    write-command operands only" framing as a hard boundary; this only narrows
+    what such a command is denied for). In plan mode a memory path is additionally exempt from the
     plan-artifact rule — checked **before** :func:`_is_plan_artifact_path` (which
     reports any out-of-root path, memory included, as a non-artifact), so a
     plan-mode ``echo x > ~/.claude/.../y.md`` is allowed. ``cd``/``pushd`` and

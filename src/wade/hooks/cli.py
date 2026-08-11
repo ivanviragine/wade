@@ -179,30 +179,46 @@ def _encode_cursor_project_path(path: Path) -> str:
 def _memory_allow_paths(tool: str, worktree_root: Path) -> tuple[Path, ...]:
     """Absolute, resolved memory root ``tool`` may write to despite containment.
 
-    Scoped to the **active session's own** memory location, not the tool's whole
-    memory tree:
+    Scoped as tightly as each tool's own storage layout allows — narrower is not
+    always possible, and the three tools differ in how narrow they get:
 
-    - Claude nests memory one level below its per-project session dir —
+    - **Claude** nests memory one level below its per-project session dir —
       ``<config-home>/projects/<encoded-worktree>/memory/``. Sibling session
       transcripts live un-nested at ``<encoded-worktree>/``, so allowlisting that
       parent (as this used to) would over-grant writes to every transcript, not
-      just memory.
-    - Cursor's per-project dir *is* the memory location —
-      ``<config-home>/projects/<encoded-worktree>/``.
-    - Codex's rollouts are filed by date, not by project —
-      ``<config-home>/sessions/YYYY/MM/DD/rollout-*.jsonl`` — so this cannot be
-      narrowed further per-worktree.
+      just memory. This is the only one of the three scoped to **both** this
+      session **and** memory alone.
+    - **Cursor**'s per-project dir *is* the memory location —
+      ``<config-home>/projects/<encoded-worktree>/`` — but crossby's own reader
+      (``crossby.handoff.readers.cursor.locate_sessions``) globs that *same*
+      directory for session-transcript JSON. So this bypass is scoped to *this
+      session's project* (an improvement over allowlisting every Cursor project
+      on the machine, which the pre-narrowing code did) but not to memory
+      alone: a guarded Cursor session can also rewrite or delete its own
+      transcript files, not just append memory.
+    - **Codex**'s rollouts are filed by date, not by project —
+      ``<config-home>/sessions/YYYY/MM/DD/rollout-*.jsonl``, shared flat across
+      *every* project on the machine (crossby filters by a ``cwd`` field inside
+      each file, not by directory) — so unlike Claude/Cursor, this bypass is
+      **not scoped to this session at all**: the whole ``sessions/`` tree, every
+      other project's rollouts included, is writable. Accepted because Codex's
+      storage offers no narrower boundary to key on; the alternative would be
+      dropping Codex from :data:`_TOOL_MEMORY_DIRS` entirely (like Copilot /
+      Antigravity-CLI) rather than approximating a per-session guarantee it
+      cannot actually provide.
 
     ``<config-home>`` is :func:`_tool_config_home` (honors a relocation env var
     before falling back to ``Path.home() / ".<tool>"``). ``<encoded-worktree>`` is
     ``worktree_root`` encoded the way the tool itself encodes its CWD into a
     project-dir name (:func:`_encode_claude_project_path` /
-    :func:`_encode_cursor_project_path`) — scoping the allow-root to *this*
-    session's project also means an ancestor-directory symlink (e.g. a
-    hypothetical ``projects -> ..``) cannot widen the exception the way it could
-    when the allow-root was the shared ``projects`` parent: the resolved root is
-    still a session-specific leaf ending in ``/memory`` (Claude) or the encoded
-    project name (Cursor), never an ancestor like the config home itself.
+    :func:`_encode_cursor_project_path`) — for Claude and Cursor, scoping the
+    allow-root to *this* session's project also means an ancestor-directory
+    symlink (e.g. a hypothetical ``projects -> ..``) cannot widen the exception
+    the way it could when the allow-root was the shared ``projects`` parent: the
+    resolved root is still a session-specific leaf ending in ``/memory`` (Claude)
+    or the encoded project name (Cursor), never an ancestor like the config home
+    itself. Codex's allow-root is already tool-wide, so this property does not
+    apply to it.
 
     Threaded into the three write guards as ``allow_paths``.
 
