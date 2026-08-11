@@ -215,13 +215,17 @@ subcommands `_GIT_WRITE_SUBCOMMANDS` (`checkout`/`clean`/`clone`/`init`/`worktre
 mode it additionally rejects those same writes when aimed at non-artifacts, and
 denies the in-place `-i` flag outright.
 
-Spaced `git -C <dir>` is buffered: `git -C ../crossby log` (a read subcommand) is
-allowed, but a git *write* subcommand after an outside `-C` (`git -C /outside
-clean -fd`, `git -C /outside checkout -- file`) is denied — there is no later path
-operand to catch it otherwise. It also unglues paths from flags
-(`--output=/etc/x`, `-o/etc/x`, `of=/etc/x`, `git -C/etc/other`) and keeps those
-**glued** forms contained in every mode (a tokenizer cannot tell a glued read flag
-from a glued write flag, so a few glued reads are denied too), treats bash's
+`git -C <dir>` is buffered — spaced *and* glued alike: `git -C ../crossby log` /
+`git -C../crossby log` (a read subcommand) is allowed, but a git *write*
+subcommand after an outside `-C` (`git -C /outside clean -fd`, `git -C/outside
+clean -fd`) is denied — there is no later path operand to catch it otherwise.
+Checked only against `worktree_root`, never `allow_paths`: a `git -C`-scoped
+write can touch every file under `<dir>`, not just a direct memory write, so it
+stays strict even when `<dir>` is the active tool's own memory root. It also
+unglues paths from other flags (`--output=/etc/x`, `-o/etc/x`, `of=/etc/x`) and
+keeps those **glued** forms contained in every mode (a tokenizer cannot tell a
+glued read flag from a glued write flag, so a few glued reads are denied too),
+treats bash's
 `>&file` as a write while skipping true fd duplication (`2>&1`), denies a bare
 `cd` (it lands in `$HOME`), and exempts known discard/console devices
 (`>/dev/null 2>&1`) plus system temp dirs (`/tmp`, `$TMPDIR`) — shared scratch space
@@ -240,31 +244,55 @@ is the memory allowlist below.
 
 ### Memory allowlist
 
-All three write guards take an `allow_paths` tuple — the **active tool's own
-memory subtree** — resolved by `_memory_allow_paths(tool)` in `hooks/cli.py` from
-a static per-tool map (`_TOOL_MEMORY_DIRS`) joined against `Path.home()`. A write
-whose resolved path lands inside such a subtree is permitted despite containment,
-and in plan mode is exempt from the plan-artifact rule (checked **before**
-`_is_plan_artifact_path`, which reports any out-of-root path — memory included —
-as a non-artifact). This lets a guarded tool persist the memory it writes
-*outside* the worktree — Claude `~/.claude/projects`, Cursor `~/.cursor/projects`,
-Codex `~/.codex/sessions`; Copilot / Antigravity-CLI keep memory in-repo, so their
-entry is an intentional empty tuple (no bypass). It is threaded into **redirect
-targets** and **write-command operands** on the shell channel; `cd`/`pushd` and
-`git -C` stay strict (memory writes are direct-path, never cd-relative).
+All three write guards take an `allow_paths` tuple — **this session's own memory
+location for the active tool**, never a shared parent — resolved by
+`_memory_allow_paths(tool, worktree_root)` in `hooks/cli.py`. A write whose
+resolved path lands inside it is permitted despite containment, and in plan mode
+is exempt from the plan-artifact rule (checked **before** `_is_plan_artifact_path`,
+which reports any out-of-root path — memory included — as a non-artifact). The
+resolved path is tool-specific and scoped to *this* worktree's encoded project
+directory, not the whole per-tool tree:
 
-The allowlist is **deliberately narrow — the memory subtree only, never the
-tool's config/auth home.** `~/.claude/settings.json` holds the `hooks` block these
-guards depend on; allowlisting the whole `~/.claude` would let a session strip its
-own guard and permanently disable it. The tool's config/auth files
-(`~/.claude/settings.json`, `~/.codex/*state*.json`, `~/.cursor/*config*.json`)
-therefore stay denied. `_memory_allow_paths` degrades safely — an unknown tool, an
-empty entry, or an unresolvable `Path.home()` (HOME unset) all return `()` and
+- **Claude** — `<config-home>/projects/<encoded-worktree>/memory/`. Sibling
+  session transcripts live un-nested at `<encoded-worktree>/`, so the allow-root
+  stops at `memory/`, not its parent.
+- **Cursor** — `<config-home>/projects/<encoded-worktree>/` (its per-project dir
+  *is* the memory location — no separate `memory/` subfolder to narrow to).
+- **Codex** — `<config-home>/sessions/` — rollouts are filed by date, not by
+  project, so this cannot be narrowed further per-worktree.
+
+`<encoded-worktree>` mirrors the tool's own CWD-to-directory-name encoding
+(`_encode_claude_project_path` / `_encode_cursor_project_path` in `hooks/cli.py`,
+duplicated from `crossby.ai_tools.claude`/`cursor` rather than imported, for the
+same lean-hot-path reason as the dialect maps below). `<config-home>` is
+`_tool_config_home`: it honors each tool's data-home relocation env var
+(`CLAUDE_CONFIG_DIR`, `CODEX_HOME`) before falling back to `Path.home() /
+".<tool>"` — without this, a relocated config dir (e.g. the isolated
+`CLAUDE_CONFIG_DIR` `scripts/test-live-ai-taskr.sh` sets up for live tests) would
+leave the tool's *real* memory writes denied. Copilot / Antigravity-CLI keep
+memory in-repo, so they resolve to an intentional empty tuple (no bypass). It is
+threaded into **redirect targets** and **write-command operands** on the shell
+channel; `cd`/`pushd` and `git -C` (spaced *and* glued) stay strict — checked only
+against `worktree_root`, never `allow_paths` — since a `git -C`-scoped write can
+touch every file under the target directory, not just a direct memory write.
+
+The allowlist is **deliberately narrow — this session's own memory location only,
+never the tool's config/auth home or its other sessions' memory.** `~/.claude/
+settings.json` holds the `hooks` block these guards depend on; allowlisting all of
+`~/.claude`, or even all of `~/.claude/projects`, would let a session strip its
+own guard (or read/write another project's memory) — scoping to the encoded,
+per-worktree `memory/` leaf also means an ancestor-directory symlink cannot widen
+the exception the way a shared parent directory could. The tool's config/auth
+files (`~/.claude/settings.json`, `~/.codex/*state*.json`,
+`~/.cursor/*config*.json`) therefore stay denied. `_memory_allow_paths` degrades
+safely — an unrecognized tool, an intentional empty policy, an unresolvable
+`Path.home()` (HOME unset), or a path that will not resolve all return `()` and
 never raise, so containment behaves exactly as before. Like the dialect maps,
-`_TOOL_MEMORY_DIRS` is a static copy kept off the hot path (no `crossby.ai_tools`
-import); `TestPerToolMemoryDirsCoverHookWriters` fails if its key set drifts from
-`_hook_writers`. These per-tool memory locations ultimately belong in crossby's
-`AIToolCapabilities` (mirrored wade-side today) — a follow-up, not on this path.
+`_TOOL_MEMORY_DIRS` (now a plain key set, not a path map) is kept off the hot path
+(no `crossby.ai_tools` import); `TestPerToolMemoryDirsCoverHookWriters` fails if
+its key set drifts from `_hook_writers`. These per-tool memory locations
+ultimately belong in crossby's `AIToolCapabilities` (mirrored wade-side today) —
+a follow-up, not on this path.
 
 **It is defense-in-depth, not a completeness guarantee.** It stops the
 non-obfuscated cases an agent actually produces. Documented residual gaps

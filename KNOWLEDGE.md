@@ -507,3 +507,9 @@ Headless review/deps timeout auto-scales from prompt size + reasoning effort (`e
 The per-tool memory allowlist (`_TOOL_MEMORY_DIRS` in `hooks/cli.py`, threaded as `allow_paths` into the three write guards) MUST target only the memory subtree (e.g. `~/.claude/projects`), never the tool's config home — `~/.claude/settings.json` holds the `hooks` block, so allowlisting all of `~/.claude` would let a guarded session strip its own guard and permanently disable it. In `shell_containment`, memory membership (`_under_any`) must be checked BEFORE `_is_plan_artifact_path`/`_is_always_allowed_device`, which report any out-of-root path (memory included) as a non-artifact and would otherwise deny a plan-mode memory redirect. Per-tool memory locations are mirrored wade-side (static maps, kept off the hot per-edit path) like the dialect maps; migrating them into crossby's `AIToolCapabilities` is the open follow-up.
 
 ---
+
+## b1e7f60c6de6 | 2026-08-11 | implementation | tags: hooks, write-guards, memory-allowlist | Issue #387
+
+The per-tool memory allowlist (`_memory_allow_paths(tool, worktree_root)` in `hooks/cli.py`) must scope to THIS session's own memory leaf, never a shared parent — Claude's is `<config-home>/projects/<encoded-worktree>/memory/` (sibling session transcripts live un-nested one level up, so allowlisting the parent over-grants), Cursor's is `<config-home>/projects/<encoded-worktree>/`, Codex's is `<config-home>/sessions/` (can't be narrowed further — rollouts are filed by date, not by project); `<config-home>` honors each tool's data-home relocation env var (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`) before falling back to `Path.home() / ".<tool>"`. `git -C <dir>` (spaced or glued) must be checked only against `worktree_root`, never `allow_paths` — a `-C`-scoped write can touch every file under `<dir>`, not just a direct memory write, so it stays strict even when `<dir>` is the active tool's own memory root.
+
+---

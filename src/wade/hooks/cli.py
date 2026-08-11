@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -91,28 +92,25 @@ _TOOL_STOP_DIALECTS: dict[str, HookStopDialect] = {
     "antigravity-cli": HookStopDialect.CONTINUE_DECISION,
 }
 
-# Home-relative MEMORY subpaths (NOT the tool's whole config home) where each
-# guarded tool persists memory OUTSIDE the worktree. Deliberately excludes
-# settings/auth files (e.g. ``~/.claude/settings.json`` holds the hooks block this
-# guard depends on; ``~/.codex/*state*.json``, ``~/.cursor/*config*.json``). A
-# session's active tool may write here despite worktree containment; every other
-# out-of-worktree path — including the tool's config home — stays denied.
-# Copilot/Antigravity-CLI keep memory in-repo, so their entry is an intentional
-# empty tuple (present for the coverage test = "no bypass"). Scoped to the 5 tools
-# ``bootstrap._hook_writers`` installs a guard for — not all 8 ``AIToolID`` values.
-#
-# Static (no ``crossby.ai_tools`` import on the hot per-edit path), exactly like
-# :data:`_TOOL_DIALECTS`; a coverage test keeps the key set in sync with
-# ``_hook_writers``. These are the memory *subtrees*, confirmed against crossby:
-# Claude ``~/.claude/projects/<encoded>/memory/`` (claude.py), Cursor
-# ``~/.cursor/projects/<encoded>/`` (cursor.py), Codex
-# ``~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`` (handoff/readers/codex.py).
-_TOOL_MEMORY_DIRS: dict[str, tuple[str, ...]] = {
-    "claude": (".claude/projects",),
-    "codex": (".codex/sessions",),
-    "cursor": (".cursor/projects",),
-    "copilot": (),
-    "antigravity-cli": (),
+# Tools whose memory-bypass policy is defined in :func:`_memory_allow_paths` below
+# — the same 5 tools ``bootstrap._hook_writers`` installs a guard for, not all 8
+# ``AIToolID`` values. Copilot/Antigravity-CLI keep memory in-repo, so they resolve
+# to the intentional empty tuple (no bypass) — present here so "handled, no bypass"
+# stays distinguishable from "forgotten". Static (no ``crossby.ai_tools`` import on
+# the hot per-edit path), exactly like :data:`_TOOL_DIALECTS`; a coverage test keeps
+# this key set in sync with ``_hook_writers``.
+_TOOL_MEMORY_DIRS: frozenset[str] = frozenset(
+    {"claude", "codex", "cursor", "copilot", "antigravity-cli"}
+)
+
+# Env var each tool honors to relocate its whole data home (mirroring the tool's
+# own CLI resolution — undocumented in crossby, whose adapters hardcode
+# ``Path.home()`` and never needed this). A tool absent here (Cursor) has no known
+# relocation var and always resolves under ``Path.home()``. MUST be re-verified if
+# either tool changes its override var.
+_TOOL_CONFIG_HOME_ENV: dict[str, str] = {
+    "claude": "CLAUDE_CONFIG_DIR",
+    "codex": "CODEX_HOME",
 }
 
 # PreToolUse write guards fail CLOSED (deny) on any error or misconfiguration.
@@ -142,37 +140,110 @@ def _stop_dialect_for(tool: str) -> HookStopDialect:
     return _TOOL_STOP_DIALECTS.get(tool.strip().lower(), HookStopDialect.BLOCK_DECISION)
 
 
-def _memory_allow_paths(tool: str) -> tuple[Path, ...]:
-    """Absolute, resolved memory roots ``tool`` may write to despite containment.
+def _tool_config_home(tool: str, home: Path) -> Path:
+    """The directory ``tool`` actually persists data under, honoring its relocation env var.
 
-    Expands each home-relative entry in :data:`_TOOL_MEMORY_DIRS` against
-    ``Path.home()`` into an absolute, resolved root (``resolve(strict=False)`` — the
-    dir need not exist yet). Threaded into the three write guards as ``allow_paths``.
+    Falls back to ``home / ".<tool>"`` when ``tool`` has no entry in
+    :data:`_TOOL_CONFIG_HOME_ENV`, or the var is unset/blank — e.g. the repo's own
+    live-test harness sets ``CLAUDE_CONFIG_DIR`` to an isolated temp dir
+    (``scripts/test-live-ai-taskr.sh``), so Claude's real memory location moves
+    with it; without this, the allowlist would keep denying those writes.
+    """
+    env_var = _TOOL_CONFIG_HOME_ENV.get(tool)
+    if env_var:
+        override = os.environ.get(env_var, "").strip()
+        if override:
+            return Path(override)
+    return home / f".{tool}"
+
+
+def _encode_claude_project_path(path: Path) -> str:
+    """Mirror ``crossby.ai_tools.claude._encode_claude_path`` (``/`` and ``.`` -> ``-``).
+
+    Duplicated, not imported: importing ``crossby.ai_tools.claude`` would import
+    its parent package ``crossby.ai_tools`` first, which eagerly loads every
+    adapter (see module docstring) — exactly what this hot per-edit path avoids.
+    MUST be re-verified on every crossby version bump.
+    """
+    return str(path).replace("/", "-").replace(".", "-")
+
+
+def _encode_cursor_project_path(path: Path) -> str:
+    """Mirror crossby.ai_tools.cursor's working-dir encoding: strip a leading ``/``, ``/`` -> ``-``.
+
+    Duplicated for the same lean-import reason as :func:`_encode_claude_project_path`.
+    """
+    return str(path).lstrip("/").replace("/", "-")
+
+
+def _memory_allow_paths(tool: str, worktree_root: Path) -> tuple[Path, ...]:
+    """Absolute, resolved memory root ``tool`` may write to despite containment.
+
+    Scoped to the **active session's own** memory location, not the tool's whole
+    memory tree:
+
+    - Claude nests memory one level below its per-project session dir —
+      ``<config-home>/projects/<encoded-worktree>/memory/``. Sibling session
+      transcripts live un-nested at ``<encoded-worktree>/``, so allowlisting that
+      parent (as this used to) would over-grant writes to every transcript, not
+      just memory.
+    - Cursor's per-project dir *is* the memory location —
+      ``<config-home>/projects/<encoded-worktree>/``.
+    - Codex's rollouts are filed by date, not by project —
+      ``<config-home>/sessions/YYYY/MM/DD/rollout-*.jsonl`` — so this cannot be
+      narrowed further per-worktree.
+
+    ``<config-home>`` is :func:`_tool_config_home` (honors a relocation env var
+    before falling back to ``Path.home() / ".<tool>"``). ``<encoded-worktree>`` is
+    ``worktree_root`` encoded the way the tool itself encodes its CWD into a
+    project-dir name (:func:`_encode_claude_project_path` /
+    :func:`_encode_cursor_project_path`) — scoping the allow-root to *this*
+    session's project also means an ancestor-directory symlink (e.g. a
+    hypothetical ``projects -> ..``) cannot widen the exception the way it could
+    when the allow-root was the shared ``projects`` parent: the resolved root is
+    still a session-specific leaf ending in ``/memory`` (Claude) or the encoded
+    project name (Cursor), never an ancestor like the config home itself.
+
+    Threaded into the three write guards as ``allow_paths``.
 
     Degrades **safely, never raising** — this runs on the hot PreToolUse path:
 
-    - an unknown tool (or one whose entry is the intentional empty tuple) → ``()``
-      (no bypass);
+    - an unrecognized tool, or one with an intentional empty policy (Copilot /
+      Antigravity-CLI keep memory in-repo) → ``()`` (no bypass);
     - ``Path.home()`` unresolvable (e.g. HOME unset) → ``()`` (no bypass);
-    - an individual entry that will not resolve is dropped, keeping the rest.
+    - a path that will not resolve → ``()`` (no bypass).
 
-    Kept lean like :func:`_dialect_for`: a plain ``Path.home()`` join, no
-    ``crossby.ai_tools`` import and no config load.
+    Kept lean like :func:`_dialect_for`: plain path joins, no ``crossby.ai_tools``
+    import and no config load.
     """
-    entries = _TOOL_MEMORY_DIRS.get(tool.strip().lower())
-    if not entries:
+    normalized = tool.strip().lower()
+    if normalized not in _TOOL_MEMORY_DIRS:
         return ()
     try:
         home = Path.home()
     except (RuntimeError, OSError):
         return ()
-    out: list[Path] = []
-    for entry in entries:
-        try:
-            out.append((home / entry).resolve(strict=False))
-        except (OSError, ValueError, RuntimeError):
-            continue
-    return tuple(out)
+    try:
+        if normalized == "claude":
+            path = (
+                _tool_config_home(normalized, home)
+                / "projects"
+                / _encode_claude_project_path(worktree_root)
+                / "memory"
+            )
+        elif normalized == "cursor":
+            path = (
+                _tool_config_home(normalized, home)
+                / "projects"
+                / _encode_cursor_project_path(worktree_root)
+            )
+        elif normalized == "codex":
+            path = _tool_config_home(normalized, home) / "sessions"
+        else:
+            return ()  # Copilot / Antigravity-CLI — intentional no bypass.
+        return (path.resolve(strict=False),)
+    except (OSError, ValueError, RuntimeError):
+        return ()
 
 
 # Every value-taking flag must be listed so _event_from_argv skips the flag's
@@ -461,10 +532,10 @@ def _run(event: str, guard: str, tool: str, root: str) -> HookEmission:
             json.loads(raw)
             worktree_root = Path(root)
             plan_mode = guard == "plan"
-            # The active tool's own memory subtree(s) — writable despite containment
-            # (see _memory_allow_paths). Computed once; a plain Path.home() join, no
+            # The active tool's own memory subtree — writable despite containment
+            # (see _memory_allow_paths). Computed once; plain path joins, no
             # crossby.ai_tools import and no config load, so the hot path stays lean.
-            allow = _memory_allow_paths(tool)
+            allow = _memory_allow_paths(tool, worktree_root)
             decision = HookDecision.allow()
             if ev.command:
                 # Shell channel: crossby reports is_write=False for shell tool

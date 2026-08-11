@@ -611,31 +611,64 @@ class TestStopNeverTrapsOnUsageError:
 
 
 class TestMemoryAllowPathsResolver:
-    """Unit cover for ``_memory_allow_paths`` — the static map + ``Path.home()`` join."""
+    """Unit cover for ``_memory_allow_paths`` — per-tool, per-session path composition."""
 
-    def test_claude_resolves_projects_subtree(self) -> None:
+    def test_claude_resolves_this_sessions_memory_subdir(self) -> None:
+        from wade.hooks.cli import _encode_claude_project_path, _memory_allow_paths
+
+        encoded = _encode_claude_project_path(Path(WT))
+        expected = (Path.home() / ".claude" / "projects" / encoded / "memory").resolve()
+        assert _memory_allow_paths("claude", Path(WT)) == (expected,)
+
+    def test_claude_does_not_allow_the_whole_projects_tree(self) -> None:
+        # The old (pre-narrowing) allow-root — must no longer be what's returned.
         from wade.hooks.cli import _memory_allow_paths
 
-        assert _memory_allow_paths("claude") == ((Path.home() / ".claude" / "projects").resolve(),)
+        (allowed,) = _memory_allow_paths("claude", Path(WT))
+        assert allowed != (Path.home() / ".claude" / "projects").resolve()
+
+    def test_claude_honors_config_dir_override(self, monkeypatch) -> None:
+        from wade.hooks.cli import _encode_claude_project_path, _memory_allow_paths
+
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/isolated/claude-home")
+        encoded = _encode_claude_project_path(Path(WT))
+        expected = (Path("/isolated/claude-home") / "projects" / encoded / "memory").resolve(
+            strict=False
+        )
+        assert _memory_allow_paths("claude", Path(WT)) == (expected,)
+
+    def test_codex_honors_config_home_override(self, monkeypatch) -> None:
+        from wade.hooks.cli import _memory_allow_paths
+
+        monkeypatch.setenv("CODEX_HOME", "/isolated/codex-home")
+        expected = (Path("/isolated/codex-home") / "sessions").resolve(strict=False)
+        assert _memory_allow_paths("codex", Path(WT)) == (expected,)
+
+    def test_cursor_resolves_this_sessions_project_dir(self) -> None:
+        from wade.hooks.cli import _encode_cursor_project_path, _memory_allow_paths
+
+        encoded = _encode_cursor_project_path(Path(WT))
+        expected = (Path.home() / ".cursor" / "projects" / encoded).resolve()
+        assert _memory_allow_paths("cursor", Path(WT)) == (expected,)
 
     def test_case_insensitive_and_trimmed(self) -> None:
-        from wade.hooks.cli import _memory_allow_paths
+        from wade.hooks.cli import _encode_claude_project_path, _memory_allow_paths
 
-        assert _memory_allow_paths("  CLAUDE ") == (
-            (Path.home() / ".claude" / "projects").resolve(),
-        )
+        encoded = _encode_claude_project_path(Path(WT))
+        expected = (Path.home() / ".claude" / "projects" / encoded / "memory").resolve()
+        assert _memory_allow_paths("  CLAUDE ", Path(WT)) == (expected,)
 
     def test_empty_tuple_tools_have_no_bypass(self) -> None:
         # Copilot / Antigravity-CLI keep memory in-repo — intentional empty tuple.
         from wade.hooks.cli import _memory_allow_paths
 
-        assert _memory_allow_paths("copilot") == ()
-        assert _memory_allow_paths("antigravity-cli") == ()
+        assert _memory_allow_paths("copilot", Path(WT)) == ()
+        assert _memory_allow_paths("antigravity-cli", Path(WT)) == ()
 
     def test_unknown_tool_has_no_bypass(self) -> None:
         from wade.hooks.cli import _memory_allow_paths
 
-        assert _memory_allow_paths("nonesuch") == ()
+        assert _memory_allow_paths("nonesuch", Path(WT)) == ()
 
     def test_home_unresolvable_degrades_to_no_bypass(self, monkeypatch) -> None:
         """HOME unset → ``Path.home()`` raises; the resolver returns () and never raises."""
@@ -645,7 +678,7 @@ class TestMemoryAllowPathsResolver:
             raise RuntimeError("home unresolvable")
 
         monkeypatch.setattr(cli.Path, "home", staticmethod(_boom))
-        assert cli._memory_allow_paths("claude") == ()
+        assert cli._memory_allow_paths("claude", Path(WT)) == ()
 
 
 class TestPerToolMemoryDirsCoverHookWriters:
@@ -667,9 +700,15 @@ class TestMemoryAllowlistCLI:
     repo, and a tool with no memory entry all stay denied.
     """
 
+    def _mem_target(self) -> Path:
+        from wade.hooks.cli import _encode_claude_project_path
+
+        encoded = _encode_claude_project_path(Path(WT))
+        return Path.home() / ".claude" / "projects" / encoded / "memory" / "note.md"
+
     def _mem_write(self) -> str:
-        target = Path.home() / ".claude" / "projects" / "enc" / "memory" / "note.md"
-        return json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(target)}})
+        target = str(self._mem_target())
+        return json.dumps({"tool_name": "Write", "tool_input": {"file_path": target}})
 
     def test_memory_write_allowed_worktree_mode(self) -> None:
         r = _run_lean("pre_tool_use", "worktree", "claude", self._mem_write())
@@ -683,10 +722,33 @@ class TestMemoryAllowlistCLI:
 
     def test_memory_shell_redirect_allowed_plan_mode(self) -> None:
         # Exercises the shell channel + the _is_plan_artifact_path ordering trap.
-        target = Path.home() / ".claude" / "projects" / "enc" / "memory" / "note.md"
-        stdin = json.dumps({"tool_name": "Bash", "tool_input": {"command": f"echo x > {target}"}})
+        stdin = json.dumps(
+            {"tool_name": "Bash", "tool_input": {"command": f"echo x > {self._mem_target()}"}}
+        )
         r = _run_lean("pre_tool_use", "plan", "claude", stdin)
         assert r.returncode == 0
+
+    def test_sibling_project_memory_denied(self) -> None:
+        # A different worktree's encoded memory dir is not *this* session's own —
+        # the allowlist is scoped per-session, not the whole ~/.claude/projects tree.
+        from wade.hooks.cli import _encode_claude_project_path
+
+        encoded = _encode_claude_project_path(Path("/repo/other-wt"))
+        target = Path.home() / ".claude" / "projects" / encoded / "memory" / "note.md"
+        stdin = json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(target)}})
+        r = _run_lean("pre_tool_use", "worktree", "claude", stdin)
+        assert r.returncode == 2
+
+    def test_session_transcript_write_denied(self) -> None:
+        # Sibling to memory/ under the same encoded project dir, but not memory
+        # itself — must stay denied even for this session's own project dir.
+        from wade.hooks.cli import _encode_claude_project_path
+
+        encoded = _encode_claude_project_path(Path(WT))
+        target = Path.home() / ".claude" / "projects" / encoded / "session.jsonl"
+        stdin = json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(target)}})
+        r = _run_lean("pre_tool_use", "worktree", "claude", stdin)
+        assert r.returncode == 2
 
     def test_config_file_write_denied(self) -> None:
         # ~/.claude/settings.json holds the hooks block — outside the memory subtree.
@@ -703,7 +765,6 @@ class TestMemoryAllowlistCLI:
     def test_empty_tuple_tool_gets_no_bypass(self) -> None:
         # Antigravity-CLI has an empty memory entry, so the claude memory path is just
         # another out-of-worktree write for it — denied.
-        target = str(Path.home() / ".claude" / "projects" / "enc" / "memory" / "note.md")
-        stdin = json.dumps({"tool_name": "Write", "tool_input": {"path": target}})
+        stdin = json.dumps({"tool_name": "Write", "tool_input": {"path": str(self._mem_target())}})
         r = _run_lean("pre_tool_use", "worktree", "antigravity-cli", stdin)
         assert r.returncode == 2
