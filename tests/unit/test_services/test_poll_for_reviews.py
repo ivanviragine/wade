@@ -471,6 +471,81 @@ def test_bot_completed_no_signals_returns_review_complete(
 
 
 @patch(_SLEEP)
+@patch(_STATUS)
+@patch(_GET_PR)
+def test_bot_completed_signal_covers_head_returns_review_complete(
+    mock_get_pr: MagicMock,
+    mock_status: MagicMock,
+    mock_sleep: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """COMPLETED with a bot signal at/after HEAD → REVIEW_COMPLETE (no regression)."""
+    from datetime import datetime, timedelta
+
+    commit = datetime.now(UTC) - timedelta(minutes=30)
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
+    mock_status.return_value = PRReviewStatus(
+        actionable_threads=[],
+        all_unresolved_threads=[],
+        bot_status=ReviewBotStatus.COMPLETED,
+        bot_status_ts=commit + timedelta(seconds=5),  # bot reviewed after the commit
+        latest_commit_pushed_at=commit,
+        pending_reviewers=[],
+    )
+
+    result = poll_for_reviews(_provider(), tmp_path, 42, "feat/42-test")
+
+    assert result == PollOutcome.REVIEW_COMPLETE
+    mock_sleep.assert_not_called()
+
+
+@patch(_SLEEP)
+@patch(_TIME)
+@patch(_STATUS)
+@patch(_GET_PR)
+def test_bot_completed_but_commit_newer_than_signal_keeps_polling(
+    mock_get_pr: MagicMock,
+    mock_status: MagicMock,
+    mock_time: MagicMock,
+    _mock_sleep: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """Regression for #403 (crossby #131): COMPLETED but the latest commit postdates
+    the newest bot signal → must NOT return REVIEW_COMPLETE. It keeps polling and
+    eventually hits QUIET_TIMEOUT when no fresh review arrives.
+    """
+    from datetime import datetime, timedelta
+
+    # crossby #131 timeline: HEAD commit ~21 minutes after the last bot review.
+    # Both must be comfortably in the past so the commit is not "fresh".
+    head_commit = datetime.now(UTC) - timedelta(minutes=30)
+    last_bot_review = head_commit - timedelta(minutes=21)
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
+    mock_status.return_value = PRReviewStatus(
+        actionable_threads=[],
+        all_unresolved_threads=[],
+        bot_status=ReviewBotStatus.COMPLETED,
+        bot_status_ts=last_bot_review,
+        latest_commit_pushed_at=head_commit,
+        pending_reviewers=[],
+    )
+    # First call sets quiet_start, second call trips the quiet timeout.
+    mock_time.side_effect = [100.0, 800.0]  # elapsed = 700s > quiet_timeout=600
+
+    result = poll_for_reviews(
+        _provider(),
+        tmp_path,
+        42,
+        "feat/42-test",
+        poll_interval=60,
+        quiet_timeout=600,
+    )
+
+    assert result == PollOutcome.QUIET_TIMEOUT
+    assert mock_status.call_count >= 2
+
+
+@patch(_SLEEP)
 @patch(_TIME)
 @patch(_STATUS)
 @patch(_GET_PR)

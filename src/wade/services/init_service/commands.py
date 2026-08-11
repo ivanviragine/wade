@@ -360,16 +360,9 @@ def init(
         return False
     knowledge_setup = normalized_knowledge_setup
 
-    if knowledge_setup.get("enabled"):
-        from wade.services.knowledge_service import resolve_ratings_path
-
-        knowledge_path: str = knowledge_setup.get("path", "KNOWLEDGE.md")
-        copy_list_k: list[str] = hooks_setup.get("copy_to_worktree", [])
-        ratings_path = str(resolve_ratings_path(Path(knowledge_path)))
-        for managed_path in (knowledge_path, ratings_path):
-            if managed_path not in copy_list_k:
-                copy_list_k.append(managed_path)
-        hooks_setup["copy_to_worktree"] = copy_list_k
+    # The knowledge file + ratings sidecar are NOT added to copy_to_worktree (#358):
+    # they are tracked, so a new worktree already checks out the committed version.
+    # Copying main's copy over it is what manufactured the stale snapshot #358 fixes.
 
     # Write phase
     if not non_interactive:

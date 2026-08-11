@@ -415,6 +415,35 @@ def update_pr_body(repo_root: Path, pr_number: int, body: str) -> bool:
     return result.returncode == 0
 
 
+def update_pr_title(repo_root: Path, pr_number: int, title: str) -> bool:
+    """Update the title of an existing pull request.
+
+    Used by ``done()`` to sync an open PR's title to a corrected issue title so a
+    stale (non-conventional) title reaching the PR before this enforcement can be
+    fixed in place — clearing the ``PR Title Lint`` CI check. Mirrors
+    :func:`update_pr_body` (``gh pr edit <n> --title``, retry transient failures).
+
+    Args:
+        repo_root: Repository root directory.
+        pr_number: PR number to update.
+        title: New PR title.
+
+    Returns:
+        True if the update succeeded, False otherwise.
+    """
+    result = _run_gh(
+        "pr",
+        "edit",
+        str(pr_number),
+        "--title",
+        title,
+        cwd=repo_root,
+        check=False,
+        retries=3,
+    )
+    return result.returncode == 0
+
+
 # Substrings in ``gh`` stderr that mean "no PR exists for this branch" — a
 # normal, non-error result — as opposed to a transient/permanent lookup failure
 # (network error, bad auth, rate limit). ``gh pr view <branch>`` exits non-zero

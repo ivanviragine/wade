@@ -1,0 +1,3 @@
+Implementation phase; the full plan lives in PLAN.md at the worktree root.
+Wrap up with `wade implementation-session done`: it syncs onto base, pushes, and opens or updates the PR — skip the manual `git push` / `gh pr create`.
+Expect gates first: review findings to resolve, a base-branch sync/rebase, and a pre-push backstop that refuses an unmarked push.

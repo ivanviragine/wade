@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import sys
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import typer
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 knowledge_app = typer.Typer(
     help="Project knowledge management.",
@@ -14,6 +17,30 @@ tag_app = typer.Typer(help="Manage tags on knowledge entries.")
 knowledge_app.add_typer(tag_app, name="tag")
 
 VALID_SESSION_TYPES = ("plan", "implementation")
+
+
+def _refuse_write_in_throwaway_session(project_root: Path, command: str) -> None:
+    """Render + exit when a knowledge *write* is refused in a throwaway detached session.
+
+    The git-state policy (is this a throwaway detached-HEAD plan / ``task deps`` worktree?
+    is a plan dir present?) lives in :func:`knowledge_service.refusal_for_throwaway_write`;
+    this CLI helper only renders the returned domain result and performs the Typer exit.
+    """
+    from wade.services.knowledge_service import refusal_for_throwaway_write
+    from wade.ui.console import console
+
+    refusal = refusal_for_throwaway_write(project_root, command)
+    if refusal is None:
+        return
+    console.error(
+        "This worktree is discarded at session end and has no PR to carry the edit, "
+        f"so `{refusal.command}` is unavailable here."
+    )
+    if refusal.plan_hint:
+        console.hint(
+            "Record the learning in the plan file; the implementation session will capture it."
+        )
+    raise typer.Exit(1)
 
 
 @knowledge_app.command()
@@ -62,6 +89,9 @@ def add(
         raise typer.Exit(1)
 
     project_root = Path(config.project_root) if config.project_root else Path.cwd()
+    # `add` writes an entry that must ride to origin in a PR. A throwaway
+    # detached-HEAD plan/deps worktree has none, so refuse (see helper).
+    _refuse_write_in_throwaway_session(project_root, "wade knowledge add")
     try:
         knowledge_path = resolve_canonical_knowledge_path(project_root, config.knowledge)
         if supersedes and not find_entry_id(knowledge_path, supersedes):
@@ -206,6 +236,42 @@ def rate(
 
 
 @knowledge_app.command()
+def status() -> None:
+    """Report uncommitted knowledge/ratings changes on the resolved root."""
+    from pathlib import Path
+
+    from wade.config.loader import load_config
+    from wade.services.knowledge_service import knowledge_status
+    from wade.ui.console import console
+
+    config = load_config()
+    if not config.knowledge.enabled:
+        console.error("Knowledge capture is not enabled. Run `wade init` to enable it.")
+        raise typer.Exit(1)
+
+    project_root = Path(config.project_root) if config.project_root else Path.cwd()
+    try:
+        result = knowledge_status(project_root, config.knowledge)
+    except (ValueError, OSError) as exc:
+        console.error(str(exc))
+        raise typer.Exit(1) from exc
+
+    if not result.dirty_paths and not result.legacy_migration_pending:
+        console.success("Knowledge is clean — no uncommitted knowledge or ratings changes.")
+        return
+
+    if result.dirty_paths:
+        console.warn("Uncommitted knowledge/ratings changes:")
+        for line in result.dirty_paths:
+            console.detail(line)
+    if result.legacy_migration_pending:
+        console.info(
+            "A legacy ratings YAML file is pending migration to .ratings.jsonl "
+            "(converts on the next `wade knowledge rate`)."
+        )
+
+
+@knowledge_app.command()
 def enable(
     path: str | None = typer.Option(
         None, "--path", help="Custom path for knowledge file (relative to project root)."
@@ -278,6 +344,7 @@ def tag_add(
         raise typer.Exit(1)
 
     project_root = Path(config.project_root) if config.project_root else Path.cwd()
+    _refuse_write_in_throwaway_session(project_root, "wade knowledge tag add")
     try:
         knowledge_path = resolve_canonical_knowledge_path(project_root, config.knowledge)
         add_tag_to_entry(knowledge_path, entry_id, tag)
@@ -313,6 +380,7 @@ def tag_remove(
         raise typer.Exit(1)
 
     project_root = Path(config.project_root) if config.project_root else Path.cwd()
+    _refuse_write_in_throwaway_session(project_root, "wade knowledge tag remove")
     try:
         knowledge_path = resolve_canonical_knowledge_path(project_root, config.knowledge)
         remove_tag_from_entry(knowledge_path, entry_id, tag)

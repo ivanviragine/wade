@@ -8,17 +8,29 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from wade.git import branch as git_branch
-from wade.models.config import AICommandConfig, AIConfig, DoneConfig, ProjectConfig, ProjectSettings
+from wade.models.config import (
+    AICommandConfig,
+    AIConfig,
+    DoneConfig,
+    ProjectConfig,
+    ProjectSettings,
+    ProviderConfig,
+    ProviderID,
+)
 from wade.models.review import ReviewComment, ReviewThread
 from wade.models.session import SyncResult
+from wade.models.task import Task
 from wade.services.implementation_service.done import (
     _behind_count,
+    _gate_knowledge_valid,
     _gate_pr_summary,
+    _gate_pr_title,
     _gate_resolved_threads,
     _gate_review_ran,
     _gate_sync,
     _is_placeholder_pr_summary,
     _run_completion_gates,
+    _title_fix_hint,
 )
 from wade.utils import markers
 
@@ -57,6 +69,69 @@ class TestPrSummaryGate:
     def test_hatch_disables_gate(self, tmp_path: Path) -> None:
         # No PR-SUMMARY.md at all, but the hatch is off → gate passes.
         assert _gate_pr_summary(self._config(require=False), tmp_path) is True
+
+
+class TestPrTitleGate:
+    """`_gate_pr_title` blocks a non-conventional issue title (both session types)."""
+
+    def _provider(self, title: str) -> MagicMock:
+        provider = MagicMock()
+        provider.read_task.return_value = Task(id="42", title=title)
+        return provider
+
+    def test_passes_for_conventional_title(self) -> None:
+        provider = self._provider("feat: add the thing")
+        assert _gate_pr_title(ProjectConfig(), provider, "42") is True
+
+    def test_blocks_non_conventional_title(self) -> None:
+        provider = self._provider("E3: Session-start context injection")
+        assert _gate_pr_title(ProjectConfig(), provider, "42") is False
+
+    def test_read_failure_is_non_blocking(self) -> None:
+        provider = MagicMock()
+        provider.read_task.side_effect = RuntimeError("gh boom")
+        # A flaky provider read must not trap completion — _done_via_pr surfaces
+        # the hard read error later.
+        assert _gate_pr_title(ProjectConfig(), provider, "42") is True
+
+    def test_hatch_disables_gate(self) -> None:
+        config = ProjectConfig(done=DoneConfig(require_conventional_title=False))
+        provider = MagicMock()
+        assert _gate_pr_title(config, provider, "42") is True
+        provider.read_task.assert_not_called()
+
+    def test_markup_in_title_does_not_crash(self, capsys) -> None:
+        # The rejected title is echoed back through Rich-rendering console methods.
+        # A stray `[/]` is markup that "has nothing to close" and raises
+        # MarkupError when parsed — the gate must render it literally instead of
+        # crashing after the (successful) validation work. See KNOWLEDGE.md.
+        provider = self._provider("[/] not conventional")
+        assert _gate_pr_title(ProjectConfig(), provider, "42") is False
+        out = capsys.readouterr()
+        combined = out.out + out.err
+        # Rendered literally — the raw bracket text survives to the output.
+        assert "[/] not conventional" in combined
+
+
+class TestTitleFixHint:
+    """`_title_fix_hint` points at the configured provider's title-update path."""
+
+    def test_github_uses_gh_issue_edit(self) -> None:
+        config = ProjectConfig(provider=ProviderConfig(name=ProviderID.GITHUB))
+        hint = _title_fix_hint(config, "42")
+        assert "gh issue edit 42" in hint
+
+    def test_clickup_does_not_use_gh(self) -> None:
+        config = ProjectConfig(provider=ProviderConfig(name=ProviderID.CLICKUP))
+        hint = _title_fix_hint(config, "42")
+        assert "gh issue edit" not in hint
+        assert "ClickUp" in hint
+
+    def test_markdown_does_not_use_gh(self) -> None:
+        config = ProjectConfig(provider=ProviderConfig(name=ProviderID.MARKDOWN))
+        hint = _title_fix_hint(config, "42")
+        assert "gh issue edit" not in hint
+        assert "Markdown" in hint
 
 
 class TestPlaceholderDetection:
@@ -105,6 +180,120 @@ class TestReviewRanGate:
             ai=AIConfig(review_implementation=AICommandConfig(enabled=False)),
         )
         assert _gate_review_ran(config, tmp_path, "abc", skip_review=False) is True
+
+
+def _captured_text(capsys) -> str:
+    """Combined stdout+stderr with whitespace collapsed (survives rich wrapping).
+
+    ``console.error``/``warn`` go to stderr while ``hint``/``detail`` go to
+    stdout, and rich soft-wraps long lines — so join both streams and normalize
+    whitespace before substring-matching a phrase.
+    """
+    captured = capsys.readouterr()
+    return " ".join((captured.out + "\n" + captured.err).split())
+
+
+class TestReviewRanCap:
+    """The code-enforced review-pass cap (``done.max_review_passes``, default 2) on
+    the implementation path (#384)."""
+
+    def test_refuses_before_cap_with_pass_count(self, tmp_path: Path, capsys) -> None:
+        # One prior pass, no exact-sha marker, limit 2 → refuse "pass 1 of 2".
+        markers.record_review_pass(tmp_path, "sha1")
+        assert (
+            _gate_review_ran(
+                ProjectConfig(),
+                tmp_path,
+                "newhead",
+                skip_review=False,
+                session_type="implementation",
+            )
+            is False
+        )
+        text = _captured_text(capsys)
+        assert "review pass 1 of 2" in text
+        assert "--skip-review" in text
+
+    def test_passes_at_cap_with_notice(self, tmp_path: Path, capsys) -> None:
+        # Two distinct reviewed commits reach the cap → complete anyway + notice.
+        markers.record_review_pass(tmp_path, "sha1")
+        markers.record_review_pass(tmp_path, "sha2")
+        assert (
+            _gate_review_ran(
+                ProjectConfig(),
+                tmp_path,
+                "newhead",
+                skip_review=False,
+                session_type="implementation",
+            )
+            is True
+        )
+        text = _captured_text(capsys)
+        assert "safety limit reached (2 of 2)" in text
+        assert "not re-reviewed" in text.lower()
+        assert "--skip-review" in text
+
+    def test_exact_sha_fast_path_wins_over_cap(self, tmp_path: Path, capsys) -> None:
+        # An exact-sha reviewed marker passes even when the review-pass cap is
+        # already exhausted — the fast path precedes the cap check.
+        markers.record_review_pass(tmp_path, "sha1")
+        markers.record_review_pass(tmp_path, "sha2")  # cap (default 2) reached
+        markers.write_marker(tmp_path, "reviewed", "head")
+        assert (
+            _gate_review_ran(
+                ProjectConfig(), tmp_path, "head", skip_review=False, session_type="implementation"
+            )
+            is True
+        )
+        # Took the exact-sha fast path, not the cap branch (no safety-limit notice).
+        assert "safety limit reached" not in _captured_text(capsys)
+
+    def test_custom_max_review_passes_honored(self, tmp_path: Path) -> None:
+        config = ProjectConfig(done=DoneConfig(max_review_passes=3))
+        markers.record_review_pass(tmp_path, "sha1")
+        markers.record_review_pass(tmp_path, "sha2")
+        # 2 passes < limit 3 → still refuses.
+        assert (
+            _gate_review_ran(
+                config, tmp_path, "newhead", skip_review=False, session_type="implementation"
+            )
+            is False
+        )
+        markers.record_review_pass(tmp_path, "sha3")
+        # 3 passes == limit 3 → passes.
+        assert (
+            _gate_review_ran(
+                config, tmp_path, "newhead", skip_review=False, session_type="implementation"
+            )
+            is True
+        )
+
+    def test_fail_safe_count_never_false_caps(self, tmp_path: Path) -> None:
+        # A `.wade` that is a regular file makes the listing fail → count 0 →
+        # refuse (never a false "cap reached").
+        (tmp_path / ".wade").write_text("")
+        assert (
+            _gate_review_ran(
+                ProjectConfig(), tmp_path, "head", skip_review=False, session_type="implementation"
+            )
+            is False
+        )
+
+    def test_review_pr_comments_path_never_caps(self, tmp_path: Path) -> None:
+        # Even with passes >= limit, the review-pr-comments path keeps the
+        # unbounded fast-path-or-refuse behavior — the cap is impl-only.
+        markers.record_review_pass(tmp_path, "sha1")
+        markers.record_review_pass(tmp_path, "sha2")
+        assert (
+            _gate_review_ran(
+                ProjectConfig(),
+                tmp_path,
+                "newhead",
+                skip_review=False,
+                session_type="review-pr-comments",
+            )
+            is False
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -288,12 +477,14 @@ class TestRunCompletionGatesOrder:
             return lambda *a, **k: (calls.append(name), True)[1]
 
         with (
+            patch.object(done_mod, "_gate_pr_title", side_effect=_record("pr_title")),
             patch.object(done_mod, "_gate_pr_summary", side_effect=_record("pr_summary")),
             patch.object(
                 done_mod, "_gate_resolved_threads", side_effect=_record("resolved_threads")
             ),
             patch.object(done_mod, "_gate_review_ran", side_effect=_record("review_ran")),
             patch.object(done_mod, "_gate_sync", side_effect=_record("sync")),
+            patch.object(done_mod, "_gate_knowledge_valid", side_effect=_record("knowledge_valid")),
         ):
             assert (
                 _run_completion_gates(
@@ -304,6 +495,7 @@ class TestRunCompletionGatesOrder:
                     worktree_root=Path("/wt"),
                     branch="feat/x",
                     main_branch="main",
+                    issue_number="42",
                     pre_sync_head="abc123",
                     skip_review=False,
                 )
@@ -311,8 +503,72 @@ class TestRunCompletionGatesOrder:
             )
         return calls
 
-    def test_implementation_runs_pr_summary_review_then_sync(self) -> None:
-        assert self._order("implementation") == ["pr_summary", "review_ran", "sync"]
+    def test_implementation_runs_title_pr_summary_review_sync_then_knowledge(self) -> None:
+        # Title gate runs first (block earliest on a bad title, before any PR
+        # mutation); knowledge validation runs LAST — after sync merges the base
+        # branch (the local merge=union point where KNOWLEDGE.md could be corrupted).
+        assert self._order("implementation") == [
+            "pr_title",
+            "pr_summary",
+            "review_ran",
+            "sync",
+            "knowledge_valid",
+        ]
 
-    def test_review_runs_threads_then_review_and_never_syncs(self) -> None:
-        assert self._order("review-pr-comments") == ["resolved_threads", "review_ran"]
+    def test_review_runs_title_threads_review_then_knowledge_and_never_syncs(self) -> None:
+        assert self._order("review-pr-comments") == [
+            "pr_title",
+            "resolved_threads",
+            "review_ran",
+            "knowledge_valid",
+        ]
+
+
+class TestKnowledgeValidGate:
+    """`_gate_knowledge_valid` refuses a structurally corrupt knowledge file (#358)."""
+
+    def _config(self, tmp_path: Path, *, enabled: bool) -> ProjectConfig:
+        from wade.models.config import KnowledgeConfig
+
+        return ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=enabled, path="KNOWLEDGE.md"),
+        )
+
+    def test_noop_when_knowledge_disabled(self, tmp_path: Path) -> None:
+        # A corrupt file is ignored entirely when knowledge is off.
+        (tmp_path / "KNOWLEDGE.md").write_text(
+            "## dup | 2026-01-01 | plan\n\na\n\n---\n## dup | 2026-01-01 | plan\n\nb\n\n---\n",
+            encoding="utf-8",
+        )
+        assert _gate_knowledge_valid(self._config(tmp_path, enabled=False), tmp_path) is True
+
+    def test_passes_for_valid_file(self, tmp_path: Path) -> None:
+        (tmp_path / "KNOWLEDGE.md").write_text(
+            "# Project Knowledge\n\n## abcd1234 | 2026-01-01 | plan\n\nbody\n\n---\n",
+            encoding="utf-8",
+        )
+        assert _gate_knowledge_valid(self._config(tmp_path, enabled=True), tmp_path) is True
+
+    def test_passes_when_file_missing(self, tmp_path: Path) -> None:
+        assert _gate_knowledge_valid(self._config(tmp_path, enabled=True), tmp_path) is True
+
+    def test_refuses_duplicate_entry_id(self, tmp_path: Path) -> None:
+        (tmp_path / "KNOWLEDGE.md").write_text(
+            "# Project Knowledge\n\n"
+            "## abcd1234 | 2026-01-01 | plan\n\none\n\n---\n"
+            "## abcd1234 | 2026-01-01 | plan | tags: git\n\ntwo\n\n---\n",
+            encoding="utf-8",
+        )
+        assert _gate_knowledge_valid(self._config(tmp_path, enabled=True), tmp_path) is False
+
+    def test_refuses_unresolved_conflict_markers(self, tmp_path: Path) -> None:
+        # validate_knowledge_file rejects unresolved VCS conflict markers too (a non-union
+        # merge backstop) — protect that second structural-validation path from regression.
+        (tmp_path / "KNOWLEDGE.md").write_text(
+            "# Project Knowledge\n\n"
+            "## abcd1234 | 2026-01-01 | plan\n\n"
+            "<<<<<<< HEAD\none\n=======\ntwo\n>>>>>>> branch\n\n---\n",
+            encoding="utf-8",
+        )
+        assert _gate_knowledge_valid(self._config(tmp_path, enabled=True), tmp_path) is False

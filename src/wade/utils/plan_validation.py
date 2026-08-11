@@ -20,13 +20,18 @@ consistent.
 
 from __future__ import annotations
 
-import re
 from enum import StrEnum
 from pathlib import Path
 
 from pydantic import BaseModel
 
 from wade.models.task import PlanFile
+from wade.utils.conventional import (
+    CONVENTIONAL_COMMIT_RE as _CONVENTIONAL_COMMIT_RE,
+)
+from wade.utils.conventional import (
+    conventional_title_error,
+)
 
 # ---------------------------------------------------------------------------
 # Plan file discovery
@@ -45,10 +50,6 @@ def discover_plan_files(plan_dir: Path) -> list[Path]:
 # ---------------------------------------------------------------------------
 
 _RECOMMENDED_SECTIONS = ("tasks", "acceptance criteria")
-
-_CONVENTIONAL_COMMIT_RE = re.compile(
-    r"^(feat|fix|docs|refactor|chore|style|perf|test|ci|build|revert|update)(\(.+\))?!?:\s+\S"
-)
 
 
 class PlanDiagnosticLevel(StrEnum):
@@ -134,11 +135,7 @@ def validate_plan_dir(plan_dir: Path) -> PlanValidationResult:
                 PlanDiagnostic(
                     file=md_file.name,
                     level=PlanDiagnosticLevel.ERROR,
-                    message=(
-                        f"Title '{plan.title}' does not start with a conventional commit prefix. "
-                        "Use: feat, fix, docs, refactor, chore, style, perf, test, ci, build, "
-                        "revert, update. Example: 'feat: add retry logic to task provider'."
-                    ),
+                    message=conventional_title_error(plan.title),
                 )
             )
 

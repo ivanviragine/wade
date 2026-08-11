@@ -19,6 +19,30 @@ from wade.services.knowledge_service import (
 runner = CliRunner()
 
 
+def _write_ratings(ratings_path: Path, counters: dict[str, dict[str, int]]) -> None:
+    """Write a JSONL vote log that folds to the given per-entry counter dict.
+
+    One seed record per entry — the append-only equivalent of the old counter YAML.
+    """
+    import json
+
+    lines = [
+        json.dumps(
+            {
+                "id": entry_id,
+                "seed": True,
+                "up": counts.get("up", 0),
+                "down": counts.get("down", 0),
+                "stale": counts.get("stale", 0),
+                "superseded_by": counts.get("superseded_by"),
+            },
+            sort_keys=True,
+        )
+        for entry_id, counts in counters.items()
+    ]
+    ratings_path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
+
+
 class TestKnowledgeGetCommand:
     def test_prints_content_when_file_exists(self, tmp_path: Path) -> None:
         content = "# Knowledge\n\n---\n\n## a1b2c3d4 | 2026-03-24 | plan\n\nSome content.\n\n---\n"
@@ -92,9 +116,9 @@ class TestKnowledgeGetCommand:
         (tmp_path / "KNOWLEDGE.md").write_text(content, encoding="utf-8")
         # Rate a1b2c3d4 up, f5e6d7c8 down
         ratings_path = resolve_ratings_path(tmp_path / "KNOWLEDGE.md")
-        ratings_path.write_text(
-            yaml.safe_dump({"a1b2c3d4": {"up": 2, "down": 0}, "f5e6d7c8": {"up": 0, "down": 2}}),
-            encoding="utf-8",
+        _write_ratings(
+            ratings_path,
+            {"a1b2c3d4": {"up": 2, "down": 0}, "f5e6d7c8": {"up": 0, "down": 2}},
         )
         config = ProjectConfig(
             project_root=str(tmp_path),
@@ -110,10 +134,7 @@ class TestKnowledgeGetCommand:
         content = KNOWLEDGE_TEMPLATE + "\n## a1b2c3d4 | 2026-03-24 | plan\n\nContent.\n\n---\n"
         (tmp_path / "KNOWLEDGE.md").write_text(content, encoding="utf-8")
         ratings_path = resolve_ratings_path(tmp_path / "KNOWLEDGE.md")
-        ratings_path.write_text(
-            yaml.safe_dump({"a1b2c3d4": {"up": 3, "down": 1}}),
-            encoding="utf-8",
-        )
+        _write_ratings(ratings_path, {"a1b2c3d4": {"up": 3, "down": 1}})
         config = ProjectConfig(
             project_root=str(tmp_path),
             knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
@@ -214,10 +235,7 @@ class TestKnowledgeGetCommand:
         )
         (tmp_path / "KNOWLEDGE.md").write_text(content, encoding="utf-8")
         ratings_path = resolve_ratings_path(tmp_path / "KNOWLEDGE.md")
-        ratings_path.write_text(
-            yaml.safe_dump({"a1b2c3d4": {"up": 0, "down": 0, "stale": 2}}),
-            encoding="utf-8",
-        )
+        _write_ratings(ratings_path, {"a1b2c3d4": {"up": 0, "down": 0, "stale": 2}})
         config = ProjectConfig(
             project_root=str(tmp_path),
             knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
@@ -234,10 +252,7 @@ class TestKnowledgeGetCommand:
         )
         (tmp_path / "KNOWLEDGE.md").write_text(content, encoding="utf-8")
         ratings_path = resolve_ratings_path(tmp_path / "KNOWLEDGE.md")
-        ratings_path.write_text(
-            yaml.safe_dump({"a1b2c3d4": {"up": 0, "down": 0, "stale": 5}}),
-            encoding="utf-8",
-        )
+        _write_ratings(ratings_path, {"a1b2c3d4": {"up": 0, "down": 0, "stale": 5}})
         config = ProjectConfig(
             project_root=str(tmp_path),
             knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
@@ -251,10 +266,7 @@ class TestKnowledgeGetCommand:
         content = KNOWLEDGE_TEMPLATE + "\n## a1b2c3d4 | 2026-03-24 | plan\n\nContent.\n\n---\n"
         (tmp_path / "KNOWLEDGE.md").write_text(content, encoding="utf-8")
         ratings_path = resolve_ratings_path(tmp_path / "KNOWLEDGE.md")
-        ratings_path.write_text(
-            yaml.safe_dump({"a1b2c3d4": {"up": 2, "down": 0, "stale": 1}}),
-            encoding="utf-8",
-        )
+        _write_ratings(ratings_path, {"a1b2c3d4": {"up": 2, "down": 0, "stale": 1}})
         config = ProjectConfig(
             project_root=str(tmp_path),
             knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
@@ -391,10 +403,12 @@ class TestKnowledgeAddSupersedes:
             )
         assert result.exit_code == 0
         assert "supersedes a1b2c3d4" in result.output
-        # Check sidecar file has the link
+        # The vote log folds to a supersede link for the old id.
+        from wade.services.knowledge_service import read_ratings
+
         ratings_path = resolve_ratings_path(tmp_path / "KNOWLEDGE.md")
-        ratings = yaml.safe_load(ratings_path.read_text(encoding="utf-8"))
-        assert ratings["a1b2c3d4"]["superseded_by"] is not None
+        ratings = read_ratings(ratings_path)
+        assert ratings["a1b2c3d4"].superseded_by is not None
 
     def test_supersedes_missing_id_exits_1(self, tmp_path: Path) -> None:
         content = KNOWLEDGE_TEMPLATE + "\n## a1b2c3d4 | 2026-03-24 | plan\n\nOld.\n\n---\n"
@@ -557,3 +571,114 @@ class TestKnowledgeDisableCommand:
 
         assert result.exit_code == 1
         assert ".wade.yml not found" in result.output
+
+
+class TestThrowawaySessionGate:
+    """`add` / `tag` are refused in a detached-HEAD (plan / task deps) worktree."""
+
+    def _config(self, tmp_path: Path) -> ProjectConfig:
+        (tmp_path / "KNOWLEDGE.md").write_text(
+            KNOWLEDGE_TEMPLATE + "\n## a1b2c3d4 | 2026-03-24 | plan\n\nOld.\n\n---\n",
+            encoding="utf-8",
+        )
+        return ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
+        )
+
+    def test_add_blocked_in_plan_session_with_plan_hint(self, tmp_path: Path) -> None:
+        config = self._config(tmp_path)
+        (tmp_path / ".wade" / "plans").mkdir(parents=True)  # plan worktree signal
+        with (
+            patch("wade.config.loader.load_config", return_value=config),
+            patch("wade.git.repo.get_git_dir", return_value=".git"),
+            patch("wade.git.repo.is_head_attached", return_value=False),
+        ):
+            result = runner.invoke(
+                app,
+                ["knowledge", "add", "--session", "plan"],
+                input="A learning\n",
+            )
+        assert result.exit_code == 1
+        assert "discarded at session end" in result.output
+        assert "plan file" in result.output  # plan-file hint present
+
+    def test_add_blocked_in_deps_session_without_plan_hint(self, tmp_path: Path) -> None:
+        # A `task deps` worktree is also detached but has NO .wade/plans dir — the
+        # base message must stand alone with no false "put it in the plan file".
+        config = self._config(tmp_path)
+        with (
+            patch("wade.config.loader.load_config", return_value=config),
+            patch("wade.git.repo.get_git_dir", return_value=".git"),
+            patch("wade.git.repo.is_head_attached", return_value=False),
+        ):
+            result = runner.invoke(
+                app,
+                ["knowledge", "add", "--session", "implementation"],
+                input="A learning\n",
+            )
+        assert result.exit_code == 1
+        assert "discarded at session end" in result.output
+        assert "plan file" not in result.output  # no plan-file hint for a deps session
+
+    def test_tag_add_blocked_in_throwaway_session(self, tmp_path: Path) -> None:
+        config = self._config(tmp_path)
+        with (
+            patch("wade.config.loader.load_config", return_value=config),
+            patch("wade.git.repo.get_git_dir", return_value=".git"),
+            patch("wade.git.repo.is_head_attached", return_value=False),
+        ):
+            result = runner.invoke(app, ["knowledge", "tag", "add", "a1b2c3d4", "git"])
+        assert result.exit_code == 1
+        assert "discarded at session end" in result.output
+
+    def test_add_allowed_when_attached(self, tmp_path: Path) -> None:
+        config = self._config(tmp_path)
+        with (
+            patch("wade.config.loader.load_config", return_value=config),
+            patch("wade.git.repo.get_git_dir", return_value=".git"),
+            patch("wade.git.repo.is_head_attached", return_value=True),
+        ):
+            result = runner.invoke(
+                app,
+                ["knowledge", "add", "--session", "implementation"],
+                input="A learning\n",
+            )
+        assert result.exit_code == 0
+
+    def test_add_allowed_outside_git_repo(self, tmp_path: Path) -> None:
+        # A non-repo path (tests, odd setups) must NOT be treated as a throwaway session.
+        config = self._config(tmp_path)
+        with (
+            patch("wade.config.loader.load_config", return_value=config),
+            patch("wade.git.repo.get_git_dir", return_value=None),
+        ):
+            result = runner.invoke(
+                app,
+                ["knowledge", "add", "--session", "implementation"],
+                input="A learning\n",
+            )
+        assert result.exit_code == 0
+
+
+class TestKnowledgeStatusCommand:
+    def test_status_reports_pending_legacy_migration(self, tmp_path: Path) -> None:
+        (tmp_path / "KNOWLEDGE.ratings.yml").write_text("e: {up: 1}\n", encoding="utf-8")
+        config = ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
+        )
+        with patch("wade.config.loader.load_config", return_value=config):
+            result = runner.invoke(app, ["knowledge", "status"])
+        assert result.exit_code == 0
+        assert "pending migration" in result.output
+
+    def test_status_clean_when_nothing_pending(self, tmp_path: Path) -> None:
+        config = ProjectConfig(
+            project_root=str(tmp_path),
+            knowledge=KnowledgeConfig(enabled=True, path="KNOWLEDGE.md"),
+        )
+        with patch("wade.config.loader.load_config", return_value=config):
+            result = runner.invoke(app, ["knowledge", "status"])
+        assert result.exit_code == 0
+        assert "clean" in result.output.lower()

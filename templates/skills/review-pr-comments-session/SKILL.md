@@ -33,12 +33,7 @@ next step you'll take.
 **NEVER** use `gh issue create` or the GitHub API to create issues directly.
 Always use `wade task create` for interactive issue creation.
 
-## Project Knowledge
-
-Before addressing comments, search for knowledge about the files and topics being
-reviewed (do not dump all entries) — past gotchas about the files you're editing
-matter most here. Rating is required for each entry you open and evaluate. See
-@.claude/skills/knowledge/SKILL.md for search syntax and the rating decision tree.
+{knowledge_step}
 
 ## First action: check your context
 
@@ -159,6 +154,11 @@ it fails, debug and fix it — do NOT bypass.
   block. Hatch: `done.require_resolved_threads: false` in `.wade.yml`.
 - `wade review implementation` has not run for the current commit → run it, or
   pass `--skip-review`. Hatch: `done.require_review: false`.
+
+`done` also records the review outcome as a `## Review Status` line in the PR body
+(reviewed at `<sha>` / skipped via `--skip-review` / gate disabled), with the
+review-pass count — so a skipped or never-run review is visible to reviewers, not
+silent.
 
 A **pre-push git hook** refuses a push of the session branch without a current
 `.wade/done@<sha>` marker (`done` writes it). `git push --no-verify` bypasses it

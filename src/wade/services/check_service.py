@@ -23,7 +23,11 @@ from wade.models.config import (
     LEGACY_AI_COMMAND_ALIASES,
     AICommandConfig,
     AIConfig,
+    CommitMsgConfig,
     DoneConfig,
+    HooksConfig,
+    PostToolUseConfig,
+    PreCommitConfig,
     ProjectConfig,
 )
 from wade.models.delegation import DelegationMode
@@ -264,6 +268,15 @@ _VALID_AI_TOP_LEVEL_KEYS = frozenset(
 # validator can't drift from the schema (per knowledge ca245d6a — config-key
 # validity lives in three places; deriving keeps them in sync automatically).
 _VALID_DONE_KEYS = frozenset(DoneConfig.model_fields)
+
+# Valid keys for the ``hooks`` section and its quality-gate subsections, all
+# derived from their Pydantic models for the same reason (#352 added
+# pre_commit / commit_msg / post_tool_use; hand-maintaining these sets is exactly
+# the drift knowledge ca245d6a warns about).
+_VALID_HOOKS_KEYS = frozenset(HooksConfig.model_fields)
+_VALID_PRE_COMMIT_KEYS = frozenset(PreCommitConfig.model_fields)
+_VALID_COMMIT_MSG_KEYS = frozenset(CommitMsgConfig.model_fields)
+_VALID_POST_TOOL_USE_KEYS = frozenset(PostToolUseConfig.model_fields)
 
 
 def validate_config(cwd: Path | None = None) -> ConfigCheckResult:
@@ -598,7 +611,7 @@ def _validate_permissions_section(permissions: dict[str, Any], errors: list[str]
 
 
 def _validate_hooks_section(hooks: dict[str, Any], errors: list[str]) -> None:
-    """Validate the hooks section."""
+    """Validate the hooks section (including the #352 quality-gate subsections)."""
     copy_list = hooks.get("copy_to_worktree")
     if copy_list is not None:
         if not isinstance(copy_list, list):
@@ -618,10 +631,84 @@ def _validate_hooks_section(hooks: dict[str, Any], errors: list[str]) -> None:
                         f"hooks.copy_to_worktree[{i}]: item is empty. Use: - <relative-path>"
                     )
 
-    valid_keys = {"post_worktree_create", "copy_to_worktree"}
+    _validate_hooks_subsection(
+        hooks.get("pre_commit"),
+        section="hooks.pre_commit",
+        valid_keys=_VALID_PRE_COMMIT_KEYS,
+        string_keys=("lint", "test"),
+        bool_keys=(),
+        positive_int_keys=(),
+        errors=errors,
+    )
+    _validate_hooks_subsection(
+        hooks.get("commit_msg"),
+        section="hooks.commit_msg",
+        valid_keys=_VALID_COMMIT_MSG_KEYS,
+        string_keys=(),
+        bool_keys=("conventional",),
+        positive_int_keys=(),
+        errors=errors,
+    )
+    _validate_hooks_subsection(
+        hooks.get("post_tool_use"),
+        section="hooks.post_tool_use",
+        valid_keys=_VALID_POST_TOOL_USE_KEYS,
+        string_keys=("lint_cmd",),
+        bool_keys=("enabled",),
+        positive_int_keys=("timeout",),
+        errors=errors,
+    )
+
+    # Derived from HooksConfig.model_fields so a field added to the model is
+    # accepted automatically — no hand-maintained literal set to drift (#368).
     for key in hooks:
-        if key not in valid_keys:
+        if key not in _VALID_HOOKS_KEYS:
             errors.append(f"hooks.{key}: unsupported key")
+
+
+def _validate_hooks_subsection(
+    section_raw: Any,
+    *,
+    section: str,
+    valid_keys: frozenset[str],
+    string_keys: tuple[str, ...],
+    bool_keys: tuple[str, ...],
+    positive_int_keys: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    """Validate one nested ``hooks.*`` quality-gate subsection.
+
+    A ``None`` section (key absent, or present-but-null → treated as "unset,
+    use defaults") is skipped; any other non-mapping value is an error. String
+    keys must be non-empty strings, bool keys booleans, and positive-int keys
+    positive integers (rejecting ``bool``, which is an ``int`` subclass).
+    """
+    if section_raw is None:
+        return
+    if not isinstance(section_raw, dict):
+        errors.append(f"{section}: must be a mapping")
+        return
+
+    for key in string_keys:
+        value = section_raw.get(key)
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            errors.append(f"{section}.{key}: must be a non-empty string command")
+
+    for key in bool_keys:
+        value = section_raw.get(key)
+        if value is not None and not isinstance(value, bool):
+            errors.append(f"{section}.{key}: must be true or false")
+
+    for key in positive_int_keys:
+        value = section_raw.get(key)
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or value <= 0
+        ):
+            errors.append(f"{section}.{key}: must be a positive integer")
+
+    for key in section_raw:
+        if key not in valid_keys:
+            errors.append(f"{section}.{key}: unsupported key")
 
 
 def _validate_knowledge_section(
@@ -655,12 +742,14 @@ def _validate_knowledge_section(
 
 
 def _validate_done_section(done: dict[str, Any], errors: list[str]) -> None:
-    """Validate the ``done`` completion-gate section (all fields are booleans).
+    """Validate the ``done`` completion-gate section.
 
-    Iterating ``done.items()`` only sees keys the user explicitly wrote, so an
-    explicit null (``require_sync:`` with no value) is a user mistake, not an
-    "unset" default — reject it. This keeps `wade check` aligned with the loader,
-    which normalizes such a null to the documented default rather than crashing.
+    Every field is a boolean gate toggle **except** ``max_review_passes``, which
+    is a positive int (#384). Iterating ``done.items()`` only sees keys the user
+    explicitly wrote, so an explicit null (``require_sync:`` with no value) is a
+    user mistake, not an "unset" default — reject it. This keeps `wade check`
+    aligned with the loader, which normalizes such a null to the documented
+    default rather than crashing.
     """
     for key, value in done.items():
         if key not in _VALID_DONE_KEYS:
@@ -668,5 +757,10 @@ def _validate_done_section(done: dict[str, Any], errors: list[str]) -> None:
                 f"done.{key}: unsupported key. "
                 f"Supported keys: {', '.join(sorted(_VALID_DONE_KEYS))}"
             )
+        elif key == "max_review_passes":
+            # Reject bool explicitly — it is an int subclass, so a bare
+            # `isinstance(value, int)` would wrongly accept `true`/`false`.
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                errors.append(f"done.{key}: must be a positive integer")
         elif not isinstance(value, bool):
             errors.append(f"done.{key}: must be true or false")

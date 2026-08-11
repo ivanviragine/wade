@@ -37,14 +37,7 @@ dependency analysis hooks.
 
 {review_enforcement_rule}
 
-## Project Knowledge
-
-Search for knowledge relevant to your task at session start (do not dump all
-entries), and capture important learnings before writing `PR-SUMMARY.md` when
-knowledge is enabled (`.wade.yml` → `knowledge.enabled`). Rating is required for
-each entry you open and evaluate. See @.claude/skills/knowledge/SKILL.md for
-search syntax, the rating decision tree, and entry style. Commit the updated
-knowledge file with your other changes.
+{knowledge_step}
 
 ## First action: check your context
 
@@ -69,6 +62,8 @@ The human creates worktrees via `wade implement` or `wade implement-batch`.
 
 Use [Conventional Commits](https://www.conventionalcommits.org/) format. Prefer
 `git commit` (opens an editor) over `git commit -m` for multi-line messages.
+The **issue title** must be conventional too — the PR title derives from it, so
+`done` blocks a non-conventional title (fix it as `done` instructs, then re-run).
 
 ## Closing the session
 

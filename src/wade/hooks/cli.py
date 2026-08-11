@@ -24,6 +24,7 @@ alias that delegates here.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import sys
 from pathlib import Path
@@ -43,10 +44,11 @@ from wade.hooks.policies import (
     plan_artifact_only,
     plan_complete,
     session_complete,
+    session_start_context,
     shell_containment,
     worktree_containment,
 )
-from wade.models.hooks import StopGuard
+from wade.models.hooks import SessionPhase, StopGuard
 from wade.utils import markers
 
 # Stop guards fail OPEN — an unknown one must never trap the agent. Derived from
@@ -92,6 +94,21 @@ _TOOL_STOP_DIALECTS: dict[str, HookStopDialect] = {
 # PreToolUse write guards fail CLOSED (deny) on any error or misconfiguration.
 _WRITE_GUARDS = frozenset({"worktree", "plan"})
 
+# Fallback timeout (seconds) for the PostToolUse linter when ``--timeout`` is
+# omitted. Bootstrap always bakes an explicit value; this only guards a
+# hand-invoked hook.
+_POST_TOOL_USE_TIMEOUT = 10
+
+
+def _is_post_tool_use(event: str) -> bool:
+    """True when ``event`` names the PostToolUse hook, in any casing/spelling."""
+    return event.strip().lower().replace("_", "") == "posttooluse"
+
+
+def _is_session_start(event: str) -> bool:
+    """True when ``event`` names the SessionStart hook, in any casing/spelling."""
+    return event.strip().lower().replace("_", "") == "sessionstart"
+
 
 def _dialect_for(tool: str) -> HookOutputDialect:
     return _TOOL_DIALECTS.get(tool.strip().lower(), HookOutputDialect.HOOK_SPECIFIC_OUTPUT)
@@ -101,7 +118,12 @@ def _stop_dialect_for(tool: str) -> HookStopDialect:
     return _TOOL_STOP_DIALECTS.get(tool.strip().lower(), HookStopDialect.BLOCK_DECISION)
 
 
-_VALUE_FLAGS = ("--guard", "--tool", "--root")
+# Every value-taking flag must be listed so _event_from_argv skips the flag's
+# VALUE when recovering the event positional from a rejected argv — otherwise a
+# value like `--lint-cmd stop` is mistaken for a Stop event and flips a
+# PreToolUse usage error from fail-closed to fail-open. `--unscoped` is a
+# store_true (no value), so it is deliberately absent.
+_VALUE_FLAGS = ("--guard", "--tool", "--root", "--lint-cmd", "--timeout", "--phase")
 
 
 def _event_from_argv(argv: list[str]) -> str:
@@ -404,6 +426,200 @@ def _run(event: str, guard: str, tool: str, root: str) -> HookEmission:
     return emit_decision(decision, dialect, event=ev.event or event)
 
 
+def _resolve_edited_path(ev: object, root: str) -> str | None:
+    """Resolve the just-edited file path, confined to the worktree, or None.
+
+    Returns the absolute path only when the event names a path-addressed write
+    (:attr:`HookEvent.is_write`) whose target resolves **inside** ``root``. A
+    missing path, a non-write tool call (read/shell), a missing root, or a path
+    that escapes the worktree all yield None — the linter must never run on a
+    file it cannot attribute to this in-worktree edit.
+    """
+    if not root:
+        return None
+    if not getattr(ev, "is_write", False):
+        return None
+    file_path = getattr(ev, "file_path", None)
+    if not file_path:
+        return None
+    root_path = Path(root).resolve()
+    candidate = Path(file_path)
+    if not candidate.is_absolute():
+        candidate = root_path / candidate
+    try:
+        resolved = candidate.resolve()
+    except OSError:
+        return None
+    if resolved != root_path and root_path not in resolved.parents:
+        return None
+    return str(resolved)
+
+
+def _resolve_post_tool_use_config(root: str) -> tuple[str, int, bool] | None:
+    """Resolve ``(lint_cmd, timeout, scoped)`` from the worktree's ``.wade.yml``.
+
+    Returns None when PostToolUse is disabled or no lint command resolves, so a
+    stale hook installed by a prior session self-noops once the gate is turned
+    off. ``lint_cmd`` is ``post_tool_use.lint_cmd`` (file-scoped) or, when unset,
+    ``pre_commit.lint`` (whole-repo). Imported lazily so the config loader is only
+    pulled in on this PostToolUse branch — never on the hot PreToolUse write path.
+    """
+    if not root:
+        return None
+    try:
+        from wade.config.loader import load_config
+
+        config = load_config(Path(root))
+    except Exception:
+        return None
+    ptu = config.hooks.post_tool_use
+    if not ptu.enabled:
+        return None
+    lint_cmd = ptu.lint_cmd or config.hooks.pre_commit.lint
+    if not lint_cmd:
+        return None
+    return lint_cmd, ptu.timeout, bool(ptu.lint_cmd)
+
+
+def _run_post_tool_use(
+    tool: str, root: str, lint_cmd: str | None, timeout: int | None, *, unscoped: bool
+) -> HookEmission:
+    """Run the file-scoped PostToolUse linter — strictly fire-and-forget / fail-open.
+
+    Always exits 0 and never denies. On a non-zero lint exit it returns the lint
+    output as :meth:`HookDecision.context` so the agent can fix the file while the
+    edit is still in working memory; every other outcome — a context-incapable
+    tool, disabled/no lint command, unreadable stdin, a non-write / out-of-worktree
+    edit, a timeout, empty output, or any exception — is a silent no-op.
+
+    ``lint_cmd`` may be passed explicitly (an override, used by tests); when
+    omitted it is resolved from the worktree's ``.wade.yml`` at ``root``, so the
+    installed hook command is **stable** (``--tool``/``--root`` only). That keeps
+    re-bootstrap idempotent (identical command → crossby dedups) and makes a hook
+    left over from a now-disabled gate self-noop.
+
+    The argv is built **safely**: ``shlex.split(lint_cmd)`` (config-authored,
+    trusted) plus the resolved edited path (tool-emitted, untrusted) as a list,
+    run with ``shell=False``. The path is never string-interpolated into a shell
+    command, so a hostile path cannot inject.
+    """
+    import shlex
+    import subprocess
+
+    dialect = _dialect_for(tool)
+
+    def _noop() -> HookEmission:
+        return emit_decision(HookDecision.allow(), dialect, event="post_tool_use")
+
+    # agy (DECISION dialect) has no context channel; bootstrap already skips it,
+    # but double-guard so a stray install can't fire a per-edit subprocess for it.
+    if dialect is HookOutputDialect.DECISION:
+        return _noop()
+
+    if lint_cmd is None:
+        # No explicit override — resolve from config (also self-disables a stale
+        # hook whose gate was turned off).
+        resolved = _resolve_post_tool_use_config(root)
+        if resolved is None:
+            return _noop()
+        lint_cmd, timeout, scoped = resolved
+    else:
+        scoped = not unscoped
+        if timeout is None:
+            timeout = _POST_TOOL_USE_TIMEOUT
+    if not lint_cmd:
+        return _noop()
+
+    try:
+        raw = sys.stdin.read()
+    except (OSError, ValueError):
+        return _noop()
+    ev = parse_event(raw, event="post_tool_use")
+
+    try:
+        # ValueError on an unbalanced-quote lint_cmd: config validation only
+        # checks the command is a non-empty string, so a malformed value would
+        # otherwise crash the hook with a non-zero exit — violating fail-open.
+        argv = shlex.split(lint_cmd)
+    except ValueError:
+        return _noop()
+    if not argv:
+        return _noop()
+    if scoped:
+        edited_path = _resolve_edited_path(ev, root)
+        if edited_path is None:
+            return _noop()
+        argv = [*argv, edited_path]
+
+    try:
+        proc = subprocess.run(
+            argv,
+            cwd=root or None,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        # TimeoutExpired is a SubprocessError — skip on overrun, never hang/block.
+        return _noop()
+
+    if proc.returncode == 0:
+        return _noop()
+    output = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    if not output:
+        return _noop()
+    return emit_decision(HookDecision.context(output), dialect, event="post_tool_use")
+
+
+def _run_session_start(tool: str, root: str, phase: str) -> HookEmission:
+    """Emit the SessionStart context payload — strictly non-blocking / fail-open.
+
+    Re-injects a compact, phase-gated task reminder on every SessionStart source
+    (startup / resume / compact / clear / fork — the installed hook uses a ``.*``
+    matcher). Always exit 0: ``context`` and ``allow`` are both non-blocking, so
+    this channel can never trap a session from starting. Any problem — a
+    context-incapable tool (agy), a missing ``--root`` / ``--phase``, an
+    unrecognized phase, an unreadable ``PLAN.md``, or any exception — degrades to a
+    no-op ``allow``.
+
+    All dialect/shape logic is crossby's: ``emit_decision`` serializes
+    :meth:`HookDecision.context` as nested ``hookSpecificOutput.additionalContext``
+    (Claude/Codex), flat ``additionalContext`` (Copilot), or ``additional_context``
+    (Cursor, gated to the events it reads it on). wade owns only the *policy* (the
+    text, by phase) and the *install*.
+    """
+    dialect = _dialect_for(tool)
+
+    def _noop() -> HookEmission:
+        return emit_decision(HookDecision.allow(), dialect, event="session_start")
+
+    # agy (DECISION dialect) has no verified context channel; bootstrap already
+    # skips it via supports_session_start_hook, but double-guard so a stray install
+    # can never emit anything.
+    if dialect is HookOutputDialect.DECISION:
+        return _noop()
+
+    # Read + discard stdin best-effort (consistency with the other branches; the
+    # payload is built from --root/--phase, not stdin).
+    with contextlib.suppress(OSError, ValueError):
+        sys.stdin.read()
+
+    if not root or not phase:
+        return _noop()  # nothing to inject / no phase — never block startup
+
+    try:
+        payload = session_start_context(Path(root), SessionPhase(phase))
+    except Exception:
+        # Fail open on ANY error (unknown phase, unreadable payload, …): a
+        # SessionStart hook must never block a session from starting.
+        return _noop()
+
+    if not payload:
+        return _noop()
+    return emit_decision(HookDecision.context(payload), dialect, event="session_start")
+
+
 def main(argv: list[str] | None = None) -> int:
     """Parse args, run the guard, emit the decision, return the exit code."""
     parser = argparse.ArgumentParser(
@@ -413,15 +629,42 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "event",
-        help="Canonical hook event: pre_tool_use, stop, or session_start.",
+        help="Canonical hook event: pre_tool_use, post_tool_use, stop, or session_start.",
     )
     parser.add_argument(
         "--guard",
-        required=True,
-        help="Guard policy: worktree | plan | session-complete | plan-complete.",
+        default="",
+        help=(
+            "Guard policy: worktree | plan | session-complete | plan-complete "
+            "(| context for session_start context injection)."
+        ),
     )
     parser.add_argument("--tool", required=True, help="AI tool id (selects the output dialect).")
     parser.add_argument("--root", default="", help="Worktree root — required by write guards.")
+    parser.add_argument(
+        "--phase",
+        default="",
+        help="Session phase for session_start context: plan | implement | review.",
+    )
+    # PostToolUse lint feedback (fail-open, never blocks). The installed hook
+    # passes neither --lint-cmd nor --timeout (a stable, config-driven command);
+    # these remain as explicit overrides (used by tests / manual invocation).
+    parser.add_argument(
+        "--lint-cmd",
+        default=None,
+        help="PostToolUse override: lint command; the edited path is appended unless --unscoped.",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=None,
+        help="PostToolUse override: seconds before the linter is abandoned (skip on overrun).",
+    )
+    parser.add_argument(
+        "--unscoped",
+        action="store_true",
+        help="PostToolUse override: run the lint command whole-repo (do not append the path).",
+    )
 
     raw_argv = sys.argv[1:] if argv is None else argv
     try:
@@ -429,15 +672,23 @@ def main(argv: list[str] | None = None) -> int:
     except SystemExit:
         # argparse exits 2 on a usage error. For a PreToolUse write guard that
         # would (via the non-zero code) block the edit, which is the safe
-        # direction, so let it stand. On a *Stop* event it is the opposite: exit 2
-        # means "block the stop", so a malformed invocation (e.g. a worktree path
-        # with a space that the tool's runner word-split) would trap the agent with
-        # an argparse usage message. The Stop channel fails open even here.
-        if _event_from_argv(raw_argv) == "stop":
+        # direction, so let it stand. On a *Stop*, *PostToolUse*, or *SessionStart*
+        # event it is the opposite: those channels are fail-open (PostToolUse must
+        # never block — the tool has already run; SessionStart must never block a
+        # session from starting), so a malformed invocation there returns 0.
+        event_arg = _event_from_argv(raw_argv)
+        if event_arg == "stop" or _is_post_tool_use(event_arg) or _is_session_start(event_arg):
             return 0
         raise
 
-    emission = _run(ns.event, ns.guard, ns.tool, ns.root)
+    if _is_post_tool_use(ns.event):
+        emission = _run_post_tool_use(
+            ns.tool, ns.root, ns.lint_cmd, ns.timeout, unscoped=ns.unscoped
+        )
+    elif _is_session_start(ns.event):
+        emission = _run_session_start(ns.tool, ns.root, ns.phase)
+    else:
+        emission = _run(ns.event, ns.guard, ns.tool, ns.root)
     if emission.stdout:
         sys.stdout.write(emission.stdout)
     if emission.stderr:

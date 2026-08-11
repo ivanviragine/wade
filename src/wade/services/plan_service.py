@@ -25,6 +25,7 @@ from crossby.models.ai import AIToolID, EffortLevel, TokenUsage
 
 from wade.config.loader import load_config
 from wade.models.config import ProjectConfig
+from wade.models.hooks import PLAN_ISSUE_REF_FILE, SessionPhase
 from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 from wade.models.task import CloseReason, PlanFile, Task
 from wade.providers.base import AbstractTaskProvider
@@ -104,6 +105,33 @@ def _build_issue_context_header(issue: Task) -> str:
     return "\n".join(lines)
 
 
+def _persist_plan_issue_ref(worktree_root: Path, issue: Task) -> None:
+    """Persist a compact issue heading so the PLAN SessionStart hook can re-inject it.
+
+    ``wade plan --issue-id`` pre-loads the issue into the *launch* prompt only;
+    after a resume or compaction that context is gone, and a detached plan
+    worktree has no root ``PLAN.md`` to recover it from. Writing the ``# Issue
+    #<id>: <title>`` heading to :data:`PLAN_ISSUE_REF_FILE` lets
+    :func:`wade.hooks.policies.session_start_context` restore *which* issue is
+    being planned on every SessionStart source. Best-effort — a write failure is
+    logged and swallowed so it can never abort the plan session.
+    """
+    ref_path = worktree_root / PLAN_ISSUE_REF_FILE
+    wade_dir = ref_path.parent
+    # Refuse to write through a symlinked ``.wade``: ``mkdir(exist_ok=True)`` would
+    # accept it (the dir check follows the link) and the write would land at
+    # ``<link-target>/plan-issue.md`` outside the ephemeral planning worktree.
+    # ``is_symlink`` does not follow the link, so this is a no-follow guard.
+    if wade_dir.is_symlink():
+        logger.warning("plan.issue_ref_symlinked_dir_skipped", path=str(wade_dir))
+        return
+    try:
+        wade_dir.mkdir(parents=True, exist_ok=True)
+        ref_path.write_text(f"# Issue #{issue.id}: {issue.title}\n", encoding="utf-8")
+    except OSError as e:  # pragma: no cover - defensive; must never break planning
+        logger.warning("plan.issue_ref_persist_failed", error=str(e))
+
+
 # ---------------------------------------------------------------------------
 # Plan file discovery and validation
 # ---------------------------------------------------------------------------
@@ -180,7 +208,9 @@ def _select_valid_plans(
         if file_errors:
             invalid.append(plan)
             for message in file_errors:
-                console.error(f"{plan.path.name}: {message}")
+                # Diagnostic messages can embed the plan's own (untrusted) title —
+                # render without Rich markup so bracket tokens aren't parsed.
+                console.error(f"{plan.path.name}: {message}", markup=False)
         else:
             valid.append(plan)
 
@@ -403,7 +433,8 @@ def plan(
     if issue_id:
         try:
             existing_issue = provider.read_task(issue_id)
-            console.kv("Issue", f"#{existing_issue.id}: {existing_issue.title}")
+            safe_title = console.escape_markup(existing_issue.title)
+            console.kv("Issue", f"#{existing_issue.id}: {safe_title}")
         except Exception as e:
             console.error(f"Could not fetch issue #{issue_id}: {e}")
             return False
@@ -445,7 +476,12 @@ def plan(
                 worktree_dir=planning_worktree_dir,
             )
             bootstrap_worktree(
-                planning_worktree, config, repo_root, skills=PLAN_SKILLS, plan_mode=True
+                planning_worktree,
+                config,
+                repo_root,
+                skills=PLAN_SKILLS,
+                plan_mode=True,
+                session_phase=SessionPhase.PLAN,
             )
             console.kv("Planning worktree", str(planning_worktree))
         except Exception as e:
@@ -459,6 +495,10 @@ def plan(
         plan_output_dir = planning_worktree / ".wade" / "plans"
         plan_output_dir.mkdir(parents=True, exist_ok=True)
         plan_dir = str(plan_output_dir)
+        # Persist the issue ref so a resumed/compacted issue-scoped plan session
+        # can re-inject "which issue am I planning" via the SessionStart hook.
+        if existing_issue is not None:
+            _persist_plan_issue_ref(planning_worktree, existing_issue)
     else:
         plan_dir = tempfile.mkdtemp(prefix="wade-plan-")
 

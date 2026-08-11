@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shlex
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -80,26 +82,26 @@ class TestShellContainment:
     @pytest.mark.parametrize(
         "command",
         [
-            "printf 'x' > /tmp/out.txt",  # spaced redirect
-            "printf 'x' >/tmp/out.txt",  # glued redirect
+            "printf 'x' > /etc/out.txt",  # spaced redirect
+            "printf 'x' >/etc/out.txt",  # glued redirect
             "printf x >>../main/file",  # relative traversal, glued append
-            'printf x > "/tmp/quoted"',  # quoting does not hide the target
-            "printf x > /tmp/esc\\ aped",  # escaped space
+            'printf x > "/etc/quoted"',  # quoting does not hide the target
+            "printf x > /etc/esc\\ aped",  # escaped space
             "cd /etc && rm x",  # cd outside rebases later writes
             "cd ..",  # bare .. carries no slash
             "cd ../../elsewhere",
-            "cp a /tmp/b",
+            "cp a /etc/b",
             "git checkout -- ../main-repo/x",
             "echo a | tee /etc/p",
             "sed -i '' s/a/b/ ../main/file",  # in-place edit outside (impl mode)
-            "true; cp a /tmp/b",  # ;-chained segment
-            "true && cp a /tmp/b",  # &&-chained segment
-            "mkdir /tmp/outside-dir",  # mkdir creates outside
-            "git clone https://example.com/r.git /tmp/outside",  # positional write
-            "git init /tmp/outside",
-            "git worktree add /tmp/outside main",  # literal worktree escape
-            "git -C /tmp/outside clean -fd",  # spaced -C + git write subcommand
-            "git -C /tmp/outside checkout -- file",
+            "true; cp a /etc/b",  # ;-chained segment
+            "true && cp a /etc/b",  # &&-chained segment
+            "mkdir /etc/outside-dir",  # mkdir creates outside
+            "git clone https://example.com/r.git /etc/outside",  # positional write
+            "git init /etc/outside",
+            "git worktree add /etc/outside main",  # literal worktree escape
+            "git -C /etc/outside clean -fd",  # spaced -C + git write subcommand
+            "git -C /etc/outside checkout -- file",
         ],
     )
     def test_outside_worktree_denied(self, command: str) -> None:
@@ -145,11 +147,102 @@ class TestShellContainment:
         """``>/dev/null 2>&1`` is the commonest shell idiom there is, not an escape."""
         assert shell_containment(_shell(command), worktree_root=WT).action == "allow"
 
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "command -v gh >/dev/null 2>&1",
+            "git rev-parse --show-toplevel 2>/dev/null",
+            "./scripts/test.sh > /dev/null",
+            "make build &>/dev/null",
+        ],
+    )
+    def test_device_redirects_allowed_in_plan_mode(self, command: str) -> None:
+        """Devices are discard sinks, not plan artifacts, but plan mode allows them too.
+
+        Mirrors ``test_device_redirects_allowed`` (worktree/impl mode) — the same
+        idioms must not trip the plan-mode artifact gate.
+        """
+        d = shell_containment(_shell(command), worktree_root=WT, plan_mode=True)
+        assert d.action == "allow"
+
+    @pytest.mark.parametrize("command", ["tee /dev/null", "dd of=/dev/null"])
+    def test_device_write_commands_allowed_in_plan_mode(self, command: str) -> None:
+        """A write command's operand targeting a device is not a plan artifact,
+        but is still allowed — it persists nothing."""
+        d = shell_containment(_shell(command), worktree_root=WT, plan_mode=True)
+        assert d.action == "allow"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "printf x >/dev/shm/out",  # /dev/shm is a writable tmpfs, not a discard sink
+            "tee /dev/shm/out",
+            "printf x >/dev/mqueue/out",
+            "dd of=/dev/hugepages/out if=README.md",
+        ],
+    )
+    def test_writable_dev_filesystems_denied(self, command: str) -> None:
+        """Linux mounts writable filesystems under ``/dev/`` (``/dev/shm`` tmpfs,
+        ``/dev/mqueue``, ``/dev/hugepages``). A write there persists a real file
+        outside the worktree, so the device allowlist is exact (``/dev/null`` …),
+        not a ``/dev/`` prefix — these must be denied in every mode."""
+        assert shell_containment(_shell(command), worktree_root=WT).action == "deny"
+        plan = shell_containment(_shell(command), worktree_root=WT, plan_mode=True)
+        assert plan.action == "deny"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "printf x >/dev/zero",  # non-``/dev/null`` discard sinks in the allowlist
+            "printf x >/dev/full",
+            "dd of=/dev/zero",
+            "tee /dev/tty",
+        ],
+    )
+    def test_other_discard_devices_allowed_in_plan_mode(self, command: str) -> None:
+        """The allowlist is not just ``/dev/null`` — the other enumerated discard/
+        console sinks persist nothing either, so they stay allowed in plan mode.
+
+        Only self-resolving device *nodes* are listed; the std-stream symlinks
+        (``/dev/stdout`` …) resolve to ``/dev/fd/N`` and are intentionally not here."""
+        d = shell_containment(_shell(command), worktree_root=WT, plan_mode=True)
+        assert d.action == "allow"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "printf 'x' > /tmp/out.txt",  # spaced redirect to temp
+            "printf 'x' >/tmp/scratch.log",  # glued redirect
+            "cp README.md /tmp/backup",  # write command operand into temp
+            "mkdir /tmp/wade-scratch",
+            "sort --output=/tmp/pwn file",  # glued write flag to temp
+        ],
+    )
+    def test_temp_dir_writes_allowed(self, command: str) -> None:
+        """System temp dirs (``/tmp``, ``$TMPDIR``) are shared scratch space — writes to a
+        file *under* them are allowed even though they resolve outside the worktree.
+
+        The dir prefix carries a trailing separator so ``/tmp/`` can't match a sibling
+        like ``/tmpfoo``; that also means the bare dir (``cd /tmp``) is not itself a
+        target, which is fine — the use case is staging scratch *files*."""
+        assert shell_containment(_shell(command), worktree_root=WT).action == "allow"
+
+    def test_system_tmpdir_writes_allowed(self) -> None:
+        """``$TMPDIR`` — not just the literal ``/tmp`` — is allowed, cross-platform."""
+        target = f"{tempfile.gettempdir()}/wade-scratch.log"
+        d = shell_containment(_shell(f"printf x > {shlex.quote(target)}"), worktree_root=WT)
+        assert d.action == "allow"
+
+    def test_temp_dir_writes_still_denied_in_plan_mode(self) -> None:
+        """Plan mode stays artifact-only — a temp write is not a plan artifact."""
+        d = shell_containment(_shell("printf x > /tmp/o"), worktree_root=WT, plan_mode=True)
+        assert d.action == "deny"
+
     @pytest.mark.parametrize("command", ["echo hi 2>&1", "echo hi >&2", "exec 3>&-"])
     def test_fd_duplication_names_no_file(self, command: str) -> None:
         assert shell_containment(_shell(command), worktree_root=WT).action == "allow"
 
-    @pytest.mark.parametrize("command", ["printf x >&/tmp/pwn", "printf x >>&/tmp/pwn"])
+    @pytest.mark.parametrize("command", ["printf x >&/etc/pwn", "printf x >>&/etc/pwn"])
     def test_glued_ampersand_redirect_to_file_denied(self, command: str) -> None:
         """bash's ``>&word`` with a filename is a real write, not an fd dup."""
         assert shell_containment(_shell(command), worktree_root=WT).action == "deny"
@@ -157,11 +250,11 @@ class TestShellContainment:
     @pytest.mark.parametrize(
         "command",
         [
-            "sort --output=/tmp/pwn file",
-            "tar --file=/tmp/pwn.tar -c .",
-            "curl -o/tmp/pwn https://example.com",
-            "dd of=/tmp/pwn if=README.md",
-            "git -C/tmp/other init",
+            "sort --output=/etc/pwn file",
+            "tar --file=/etc/pwn.tar -c .",
+            "curl -o/etc/pwn https://example.com",
+            "dd of=/etc/pwn if=README.md",
+            "git -C/etc/other init",
         ],
     )
     def test_paths_glued_to_flags_denied(self, command: str) -> None:
@@ -204,9 +297,9 @@ class TestShellContainment:
     @pytest.mark.parametrize(
         "command",
         [
-            "tee 'a|b' /tmp/pwn",  # quoted '|' must not fake a segment break
-            "tee 'a;b' /tmp/pwn",
-            "grep 'x&y' f && cp a /tmp/b",  # real separator after a quoted one
+            "tee 'a|b' /etc/pwn",  # quoted '|' must not fake a segment break
+            "tee 'a;b' /etc/pwn",
+            "grep 'x&y' f && cp a /etc/b",  # real separator after a quoted one
         ],
     )
     def test_quoted_separators_do_not_hide_the_next_operand(self, command: str) -> None:
@@ -248,7 +341,7 @@ class TestShellContainment:
             "rm -rf src/",
             "rmdir src",
             "unlink src/app.py",
-            "printf x > /tmp/o",  # outside wins regardless
+            "printf x > /tmp/o",  # temp is writable elsewhere, but never a plan artifact
         ],
     )
     def test_plan_mode_denies_non_artifact_writes(self, command: str) -> None:

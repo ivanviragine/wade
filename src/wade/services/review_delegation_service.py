@@ -6,6 +6,7 @@ from pathlib import Path
 
 import structlog
 from crossby.models.ai import EffortLevel
+from rich.markup import escape
 
 from wade.config.loader import load_config
 from wade.git import repo as git_repo
@@ -20,10 +21,15 @@ from wade.services.ai_resolution import (
     resolve_model,
     resolve_permission_mode,
 )
-from wade.services.delegation_service import delegate, resolve_mode
+from wade.services.delegation_service import (
+    delegate,
+    effective_timeout,
+    extended_timeout,
+    resolve_mode,
+)
 from wade.skills.installer import load_prompt_template
 from wade.ui.console import console
-from wade.utils.markers import write_marker
+from wade.utils.markers import count_review_passes, record_review_pass, write_marker
 
 logger = structlog.get_logger()
 
@@ -44,6 +50,53 @@ def _mark_reviewed() -> None:
         logger.debug("review.reviewed_marker_skipped", exc_info=True)
         return
     write_marker(repo_root, "reviewed", head)
+
+
+def _record_review_pass() -> int | None:
+    """Count one delegation-backed implementation-review pass for the cap (#384).
+
+    Writes a ``.wade/review-pass@<HEAD>`` marker **independent of the review's
+    success** — even a headless timeout (which exits non-zero and writes no
+    ``reviewed`` marker) still consumed a real review→fix cycle, so it must
+    advance the pass count that the ``done`` gate's review-pass cap reads. Per-sha and
+    idempotent, so re-running review on the same HEAD does not inflate the count.
+
+    Returns the resulting distinct-pass count, or ``None`` if the marker could not
+    be recorded (best-effort: a git failure is logged and skipped).
+    """
+    try:
+        repo_root = git_repo.get_repo_root(Path.cwd())
+        head = git_repo.rev_parse(repo_root, "HEAD")
+    except GitError:
+        logger.debug("review.review_pass_marker_skipped", exc_info=True)
+        return None
+    record_review_pass(repo_root, head)
+    return count_review_passes(repo_root)
+
+
+def _announce_review_pass_budget(passes: int, limit: int) -> None:
+    """Surface the implementation-session review-pass budget from the command (#384).
+
+    The ``done`` cap stops requiring re-review of new commits after
+    ``done.max_review_passes`` passes. Printing the running count here means an
+    agent sees its remaining budget directly from ``wade review implementation``
+    rather than from buried skill/prompt prose. Informational only — the cap is
+    enforced (and scoped to implementation sessions) at ``done`` time.
+    """
+    remaining = max(0, limit - passes)
+    if remaining > 0:
+        plural = "" if remaining == 1 else "es"
+        console.info(
+            f"Review pass {passes} of {limit} recorded — {remaining} pass{plural} left "
+            "before `done` stops requiring re-review of new commits in an "
+            "implementation session. Configure the cap with `done.max_review_passes`."
+        )
+    else:
+        console.warn(
+            f"Review pass {passes} of {limit} recorded — the implementation-session "
+            "review-pass cap is now reached. `done` will complete without requiring "
+            "re-review of further commits. Configure with `done.max_review_passes`."
+        )
 
 
 def _load_review_config(
@@ -156,6 +209,10 @@ def _run_review_delegation(
 
     effort_str = resolved_effort.value if isinstance(resolved_effort, EffortLevel) else None
 
+    # An explicit ``ai.<command>.timeout`` is honored verbatim: it bypasses
+    # scaling and — since it is the escape hatch for a hard tool-timeout — the
+    # retry too (see ``_delegate_headless``).
+    explicit_timeout = cmd_config.timeout is not None
     request = DelegationRequest(
         mode=delegation_mode,
         prompt=prompt,
@@ -163,21 +220,35 @@ def _run_review_delegation(
         model=resolved_model,
         effort=effort_str,
         permission_mode=effective_permission_mode,
-        **({"timeout": cmd_config.timeout} if cmd_config.timeout is not None else {}),
+        timeout=effective_timeout(prompt, cmd_config.timeout, effort_str),
+        explicit_timeout=explicit_timeout,
     )
 
     if delegation_mode == DelegationMode.HEADLESS:
         # This spawns an external AI subprocess bounded by ``request.timeout``.
-        # Announce that budget so the orchestrator driving wade (Claude Code,
-        # Cursor, Copilot, …) allows more than its own shell/tool timeout before
-        # killing the call — otherwise it aborts the review before wade's own
-        # timeout can fire. Configure the budget via ``ai.<command>.timeout``.
-        console.info(
-            "Launching headless AI review — this runs an external AI subprocess "
-            f"that can take up to {request.timeout}s. Keep it in the foreground and "
-            f"allow more than {request.timeout}s before timing out (raise your "
-            "shell/tool timeout if needed). Do not move it to the background."
-        )
+        # Announce a budget the orchestrator driving wade (Claude Code, Cursor,
+        # Copilot, …) must wait out — otherwise it kills the call at its own
+        # shorter timeout. For a scaled budget wade retries once on timeout, so
+        # announce the *worst-case total* (budget + retry); an explicit budget is
+        # verbatim with no retry, so announce it as-is.
+        if explicit_timeout:
+            console.info(
+                "Launching headless AI review — this runs an external AI "
+                f"subprocess bounded by your configured ai.<command>.timeout of "
+                f"{request.timeout}s (no retry). Keep it in the foreground and "
+                f"allow more than {request.timeout}s before timing out. Do not "
+                "move it to the background."
+            )
+        else:
+            worst_case = request.timeout + extended_timeout(request.timeout)
+            console.info(
+                "Launching headless AI review — this runs an external AI "
+                f"subprocess. wade budgets {request.timeout}s and, on timeout, "
+                f"retries once with a longer budget (worst-case total "
+                f"{worst_case}s). Keep it in the foreground and allow more than "
+                f"{worst_case}s before timing out (raise your shell/tool timeout "
+                "if needed). Do not move it to the background."
+            )
     elif delegation_mode == DelegationMode.INTERACTIVE:
         console.info(
             "Launching external AI review session — "
@@ -186,9 +257,28 @@ def _run_review_delegation(
 
     result = delegate(request)
     if result.success:
-        console.out.print(result.feedback)
+        # Delegation feedback is untrusted, model-authored text/markdown that
+        # routinely quotes source code (e.g. `console.print("[x]done[/]")`).
+        # Rich would parse `[/]` as a closing tag with nothing to close and
+        # raise MarkupError, so print it literally with markup disabled (#394).
+        console.out.print(result.feedback, markup=False)
+    elif result.timed_out:
+        # A timed-out review may still carry real partial content — surface it as
+        # a warning + plain text, never as a hard error (#366). Same markup=False
+        # treatment as the success path since the output is untrusted.
+        if result.feedback:
+            console.warn(
+                "Headless review timed out before finishing — the output below is "
+                "partial and may be incomplete:"
+            )
+            console.out.print(result.feedback, markup=False)
+        else:
+            console.warn("Headless review timed out before producing any output.")
     else:
-        console.error(result.feedback)
+        # `console.error` interpolates the message into its own `[error]…[/]`
+        # wrapper, so `markup=False` can't apply here — escape the feedback so
+        # bracketed tokens render literally while the wrapper still styles (#394).
+        console.error(escape(result.feedback))
     return result
 
 
@@ -341,6 +431,17 @@ def review_implementation(
         yolo=yolo,
         permission_mode_explicit=permission_mode_explicit,
     )
+    # Count this delegation-backed pass toward the `done` review cap regardless
+    # of success — a headless timeout still consumed a review→fix cycle, so it
+    # must advance the count (#384). This runs only past the no-diff early return
+    # above, so an empty review never spends a cap slot. Per-sha and idempotent.
+    passes = _record_review_pass()
+    # Surface the running budget from the command itself so the caller sees how
+    # many passes remain before `done` stops requiring re-review — no need to rely
+    # on the "run at most N times" rule buried in the skill/prompt. Guarded by an
+    # int check so a mocked `_record_review_pass` in tests never triggers it.
+    if isinstance(passes, int):
+        _announce_review_pass_budget(passes, config.done.max_review_passes)
     # Record the review-ran marker on any non-hard-failure result (success),
     # keyed to the current HEAD sha. The `done` review-ran gate reads it.
     if result.success:

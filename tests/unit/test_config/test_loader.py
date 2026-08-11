@@ -88,6 +88,60 @@ class TestParseConfigFile:
         assert config.hooks.post_worktree_create == "scripts/setup-worktree.sh"
         assert config.hooks.copy_to_worktree == [".env"]
 
+    def test_hooks_quality_gates_default_off(self, tmp_path: Path) -> None:
+        # A config with no quality-gate keys leaves every gate off/empty, so
+        # nothing is installed unless the project opts in.
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\n")
+        config = parse_config_file(config_path)
+        assert config.hooks.pre_commit.lint is None
+        assert config.hooks.pre_commit.test is None
+        assert config.hooks.commit_msg.conventional is False
+        assert config.hooks.post_tool_use.enabled is False
+        assert config.hooks.post_tool_use.lint_cmd is None
+        assert config.hooks.post_tool_use.timeout == 10
+
+    def test_hooks_quality_gates_parsed(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\n"
+            "hooks:\n"
+            "  pre_commit:\n"
+            "    lint: ./scripts/check.sh --lint\n"
+            "    test: ./scripts/test.sh\n"
+            "  commit_msg:\n"
+            "    conventional: true\n"
+            "  post_tool_use:\n"
+            "    enabled: true\n"
+            "    lint_cmd: ruff check\n"
+            "    timeout: 20\n"
+        )
+        config = parse_config_file(config_path)
+        assert config.hooks.pre_commit.lint == "./scripts/check.sh --lint"
+        assert config.hooks.pre_commit.test == "./scripts/test.sh"
+        assert config.hooks.commit_msg.conventional is True
+        assert config.hooks.post_tool_use.enabled is True
+        assert config.hooks.post_tool_use.lint_cmd == "ruff check"
+        assert config.hooks.post_tool_use.timeout == 20
+
+    def test_hooks_null_booleans_normalized_to_defaults(self, tmp_path: Path) -> None:
+        # A key present-but-null must fall back to the documented default (mirrors
+        # the `done` section) rather than raising a Pydantic error at load time.
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\n"
+            "hooks:\n"
+            "  commit_msg:\n"
+            "    conventional:\n"
+            "  post_tool_use:\n"
+            "    enabled:\n"
+            "    timeout:\n"
+        )
+        config = parse_config_file(config_path)
+        assert config.hooks.commit_msg.conventional is False
+        assert config.hooks.post_tool_use.enabled is False
+        assert config.hooks.post_tool_use.timeout == 10
+
     def test_model_mapping(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text(SAMPLE_V2_CONFIG)
@@ -142,6 +196,7 @@ class TestParseConfigFile:
         assert config.done.require_sync is True
         assert config.done.require_review is True
         assert config.done.require_resolved_threads is True
+        assert config.done.require_conventional_title is True
         assert config.done.pre_push_backstop is True
 
     def test_done_gates_round_trip(self, tmp_path: Path) -> None:
@@ -153,6 +208,7 @@ class TestParseConfigFile:
             "  require_sync: false\n"
             "  require_review: false\n"
             "  require_resolved_threads: false\n"
+            "  require_conventional_title: false\n"
             "  pre_push_backstop: false\n"
         )
 
@@ -161,6 +217,7 @@ class TestParseConfigFile:
         assert config.done.require_sync is False
         assert config.done.require_review is False
         assert config.done.require_resolved_threads is False
+        assert config.done.require_conventional_title is False
         assert config.done.pre_push_backstop is False
 
     def test_done_flag_null_normalized_to_default(self, tmp_path: Path) -> None:
@@ -172,6 +229,60 @@ class TestParseConfigFile:
 
         config = parse_config_file(config_path)
         assert config.done.require_sync is True
+
+    def test_max_review_passes_default(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\n")
+        config = parse_config_file(config_path)
+        assert config.done.max_review_passes == 2
+
+    def test_max_review_passes_override(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\ndone:\n  max_review_passes: 5\n")
+        config = parse_config_file(config_path)
+        assert config.done.max_review_passes == 5
+
+    def test_max_review_passes_null_normalized_to_default(self, tmp_path: Path) -> None:
+        # An explicit null (not a bool default) must normalize to 2, not crash.
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\ndone:\n  max_review_passes:\n")
+        config = parse_config_file(config_path)
+        assert config.done.max_review_passes == 2
+
+    def test_max_review_passes_zero_rejected_at_load(self, tmp_path: Path) -> None:
+        # PositiveInt bound makes a 0 fail loudly at load (wrapped as ConfigError).
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\ndone:\n  max_review_passes: 0\n")
+        with pytest.raises(ConfigError):
+            parse_config_file(config_path)
+
+    def test_max_review_passes_negative_rejected_at_load(self, tmp_path: Path) -> None:
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\ndone:\n  max_review_passes: -1\n")
+        with pytest.raises(ConfigError):
+            parse_config_file(config_path)
+
+    def test_max_review_passes_bool_rejected_at_load(self, tmp_path: Path) -> None:
+        # StrictInt rejects YAML `true` at load — a plain PositiveInt would coerce
+        # it to 1 (bool is an int subclass), silently accepting an invalid value.
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\ndone:\n  max_review_passes: true\n")
+        with pytest.raises(ConfigError):
+            parse_config_file(config_path)
+
+    def test_max_review_passes_string_rejected_at_load(self, tmp_path: Path) -> None:
+        # StrictInt rejects a YAML string; a plain PositiveInt would coerce "2"→2.
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text('version: 2\ndone:\n  max_review_passes: "2"\n')
+        with pytest.raises(ConfigError):
+            parse_config_file(config_path)
+
+    def test_max_review_passes_float_rejected_at_load(self, tmp_path: Path) -> None:
+        # StrictInt rejects a YAML float; a plain PositiveInt would coerce 2.0→2.
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\ndone:\n  max_review_passes: 2.0\n")
+        with pytest.raises(ConfigError):
+            parse_config_file(config_path)
 
     def test_empty_file(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
@@ -230,6 +341,29 @@ class TestParseCommandConfig:
         assert config.ai.review_plan.mode == "prompt"
         assert config.ai.review_implementation.tool == "copilot"
         assert config.ai.review_implementation.mode == "headless"
+
+    def test_review_pr_comments_parsed(self, tmp_path: Path) -> None:
+        """The dedicated ``ai.review_pr_comments`` section (#389) round-trips.
+
+        The loader iterates ``AI_COMMAND_NAMES`` and spreads the parsed sections
+        onto ``AIConfig`` by name, so the new section maps onto
+        ``AIConfig.review_pr_comments`` with no loader edit.
+        """
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\n"
+            "ai:\n"
+            "  review_pr_comments:\n"
+            "    tool: claude\n"
+            "    model: claude-sonnet-5\n"
+            "    effort: high\n"
+            "    permission_mode: yolo\n"
+        )
+        config = parse_config_file(config_path)
+        assert config.ai.review_pr_comments.tool == "claude"
+        assert config.ai.review_pr_comments.model == "claude-sonnet-5"
+        assert config.ai.review_pr_comments.effort == "high"
+        assert config.ai.review_pr_comments.permission_mode == "yolo"
 
     def test_review_batch_and_yolo_parsed(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"

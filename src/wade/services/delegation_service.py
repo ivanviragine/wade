@@ -28,6 +28,65 @@ from wade.utils.process import CommandError, run
 
 logger = structlog.get_logger()
 
+# ---------------------------------------------------------------------------
+# Headless timeout scaling + budget-aware retry
+# ---------------------------------------------------------------------------
+#
+# A headless review/deps subprocess embeds the whole payload (diff or issue
+# context) in its prompt, so cost is ~proportional to prompt size *and* reasoning
+# effort. A flat budget over-serves a tiny diff and starves a big one (the #363
+# repro timed out twice at 300s / effort:high, then finished in one run at 900s).
+# Scale the first-attempt budget from both signals, bounded floor..ceiling, and
+# retry once at a longer budget on timeout — bounding the *sum* of both attempts
+# so the worst case is predictable. These constants are tuned against the #363
+# repro; treat them as a starting point to measure, not as sacred.
+TIMEOUT_FLOOR = 600  # landed default (#385): CLI cold-start + a small high-effort run
+TIMEOUT_CEILING = 1500  # single-attempt upper bound
+# ~0.0075 s/byte: an ~800-line (~40 KB) prompt adds ~300s over the floor.
+_TIMEOUT_SECONDS_PER_BYTE = 0.0075
+_EFFORT_MULTIPLIER = {"high": 1.5, "xhigh": 1.75, "max": 1.75}  # else 1.0
+
+TIMEOUT_RETRY_MULTIPLIER = 1.5
+# Sized so a ceiling-length first attempt still gets the *full* multiplier on
+# retry: TIMEOUT_CEILING + TIMEOUT_CEILING * TIMEOUT_RETRY_MULTIPLIER. A flat
+# cap here (e.g. 2400) would clip the retry below the first attempt for large
+# first-attempt budgets (#366 review) — exactly the big-prompt case a retry
+# needs to help most. ~3750s (62.5 min) at current constants.
+TOTAL_TIMEOUT_CAP = TIMEOUT_CEILING + round(TIMEOUT_CEILING * TIMEOUT_RETRY_MULTIPLIER)
+
+
+def scaled_timeout(payload_bytes: int, effort: str | None = None) -> int:
+    """Scale a headless budget from payload size and effort, bounded floor..ceiling."""
+    base = TIMEOUT_FLOOR + round(_TIMEOUT_SECONDS_PER_BYTE * payload_bytes)
+    base = round(base * _EFFORT_MULTIPLIER.get(effort or "", 1.0))
+    return max(TIMEOUT_FLOOR, min(TIMEOUT_CEILING, base))
+
+
+def effective_timeout(prompt: str, configured: int | None, effort: str | None = None) -> int:
+    """Resolve the first-attempt headless budget for ``prompt``.
+
+    An explicit ``ai.<cmd>.timeout`` is a deliberate override: honor it verbatim
+    and bypass scaling. This preserves the per-project ``.wade.yml`` workaround
+    semantics and is the escape hatch for orchestrators with a hard tool-timeout
+    (set it below the harness limit). Otherwise scale from payload bytes + effort.
+    """
+    if configured is not None:
+        return configured
+    return scaled_timeout(len(prompt.encode("utf-8")), effort)
+
+
+def extended_timeout(t: int) -> int:
+    """Retry budget for a timed-out first attempt of length ``t`` seconds.
+
+    A meaningful extension (``t * TIMEOUT_RETRY_MULTIPLIER``) that never lets the
+    sum ``t + extended_timeout(t)`` exceed ``TOTAL_TIMEOUT_CAP``. ``TOTAL_TIMEOUT_CAP``
+    is sized so the full multiplier always applies for ``t`` up to
+    ``TIMEOUT_CEILING`` — the retry is always strictly longer than the attempt
+    that just timed out, never clipped to it (#366 review). Returns 0 (no
+    retry) when ``t`` is already at/over the cap.
+    """
+    return max(0, min(round(t * TIMEOUT_RETRY_MULTIPLIER), TOTAL_TIMEOUT_CAP - t))
+
 
 def resolve_mode(
     cmd_config: AICommandConfig,
@@ -75,6 +134,64 @@ def _delegate_prompt(request: DelegationRequest) -> DelegationResult:
         success=True,
         feedback=request.prompt,
         mode=DelegationMode.PROMPT,
+    )
+
+
+def _partial_from_timeout(exc: subprocess.TimeoutExpired) -> str:
+    """Decoded, stripped partial stdout from a timed-out headless run.
+
+    ``utils.process.run`` already decodes and reattaches ``exc.stdout`` (bytes →
+    str), but guard against bytes defensively: ``TimeoutExpired.stdout`` is bytes
+    even under ``text=True`` (the buffer is collected before the decode step), so
+    a caller that bypasses the process layer would still hand us bytes here.
+    """
+    raw: str | bytes | None = exc.stdout
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", errors="replace")
+    return (raw or "").strip()
+
+
+def _timeout_result(partial: str) -> DelegationResult:
+    """A non-success result flagged as a timeout (not a crash), carrying any partial output."""
+    return DelegationResult(
+        success=False,
+        timed_out=True,
+        feedback=partial or "<no output before the budget elapsed>",
+        mode=DelegationMode.HEADLESS,
+        exit_code=1,
+    )
+
+
+def _crash_result(exc: CommandError) -> DelegationResult:
+    """A non-success result for a headless crash — ``timed_out`` stays False (never retried)."""
+    return DelegationResult(
+        success=False,
+        feedback=f"Headless session failed: {exc}",
+        mode=DelegationMode.HEADLESS,
+        exit_code=1,
+    )
+
+
+def _run_headless_once(cmd: list[str], timeout: int, session_cwd: Path) -> DelegationResult:
+    """Run the headless subprocess once.
+
+    Returns success/non-zero results directly; lets ``TimeoutExpired`` and
+    ``CommandError`` propagate so the caller can decide whether to retry.
+    """
+    result = run(cmd, check=False, timeout=timeout, cwd=session_cwd)
+    stdout = result.stdout.strip() if result.stdout else ""
+    if result.returncode == 0:
+        return DelegationResult(
+            success=True,
+            feedback=stdout,
+            mode=DelegationMode.HEADLESS,
+            exit_code=0,
+        )
+    return DelegationResult(
+        success=False,
+        feedback=stdout or "Headless session failed with no output",
+        mode=DelegationMode.HEADLESS,
+        exit_code=result.returncode,
     )
 
 
@@ -126,38 +243,53 @@ def _delegate_headless(request: DelegationRequest) -> DelegationResult:
         **permission_mode_launch_kwargs(PermissionMode.DEFAULT),
     )
 
-    try:
-        result = run(cmd, check=False, timeout=request.timeout, cwd=session_cwd)
-        stdout = result.stdout.strip() if result.stdout else ""
-        if result.returncode == 0:
-            return DelegationResult(
-                success=True,
-                feedback=stdout,
-                mode=DelegationMode.HEADLESS,
-                exit_code=0,
+    # First attempt at request.timeout; on timeout (never on a crash) retry once
+    # at a longer budget. extended_timeout bounds the *sum* of both legs, so the
+    # worst case is predictable (<= TOTAL_TIMEOUT_CAP) and matches the pre-run
+    # advisory. A crash or non-zero exit returns immediately — no retry. An
+    # explicit ai.<cmd>.timeout is honored verbatim with NO retry: it is the
+    # escape hatch for a hard tool-timeout, so a retry that overshoots it would
+    # defeat the purpose (and get killed by the harness anyway).
+    attempts = [request.timeout]
+    if not request.explicit_timeout:
+        retry_timeout = extended_timeout(request.timeout)
+        if retry_timeout > 0:
+            attempts.append(retry_timeout)
+
+    partial = ""
+    for index, budget in enumerate(attempts):
+        is_last = index == len(attempts) - 1
+        if index > 0:
+            # Announce the retry so the orchestrator driving wade does not kill it
+            # early — the pre-launch advisory already reserved this headroom.
+            logger.warning(
+                "delegation.headless_timeout_retry",
+                tool=request.ai_tool,
+                first_timeout=request.timeout,
+                retry_timeout=budget,
             )
-        return DelegationResult(
-            success=False,
-            feedback=stdout or "Headless session failed with no output",
-            mode=DelegationMode.HEADLESS,
-            exit_code=result.returncode,
-        )
-    except subprocess.TimeoutExpired:
-        logger.warning("delegation.headless_timeout", tool=request.ai_tool)
-        return DelegationResult(
-            success=False,
-            feedback="Headless session timed out",
-            mode=DelegationMode.HEADLESS,
-            exit_code=1,
-        )
-    except CommandError as e:
-        logger.warning("delegation.headless_failed", tool=request.ai_tool, error=str(e))
-        return DelegationResult(
-            success=False,
-            feedback=f"Headless session failed: {e}",
-            mode=DelegationMode.HEADLESS,
-            exit_code=1,
-        )
+            console.warn(
+                f"Headless session timed out after {request.timeout}s — retrying "
+                f"once with a longer budget ({budget}s; worst-case total "
+                f"{request.timeout + budget}s). Keep it in the foreground."
+            )
+        try:
+            return _run_headless_once(cmd, budget, session_cwd)
+        except subprocess.TimeoutExpired as exc:
+            # Prefer this attempt's partial output; fall back to a prior attempt's.
+            partial = _partial_from_timeout(exc) or partial
+            if is_last:
+                logger.warning(
+                    "delegation.headless_timeout",
+                    tool=request.ai_tool,
+                    timeout=budget,
+                    retried=index > 0,
+                )
+        except CommandError as e:
+            logger.warning("delegation.headless_failed", tool=request.ai_tool, error=str(e))
+            return _crash_result(e)
+
+    return _timeout_result(partial)
 
 
 def _delegate_interactive(request: DelegationRequest) -> DelegationResult:

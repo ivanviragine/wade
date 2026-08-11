@@ -15,7 +15,7 @@ from crossby.models.ai import EffortLevel
 
 from wade.config.loader import load_config
 from wade.models.config import ProjectConfig
-from wade.models.delegation import DelegationMode, DelegationRequest
+from wade.models.delegation import DelegationMode, DelegationRequest, DelegationResult
 from wade.models.deps import DependencyEdge, DependencyGraph
 from wade.models.permission import PermissionMode
 from wade.providers.base import AbstractTaskProvider
@@ -27,7 +27,12 @@ from wade.services.ai_resolution import (
     resolve_model,
     resolve_permission_mode,
 )
-from wade.services.delegation_service import delegate, resolve_mode
+from wade.services.delegation_service import (
+    delegate,
+    effective_timeout,
+    extended_timeout,
+    resolve_mode,
+)
 from wade.services.task_service import ensure_task_label
 from wade.ui.console import console
 
@@ -350,10 +355,14 @@ def _run_delegation(
     cwd: Path | None = None,
     timeout: int | None = None,
     permission_mode: PermissionMode = PermissionMode.DEFAULT,
-) -> str | None:
+    explicit_timeout: bool = False,
+) -> DelegationResult:
     """Run dependency analysis via the generic delegation infrastructure.
 
-    Returns the AI output text, or None on failure.
+    Returns the full ``DelegationResult`` so the caller can distinguish a timeout
+    (``timed_out=True``, possibly carrying partial output) from a crash and avoid
+    applying a partial dependency graph. ``explicit_timeout`` marks a
+    user-configured ``ai.deps.timeout`` so the headless path skips its retry.
     """
     request = DelegationRequest(
         mode=mode,
@@ -364,14 +373,15 @@ def _run_delegation(
         cwd=cwd,
         allowed_commands=allowed_commands or [],
         permission_mode=permission_mode,
+        explicit_timeout=explicit_timeout,
         **({"timeout": timeout} if timeout is not None else {}),
     )
     result = delegate(request)
-    if result.success and result.feedback:
-        return result.feedback
-    if not result.success:
+    if result.timed_out:
+        logger.warning("deps.delegation_timeout", mode=mode.value)
+    elif not result.success:
         logger.warning("deps.delegation_failed", mode=mode.value, feedback=result.feedback)
-    return None
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -538,18 +548,45 @@ def analyze_deps(
             try:
                 task = provider.read_task(num)
                 task_titles[num] = task.title
-                console.step(f"#{num}: {task.title}")
+                console.step(f"#{num}: {console.escape_markup(task.title)}")
             except Exception:
                 logger.debug("deps.issue_read_failed", issue_num=num, exc_info=True)
                 task_titles[num] = f"Issue #{num}"
 
     # Run AI analysis via delegation infrastructure
     effort_str = resolved_effort.value if isinstance(resolved_effort, EffortLevel) else None
+    # Scale the budget from payload size + effort; an explicit
+    # ``ai.deps.timeout`` is honored verbatim and bypasses scaling + retry.
+    deps_timeout = effective_timeout(prompt, cmd_config.timeout, effort_str)
+    deps_explicit_timeout = cmd_config.timeout is not None
     if delegation_mode != DelegationMode.PROMPT and resolved_tool:
         console.step(
             f"Running {resolved_tool} ({delegation_mode.value}) for dependency analysis..."
         )
-    output = _run_delegation(
+    if delegation_mode == DelegationMode.HEADLESS:
+        # This spawns an external AI subprocess bounded by ``deps_timeout``. Announce
+        # a budget the orchestrator driving wade must wait out — otherwise it kills
+        # the call at its own shorter timeout before wade can preserve partial output
+        # or run its retry. Mirrors the advisory in
+        # review_delegation_service._run_review_delegation (#366 review: the deps
+        # path silently blocked without it).
+        if deps_explicit_timeout:
+            console.info(
+                "This runs an external AI subprocess bounded by your configured "
+                f"ai.deps.timeout of {deps_timeout}s (no retry). Keep it in the "
+                f"foreground and allow more than {deps_timeout}s before timing "
+                "out. Do not move it to the background."
+            )
+        else:
+            worst_case = deps_timeout + extended_timeout(deps_timeout)
+            console.info(
+                f"This runs an external AI subprocess. wade budgets {deps_timeout}s "
+                "and, on timeout, retries once with a longer budget (worst-case "
+                f"total {worst_case}s). Keep it in the foreground and allow more "
+                f"than {worst_case}s before timing out (raise your shell/tool "
+                "timeout if needed). Do not move it to the background."
+            )
+    delegation_result = _run_delegation(
         resolved_tool,
         prompt,
         delegation_mode,
@@ -557,19 +594,40 @@ def analyze_deps(
         effort=effort_str,
         allowed_commands=config.permissions.allowed_commands,
         cwd=deps_cwd,
-        timeout=cmd_config.timeout,
+        timeout=deps_timeout,
         permission_mode=effective_permission_mode,
+        explicit_timeout=deps_explicit_timeout,
+    )
+    output = (
+        delegation_result.feedback
+        if delegation_result.success and delegation_result.feedback
+        else None
     )
 
     if delegation_mode == DelegationMode.PROMPT:
         if output:
-            console.out.print(output)
+            # AI-generated analysis is untrusted free-form text that can quote
+            # bracketed markup (e.g. `[/]`); print literally with markup
+            # disabled so Rich doesn't raise MarkupError on it (#394).
+            console.out.print(output, markup=False)
             return DependencyGraph()
         console.error("Could not generate dependency analysis prompt.")
         return None
 
     if output:
         console.success(f"Analysis complete ({delegation_mode.value} mode).")
+    elif delegation_result.timed_out:
+        # A timed-out deps run may carry *partial* output, but applying an
+        # incomplete dependency graph to issue bodies is worse than applying
+        # none — a half-finished graph silently overwrites real cross-refs. The
+        # bigger budget + one retry (both in the shared headless path) already
+        # make a clean run far more likely, so surface the timeout (distinct from
+        # a crash) and drop the partial rather than parsing half a graph.
+        console.warn(
+            f"Dependency analysis timed out ({delegation_mode.value} mode) before "
+            "completing — no dependency graph was applied. Re-run, or raise "
+            "ai.deps.timeout."
+        )
     else:
         console.error(f"Delegation failed ({delegation_mode.value} mode).")
 
@@ -581,6 +639,12 @@ def analyze_deps(
 
             repo_root = git_repo.get_repo_root(project_root or Path.cwd())
             git_worktree.remove_worktree(repo_root, standalone_worktree, force=True)
+
+    # A timeout is a hard failure (not "no deps found"), so return None rather
+    # than an empty graph — callers must not treat it as an authoritative result.
+    # Cleanup above already ran.
+    if delegation_result.timed_out:
+        return None
 
     # Parse edges
     edges = parse_deps_output(output, valid_numbers) if output else []

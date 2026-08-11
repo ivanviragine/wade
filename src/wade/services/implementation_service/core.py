@@ -25,6 +25,7 @@ from wade.git import repo as git_repo
 from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
+from wade.models.hooks import SessionPhase
 from wade.models.permission import permission_mode_launch_kwargs
 from wade.models.session import ImplementResult, MergeStatus
 from wade.models.task import Task
@@ -111,6 +112,9 @@ def _detect_ai_cli_env() -> str | None:
     # Cursor CLI
     if os.environ.get("CURSOR_CLI"):
         return "CURSOR_CLI"
+    # Antigravity CLI (agy) sets ANTIGRAVITY_AGENT=1 in its session env
+    if os.environ.get("ANTIGRAVITY_AGENT"):
+        return "ANTIGRAVITY_AGENT"
     return None
 
 
@@ -495,6 +499,7 @@ def start(
             repo_root,
             skills=IMPLEMENT_SKILLS,
             selected_ai_tool=resolved_tool,
+            session_phase=SessionPhase.IMPLEMENT,
         )
 
         # Store stacked base branch metadata so sync can use it instead of main
@@ -761,9 +766,20 @@ def _resolve_task_target(
     target_path = Path(target).expanduser()
     if target_path.is_file():
         from wade.services.task_service import create_from_plan_file
+        from wade.utils.conventional import ConventionalTitleError
 
         console.info(f"Creating issue from plan file: {target}")
-        task = create_from_plan_file(target_path, config=config, provider=provider)
+        try:
+            task = create_from_plan_file(target_path, config=config, provider=provider)
+        except ConventionalTitleError as e:
+            # Title comes from the plan file — disable Rich markup so bracket
+            # tokens in it are shown literally rather than parsed as markup.
+            console.error(str(e), markup=False)
+            console.hint(
+                f"Fix the plan file's `# Title` heading in {target} to a "
+                "conventional-commit title, then re-run."
+            )
+            return None
         return task
 
     # Treat as issue number — strip leading "#" so "#123" and "123" both work

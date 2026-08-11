@@ -26,11 +26,12 @@ import os
 import posixpath
 import re
 import shlex
+import tempfile
 from pathlib import Path
 
 from crossby.hooks.runtime import HookDecision, HookEvent
 
-from wade.models.hooks import StopGuard
+from wade.models.hooks import PLAN_ISSUE_REF_FILE, SessionPhase, StopGuard
 from wade.utils import markers
 
 __all__ = [
@@ -38,6 +39,7 @@ __all__ = [
     "plan_artifact_only",
     "plan_complete",
     "session_complete",
+    "session_start_context",
     "shell_containment",
     "stop_nudge_marker_path",
     "worktree_containment",
@@ -224,9 +226,72 @@ _IN_PLACE_FLAG_RE = re.compile(r"^--in-place(=.*)?$|^-i(\..*)?$")
 # rule 5 only — the worktree rules still apply, so it cannot escape the root.
 _IN_PLACE_COMMANDS = frozenset({"sed", "gsed", "perl", "ruby", "yq"})
 
-# Character devices are not worktree escapes — `>/dev/null 2>&1` is the single most
-# common shell idiom an agent emits, and denying it breaks ordinary sessions.
-_ALWAYS_ALLOWED_PATH_PREFIXES = ("/dev/",)
+
+def _temp_write_prefixes() -> tuple[str, ...]:
+    """Resolved system-temp path prefixes writes may always target.
+
+    System temp dirs sit outside the worktree but are legitimate shared scratch
+    space — agents and wade itself stage throwaway files there (headless-review
+    logs, patches, ``mktemp`` output). Resolved so macOS's ``/tmp``→``/private/tmp``
+    and ``$TMPDIR`` (``/var/folders/…``, itself under a ``/private`` symlink) match
+    the *resolved* path :func:`_contained` compares against; each ends in a
+    separator so ``/tmp/`` never matches a sibling like ``/tmpfoo``.
+    """
+    prefixes: set[str] = set()
+    for raw in ("/tmp", tempfile.gettempdir()):
+        try:
+            resolved = str(Path(raw).resolve())
+        except (OSError, ValueError, RuntimeError):
+            resolved = raw
+        prefixes.add(resolved.rstrip("/") + "/")
+    return tuple(sorted(prefixes))
+
+
+# Known discard/console character devices — `>/dev/null 2>&1` is the single most
+# common shell idiom an agent emits. Writing one persists nothing and touches no
+# worktree/repo file, so writes to these exact paths are always allowed; every real
+# project/source path outside the root stays contained. System temp dirs
+# (:func:`_temp_write_prefixes`) are the other write exception — shared scratch
+# space outside the worktree.
+#
+# This is an *exact* allowlist, deliberately not a `/dev/` prefix: Linux mounts
+# writable filesystems under `/dev/` too (`/dev/shm` tmpfs, `/dev/mqueue`,
+# `/dev/hugepages`), where a write persists a real file outside the worktree — a
+# bare prefix match would wave `tee /dev/shm/out` straight through. Devices are the
+# one exception plan mode also honors (not plan artifacts, yet persist nothing);
+# temp dirs are real scratch files and stay denied in plan mode. That difference is
+# why the device set is its own constant rather than folded into the temp prefixes.
+#
+# Only self-resolving character-device *nodes* belong here — the caller matches the
+# ``Path.resolve()``-d target, so the std-stream symlinks (`/dev/stdout` and friends
+# → `/dev/fd/N` / `/proc/self/fd/N`) would never match anyway; following them to the
+# real fd target is the safer behavior (a redirected fd could point at a real file).
+_ALWAYS_ALLOWED_DEVICES = frozenset(
+    {
+        "/dev/null",
+        "/dev/zero",
+        "/dev/full",
+        "/dev/random",
+        "/dev/urandom",
+        "/dev/tty",
+    }
+)
+_ALWAYS_ALLOWED_PATH_PREFIXES = _temp_write_prefixes()
+
+
+def _is_always_allowed_device(path: Path) -> bool:
+    """True when ``path`` is a known discard/console device (e.g. ``/dev/null``).
+
+    Matches an *exact* allowlist (:data:`_ALWAYS_ALLOWED_DEVICES`), not a ``/dev/``
+    prefix: Linux exposes writable filesystems under ``/dev/`` too — ``/dev/shm``
+    (tmpfs), ``/dev/mqueue``, ``/dev/hugepages`` — where a write persists a real
+    file *outside* the worktree. Only these enumerated sinks persist nothing and
+    escape no worktree, so plan mode allows them even though they are not plan
+    artifacts. Temp dirs stay denied in plan mode (they are real scratch files),
+    which is why the device set is split from the temp prefixes.
+    """
+    return str(path) in _ALWAYS_ALLOWED_DEVICES
+
 
 # Commands whose path operands are *writes*, so their operands stay contained even
 # after the read relaxation. In plan mode those operands must additionally be plan
@@ -372,8 +437,15 @@ def _resolve_shell_path(token: str, *, base: Path) -> Path | None:
 
 
 def _contained(path: Path, root: Path) -> bool:
-    """True when ``path`` is inside ``root`` (or is an always-allowed device node)."""
-    if str(path).startswith(_ALWAYS_ALLOWED_PATH_PREFIXES):
+    """True when ``path`` is inside ``root`` (or an always-allowed location).
+
+    Always-allowed locations cover known discard/console devices
+    (:data:`_ALWAYS_ALLOWED_DEVICES` — ``/dev/null`` …, matched exactly) and system
+    temp dirs (``/tmp``, ``$TMPDIR`` via :data:`_ALWAYS_ALLOWED_PATH_PREFIXES``,
+    matched by prefix) — shared scratch space that is safe to write even though it
+    is outside ``root``.
+    """
+    if _is_always_allowed_device(path) or str(path).startswith(_ALWAYS_ALLOWED_PATH_PREFIXES):
         return True
     try:
         path.relative_to(root)
@@ -400,6 +472,17 @@ def shell_containment(
     a sibling repo (``cat ../crossby/x``, ``grep -r foo ../crossby``,
     ``git -C ../crossby log``) never mutates state, so a read operand may resolve
     anywhere. The guard's job is to keep *writes* inside the root.
+
+    **System temp dirs and discard/console devices are write exceptions.** ``/tmp``,
+    ``$TMPDIR``, and a small exact allowlist of devices (``/dev/null``, ``/dev/zero`` …)
+    resolve as "contained" even though they sit outside the root
+    (:func:`_temp_write_prefixes` / :data:`_ALWAYS_ALLOWED_DEVICES`, via
+    :data:`_ALWAYS_ALLOWED_PATH_PREFIXES` and :func:`_is_always_allowed_device`). The
+    device allowlist is *exact*, not a ``/dev/`` prefix — Linux mounts writable
+    filesystems there too (``/dev/shm``), so ``tee /dev/shm/out`` stays contained.
+    Plan mode still denies temp-dir writes as non-artifacts (real scratch files);
+    device writes are additionally allowed in plan mode
+    (:func:`_is_always_allowed_device`) since they persist nothing.
 
     Rules, in order (any match denies):
 
@@ -433,7 +516,10 @@ def shell_containment(
     7. In plan mode only: any output redirect, an in-place edit flag (``sed -i``,
        ``--in-place``) on a command that *has* one (:data:`_IN_PLACE_COMMANDS` —
        ``grep -i`` and ``ls -i`` are ordinary read flags), or an operand of a write
-       command whose path is not a plan artifact.
+       command whose path is not a plan artifact — **except a device node**
+       (``/dev/null`` and friends), which stays allowed in plan mode
+       (:func:`_is_always_allowed_device`): it is a discard/console sink, not a
+       plan artifact, but writing it persists nothing.
 
     **This is defense-in-depth, not a completeness guarantee.** It stops the
     non-obfuscated cases — the ones an agent actually produces — and is trivially
@@ -526,7 +612,11 @@ def shell_containment(
         resolved = _resolve_shell_path(target, base=base)
         if resolved is None or not _contained(resolved, root):
             return deny_outside("redirect target", target)
-        if plan_mode and not _is_plan_artifact_path(resolved, root):
+        if (
+            plan_mode
+            and not _is_plan_artifact_path(resolved, root)
+            and not _is_always_allowed_device(resolved)
+        ):
             return HookDecision.deny(
                 f"BLOCKED by plan-session guard: redirecting output to '{target}' "
                 "would write a non-artifact file without going through a write tool. "
@@ -538,7 +628,11 @@ def shell_containment(
 
     def check_non_artifact(what: str, token: str, resolved: Path) -> HookDecision | None:
         """Plan mode: a contained path a write command targets must be an artifact."""
-        if not plan_mode or _is_plan_artifact_path(resolved, root):
+        if (
+            not plan_mode
+            or _is_plan_artifact_path(resolved, root)
+            or _is_always_allowed_device(resolved)
+        ):
             return None
         return HookDecision.deny(
             f"BLOCKED by plan-session guard: {what} would write to '{token}', which is "
@@ -814,3 +908,131 @@ def plan_complete(
         "section) to the plan directory so wade can create the issue. If you are "
         "pausing to ask a question or are still mid-plan, disregard this and continue."
     )
+
+
+# --- Session-start context injection (#351) ---------------------------------
+
+# Hard cap on the injected context payload. Deliberately small: this is a
+# compact, say-it-once reminder re-injected on every SessionStart source
+# (startup/resume/compact/clear/fork) to keep baseline adherence high — NOT a
+# second copy of the always-loaded skill. The builder truncates to this so the
+# acceptance budget can never regress.
+_SESSION_CONTEXT_MAX_CHARS = 800
+
+# Cap the echoed issue title so one very long title cannot dominate the budget.
+_SESSION_CONTEXT_TITLE_MAX = 140
+
+# ``write_plan_md`` writes ``# Issue #<id>: <title>`` as PLAN.md's first line.
+_ISSUE_LINE_RE = re.compile(r"^#\s*Issue\s+#(\d+):\s*(.+)$")
+
+# Phase -> the prompt template holding that phase's static instruction prose.
+# The prose is AI-facing content, so it is sourced from ``templates/prompts/``
+# (the repo's prompt source-of-truth per AGENTS.md "Prompts as .md Templates")
+# rather than hard-coded here; :func:`session_start_context` stays limited to
+# loading that prose, prepending the dynamic issue line, branding, and capping.
+_SESSION_CONTEXT_TEMPLATES: dict[SessionPhase, str] = {
+    SessionPhase.IMPLEMENT: "session-start-implement.md",
+    SessionPhase.REVIEW: "session-start-review.md",
+    SessionPhase.PLAN: "session-start-plan.md",
+}
+
+
+def _parse_issue_heading(path: Path) -> tuple[str, str] | None:
+    """Return ``(issue_id, title)`` from ``path``'s first line, or ``None``.
+
+    The first line must match ``# Issue #<id>: <title>`` — the heading shape
+    ``write_plan_md`` emits into ``PLAN.md`` (impl/review) and ``plan_service``
+    persists into ``.wade/plan-issue.md`` (plan). Reads the file directly — never
+    through the ``wade.git`` layer, whose ``git.run`` debug line would print to the
+    lean ``wade-hook`` entry's stdout and corrupt its decision-JSON contract (the
+    #349 gotcha). A missing file, an unreadable one (including a non-UTF-8 /
+    binary file), or a non-matching first line all yield ``None`` so the caller
+    omits the issue line rather than failing — the contract holds on this
+    function's own terms, not by accident of the caller's outer catch-all.
+    """
+    try:
+        # utf-8-sig so a stray BOM on the first line never suppresses the issue
+        # ref (decodes plain utf-8 unchanged when no BOM is present). A binary /
+        # non-UTF-8 file raises UnicodeDecodeError (a ValueError) on read, not
+        # OSError — caught here so the fail-open promise above is self-contained.
+        with path.open(encoding="utf-8-sig") as fd:
+            first_line = fd.readline().strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    match = _ISSUE_LINE_RE.match(first_line)
+    if match is None:
+        return None
+    return match.group(1), match.group(2).strip()
+
+
+def _issue_line(parsed: tuple[str, str]) -> str:
+    """Render the ``Issue #<id> — <title>`` context line, capping a long title."""
+    issue_id, title = parsed
+    if len(title) > _SESSION_CONTEXT_TITLE_MAX:
+        title = title[: _SESSION_CONTEXT_TITLE_MAX - 1].rstrip() + "…"
+    return f"Issue #{issue_id} — {title}"
+
+
+def session_start_context(worktree_root: Path, phase: SessionPhase) -> str | None:
+    """Build the compact context re-injected at session start / resume / compaction.
+
+    Returned as ``additionalContext`` (per each tool's dialect, by crossby's
+    ``emit_decision``) so the task ref and the phase's closing gate stay in context
+    over a long session — the largest single context loss being *compaction*, which
+    fires ``SessionStart`` with ``source: "compact"``.
+
+    Content by phase (authored *distinctly* from the always-loaded SKILL.md —
+    these are pointers/reminders, not restatements — and sourced from
+    ``templates/prompts/session-start-<phase>.md``, see
+    :data:`_SESSION_CONTEXT_TEMPLATES`):
+
+    - ``IMPLEMENT`` / ``REVIEW``: the issue ref parsed from ``PLAN.md`` (omitted if
+      absent), plus a one-line pointer to the phase's ``done`` command and the gates
+      it enforces. ``PLAN.md`` holds the full plan.
+    - ``PLAN``: a detached worktree with no ``PLAN.md`` at the root; the issue ref
+      of a ``wade plan --issue-id`` session (parsed from ``.wade/plan-issue.md``,
+      which ``plan_service`` persists — omitted for a from-scratch plan), plus a
+      reminder to write a valid ``PLAN*.md`` then run ``plan-session done``.
+
+    Import-light and stdout-safe: it runs on the lean ``wade-hook`` entry point, so
+    it reads the issue-ref file with a plain file read and touches nothing that
+    prints. Returns ``None`` when there is nothing meaningful to say (runtime
+    no-op). The result is hard-capped at :data:`_SESSION_CONTEXT_MAX_CHARS`.
+    """
+    lines: list[str] = []
+
+    # Where each phase's issue ref lives on disk (impl/review: the root PLAN.md;
+    # plan: the metadata file a ``--issue-id`` session persists). ``None`` → no
+    # issue line for this phase.
+    issue_ref_path: Path | None = None
+    if phase in (SessionPhase.IMPLEMENT, SessionPhase.REVIEW):
+        issue_ref_path = worktree_root / "PLAN.md"
+    elif phase is SessionPhase.PLAN:
+        issue_ref_path = worktree_root / PLAN_ISSUE_REF_FILE
+
+    if issue_ref_path is not None:
+        parsed = _parse_issue_heading(issue_ref_path)
+        if parsed is not None:
+            lines.append(_issue_line(parsed))
+
+    template_name = _SESSION_CONTEXT_TEMPLATES.get(phase)
+    if template_name is not None:
+        # Lazy import: the prose loader pulls in ``wade.skills.installer``, which
+        # is NOT on the hot PreToolUse write path — only this SessionStart branch
+        # reaches it, once per session start. It adds ~2ms and loads none of the
+        # heavy modules the lean entry avoids (no crossby adapters, no CLI graph).
+        from wade.skills.installer import load_prompt_template
+
+        lines.extend(ln for ln in load_prompt_template(template_name).splitlines() if ln.strip())
+
+    if not lines:
+        return None
+
+    # Brand the payload so the injected block is recognizable in the transcript.
+    if not lines[0].startswith("[wade]"):
+        lines[0] = f"[wade] {lines[0]}"
+
+    payload = "\n".join(lines)
+    if len(payload) > _SESSION_CONTEXT_MAX_CHARS:
+        payload = payload[: _SESSION_CONTEXT_MAX_CHARS - 1].rstrip() + "…"
+    return payload

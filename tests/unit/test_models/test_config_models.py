@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from wade.models.config import (
+    AI_COMMAND_NAMES,
     WADE_BASE_ALLOWLIST_PATTERN,
     AICommandConfig,
     AIConfig,
@@ -11,6 +12,7 @@ from wade.models.config import (
     ProjectConfig,
     with_wade_base_pattern,
 )
+from wade.models.permission import PermissionMode
 from wade.models.session import MergeStrategy
 
 
@@ -105,3 +107,55 @@ class TestProjectConfig:
         assert config.get_complexity_model("copilot", "complex") == "claude-sonnet-4.6"
         assert config.get_complexity_model("copilot", "medium") is None
         assert config.get_complexity_model("unknown", "easy") is None
+
+
+class TestReviewPrCommentsSection:
+    """The dedicated ``ai.review_pr_comments`` config section (#389)."""
+
+    def test_is_a_canonical_command_section(self) -> None:
+        assert "review_pr_comments" in AI_COMMAND_NAMES
+        assert isinstance(AIConfig().review_pr_comments, AICommandConfig)
+
+    def test_getters_honor_each_key(self) -> None:
+        config = ProjectConfig(
+            ai=AIConfig(
+                default_tool="copilot",
+                default_model="global-model",
+                review_pr_comments=AICommandConfig(
+                    tool="claude",
+                    model="claude-sonnet-5",
+                    effort="high",
+                    permission_mode="yolo",
+                ),
+            )
+        )
+        assert config.get_ai_tool("review_pr_comments") == "claude"
+        assert config.get_model("review_pr_comments") == "claude-sonnet-5"
+        assert config.get_effort("review_pr_comments") == "high"
+        assert config.get_permission_mode("review_pr_comments") is PermissionMode.YOLO
+        assert config.get_yolo("review_pr_comments") is True
+
+    def test_unset_falls_back_to_global_not_implement(self) -> None:
+        """With the section unset, tool/model/autonomy fall back to the global
+        ``ai.*`` defaults — never through ``ai.implement.*``."""
+        config = ProjectConfig(
+            ai=AIConfig(
+                default_tool="copilot",
+                default_model="global-model",
+                permission_mode="auto",
+                implement=AICommandConfig(
+                    tool="claude",
+                    model="implement-model",
+                    permission_mode="yolo",
+                ),
+            )
+        )
+        assert config.get_ai_tool("review_pr_comments") == "copilot"
+        assert config.get_model("review_pr_comments") == "global-model"
+        assert config.get_permission_mode("review_pr_comments") is PermissionMode.AUTO
+
+    def test_yolo_alias_honored(self) -> None:
+        config = ProjectConfig(
+            ai=AIConfig(review_pr_comments=AICommandConfig(yolo=True)),
+        )
+        assert config.get_permission_mode("review_pr_comments") is PermissionMode.YOLO
