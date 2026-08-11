@@ -732,6 +732,72 @@ class TestAnalyzeDepsMode:
     @patch("wade.services.deps_service.resolve_ai_tool")
     @patch("wade.services.deps_service.get_provider")
     @patch("wade.services.deps_service.load_config")
+    def test_headless_prints_budget_advisory(
+        self,
+        mock_config: MagicMock,
+        mock_provider: MagicMock,
+        mock_resolve_tool: MagicMock,
+        mock_resolve_model: MagicMock,
+        mock_resolve_effort: MagicMock,
+        mock_confirm: MagicMock,
+        mock_delegate: MagicMock,
+        mock_apply: MagicMock,
+        mock_tracking: MagicMock,
+        mock_console: MagicMock,
+    ) -> None:
+        """#366 review: headless deps must announce the worst-case budget pre-launch,
+
+        the same way _run_review_delegation does, so an agent-driven shell reserves
+        enough time instead of killing the call at its own shorter timeout.
+        """
+        from wade.models.config import AICommandConfig, AIConfig
+        from wade.services.delegation_service import effective_timeout, extended_timeout
+
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(deps=AICommandConfig(tool="claude", mode="headless"))
+        )
+        provider = MagicMock()
+        provider.read_task.side_effect = [
+            Task(id="1", title="Auth", body="Login"),
+            Task(id="2", title="DB", body="Schema"),
+            Task(id="1", title="Auth", body="Login"),
+            Task(id="2", title="DB", body="Schema"),
+        ]
+        mock_provider.return_value = provider
+        mock_resolve_tool.return_value = "claude"
+        mock_resolve_model.return_value = None
+        mock_resolve_effort.return_value = None
+        mock_confirm.return_value = ("claude", None, None, False)
+        mock_delegate.return_value = DelegationResult(
+            success=True,
+            feedback="1 -> 2 # auth before UI",
+            mode=DelegationMode.HEADLESS,
+        )
+        mock_apply.return_value = 2
+        mock_tracking.return_value = "10"
+
+        result = analyze_deps(["1", "2"])
+        assert result is not None
+        call_args = mock_delegate.call_args[0][0]
+        budget = effective_timeout(call_args.prompt, None, None)
+        worst_case = budget + extended_timeout(budget)
+
+        info_calls = [c.args[0] for c in mock_console.info.call_args_list]
+        assert any(str(worst_case) in msg and str(budget) in msg for msg in info_calls), (
+            f"expected an advisory mentioning budget {budget}s / worst-case "
+            f"{worst_case}s, got: {info_calls}"
+        )
+
+    @patch("wade.services.deps_service.console")
+    @patch("wade.services.deps_service.create_tracking_issue")
+    @patch("wade.services.deps_service.apply_deps_to_issues")
+    @patch("wade.services.deps_service.delegate")
+    @patch("wade.services.deps_service.confirm_ai_selection")
+    @patch("wade.services.deps_service.resolve_effort")
+    @patch("wade.services.deps_service.resolve_model")
+    @patch("wade.services.deps_service.resolve_ai_tool")
+    @patch("wade.services.deps_service.get_provider")
+    @patch("wade.services.deps_service.load_config")
     def test_timed_out_returns_none_without_applying(
         self,
         mock_config: MagicMock,

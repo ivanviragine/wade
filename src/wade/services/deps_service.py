@@ -25,7 +25,12 @@ from wade.services.ai_resolution import (
     resolve_effort,
     resolve_model,
 )
-from wade.services.delegation_service import delegate, effective_timeout, resolve_mode
+from wade.services.delegation_service import (
+    delegate,
+    effective_timeout,
+    extended_timeout,
+    resolve_mode,
+)
 from wade.services.task_service import ensure_task_label
 from wade.ui.console import console
 
@@ -517,10 +522,37 @@ def analyze_deps(
 
     # Run AI analysis via delegation infrastructure
     effort_str = resolved_effort.value if isinstance(resolved_effort, EffortLevel) else None
+    # Scale the budget from payload size + effort; an explicit
+    # ``ai.deps.timeout`` is honored verbatim and bypasses scaling + retry.
+    deps_timeout = effective_timeout(prompt, cmd_config.timeout, effort_str)
+    deps_explicit_timeout = cmd_config.timeout is not None
     if delegation_mode != DelegationMode.PROMPT and resolved_tool:
         console.step(
             f"Running {resolved_tool} ({delegation_mode.value}) for dependency analysis..."
         )
+    if delegation_mode == DelegationMode.HEADLESS:
+        # This spawns an external AI subprocess bounded by ``deps_timeout``. Announce
+        # a budget the orchestrator driving wade must wait out — otherwise it kills
+        # the call at its own shorter timeout before wade can preserve partial output
+        # or run its retry. Mirrors the advisory in
+        # review_delegation_service._run_review_delegation (#366 review: the deps
+        # path silently blocked without it).
+        if deps_explicit_timeout:
+            console.info(
+                "This runs an external AI subprocess bounded by your configured "
+                f"ai.deps.timeout of {deps_timeout}s (no retry). Keep it in the "
+                f"foreground and allow more than {deps_timeout}s before timing "
+                "out. Do not move it to the background."
+            )
+        else:
+            worst_case = deps_timeout + extended_timeout(deps_timeout)
+            console.info(
+                f"This runs an external AI subprocess. wade budgets {deps_timeout}s "
+                "and, on timeout, retries once with a longer budget (worst-case "
+                f"total {worst_case}s). Keep it in the foreground and allow more "
+                f"than {worst_case}s before timing out (raise your shell/tool "
+                "timeout if needed). Do not move it to the background."
+            )
     delegation_result = _run_delegation(
         resolved_tool,
         prompt,
@@ -529,10 +561,8 @@ def analyze_deps(
         effort=effort_str,
         allowed_commands=config.permissions.allowed_commands,
         cwd=deps_cwd,
-        # Scale the budget from payload size + effort; an explicit
-        # ``ai.deps.timeout`` is honored verbatim and bypasses scaling + retry.
-        timeout=effective_timeout(prompt, cmd_config.timeout, effort_str),
-        explicit_timeout=cmd_config.timeout is not None,
+        timeout=deps_timeout,
+        explicit_timeout=deps_explicit_timeout,
     )
     output = (
         delegation_result.feedback
