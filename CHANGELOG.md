@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.43.0] — 2026-08-11
+
+### Features
+
+- allow AI-tool memory writes through worktree/plan write-guards (#388) (338a31c)
+
 ## [v0.42.6] — 2026-08-11
 
 ### Bug Fixes
