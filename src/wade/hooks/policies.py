@@ -17,6 +17,30 @@ Guards today:
   for shell tool names by design (``SHELL_TOOL_NAMES``), so a shell call carries
   its target in ``command``, not ``file_path``, and the two path guards above
   would wave it through. This closes that channel.
+
+Memory allowlist (``allow_paths``): all three guards accept an ``allow_paths``
+tuple — the *active* tool's own memory location for *this session*, resolved by
+:func:`wade.hooks.cli._memory_allow_paths` (e.g. Claude
+``~/.claude/projects/<encoded-worktree>/memory``). A write inside it is
+permitted despite containment, and is exempt from the plan-artifact rule in plan
+mode, so a guarded tool can persist memory outside the worktree. On the shell
+channel this is honored for redirect targets and write-command operands — but
+also, incidentally, for any *glued* flag value targeting the allow-root (e.g.
+``curl -o <memory-path>``), since the glued-path check does not distinguish a
+write flag from a read one (see :func:`shell_containment`'s rule 5); this only
+*narrows* what such a command would otherwise be denied for, never widens it
+past the allow-root itself. The allowlist is **deliberately narrow — never the
+tool's config/auth home** (``~/.claude/settings.json`` holds the ``hooks`` block
+these guards depend on; allowlisting the whole home would let a session strip
+its own guard) **— but not uniformly scoped to "memory only" across tools**:
+Claude's allow-root is memory alone; Cursor's and Codex's are, respectively, the
+session's whole project dir and the tool's whole (cross-project) sessions tree,
+because neither tool's storage draws a finer boundary to key on (see
+:func:`wade.hooks.cli._memory_allow_paths` for the per-tool breakdown). Every
+other out-of-worktree write, including the tool's own config, stays denied. The
+per-tool memory locations are mirrored wade-side today (like the dialect maps in
+:mod:`wade.hooks.cli`); they ultimately belong in crossby's
+``AIToolCapabilities`` — a follow-up, not on this path.
 """
 
 from __future__ import annotations
@@ -101,16 +125,24 @@ def _resolve_path(file_path: str) -> Path:
     return (Path(os.getcwd()) / p).resolve()
 
 
-def worktree_containment(event: HookEvent, *, worktree_root: Path) -> HookDecision:
+def worktree_containment(
+    event: HookEvent, *, worktree_root: Path, allow_paths: tuple[Path, ...] = ()
+) -> HookDecision:
     """Deny writes outside ``worktree_root`` — and writes we cannot locate at all.
 
     A non-write tool call is allowed (nothing to contain). A *write*, however, is
-    denied unless its target resolves to a path inside the worktree: the PreToolUse
-    matcher only fires this hook on write tools, so a write with a missing or
-    unresolvable ``file_path`` is a write we can't verify is contained — failing
-    open would let it through unchecked. (The ``wade-hook`` CLI short-circuits a
-    genuinely *empty* payload to allow before reaching here, so this only sees
-    events that actually described a write.)
+    denied unless its target resolves to a path inside the worktree **or** inside
+    an allowed memory subtree (``allow_paths`` — the active tool's own memory
+    root; see :func:`wade.hooks.cli._memory_allow_paths`): the PreToolUse matcher
+    only fires this hook on write tools, so a write with a missing or unresolvable
+    ``file_path`` is a write we can't verify is contained — failing open would let
+    it through unchecked. (The ``wade-hook`` CLI short-circuits a genuinely
+    *empty* payload to allow before reaching here, so this only sees events that
+    actually described a write.)
+
+    ``allow_paths`` is the **only** relaxation here: unlike the shell channel,
+    this file-path channel does not share the temp-dir / device scratch
+    exemption, so a memory root is the sole out-of-worktree target it permits.
     """
     if not event.is_write:
         return HookDecision.allow()
@@ -132,14 +164,12 @@ def worktree_containment(event: HookEvent, *, worktree_root: Path) -> HookDecisi
         )
 
     root = worktree_root.resolve()
-    try:
-        resolved.relative_to(root)
-    except ValueError:
-        return HookDecision.deny(
-            f"BLOCKED by worktree guard: cannot write to '{event.file_path}'. "
-            f"You should only edit files inside your worktree at '{root}'."
-        )
-    return HookDecision.allow()
+    if _within(resolved, root) or _under_any(resolved, allow_paths):
+        return HookDecision.allow()
+    return HookDecision.deny(
+        f"BLOCKED by worktree guard: cannot write to '{event.file_path}'. "
+        f"You should only edit files inside your worktree at '{root}'."
+    )
 
 
 def _is_plan_artifact(file_path: str) -> bool:
@@ -159,7 +189,9 @@ def _is_plan_artifact(file_path: str) -> bool:
     return any(fnmatch.fnmatch(basename, pattern) for pattern in _ALLOWED_PLAN_BASENAMES)
 
 
-def plan_artifact_only(event: HookEvent, *, worktree_root: Path) -> HookDecision:
+def plan_artifact_only(
+    event: HookEvent, *, worktree_root: Path, allow_paths: tuple[Path, ...] = ()
+) -> HookDecision:
     """During a plan session, deny writes outside the worktree or to non-artifacts.
 
     Plan mode installs this guard *instead of* :func:`worktree_containment`, so it
@@ -168,15 +200,31 @@ def plan_artifact_only(event: HookEvent, *, worktree_root: Path) -> HookDecision
     non-sandboxed tools. Containment also denies a write with no resolvable path,
     so only located, contained writes reach the plan-artifact allowlist below.
 
+    ``allow_paths`` (the active tool's memory subtree) is threaded into
+    containment so a memory write is not rejected as "outside the worktree", and
+    then exempted from the plan-artifact rule **before** it is applied: a memory
+    path resolves outside ``worktree_root``, so :func:`_is_plan_artifact` would
+    never match it and it would be denied as a non-artifact. The exemption keeps
+    memory writable in plan mode without loosening the artifact rule for
+    in-worktree paths.
+
     A non-write tool call is allowed. The ``posixpath`` normalization collapses
     ``../`` traversal so escapes like ``.claude/plans/../../src/x.py`` are blocked.
     """
-    containment = worktree_containment(event, worktree_root=worktree_root)
+    containment = worktree_containment(event, worktree_root=worktree_root, allow_paths=allow_paths)
     if containment.action == "deny":
         return containment
 
     if not event.is_write or not event.file_path:
         return HookDecision.allow()
+
+    if allow_paths:
+        try:
+            resolved = _resolve_path(event.file_path)
+        except (OSError, ValueError):
+            resolved = None
+        if resolved is not None and _under_any(resolved, allow_paths):
+            return HookDecision.allow()  # memory subtree — exempt from artifact rule
 
     if _is_plan_artifact(event.file_path):
         return HookDecision.allow()
@@ -436,22 +484,40 @@ def _resolve_shell_path(token: str, *, base: Path) -> Path | None:
         return None
 
 
-def _contained(path: Path, root: Path) -> bool:
-    """True when ``path`` is inside ``root`` (or an always-allowed location).
+def _within(path: Path, base: Path) -> bool:
+    """True when ``path`` is ``base`` itself or nested under it."""
+    try:
+        path.relative_to(base)
+    except ValueError:
+        return False
+    return True
+
+
+def _under_any(path: Path, roots: tuple[Path, ...]) -> bool:
+    """True when ``path`` is (or is nested under) any root in ``roots``.
+
+    Used for the per-tool **memory allowlist** (``allow_paths`` — see
+    :func:`wade.hooks.cli._memory_allow_paths`): out-of-worktree subtrees the
+    session's active tool may write to despite containment, so a guarded tool can
+    persist its own memory. Deliberately narrow — only the memory subtree, never
+    the tool's config/auth home.
+    """
+    return any(_within(path, r) for r in roots)
+
+
+def _contained(path: Path, root: Path, allow_paths: tuple[Path, ...] = ()) -> bool:
+    """True when ``path`` is inside ``root``, an always-allowed location, or a memory root.
 
     Always-allowed locations cover known discard/console devices
     (:data:`_ALWAYS_ALLOWED_DEVICES` — ``/dev/null`` …, matched exactly) and system
     temp dirs (``/tmp``, ``$TMPDIR`` via :data:`_ALWAYS_ALLOWED_PATH_PREFIXES``,
     matched by prefix) — shared scratch space that is safe to write even though it
-    is outside ``root``.
+    is outside ``root``. ``allow_paths`` are the active tool's memory subtrees
+    (:func:`_under_any`), permitted despite being outside the worktree.
     """
     if _is_always_allowed_device(path) or str(path).startswith(_ALWAYS_ALLOWED_PATH_PREFIXES):
         return True
-    try:
-        path.relative_to(root)
-    except ValueError:
-        return False
-    return True
+    return _within(path, root) or _under_any(path, allow_paths)
 
 
 def shell_containment(
@@ -459,6 +525,7 @@ def shell_containment(
     *,
     worktree_root: Path,
     plan_mode: bool = False,
+    allow_paths: tuple[Path, ...] = (),
 ) -> HookDecision:
     """Deny a shell command that writes outside the worktree (or outside plan artifacts).
 
@@ -484,6 +551,23 @@ def shell_containment(
     device writes are additionally allowed in plan mode
     (:func:`_is_always_allowed_device`) since they persist nothing.
 
+    **The active tool's memory allow-root is also writable.** ``allow_paths`` (the
+    tool's own allow-root for this session — see
+    :func:`wade.hooks.cli._memory_allow_paths`) is honored for **redirect
+    targets** and **write-command operands**, so a shell redirect or a write
+    command targeting it is contained even though it lives outside the root
+    (a glued flag value pointing there also passes, incidentally, via the
+    generic glued-path check in rule 5 below — that check cannot distinguish a
+    write flag from a read one, so it does not enforce the "redirect targets and
+    write-command operands only" framing as a hard boundary; this only narrows
+    what such a command is denied for). In plan mode a memory path is additionally exempt from the
+    plan-artifact rule — checked **before** :func:`_is_plan_artifact_path` (which
+    reports any out-of-root path, memory included, as a non-artifact), so a
+    plan-mode ``echo x > ~/.claude/.../y.md`` is allowed. ``cd``/``pushd`` and
+    every git directory-redirect flag (``-C``, ``--work-tree=``, ``--git-dir=``)
+    stay strict (memory writes are direct-path, not cd-relative), so the bypass
+    never loosens directory context.
+
     Rules, in order (any match denies):
 
     1. The command does not tokenize (unbalanced quotes) — **fail closed**.
@@ -504,15 +588,26 @@ def shell_containment(
        live in ``/usr/bin``, ``/bin``, ``/opt/homebrew/bin`` and denying those
        breaks every session. Character devices (``/dev/null``) are exempt too.
     5. A path glued to a flag or operand (``--output=/tmp/x``, ``-o/tmp/x``,
-       ``of=/tmp/x``, ``git -C/tmp/other``) resolves outside the root. The glued
-       form is contained in *all* modes: a tokenizer cannot tell a glued read flag
-       from a glued write flag, so both are denied — this conservatively denies a
-       few glued *reads* too (e.g. ``git -C/tmp/other log``).
-    6. Spaced ``git -C <dir>`` where ``<dir>`` is outside the root **and** a git
-       write subcommand (:data:`_GIT_WRITE_SUBCOMMANDS`) follows in the same
-       segment. ``git -C <outside> log``/``show``/``status``/``diff`` (read
-       subcommands) stay allowed; ``git -C <outside> clean`` would otherwise delete
-       untracked files outside with no later path operand to catch it.
+       ``of=/tmp/x``) resolves outside the root. The glued form is contained in
+       *all* modes: a tokenizer cannot tell a glued read flag from a glued write
+       flag, so both are denied — this conservatively denies a few glued *reads*
+       too. Every git directory-redirect flag's glued/``=``-joined form — glued
+       ``-C<dir>`` (e.g. ``git -C/tmp/other``), ``--work-tree=<dir>``,
+       ``--git-dir=<dir>`` — is carved out of this rule and handled by rule 6
+       instead.
+    6. Any git directory-redirect flag — ``-C``, ``--work-tree``, or
+       ``--git-dir``, spaced *or* glued/``=``-joined (git's own parser accepts
+       both forms identically for all three) — where ``<dir>`` is outside the
+       root **and** a git write subcommand (:data:`_GIT_WRITE_SUBCOMMANDS`)
+       follows in the same segment. ``git -C <outside> log``/``show``/``status``/
+       ``diff`` (read subcommands) stay allowed; ``git -C <outside> clean`` would
+       otherwise delete untracked files outside with no later path operand to
+       catch it — ``--work-tree``/``--git-dir`` are functionally the same
+       redirection, just spelled differently. Checked only against ``root`` —
+       ``allow_paths`` (the memory exception, rule 4/5's `_contained` call) does
+       not apply to any of these six spellings: a git
+       write scoped to a redirected directory can touch every file under
+       ``<dir>``, not just a direct memory write.
     7. In plan mode only: any output redirect, an in-place edit flag (``sed -i``,
        ``--in-place``) on a command that *has* one (:data:`_IN_PLACE_COMMANDS` —
        ``grep -i`` and ``ls -i`` are ordinary read flags), or an operand of a write
@@ -574,6 +669,8 @@ def shell_containment(
         event: Normalized hook event; only :attr:`HookEvent.command` is read.
         worktree_root: The session worktree; writes must stay inside it.
         plan_mode: Apply the stricter plan-session rules (rule 5).
+        allow_paths: Out-of-worktree memory subtrees the active tool may write to
+            (redirect targets / write-command operands only; empty = no bypass).
     """
     command = (event.command or "").strip()
     if not command:
@@ -610,10 +707,14 @@ def shell_containment(
         if op == "<":
             return None
         resolved = _resolve_shell_path(target, base=base)
-        if resolved is None or not _contained(resolved, root):
+        if resolved is None or not _contained(resolved, root, allow_paths):
             return deny_outside("redirect target", target)
+        # Memory membership FIRST: a memory path is outside the root, so
+        # ``_is_plan_artifact_path`` reports it as "not an artifact" and would deny
+        # it — the ordering trap this check exists to avoid.
         if (
             plan_mode
+            and not _under_any(resolved, allow_paths)
             and not _is_plan_artifact_path(resolved, root)
             and not _is_always_allowed_device(resolved)
         ):
@@ -627,9 +728,15 @@ def shell_containment(
         return None
 
     def check_non_artifact(what: str, token: str, resolved: Path) -> HookDecision | None:
-        """Plan mode: a contained path a write command targets must be an artifact."""
+        """Plan mode: a contained path a write command targets must be an artifact.
+
+        A memory path (``allow_paths``) is exempt — checked before
+        :func:`_is_plan_artifact_path`, which reports any out-of-root path (memory
+        included) as a non-artifact.
+        """
         if (
             not plan_mode
+            or _under_any(resolved, allow_paths)
             or _is_plan_artifact_path(resolved, root)
             or _is_always_allowed_device(resolved)
         ):
@@ -646,11 +753,15 @@ def shell_containment(
     is_write_command = False
     awaiting_cd_target = False
     pending_redirect: str | None = None
-    # Spaced ``git -C <dir>``: the next token is the directory (awaiting flag), and
+    # Spaced git directory-redirect flag (``-C <dir>``, ``--work-tree <dir>``,
+    # ``--git-dir <dir>``): the next token is the directory (awaiting flag), and
     # once seen we remember it here iff it resolves outside the root. A read like
-    # ``git -C <outside> log`` is fine; only a later git *write* subcommand denies.
-    awaiting_git_c_dir = False
-    git_c_outside_token: str | None = None
+    # ``git -C <outside> log`` is fine; only a later git *write* subcommand
+    # denies. Shared with the glued (``-C<dir>``) and ``=``-joined
+    # (``--work-tree=<dir>``, ``--git-dir=<dir>``) forms below — all six
+    # spellings are directory-redirect flags with the same escape shape.
+    awaiting_git_dir_redirect = False
+    git_dir_redirect_outside_token: str | None = None
 
     def end_segment() -> HookDecision | None:
         """A segment that ended while `cd` still wanted a target went to $HOME."""
@@ -672,8 +783,8 @@ def shell_containment(
             is_write_command = False
             awaiting_cd_target = False
             pending_redirect = None
-            awaiting_git_c_dir = False
-            git_c_outside_token = None
+            awaiting_git_dir_redirect = False
+            git_dir_redirect_outside_token = None
             continue
 
         redirect = _REDIRECT_RE.match(token)
@@ -725,19 +836,46 @@ def shell_containment(
                 return deny_outside(f"{command_name} target", token)
             continue
 
-        # Spaced ``git -C <dir>``: buffer the directory. A read through it is fine
-        # (``git -C ../crossby log``); a later git *write* subcommand in the same
-        # segment turns a buffered *outside* dir into a denial. The glued
-        # ``-C/outside`` form is caught by `_embedded_path` below in every mode.
-        if awaiting_git_c_dir:
-            awaiting_git_c_dir = False
+        # Spaced git directory-redirect flag: buffer the directory from the NEXT
+        # token. A read through it is fine (``git -C ../crossby log``,
+        # ``git --work-tree ../crossby log``); a later git *write* subcommand in
+        # the same segment turns a buffered *outside* dir into a denial. Checked
+        # only against ``root`` — NOT ``allow_paths`` — below. git's own parser
+        # (git.c) accepts ``-C``, ``--work-tree``, and ``--git-dir`` both spaced
+        # and ``=``-joined identically, so all three must be buffered here too —
+        # not just ``-C`` (a prior review already caught the missing
+        # ``=``-joined ``--work-tree``/``--git-dir`` forms; this closes the
+        # remaining spaced-without-``=`` gap for those same two flags).
+        if awaiting_git_dir_redirect:
+            awaiting_git_dir_redirect = False
             resolved = _resolve_shell_path(token, base=base)
             if resolved is None or not _contained(resolved, root):
-                git_c_outside_token = token
+                git_dir_redirect_outside_token = token
             continue
 
-        if command_name == "git" and token == "-C":
-            awaiting_git_c_dir = True
+        if command_name == "git" and token in ("-C", "--work-tree", "--git-dir"):
+            awaiting_git_dir_redirect = True
+            continue
+
+        # Glued ``-C<dir>`` (no space, e.g. ``-C..`` or ``-C/tmp/other``) and the
+        # ``=``-joined ``--work-tree=<dir>`` / ``--git-dir=<dir>`` forms:
+        # resolved directly from the same token instead of falling through to
+        # the generic `_embedded_path` branch below. That branch checks
+        # ``allow_paths``, which would let e.g. ``git -C<memory-dir> clean -fd``
+        # reach the memory exception — a write reached through any
+        # directory-redirect flag can touch every file under ``<dir>``, not just
+        # a direct memory write; all spellings must stay as strict as spaced
+        # ``-C``.
+        if command_name == "git" and token.startswith("-C") and token != "-C":
+            git_dir_redirect = token[2:]
+        elif command_name == "git" and token.startswith(("--work-tree=", "--git-dir=")):
+            _, _, git_dir_redirect = token.partition("=")
+        else:
+            git_dir_redirect = None
+        if git_dir_redirect is not None:
+            resolved = _resolve_shell_path(git_dir_redirect, base=base)
+            if resolved is None or not _contained(resolved, root):
+                git_dir_redirect_outside_token = git_dir_redirect
             continue
 
         # In-place editors (`sed -i`, `perl -i`, `yq -i`, …) rewrite their operands.
@@ -756,20 +894,24 @@ def shell_containment(
 
         if command_name == "git" and token in _GIT_WRITE_SUBCOMMANDS:
             is_write_command = True
-            # A git write subcommand after a spaced ``-C`` pointing outside the root
-            # (``git -C /outside clean -fd``) writes outside with no later path
-            # operand to catch it — deny on the buffered directory.
-            if git_c_outside_token is not None:
-                return deny_outside("git -C directory", git_c_outside_token)
+            # A git write subcommand after a directory-redirect flag pointing
+            # outside the root (``git -C /outside clean -fd``, ``git
+            # -C/outside clean -fd``, ``git --work-tree=/outside clean -fd``,
+            # ``git --git-dir=/outside clean -fd``) writes outside with no later
+            # path operand to catch it — deny on the buffered directory.
+            if git_dir_redirect_outside_token is not None:
+                return deny_outside("git directory-redirect flag", git_dir_redirect_outside_token)
 
-        # A path glued to a flag or operand (``--output=/tmp/x``, ``of=/tmp/x``,
-        # ``git -C/tmp/other``) is invisible to `_looks_like_path`, and `of=/tmp/x`
-        # would resolve *relative*. Contained in every mode: a tokenizer cannot tell
-        # a glued read flag from a glued write flag, so both are denied.
+        # A path glued to a flag or operand (``--output=/tmp/x``, ``of=/tmp/x``)
+        # is invisible to `_looks_like_path`, and `of=/tmp/x` would resolve
+        # *relative*. Contained in every mode: a tokenizer cannot tell a glued
+        # read flag from a glued write flag, so both are denied. Every git
+        # directory-redirect flag (``-C<dir>``, ``--work-tree=<dir>``,
+        # ``--git-dir=<dir>``) is handled above instead, before this branch.
         embedded = _embedded_path(token)
         if embedded is not None:
             resolved = _resolve_shell_path(embedded, base=base)
-            if resolved is None or not _contained(resolved, root):
+            if resolved is None or not _contained(resolved, root, allow_paths):
                 return deny_outside("path argument", embedded)
             if is_write_command:
                 denial = check_non_artifact(f"'{command_name}'", embedded, resolved)
@@ -783,7 +925,7 @@ def shell_containment(
             # state. Path-like or not: plan mode must catch `tee app.py`, not just
             # `tee src/app.py`.
             resolved = _resolve_shell_path(token, base=base)
-            if resolved is None or not _contained(resolved, root):
+            if resolved is None or not _contained(resolved, root, allow_paths):
                 return deny_outside("path argument", token)
             denial = check_non_artifact(f"'{command_name}'", token, resolved)
             if denial is not None:
