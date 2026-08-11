@@ -522,9 +522,21 @@ class TestExtendedTimeout:
             assert t + extended_timeout(t) <= TOTAL_TIMEOUT_CAP
 
     def test_meaningful_extension_below_cap(self) -> None:
-        # 600 * 1.5 = 900, sum 1500 <= 2400.
+        # 600 * 1.5 = 900, sum 1500 <= TOTAL_TIMEOUT_CAP.
         assert extended_timeout(600) == 900
 
     def test_zero_when_at_or_over_cap(self) -> None:
         assert extended_timeout(TOTAL_TIMEOUT_CAP) == 0
         assert extended_timeout(TOTAL_TIMEOUT_CAP + 500) == 0
+
+    def test_retry_always_longer_than_first_attempt(self) -> None:
+        """#366 review: a scaled first attempt must never get a same-or-shorter retry.
+
+        Every real first attempt is a scaled/floor/ceiling-bounded value in
+        [TIMEOUT_FLOOR, TIMEOUT_CEILING] — the cap must accommodate the full
+        multiplier across that whole range, not just below its midpoint.
+        """
+        for t in range(TIMEOUT_FLOOR, TIMEOUT_CEILING + 1, 50):
+            retry = extended_timeout(t)
+            assert retry > t, f"extended_timeout({t}) == {retry}, not longer than {t}"
+            assert retry == round(t * 1.5)

@@ -47,7 +47,12 @@ _TIMEOUT_SECONDS_PER_BYTE = 0.0075
 _EFFORT_MULTIPLIER = {"high": 1.5, "xhigh": 1.75, "max": 1.75}  # else 1.0
 
 TIMEOUT_RETRY_MULTIPLIER = 1.5
-TOTAL_TIMEOUT_CAP = 2400  # hard bound on first_attempt + retry (40 min)
+# Sized so a ceiling-length first attempt still gets the *full* multiplier on
+# retry: TIMEOUT_CEILING + TIMEOUT_CEILING * TIMEOUT_RETRY_MULTIPLIER. A flat
+# cap here (e.g. 2400) would clip the retry below the first attempt for large
+# first-attempt budgets (#366 review) — exactly the big-prompt case a retry
+# needs to help most. ~3750s (62.5 min) at current constants.
+TOTAL_TIMEOUT_CAP = TIMEOUT_CEILING + round(TIMEOUT_CEILING * TIMEOUT_RETRY_MULTIPLIER)
 
 
 def scaled_timeout(payload_bytes: int, effort: str | None = None) -> int:
@@ -74,7 +79,10 @@ def extended_timeout(t: int) -> int:
     """Retry budget for a timed-out first attempt of length ``t`` seconds.
 
     A meaningful extension (``t * TIMEOUT_RETRY_MULTIPLIER``) that never lets the
-    sum ``t + extended_timeout(t)`` exceed ``TOTAL_TIMEOUT_CAP``. Returns 0 (no
+    sum ``t + extended_timeout(t)`` exceed ``TOTAL_TIMEOUT_CAP``. ``TOTAL_TIMEOUT_CAP``
+    is sized so the full multiplier always applies for ``t`` up to
+    ``TIMEOUT_CEILING`` — the retry is always strictly longer than the attempt
+    that just timed out, never clipped to it (#366 review). Returns 0 (no
     retry) when ``t`` is already at/over the cap.
     """
     return max(0, min(round(t * TIMEOUT_RETRY_MULTIPLIER), TOTAL_TIMEOUT_CAP - t))
