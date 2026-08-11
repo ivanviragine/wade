@@ -742,3 +742,23 @@ class TestMemoryAllowlist:
         # cd/pushd stays strict — the bypass is direct-path only, never cd-relative.
         d = shell_containment(_shell(f"cd {_MEM} && rm x"), worktree_root=WT, allow_paths=(_MEM,))
         assert d.action == "deny"
+
+    def test_git_c_spaced_write_into_memory_still_denied(self) -> None:
+        # git -C stays strict too — a write scoped there can touch every file
+        # under the memory dir, not just a direct memory write.
+        d = shell_containment(
+            _shell(f"git -C {_MEM} clean -fd"), worktree_root=WT, allow_paths=(_MEM,)
+        )
+        assert d.action == "deny"
+
+    def test_git_c_glued_write_into_memory_still_denied(self) -> None:
+        d = shell_containment(
+            _shell(f"git -C{_MEM} clean -fd"), worktree_root=WT, allow_paths=(_MEM,)
+        )
+        assert d.action == "deny"
+
+    def test_git_c_glued_read_into_memory_allowed(self) -> None:
+        # Reads are fine, matching the spaced form (rule 6) — only a later write
+        # subcommand turns a buffered outside/memory ``-C`` dir into a denial.
+        d = shell_containment(_shell(f"git -C{_MEM} log"), worktree_root=WT, allow_paths=(_MEM,))
+        assert d.action == "allow"

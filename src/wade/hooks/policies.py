@@ -572,15 +572,20 @@ def shell_containment(
        live in ``/usr/bin``, ``/bin``, ``/opt/homebrew/bin`` and denying those
        breaks every session. Character devices (``/dev/null``) are exempt too.
     5. A path glued to a flag or operand (``--output=/tmp/x``, ``-o/tmp/x``,
-       ``of=/tmp/x``, ``git -C/tmp/other``) resolves outside the root. The glued
-       form is contained in *all* modes: a tokenizer cannot tell a glued read flag
-       from a glued write flag, so both are denied — this conservatively denies a
-       few glued *reads* too (e.g. ``git -C/tmp/other log``).
-    6. Spaced ``git -C <dir>`` where ``<dir>`` is outside the root **and** a git
-       write subcommand (:data:`_GIT_WRITE_SUBCOMMANDS`) follows in the same
-       segment. ``git -C <outside> log``/``show``/``status``/``diff`` (read
-       subcommands) stay allowed; ``git -C <outside> clean`` would otherwise delete
-       untracked files outside with no later path operand to catch it.
+       ``of=/tmp/x``) resolves outside the root. The glued form is contained in
+       *all* modes: a tokenizer cannot tell a glued read flag from a glued write
+       flag, so both are denied — this conservatively denies a few glued *reads*
+       too. Glued ``git -C<dir>`` (e.g. ``git -C/tmp/other``) is carved out of
+       this rule and handled by rule 6 instead.
+    6. ``git -C <dir>`` — spaced *or* glued — where ``<dir>`` is outside the root
+       **and** a git write subcommand (:data:`_GIT_WRITE_SUBCOMMANDS`) follows in
+       the same segment. ``git -C <outside> log``/``show``/``status``/``diff``
+       (read subcommands) stay allowed; ``git -C <outside> clean`` would otherwise
+       delete untracked files outside with no later path operand to catch it.
+       Checked only against ``root`` — ``allow_paths`` (the memory exception,
+       rule 4/5's `_contained` call) does not apply here: a git write scoped to
+       ``-C`` can touch every file under ``<dir>``, not just a direct memory
+       write, so ``git -C`` stays strict in both forms.
     7. In plan mode only: any output redirect, an in-place edit flag (``sed -i``,
        ``--in-place``) on a command that *has* one (:data:`_IN_PLACE_COMMANDS` —
        ``grep -i`` and ``ls -i`` are ordinary read flags), or an operand of a write
@@ -807,8 +812,8 @@ def shell_containment(
 
         # Spaced ``git -C <dir>``: buffer the directory. A read through it is fine
         # (``git -C ../crossby log``); a later git *write* subcommand in the same
-        # segment turns a buffered *outside* dir into a denial. The glued
-        # ``-C/outside`` form is caught by `_embedded_path` below in every mode.
+        # segment turns a buffered *outside* dir into a denial. Checked only
+        # against ``root`` — NOT ``allow_paths`` — below.
         if awaiting_git_c_dir:
             awaiting_git_c_dir = False
             resolved = _resolve_shell_path(token, base=base)
@@ -818,6 +823,18 @@ def shell_containment(
 
         if command_name == "git" and token == "-C":
             awaiting_git_c_dir = True
+            continue
+
+        # Glued ``git -C<dir>`` (no space): buffered the same way as the spaced
+        # form above, instead of falling through to the generic `_embedded_path`
+        # branch below. The generic branch checks ``allow_paths``, which would let
+        # ``git -C<memory-dir> clean -fd`` reach the memory exception — a git
+        # write scoped to ``-C`` can touch every file under ``<dir>``, not just a
+        # direct memory write, so this must stay as strict as the spaced form.
+        if command_name == "git" and token.startswith("-C") and token != "-C" and "/" in token:
+            resolved = _resolve_shell_path(token[2:], base=base)
+            if resolved is None or not _contained(resolved, root):
+                git_c_outside_token = token[2:]
             continue
 
         # In-place editors (`sed -i`, `perl -i`, `yq -i`, …) rewrite their operands.
@@ -836,16 +853,18 @@ def shell_containment(
 
         if command_name == "git" and token in _GIT_WRITE_SUBCOMMANDS:
             is_write_command = True
-            # A git write subcommand after a spaced ``-C`` pointing outside the root
-            # (``git -C /outside clean -fd``) writes outside with no later path
-            # operand to catch it — deny on the buffered directory.
+            # A git write subcommand after a spaced or glued ``-C`` pointing
+            # outside the root (``git -C /outside clean -fd``, ``git
+            # -C/outside clean -fd``) writes outside with no later path operand
+            # to catch it — deny on the buffered directory.
             if git_c_outside_token is not None:
                 return deny_outside("git -C directory", git_c_outside_token)
 
-        # A path glued to a flag or operand (``--output=/tmp/x``, ``of=/tmp/x``,
-        # ``git -C/tmp/other``) is invisible to `_looks_like_path`, and `of=/tmp/x`
-        # would resolve *relative*. Contained in every mode: a tokenizer cannot tell
-        # a glued read flag from a glued write flag, so both are denied.
+        # A path glued to a flag or operand (``--output=/tmp/x``, ``of=/tmp/x``)
+        # is invisible to `_looks_like_path`, and `of=/tmp/x` would resolve
+        # *relative*. Contained in every mode: a tokenizer cannot tell a glued
+        # read flag from a glued write flag, so both are denied. Glued
+        # ``git -C<dir>`` is handled above instead, before this branch.
         embedded = _embedded_path(token)
         if embedded is not None:
             resolved = _resolve_shell_path(embedded, base=base)
