@@ -174,8 +174,9 @@ Those headless commands **auto-scale** their subprocess budget from the prompt
 size and reasoning effort (600s floor → 1500s ceiling), so a large diff or a
 high-effort run no longer times out at a flat budget. If a run does time out,
 wade keeps whatever partial output the reviewer produced (rather than discarding
-it) and **retries once** with a longer budget, bounded to a 40-minute worst-case
-total that the pre-launch advisory announces. Set `ai.<command>.timeout`
+it) and **retries once** with a longer budget (1.5x the first attempt, always
+strictly more time than the run that just timed out), bounded to a ~62.5-minute
+worst-case total that the pre-launch advisory announces. Set `ai.<command>.timeout`
 (seconds) to override: an explicit value is used verbatim and **turns off both
 the scaling and the retry** — the escape hatch when your terminal/orchestrator
 enforces a hard tool-timeout (set it just under that limit).
