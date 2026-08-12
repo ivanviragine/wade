@@ -561,19 +561,19 @@ Write-guard temp/scratch is now allowed in both plan and impl mode (#409), which
 
 ## 8af3d744375f | 2026-08-12 | implementation | tags: hooks, write-guards, git | Issue #409
 
-In src/wade/hooks/policies.py's shell_containment, the always-allowed-scratch exemption (_is_always_allowed_scratch: temp dirs + devices) covers only direct file writes, NOT git directory-redirect flags (-C/--work-tree/--git-dir, spaced or glued/=-joined). Rule 6's buffering checks those with strict _within(root) instead of _contained, so 'git -C /tmp/x clean -fd' stays denied even though a direct write to /tmp/x is scratch-exempt — a directory-scoped write can touch every file under <dir>, a far larger blast radius than one scratch file.
+In src/wade/hooks/policies.py's `shell_containment`, the always-allowed-scratch exemption (`_is_always_allowed_scratch`: temp dirs + devices) covers only direct file writes, NOT git directory-redirect flags (-C/--work-tree/--git-dir, spaced or glued/=-joined). Rule 6's buffering checks those with strict `_within(root)` instead of `_contained`, so 'git -C /tmp/x clean -fd' stays denied even though a direct write to /tmp/x is scratch-exempt — a directory-scoped write can touch every file under <dir>, a far larger blast radius than one scratch file.
 
 ---
 
 ## de9cb5388ad2 | 2026-08-12 | implementation | tags: hooks, write-guards, gotcha | Issue #409
 
-shell_containment's base = _resolve_shell_path(event.cwd) trust (src/wade/hooks/policies.py) is unconditional and predates #409 — some tools' shell execution (e.g. Claude Code's Bash) persists cwd across SEPARATE tool calls, not just within one command string. So cd /tmp/x in one call followed by a bare 'git clean -fd' (no -C, no cd) in the next call reports event.cwd=/tmp/x, and nothing in this single-command tokenizer catches it (rule 6's cwd_outside_root_token resets fresh per shell_containment call). Found by wade review implementation on the #409 cd-into-scratch fix; documented as a residual gap, not fixed, since it needs cross-call cwd tracking outside this predicate's scope.
+`shell_containment`'s `base = _resolve_shell_path(event.cwd)` trust (src/wade/hooks/policies.py) is unconditional and predates #409 — some tools' shell execution (e.g. Claude Code's Bash) persists cwd across SEPARATE tool calls, not just within one command string. So cd /tmp/x in one call followed by a bare 'git clean -fd' (no -C, no cd) in the next call reports event.cwd=/tmp/x, and nothing in this single-command tokenizer catches it (rule 6's `cwd_outside_root_token` resets fresh per `shell_containment` call). Found by wade review implementation on the #409 cd-into-scratch fix; documented as a residual gap, not fixed, since it needs cross-call cwd tracking outside this predicate's scope.
 
 ---
 
 ## 4726118ad21a | 2026-08-12 | implementation | tags: hooks, write-guards, security, gotcha | Issue #409
 
-In src/wade/hooks/policies.py, the plan-artifact-rule scratch exemption must be root-aware, not just `_is_always_allowed_scratch`: if worktree_root itself resolves under a system temp dir (ephemeral clone, CI job, configured temp worktree dir), every in-worktree path also matches the temp-prefix test, so the plain check would exempt ordinary source writes from the plan-artifact allowlist. Fixed via `_is_scratch_outside_worktree(path, root)` (scratch AND outside root) used only by the three plan-artifact exemption call sites (plan_artifact_only, shell_containment's check_redirect_target/check_non_artifact) — baseline containment (_contained) doesn't need it since in-root paths are already allowed via _within regardless of check order.
+In src/wade/hooks/policies.py, the plan-artifact-rule scratch exemption must be root-aware, not just `_is_always_allowed_scratch`: if `worktree_root` itself resolves under a system temp dir (ephemeral clone, CI job, configured temp worktree dir), every in-worktree path also matches the temp-prefix test, so the plain check would exempt ordinary source writes from the plan-artifact allowlist. Fixed via `_is_scratch_outside_worktree(path, root)` (scratch AND outside root) used only by the three plan-artifact exemption call sites (`plan_artifact_only`, `shell_containment`'s `check_redirect_target`/`check_non_artifact`) — baseline containment (`_contained`) doesn't need it since in-root paths are already allowed via `_within` regardless of check order.
 
 ---
 
