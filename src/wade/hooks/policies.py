@@ -223,13 +223,20 @@ def plan_artifact_only(
     memory writable in plan mode without loosening the artifact rule for
     in-worktree paths.
 
-    System temp dirs and discard/console devices (:func:`_is_always_allowed_scratch`)
-    are exempted the same way, checked **after** the memory exemption and
-    **before** :func:`_is_plan_artifact`: a scratch path also resolves outside
-    ``worktree_root``, so the artifact check would otherwise deny it as a
-    non-artifact. ``resolved`` is computed unconditionally (not only when
-    ``allow_paths`` is set) so this exemption applies even when no memory
-    allowlist is configured for the session — the common case.
+    System temp dirs and discard/console devices are exempted the same way,
+    checked **after** the memory exemption and **before**
+    :func:`_is_plan_artifact`, via :func:`_is_scratch_outside_worktree` rather
+    than the plain :func:`_is_always_allowed_scratch`: a scratch path normally
+    resolves outside ``worktree_root``, so the artifact check would otherwise
+    deny it as a non-artifact — but when ``worktree_root`` itself sits under a
+    system temp dir (an ephemeral clone, a CI job, a configured temp worktree
+    directory), every in-worktree path *also* matches the temp-prefix test, so
+    the exemption is only applied when the resolved target is outside
+    ``worktree_root`` — otherwise ordinary in-worktree source writes would
+    bypass the artifact allowlist entirely. ``resolved`` is computed
+    unconditionally (not only when ``allow_paths`` is set) so this exemption
+    applies even when no memory allowlist is configured for the session — the
+    common case.
 
     A non-write tool call is allowed. The ``posixpath`` normalization collapses
     ``../`` traversal so escapes like ``.claude/plans/../../src/x.py`` are blocked.
@@ -249,7 +256,7 @@ def plan_artifact_only(
     if resolved is not None:
         if allow_paths and _under_any(resolved, allow_paths):
             return HookDecision.allow()  # memory subtree — exempt from artifact rule
-        if _is_always_allowed_scratch(resolved):
+        if _is_scratch_outside_worktree(resolved, worktree_root.resolve()):
             return HookDecision.allow()  # temp/device scratch — exempt from artifact rule
 
     if _is_plan_artifact(event.file_path):
@@ -564,8 +571,37 @@ def _is_always_allowed_scratch(path: Path) -> bool:
     :func:`plan_artifact_only`) and the shell channel's plan-mode exemptions
     (:func:`shell_containment`'s ``check_redirect_target`` / ``check_non_artifact``)
     cannot drift on what counts as scratch.
+
+    Deliberately unaware of ``worktree_root``: :func:`_contained` only needs "is
+    this safe to write at all", and a path inside root is already safe via
+    ``_within`` regardless of whether it also happens to match a temp prefix. The
+    *plan-artifact* exemption call sites need a stricter, root-aware variant —
+    see :func:`_is_scratch_outside_worktree`.
     """
     return _is_always_allowed_device(path) or str(path).startswith(_ALWAYS_ALLOWED_PATH_PREFIXES)
+
+
+def _is_scratch_outside_worktree(path: Path, root: Path) -> bool:
+    """True when ``path`` is always-allowed scratch AND lies outside ``root``.
+
+    Guards the plan-artifact exemptions specifically (:func:`plan_artifact_only`;
+    :func:`shell_containment`'s ``check_redirect_target`` / ``check_non_artifact``):
+    if ``worktree_root`` itself resolves under a system temp dir — an ephemeral
+    clone, a CI job, or a configured temp worktree directory — every path *inside*
+    the worktree also matches the temp-prefix test in
+    :func:`_is_always_allowed_scratch`. Without the ``not _within(path, root)``
+    guard here, every in-worktree source write in such a worktree would be
+    wrongly exempted from the plan-artifact allowlist, effectively disabling the
+    plan-session write guard for that worktree.
+
+    Baseline containment (:func:`_contained`) does not need this distinction: a
+    path inside ``root`` is already allowed via ``_within`` regardless of whether
+    the scratch check fires first, so the two never disagree there — only the
+    artifact-exemption call sites, which treat "is scratch" as "is *outside* the
+    worktree and therefore not subject to the artifact allowlist", need the
+    ``root`` check.
+    """
+    return _is_always_allowed_scratch(path) and not _within(path, root)
 
 
 def _contained(path: Path, root: Path, allow_paths: tuple[Path, ...] = ()) -> bool:
@@ -688,11 +724,15 @@ def shell_containment(
     7. In plan mode only: any output redirect, an in-place edit flag (``sed -i``,
        ``--in-place``) on a command that *has* one (:data:`_IN_PLACE_COMMANDS` —
        ``grep -i`` and ``ls -i`` are ordinary read flags), or an operand of a write
-       command whose path is not a plan artifact — **except always-allowed scratch**
-       (a temp path or a device node like ``/dev/null``), which stays allowed in
-       plan mode (:func:`_is_always_allowed_scratch`): a device persists nothing,
-       and a temp write is accepted world-shared scratch, so neither need be a plan
-       artifact.
+       command whose path is not a plan artifact — **except always-allowed scratch
+       outside the worktree** (a temp path or a device node like ``/dev/null``),
+       which stays allowed in plan mode (:func:`_is_scratch_outside_worktree`): a
+       device persists nothing, and a temp write outside the worktree is accepted
+       world-shared scratch, so neither need be a plan artifact. The check is
+       root-aware, not the plain :func:`_is_always_allowed_scratch`: a
+       ``worktree_root`` that itself resolves under a system temp dir would
+       otherwise make every in-worktree path match the temp prefix too, exempting
+       ordinary source writes from the artifact rule.
 
     **This is defense-in-depth, not a completeness guarantee.** It stops the
     non-obfuscated cases — the ones an agent actually produces — and is trivially
@@ -807,7 +847,7 @@ def shell_containment(
             plan_mode
             and not _under_any(resolved, allow_paths)
             and not _is_plan_artifact_path(resolved, root)
-            and not _is_always_allowed_scratch(resolved)
+            and not _is_scratch_outside_worktree(resolved, root)
         ):
             return HookDecision.deny(
                 f"BLOCKED by plan-session guard: redirecting output to '{target}' "
@@ -829,7 +869,7 @@ def shell_containment(
             not plan_mode
             or _under_any(resolved, allow_paths)
             or _is_plan_artifact_path(resolved, root)
-            or _is_always_allowed_scratch(resolved)
+            or _is_scratch_outside_worktree(resolved, root)
         ):
             return None
         return HookDecision.deny(

@@ -258,6 +258,18 @@ file-path guards (`worktree_containment`, `plan_artifact_only`, both via
 scratch. (Rule 6's git directory-redirect buffering is the sole exception, kept
 **stricter** than a direct write even for a temp `<dir>` — see above.)
 
+The **plan-artifact exemption specifically** (not baseline containment) uses a
+stricter, `worktree_root`-aware variant, `_is_scratch_outside_worktree`, rather
+than the plain `_is_always_allowed_scratch`. If `worktree_root` itself resolves
+under a system temp dir — an ephemeral clone, a CI job, or a configured temp
+worktree directory — every in-worktree path also matches the temp-prefix test,
+so the plain scratch check would wrongly exempt ordinary in-worktree source
+writes from the plan-artifact allowlist. `_is_scratch_outside_worktree` only
+exempts a target that is both always-allowed scratch **and** resolves outside
+`worktree_root`. Baseline containment doesn't need this: a path inside
+`worktree_root` is already allowed via plain containment regardless of the
+scratch check's order.
+
 ### Memory allowlist
 
 All three write guards take an `allow_paths` tuple — the active tool's memory

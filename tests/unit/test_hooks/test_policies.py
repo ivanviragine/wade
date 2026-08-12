@@ -835,6 +835,68 @@ class TestPlanModeSourceWriteRegression:
         d = shell_containment(_shell("printf x > src/app.py"), worktree_root=WT, plan_mode=True)
         assert d.action == "deny"
 
+    # --- worktree_root itself resolves under a system temp dir (#410 review) ---
+    #
+    # An ephemeral clone, a CI job, or a configured temp worktree directory can
+    # put worktree_root itself under /tmp or $TMPDIR. Every in-worktree path then
+    # also matches the temp-prefix scratch test, so the scratch exemption must be
+    # scoped to targets *outside* worktree_root — otherwise it swallows the
+    # plan-artifact rule for ordinary source writes. These use pytest's real
+    # ``tmp_path`` (already under the OS temp dir) as worktree_root, unlike the
+    # fixed ``WT``/neutralized-fixture tests above.
+
+    def test_write_tool_to_source_denied_when_worktree_itself_under_temp_dir(
+        self, tmp_path: Path
+    ) -> None:
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        source = wt / "src" / "app.py"
+        d = plan_artifact_only(_write(str(source)), worktree_root=wt)
+        assert d.action == "deny"
+        assert "plan-session guard" in d.reason
+
+    def test_shell_redirect_to_source_denied_when_worktree_itself_under_temp_dir(
+        self, tmp_path: Path
+    ) -> None:
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        target = wt / "src" / "app.py"
+        d = shell_containment(
+            _shell(f"printf x > {target}", cwd=str(wt)), worktree_root=wt, plan_mode=True
+        )
+        assert d.action == "deny"
+
+    def test_shell_write_command_operand_denied_when_worktree_itself_under_temp_dir(
+        self, tmp_path: Path
+    ) -> None:
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        (wt / "PLAN.md").write_text("")
+        target = wt / "src" / "app.py"
+        d = shell_containment(
+            _shell(f"cp PLAN.md {target}", cwd=str(wt)), worktree_root=wt, plan_mode=True
+        )
+        assert d.action == "deny"
+
+    def test_plan_artifact_still_allowed_when_worktree_itself_under_temp_dir(
+        self, tmp_path: Path
+    ) -> None:
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        plan_file = wt / "PLAN.md"
+        d = plan_artifact_only(_write(str(plan_file)), worktree_root=wt)
+        assert d.action == "allow"
+
+    def test_scratch_outside_such_a_worktree_still_allowed(self, tmp_path: Path) -> None:
+        """The fix must not overcorrect: a target that is genuinely outside
+        worktree_root, even though it sits in a sibling directory under the same
+        system temp dir, stays exempt from the plan-artifact rule."""
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        outside_scratch = tmp_path / "sibling-scratch.log"
+        d = plan_artifact_only(_write(str(outside_scratch)), worktree_root=wt)
+        assert d.action == "allow"
+
 
 # The active tool's memory subtree lives under the real home dir — resolved so it
 # matches what the guards' internal ``resolve()`` produces (no temp-prefix overlap:
