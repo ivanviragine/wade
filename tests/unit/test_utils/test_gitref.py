@@ -45,6 +45,8 @@ class TestIsValidGitRef:
             "trailing-dot.",
             "ends-in.lock",
             "comp.lock/tail",  # a path component ending in .lock
+            "release/.candidate",  # a non-leading component beginning with a dot
+            ".hidden/tail",  # leading component beginning with a dot
         ],
     )
     def test_invalid_refs(self, ref: str) -> None:

@@ -37,5 +37,8 @@ def is_valid_git_ref(ref: str) -> bool:
         return False
     if ref.startswith(("/", "-", ".")) or ref.endswith(("/", ".", ".lock")):
         return False
-    # No path component may be empty or end in ``.lock``.
-    return all(part and not part.endswith(".lock") for part in ref.split("/"))
+    # No path component may be empty, begin with ``.`` (git forbids a dot-prefixed
+    # component anywhere, e.g. ``release/.candidate``), or end in ``.lock``.
+    return all(
+        part and not part.startswith(".") and not part.endswith(".lock") for part in ref.split("/")
+    )

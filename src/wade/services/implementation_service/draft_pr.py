@@ -6,7 +6,6 @@ from ``templates/prompts/`` (not symlinked) — see knowledge entry b61e247e.
 
 from __future__ import annotations
 
-import contextlib
 from pathlib import Path
 
 import structlog
@@ -136,10 +135,20 @@ def bootstrap_draft_pr(
         # specific ref into origin/<base> (an explicit refspec so it also works in a
         # single-branch clone whose default fetch refspec would skip it), then
         # re-resolve before giving up (#376).
-        with contextlib.suppress(GitError):
+        try:
             git_repo.fetch_ref(
                 repo_root, "origin", f"{effective_base}:refs/remotes/origin/{effective_base}"
             )
+        except GitError as e:
+            # The fetch itself failed. A missing ref on origin AND a network/auth
+            # error both land here, so don't claim the branch is simply absent —
+            # surface the underlying git error so the real cause (unreachable
+            # remote vs. truly-missing ref) is visible (#376 review).
+            console.error(
+                f"Could not fetch base branch '{effective_base}' from origin: {e}. "
+                "Verify the branch exists on origin and the remote is reachable."
+            )
+            return None
         start_point = git_branch.resolve_start_point(repo_root, effective_base)
     if start_point is None:
         console.error(

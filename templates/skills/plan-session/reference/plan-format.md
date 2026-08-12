@@ -8,9 +8,6 @@ Read this when writing plan file(s). Each plan file must follow this structure:
 ## Complexity
 medium
 
-## Base Branch
-develop
-
 ## Context / Problem
 Why this change is needed.
 
@@ -33,7 +30,7 @@ What to build / change.
 |---------|------|
 | **Title** | First `# Heading` — becomes the GitHub issue title. Must start with a conventional commit prefix (`feat`, `fix`, `refactor`, `docs`, `chore`, `test`, `perf`, `ci`, `build`) followed by `:` and a space. Example: `feat: add retry logic`. Required. |
 | **Complexity** | `## Complexity` with one of: `easy`, `medium`, `complex`, `very_complex`. Used by `wade implement` to auto-select the AI model. Also applied as a `complexity:X` label on the issue. |
-| **Base Branch** | *Optional.* `## Base Branch` with a single branch name. When present, the draft PR branches from and targets that base; the worktree is cut from it and the work merges back into it. **Omit** to use the project's configured main branch (the default). The value must be a well-formed git branch name that exists — or will exist — before implementation. |
+| **Base Branch** | *Optional.* `## Base Branch` with a single branch name. When present, the draft PR branches from and targets that base; the worktree is cut from it and the work merges back into it. **Omit** to use the project's configured main branch (the default). The value must be a well-formed git branch name that already exists (locally or on the remote) when the draft PR is created — WADE creates that PR right after planning, before `wade implement` runs. |
 | **Body** | Everything after the title becomes the draft PR plan content. The issue itself gets a lightweight summary. |
 
 ## Base branch (optional)
@@ -53,8 +50,10 @@ develop
 - A present `## Base Branch` heading **must** name a branch — an empty section
   (heading with no value) is rejected by `wade plan-session done`, not treated
   as "omitted". Remove the heading to default to main.
-- The branch must exist (locally or on the remote) before you run
-  `wade implement`, or draft-PR creation fails with an actionable error.
+- The branch must exist (locally or on the remote) when the draft PR is
+  created — which happens right after planning (`wade plan-session done`),
+  before `wade implement` runs — or draft-PR creation fails with an actionable
+  error.
 - To override or set a base at implement time instead, use
   `wade implement <N> --base <branch>` — it retargets the draft PR too.
 

@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from wade.git.pr import PRLookup
+from wade.git.repo import GitError
 from wade.services.implementation_service.draft_pr import bootstrap_draft_pr
 
 _D = "wade.services.implementation_service.draft_pr"
@@ -88,6 +89,34 @@ def test_still_fails_when_base_absent_after_fetch(
 
     assert result is None
     mock_fetch.assert_called_once()  # a fetch was attempted before giving up
+    mock_create_branch.assert_not_called()
+    mock_create_pr.assert_not_called()
+
+
+@patch(f"{_D}.git_pr.create_pr")
+@patch(f"{_D}.git_branch.create_branch")
+@patch(f"{_D}.git_repo.fetch_ref", side_effect=GitError("Could not resolve host"))
+@patch(f"{_D}.git_repo.has_remote", return_value=True)
+@patch(f"{_D}.git_branch.resolve_start_point", return_value=None)
+@patch(f"{_D}.git_pr.get_pr_for_branch", return_value=PRLookup(found=False))
+@patch(f"{_D}.git_branch.make_branch_name", return_value="feat/42-x")
+def test_fetch_failure_reported_not_swallowed(
+    _mk: MagicMock,
+    _lookup: MagicMock,
+    _resolve: MagicMock,
+    _has_remote: MagicMock,
+    mock_fetch: MagicMock,
+    mock_create_branch: MagicMock,
+    mock_create_pr: MagicMock,
+) -> None:
+    # A network/auth failure during fetch must not be misreported as "base absent";
+    # bootstrap aborts (returns None) rather than proceeding on an unknown base.
+    result = bootstrap_draft_pr(
+        "42", "Title", "plan body", _cfg(), Path("/repo"), base_branch="develop"
+    )
+
+    assert result is None
+    mock_fetch.assert_called_once()
     mock_create_branch.assert_not_called()
     mock_create_pr.assert_not_called()
 

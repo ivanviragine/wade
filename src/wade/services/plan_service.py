@@ -809,11 +809,14 @@ def _branch_work_in_flight(repo_root: Path, branch_name: str, base: str) -> bool
     except Exception:
         logger.debug("plan.in_flight_worktree_check_failed", exc_info=True)
 
-    # Compare against a locally-resolvable ref (the base may be remote-only).
-    compare_base = git_branch.resolve_start_point(repo_root, base) or base
+    # Compare against a locally-resolvable ref (the base may be remote-only). Both
+    # the resolve and the count run under the same guard: the git probes use
+    # check=False (no GitError) but _run_git can still raise OSError, and
+    # commits_ahead can raise ValueError on unparsable output.
     try:
+        compare_base = git_branch.resolve_start_point(repo_root, base) or base
         return git_branch.commits_ahead(repo_root, branch_name, compare_base) > 1
-    except GitError:
+    except (GitError, OSError, ValueError):
         # Cannot tell how far the branch has advanced (base deleted upstream, or a
         # narrow clone that lacks it). Fail CLOSED — treat as in-flight so the
         # retarget requires explicit confirmation rather than silently diverging
@@ -909,6 +912,64 @@ def _base_retarget_is_safe(
     return False
 
 
+def _reconcile_inflight_worktree_base(
+    config: ProjectConfig, issue: Task, repo_root: Path, declared_base: str | None
+) -> None:
+    """Bring an in-flight worktree's ``.wade/base_branch`` in line with a just-applied
+    PR retarget, so a resumed session's ``sync``/``done`` merge into the new base — not
+    the pre-retarget one (#376 review).
+
+    Only acts when a worktree is actually checked out on the branch; otherwise there is
+    no pin to diverge (``start()`` writes a fresh one later). Mirrors ``start()``'s
+    write-or-clear rule: pin a non-main base, clear the file when the base is ``main``.
+    A base *removal* (``declared_base is None``) is a documented no-op — ``bootstrap_draft_pr``
+    does not retarget, so the existing pin stays correct and is left untouched.
+    """
+    from wade.git import branch as git_branch
+    from wade.git import repo as git_repo
+    from wade.git import worktree as git_worktree
+    from wade.git.repo import GitError
+
+    if declared_base is None:
+        return
+
+    branch_name = git_branch.make_branch_name(
+        config.project.branch_prefix, int(issue.id), issue.title
+    )
+    try:
+        wt_path = next(
+            (
+                Path(wt["path"])
+                for wt in git_worktree.list_worktrees(repo_root)
+                if wt.get("branch") == branch_name
+            ),
+            None,
+        )
+    except Exception:
+        logger.debug("plan.inflight_worktree_lookup_failed", exc_info=True)
+        return
+    if wt_path is None:
+        return  # No worktree checked out — nothing to reconcile.
+
+    main_branch = config.project.main_branch
+    if not main_branch:
+        try:
+            main_branch = git_repo.detect_main_branch(repo_root)
+        except GitError:
+            main_branch = None
+
+    base_file = wt_path / ".wade" / "base_branch"
+    try:
+        if declared_base != main_branch:
+            base_file.parent.mkdir(exist_ok=True)
+            base_file.write_text(declared_base + "\n")
+        elif base_file.exists():
+            # Retargeted back to main — clear the stale non-main pin.
+            base_file.unlink()
+    except OSError:
+        logger.debug("plan.inflight_worktree_base_write_failed", exc_info=True)
+
+
 def _attach_plan_to_existing_issue(
     provider: AbstractTaskProvider,
     config: ProjectConfig,
@@ -958,6 +1019,11 @@ def _attach_plan_to_existing_issue(
             pr_number = pr_info.get("number", "?")
             pr_url = pr_info.get("url", "")
             console.success(f"Draft PR #{pr_number}: {pr_url}")
+
+            # A confirmed in-flight retarget changed the PR's base above; keep the
+            # existing worktree's merge-target pin in step so sync/done don't keep
+            # targeting the old base (#376 review). No-op when no worktree exists.
+            _reconcile_inflight_worktree_base(config, issue, repo_root, plan_file.base_branch)
 
             # Preserve the original issue body and append the PR link
             original_body = (issue.body or "").rstrip("\n")

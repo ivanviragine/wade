@@ -278,7 +278,8 @@ def implement_cmd(
         None,
         "--base",
         help="Base branch to branch from and merge into (retargets the draft PR). "
-        "Overrides the plan-declared base; defaults to the project's main branch.",
+        "Overrides the plan-declared base; when omitted, inherits the existing "
+        "draft PR's base, then falls back to the project's main branch.",
     ),
 ) -> None:
     """Start an implementation session on an issue."""
@@ -558,7 +559,8 @@ def implement_alias(
         None,
         "--base",
         help="Base branch to branch from and merge into (retargets the draft PR). "
-        "Overrides the plan-declared base; defaults to the project's main branch.",
+        "Overrides the plan-declared base; when omitted, inherits the existing "
+        "draft PR's base, then falls back to the project's main branch.",
     ),
 ) -> None:
     """Alias for implement."""

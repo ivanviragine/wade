@@ -26,6 +26,7 @@ from wade.services.plan_service import (
     _offer_to_implement,
     _persist_plan_issue_ref,
     _preserve_generated_plans,
+    _reconcile_inflight_worktree_base,
     _select_valid_plans,
     _supersede_issue_with_plans,
     _with_supersede_banner,
@@ -1188,6 +1189,57 @@ class TestBaseRetargetGuard:
             mock_console.warn.assert_called_once()
 
 
+class TestReconcileInflightWorktreeBase:
+    """After a confirmed retarget, the in-flight worktree's pin must follow (#376 review)."""
+
+    def _issue(self) -> Task:
+        return Task(id="42", title="feat: thing")
+
+    def _wt_entry(self, wt: Path) -> list[dict[str, str]]:
+        return [{"path": str(wt), "branch": "feat/42-thing"}]
+
+    def test_writes_pin_for_inflight_worktree(self, tmp_path: Path) -> None:
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        with (
+            patch("wade.git.branch.make_branch_name", return_value="feat/42-thing"),
+            patch("wade.git.worktree.list_worktrees", return_value=self._wt_entry(wt)),
+        ):
+            _reconcile_inflight_worktree_base(_cfg_main(), self._issue(), tmp_path, "develop")
+        assert (wt / ".wade" / "base_branch").read_text().strip() == "develop"
+
+    def test_no_worktree_is_noop(self, tmp_path: Path) -> None:
+        with (
+            patch("wade.git.branch.make_branch_name", return_value="feat/42-thing"),
+            patch("wade.git.worktree.list_worktrees", return_value=[]),
+        ):
+            _reconcile_inflight_worktree_base(_cfg_main(), self._issue(), tmp_path, "develop")
+        assert not (tmp_path / ".wade").exists()
+
+    def test_retarget_to_main_clears_stale_pin(self, tmp_path: Path) -> None:
+        wt = tmp_path / "wt"
+        (wt / ".wade").mkdir(parents=True)
+        (wt / ".wade" / "base_branch").write_text("develop\n")
+        with (
+            patch("wade.git.branch.make_branch_name", return_value="feat/42-thing"),
+            patch("wade.git.worktree.list_worktrees", return_value=self._wt_entry(wt)),
+        ):
+            _reconcile_inflight_worktree_base(_cfg_main(), self._issue(), tmp_path, "main")
+        assert not (wt / ".wade" / "base_branch").exists()
+
+    def test_base_removal_leaves_existing_pin(self, tmp_path: Path) -> None:
+        # declared_base is None (section removed) — a documented no-op; the pin stays.
+        wt = tmp_path / "wt"
+        (wt / ".wade").mkdir(parents=True)
+        (wt / ".wade" / "base_branch").write_text("develop\n")
+        with (
+            patch("wade.git.branch.make_branch_name", return_value="feat/42-thing"),
+            patch("wade.git.worktree.list_worktrees", return_value=self._wt_entry(wt)),
+        ):
+            _reconcile_inflight_worktree_base(_cfg_main(), self._issue(), tmp_path, None)
+        assert (wt / ".wade" / "base_branch").read_text().strip() == "develop"
+
+
 # ---------------------------------------------------------------------------
 # _persist_plan_issue_ref — issue context for resumed plan sessions (#351/#391)
 # ---------------------------------------------------------------------------
@@ -1944,6 +1996,7 @@ class TestStrictValidationGateWiring:
             assert plan(project_root=tmp_path, issue_id="330") is False
 
         mock_attach.assert_called_once()
+        assert mock_attach.call_args.kwargs["yolo"] is False  # resolved yolo forwarded
         mock_finalize.assert_not_called()  # aborted before finalization
         preserve.assert_called_once()  # replacement plan salvaged, not discarded
 
