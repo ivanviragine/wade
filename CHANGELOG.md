@@ -8,6 +8,7 @@ The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
 ### Bug Fixes
 
+- revert unsafe git-redirect "last flag wins" and scope exact-temp-dir match (0bb4cc2)
 - reset git_dir_redirect_seen_in_root when a later -C resolves outside (5b3be40)
 - rebase shell-guard base on cd, honor last -C, allow exact temp dir (bfcbda6)
 - git -C overriding a stale scratch cd falsely denied in shell guard (676d1e4)
@@ -16,11 +17,15 @@ The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
 ### Documentation
 
+- correct architecture.md for the reverted last-flag-wins fix (ed0b63d)
+- document base-rebase-on-cd and last-flag-wins in architecture.md (e28d92a)
+- regenerate CHANGELOG.md to restore dropped v0.35.2/v0.43.1 sections (c68ac57)
 - format raw identifiers as inline code in KNOWLEDGE.md (d8b775e)
 - document cross-invocation cd persistence as a residual gap (32479d5)
 
 ### Tests
 
+- correct misleading TMPDIR-isolation comment in a plan-guard test (21ac85a)
 - fix broken TMPDIR-based scratch isolation in memory-leaf test (24f4ef2)
 
 ## [v0.44.1] — 2026-08-12

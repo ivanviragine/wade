@@ -292,9 +292,9 @@ class TestShellContainment:
         assert worktree_containment(_write("/tmp"), worktree_root=WT).action == "deny"
 
     def test_git_c_temp_dir_write_denied(self) -> None:
-        """Task 1b: a git write reached through a directory-redirect flag stays
-        denied even for a temp ``<dir>`` — a directory-scoped destructive op has a
-        far larger blast radius than a single scratch-file write."""
+        """A git write reached through a directory-redirect flag stays denied even
+        for a temp ``<dir>`` — a directory-scoped destructive op has a far larger
+        blast radius than a single scratch-file write."""
         d = shell_containment(_shell("git -C /tmp/x clean -fd"), worktree_root=WT)
         assert d.action == "deny"
 
