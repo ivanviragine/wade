@@ -19,13 +19,8 @@ start.
 
 ## Talking to the user
 
-Inform the user before running `wade`/`gh` commands, reviews, or lifecycle
-operations — say what you're doing and why; never run them silently. Announce
-each step as you start it, and after each command report the outcome and the
-next step you'll take.
-
 {user_interaction_prompt}
-- After presenting the workflow recap and state: "Want any further changes, or is the session complete?"
+- After presenting results and state: "Want any further changes, or is the session complete?"
 - If review findings need user input: "Should I address this review finding?"
 
 ## Never use `gh issue create`
@@ -37,14 +32,7 @@ dependency analysis hooks.
 
 {review_enforcement_rule}
 
-## Project Knowledge
-
-Search for knowledge relevant to your task at session start (do not dump all
-entries), and capture important learnings before writing `PR-SUMMARY.md` when
-knowledge is enabled (`.wade.yml` → `knowledge.enabled`). Rating is required for
-each entry you open and evaluate. See @.claude/skills/knowledge/SKILL.md for
-search syntax, the rating decision tree, and entry style. Commit the updated
-knowledge file with your other changes.
+{knowledge_step}
 
 ## First action: check your context
 
@@ -69,6 +57,8 @@ The human creates worktrees via `wade implement` or `wade implement-batch`.
 
 Use [Conventional Commits](https://www.conventionalcommits.org/) format. Prefer
 `git commit` (opens an editor) over `git commit -m` for multi-line messages.
+The **issue title** must be conventional too — the PR title derives from it, so
+`done` blocks a non-conventional title (fix it as `done` instructs, then re-run).
 
 ## Closing the session
 
@@ -108,16 +98,20 @@ git operations yourself.
 wade implementation-session done
 ```
 
-`done` pushes the branch and updates the existing draft PR (appends a summary,
-marks it ready). The worktree is **not** deleted — `implement` cleans it up after
-merge. This is a **mandatory** step; if it fails, debug and fix it — do NOT bypass.
+`done` is the **authoritative completion gate**: it requires PR-SUMMARY and a
+review for this commit; it auto-syncs a branch behind `main`, refusing only on
+conflict (bypass: `--skip-review`, or a `done.*` toggle in `.wade.yml`). A pre-push
+hook blocks pushes with no `.wade/done@<sha>` marker (`--no-verify` bypasses it).
+The worktree is **not** deleted (cleaned up after merge). **Mandatory**; if it
+fails, fix the cause, do NOT bypass.
 
-**Step 6 — Present results:** give a brief **workflow recap** (only the steps you
-performed) and **current state** (PR number/URL, that the issue closes on merge,
-the branch), then what's next (wade monitors the PR; later feedback →
-`wade review pr-comments <issue>`; status → `wade status <issue>`). Then ask
-(native question component): "Want any further changes, or is the session
-complete?" — apply and repeat Steps 1–6 if so, else suggest the user exits.
+**Step 6 — Present results** (per the **Communication style** rule): the
+actionable handles — PR number/URL, that the issue closes on merge (unless
+`--no-close` was passed to `done`, in which case say the issue stays open), the
+branch — plus what's next (wade monitors the PR; later feedback → `wade review
+pr-comments <issue>`; status → `wade status <issue>`). Then ask (native question
+component): "Want any further changes, or is the session complete?" — apply and
+repeat Steps 1–6 if so, else suggest the user exits.
 
 ## Wade-managed skills
 

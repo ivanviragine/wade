@@ -11,6 +11,7 @@ from wade.cli.autocomplete import (
     complete_delegation_modes,
     complete_effort_levels,
     complete_models,
+    complete_permission_modes,
 )
 
 task_app = typer.Typer(
@@ -122,6 +123,7 @@ def create(
         from pathlib import Path
 
         from wade.services.task_service import create_task
+        from wade.utils.conventional import ConventionalTitleError
 
         # Resolve body: --body-file takes precedence over --body
         resolved_body = ""
@@ -138,7 +140,17 @@ def create(
         elif body:
             resolved_body = body
 
-        task = create_task(title=title, body=resolved_body, extra_labels=list(label or []))
+        try:
+            task = create_task(title=title, body=resolved_body, extra_labels=list(label or []))
+        except ConventionalTitleError as e:
+            # The rejected title is echoed in the message — disable Rich markup so
+            # bracket tokens in it can't be parsed as markup (which would crash).
+            console.error(str(e), markup=False)
+            console.hint(
+                "The PR title is derived from the issue title, so it must be "
+                "conventional-commit format."
+            )
+            raise typer.Exit(1) from None
     else:
         from wade.services.task_service import create_interactive
 
@@ -243,6 +255,13 @@ def deps(
         help="Delegation mode: prompt, headless, interactive.",
         autocompletion=complete_delegation_modes,
     ),
+    yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
+    permission_mode: str | None = typer.Option(
+        None,
+        "--permission-mode",
+        help="Autonomy tier: default, accept-edits, auto, or yolo.",
+        autocompletion=complete_permission_modes,
+    ),
     check: bool = typer.Option(False, "--check", help="Validate existing dependencies."),
 ) -> None:
     """Analyze dependencies between issues."""
@@ -312,5 +331,8 @@ def deps(
         effort=effort,
         effort_explicit=effort is not None,
         mode=mode,
+        yolo=yolo or None,
+        permission_mode=permission_mode,
+        permission_mode_explicit=permission_mode is not None,
     )
     raise typer.Exit(0 if graph is not None else 1)

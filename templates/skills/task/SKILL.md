@@ -125,7 +125,9 @@ When **2 issues** are created, offer first:
 > "Want me to create an epic issue linking both sub-issues?"
 
 Write an epic with:
-- `# Epic: <overall feature title>`
+- `# feat(epic): <overall feature title>` — the title must be conventional-commit
+  format like any other issue (`wade task create` enforces it); `feat(epic)`
+  keeps it self-identifying as the parent
 - Brief summary of the feature
 - Checklist linking each sub-issue: `- [ ] #<number> — <title>`
 
@@ -142,10 +144,10 @@ After creating all issues, list them clearly:
 
 ```
 ✓ Created 3 issues:
-  #42 — Add user preferences schema (~200 LOC)
-  #43 — Add preferences API endpoint (~250 LOC)
-  #44 — Add preferences UI panel (~350 LOC)
-  #45 — Epic: User preferences feature (links #42, #43, #44)
+  #42 — feat: add user preferences schema (~200 LOC)
+  #43 — feat: add preferences API endpoint (~250 LOC)
+  #44 — feat: add preferences UI panel (~350 LOC)
+  #45 — feat(epic): user preferences feature (links #42, #43, #44)
 ```
 
 Then show the next-step hint so the user knows how to proceed:
@@ -176,6 +178,13 @@ see @.claude/skills/implementation-session/SKILL.md.
 - **Never create issues without user confirmation** (Step 3 is mandatory).
 - **Always use `wade task create`** — never construct `gh issue create` commands manually.
 - **Every plan file must have a `# Title`** as the first heading (the script requires it).
+- **Issue titles must be [Conventional Commits](https://www.conventionalcommits.org/)
+  format** (`feat:`, `fix:`, `docs:`, `refactor:`, `chore:`, `style:`, `perf:`,
+  `test:`, `ci:`, `build:`, `revert:`, `update:`). The PR title is derived from
+  the issue title verbatim, so a non-conventional title fails the `PR Title Lint`
+  CI check. `wade task create` **enforces this in code** — a non-conventional
+  `--title` is rejected and interactive create re-prompts. Choose the prefix that
+  matches the change; wade never guesses it for you.
 - Keep issue titles concise and actionable (max 256 chars).
 - Each issue should be independently implementable (even if there are dependencies).
 - Include acceptance criteria in every issue.

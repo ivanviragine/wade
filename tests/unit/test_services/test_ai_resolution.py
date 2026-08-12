@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import crossby.ai_tools  # noqa: F401 — registers all adapters via __init_subclass__
+import pytest
 from crossby.models.ai import EffortLevel
 
 from wade.models.config import AICommandConfig, AIConfig, ComplexityModelMapping, ProjectConfig
@@ -595,3 +596,105 @@ class TestResolveEffortPerTier:
         config = _make_config()
         result = resolve_effort("not-a-valid-level", config, "plan")
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Always-display — the resolved selection surfaces on EVERY path
+# ---------------------------------------------------------------------------
+
+
+def _kv_pairs(mock_kv: MagicMock) -> list[tuple[str, str]]:
+    """Extract (key, value) tuples from recorded console.kv calls."""
+    pairs: list[tuple[str, str]] = []
+    for call in mock_kv.call_args_list:
+        if len(call.args) >= 2:
+            pairs.append((call.args[0], call.args[1]))
+    return pairs
+
+
+class TestConfirmAiSelectionAlwaysDisplays:
+    """The resolved selection (tool/model/effort/permission mode) is displayed
+    exactly once, BEFORE the skip guard — so it appears on every launch path."""
+
+    def test_non_tty_still_displays_permission_mode(self) -> None:
+        with patch(_IS_TTY, return_value=False), patch(_CONSOLE_KV) as mock_kv:
+            confirm_ai_selection(
+                _CLAUDE,
+                _MODEL_A,
+                tool_explicit=False,
+                model_explicit=False,
+                resolved_permission_mode=PermissionMode.YOLO,
+            )
+        pairs = _kv_pairs(mock_kv)
+        assert ("AI tool", _CLAUDE) in pairs
+        pm = [v for k, v in pairs if k == "Permission mode"]
+        assert pm and pm[0].startswith("yolo — ")
+
+    def test_headless_still_displays_permission_mode(self) -> None:
+        with patch(_IS_TTY, return_value=True), patch(_CONSOLE_KV) as mock_kv:
+            confirm_ai_selection(
+                _CLAUDE,
+                _MODEL_A,
+                tool_explicit=False,
+                model_explicit=False,
+                resolved_permission_mode=PermissionMode.DEFAULT,
+                mode=DelegationMode.HEADLESS,
+            )
+        pm = [v for k, v in _kv_pairs(mock_kv) if k == "Permission mode"]
+        assert pm and pm[0].startswith("default — ")
+
+    def test_all_explicit_still_displays_permission_mode(self) -> None:
+        with patch(_IS_TTY, return_value=True), patch(_CONSOLE_KV) as mock_kv:
+            confirm_ai_selection(
+                _CLAUDE,
+                _MODEL_A,
+                tool_explicit=True,
+                model_explicit=True,
+                effort_explicit=True,
+                permission_mode_explicit=True,
+                resolved_permission_mode=PermissionMode.ACCEPT_EDITS,
+            )
+        pm = [v for k, v in _kv_pairs(mock_kv) if k == "Permission mode"]
+        assert pm and pm[0].startswith("accept-edits — ")
+
+    @pytest.mark.parametrize("mode", list(PermissionMode))
+    def test_each_mode_renders_its_descriptor(self, mode: PermissionMode) -> None:
+        from wade.models.permission import describe_permission_mode
+
+        with patch(_IS_TTY, return_value=False), patch(_CONSOLE_KV) as mock_kv:
+            confirm_ai_selection(
+                _CLAUDE,
+                _MODEL_A,
+                tool_explicit=False,
+                model_explicit=False,
+                resolved_permission_mode=mode,
+            )
+        pm = [v for k, v in _kv_pairs(mock_kv) if k == "Permission mode"]
+        assert pm == [f"{mode.value} — {describe_permission_mode(mode)}"]
+
+    def test_resolved_tool_none_renders_not_resolved(self) -> None:
+        """No tool resolved → a single 'not resolved' line, never a permission line."""
+        with patch(_IS_TTY, return_value=True), patch(_CONSOLE_KV) as mock_kv:
+            confirm_ai_selection(
+                None,
+                None,
+                tool_explicit=False,
+                model_explicit=False,
+                resolved_permission_mode=PermissionMode.YOLO,
+            )
+        pairs = _kv_pairs(mock_kv)
+        assert ("AI tool", "not resolved") in pairs
+        assert all(k != "Permission mode" for k, _ in pairs)
+
+    def test_display_not_double_printed_on_first_render(self) -> None:
+        """The hoisted display renders once; the change-loop must not re-print it
+        on its first iteration."""
+        with (
+            patch(_IS_TTY, return_value=True),
+            patch(_SELECT, return_value=0),  # Proceed immediately
+            patch(_DETECT, return_value=_make_installed(_CLAUDE)),
+            patch(_CONSOLE_KV) as mock_kv,
+        ):
+            confirm_ai_selection(_CLAUDE, _MODEL_A, tool_explicit=False, model_explicit=False)
+        tool_lines = [1 for k, _ in _kv_pairs(mock_kv) if k == "AI tool"]
+        assert sum(tool_lines) == 1

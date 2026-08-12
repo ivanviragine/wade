@@ -134,9 +134,10 @@ wade 42
 | `wade update` | Upgrade WADE and refresh project files |
 | `wade deinit` | Remove WADE from the current project |
 | `wade check-config` | Validate `.wade.yml` configuration |
-| `wade knowledge add` | Append a project learning from stdin |
+| `wade knowledge add` | Append a project learning from stdin (unavailable in a plan/deps session) |
 | `wade knowledge get` | Print the current project knowledge file |
-| `wade knowledge rate` | Record a thumbs-up or thumbs-down for a knowledge entry |
+| `wade knowledge rate` | Record an up / down / stale vote for a knowledge entry |
+| `wade knowledge status` | Show uncommitted knowledge/ratings changes and any pending ratings migration |
 | `wade knowledge enable [--path PATH]` | Enable knowledge capture and optionally set custom file path |
 | `wade knowledge disable` | Disable knowledge capture (keeps existing knowledge file) |
 
@@ -163,9 +164,59 @@ dispatched: prompt/interactive/headless). The tiers, most→least permissive, ar
 doesn't support is downgraded automatically (e.g. `auto` → `accept-edits` on
 non-Claude tools) with a warning — WADE forwards the requested tier and
 [`crossby`](https://github.com/ivanviragine/crossby) owns the downgrade ladder.
-Headless commands (`deps`, `review_*`) always run at `default`. `plan` is not a
-permission mode — it's driven separately — and is rejected (warn + fall back to
-`default`) if configured.
+**Headless launches are always read-only** — any of `deps` /
+`review_plan` / `review_implementation` / `review_batch` dispatched in headless
+delegation mode runs at `default` regardless of the configured tier, and no
+`--yolo` is forwarded to the subprocess. The *interactive* variants honor the
+tier: `wade review plan`, `wade review implementation`, `wade review batch`, and
+`wade task deps` all accept `--yolo` / `--permission-mode` (matching `wade review
+pr-comments`), and `ai.review_batch.yolo: true` / `ai.deps.yolo: true` apply when
+those commands run interactively; the auto-launched review session honors its own
+tier via `ai.review_pr_comments` (see below). `plan` is not a permission mode —
+it's driven separately — and is rejected (warn + fall back to `default`) if
+configured.
+
+The **resolved permission mode is always displayed** at launch, on every path
+(TTY, non-TTY, headless, all-flags-explicit), with a one-line descriptor — so a
+`default` session states what `default` means, and what is shown always equals
+what is applied.
+
+Those headless commands **auto-scale** their subprocess budget from the prompt
+size and reasoning effort (600s floor → 1500s ceiling), so a large diff or a
+high-effort run no longer times out at a flat budget. If a run does time out,
+wade keeps whatever partial output the reviewer produced (rather than discarding
+it) and **retries once** with a longer budget (1.5x the first attempt, always
+strictly more time than the run that just timed out), bounded to a ~62.5-minute
+worst-case total that the pre-launch advisory announces. Set `ai.<command>.timeout`
+(seconds) to override: an explicit value is used verbatim and **turns off both
+the scaling and the retry** — the escape hatch when your terminal/orchestrator
+enforces a hard tool-timeout (set it just under that limit).
+
+The auto-launched **review session** — the one started when you pick **"Wait
+for reviews"** after `wade implementation-session done` and comments land —
+resolves its tool, model, effort, and autonomy tier from a dedicated
+`ai.review_pr_comments` section (the same keys every `ai.<command>` section
+accepts: `tool`, `model`, `effort`, `mode`, `permission_mode` / `yolo`,
+`enabled`, `timeout`):
+
+```yaml
+ai:
+  review_pr_comments:
+    tool: claude
+    model: claude-sonnet-5
+    effort: high
+    permission_mode: yolo   # auto-launched review runs unattended
+```
+
+With this set, the review session runs in the configured tier even when the
+implementation session ran without it (the `permission_mode: yolo` above starts
+the review session with no prompts). With `ai.review_pr_comments` **unset**,
+tool / model / autonomy fall back to the global `ai.*` defaults (`default_tool`,
+`default_model`, `ai.permission_mode` / `ai.yolo`) — **not** through
+`ai.implement.*`. Projects that relied on `ai.implement.tool` / `model`
+implicitly governing the review session should set `ai.review_pr_comments.tool`
+/ `model` (or the global defaults). An explicit `wade implement --yolo` /
+`--permission-mode` still carries into the auto-launched review session.
 
 `wade plan --issue <N>` re-plans an existing issue. If the session produces a
 single plan file, it's attached to `#N` and the issue stays open. If the
@@ -208,7 +259,36 @@ enough to pick up improvements, with no re-init or migration.
 |-------|----------------|
 | Worktree containment | Writes that land outside your worktree |
 | Plan-artifact | During `wade plan`, writes to anything but plan artifacts |
-| Session completion | Finishing a session with `PR-SUMMARY.md` missing (nudges once) |
+| Session completion | Finishing an implement/review session with unfinished work not yet run through `done` (nudges once) |
+| Plan completion | Finishing a `wade plan` session that produced no valid `PLAN*.md` yet (nudges once) |
+
+The session-completion guard keys on the same fact `done` records — a sha-keyed
+`.wade/done@<HEAD>` marker written when `done`'s gates pass — so it nudges only
+when the branch has commits ahead of its base **and** `done` has not finalized
+the current commit. An early "stopping to ask a question" turn (no commits ahead)
+never triggers it. The plan-completion guard is the planning counterpart: it
+nudges once if a plan session is about to end with no valid plan file (a title
+with a conventional-commit prefix plus a `## Complexity`). Both fail **open** — a
+session is never trapped.
+
+Independently of that nudge, `wade plan` now **strictly validates** plan files
+before creating issues: a `PLAN*.md` missing a valid `## Complexity` or a
+conventional-commit title is dropped with a loud error instead of silently
+becoming an issue with no complexity label.
+
+`wade task create` enforces the same conventional-commit **title** rule (the type
+list is the single Python source in `utils/conventional.py`): a non-conventional
+`--title` (or a plan file's `# Title`) is rejected, and interactive create
+re-prompts. The PR title is derived from the issue title verbatim, so this is
+what keeps a wade-opened PR from ever failing the `PR Title Lint` CI check;
+`done` also blocks on — and syncs — a stale non-conventional title on an already
+open PR (see the completion-gate table below).
+
+If some files pass and others fail, an interactive run asks whether to continue
+with the valid ones; `--yolo` and non-interactive runs continue without asking.
+If you decline, or if every plan file fails validation, no issues are created —
+the generated `PLAN*.md` are preserved to a temp directory so you can fix the
+reported errors and re-run instead of regenerating from scratch.
 
 Both write guards cover **shell commands** as well as file edits, so a redirect
 like `printf x > ../other-repo/app.py` is blocked, not just an `Edit` call. Shell
@@ -226,6 +306,37 @@ deliberate obfuscation (variable indirection, command substitution, subshells).
 The remaining supported tools (OpenCode, VS Code, Antigravity IDE) expose no hook
 mechanism WADE can install into, so they receive neither guard — session rules
 there rest on the skill files alone.
+
+### Completion gates
+
+`wade implementation-session done` (and `review-pr-comments-session done`) is the
+authoritative completion gate: it refuses to finalize until the work is actually
+ready, then writes the `.wade/done@<HEAD>` marker and pushes. Each gate has an
+escape hatch under a `done:` block in `.wade.yml` (all default on):
+
+| Gate | Refuses when… | Hatch |
+|------|---------------|-------|
+| PR-SUMMARY | `PR-SUMMARY.md` is missing, empty, or still a template placeholder (implementation only) | `done.require_pr_summary: false` |
+| Sync | the branch is behind main — auto-syncs first, refuses only on conflict (implementation only) | `done.require_sync: false` |
+| Review ran | `wade review implementation` did not run for the current commit. **Implementation sessions bound this loop:** after `done.max_review_passes` (default 2) review→fix→re-review cycles, `done` completes anyway with a notice instead of looping forever | `--skip-review`, `done.require_review: false` (auto-off when `ai.review_implementation.enabled: false`) |
+| Resolved threads | unresolved PR review threads remain (review-comments only) | `done.require_resolved_threads: false` |
+| Conventional title | the issue title is not a conventional-commit title (the PR title is derived from it, so it would fail `PR Title Lint`) — blocks; when valid but the open PR's title differs, syncs the PR title to match (both session types) — if that sync fails while the PR's current title is itself non-conventional (lint would fail), `done` fails so it can be retried | `done.require_conventional_title: false` |
+| Knowledge valid | the knowledge file is structurally corrupt — duplicate entry IDs or unresolved conflict markers (e.g. from a `merge=union` merge) | *none — gated by `knowledge.enabled`; no `done.*` hatch* |
+
+A **pre-push git hook** (`done.pre_push_backstop`, default on) backs the gate up:
+a push of the session branch without a current `.wade/done@<sha>` marker is
+refused, so committing-and-pushing straight past `done` doesn't work. It is
+worktree-scoped (never touches your main checkout or sibling worktrees) and
+chains to any pre-existing `pre-push` hook. **Honesty:** `git push --no-verify`
+bypasses the backstop in one flag — this is a quality/backstop layer that makes
+the gate hard to skip, not an airtight boundary.
+
+`done` also writes a **`## Review Status`** line into the PR body recording the
+review outcome — reviewed at `<sha>`, skipped via `--skip-review`, gate disabled
+(`done.require_review: false` / `ai.review_implementation.enabled: false`), or
+completed at the review-pass cap — with the review-pass count. A skipped or
+never-run review is therefore visible to reviewers in the PR itself, not just in
+the worktree-local `.wade/` markers that are discarded when the session ends.
 
 ## Task Providers
 
@@ -297,6 +408,17 @@ wade installs Skills that teach your AI agent the workflow — issue format, pla
 | `review-pr-comments-session` | Review session rules and workflow |
 | `deps` | Dependency analysis between issues |
 
+### Session communication
+
+Sessions report **by exception**: terse on success — just the actionable
+handles (issue/PR numbers, URLs, the next command), never a list of completed
+steps or a reassurance that nothing broke. When something needs your
+attention or a decision only you can make, the agent reports it in 1–2
+sentences with brief context, its complexity
+(easy/medium/complex/very_complex), and a recommendation. It then asks
+through the native question component, with the recommended option first and
+labelled "(recommended)".
+
 ## Worktree Hooks
 
 Configure automated setup when worktrees are created via `wade implement` or `wade implement-batch`. Add a `hooks` section to `.wade.yml`:
@@ -314,6 +436,49 @@ hooks:
 **`copy_to_worktree`** — Files to copy from the project root into the worktree before running the hook. Useful for secrets and config files (e.g., `.env`) that are gitignored and wouldn't otherwise be present in a new worktree.
 
 See [`templates/setup-worktree.sh.example`](templates/setup-worktree.sh.example) for a starter script.
+
+### Repo-quality gates
+
+Three **opt-in, off-by-default** quality gates enforce code hygiene at the
+commit boundary (and in-turn). Nothing is installed unless you configure it:
+
+```yaml
+hooks:
+  pre_commit:
+    lint: ./scripts/check.sh --lint   # runs on `git commit`; non-zero blocks it
+    test: ./scripts/test.sh           # runs on `git commit`; non-zero blocks it
+  commit_msg:
+    conventional: true                # rejects a non-Conventional-Commit subject
+  post_tool_use:
+    enabled: true                     # feed lint findings back to the agent in-turn
+    lint_cmd: ruff check              # FILE-SCOPED linter (the edited path is appended)
+    timeout: 10                       # seconds; the linter is skipped on overrun
+```
+
+- **`pre_commit`** installs a per-worktree `pre-commit` git hook that runs the
+  configured `lint`, then `test`, command(s). A non-zero exit blocks the commit
+  and surfaces to the agent as a normal error. Set only the step(s) you want.
+  Running the full `test` suite on every commit can be slow — prefer a fast
+  subset there, or use `lint` alone.
+- **`commit_msg`** installs a per-worktree `commit-msg` git hook that validates
+  the subject line against [Conventional Commits](https://www.conventionalcommits.org/).
+  A non-conforming subject blocks the commit. A `BREAKING CHANGE:` footer only
+  marks an already-typed commit as breaking (an alternative to the subject `!`);
+  it does not exempt the subject from the type requirement.
+- **`post_tool_use`** feeds lint findings back to the agent *in-turn* — the
+  cheapest moment to fix them, while the edit is still in working memory. It is
+  **file-scoped**: `lint_cmd` runs on just the edited path (appended as a
+  positional arg), on tools whose hooks can inject context back to the agent
+  (Claude, Cursor, Codex, Copilot; Antigravity CLI is skipped). If `lint_cmd`
+  is unset, wade falls back to `pre_commit.lint` run **whole-repo** on every
+  edit — which is slower and may error on an unexpected positional arg, so
+  prefer configuring a file-scoped `lint_cmd`. This layer never blocks.
+
+Like the pre-push backstop, the git hooks are worktree-scoped (never touch your
+main checkout or sibling worktrees) and chain to any pre-existing hook of the
+same name. **Honesty:** `git commit --no-verify` bypasses the pre-commit and
+commit-msg hooks in one flag — these are **quality** gates that make messy or
+untested commits hard to land, not airtight enforcement boundaries.
 
 ## Shell Integration
 

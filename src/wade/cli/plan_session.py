@@ -25,7 +25,9 @@ def done(
         console.warn(f"{diag.file}: {diag.message}")
 
     for diag in result.errors:
-        console.error(f"{diag.file}: {diag.message}")
+        # A diagnostic can embed the plan's own (untrusted) title — render without
+        # Rich markup so bracket tokens in it aren't parsed as markup.
+        console.error(f"{diag.file}: {diag.message}", markup=False)
 
     if result.has_errors:
         n = len(result.errors)
@@ -47,9 +49,9 @@ def done(
 
     console.info(
         "SESSION COMPLETE — do not implement anything. "
-        "Present the workflow recap and what happens next to the user. "
-        "Suggest they exit the session now. "
-        "wade will read the plan files and create GitHub issues and draft PRs automatically."
+        "Report by exception: tell the user what happens next (wade will read the "
+        "plan files and create GitHub issues and draft PRs automatically) and only "
+        "call out anything that needs their attention. Suggest they exit the session now."
     )
 
     raise typer.Exit(0)

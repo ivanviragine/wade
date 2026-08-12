@@ -117,12 +117,19 @@ src/wade/
     ├── terminal.py      # Tab title, TTY detection, launch_in_new_terminal
     ├── slug.py          # Title -> URL-safe slug
     ├── markdown.py      # Plan file parsing
+    ├── conventional.py  # Canonical conventional-commit TITLE validator (types + is_conventional_title) — stdlib-only, single Python source of truth
+    ├── plan_validation.py # Lean plan-file validator (discover/validate/has_valid_plan) — Stop-path safe; sources its title regex from conventional.py
     ├── process.py       # Subprocess helpers
     ├── http.py          # HTTPClient for REST API providers
+    ├── markers.py       # sha-keyed .wade/<name>@<sha> completion markers (done, reviewed, stop-nudged)
     ├── update_check.py  # Version checking, self-upgrade hints
     └── install.py       # Self-upgrade helpers (venv/source detection, re-exec)
 ```
 
+> `templates/hooks/pre-push` is the completion-gate backstop script installed
+> per-worktree at `.wade/githooks/pre-push` (see *Completion Gates & the
+> `done`-marker* below).
+>
 > **The `db/` package is unused scaffolding** — deliberately omitted from the
 > tree above. No code path under `services/` or `cli/` writes
 > session/worktree/PR rows, so its sole reader
@@ -164,13 +171,25 @@ trusting the agent to follow the skill. The split across the two repos:
 
 | Guard | Event | Failure mode | Blocks |
 |-------|-------|--------------|--------|
-| `worktree` | PreToolUse | **closed** (deny) | Writes resolving outside the worktree |
-| `plan` | PreToolUse | **closed** (deny) | Writes to anything but plan artifacts |
-| `session-complete` | Stop | **open** (allow) | Ending a turn with `PR-SUMMARY.md` missing (once) |
+| `worktree` | PreToolUse | **closed** (deny) | Writes resolving outside the worktree (except the active tool's memory subtree and always-allowed scratch — see [Memory allowlist](#memory-allowlist) and below) |
+| `plan` | PreToolUse | **closed** (deny) | Writes to anything but plan artifacts (the memory subtree and always-allowed scratch are also exempt) |
+| `session-complete` | Stop | **open** (allow) | Ending an impl/review turn with commits ahead of base and no current `done` marker (once) |
+| `plan-complete` | Stop | **open** (allow) | Ending a plan turn with no valid `PLAN*.md` in `.wade/plans` (once) |
 
 The asymmetry is deliberate and must not regress: a write guard that allows on
 error is worse than useless, while a Stop guard that blocks on error traps the
-agent in a session it cannot exit.
+agent in a session it cannot exit. Both Stop guards live in `hooks/policies.py`
+as pure predicates fed a fact the `hooks/cli.py` Stop branch computes:
+`session-complete` over `commits_ahead` + `done_marker_present` (git facts read
+via **raw `subprocess`** — never the `wade.git` layer, whose `structlog` output
+would corrupt the lean entry's decision-JSON contract), and `plan-complete` over
+`has_valid_plan(.wade/plans)` (via a **lazy** import of
+`wade.utils.plan_validation`, kept off the hot PreToolUse write path). Any
+failure — unresolvable dir, missing `--root`, exception — fails open. The two
+Stop guards share the single-shot `.wade/stop-nudged` marker because a worktree
+is either a plan worktree or an impl worktree, never both. Installation:
+`bootstrap_worktree` installs `session-complete` for impl/review sessions (plus
+the pre-push `done` backstop) and `plan-complete` for plan sessions.
 
 ### Two write channels
 
@@ -193,19 +212,190 @@ input redirects excepted (a read); `cd`/`pushd` targets; and operands of *write*
 commands — `_PLAN_WRITE_COMMANDS` (`tee`/`cp`/`mv`/`touch`/`mkdir` …), git write
 subcommands `_GIT_WRITE_SUBCOMMANDS` (`checkout`/`clean`/`clone`/`init`/`worktree`
 …), and in-place editors (`sed -i`, `perl -i`) — that resolve outside. In plan
-mode it additionally rejects those same writes when aimed at non-artifacts, and
-denies the in-place `-i` flag outright.
+mode it additionally rejects those same writes when aimed at non-artifacts
+(except always-allowed scratch — see below), and denies the in-place `-i`
+flag outright.
 
-Spaced `git -C <dir>` is buffered: `git -C ../crossby log` (a read subcommand) is
-allowed, but a git *write* subcommand after an outside `-C` (`git -C /outside
-clean -fd`, `git -C /outside checkout -- file`) is denied — there is no later path
-operand to catch it otherwise. It also unglues paths from flags
-(`--output=/tmp/x`, `-o/tmp/x`, `of=/tmp/x`, `git -C/tmp/other`) and keeps those
-**glued** forms contained in every mode (a tokenizer cannot tell a glued read flag
-from a glued write flag, so a few glued reads are denied too), treats bash's
+Every git directory-redirect flag is buffered the same way, in every spelling
+git's own parser (`git.c`) accepts: `-C`, `--work-tree`, and `--git-dir` are
+functionally equivalent for this purpose (all three redirect where git
+reads/writes), each spaced (`-C <dir>`) or glued/`=`-joined (`-C<dir>`,
+`--work-tree=<dir>`) — including a relative, slash-less glued `-C` form like
+`-C..`. `git -C ../crossby log` / `git --work-tree ../crossby log` (a read
+subcommand) is allowed, but a git *write* subcommand after one of these
+pointed outside (`git -C /outside clean -fd`, `git -C/outside clean -fd`,
+`git --work-tree /outside clean -fd`, `git --git-dir=/outside clean -fd`) is
+denied — there is no later path operand to catch it otherwise. Checked with
+**strict** `_within` against `worktree_root` only, never `allow_paths` and
+never the always-allowed-scratch exemption described below: a write reached
+through any of these six spellings can touch every file under `<dir>`, not
+just a direct memory/scratch write, so they stay strict even when `<dir>` is
+the active tool's own memory root **or** a system temp dir (`git -C /tmp/x
+clean -fd` is denied, even though a direct write to `/tmp/x` is scratch-exempt).
+
+The identical blast radius is reachable the plain way, without any `-C` flag at
+all: a `cd`/`pushd` to a directory outside `worktree_root` (necessarily
+always-allowed scratch — a non-scratch outside target already denies at the
+`cd`-target check) redirects git's implicit working directory for the rest of
+the *whole command line*, not just the current segment — a real shell's cwd
+persists across `&&`/`;`/`|`, unlike a per-invocation `-C` flag. So `cd /tmp/x
+&& git clean -fd` gets the same denial as `git -C /tmp/x clean -fd` even though
+it has no `-C` flag and `clean` has no path operand of its own for the
+enumerated-write-command check to catch. `cwd_outside_root_token` buffers this
+across segments (unlike the git-directory-redirect buffer, which resets per
+segment) and is cleared by a later `cd` that lands back inside root. A
+**same-segment** directory-redirect flag that itself resolves inside root
+overrides the buffered scratch `cd` for that one invocation, exactly like a
+real shell would: `cd /tmp/x && git -C /repo/wt clean -fd` is allowed, since
+git's own `-C` takes precedence over the shell's cwd. This is tracked
+separately (`git_dir_redirect_seen_in_root`) from the outside-root buffer,
+because "no redirect flag this segment" and "redirect flag present and
+in-root" both leave the outside-root buffer unset but must be told apart.
+
+An accepted `cd`/`pushd` also rebases the tokenizer's `base` (the directory
+later relative paths resolve against) to the new cwd — not just the
+`cwd_outside_root_token` bookkeeping above. Without this, a *relative*
+directory-redirect flag after a scratch `cd` (`git -C .`, `--work-tree .`,
+`--git-dir .`) would resolve against the stale original `base` and wrongly
+read as in-root, bypassing the same-blast-radius denial `cd /tmp/x && git
+clean -fd` already gets. `base` is rebased only in the `cd`/`pushd` handler,
+never by a directory-redirect flag itself, so a same-segment `-C` still
+overrides containment for that one git invocation without permanently
+changing where later, unrelated tokens resolve. The outside-root buffer is
+**sticky within a segment**, not "last flag wins": once any
+`-C`/`--work-tree`/`--git-dir` occurrence resolves outside root, a later
+occurrence resolving in-root does *not* clear it (`git -C /tmp/x -C /repo/wt
+clean -fd` stays denied). A naive reset was tried and reverted — repeated
+relative `-C` values chain from the *preceding* `-C`, not the segment's
+original cwd, so `git -C /tmp/x -C . clean -fd`'s second flag can resolve
+back to root while git's real effective directory is still outside; and
+`--work-tree`/`--git-dir` are independent settings, not last-one-wins
+alternatives, so an in-root `--git-dir` must not clear an outside
+`--work-tree`'s denial. Correctly resolving the narrower, legitimate
+`-C a -C b` case needs per-flag-type effective-directory tracking, not a
+shared token — out of scope for now; staying strict is the safe trade-off.
+
+It also unglues paths from other flags
+(`--output=/etc/x`, `-o/etc/x`, `of=/etc/x`) and keeps those **glued** forms
+contained in every mode (a tokenizer cannot tell a glued read flag from a glued
+write flag, so a few glued reads are denied too), treats bash's
 `>&file` as a write while skipping true fd duplication (`2>&1`), denies a bare
-`cd` (it lands in `$HOME`), and exempts character devices so `>/dev/null 2>&1`
-still works.
+`cd` (it lands in `$HOME`), and exempts known discard/console devices
+(`>/dev/null 2>&1`) plus system temp dirs (`/tmp`, `$TMPDIR`) — shared scratch space
+where writes are always allowed, in **every** mode. `_ALWAYS_ALLOWED_DEVICES` and
+the temp-dir prefixes (`_ALWAYS_ALLOWED_PATH_PREFIXES`) stay **separate constants**,
+unioned by `_is_always_allowed_scratch` and consulted together by `_contained`: a
+device persists nothing (matched by an **exact** allowlist — `/dev/null`,
+`/dev/zero`, … — not a `/dev/` prefix, since Linux mounts writable filesystems under
+`/dev/` too, e.g. `/dev/shm` tmpfs, `/dev/mqueue`, where a write persists a real file
+outside the worktree and a bare prefix would let `tee /dev/shm/out` escape), while a
+temp write persists a real file (matched by prefix). Both are exempt from the
+plan-mode plan-artifact rule for the same reason devices always were: the accepted
+risk is a compromised plan session (no shell execution) staging bytes in `$TMPDIR`
+that a later impl session (which has shell execution) could read or execute —
+judged acceptable because system temp is world-shared scratch already reachable by
+any local process, and impl mode already allowed it. The scratch exemption
+(`_is_always_allowed_scratch`) is shared by `shell_containment` **and** the
+file-path guards (`worktree_containment`, `plan_artifact_only`, both via
+`_contained`) — the two channels no longer diverge on what counts as always-allowed
+scratch. (Rule 6's git directory-redirect buffering is the sole exception, kept
+**stricter** than a direct write even for a temp `<dir>` — see above.)
+
+`_is_always_allowed_scratch` matches temp dirs **by prefix only**, never the
+bare dir itself — a separate, narrow `_is_temp_root` predicate lets
+`cd`/`pushd` land on the bare temp dir (`cd /tmp`, pure navigation), but
+write-command operands, redirect targets, and the file-path channel
+deliberately stay prefix-only, so a destructive command can't target the whole
+shared directory (`rm -rf /tmp` stays denied). A version of the exact-dir
+concession folded into the general scratch predicate was tried and reverted
+for exactly this reason.
+
+The **plan-artifact exemption specifically** (not baseline containment) uses a
+stricter, `worktree_root`-aware variant, `_is_scratch_outside_worktree`, rather
+than the plain `_is_always_allowed_scratch`. If `worktree_root` itself resolves
+under a system temp dir — an ephemeral clone, a CI job, or a configured temp
+worktree directory — every in-worktree path also matches the temp-prefix test,
+so the plain scratch check would wrongly exempt ordinary in-worktree source
+writes from the plan-artifact allowlist. `_is_scratch_outside_worktree` only
+exempts a target that is both always-allowed scratch **and** resolves outside
+`worktree_root`. Baseline containment doesn't need this: a path inside
+`worktree_root` is already allowed via plain containment regardless of the
+scratch check's order.
+
+### Memory allowlist
+
+All three write guards take an `allow_paths` tuple — the active tool's memory
+allow-root — resolved by `_memory_allow_paths(tool, worktree_root)` in
+`hooks/cli.py`. A write whose resolved path lands inside it is permitted
+despite containment, and in plan mode is exempt from the plan-artifact rule
+(checked **before** `_is_plan_artifact_path`, which reports any out-of-root
+path — memory included — as a non-artifact). The resolved path is tool-specific
+and, where the tool's own storage layout allows it, scoped to *this* worktree's
+encoded project directory — but the three tools do **not** get the same
+guarantee:
+
+- **Claude** — `<config-home>/projects/<encoded-worktree>/memory/`. Sibling
+  session transcripts live un-nested at `<encoded-worktree>/`, so the allow-root
+  stops at `memory/`, not its parent. The only one of the three scoped to both
+  this session **and** memory alone.
+- **Cursor** — `<config-home>/projects/<encoded-worktree>/`. Its per-project dir
+  *is* the memory location (no separate `memory/` subfolder to narrow to), but
+  crossby's own reader globs that same directory for session-transcript JSON —
+  so this is scoped to *this session's project* (narrower than the old code,
+  which allowlisted every Cursor project on the machine) but not to memory
+  alone: a guarded Cursor session can also rewrite/delete its own transcripts.
+- **Codex** — `<config-home>/sessions/` — rollouts are filed by date, not by
+  project, and shared flat across *every* project on the machine (crossby
+  filters by a `cwd` field inside each file, not by directory). Unlike
+  Claude/Cursor, this is **not scoped to this session at all** — every other
+  project's Codex rollouts are writable too. Accepted because Codex's storage
+  has no per-project boundary to key on; the alternative is dropping Codex from
+  the allowlist entirely (like Copilot/Antigravity-CLI), not approximating a
+  guarantee it cannot provide.
+
+`<encoded-worktree>` mirrors the tool's own CWD-to-directory-name encoding
+(`_encode_claude_project_path` / `_encode_cursor_project_path` in `hooks/cli.py`,
+duplicated from `crossby.ai_tools.claude`/`cursor` rather than imported, for the
+same lean-hot-path reason as the dialect maps below) — `worktree_root` is
+**canonicalized (`.resolve()`) before encoding**, so a `worktrees_dir` reached
+through a symlink still encodes the same physical path the launched tool
+observes as its own CWD, not the symlink spelling. `<config-home>` is
+`_tool_config_home`: it honors each tool's data-home relocation env var
+(`CLAUDE_CONFIG_DIR`, `CODEX_HOME`) before falling back to `Path.home() /
+".<tool>"` — without this, a relocated config dir (e.g. the isolated
+`CLAUDE_CONFIG_DIR` `scripts/test-live-ai-taskr.sh` sets up for live tests) would
+leave the tool's *real* memory writes denied. Copilot / Antigravity-CLI keep
+memory in-repo, so they resolve to an intentional empty tuple (no bypass). It is
+threaded into **redirect targets** and **write-command operands** on the shell
+channel; `cd`/`pushd` and every git directory-redirect flag (`-C` spaced or
+glued, `--work-tree=`, `--git-dir=`) stay strict — checked only against
+`worktree_root`, never `allow_paths` — since a write reached through any of
+them can touch every file under the target directory, not just a direct
+memory write.
+
+The allowlist is **deliberately narrow — never the tool's config/auth home**
+(`~/.claude/settings.json` holds the `hooks` block these guards depend on;
+allowlisting all of `~/.claude`, or even all of `~/.claude/projects`, would let
+a session strip its own guard) **— though not uniformly narrow across tools**:
+Claude and Cursor scope to the encoded, per-worktree leaf (also meaning an
+ancestor-directory symlink cannot widen the exception the way a shared parent
+directory could); Codex does not, per above. The leaf itself is never resolved
+through a symlink either — `_memory_allow_paths` resolves only the leaf's
+*parent*, then reattaches the leaf name literally, so a symlink swapped in for
+`memory/` (or the encoded project dir, or `sessions/`) cannot silently
+redirect the allow-root to whatever it points at; a write reaching such a
+symlinked leaf resolves (via `_resolve_path`) to the real target, which no
+longer falls under the allow-root and stays denied. The tool's config/auth files
+(`~/.claude/settings.json`, `~/.codex/*state*.json`, `~/.cursor/*config*.json`)
+stay denied regardless. `_memory_allow_paths` degrades safely — an unrecognized
+tool, an intentional empty policy, an unresolvable
+`Path.home()` (HOME unset), or a path that will not resolve all return `()` and
+never raise, so containment behaves exactly as before. Like the dialect maps,
+`_TOOL_MEMORY_DIRS` (now a plain key set, not a path map) is kept off the hot path
+(no `crossby.ai_tools` import); `TestPerToolMemoryDirsCoverHookWriters` fails if
+its key set drifts from `_hook_writers`. These per-tool memory locations
+ultimately belong in crossby's `AIToolCapabilities` (mirrored wade-side today) —
+a follow-up, not on this path.
 
 **It is defense-in-depth, not a completeness guarantee.** It stops the
 non-obfuscated cases an agent actually produces. Documented residual gaps
@@ -244,6 +434,68 @@ Codex is the one tool whose worktree guard is **narrowed** rather than skipped:
 `--sandbox workspace-write` already confines tool-call writes, but it also
 permits `/tmp` and `$TMPDIR`, so a shell redirect remains a live escape.
 
+### Session-start context injection (#351)
+
+The launch prompt injects the task **once**. Nothing re-injects it on **resume**
+or after **compaction** — and compaction is the largest single context loss.
+`bootstrap_worktree` therefore installs a **SessionStart** hook (`wade-hook
+session_start`) that re-injects a compact, phase-gated reminder as
+`additionalContext` on every session-start source. It is **non-blocking** (like
+the Stop hook, no `fail_closed`) and **fail-open**: a missing `--root`/`--phase`,
+an unreadable `PLAN.md`, or any exception yields exit 0, so it can never trap a
+session from starting.
+
+- **Policy** (`hooks/policies.py::session_start_context`): assembles the text by
+  `SessionPhase` (`implement` / `review` / `plan`, baked into the installed
+  command as `--phase`). The AI-facing per-phase prose lives in
+  `templates/prompts/session-start-<phase>.md` (the prompt source-of-truth per the
+  "Prompts as .md Templates" principle) and is loaded via `load_prompt_template`
+  (a lazy import — off the hot PreToolUse path); the builder itself only prepends
+  the dynamic issue line, brands the payload, and caps it. For impl/review it
+  parses the issue ref from `PLAN.md`'s first line (`# Issue #<id>: <title>`,
+  omitted if absent) and points at the phase's `done` command and the gates it
+  enforces; for plan (a detached worktree with no `PLAN.md` at the root) it points
+  at writing a valid `PLAN*.md` then `plan-session done .wade/plans`, plus — for a
+  `wade plan --issue-id` session — the issue ref parsed from `.wade/plan-issue.md`
+  (which `plan_service` persists so a resumed/compacted plan session re-injects
+  *which* issue it is planning; omitted for a from-scratch plan). Import-light and
+  stdout-safe — it reads the issue-ref file with a plain file read, never the `wade.git`
+  layer (the #349 lean-entry gotcha). The payload is hard-capped at **≤ 800 chars**
+  and phrased *distinctly* from the always-loaded SKILL.md (a per-phase test
+  asserts no prose line is shared).
+- **Install** (`bootstrap.py::_install_session_start_hook`): gated on
+  `supports_session_start_hook` (mirroring how the Stop hook gates on
+  `supports_stop_hook`). `tools=[]` is **load-bearing** — `_tools_to_matcher([])`
+  → `.*`, and the SessionStart matcher is tested against the *source*, so `.*`
+  re-fires on `startup`/`resume`/`compact`/`clear`/`fork`. Narrowing it would
+  silently drop compaction re-injection. Because crossby dedups hooks by exact
+  command, a **reused** worktree (impl → review re-bootstraps with a different
+  `--phase`) would otherwise fire *both* phase reminders; the install revokes every
+  other-phase variant via `hooks_remove`, leaving exactly one entry.
+- **Sessions**: installed for implementation, review, and plan sessions (each
+  passes a `session_phase` to `bootstrap_worktree`). `wade task deps` passes
+  `None` and opts out (short, detached, no completion-gate decay). `plan_mode` and
+  `session_phase` stay independent signals — the invariant `plan_mode is True` iff
+  `session_phase is SessionPhase.PLAN` is pinned by a test, not derived in code.
+
+Per-tool payload shape (all delegated to crossby's `emit_decision`; **no crossby
+change or pin bump** was needed — as of crossby 0.17 it already serializes
+`action="context"` for every session-start dialect):
+
+| Tool | Event | Payload key |
+|------|-------|-------------|
+| Claude, Codex | `SessionStart` | nested `hookSpecificOutput.additionalContext` |
+| Copilot | `sessionStart` | flat `additionalContext` |
+| Cursor | `sessionStart` | `additional_context` (gated to the events Cursor reads it on) |
+| Antigravity CLI (`agy`) | — | no hook installed (`DECISION` dialect has no context channel); **degrades to the always-loaded skill** |
+
+**Deferred (evaluated, not built):** `SessionStart.initialUserMessage` as a
+stronger resume carrier — crossby's `emit_decision` has no such channel, so it
+would need a crossby change; `additionalContext` covers resume *and* compaction
+uniformly and is the verified channel. `UserPromptSubmit` per-turn injection —
+the wiring exists but injecting on every prompt conflicts with the "compact,
+say-it-once, low-cost" goal.
+
 ### Upgrade path for already-inited projects
 
 Guards are installed **per-worktree** in `bootstrap_worktree`, not at
@@ -251,6 +503,89 @@ Guards are installed **per-worktree** in `bootstrap_worktree`, not at
 So an existing inited project picks up corrected guards automatically on its
 next `wade implement` / `wade plan` session once wade (and transitively crossby)
 is upgraded — **no re-init, resync, or migration is needed.**
+
+## Completion Gates & the `done`-marker
+
+`done` (`implementation_service/done.py`) is the authoritative completion gate.
+Both `implementation-session done` and `review-pr-comments-session done` call the
+same `done()` service, parameterized by `session_type`; the gate set branches on
+it and runs in a **fixed order** (a clean main-merge in the sync step advances
+HEAD, so any sha-keyed check must precede it):
+
+1. **PR-SUMMARY** (implementation) — present, non-empty, non-placeholder.
+2. **unresolved-threads** (review-pr-comments only, runs *first* for that
+   session type) — a transient provider error is non-blocking.
+3. **review-ran** (both) — `marker_present(worktree, "reviewed", pre-sync HEAD)`.
+   Checked against the pre-sync HEAD so a clean main-merge doesn't invalidate the
+   review just performed. **Implementation sessions add a code-enforced review-pass
+   cap (`done.max_review_passes`, default 2) (#384):** past the exact-sha fast
+   path, the gate counts distinct
+   `review-pass@<sha>` markers (written by each delegation-backed
+   `wade review implementation`, independent of its success — so a headless
+   timeout still counts) and, once `done.max_review_passes` (default 2) is
+   reached, completes anyway with a notice rather than looping. `wade review
+   implementation` surfaces the running budget after each pass ("review pass N of
+   M — K left"), so the count is visible from the command rather than only from
+   the skill prose or the `done`-time notice. A listdir failure
+   counts as 0 — as does a symlinked `.wade` or a platform without descriptor-based
+directory reads (fail closed toward re-gating, so tampering can't satisfy the
+cap). `review-pr-comments` keeps the unbounded
+   fast-path-or-refuse behavior — the gate is shared, so the cap branch is
+   scoped to `session_type == "implementation"`.
+4. **sync** (implementation only) — auto-sync via the existing `do_sync` service
+   when `behind > 0`, refuse only on conflict.
+5. `_done_via_pr` writes `.wade/done@<post-sync HEAD>` immediately before pushing,
+   and projects the review outcome into the PR body as a `wade:review-status`
+   block (see below).
+
+**Review status is legible in the PR body (#367).** The `.wade/` markers
+(`reviewed@<sha>`, `review-pass@<sha>`) are zero-byte and **worktree-local** — no
+human ever sees them, so "attempted twice, timed out twice" was indistinguishable
+from "never tried" in the durable artifact. `done` closes that legibility gap:
+after the gates pass, `_classify_review(config, worktree, pre-sync HEAD,
+skip_review, session_type)` — one pure classifier that the review-ran **gate**
+also decides from, so the two can't drift — returns a frozen `ReviewStatus`
+(`kind`, `passes`, `session_type`, `reviewed_sha`) that `_render_review_status`
+turns into a one-line `## Review Status` section wrapped in
+`wade:review-status:start/end` markers. It records reviewed-at-`<sha>` /
+skipped (`--skip-review`) / gate-disabled (`done.require_review: false` or
+`review_implementation.enabled: false`) / cap-reached, and shows the review-pass
+count so a skipped-but-attempted run reads differently from a never-run one. Like
+the `wade:summary` block it is marker-scoped (upserted before the
+`wade:impl-usage` table, idempotent on re-run, preserving any concurrent edit
+outside the markers) — the PR body, not the discarded `.wade/` markers, is the
+durable receipt.
+
+The **done-marker primitive** lives in `utils/markers.py` — a pure-stdlib leaf
+(so the lean `wade-hook` can import it cheaply). A marker is a zero-byte file
+`.wade/<name>@<sha>` meaning "the `<name>` gates passed for `<sha>`"; a new commit
+changes the sha and invalidates every prior marker (**missing/stale ⇒ not done**).
+All reads/writes go through an `O_DIRECTORY | O_NOFOLLOW` handle on `.wade` so a
+symlinked `.wade` can never redirect them — there is deliberately **no** path-based
+fallback (following the symlink is worse than not writing). The same module backs
+the single-shot `.wade/stop-nudged` flag (`flag_marker_*`), so the Stop-nudge and
+done-marker implementations can't drift.
+
+⚠ **`commits_ahead` argument order differs by call site** and is pinned by a test:
+the sync gate's behind-count is `commits_ahead(repo, origin/<main>, branch)`
+(base in the *branch* position); the Stop hook's ahead-count puts the session
+branch in the branch position. Inverting either is a silent bug.
+
+The **pre-push backstop** (`templates/hooks/pre-push`, installed by
+`skills/installer.py:install_worktree_git_hooks`) makes the gate hard to skip: git
+runs it with cwd at the worktree top, so it tests `[[ -f ".wade/done@${sha}" ]]`
+in pure shell. It is wired per-worktree via `extensions.worktreeConfig` +
+`git config --worktree core.hooksPath .wade/githooks` (git ≥ 2.20; **graceful
+degrade** to warn-and-skip otherwise), so it never leaks to the main checkout or
+sibling worktrees. Because `core.hooksPath` *replaces* `.git/hooks`, the installer
+detects any pre-existing hook once at first install, persisting it per-hook to
+`.wade/githooks/.chain-<hook_name>` (so `pre-push`/`pre-commit`/`commit-msg` each
+chain to their own captured prior), and the wade hook **chains** to it (re-emitting
+the exact buffered stdin) rather than silently shadowing it. The same
+`install_worktree_git_hooks` batch API installs all of `pre-push`, `pre-commit`,
+and `commit-msg` in one call so their chaining stays correct. **Honesty:**
+`git push --no-verify` bypasses it in one flag — a quality/backstop layer, not a
+boundary.
 
 ## Command Dispatch
 
@@ -295,20 +630,46 @@ hooks:
   post_worktree_create: scripts/setup-worktree.sh
   copy_to_worktree:
     - .env
+  pre_commit:                # opt-in repo-quality gate (#352); off by default
+    lint: ./scripts/check.sh --lint
+    test: ./scripts/test.sh
+  commit_msg:
+    conventional: true       # validate Conventional Commits on `git commit`
+  post_tool_use:
+    enabled: false           # in-turn lint feedback to context-capable tools
+    lint_cmd: ruff check      # FILE-SCOPED (edited path appended); else pre_commit.lint whole-repo
+    timeout: 10
 knowledge:
   enabled: true
   path: KNOWLEDGE.md
+done:                        # completion-gate toggles (all default true)
+  require_pr_summary: true
+  require_sync: true
+  require_review: true
+  require_resolved_threads: true
+  require_conventional_title: true  # block a non-conventional issue title; sync it onto the PR (#392)
+  pre_push_backstop: true
+  max_review_passes: 2       # impl-session review→fix loop cap (#384); strict positive int
 ```
+
+**`done` section** (`DoneConfig`): completion-gate escape hatches, all default
+on. Per knowledge `ca245d6a`, config-key validity lives in **three** places that
+can drift — the Pydantic model (`models/config.py`), the loader
+(`config/loader.py`), and the `check_service.py` validator. The `done` validator
+allowlist is **derived** from `DoneConfig.model_fields`, so a new field is
+accepted automatically.
 
 **Model complexity mapping**: The `models` section maps AI tool names to complexity-tiered model IDs (`easy`, `medium`, `complex`, `very_complex`). When `wade implement` is invoked, the service reads the `complexity:X` label from the issue (falling back to `## Complexity` in the body), maps it to the appropriate configured model, and passes it as `--model` to the AI tool — unless the user explicitly passed `--model` themselves.
 
-**Per-command AI tool and model overrides**: The `ai` section supports `plan`, `deps`, `implement`, `review_plan`, `review_implementation`, and `review_batch` sub-sections, with optional `tool`, `model`, `mode`, `effort`, `enabled`, `yolo`, `permission_mode`, and `timeout` keys as applicable. The fallback chain is: CLI `--ai`/`--model` flag -> command-specific config -> global `default_tool`. This is implemented in `ProjectConfig.get_ai_tool(command)` and `ProjectConfig.get_model(command)`. When `mode` is omitted, `review_plan` and `review_implementation` default to `prompt`, while `review_batch` defaults to `interactive`.
+**Per-command AI tool and model overrides**: The `ai` section supports `plan`, `deps`, `implement`, `review_plan`, `review_implementation`, `review_batch`, and `review_pr_comments` sub-sections (`AI_COMMAND_NAMES` in `models/config.py`), with optional `tool`, `model`, `mode`, `effort`, `enabled`, `yolo`, `permission_mode`, and `timeout` keys as applicable. `timeout` bounds a headless subprocess (seconds). When **unset**, the review/deps services compute the budget with `effective_timeout` (`delegation_service.py`, #366): it scales from **payload bytes + reasoning effort** — `scaled_timeout` starts at a **600s floor** (`TIMEOUT_FLOOR`, covers CLI cold-start + a small high-effort run), adds ~0.0075 s/byte of prompt, multiplies high/xhigh/max effort by 1.5–1.75×, and clamps to a **1500s ceiling** (`TIMEOUT_CEILING`). A headless timeout is **not** discarded: `run` (`utils/process.py`) decodes and reattaches the partial stdout (bytes even under `text=True`), `_delegate_headless` returns it as `feedback` with `DelegationResult.timed_out=True`, and wade **retries once** at a longer budget (`extended_timeout`, 1.5×) — bounding the *sum* of both legs to `TOTAL_TIMEOUT_CAP` (`TIMEOUT_CEILING + TIMEOUT_CEILING * TIMEOUT_RETRY_MULTIPLIER`, ~3750s / 62.5 min) so the worst case is predictable while the retry always gets the full multiplier, never a shorter budget than the attempt that just timed out (#366 review). The pre-launch advisory — now also printed by `deps_service.analyze_deps` before a headless run, not just the review commands (#366 review) — announces that worst-case total. A crash (`CommandError` / non-zero exit) is never retried and never flagged `timed_out`. Setting `ai.<cmd>.timeout` **explicitly** is a deliberate override: it is honored verbatim and **bypasses scaling and the retry math** — the escape hatch for orchestrators with a hard tool-timeout (set it below the harness limit). The fallback chain (tool/model) is: CLI `--ai`/`--model` flag -> command-specific config -> global `default_tool`. This is implemented in `ProjectConfig.get_ai_tool(command)` and `ProjectConfig.get_model(command)`. When `mode` is omitted, `review_plan` and `review_implementation` default to `prompt`, while `review_batch` defaults to `interactive`. `review_pr_comments` (#389) governs the **auto-launched review session** (post-`done` "Wait for reviews" → comments land → `review_service.start`): it resolves that session's tool, model, effort, and autonomy tier under its own key rather than inheriting `ai.implement.*`. The inherited implementation-session `tool` / `model` / `permission_mode` are honored only when the user set them *explicitly* (`--ai` / `--model` / `--permission-mode` / `--yolo`); the implementation flow forwards its already-*resolved* concrete values (never `None`), which would otherwise short-circuit the resolvers and shadow `ai.review_pr_comments` — so a merely config/default-derived value is dropped and the review config (then global `ai.*`) governs.
 
-**Permission (autonomy) mode vs. delegation `mode` — two orthogonal axes**: The `mode` key (`DelegationMode`: `prompt`/`interactive`/`headless`, `models/delegation.py`) governs *how* a tool is dispatched. `permission_mode` (`PermissionMode`: `default`/`accept-edits`/`auto`/`yolo`, `models/permission.py`) governs *how much* the tool may do without prompting — the autonomy axis crossby exposes via the `yolo`/`auto`/`accept_edits` launch booleans. Do **not** conflate them: they live in separate modules on purpose. Resolution (`resolve_permission_mode()` in `ai_resolution.py`) follows CLI `--permission-mode` > `--yolo` alias > command config > global config > `default`; `permission_mode` wins over the legacy `yolo` alias at any level, and `get_yolo()`/`resolve_yolo()` are thin shims that derive from the resolved mode so the alias has a single source of truth. WADE forwards only the *requested* tier and does **not** gate on per-tool capability — crossby owns capability-aware downgrades and warnings (`_autonomy_launch_args`), so `auto` on a non-Claude tool downgrades to `accept-edits` instead of WADE silently disabling it. The headless delegation path always forces `default` (no autonomy grant) regardless of config, since `deps`/`review_*` are read/analytical. `plan` is intentionally excluded from `PermissionMode` (WADE drives plan mode separately via `plan_service` → `plan_mode=True`); a configured or CLI-supplied `permission_mode: plan` (or any invalid value) warns and falls back to `default`.
+**Permission (autonomy) mode vs. delegation `mode` — two orthogonal axes**: The `mode` key (`DelegationMode`: `prompt`/`interactive`/`headless`, `models/delegation.py`) governs *how* a tool is dispatched. `permission_mode` (`PermissionMode`: `default`/`accept-edits`/`auto`/`yolo`, `models/permission.py`) governs *how much* the tool may do without prompting — the autonomy axis crossby exposes via the `yolo`/`auto`/`accept_edits` launch booleans. Do **not** conflate them: they live in separate modules on purpose. Resolution (`resolve_permission_mode()` in `ai_resolution.py`) follows CLI `--permission-mode` > `--yolo` alias > command config > global config > `default`; `permission_mode` wins over the legacy `yolo` alias at any level, and `get_yolo()`/`resolve_yolo()` are thin shims that derive from the resolved mode so the alias has a single source of truth. WADE forwards only the *requested* tier and does **not** gate on per-tool capability — crossby owns capability-aware downgrades and warnings (`_autonomy_launch_args`), so `auto` on a non-Claude tool downgrades to `accept-edits` instead of WADE silently disabling it. The headless delegation path always forces `default` (no autonomy grant) regardless of config, since `deps`/`review_plan`/`review_implementation`/`review_batch` are read/analytical; `review_pr_comments` is the exception — it launches an *interactive* session and honors its configured `ai.review_pr_comments.permission_mode`. `plan` is intentionally excluded from `PermissionMode` (WADE drives plan mode separately via `plan_service` → `plan_mode=True`); a configured or CLI-supplied `permission_mode: plan` (or any invalid value) warns and falls back to `default`. Every launch command (`plan`, `implement`, `implement-batch`, `review pr-comments`, `review plan`/`implementation`/`batch`, `task deps`, and the delegation paths) exposes `--yolo`/`--permission-mode` and resolves + forwards the tier; `confirm_ai_selection()` (`ai_resolution.py`) **always displays** the resolved tool/model/effort/permission mode with a per-tier descriptor (`permission.describe_permission_mode`) before its skip guard, so the mode surfaces on every path (TTY, non-TTY, headless, all-flags-explicit) and what is shown always equals what is applied. For the read-only headless paths (`deps`/`review_*` in headless mode), the service computes the *effective* mode as `default` and uses that single value for both display and the `DelegationRequest`, mirroring the `delegation_service` headless force-default rule.
 
 **Worktree hooks**: The `hooks` section lets projects run setup automatically when a worktree is created. `post_worktree_create` points to a script that runs in the new worktree (e.g., installing dependencies). `copy_to_worktree` lists files to copy from the project root into the worktree before the hook runs (e.g., `.env`). Hook failures are non-fatal — a warning is logged and the session continues.
 
-**Project knowledge**: The optional `knowledge` section enables a project knowledge file for cross-session AI learning. `wade init` can create the file and add it, plus its `.ratings.yml` sidecar, to `hooks.copy_to_worktree` so sessions can read and update the same relative path from worktrees. `wade knowledge add` appends learnings to that file, `wade knowledge get` prints its current contents, and `wade knowledge rate` records thumbs-up/thumbs-down feedback per entry in the sidecar file. The path must stay inside the project root.
+**Repo-quality gates** (`HooksConfig` → `PreCommitConfig` / `CommitMsgConfig` / `PostToolUseConfig`, #352): three opt-in, off-by-default subsections. `pre_commit.{lint,test}` and `commit_msg.conventional` install per-worktree `pre-commit` / `commit-msg` git hooks (baked from config at bootstrap via placeholder substitution — no per-commit config load). They are reconciled together with the `done.pre_push_backstop` `pre-push` hook by `reconcile_worktree_git_hooks`, which installs the desired set in one batch (so every prior user hook is captured **before** wade sets `core.hooksPath` — per-hook `.chain-<hook_name>` files; a #349 unsuffixed `.chain` is migrated to `.chain-pre-push` on upgrade) **and** is idempotent across re-bootstraps of a reused worktree: a gate turned off since a prior session is neutralized (a chain-only passthrough that still runs any captured prior, or a full uninstall + `core.hooksPath` unset when nothing is managed), so disabling a gate actually disables it. `post_tool_use` installs a PostToolUse hook into context-capable tools only (dialect ≠ `DECISION`, so Antigravity CLI is skipped and its prior entry removed); the command is **stable** (`wade-hook post_tool_use --tool <id> --root <root>`) and resolves `lint_cmd`/timeout/scope from `.wade.yml` at runtime, so re-bootstrap dedups, a disabled gate's entry is removed (and a leftover hook self-noops), and it fails open — lints the just-edited file (`lint_cmd` file-scoped; falls back to `pre_commit.lint` whole-repo) and injects findings back as `additionalContext`, never blocking. All three, like `done`, derive their `check_service` validator allowlists from `*.model_fields` so config-key validity can't drift (knowledge `ca245d6a`). **Honesty:** `git commit --no-verify` bypasses the git hooks — these are quality gates, not enforcement boundaries.
+
+**Project knowledge** (worktree-local lifecycle, #358): The optional `knowledge` section enables a project knowledge file (`KNOWLEDGE.md`) for cross-session AI learning, with an append-only ratings **vote log** (`KNOWLEDGE.ratings.jsonl`) beside it. Both are **tracked** files — a session edits the copy in the worktree it is standing in, and the change rides to `main` with its PR. They are **not** copied into worktrees (a copy would manufacture a stale snapshot); `_resolve_knowledge_root` keys off the HEAD-attachment state, redirecting only a throwaway detached-HEAD worktree (a `plan` / `task deps` session) back to the main checkout. Two mechanisms make concurrent branches merge cleanly: a wade-managed `merge=union` block in `.gitattributes` (`ensure_knowledge_merge_attributes`, ensured per attached bootstrap; committed so `main` carries it as the server-side backstop), and the append-only vote log (merging is concatenation → no vote lost). `wade knowledge add` appends an entry (blocked in a throwaway plan/deps session — no PR to carry it), `rate` appends an up/down/stale vote (allowed everywhere; a throwaway session's vote is carried into the next attached session's PR by a ratings-only reconcile at bootstrap), `get` prints the annotated file, and `status` reports uncommitted knowledge/ratings changes scoped to just those paths. A pre-#358 `KNOWLEDGE.ratings.yml` is folded to the same scores on read (in memory, no write) and converted on the first ratings write to a byte-deterministic seeded `.jsonl` (the `.yml` is `git rm`'d). A `.wade.yml` migration strips the knowledge/ratings entries from any existing `hooks.copy_to_worktree` (paths are canonicalized before comparison — folding `.`/`..` — so `./KNOWLEDGE.md`, `docs/../KNOWLEDGE.md` and `KNOWLEDGE.md` all match; bootstrap's copy-exclusion applies the same `collapse_relative_path` policy so a redundant-`..` spelling can't slip past one and re-copy main's file). The path must stay inside the project root. The pure path/parse/validation helpers (`resolve_knowledge_path`, `resolve_ratings_path`, `parse_entries`, `validate_knowledge_file`) live in the leaf module `utils/knowledge_file.py` so lower layers can use them without importing the service; `done` runs `validate_knowledge_file` as a completion gate (refuses on duplicate entry IDs or unresolved conflict markers when `knowledge.enabled`) so a `merge=union`-corrupted file can't reach `main`. (Attached-session knowledge edits are worktree-local, so an attached session never dirties `main`. The one exception is a detached `plan` / `task deps` session: its `rate` vote appends to main's tracked ratings JSONL and stays uncommitted there until the next attached bootstrap's ratings-only reconcile carries it forward and restores main. The stash/pop branch in `_pull_main_after_merge` therefore still matters — it covers that transient detached-ratings dirt as well as non-knowledge dirt.)
 
 ## Config Migration Pipeline
 

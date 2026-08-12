@@ -98,9 +98,10 @@ class TestKnowledgeCommands:
         result = _run(["knowledge", "rate", "a1b2c3d4", "up"], cwd=e2e_repo)
 
         assert result.returncode == 0
-        ratings_text = (e2e_repo / "docs" / "KNOWLEDGE.ratings.yml").read_text(encoding="utf-8")
-        assert "a1b2c3d4:" in ratings_text
-        assert "up: 1" in ratings_text
+        # Ratings are now an append-only JSONL vote log (#358), not a counter YAML.
+        ratings_text = (e2e_repo / "docs" / "KNOWLEDGE.ratings.jsonl").read_text(encoding="utf-8")
+        assert '"id": "a1b2c3d4"' in ratings_text
+        assert '"dir": "up"' in ratings_text
 
     def test_knowledge_rate_invalid_path_exits_cleanly(self, e2e_repo: Path) -> None:
         """knowledge rate should fail cleanly for configured paths outside the repo."""

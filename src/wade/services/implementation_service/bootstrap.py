@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import shutil
 import subprocess
+from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -20,6 +22,7 @@ from wade.models.config import (
     ProjectConfig,
     with_wade_base_pattern,
 )
+from wade.models.hooks import SessionPhase, StopGuard
 from wade.models.task import Task
 from wade.utils.markdown import has_marker_block, remove_marker_block
 
@@ -36,6 +39,9 @@ __all__ = [
     "_get_info_exclude_path",
     "_identify_session_dirty_files",
     "_install_guard_hooks",
+    "_install_managed_git_hooks",
+    "_install_post_tool_use_lint_hook",
+    "_install_session_start_hook",
     "_install_stop_hook",
     "_resolve_worktrees_dir",
     "_suppress_pointer_artifacts",
@@ -310,14 +316,23 @@ def _install_guard_hooks(
     logger.info(f"implementation.{guard_type}_guard_hooks_installed", path=str(worktree_path))
 
 
-def _install_stop_hook(worktree_path: Path) -> None:
-    """Install a Stop-hook workflow-completion reminder into each capable tool.
+def _install_stop_hook(
+    worktree_path: Path, *, guard: StopGuard = StopGuard.SESSION_COMPLETE
+) -> None:
+    """Install a Stop-hook completion reminder into each capable tool.
 
-    On session Stop, ``wade hook stop --guard session-complete`` nudges (once) if
-    ``PR-SUMMARY.md`` is missing — enforcing the closing steps rather than relying
-    on the skill checklist. Installed only for tools that fire a blocking Stop
-    hook (``supports_stop_hook``), which as of crossby 0.13 is every tool wade
-    drives: Copilot joined once its ``agentStop`` event and blocking
+    On session Stop, ``wade hook stop --guard {guard}`` nudges (once) when the
+    session's closing artifact is missing — enforcing the closing step rather than
+    relying on the skill checklist. Two guards share this installer:
+
+    - ``session-complete`` (impl/review sessions) nudges when the branch has
+      commits ahead of its base and no current ``.wade/done@<HEAD>`` marker.
+    - ``plan-complete`` (plan sessions) nudges when the plan dir holds no valid
+      ``PLAN*.md`` yet.
+
+    Installed only for tools that fire a blocking Stop hook
+    (``supports_stop_hook``), which as of crossby 0.13 is every tool wade drives:
+    Copilot joined once its ``agentStop`` event and blocking
     ``{"decision": "block", "reason": …}`` contract were confirmed. Merged
     alongside the PreToolUse write guard by crossby's hook writers.
 
@@ -335,33 +350,379 @@ def _install_stop_hook(worktree_path: Path) -> None:
     for tool_id, writer in _hook_writers():
         if not AbstractAITool.get(tool_id).capabilities().supports_stop_hook:
             continue
-        command = f"wade-hook stop --guard session-complete --tool {tool_id.value} --root {root}"
+        command = f"wade-hook stop --guard {guard.value} --tool {tool_id.value} --root {root}"
         hook = HookEntry(event="stop", tools=[], command=command)
         _log_sync_result(writer.sync(SyncData(hooks=[hook]), worktree_path), tool_id)
 
-    logger.info("implementation.stop_hook_installed", path=str(worktree_path))
+    logger.info("implementation.stop_hook_installed", path=str(worktree_path), guard=guard.value)
+
+
+def _session_start_command(tool_value: str, quoted_root: str, phase_value: str) -> str:
+    """Build the installed ``wade-hook session_start`` command for one tool + phase.
+
+    Single source of truth so the install path and the stale-phase revocation
+    (``hooks_remove``) in :func:`_install_session_start_hook` construct
+    byte-identical commands: crossby matches a removal by exact command string, so
+    any drift between the two would silently fail to reconcile a prior phase's hook.
+
+    ``--guard context`` is a descriptive label, not a dispatch key: the runtime
+    routes session_start by the *event* positional (``_is_session_start``), never by
+    ``--guard``. It documents intent and is asserted by the install tests.
+    """
+    return (
+        f"wade-hook session_start --guard context --tool {tool_value} "
+        f"--root {quoted_root} --phase {phase_value}"
+    )
+
+
+def _install_session_start_hook(worktree_path: Path, *, phase: SessionPhase) -> None:
+    """Install a SessionStart context-injection hook into each capable tool.
+
+    On every SessionStart source (startup / resume / compact / clear / fork),
+    ``wade-hook session_start`` re-injects a compact, phase-gated task reminder as
+    ``additionalContext`` — countering context decay over long sessions, the
+    largest single loss being *compaction*. Non-blocking, like the Stop hook (no
+    ``fail_closed``).
+
+    Installed only for tools that fire a SessionStart hook
+    (``supports_session_start_hook`` — Claude/Codex/Copilot/Cursor as of crossby
+    0.17; **agy is skipped**, its DECISION dialect having no verified context
+    channel, so it degrades to the always-loaded skill). This mirrors how
+    :func:`_install_stop_hook` gates on ``supports_stop_hook``.
+
+    ``tools=[]`` is **load-bearing**: ``_tools_to_matcher([])`` returns ``.*``, so
+    the Claude/Codex SessionStart matcher matches every ``source`` (the matcher is
+    tested against the source, not a tool name). Narrowing it would silently drop
+    resume/compaction re-injection. The per-tool payload *shape* (nested vs flat
+    ``additionalContext`` vs Cursor ``additional_context``) is resolved by
+    ``wade-hook`` / crossby, not here.
+
+    A worktree is only ever one session kind at a time, but an implementation
+    worktree is later **reused** for its review session (``review_service.start``
+    re-bootstraps with ``SessionPhase.REVIEW``). crossby's hook writers dedup by
+    exact command, so a prior ``--phase implement`` entry would survive alongside
+    the new ``--phase review`` one and **both** would fire, injecting contradictory
+    phase reminders. Every other-phase variant is therefore revoked via
+    ``hooks_remove`` so exactly one SessionStart hook remains after re-bootstrap.
+    """
+    import shlex
+
+    from crossby.ai_tools import AbstractAITool
+    from crossby.models.config import HookEntry
+    from crossby.sync.base import SyncData
+
+    root = shlex.quote(str(worktree_path))
+    for tool_id, writer in _hook_writers():
+        if not AbstractAITool.get(tool_id).capabilities().supports_session_start_hook:
+            continue
+        command = _session_start_command(tool_id.value, root, phase.value)
+        hook = HookEntry(event="session_start", tools=[], command=command)
+        # Revoke this tool's SessionStart command for every *other* phase, so a
+        # reused worktree (impl → review) ends up with exactly one entry rather
+        # than a stale phase firing alongside the current one. sync() adds before
+        # it removes, and no removal ever equals `command` (distinct --phase), so
+        # the entry just installed is never clobbered.
+        stale_removals = [
+            ("session_start", _session_start_command(tool_id.value, root, other.value))
+            for other in SessionPhase
+            if other != phase
+        ]
+        _log_sync_result(
+            writer.sync(SyncData(hooks=[hook], hooks_remove=stale_removals), worktree_path),
+            tool_id,
+        )
+
+    logger.info(
+        "implementation.session_start_hook_installed", path=str(worktree_path), phase=phase.value
+    )
+
+
+# Canonical write-family tool names the PostToolUse lint feedback fires on. Scoped
+# to file-write tools (not Bash: a shell call has no path to lint; not Delete: the
+# file is gone, so linting it only injects "file not found" noise). crossby's hook
+# writers translate these per tool.
+_LINT_FEEDBACK_TOOLS = ["Edit", "Write", "NotebookEdit"]
+
+
+def _install_managed_git_hooks(worktree_path: Path, config: ProjectConfig) -> None:
+    """Reconcile the pre-push backstop + opt-in pre-commit/commit-msg gates.
+
+    Gathers the hooks whose config gates are on and hands the full desired set to
+    :func:`reconcile_worktree_git_hooks`, which installs them in one batch
+    (guaranteeing every prior user hook is captured before wade sets
+    ``core.hooksPath``) **and** neutralizes any gate turned off since a prior
+    bootstrap — so re-running ``wade implement`` on a reused worktree honors a
+    disabled gate instead of leaving a stale one firing. All hooks are optional
+    and the installer graceful-degrades on old git, so a failure is swallowed to a
+    warning and never crashes bootstrap.
+    """
+    from wade.skills.installer import (
+        build_commit_msg_hook_script,
+        build_pre_commit_hook_script,
+        load_hook_template,
+        reconcile_worktree_git_hooks,
+    )
+
+    hooks: dict[str, str] = {}
+
+    if config.done.pre_push_backstop:
+        try:
+            hooks["pre-push"] = load_hook_template("pre-push")
+        except FileNotFoundError:
+            logger.warning("implementation.pre_push_template_missing")
+
+    # build_*_hook_script both call load_hook_template, which raises
+    # FileNotFoundError on a missing template — guard each the same way as the
+    # pre-push branch so a packaging gap degrades to a warning instead of
+    # crashing bootstrap for a project that opted into either gate.
+    pre_commit = config.hooks.pre_commit
+    if pre_commit.lint or pre_commit.test:
+        try:
+            hooks["pre-commit"] = build_pre_commit_hook_script(pre_commit.lint, pre_commit.test)
+        except FileNotFoundError:
+            logger.warning("implementation.pre_commit_template_missing")
+
+    if config.hooks.commit_msg.conventional:
+        try:
+            hooks["commit-msg"] = build_commit_msg_hook_script()
+        except FileNotFoundError:
+            logger.warning("implementation.commit_msg_template_missing")
+
+    try:
+        reconcile_worktree_git_hooks(worktree_path, hooks)
+    except Exception:
+        logger.warning(
+            "implementation.git_hooks_error",
+            path=str(worktree_path),
+            hooks=sorted(hooks),
+            exc_info=True,
+        )
+
+
+def _install_post_tool_use_lint_hook(worktree_path: Path, config: ProjectConfig) -> None:
+    """Reconcile PostToolUse in-turn lint feedback across each tool.
+
+    Opt-in via ``hooks.post_tool_use.enabled`` with a resolvable lint command
+    (``post_tool_use.lint_cmd`` file-scoped, or ``pre_commit.lint`` whole-repo).
+    The installed hook command is **stable** — ``wade-hook post_tool_use --tool
+    <id> --root <root>``, with the lint command/timeout/scope resolved from
+    ``.wade.yml`` at runtime — so re-bootstrapping a reused worktree is idempotent
+    (identical command → crossby dedups; no duplicate entry on reconfigure) and a
+    hook left over from a now-disabled gate self-noops.
+
+    Only **context-capable** tools (output dialect ≠ ``DECISION``) get the hook —
+    Antigravity CLI has no verified context channel, so it is skipped. When the
+    gate is off (or the tool can't inject context) any prior wade entry is
+    **removed**; the stable command makes that removal deterministic regardless of
+    the previously-configured lint command. Never fail-closed: this must not block.
+    """
+    import shlex
+
+    from crossby.ai_tools import AbstractAITool
+    from crossby.models.ai import HookOutputDialect
+    from crossby.models.config import HookEntry
+    from crossby.sync.base import SyncData
+
+    ptu = config.hooks.post_tool_use
+    enabled = ptu.enabled and bool(ptu.lint_cmd or config.hooks.pre_commit.lint)
+    root = shlex.quote(str(worktree_path))
+
+    for tool_id, writer in _hook_writers():
+        command = f"wade-hook post_tool_use --tool {tool_id.value} --root {root}"
+        # Never fail-closed: a malformed tool settings file or an OSError on write
+        # must not abort bootstrap for this optional, off-by-default gate. Guard
+        # per tool so one tool's failure doesn't skip the rest, mirroring the
+        # warn-and-continue treatment in _install_managed_git_hooks.
+        try:
+            context_capable = (
+                AbstractAITool.get(tool_id).capabilities().hook_output_dialect
+                is not HookOutputDialect.DECISION
+            )
+            if enabled and context_capable:
+                # No fail_closed: PostToolUse must never block. The timeout bounds
+                # the per-edit cost at the tool's hook-runner level too. Note this
+                # OUTER (tool-runner) bound is baked at bootstrap, unlike wade-hook's
+                # INNER subprocess timeout, which re-resolves from .wade.yml every
+                # run — so raising post_tool_use.timeout without re-bootstrapping
+                # leaves the old outer bound in place until the next bootstrap.
+                # Fails open either way, so this is a latent staleness, not a bug.
+                data = SyncData(
+                    hooks=[
+                        HookEntry(
+                            event="post_tool_use",
+                            tools=_LINT_FEEDBACK_TOOLS,
+                            command=command,
+                            timeout=ptu.timeout,
+                        )
+                    ]
+                )
+            else:
+                # Gate off, or the tool can't inject context — retract any prior
+                # wade entry. Removing a non-existent entry is a no-op (no config
+                # file is created), so this is safe to run every bootstrap.
+                data = SyncData(hooks_remove=[("post_tool_use", command)])
+            _log_sync_result(writer.sync(data, worktree_path), tool_id)
+        except Exception:
+            logger.warning(
+                "implementation.post_tool_use_hook_error",
+                tool=tool_id.value,
+                path=str(worktree_path),
+                exc_info=True,
+            )
+
+    if enabled:
+        logger.info("implementation.post_tool_use_lint_installed", path=str(worktree_path))
 
 
 def _effective_copy_files(config: ProjectConfig) -> list[str]:
     """Compute the full list of files to copy into a new worktree.
 
-    Merges user-configured copy_to_worktree with internal wade files
-    that must always be present (.wade.yml, knowledge path + ratings when enabled).
+    Merges user-configured ``copy_to_worktree`` with internal wade files that must
+    always be present (``.wade.yml``).
+
+    The knowledge file and its ratings sidecar are **never** copied (#358): they are
+    tracked, so the worktree checkout already has the committed version — copying
+    main's (possibly dirty) copy over it is exactly what manufactured the stale
+    snapshot this issue removes. Any lingering knowledge/ratings entries in a
+    project's ``copy_to_worktree`` (pre-#358 config, before the migration strips
+    them) are filtered out here so the copy can never resurrect the bug.
     """
-    from wade.services.knowledge_service import resolve_ratings_path
+    from wade.utils.knowledge_file import knowledge_copy_exclusions
+    from wade.utils.paths import collapse_relative_path
+
+    # Canonicalized (``.``/``..``-folded) set of knowledge/ratings paths that must never
+    # be copied — the same single derivation the ``strip_knowledge_from_copy_to_worktree``
+    # migration uses, so a redundant-``..`` spelling can't bypass one site and re-copy
+    # main's knowledge file.
+    excluded: set[str] = set()
+    if config.knowledge.enabled:
+        excluded = knowledge_copy_exclusions(config.knowledge.path)
 
     internal: list[str] = [".wade.yml"]
-    if config.knowledge.enabled:
-        kpath = config.knowledge.path
-        if not kpath.startswith("/") and ".." not in kpath.split("/"):
-            internal.append(kpath)
-            internal.append(str(resolve_ratings_path(Path(kpath))))
-
-    files: list[str] = list(config.hooks.copy_to_worktree)
+    files: list[str] = [
+        f for f in config.hooks.copy_to_worktree if collapse_relative_path(f) not in excluded
+    ]
     for f in internal:
         if f not in files:
             files.append(f)
     return files
+
+
+def _multiset_difference(lines: list[str], subtract: list[str]) -> list[str]:
+    """Return ``lines`` minus ``subtract`` as MULTISETS — order- and count-preserving.
+
+    Each element of ``subtract`` cancels at most one equal element of ``lines``: a line
+    appearing twice in ``lines`` and once in ``subtract`` yields one occurrence, not
+    zero. The append-only ratings log can legitimately repeat a serialized line, so a
+    plain set difference would silently drop a genuinely-new duplicate vote whose twin
+    is already committed.
+    """
+    remaining = Counter(subtract)
+    result: list[str] = []
+    for line in lines:
+        if remaining.get(line, 0) > 0:
+            remaining[line] -= 1
+        else:
+            result.append(line)
+    return result
+
+
+def _carry_forward_pending_votes(
+    worktree_path: Path, repo_root: Path, config: ProjectConfig
+) -> None:
+    """Flush main's uncommitted ratings votes into the new worktree, then clean main.
+
+    A throwaway (plan / ``task deps``) ``wade knowledge rate`` appends its vote line
+    to **main's** working-copy ratings log — that is where a detached session's
+    knowledge writes are redirected. Those lines are uncommitted, so they never reach
+    origin on their own. At the next attached worktree's bootstrap we move them into
+    the new worktree's log (so they ride into that branch's PR to origin) and restore
+    main's ratings file to its committed state, returning main to clean.
+
+    Votes are additive, so this is "late but lossless" — the vote lands in origin one
+    attached session later. Serialized by ``file_lock`` on main's ratings file so two
+    concurrent bootstraps can't double-carry: the first carries + clears, the rest see
+    a clean main.
+    """
+    from wade.utils.filelock import file_lock
+    from wade.utils.knowledge_file import resolve_knowledge_path, resolve_ratings_path
+
+    try:
+        main_ratings = resolve_ratings_path(resolve_knowledge_path(repo_root, config.knowledge))
+    except ValueError:
+        return
+    if not main_ratings.is_file():
+        return
+    try:
+        relpath = main_ratings.relative_to(repo_root).as_posix()
+    except ValueError:
+        return
+    # Only reconcile a TRACKED ratings file: the carry-forward reverts main's
+    # uncommitted vote lines via ``git checkout``, which only works for a tracked
+    # file. An untracked ratings file is not the throwaway-vote scenario — skip it
+    # rather than risk moving/deleting a file wade doesn't manage.
+    if not git_repo.is_file_tracked(repo_root, relpath):
+        return
+
+    with file_lock(main_ratings):
+        if not main_ratings.is_file():
+            return
+        # Snapshot main's exact bytes so the whole carry is recoverable: if any step of
+        # the worktree transfer fails AFTER we reset main below, we restore these bytes
+        # so the pending votes survive for a later bootstrap to retry — never lost.
+        original_main_bytes = main_ratings.read_bytes()
+        working_lines = [
+            ln for ln in main_ratings.read_text(encoding="utf-8").splitlines() if ln.strip()
+        ]
+        committed_text = git_repo.show_file_at_head(repo_root, relpath)
+        committed = committed_text.splitlines() if committed_text is not None else []
+        # Multiset (not set) difference: the append-only log may legitimately repeat a
+        # serialized line, so subtracting the committed lines as a set would drop a
+        # genuinely-new duplicate vote whose identical twin already lives in HEAD.
+        pending = _multiset_difference(working_lines, committed)
+        if not pending:
+            return
+
+        # Restore main's tracked ratings to committed state FIRST, and only carry the
+        # votes into the worktree if that succeeded. Ordering matters: if we wrote to
+        # the worktree first and the restore then failed, the same lines would remain
+        # in main and be re-detected as "pending" at the next bootstrap — carried into
+        # a SECOND worktree and double-counted. A failed restore instead leaves the
+        # votes untouched in main for a later bootstrap to retry (no loss, no double).
+        if not git_repo.checkout_paths(repo_root, relpath):
+            logger.warning("implementation.ratings_carry_restore_failed", path=relpath)
+            return
+
+        # main is now reset to HEAD (pending removed). Any failure persisting the
+        # worktree copy from here must roll main back to its snapshot so the votes are
+        # not lost from BOTH locations. The transfer is only "successful" once the
+        # worktree write completes.
+        try:
+            worktree_ratings = resolve_ratings_path(
+                resolve_knowledge_path(worktree_path, config.knowledge)
+            )
+            worktree_ratings.parent.mkdir(parents=True, exist_ok=True)
+            content = (
+                worktree_ratings.read_text(encoding="utf-8") if worktree_ratings.is_file() else ""
+            )
+            # Append EVERY pending vote — do NOT dedupe against the worktree's committed
+            # records. ``pending`` is already exactly main's uncommitted votes (working
+            # minus main's HEAD), and a rating event can serialize IDENTICALLY to a line
+            # the worktree already committed while still being a genuinely-distinct event.
+            # Subtracting the worktree's copy here would drop that vote, yet the main
+            # restore above already removed it — losing it from both places. Transferring
+            # the same physical line twice is impossible regardless: main is reset to HEAD
+            # (pending removed) BEFORE this append, and a failed append rolls main back, so
+            # each pending line rides across at most once.
+            prefix = "" if (content == "" or content.endswith("\n")) else "\n"
+            with worktree_ratings.open("a", encoding="utf-8") as fd:
+                fd.write(prefix + "".join(f"{ln}\n" for ln in pending))
+        except OSError:
+            with contextlib.suppress(OSError):
+                main_ratings.write_bytes(original_main_bytes)
+            logger.warning("implementation.ratings_carry_transfer_failed", path=relpath)
+            return
+        logger.debug("implementation.ratings_votes_carried_forward", count=len(pending))
 
 
 def _get_info_exclude_path(worktree_path: Path) -> Path | None:
@@ -537,6 +898,7 @@ def bootstrap_worktree(
     skills: list[str] | None = None,
     plan_mode: bool = False,
     selected_ai_tool: str | None = None,
+    session_phase: SessionPhase | None = None,
 ) -> None:
     """Run post-creation bootstrap: copy files, install skills, run hooks.
 
@@ -549,6 +911,13 @@ def bootstrap_worktree(
         selected_ai_tool: Effective AI tool for this session (e.g. ``"cursor"``).
             When provided, takes precedence over persisted config when deciding
             whether to configure tool-specific worktree settings.
+        session_phase: The wade session kind (implement / review / plan). When set,
+            a SessionStart context-injection hook is installed for that phase; when
+            ``None`` (e.g. ``task deps`` sessions) no such hook is installed. This
+            is an **independent** signal from ``plan_mode`` (which selects the
+            write/stop guard) — the two are correlated (``plan_mode is True`` iff
+            ``session_phase is SessionPhase.PLAN``), an invariant pinned by a test
+            rather than derived in code.
     """
     # Copy configured files + internal wade files that must always be present
     copy_files = _effective_copy_files(config)
@@ -559,6 +928,18 @@ def bootstrap_worktree(
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dest)
             logger.debug("implementation.bootstrap_copy", file=filename)
+
+    # Knowledge lifecycle (#358): worktree-local, merged through the PR. Only for
+    # attached (branch-backed) worktrees — a throwaway detached-HEAD plan/deps
+    # worktree is discarded at session end, so its wade-managed .gitattributes union
+    # block and any carried-forward ratings votes would be lost with it. The
+    # attached/detached split is the same deterministic signal the knowledge layer
+    # uses to decide where reads/writes land (_resolve_knowledge_root).
+    if config.knowledge.enabled and git_repo.is_head_attached(worktree_path):
+        from wade.skills.installer import ensure_knowledge_merge_attributes
+
+        ensure_knowledge_merge_attributes(worktree_path, config)
+        _carry_forward_pending_votes(worktree_path, repo_root, config)
 
     # Install skill files — not tracked by git so worktrees don't inherit them
     from wade.skills.installer import get_wade_repo_root, install_skills
@@ -659,10 +1040,29 @@ def bootstrap_worktree(
     # overwrite the guarded config files.
     _install_guard_hooks(worktree_path, guard_type="plan" if plan_mode else "worktree")
 
-    # Implement/review sessions (not plan) also get a Stop-hook completion
-    # reminder that enforces writing PR-SUMMARY.md + running `done` before exit.
-    if not plan_mode:
+    # Every session gets a Stop-hook completion reminder, but the guard differs:
+    # plan sessions nudge to write a valid plan; impl/review sessions nudge to run
+    # `done` (and also get the pre-push backstop that hard-enforces it).
+    if plan_mode:
+        _install_stop_hook(worktree_path, guard=StopGuard.PLAN_COMPLETE)
+    else:
         _install_stop_hook(worktree_path)
+
+        # Managed git hooks: the pre-push backstop (makes `done` hard to skip) plus
+        # the opt-in pre-commit / commit-msg quality gates. Installed together in
+        # one batch so every prior user hook is captured before wade sets
+        # core.hooksPath. All optional + graceful-degrading — never crash bootstrap.
+        _install_managed_git_hooks(worktree_path, config)
+
+        # PostToolUse in-turn lint feedback (opt-in) for context-capable tools.
+        _install_post_tool_use_lint_hook(worktree_path, config)
+
+    # SessionStart context injection: re-inject a compact, phase-gated task
+    # reminder on startup/resume/compaction (all sessions with a known phase;
+    # `task deps` passes None and opts out). Independent of plan_mode — a plan
+    # worktree installs both the plan write/stop guards AND this hook.
+    if session_phase is not None:
+        _install_session_start_hook(worktree_path, phase=session_phase)
 
     # Write worktree gitignore block AFTER all file generation so the entry
     # list is complete (skills, hooks, settings, pointer are all in place).

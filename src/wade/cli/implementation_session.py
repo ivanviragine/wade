@@ -111,8 +111,11 @@ def done(
     plan: str | None = typer.Option(None, "--plan", help="Plan file to resolve worktree from."),
     no_close: bool = typer.Option(False, "--no-close", help="Don't close the issue on merge."),
     draft: bool = typer.Option(False, "--draft", help="Create PR as draft."),
+    skip_review: bool = typer.Option(
+        False, "--skip-review", help="Skip the review-ran completion gate."
+    ),
 ) -> None:
-    """Finalize implementation — push branch and create/update the PR."""
+    """Finalize implementation — run the completion gates, push, and update the PR."""
     from wade.services.implementation_service import done as do_done
 
     success = do_done(
@@ -120,30 +123,21 @@ def done(
         plan_file=Path(plan) if plan else None,
         no_close=no_close,
         draft=draft,
+        session_type="implementation",
+        skip_review=skip_review,
     )
     if success:
         from wade.cli.session_shared import DOC_PASS_ADVISORY
         from wade.ui.console import console
 
-        # Remind agent to review if reviews are enabled. Advisory only —
-        # must never turn a successful completion into a failure.
-        try:
-            from wade.config.loader import load_config
-
-            config = load_config()
-            if config.ai.review_implementation.enabled is not False:
-                console.warn(
-                    "Review not confirmed — run `wade review implementation` now "
-                    "if you haven't already, then present results to the user."
-                )
-        except Exception:  # Advisory — must never break a successful completion
-            pass
-
+        # The review-ran gate now enforces that `wade review implementation` ran
+        # for this sha before `done` succeeds, so the old post-done "review not
+        # confirmed" advisory is redundant (and would contradict the gate).
         console.warn(DOC_PASS_ADVISORY)
 
         console.info(
-            "SESSION COMPLETE — do not make further changes. "
-            "Present the workflow recap, current state, and next steps to the user. "
-            "Suggest they exit the session."
+            "SESSION COMPLETE. "
+            "Report by exception: give the PR/URL and what's next, and only call out "
+            "anything that needs the developer's attention. Suggest they exit the session."
         )
     raise typer.Exit(0 if success else 1)

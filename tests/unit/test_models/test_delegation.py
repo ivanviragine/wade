@@ -27,7 +27,8 @@ class TestDelegationRequest:
         assert req.prompt == "Review this"
         assert req.ai_tool is None
         assert req.model is None
-        assert req.timeout == 300
+        assert req.timeout == 600  # default headless budget (s)
+        assert req.explicit_timeout is False
         assert req.trusted_dirs == []
         assert req.allowed_commands == []
         assert req.permission_mode is PermissionMode.DEFAULT
@@ -89,3 +90,24 @@ class TestDelegationResult:
         )
         assert result.success is True
         assert result.skipped is True
+
+    def test_timed_out_defaults_false(self) -> None:
+        result = DelegationResult(
+            success=True,
+            feedback="ok",
+            mode=DelegationMode.HEADLESS,
+        )
+        assert result.timed_out is False
+
+    def test_timed_out_result_stays_non_success(self) -> None:
+        """A timeout carries partial output but is still a non-success (#366)."""
+        result = DelegationResult(
+            success=False,
+            feedback="partial output",
+            mode=DelegationMode.HEADLESS,
+            exit_code=1,
+            timed_out=True,
+        )
+        assert result.success is False
+        assert result.timed_out is True
+        assert result.feedback == "partial output"

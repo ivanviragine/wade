@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 from crossby.models.ai import TokenUsage
 
 from wade.git.repo import GitError
-from wade.models.config import ProjectConfig, ProjectSettings
+from wade.models.config import DoneConfig, ProjectConfig, ProjectSettings
 from wade.models.session import WorktreeState
 from wade.models.task import Task, TaskState
 from wade.services.implementation_service import (
@@ -1294,7 +1294,7 @@ class TestDone:
         subprocess.run(["git", "commit", "-m", "test"], cwd=wt_dir, check=True)
 
         mock_provider = MagicMock()
-        mock_task = Task(id="2", title="Child", body="", state=TaskState.OPEN)
+        mock_task = Task(id="2", title="feat: child", body="", state=TaskState.OPEN)
         mock_provider.read_task.return_value = mock_task
         mock_provider.find_parent_issue.return_value = None
 
@@ -1303,6 +1303,13 @@ class TestDone:
                 "wade.services.implementation_service.done.load_config",
                 return_value=ProjectConfig(
                     project=ProjectSettings(main_branch="main"),
+                    # Disable the completion gates — this test asserts base-branch
+                    # resolution, not gate behavior (gates are tested separately).
+                    done=DoneConfig(
+                        require_pr_summary=False,
+                        require_sync=False,
+                        require_review=False,
+                    ),
                 ),
             ),
             patch(

@@ -19,13 +19,8 @@ start.
 
 ## Talking to the user
 
-Inform the user before running `wade`/`gh` commands, reviews, or lifecycle
-operations — say what you're doing and why; never run them silently. Announce
-each step as you start it, and after each command report the outcome and the
-next step you'll take.
-
 {user_interaction_prompt}
-- After presenting the recap and state: "Want any further changes, or is the session complete?"
+- After presenting results and state: "Want any further changes, or is the session complete?"
 - If a review comment is ambiguous: "How should I handle this comment?"
 
 ## Never use `gh issue create`
@@ -33,12 +28,7 @@ next step you'll take.
 **NEVER** use `gh issue create` or the GitHub API to create issues directly.
 Always use `wade task create` for interactive issue creation.
 
-## Project Knowledge
-
-Before addressing comments, search for knowledge about the files and topics being
-reviewed (do not dump all entries) — past gotchas about the files you're editing
-matter most here. Rating is required for each entry you open and evaluate. See
-@.claude/skills/knowledge/SKILL.md for search syntax and the rating decision tree.
+{knowledge_step}
 
 ## First action: check your context
 
@@ -152,12 +142,28 @@ wade review-pr-comments-session done
 `done` pushes changes to the existing PR branch. This is a **mandatory** step; if
 it fails, debug and fix it — do NOT bypass.
 
-**Step 5 — Present results:** give a brief **workflow recap** (only the steps you
-performed) and **current state** (PR number/URL, threads resolved and remaining),
-then note what's next (wade keeps monitoring the PR; reviewers are notified of
-your changes). Then ask (native question component): "Want any further changes,
-or is the session complete?" — apply and repeat Steps 1–5 if so, else suggest the
-user exits.
+`done` is a completion gate here too. It refuses when:
+
+- **unresolved review threads remain** → resolve each one (see *Resolving
+  threads* above), then re-run `done`. A transient `gh` lookup failure does not
+  block. Hatch: `done.require_resolved_threads: false` in `.wade.yml`.
+- `wade review implementation` has not run for the current commit → run it, or
+  pass `--skip-review`. Hatch: `done.require_review: false`.
+
+`done` also records the review outcome as a `## Review Status` line in the PR body
+(reviewed at `<sha>` / skipped via `--skip-review` / gate disabled), with the
+review-pass count — so a skipped or never-run review is visible to reviewers, not
+silent.
+
+A **pre-push git hook** refuses a push of the session branch without a current
+`.wade/done@<sha>` marker (`done` writes it). `git push --no-verify` bypasses it
+in one flag — it is a quality layer, not a boundary; do not route around it.
+
+**Step 5 — Present results** (per the **Communication style** rule): the
+actionable handles — PR number/URL, threads resolved and remaining — plus what's
+next (wade keeps monitoring the PR; reviewers are notified of your changes). Then
+ask (native question component): "Want any further changes, or is the session
+complete?" — apply and repeat Steps 1–5 if so, else suggest the user exits.
 
 ## Skills reference
 

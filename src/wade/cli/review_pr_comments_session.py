@@ -62,8 +62,11 @@ def done(
     plan: str | None = typer.Option(None, "--plan", help="Plan file to resolve worktree from."),
     no_close: bool = typer.Option(False, "--no-close", help="Don't close the issue on merge."),
     draft: bool = typer.Option(False, "--draft", help="Create PR as draft."),
+    skip_review: bool = typer.Option(
+        False, "--skip-review", help="Skip the review-ran completion gate."
+    ),
 ) -> None:
-    """Finalize review — push branch and update PR."""
+    """Finalize review — run the completion gates, push, and update the PR."""
     from wade.services.implementation_service import done as do_done
 
     success = do_done(
@@ -71,6 +74,8 @@ def done(
         plan_file=Path(plan) if plan else None,
         no_close=no_close,
         draft=draft,
+        session_type="review-pr-comments",
+        skip_review=skip_review,
     )
     if success:
         from wade.cli.session_shared import DOC_PASS_ADVISORY
@@ -82,7 +87,9 @@ def done(
 
         status = get_review_status()
         if status is not None:
-            messages = format_review_status_summary(status)
+            # include_all_clear only matters when status.is_all_clear is True — the
+            # done()-specific guidance below covers that case, so always suppress it here.
+            messages = format_review_status_summary(status, include_all_clear=False)
             for level, message in messages:
                 if level == "success":
                     console.success(message)
@@ -90,17 +97,18 @@ def done(
                     console.warn(message)
                 elif level == "info":
                     console.info(message)
-            if not messages:
+            if status.is_all_clear:
                 console.info(
-                    "SESSION COMPLETE — push succeeded. "
-                    "Present the workflow recap, current state, and next steps to the user. "
-                    "Suggest they exit the session."
+                    "Report by exception: give the PR/URL and what's next, and only call out "
+                    "anything that needs the developer's attention. Suggest they exit the session."
                 )
         else:
             console.warn(
                 "SESSION COMPLETE — push succeeded, but review status could not be verified. "
-                "Present the workflow recap, current state, and next steps to the user. "
-                "Suggest they exit the session."
+                "Report by exception: give the PR/URL and what's next. Recommend checking the "
+                "review status directly on the PR page — easy fix — then ask via the native "
+                'question component with options "Check now (recommended)" first and "Exit" '
+                "second."
             )
     raise typer.Exit(0 if success else 1)
 

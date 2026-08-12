@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from _pytest.capture import CaptureFixture
 from typer.testing import CliRunner
 
 from wade.services import implementation_service
@@ -106,6 +107,10 @@ def test_done_with_plan_flag_resolves_and_delegates() -> None:
         ),
         patch("wade.services.implementation_service.done.git_repo.is_clean", return_value=True),
         patch(
+            "wade.services.implementation_service.done.git_repo.rev_parse", return_value="deadbeef"
+        ),
+        patch("wade.services.implementation_service.done._run_completion_gates", return_value=True),
+        patch(
             "wade.services.implementation_service.done._done_via_pr", return_value=True
         ) as mock_done,
     ):
@@ -138,6 +143,35 @@ def test_done_plan_flag_error_returns_false() -> None:
     assert result is False
 
 
+def test_done_target_plan_file_bad_title_fails_clean(
+    tmp_path: Path, capsys: CaptureFixture[str]
+) -> None:
+    """`done <plan_file>` with a non-conventional `# Title` must fail with a clean,
+    actionable message (return False) — not a raw ConventionalTitleError traceback."""
+    from wade.models.config import ProjectConfig
+
+    plan = tmp_path / "PLAN.md"
+    plan.write_text("# E3: Session-start & resume context injection\n\nBody\n", encoding="utf-8")
+
+    with (
+        patch(
+            "wade.services.implementation_service.done.load_config", return_value=ProjectConfig()
+        ),
+        patch("wade.services.implementation_service.done.get_provider", return_value=MagicMock()),
+        patch(
+            "wade.services.implementation_service.done.git_repo.get_repo_root",
+            return_value=tmp_path,
+        ),
+    ):
+        result = implementation_service.done(target=str(plan))
+
+    assert result is False
+    out = capsys.readouterr()
+    combined = out.out + out.err
+    assert "conventional commit prefix" in combined
+    assert "# Title" in combined
+
+
 def test_cli_plan_flag_passes_to_service() -> None:
     from wade.cli.implementation_session import implementation_session_app
 
@@ -150,6 +184,8 @@ def test_cli_plan_flag_passes_to_service() -> None:
         plan_file=Path("/tmp/PLAN.md"),
         no_close=False,
         draft=False,
+        session_type="implementation",
+        skip_review=False,
     )
 
 

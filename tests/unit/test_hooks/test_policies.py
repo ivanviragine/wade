@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shlex
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -9,6 +11,7 @@ from crossby.hooks.runtime import HookEvent
 
 from wade.hooks.policies import (
     plan_artifact_only,
+    plan_complete,
     session_complete,
     shell_containment,
     worktree_containment,
@@ -79,26 +82,32 @@ class TestShellContainment:
     @pytest.mark.parametrize(
         "command",
         [
-            "printf 'x' > /tmp/out.txt",  # spaced redirect
-            "printf 'x' >/tmp/out.txt",  # glued redirect
+            "printf 'x' > /etc/out.txt",  # spaced redirect
+            "printf 'x' >/etc/out.txt",  # glued redirect
             "printf x >>../main/file",  # relative traversal, glued append
-            'printf x > "/tmp/quoted"',  # quoting does not hide the target
-            "printf x > /tmp/esc\\ aped",  # escaped space
+            'printf x > "/etc/quoted"',  # quoting does not hide the target
+            "printf x > /etc/esc\\ aped",  # escaped space
             "cd /etc && rm x",  # cd outside rebases later writes
             "cd ..",  # bare .. carries no slash
             "cd ../../elsewhere",
-            "cp a /tmp/b",
+            "cp a /etc/b",
             "git checkout -- ../main-repo/x",
             "echo a | tee /etc/p",
             "sed -i '' s/a/b/ ../main/file",  # in-place edit outside (impl mode)
-            "true; cp a /tmp/b",  # ;-chained segment
-            "true && cp a /tmp/b",  # &&-chained segment
-            "mkdir /tmp/outside-dir",  # mkdir creates outside
-            "git clone https://example.com/r.git /tmp/outside",  # positional write
-            "git init /tmp/outside",
-            "git worktree add /tmp/outside main",  # literal worktree escape
-            "git -C /tmp/outside clean -fd",  # spaced -C + git write subcommand
-            "git -C /tmp/outside checkout -- file",
+            "true; cp a /etc/b",  # ;-chained segment
+            "true && cp a /etc/b",  # &&-chained segment
+            "mkdir /etc/outside-dir",  # mkdir creates outside
+            "git clone https://example.com/r.git /etc/outside",  # positional write
+            "git init /etc/outside",
+            "git worktree add /etc/outside main",  # literal worktree escape
+            "git -C /etc/outside clean -fd",  # spaced -C + git write subcommand
+            "git -C /etc/outside checkout -- file",
+            "git -C.. clean -fd",  # glued -C, relative, no "/" in the token
+            "git --work-tree=/etc/outside clean -fd",  # equivalent to -C for writes
+            "git --work-tree=/etc/outside checkout -- file",
+            "git --git-dir=/etc/outside clean -fd",
+            "git --work-tree /etc/outside clean -fd",  # spaced form (no "="), same as -C
+            "git --git-dir /etc/outside clean -fd",
         ],
     )
     def test_outside_worktree_denied(self, command: str) -> None:
@@ -113,6 +122,10 @@ class TestShellContainment:
             "ls ../crossby",
             "head ../sib/f",
             "git -C ../crossby log",  # read subcommand through an outside -C dir
+            "git --work-tree=../crossby log",  # same, via --work-tree=
+            "git --git-dir=../crossby log",  # same, via --git-dir=
+            "git --work-tree ../crossby log",  # same, spaced form (no "=")
+            "git --git-dir ../crossby log",
             "diff ../a ../b",
             "cat ~/secrets",  # ~ expands outside, but a read is fine
             "cat < /etc/passwd",  # input redirect only reads its target
@@ -144,11 +157,279 @@ class TestShellContainment:
         """``>/dev/null 2>&1`` is the commonest shell idiom there is, not an escape."""
         assert shell_containment(_shell(command), worktree_root=WT).action == "allow"
 
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "command -v gh >/dev/null 2>&1",
+            "git rev-parse --show-toplevel 2>/dev/null",
+            "./scripts/test.sh > /dev/null",
+            "make build &>/dev/null",
+        ],
+    )
+    def test_device_redirects_allowed_in_plan_mode(self, command: str) -> None:
+        """Devices are discard sinks, not plan artifacts, but plan mode allows them too.
+
+        Mirrors ``test_device_redirects_allowed`` (worktree/impl mode) — the same
+        idioms must not trip the plan-mode artifact gate.
+        """
+        d = shell_containment(_shell(command), worktree_root=WT, plan_mode=True)
+        assert d.action == "allow"
+
+    @pytest.mark.parametrize("command", ["tee /dev/null", "dd of=/dev/null"])
+    def test_device_write_commands_allowed_in_plan_mode(self, command: str) -> None:
+        """A write command's operand targeting a device is not a plan artifact,
+        but is still allowed — it persists nothing."""
+        d = shell_containment(_shell(command), worktree_root=WT, plan_mode=True)
+        assert d.action == "allow"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "printf x >/dev/shm/out",  # /dev/shm is a writable tmpfs, not a discard sink
+            "tee /dev/shm/out",
+            "printf x >/dev/mqueue/out",
+            "dd of=/dev/hugepages/out if=README.md",
+        ],
+    )
+    def test_writable_dev_filesystems_denied(self, command: str) -> None:
+        """Linux mounts writable filesystems under ``/dev/`` (``/dev/shm`` tmpfs,
+        ``/dev/mqueue``, ``/dev/hugepages``). A write there persists a real file
+        outside the worktree, so the device allowlist is exact (``/dev/null`` …),
+        not a ``/dev/`` prefix — these must be denied in every mode."""
+        assert shell_containment(_shell(command), worktree_root=WT).action == "deny"
+        plan = shell_containment(_shell(command), worktree_root=WT, plan_mode=True)
+        assert plan.action == "deny"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "printf x >/dev/zero",  # non-``/dev/null`` discard sinks in the allowlist
+            "printf x >/dev/full",
+            "dd of=/dev/zero",
+            "tee /dev/tty",
+        ],
+    )
+    def test_other_discard_devices_allowed_in_plan_mode(self, command: str) -> None:
+        """The allowlist is not just ``/dev/null`` — the other enumerated discard/
+        console sinks persist nothing either, so they stay allowed in plan mode.
+
+        Only self-resolving device *nodes* are listed; the std-stream symlinks
+        (``/dev/stdout`` …) resolve to ``/dev/fd/N`` and are intentionally not here."""
+        d = shell_containment(_shell(command), worktree_root=WT, plan_mode=True)
+        assert d.action == "allow"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "printf 'x' > /tmp/out.txt",  # spaced redirect to temp
+            "printf 'x' >/tmp/scratch.log",  # glued redirect
+            "cp README.md /tmp/backup",  # write command operand into temp
+            "mkdir /tmp/wade-scratch",
+            "sort --output=/tmp/pwn file",  # glued write flag to temp
+        ],
+    )
+    def test_temp_dir_writes_allowed(self, command: str) -> None:
+        """System temp dirs (``/tmp``, ``$TMPDIR``) are shared scratch space — writes to a
+        file *under* them are allowed even though they resolve outside the worktree.
+
+        The dir prefix carries a trailing separator so ``/tmp/`` can't match a sibling
+        like ``/tmpfoo`` (``test_tmpfoo_sibling_denied``) — see also
+        ``test_cd_into_temp_dir_itself_allowed`` (bare dir is a valid ``cd`` target)
+        and ``test_rm_temp_dir_itself_still_denied`` (but not a write-command
+        operand: the bare dir stays out of the general scratch-match on purpose, so
+        a destructive command can't target the whole shared directory)."""
+        assert shell_containment(_shell(command), worktree_root=WT).action == "allow"
+
+    def test_system_tmpdir_writes_allowed(self) -> None:
+        """``$TMPDIR`` — not just the literal ``/tmp`` — is allowed, cross-platform."""
+        target = f"{tempfile.gettempdir()}/wade-scratch.log"
+        d = shell_containment(_shell(f"printf x > {shlex.quote(target)}"), worktree_root=WT)
+        assert d.action == "allow"
+
+    def test_temp_dir_writes_allowed_in_plan_mode(self) -> None:
+        """Temp is always-allowed scratch in every mode now — plan mode included
+        (#409): not a plan artifact, but ephemeral shared scratch, like a device."""
+        d = shell_containment(_shell("printf x > /tmp/o"), worktree_root=WT, plan_mode=True)
+        assert d.action == "allow"
+
+    def test_temp_dir_write_command_operand_allowed_in_plan_mode(self) -> None:
+        """Same exemption for a write-command operand, not just a redirect target.
+
+        ``cp`` checks *both* operands as write targets in plan mode, so the source
+        must itself be a plan artifact (``PLAN.md``) to isolate the destination's
+        scratch exemption from the unrelated "source is a non-artifact" denial.
+        """
+        d = shell_containment(_shell("cp PLAN.md /tmp/backup"), worktree_root=WT, plan_mode=True)
+        assert d.action == "allow"
+
+    @pytest.mark.parametrize("plan_mode", [False, True])
+    def test_tmpfoo_sibling_denied(self, plan_mode: bool) -> None:
+        """``/tmp/`` must not match a sibling like ``/tmpfoo`` — no shared prefix
+        without the trailing separator, in either mode."""
+        d = shell_containment(
+            _shell("printf x > /tmpfoo/out"), worktree_root=WT, plan_mode=plan_mode
+        )
+        assert d.action == "deny"
+
+    def test_cd_into_temp_dir_itself_allowed(self) -> None:
+        """``cd``/``pushd`` may land on the bare temp dir, not just a child of it —
+        pure navigation, so there's no destructive blast radius to worry about
+        (unlike treating the bare dir as a write-command operand, see
+        ``test_rm_temp_dir_itself_still_denied``)."""
+        assert shell_containment(_shell("cd /tmp"), worktree_root=WT).action == "allow"
+
+    def test_rm_temp_dir_itself_still_denied(self) -> None:
+        """The bare temp dir must NOT be a valid write-command operand — unlike a
+        file under it, ``rm -rf /tmp`` (or the exact ``$TMPDIR``) would erase every
+        same-user session's scratch files, the same directory-wide blast radius the
+        git directory-redirect checks deliberately reject. Found by review as a
+        regression from over-widening the scratch-match for ``cd /tmp``."""
+        assert shell_containment(_shell("rm -rf /tmp"), worktree_root=WT).action == "deny"
+
+    def test_write_tool_to_temp_dir_itself_still_denied(self) -> None:
+        """Same rule on the file-path channel: the bare temp dir is never a valid
+        Write-tool target, only files under it are."""
+        assert worktree_containment(_write("/tmp"), worktree_root=WT).action == "deny"
+
+    def test_git_c_temp_dir_write_denied(self) -> None:
+        """A git write reached through a directory-redirect flag stays denied even
+        for a temp ``<dir>`` — a directory-scoped destructive op has a far larger
+        blast radius than a single scratch-file write."""
+        d = shell_containment(_shell("git -C /tmp/x clean -fd"), worktree_root=WT)
+        assert d.action == "deny"
+
+    def test_git_c_temp_dir_read_allowed(self) -> None:
+        """A read through a temp ``-C`` dir is unaffected — only writes are denied."""
+        d = shell_containment(_shell("git -C /tmp/x log"), worktree_root=WT)
+        assert d.action == "allow"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "git --work-tree=/tmp/x clean -fd",
+            "git --git-dir=/tmp/x clean -fd",
+            "git --work-tree /tmp/x clean -fd",
+            "git --git-dir /tmp/x clean -fd",
+            "git -C/tmp/x clean -fd",
+        ],
+    )
+    def test_git_dir_redirect_temp_dir_write_denied_all_spellings(self, command: str) -> None:
+        """Every directory-redirect spelling stays strict against a temp target."""
+        assert shell_containment(_shell(command), worktree_root=WT).action == "deny"
+
+    def test_repeated_c_flags_stay_denied_once_outside_seen(self) -> None:
+        """A naive "last flag wins" reset is unsafe: repeated relative ``-C``
+        values chain from the *preceding* ``-C`` (not from the segment's original
+        cwd), so a later relative ``-C .`` after an outside ``-C`` can resolve
+        back to root while git's real effective directory is still outside —
+        denying unconditionally once any flag in the segment is seen outside is
+        the safe, fail-closed trade-off, at the cost of over-denying the narrower
+        `-C a -C b` case where the final absolute `-C` genuinely does replace the
+        first. Found by review as a bypass in the (reverted) "later flag wins"
+        fix."""
+        d = shell_containment(_shell("git -C /tmp/x -C . clean -fd"), worktree_root=WT)
+        assert d.action == "deny"
+
+    def test_later_c_flag_outside_still_denied(self) -> None:
+        """The *last* flag being outside root also denies, same as the first."""
+        d = shell_containment(_shell("git -C /repo/wt -C /tmp/x clean -fd"), worktree_root=WT)
+        assert d.action == "deny"
+
+    def test_mixed_work_tree_and_git_dir_independent_settings_denied(self) -> None:
+        """``--work-tree`` and ``--git-dir`` are independent git settings, not
+        last-one-wins alternatives like repeated ``-C`` — an in-root ``--git-dir``
+        must not clear an outside ``--work-tree``'s buffered denial, since git
+        still operates (and ``clean -fd`` still destroys files) in the outside
+        work tree regardless of where ``--git-dir`` points. Found by review as a
+        bypass in the (reverted) "later flag wins" fix."""
+        d = shell_containment(
+            _shell("git --work-tree=/tmp/x --git-dir=/repo/wt/.git clean -fd"), worktree_root=WT
+        )
+        assert d.action == "deny"
+
+    @pytest.mark.parametrize("plan_mode", [False, True])
+    def test_cd_into_temp_then_git_clean_denied(self, plan_mode: bool) -> None:
+        """A plain ``cd`` into scratch reaches the identical blast radius as
+        ``-C`` — ``git clean -fd`` has no ``-C`` flag and no path operand of its
+        own, but the prior ``cd`` already moved git's implicit working dir
+        outside root. Found by review as a rule-6 bypass; denied unconditionally
+        (like rule 6), not just in plan mode."""
+        d = shell_containment(
+            _shell("cd /tmp/x && git clean -fd"), worktree_root=WT, plan_mode=plan_mode
+        )
+        assert d.action == "deny"
+
+    def test_cd_into_temp_then_git_read_allowed(self) -> None:
+        """Only a later *write* subcommand is denied — a read through the same
+        cd'd-into temp dir is unaffected."""
+        d = shell_containment(_shell("cd /tmp/x && git -C /tmp/x log"), worktree_root=WT)
+        assert d.action == "allow"
+
+    def test_cd_into_temp_then_git_c_back_into_root_write_allowed(self) -> None:
+        """Regression: a same-segment `-C` back inside root must override the
+        buffered scratch `cd`, not get denied on the stale flag alone — git's own
+        `-C` takes precedence over the shell's cwd for that invocation, exactly
+        like a real shell. Found by `wade review implementation` as a
+        false-positive in the rule-6 `cd`-tracking fix. (Not parametrized over
+        plan_mode: in plan mode every git write subcommand is already denied
+        because the subcommand token itself — e.g. ``clean`` — is never a plan
+        artifact, an unrelated pre-existing check that would mask this one.)"""
+        d = shell_containment(_shell("cd /tmp/x && git -C /repo/wt clean -fd"), worktree_root=WT)
+        assert d.action == "allow"
+
+    def test_cd_into_temp_then_git_c_into_other_outside_dir_denied(self) -> None:
+        """A same-segment `-C` that itself points outside root still denies —
+        the override only applies when the redirect resolves in-root."""
+        d = shell_containment(_shell("cd /tmp/x && git -C /tmp/y clean -fd"), worktree_root=WT)
+        assert d.action == "deny"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "cd /tmp/x && git -C . clean -fd",
+            "cd /tmp/x && git --work-tree . clean -fd",
+            "cd /tmp/x && git --git-dir . clean -fd",
+        ],
+    )
+    def test_cd_into_temp_then_relative_git_dir_redirect_denied(self, command: str) -> None:
+        """A *relative* directory-redirect flag after a scratch ``cd`` must resolve
+        against the new cwd, not the stale original one — otherwise ``-C .``
+        resolves back to the worktree root and wrongly reads as in-root, bypassing
+        the very check ``cd /tmp/x && git clean -fd`` (no ``-C`` at all) already
+        denies. Found by review as a bypass of the rule-6 ``cd``-tracking fix."""
+        d = shell_containment(_shell(command), worktree_root=WT)
+        assert d.action == "deny"
+
+    def test_cd_into_worktree_subdir_then_git_clean_allowed(self) -> None:
+        """A ``cd`` that stays inside the worktree must not trip the new check."""
+        d = shell_containment(_shell("cd src && git clean -fd"), worktree_root=WT)
+        assert d.action == "allow"
+
+    def test_cd_back_into_worktree_clears_the_outside_flag(self) -> None:
+        """A later ``cd`` back inside root clears the buffered outside directory."""
+        d = shell_containment(_shell("cd /tmp/x && cd /repo/wt && git clean -fd"), worktree_root=WT)
+        assert d.action == "allow"
+
+    def test_cd_into_real_outside_dir_denied_immediately(self) -> None:
+        """A non-scratch outside ``cd`` target is unaffected — already denied at
+        the ``cd`` step itself (rule 3), before the git subcommand is even seen."""
+        d = shell_containment(_shell("cd /etc && git clean -fd"), worktree_root=WT)
+        assert d.action == "deny"
+
+    @pytest.mark.parametrize(
+        "command", ["cd /tmp/x && rm -rf .", "cd /tmp/x && printf x > out.txt"]
+    )
+    def test_cd_into_temp_then_non_git_write_allowed(self, command: str) -> None:
+        """Non-git writes after a scratch ``cd`` are unaffected by the new check —
+        they resolve to (or overwrite within) already-allowed scratch either way,
+        not a new escalation the way an operand-less git write subcommand is."""
+        assert shell_containment(_shell(command), worktree_root=WT).action == "allow"
+
     @pytest.mark.parametrize("command", ["echo hi 2>&1", "echo hi >&2", "exec 3>&-"])
     def test_fd_duplication_names_no_file(self, command: str) -> None:
         assert shell_containment(_shell(command), worktree_root=WT).action == "allow"
 
-    @pytest.mark.parametrize("command", ["printf x >&/tmp/pwn", "printf x >>&/tmp/pwn"])
+    @pytest.mark.parametrize("command", ["printf x >&/etc/pwn", "printf x >>&/etc/pwn"])
     def test_glued_ampersand_redirect_to_file_denied(self, command: str) -> None:
         """bash's ``>&word`` with a filename is a real write, not an fd dup."""
         assert shell_containment(_shell(command), worktree_root=WT).action == "deny"
@@ -156,11 +437,11 @@ class TestShellContainment:
     @pytest.mark.parametrize(
         "command",
         [
-            "sort --output=/tmp/pwn file",
-            "tar --file=/tmp/pwn.tar -c .",
-            "curl -o/tmp/pwn https://example.com",
-            "dd of=/tmp/pwn if=README.md",
-            "git -C/tmp/other init",
+            "sort --output=/etc/pwn file",
+            "tar --file=/etc/pwn.tar -c .",
+            "curl -o/etc/pwn https://example.com",
+            "dd of=/etc/pwn if=README.md",
+            "git -C/etc/other init",
         ],
     )
     def test_paths_glued_to_flags_denied(self, command: str) -> None:
@@ -203,9 +484,9 @@ class TestShellContainment:
     @pytest.mark.parametrize(
         "command",
         [
-            "tee 'a|b' /tmp/pwn",  # quoted '|' must not fake a segment break
-            "tee 'a;b' /tmp/pwn",
-            "grep 'x&y' f && cp a /tmp/b",  # real separator after a quoted one
+            "tee 'a|b' /etc/pwn",  # quoted '|' must not fake a segment break
+            "tee 'a;b' /etc/pwn",
+            "grep 'x&y' f && cp a /etc/b",  # real separator after a quoted one
         ],
     )
     def test_quoted_separators_do_not_hide_the_next_operand(self, command: str) -> None:
@@ -247,7 +528,6 @@ class TestShellContainment:
             "rm -rf src/",
             "rmdir src",
             "unlink src/app.py",
-            "printf x > /tmp/o",  # outside wins regardless
         ],
     )
     def test_plan_mode_denies_non_artifact_writes(self, command: str) -> None:
@@ -354,12 +634,61 @@ class TestWorktreeContainment:
         )
         assert d.action == "deny"
 
+    @pytest.mark.parametrize(
+        "path",
+        ["/tmp/wade-scratch.log", f"{tempfile.gettempdir()}/wade-scratch.log", "/dev/null"],
+    )
+    def test_scratch_targets_allowed(self, path: str) -> None:
+        """The file-path channel now shares the shell channel's always-allowed
+        scratch exemption (#409): a Write/Edit tool call to a system temp dir or a
+        discard device is contained via ``_contained``, same as a shell redirect."""
+        d = worktree_containment(_write(path), worktree_root=WT)
+        assert d.action == "allow"
+
+    def test_tmpfoo_sibling_denied(self) -> None:
+        d = worktree_containment(_write("/tmpfoo/out"), worktree_root=WT)
+        assert d.action == "deny"
+
+    def test_dev_shm_denied(self) -> None:
+        """``/dev/shm`` is a writable tmpfs, not a discard sink — the device
+        allowlist is exact, not a ``/dev/`` prefix."""
+        d = worktree_containment(_write("/dev/shm/out"), worktree_root=WT)
+        assert d.action == "deny"
+
+    def test_symlink_escaping_worktree_denied(self, tmp_path: Path, monkeypatch) -> None:
+        """A symlink created earlier and resolved to a target outside the worktree
+        is caught by ``Path.resolve()`` following it before containment is checked.
+
+        pytest's ``tmp_path`` lives under the OS temp dir, which the scratch
+        exemption (#409) now matches by prefix — neutralize it here so ``outside``
+        is genuinely outside containment rather than accidentally scratch-exempt.
+        """
+        monkeypatch.setattr(
+            "wade.hooks.policies._ALWAYS_ALLOWED_PATH_PREFIXES", ("/wade-test-tmp-unused/",)
+        )
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        outside = tmp_path / "outside.txt"
+        outside.write_text("")
+        link = wt / "escape.txt"
+        link.symlink_to(outside)
+        d = worktree_containment(_write(str(link)), worktree_root=wt)
+        assert d.action == "deny"
+
 
 class TestPlanArtifactOnly:
     @pytest.fixture
     def wt(self, tmp_path: Path, monkeypatch) -> Path:
         # chdir into the worktree so relative artifact paths resolve inside it.
         monkeypatch.chdir(tmp_path)
+        # pytest's tmp_path lives under the OS temp dir, which the scratch
+        # exemption (#409) now matches by prefix — neutralize it so these tests
+        # exercise real worktree/artifact containment instead of every in-worktree
+        # path accidentally qualifying as always-allowed scratch. Tests that want
+        # the *real* scratch exemption use the fixed WT path instead of this fixture.
+        monkeypatch.setattr(
+            "wade.hooks.policies._ALWAYS_ALLOWED_PATH_PREFIXES", ("/wade-test-tmp-unused/",)
+        )
         return tmp_path
 
     @pytest.mark.parametrize(
@@ -413,16 +742,71 @@ class TestPlanArtifactOnly:
         assert d.action == "deny"
         assert "worktree guard" in d.reason
 
+    # These use the fixed WT path, not the `wt` fixture — the fixture patches
+    # away the real temp-prefix match (see its docstring) precisely so it does not
+    # interfere with the scratch exemption these tests exist to verify.
+
+    @pytest.mark.parametrize(
+        "path",
+        ["/tmp/wade-scratch.log", f"{tempfile.gettempdir()}/wade-scratch.log", "/dev/null"],
+    )
+    def test_scratch_targets_allowed(self, path: str) -> None:
+        """Temp/device scratch is exempt from the plan-artifact rule too (#409),
+        checked after containment (already passing — scratch is contained) and
+        before the artifact check, so it is not denied as a non-artifact."""
+        d = plan_artifact_only(_write(path), worktree_root=WT)
+        assert d.action == "allow"
+
+    def test_scratch_allowed_without_allow_paths_configured(self) -> None:
+        """Regression: ``resolved`` must be computed unconditionally, not only
+        inside ``if allow_paths:`` — otherwise the scratch exemption silently
+        no-ops when no memory allowlist is configured for the session (the common
+        case, as here)."""
+        d = plan_artifact_only(_write("/tmp/x"), worktree_root=WT, allow_paths=())
+        assert d.action == "allow"
+
+    def test_tmpfoo_sibling_denied(self, wt: Path) -> None:
+        d = plan_artifact_only(_write("/tmpfoo/out"), worktree_root=wt)
+        assert d.action == "deny"
+
+    def test_dev_shm_denied(self, wt: Path) -> None:
+        d = plan_artifact_only(_write("/dev/shm/out"), worktree_root=wt)
+        assert d.action == "deny"
+
+    def test_sibling_repo_path_denied(self, wt: Path) -> None:
+        d = plan_artifact_only(_write("/repo/other/src/app.py"), worktree_root=wt)
+        assert d.action == "deny"
+
+    def test_symlink_escaping_worktree_denied(self, wt: Path) -> None:
+        outside = wt.parent / "outside.txt"
+        outside.write_text("")
+        link = wt / "escape.txt"
+        link.symlink_to(outside)
+        d = plan_artifact_only(_write(str(link)), worktree_root=wt)
+        assert d.action == "deny"
+
 
 class TestSessionComplete:
-    def test_blocks_when_pr_summary_missing(self, tmp_path: Path) -> None:
-        d = session_complete(HookEvent(event="stop"), worktree_root=tmp_path)
+    def test_blocks_when_work_and_no_done_marker(self, tmp_path: Path) -> None:
+        # Commits ahead of base + no done marker + no nudge -> nudge to run `done`.
+        d = session_complete(HookEvent(event="stop"), worktree_root=tmp_path, commits_ahead=1)
         assert d.action == "deny"  # deny == block the stop
-        assert "PR-SUMMARY.md" in d.reason
+        assert "done" in d.reason
+        assert "PR-SUMMARY" not in d.reason  # split-brain gone
 
-    def test_allows_when_pr_summary_present(self, tmp_path: Path) -> None:
-        (tmp_path / "PR-SUMMARY.md").write_text("done")
-        d = session_complete(HookEvent(event="stop"), worktree_root=tmp_path)
+    def test_allows_when_no_commits_ahead(self, tmp_path: Path) -> None:
+        # No authored work to finalize (#318 higher-signal condition).
+        d = session_complete(HookEvent(event="stop"), worktree_root=tmp_path, commits_ahead=0)
+        assert d.action == "allow"
+
+    def test_allows_when_done_marker_present(self, tmp_path: Path) -> None:
+        # The session was already finalized via `done` — same completion fact.
+        d = session_complete(
+            HookEvent(event="stop"),
+            worktree_root=tmp_path,
+            commits_ahead=1,
+            done_marker_present=True,
+        )
         assert d.action == "allow"
 
     def test_allows_when_nudge_marker_present(self, tmp_path: Path) -> None:
@@ -433,7 +817,7 @@ class TestSessionComplete:
         marker = stop_nudge_marker_path(tmp_path)
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text("")
-        d = session_complete(HookEvent(event="stop"), worktree_root=tmp_path)
+        d = session_complete(HookEvent(event="stop"), worktree_root=tmp_path, commits_ahead=1)
         assert d.action == "allow"
 
     def test_symlinked_marker_not_trusted(self, tmp_path: Path) -> None:
@@ -445,7 +829,7 @@ class TestSessionComplete:
         marker = stop_nudge_marker_path(tmp_path)
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.symlink_to(real)
-        d = session_complete(HookEvent(event="stop"), worktree_root=tmp_path)
+        d = session_complete(HookEvent(event="stop"), worktree_root=tmp_path, commits_ahead=1)
         assert d.action == "deny"
 
     def test_symlinked_wade_dir_not_trusted(self, tmp_path: Path) -> None:
@@ -454,10 +838,313 @@ class TestSessionComplete:
         outside.mkdir()
         (outside / "stop-nudged").write_text("")
         (tmp_path / ".wade").symlink_to(outside)
-        d = session_complete(HookEvent(event="stop"), worktree_root=tmp_path)
+        d = session_complete(HookEvent(event="stop"), worktree_root=tmp_path, commits_ahead=1)
         assert d.action == "deny"
 
     def test_single_shot_allows_when_already_fired(self, tmp_path: Path) -> None:
-        # PR-SUMMARY.md still missing, but a Stop hook already fired -> never loop.
-        d = session_complete(HookEvent(event="stop", stop_hook_active=True), worktree_root=tmp_path)
+        # Work still unfinished, but a Stop hook already fired -> never loop.
+        d = session_complete(
+            HookEvent(event="stop", stop_hook_active=True),
+            worktree_root=tmp_path,
+            commits_ahead=1,
+        )
+        assert d.action == "allow"
+
+
+class TestPlanComplete:
+    def test_blocks_when_no_valid_plan(self, tmp_path: Path) -> None:
+        # No valid PLAN*.md + no prior nudge -> nudge to write one.
+        d = plan_complete(HookEvent(event="stop"), worktree_root=tmp_path, has_valid_plan=False)
+        assert d.action == "deny"  # deny == block the stop
+        assert "PLAN" in d.reason
+        assert "Complexity" in d.reason
+
+    def test_allows_when_valid_plan_present(self, tmp_path: Path) -> None:
+        # The session already produced something wade can turn into an issue.
+        d = plan_complete(HookEvent(event="stop"), worktree_root=tmp_path, has_valid_plan=True)
+        assert d.action == "allow"
+
+    def test_allows_when_stop_hook_already_fired(self, tmp_path: Path) -> None:
+        # No valid plan, but Claude's Stop hook already fired -> never loop.
+        d = plan_complete(
+            HookEvent(event="stop", stop_hook_active=True),
+            worktree_root=tmp_path,
+            has_valid_plan=False,
+        )
+        assert d.action == "allow"
+
+    def test_allows_when_nudge_marker_present(self, tmp_path: Path) -> None:
+        # Tool-agnostic single-shot: once the shared marker exists, allow even
+        # without Claude's stop_hook_active — the same marker session_complete uses.
+        from wade.hooks.policies import stop_nudge_marker_path
+
+        marker = stop_nudge_marker_path(tmp_path)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("")
+        d = plan_complete(HookEvent(event="stop"), worktree_root=tmp_path, has_valid_plan=False)
+        assert d.action == "allow"
+
+    def test_symlinked_marker_not_trusted(self, tmp_path: Path) -> None:
+        # A planted symlink at the marker path must not count as "already nudged".
+        from wade.hooks.policies import stop_nudge_marker_path
+
+        real = tmp_path / "elsewhere"
+        real.write_text("")
+        marker = stop_nudge_marker_path(tmp_path)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.symlink_to(real)
+        d = plan_complete(HookEvent(event="stop"), worktree_root=tmp_path, has_valid_plan=False)
+        assert d.action == "deny"
+
+    def test_symlinked_wade_dir_not_trusted(self, tmp_path: Path) -> None:
+        # A symlinked .wade directory must not let an outside file skip the nudge.
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "stop-nudged").write_text("")
+        (tmp_path / ".wade").symlink_to(outside)
+        d = plan_complete(HookEvent(event="stop"), worktree_root=tmp_path, has_valid_plan=False)
+        assert d.action == "deny"
+
+
+class TestPlanModeSourceWriteRegression:
+    """E2 acceptance: a source-file write during a plan session is blocked on every
+    tool — via ``Edit``/``Write``, via unrecognized write tools (``apply_patch``),
+    and via a shell redirect. The plan-artifact guard already contains these
+    post-#356; these tests pin that so E2 enforcement rests on a verified base.
+    """
+
+    @pytest.mark.parametrize("tool_name", ["Edit", "Write", "apply_patch", "write_to_file"])
+    def test_write_tool_to_source_denied_in_plan_mode(self, tool_name: str) -> None:
+        d = plan_artifact_only(_write("/repo/wt/src/app.py", tool_name), worktree_root=WT)
+        assert d.action == "deny"
+        assert "plan-session guard" in d.reason
+
+    def test_shell_redirect_to_source_denied_in_plan_mode(self) -> None:
+        d = shell_containment(_shell("printf x > src/app.py"), worktree_root=WT, plan_mode=True)
+        assert d.action == "deny"
+
+    # --- worktree_root itself resolves under a system temp dir (#410 review) ---
+    #
+    # An ephemeral clone, a CI job, or a configured temp worktree directory can
+    # put worktree_root itself under /tmp or $TMPDIR. Every in-worktree path then
+    # also matches the temp-prefix scratch test, so the scratch exemption must be
+    # scoped to targets *outside* worktree_root — otherwise it swallows the
+    # plan-artifact rule for ordinary source writes. These use pytest's real
+    # ``tmp_path`` (already under the OS temp dir) as worktree_root, unlike the
+    # fixed ``WT``/neutralized-fixture tests above.
+
+    def test_write_tool_to_source_denied_when_worktree_itself_under_temp_dir(
+        self, tmp_path: Path
+    ) -> None:
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        source = wt / "src" / "app.py"
+        d = plan_artifact_only(_write(str(source)), worktree_root=wt)
+        assert d.action == "deny"
+        assert "plan-session guard" in d.reason
+
+    def test_shell_redirect_to_source_denied_when_worktree_itself_under_temp_dir(
+        self, tmp_path: Path
+    ) -> None:
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        target = wt / "src" / "app.py"
+        d = shell_containment(
+            _shell(f"printf x > {target}", cwd=str(wt)), worktree_root=wt, plan_mode=True
+        )
+        assert d.action == "deny"
+
+    def test_shell_write_command_operand_denied_when_worktree_itself_under_temp_dir(
+        self, tmp_path: Path
+    ) -> None:
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        (wt / "PLAN.md").write_text("")
+        target = wt / "src" / "app.py"
+        d = shell_containment(
+            _shell(f"cp PLAN.md {target}", cwd=str(wt)), worktree_root=wt, plan_mode=True
+        )
+        assert d.action == "deny"
+
+    def test_plan_artifact_still_allowed_when_worktree_itself_under_temp_dir(
+        self, tmp_path: Path
+    ) -> None:
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        plan_file = wt / "PLAN.md"
+        d = plan_artifact_only(_write(str(plan_file)), worktree_root=wt)
+        assert d.action == "allow"
+
+    def test_scratch_outside_such_a_worktree_still_allowed(self, tmp_path: Path) -> None:
+        """The fix must not overcorrect: a target that is genuinely outside
+        worktree_root, even though it sits in a sibling directory under the same
+        system temp dir, stays exempt from the plan-artifact rule."""
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        outside_scratch = tmp_path / "sibling-scratch.log"
+        d = plan_artifact_only(_write(str(outside_scratch)), worktree_root=wt)
+        assert d.action == "allow"
+
+
+# The active tool's memory subtree lives under the real home dir — resolved so it
+# matches what the guards' internal ``resolve()`` produces (no temp-prefix overlap:
+# home is never under ``$TMPDIR``, which would otherwise short-circuit the shell
+# channel's ``_contained`` before ``allow_paths`` is consulted). Nothing is written;
+# the guards only resolve and compare paths.
+_HOME = Path.home()
+_MEM = (_HOME / ".claude" / "projects").resolve()  # allowed: memory subtree
+_MEM_FILE = _MEM / "enc" / "memory" / "note.md"
+_CFG = (_HOME / ".claude" / "settings.json").resolve()  # denied: config/auth, not memory
+_OUTSIDE = Path("/etc/elsewhere/x.md")  # denied: outside worktree, memory, and temp
+
+
+class TestMemoryAllowlist:
+    """``allow_paths`` lets the active tool write its own memory subtree despite
+    containment, while its config/auth files and every other out-of-worktree path
+    stay denied. The allowlist is an allow-only widening — a narrow memory subtree,
+    never the tool's config home.
+    """
+
+    # --- file-path channel (worktree_containment) ---
+
+    def test_memory_write_allowed(self) -> None:
+        d = worktree_containment(_write(str(_MEM_FILE)), worktree_root=WT, allow_paths=(_MEM,))
+        assert d.action == "allow"
+
+    def test_non_memory_outside_still_denied(self) -> None:
+        d = worktree_containment(_write(str(_OUTSIDE)), worktree_root=WT, allow_paths=(_MEM,))
+        assert d.action == "deny"
+
+    def test_config_file_still_denied(self) -> None:
+        # ~/.claude/settings.json holds the hooks block — it sits OUTSIDE the allowed
+        # ~/.claude/projects subtree, so the guard cannot be used to disable itself.
+        d = worktree_containment(_write(str(_CFG)), worktree_root=WT, allow_paths=(_MEM,))
+        assert d.action == "deny"
+
+    def test_empty_allow_paths_no_bypass(self) -> None:
+        d = worktree_containment(_write(str(_MEM_FILE)), worktree_root=WT, allow_paths=())
+        assert d.action == "deny"
+
+    # --- file-path channel, plan mode (plan_artifact_only) ---
+
+    def test_plan_memory_write_allowed(self) -> None:
+        d = plan_artifact_only(_write(str(_MEM_FILE)), worktree_root=WT, allow_paths=(_MEM,))
+        assert d.action == "allow"
+
+    def test_plan_non_artifact_inside_worktree_still_denied(self) -> None:
+        # The memory bypass must not relax the artifact rule for in-worktree paths.
+        d = plan_artifact_only(_write("/repo/wt/src/app.py"), worktree_root=WT, allow_paths=(_MEM,))
+        assert d.action == "deny"
+
+    def test_plan_config_file_still_denied(self) -> None:
+        d = plan_artifact_only(_write(str(_CFG)), worktree_root=WT, allow_paths=(_MEM,))
+        assert d.action == "deny"
+
+    # --- shell channel (shell_containment) ---
+
+    def test_shell_redirect_into_memory_allowed(self) -> None:
+        d = shell_containment(
+            _shell(f"echo x > {_MEM_FILE}"), worktree_root=WT, allow_paths=(_MEM,)
+        )
+        assert d.action == "allow"
+
+    def test_shell_redirect_outside_memory_denied(self) -> None:
+        d = shell_containment(_shell(f"echo x > {_OUTSIDE}"), worktree_root=WT, allow_paths=(_MEM,))
+        assert d.action == "deny"
+
+    def test_shell_write_command_operand_into_memory_allowed(self) -> None:
+        d = shell_containment(
+            _shell(f"cp a.txt {_MEM_FILE}"), worktree_root=WT, allow_paths=(_MEM,)
+        )
+        assert d.action == "allow"
+
+    def test_shell_write_command_operand_outside_denied(self) -> None:
+        d = shell_containment(_shell(f"cp a.txt {_OUTSIDE}"), worktree_root=WT, allow_paths=(_MEM,))
+        assert d.action == "deny"
+
+    def test_shell_config_file_write_denied(self) -> None:
+        d = shell_containment(_shell(f"echo x > {_CFG}"), worktree_root=WT, allow_paths=(_MEM,))
+        assert d.action == "deny"
+
+    def test_plan_shell_redirect_into_memory_allowed(self) -> None:
+        # Ordering trap: memory membership must be checked BEFORE _is_plan_artifact_path
+        # (which reports any out-of-root path, incl. memory, as a non-artifact) —
+        # otherwise this stays denied even after the file-path channel is fixed.
+        d = shell_containment(
+            _shell(f"echo x > {_MEM_FILE}"),
+            worktree_root=WT,
+            plan_mode=True,
+            allow_paths=(_MEM,),
+        )
+        assert d.action == "allow"
+
+    def test_cd_into_memory_still_denied(self) -> None:
+        # cd/pushd stays strict — the bypass is direct-path only, never cd-relative.
+        d = shell_containment(_shell(f"cd {_MEM} && rm x"), worktree_root=WT, allow_paths=(_MEM,))
+        assert d.action == "deny"
+
+    def test_git_c_spaced_write_into_memory_still_denied(self) -> None:
+        # git -C stays strict too — a write scoped there can touch every file
+        # under the memory dir, not just a direct memory write.
+        d = shell_containment(
+            _shell(f"git -C {_MEM} clean -fd"), worktree_root=WT, allow_paths=(_MEM,)
+        )
+        assert d.action == "deny"
+
+    def test_git_c_glued_write_into_memory_still_denied(self) -> None:
+        d = shell_containment(
+            _shell(f"git -C{_MEM} clean -fd"), worktree_root=WT, allow_paths=(_MEM,)
+        )
+        assert d.action == "deny"
+
+    def test_git_c_glued_read_into_memory_allowed(self) -> None:
+        # Reads are fine, matching the spaced form (rule 6) — only a later write
+        # subcommand turns a buffered outside/memory ``-C`` dir into a denial.
+        d = shell_containment(_shell(f"git -C{_MEM} log"), worktree_root=WT, allow_paths=(_MEM,))
+        assert d.action == "allow"
+
+    def test_git_c_relative_glued_no_slash_write_into_memory_still_denied(self) -> None:
+        # ``-C<dir>`` with no "/" in the token (e.g. a relative ".." dir) must not
+        # slip past the glued-``-C`` buffering into the unguarded fallback path.
+        # ``cwd`` puts the command's base one level under the memory root, so
+        # ".." resolves back to the memory root itself.
+        d = shell_containment(
+            _shell("git -C.. clean -fd", cwd=str(_MEM / "sub")),
+            worktree_root=WT,
+            allow_paths=(_MEM,),
+        )
+        assert d.action == "deny"
+
+    def test_git_work_tree_write_into_memory_still_denied(self) -> None:
+        # --work-tree= is functionally equivalent to -C for write purposes — must
+        # get the same strict (root-only, no allow_paths) treatment.
+        d = shell_containment(
+            _shell(f"git --work-tree={_MEM} clean -fd"), worktree_root=WT, allow_paths=(_MEM,)
+        )
+        assert d.action == "deny"
+
+    def test_git_dir_write_into_memory_still_denied(self) -> None:
+        d = shell_containment(
+            _shell(f"git --git-dir={_MEM} clean -fd"), worktree_root=WT, allow_paths=(_MEM,)
+        )
+        assert d.action == "deny"
+
+    def test_git_work_tree_spaced_write_into_memory_still_denied(self) -> None:
+        # Spaced form (no "=") — git's own parser accepts both spellings
+        # identically, so both must get the same strict treatment.
+        d = shell_containment(
+            _shell(f"git --work-tree {_MEM} clean -fd"), worktree_root=WT, allow_paths=(_MEM,)
+        )
+        assert d.action == "deny"
+
+    def test_git_dir_spaced_write_into_memory_still_denied(self) -> None:
+        d = shell_containment(
+            _shell(f"git --git-dir {_MEM} clean -fd"), worktree_root=WT, allow_paths=(_MEM,)
+        )
+        assert d.action == "deny"
+
+    def test_git_work_tree_read_into_memory_allowed(self) -> None:
+        d = shell_containment(
+            _shell(f"git --work-tree={_MEM} log"), worktree_root=WT, allow_paths=(_MEM,)
+        )
         assert d.action == "allow"

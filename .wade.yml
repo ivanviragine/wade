@@ -17,18 +17,21 @@ ai:
     model: claude-sonnet-5
     mode: headless
     effort: high
+    timeout: 900
   review_plan:
     tool: claude
     model: claude-sonnet-5
     mode: headless
     effort: high
     enabled: true
+    timeout: 900
   review_implementation:
     tool: claude
     model: claude-sonnet-5
     mode: headless
     effort: high
     enabled: true
+    timeout: 900
   review_batch:
     tool: claude
     model: claude-sonnet-5
@@ -61,5 +64,3 @@ hooks:
   copy_to_worktree:
   - .env
   - .wade.yml
-  - KNOWLEDGE.md
-  - KNOWLEDGE.ratings.yml

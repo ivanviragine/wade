@@ -81,6 +81,7 @@ def _run_git_with_retry(
     check: bool = True,
     retries: int = 3,
     base_delay: float = 0.3,
+    probe_index_lock: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Run a git command with retries on transient lock errors.
 
@@ -91,6 +92,14 @@ def _run_git_with_retry(
     Works for both ``check=True`` callers (a lock raises ``GitError`` which is
     caught and retried) and ``check=False`` callers such as ``merge``/``stash``
     (a lock yields a non-zero result whose stderr is inspected and retried).
+
+    ``probe_index_lock`` (check=False callers only) also retries when
+    :func:`_index_lock_present` reports a held index lock, even if stderr is
+    empty. ``git stash push`` on older git (verified 2.43.0) exits non-zero with
+    empty stdout AND stderr under a held ``index.lock``, so stderr matching alone
+    misses the contention there; the direct probe is version-independent. The
+    probe runs only after a command has already failed, so it adds no cost to the
+    success path and leaves every other caller's behavior unchanged.
     """
     if retries < 1:
         raise ValueError("retries must be at least 1")
@@ -109,7 +118,10 @@ def _run_git_with_retry(
         if (
             result.returncode != 0
             and attempt < retries - 1
-            and any(p in result.stderr for p in _LOCK_PATTERNS)
+            and (
+                any(p in result.stderr for p in _LOCK_PATTERNS)
+                or (probe_index_lock and _index_lock_present(cwd))
+            )
         ):
             _sleep_lock_backoff(attempt, base_delay, args)
             continue
@@ -123,6 +135,36 @@ def _sleep_lock_backoff(attempt: int, base_delay: float, args: tuple[str, ...]) 
     delay = base_delay * (2**attempt)
     log.debug("git.retry", attempt=attempt + 1, delay=delay, cmd=["git", *args])
     time.sleep(delay)
+
+
+def _index_lock_present(cwd: Path) -> bool:
+    """True if an index.lock for *cwd*'s index is currently held.
+
+    ``git stash push`` on older git (verified 2.43.0) fails silently — empty
+    stdout AND stderr — when the index is locked, so there is no stderr for
+    ``_LOCK_PATTERNS`` to match. Probing the lock file is version-independent.
+
+    The index a ``stash push`` locks is the *current worktree's* index, whose
+    lock lives in the worktree-private git dir (``--git-dir``), not
+    ``$GIT_COMMON_DIR``. In the main checkout the two coincide; in a linked
+    worktree they do not, so we check both. Paths from git may be relative to
+    *cwd* and are resolved here.
+
+    Not airtight: the competing process could release the lock between the
+    failed command and this probe, missing a retry. That window is symmetric
+    with the pre-existing stderr-matching path (which checks slightly earlier),
+    so it is not a new risk — just a known, benign gap.
+    """
+    for getter in (get_git_dir, get_git_common_dir):
+        raw = getter(cwd)
+        if not raw:
+            continue
+        d = Path(raw)
+        if not d.is_absolute():
+            d = (cwd / d).resolve()
+        if (d / "index.lock").exists():
+            return True
+    return False
 
 
 def is_git_repo(path: Path) -> bool:
@@ -412,6 +454,59 @@ def unskip_worktree_file(cwd: Path, filename: str) -> None:
     _run_git("update-index", "--no-skip-worktree", filename, cwd=cwd, check=False)
 
 
+def show_file_at_ref(cwd: Path, ref: str, relpath: str) -> str | None:
+    """Return the ``<ref>:<relpath>`` blob content, or None if absent.
+
+    None covers a path missing at that ref (or a git failure) — the caller treats
+    that as "no such version".
+    """
+    result = _run_git("show", f"{ref}:{relpath}", cwd=cwd, check=False)
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
+def show_file_at_head(cwd: Path, relpath: str) -> str | None:
+    """Return the committed ``HEAD:<relpath>`` blob content, or None if absent.
+
+    None covers an untracked/uncommitted path (or a git failure) — the caller
+    treats that as "no committed version".
+    """
+    return show_file_at_ref(cwd, "HEAD", relpath)
+
+
+def checkout_paths(cwd: Path, *paths: str) -> bool:
+    """Restore ``paths`` to their committed state (``git checkout -- <paths>``).
+
+    Returns True on success; False (via ``check=False``) when a pathspec is
+    untracked or the checkout otherwise fails, so callers can fall back.
+    """
+    if not paths:
+        return True
+    result = _run_git("checkout", "--", *paths, cwd=cwd, check=False)
+    return result.returncode == 0
+
+
+def rm_file(cwd: Path, relpath: str) -> bool:
+    """Stage the removal of ``relpath`` (``git rm --force --quiet -- <relpath>``).
+
+    Returns True on success; False when the file is untracked / not a repo, letting
+    callers fall back to a plain unlink.
+    """
+    result = _run_git("rm", "--force", "--quiet", "--", relpath, cwd=cwd, check=False)
+    return result.returncode == 0
+
+
+def status_porcelain_paths(cwd: Path, *paths: str) -> list[str]:
+    """Return ``git status --porcelain`` lines scoped to ``paths`` (empty on failure)."""
+    if not paths:
+        return []
+    result = _run_git("status", "--porcelain", "--", *paths, cwd=cwd, check=False)
+    if result.returncode != 0:
+        return []
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
 def push_branch(
     repo_root: Path, branch: str, set_upstream: bool = False, force: bool = False
 ) -> None:
@@ -632,3 +727,65 @@ def upstream_tracking_status(repo_root: Path, branch: str) -> str | None:
     )
     status = result.stdout.strip()
     return status if status else None
+
+
+def get_git_common_dir(path: Path) -> str | None:
+    """Return the *common* git directory for *path*, or None on failure.
+
+    Unlike :func:`get_git_dir` (which in a linked worktree returns that
+    worktree's private git dir), this returns the shared common dir — the main
+    repo's ``.git`` — where common hooks live (``<common-dir>/hooks``). The
+    result may be relative to *path*; callers resolve it against the worktree.
+    """
+    result = _run_git("rev-parse", "--git-common-dir", cwd=path, check=False)
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def get_config_value(path: Path, key: str, *, worktree: bool = False) -> str | None:
+    """Return a git config value, or None if unset/unreadable.
+
+    With ``worktree=True`` reads the ``--worktree`` scope, which requires
+    ``extensions.worktreeConfig`` to be enabled — when it is not, git errors and
+    this returns None (treated as "unset").
+    """
+    args = ["config"]
+    if worktree:
+        args.append("--worktree")
+    args.extend(["--get", key])
+    result = _run_git(*args, cwd=path, check=False)
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def set_config_value(path: Path, key: str, value: str, *, worktree: bool = False) -> bool:
+    """Set a git config value; return whether it succeeded.
+
+    With ``worktree=True`` writes the ``--worktree`` scope (requires
+    ``extensions.worktreeConfig``). Never raises — returns False on any failure
+    so callers can gracefully skip an optional feature on old/locked-down git.
+    """
+    args = ["config"]
+    if worktree:
+        args.append("--worktree")
+    args.extend([key, value])
+    result = _run_git(*args, cwd=path, check=False)
+    return result.returncode == 0
+
+
+def unset_config_value(path: Path, key: str, *, worktree: bool = False) -> bool:
+    """Unset a git config value (``git config --unset``); return success.
+
+    With ``worktree=True`` targets the ``--worktree`` scope. Never raises —
+    returns False on any failure (including the key already being absent, which
+    git reports as exit code 5), so callers can best-effort roll back an optional
+    config change without extra guarding.
+    """
+    args = ["config"]
+    if worktree:
+        args.append("--worktree")
+    args.extend(["--unset", key])
+    result = _run_git(*args, cwd=path, check=False)
+    return result.returncode == 0

@@ -23,6 +23,7 @@ from wade.git import repo as git_repo
 from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
+from wade.models.hooks import SessionPhase
 from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 from wade.models.review import (
     PollOutcome,
@@ -40,6 +41,7 @@ from wade.providers.registry import get_provider
 from wade.services.ai_resolution import (
     confirm_ai_selection,
     resolve_ai_tool,
+    resolve_effort,
     resolve_model,
     resolve_permission_mode,
 )
@@ -155,6 +157,11 @@ def fetch_reviews(
         elif status.bot_status == ReviewBotStatus.IN_PROGRESS:
             print("No unresolved review comments found, but CodeRabbit is still reviewing.")
             print("Try fetching again shortly.")
+        elif not status.review_covers_latest_commit:
+            print(
+                "No unresolved review comments found, but the latest commit has not"
+                " been reviewed yet — an updated review may still arrive."
+            )
         else:
             print("No unresolved review comments found.")
 
@@ -316,12 +323,13 @@ def _fallback_review_status(
 
     actionable = filter_actionable_threads(all_threads)
     all_unresolved = filter_unresolved_threads(all_threads)
-    bot_status = _check_review_bot_status(provider, pr_number)
+    bot_status, bot_status_ts = _check_review_bot_status(provider, pr_number)
 
     return PRReviewStatus(
         actionable_threads=actionable,
         all_unresolved_threads=all_unresolved,
         bot_status=bot_status,
+        bot_status_ts=bot_status_ts,
     )
 
 
@@ -392,8 +400,20 @@ def poll_for_reviews(
                 and not status.has_changes_requested
                 and not status.pending_reviewers
             ):
-                console.info("Review bot completed — no actionable comments found.")
-                return PollOutcome.REVIEW_COMPLETE
+                # A COMPLETED marker carries no info about *which* commit was
+                # reviewed. Only declare completion when the newest bot signal
+                # covers HEAD; otherwise the latest push has not been re-reviewed
+                # yet — fall through to the freshness / quiet-timeout logic
+                # below (is_commit_fresh resets the quiet timer while the commit
+                # is fresh, and QUIET_TIMEOUT eventually fires if no newer review
+                # arrives, so this cannot hang forever).
+                if status.review_covers_latest_commit:
+                    console.info("Review bot completed — no actionable comments found.")
+                    return PollOutcome.REVIEW_COMPLETE
+                console.detail(
+                    "Review bot completed an earlier commit, but the latest commit "
+                    "has not been reviewed yet — waiting for an updated review..."
+                )
 
             if eff_threads or status.has_changes_requested:
                 count = len(eff_threads)
@@ -496,6 +516,8 @@ def start(
     *,
     ai_explicit: bool = False,
     model_explicit: bool = False,
+    effort: str | None = None,
+    effort_explicit: bool = False,
     yolo: bool | None = None,
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
@@ -630,11 +652,17 @@ def start(
             console.warn("CodeRabbit is still reviewing — try again shortly.")
             return True
 
-        # No blocking conditions — message depends on commit freshness.
+        # No blocking conditions — message depends on commit freshness and
+        # whether a bot review actually covers the latest commit.
         if status.is_commit_fresh():
             console.info(
                 "No review comments found yet — the latest commit is less"
                 " than 2 minutes old. Review may still arrive."
+            )
+        elif not status.review_covers_latest_commit:
+            console.info(
+                "No review comments found yet, but the latest commit has not"
+                " been reviewed yet — an updated review may still arrive."
             )
         elif not status.pending_reviewers:
             console.success("All review comments resolved — nothing to address! 🎉")
@@ -659,6 +687,8 @@ def start(
             detach=detach,
             ai_explicit=ai_explicit,
             model_explicit=model_explicit,
+            effort=effort,
+            effort_explicit=effort_explicit,
             permission_mode=permission_mode,
             permission_mode_explicit=permission_mode_explicit,
         )
@@ -680,25 +710,59 @@ def start(
     # 5. Re-bootstrap skills (ensures review-pr-comments-session skill is installed)
     from wade.skills.installer import REVIEW_SKILLS
 
-    bootstrap_worktree(worktree_path, config, repo_root, skills=REVIEW_SKILLS)
+    bootstrap_worktree(
+        worktree_path, config, repo_root, skills=REVIEW_SKILLS, session_phase=SessionPhase.REVIEW
+    )
 
-    # 6. Resolve AI tool and model
-    resolved_tool = resolve_ai_tool(ai_tool, config, "implement")
+    # 6. Resolve AI tool, model, effort, and autonomy under the dedicated
+    # ``review_pr_comments`` config key (#389) so this auto-launched session
+    # honors ``ai.review_pr_comments.*`` rather than inheriting ``ai.implement.*``.
+    #
+    # Gate every inherited value on explicitness. The implementation flow
+    # forwards its *already-resolved* tool / model / permission-mode (concrete
+    # values, e.g. ``"copilot"`` / ``"default"``, never ``None``); passed through
+    # unconditionally they short-circuit the resolvers (which honor a non-``None``
+    # first arg) and shadow ``ai.review_pr_comments`` entirely — so switching the
+    # command key alone is a no-op. Honor an inherited value only when the user
+    # set it explicitly (``--ai`` / ``--model`` / ``--permission-mode`` /
+    # ``--yolo``); otherwise pass ``None`` so the review config (then global
+    # ``ai.*``, then ``default`` / auto-detect) governs. (``effort`` is never
+    # inherited as a concrete value — no caller forwards it — so it needs no gate.)
+    effective_ai_tool = ai_tool if ai_explicit else None
+    effective_model = model if model_explicit else None
+    effective_pm = permission_mode if permission_mode_explicit else None
+    resolved_tool = resolve_ai_tool(effective_ai_tool, config, "review_pr_comments")
     resolved_model = resolve_model(
-        model,
+        effective_model,
         config,
-        "implement",
+        "review_pr_comments",
         tool=resolved_tool,
         complexity=task.complexity.value if task.complexity else None,
     )
-    resolved_permission_mode = resolve_permission_mode(permission_mode, yolo, config, "implement")
+    resolved_effort = resolve_effort(
+        effort,
+        config,
+        "review_pr_comments",
+        tool=resolved_tool,
+        complexity=task.complexity.value if task.complexity else None,
+    )
+    resolved_permission_mode = resolve_permission_mode(
+        effective_pm, yolo, config, "review_pr_comments"
+    )
 
     if not detach:
-        resolved_tool, resolved_model, _effort, resolved_permission_mode = confirm_ai_selection(
+        (
+            resolved_tool,
+            resolved_model,
+            resolved_effort,
+            resolved_permission_mode,
+        ) = confirm_ai_selection(
             resolved_tool,
             resolved_model,
             tool_explicit=ai_explicit,
             model_explicit=model_explicit,
+            resolved_effort=resolved_effort,
+            effort_explicit=effort_explicit,
             resolved_permission_mode=resolved_permission_mode,
             permission_mode_explicit=permission_mode_explicit or yolo is not None,
         )
@@ -752,6 +816,7 @@ def start(
                 model=resolved_model,
                 trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
                 initial_message=prompt,
+                effort=resolved_effort,
                 **permission_mode_launch_kwargs(resolved_permission_mode),
             )
         except (ValueError, KeyError):
@@ -781,6 +846,7 @@ def start(
                 prompt=prompt,
                 transcript_path=transcript_path,
                 trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
+                effort=resolved_effort,
                 **permission_mode_launch_kwargs(resolved_permission_mode),
             )
             launch_completed = True
@@ -939,6 +1005,8 @@ def _quiet_next_steps_prompt(
     detach: bool = False,
     ai_explicit: bool = False,
     model_explicit: bool = False,
+    effort: str | None = None,
+    effort_explicit: bool = False,
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
 ) -> None:
@@ -984,6 +1052,8 @@ def _quiet_next_steps_prompt(
                         detach=detach,
                         ai_explicit=ai_explicit,
                         model_explicit=model_explicit,
+                        effort=effort,
+                        effort_explicit=effort_explicit,
                         permission_mode=permission_mode,
                         permission_mode_explicit=permission_mode_explicit,
                     )
@@ -1015,7 +1085,15 @@ def _post_review_lifecycle(
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
 ) -> None:
-    """Post-review lifecycle menu: Merge PR or wait for new reviews."""
+    """Post-review lifecycle menu: Merge PR or wait for new reviews.
+
+    Effort is intentionally *not* threaded through here (#389). A review session
+    never carries an explicit effort — ``wade review pr-comments`` has no
+    ``--effort`` flag and the post-``done`` auto-launch never passes one — so on a
+    "wait for new reviews" re-launch the recursed ``start()`` re-resolves effort
+    from ``ai.review_pr_comments.effort`` (config governs). That matches how a
+    non-explicit ``permission_mode`` re-resolves under the gating in ``start``.
+    """
     from wade.ui import prompts
 
     if not prompts.is_tty():
@@ -1067,13 +1145,17 @@ def _post_review_lifecycle(
 def _check_review_bot_status(
     provider: AbstractTaskProvider,
     pr_number: int,
-) -> ReviewBotStatus | None:
-    """Check if a review bot (e.g. CodeRabbit) has a pending review on the PR."""
+) -> tuple[ReviewBotStatus | None, datetime | None]:
+    """Check if a review bot (e.g. CodeRabbit) has a pending review on the PR.
+
+    Returns ``(status, updated_at)`` — the CodeRabbit summary comment's
+    ``updated_at`` participates in commit-staleness detection.
+    """
     try:
         comments = provider.get_pr_issue_comments(pr_number)
     except Exception:
         logger.debug("review.bot_status_check_failed", exc_info=True)
-        return None
+        return None, None
     return detect_coderabbit_review_status(comments)
 
 

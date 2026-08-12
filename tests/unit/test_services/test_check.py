@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from wade.models.config import AI_COMMAND_NAMES, AICommandConfig, AIConfig
+from wade.models.config import (
+    AI_COMMAND_NAMES,
+    AICommandConfig,
+    AIConfig,
+    CommitMsgConfig,
+    HooksConfig,
+    PostToolUseConfig,
+    PreCommitConfig,
+)
 from wade.services.check_service import (
     CheckExitCode,
     CheckStatus,
@@ -189,6 +197,162 @@ class TestValidateConfig:
         result = validate_config(tmp_path)
         assert result.is_valid, f"Errors: {result.errors}"
 
+    def test_valid_done_section(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text(
+            "version: 2\n"
+            "done:\n"
+            "  require_pr_summary: true\n"
+            "  require_sync: false\n"
+            "  require_review: true\n"
+            "  require_resolved_threads: false\n"
+            "  pre_push_backstop: true\n"
+        )
+        result = validate_config(tmp_path)
+        assert result.is_valid, f"Errors: {result.errors}"
+
+    def test_unknown_done_key_rejected(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\ndone:\n  require_everything: true\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("done.require_everything" in e for e in result.errors)
+
+    def test_non_bool_done_value_rejected(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\ndone:\n  require_sync: sometimes\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("done.require_sync" in e and "true or false" in e for e in result.errors)
+
+    def test_null_done_value_rejected(self, tmp_path: Path) -> None:
+        # An explicit null (`require_sync:` with no value) is a user mistake, not
+        # an unset default — `wade check` must flag it as a non-bool.
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\ndone:\n  require_sync:\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("done.require_sync" in e and "true or false" in e for e in result.errors)
+
+    def test_max_review_passes_positive_int_accepted(self, tmp_path: Path) -> None:
+        # `max_review_passes` is an int, not a bool — a positive int must pass
+        # `wade check` (the old bool-only validator would have flagged it).
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\ndone:\n  max_review_passes: 3\n")
+        result = validate_config(tmp_path)
+        assert result.is_valid, f"Errors: {result.errors}"
+
+    def test_max_review_passes_zero_rejected(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\ndone:\n  max_review_passes: 0\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("done.max_review_passes" in e and "positive integer" in e for e in result.errors)
+
+    def test_max_review_passes_bool_rejected(self, tmp_path: Path) -> None:
+        # `true` is an int subclass — it must NOT sneak through as a valid count.
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\ndone:\n  max_review_passes: true\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("done.max_review_passes" in e and "positive integer" in e for e in result.errors)
+
+    def test_valid_hooks_quality_gate_sections(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text(
+            "version: 2\n"
+            "hooks:\n"
+            "  pre_commit:\n"
+            "    lint: ./scripts/check.sh --lint\n"
+            "    test: ./scripts/test.sh\n"
+            "  commit_msg:\n"
+            "    conventional: true\n"
+            "  post_tool_use:\n"
+            "    enabled: true\n"
+            "    lint_cmd: ruff check\n"
+            "    timeout: 15\n"
+        )
+        result = validate_config(tmp_path)
+        assert result.is_valid, f"Errors: {result.errors}"
+
+    def test_pre_commit_lint_must_be_string(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nhooks:\n  pre_commit:\n    lint: true\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("hooks.pre_commit.lint" in e for e in result.errors)
+
+    def test_commit_msg_conventional_must_be_bool(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nhooks:\n  commit_msg:\n    conventional: yes-please\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any(
+            "hooks.commit_msg.conventional" in e and "true or false" in e for e in result.errors
+        )
+
+    def test_post_tool_use_timeout_must_be_positive_int(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nhooks:\n  post_tool_use:\n    timeout: -3\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any(
+            "hooks.post_tool_use.timeout" in e and "positive integer" in e for e in result.errors
+        )
+
+    def test_post_tool_use_timeout_rejects_bool(self, tmp_path: Path) -> None:
+        # bool is an int subclass — a YAML `true` must not sneak through as 1.
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nhooks:\n  post_tool_use:\n    timeout: true\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("hooks.post_tool_use.timeout" in e for e in result.errors)
+
+    def test_unknown_pre_commit_key_rejected(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nhooks:\n  pre_commit:\n    lynt: x\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("hooks.pre_commit.lynt" in e and "unsupported key" in e for e in result.errors)
+
+    def test_hooks_subsection_must_be_mapping(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nhooks:\n  pre_commit: just-a-string\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("hooks.pre_commit" in e and "mapping" in e for e in result.errors)
+
+    def test_hooks_valid_keys_stay_in_sync_with_model(self, tmp_path: Path) -> None:
+        """Every ``HooksConfig`` field must be an accepted top-level ``hooks`` key.
+
+        The validator derives ``_VALID_HOOKS_KEYS`` from the model, so a field
+        added to ``HooksConfig`` must never be rejected as unsupported (#368 /
+        knowledge ca245d6a — config-key validity in three places must not drift).
+        """
+        config = tmp_path / ".wade.yml"
+        for field in HooksConfig.model_fields:
+            config.write_text(f"version: 2\nhooks:\n  {field}: null\n")
+            result = validate_config(tmp_path)
+            assert not any(f"hooks.{field}: unsupported key" in e for e in result.errors), (
+                f"model field '{field}' rejected as an unsupported hooks key"
+            )
+
+    def test_hooks_subsection_keys_stay_in_sync_with_models(self, tmp_path: Path) -> None:
+        """Each nested subsection's allowlist is derived from its Pydantic model."""
+        cases = {
+            "pre_commit": PreCommitConfig,
+            "commit_msg": CommitMsgConfig,
+            "post_tool_use": PostToolUseConfig,
+        }
+        config = tmp_path / ".wade.yml"
+        for section, model in cases.items():
+            for field in model.model_fields:
+                config.write_text(f"version: 2\nhooks:\n  {section}:\n    {field}: null\n")
+                result = validate_config(tmp_path)
+                assert not any(
+                    f"hooks.{section}.{field}: unsupported key" in e for e in result.errors
+                ), f"model field '{field}' rejected as unsupported hooks.{section} key"
+
     def test_valid_full_config(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"
         config.write_text(
@@ -295,6 +459,37 @@ class TestValidateConfig:
         )
         result = validate_config(tmp_path)
         assert result.is_valid, f"Errors: {result.errors}"
+
+    def test_valid_review_pr_comments_keys(self, tmp_path: Path) -> None:
+        """The dedicated ``ai.review_pr_comments`` section (#389) is accepted.
+
+        Adding the section name to ``AI_COMMAND_NAMES`` + the field to
+        ``AIConfig`` is enough — the validator derives its allowlists from the
+        models (#368), so ``wade check`` needs no ``check_service`` change.
+        """
+        config = tmp_path / ".wade.yml"
+        config.write_text(
+            "version: 2\n"
+            "ai:\n"
+            "  review_pr_comments:\n"
+            "    tool: claude\n"
+            "    model: claude-sonnet-5\n"
+            "    effort: high\n"
+            "    mode: interactive\n"
+            "    permission_mode: yolo\n"
+            "    yolo: true\n"
+            "    enabled: true\n"
+            "    timeout: 600\n"
+        )
+        result = validate_config(tmp_path)
+        assert result.is_valid, f"Errors: {result.errors}"
+
+    def test_invalid_review_pr_comments_tool(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nai:\n  review_pr_comments:\n    tool: nonexistent\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("ai.review_pr_comments.tool" in e for e in result.errors)
 
     def test_invalid_review_plan_tool(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"

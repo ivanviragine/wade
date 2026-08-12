@@ -582,6 +582,44 @@ class TestReviewServiceStart:
         review_file = wt_paths[0] / "REVIEW-COMMENTS.md"
         assert not review_file.exists()
 
+    def test_antigravity_agent_nested_session_skips_ai_launch(
+        self, tmp_path: Path, mock_setup: dict[str, MagicMock], mock_provider: MagicMock
+    ) -> None:
+        """ANTIGRAVITY_AGENT (agy's in-session marker) triggers the nested-session guard.
+
+        Regression test for #341 — _detect_ai_cli_env is one function shared by
+        both wade implement and wade review; this exercises the review call site.
+        """
+        from wade.models.review import PRReviewStatus
+
+        thread = ReviewThread(
+            comments=[ReviewComment(author="alice", body="Fix this", path="main.py", line=10)]
+        )
+        mock_setup["get_comprehensive_review_status"].return_value = PRReviewStatus(
+            actionable_threads=[thread],
+            all_unresolved_threads=[thread],
+        )
+        mock_setup["_detect_ai_cli_env"].return_value = "ANTIGRAVITY_AGENT"
+        # A resolved tool (not the fixture's default None) so the guard is the
+        # only thing standing between start() and the inline launch below.
+        mock_setup["resolve_ai_tool"].return_value = "claude"
+
+        from crossby.ai_tools import AbstractAITool
+
+        with (
+            patch("wade.services.review_service.console") as mock_console,
+            patch.object(AbstractAITool, "get") as mock_get,
+        ):
+            result = start(target="42")
+
+        assert result is True
+        info_calls = [call.args[0] for call in mock_console.info.call_args_list]
+        assert any("ANTIGRAVITY_AGENT" in msg for msg in info_calls), (
+            f"Expected nested-session guard message in console.info calls, got: {info_calls}"
+        )
+        # The guard must short-circuit before the adapter is ever resolved/launched.
+        mock_get.assert_not_called()
+
     def test_outdated_threads_proceed_to_session(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock], mock_provider: MagicMock
     ) -> None:
@@ -619,6 +657,154 @@ class TestReviewServiceStart:
         assert result is True
         # quiet-exit menu should NOT be invoked for changes_requested
         mock_setup["_quiet_next_steps_prompt"].assert_not_called()
+
+    # --- #389: dedicated review_pr_comments key + inherited-mode explicitness gate ---
+
+    @staticmethod
+    def _seed_actionable_thread(mock_setup: dict[str, MagicMock]) -> None:
+        """Seed one actionable thread so start() reaches the resolution block."""
+        from wade.models.review import PRReviewStatus
+
+        thread = ReviewThread(
+            comments=[ReviewComment(author="alice", body="Fix this", path="main.py", line=10)]
+        )
+        mock_setup["get_comprehensive_review_status"].return_value = PRReviewStatus(
+            actionable_threads=[thread],
+            all_unresolved_threads=[thread],
+        )
+
+    def test_resolvers_use_review_pr_comments_key(
+        self, tmp_path: Path, mock_setup: dict[str, MagicMock]
+    ) -> None:
+        """All four resolvers run under the ``review_pr_comments`` key, not ``implement``."""
+        from wade.models.permission import PermissionMode
+
+        self._seed_actionable_thread(mock_setup)
+        with (
+            patch(
+                "wade.services.review_service.resolve_permission_mode",
+                return_value=PermissionMode.DEFAULT,
+            ) as mock_rpm,
+            patch("wade.services.review_service.resolve_effort", return_value=None) as mock_re,
+        ):
+            assert start(target="42") is True
+
+        assert mock_setup["resolve_ai_tool"].call_args.args[2] == "review_pr_comments"
+        assert mock_setup["resolve_model"].call_args.args[2] == "review_pr_comments"
+        assert mock_re.call_args.args[2] == "review_pr_comments"
+        assert mock_rpm.call_args.args[3] == "review_pr_comments"
+
+    def test_non_explicit_inherited_tool_model_do_not_shadow_config(
+        self, tmp_path: Path, mock_setup: dict[str, MagicMock]
+    ) -> None:
+        """Inherited resolved tool/model (the auto-launch forwards concrete values
+        non-explicitly) must be dropped to None so ai.review_pr_comments governs —
+        the same shadowing trap as permission_mode, for the two fields users set
+        most often."""
+        from wade.models.permission import PermissionMode
+
+        self._seed_actionable_thread(mock_setup)
+        with (
+            patch(
+                "wade.services.review_service.resolve_permission_mode",
+                return_value=PermissionMode.DEFAULT,
+            ),
+            patch("wade.services.review_service.resolve_effort", return_value=None),
+        ):
+            start(
+                target="42",
+                ai_tool="copilot",
+                model="gpt-5",
+                ai_explicit=False,
+                model_explicit=False,
+            )
+
+        # effective tool/model (positional arg 0) must be None, not the inherited values.
+        assert mock_setup["resolve_ai_tool"].call_args.args[0] is None
+        assert mock_setup["resolve_model"].call_args.args[0] is None
+
+    def test_explicit_inherited_tool_model_still_propagate(
+        self, tmp_path: Path, mock_setup: dict[str, MagicMock]
+    ) -> None:
+        """An explicit --ai/--model carried from implement still overrides config."""
+        from wade.models.permission import PermissionMode
+
+        self._seed_actionable_thread(mock_setup)
+        with (
+            patch(
+                "wade.services.review_service.resolve_permission_mode",
+                return_value=PermissionMode.DEFAULT,
+            ),
+            patch("wade.services.review_service.resolve_effort", return_value=None),
+        ):
+            start(
+                target="42",
+                ai_tool="claude",
+                model="claude-sonnet-5",
+                ai_explicit=True,
+                model_explicit=True,
+            )
+
+        assert mock_setup["resolve_ai_tool"].call_args.args[0] == "claude"
+        assert mock_setup["resolve_model"].call_args.args[0] == "claude-sonnet-5"
+
+    def test_non_explicit_inherited_mode_does_not_shadow_config(
+        self, tmp_path: Path, mock_setup: dict[str, MagicMock]
+    ) -> None:
+        """The #389 trap: a resolved-but-not-explicit implement mode (e.g.
+        ``"default"``) must be dropped to ``None`` so ``ai.review_pr_comments``
+        governs instead of the inherited value shadowing it."""
+        from wade.models.permission import PermissionMode
+
+        self._seed_actionable_thread(mock_setup)
+        with (
+            patch(
+                "wade.services.review_service.resolve_permission_mode",
+                return_value=PermissionMode.DEFAULT,
+            ) as mock_rpm,
+            patch("wade.services.review_service.resolve_effort", return_value=None),
+        ):
+            start(target="42", permission_mode="default", permission_mode_explicit=False)
+
+        # effective_pm (positional arg 0) must be None, not the inherited "default".
+        assert mock_rpm.call_args.args[0] is None
+
+    def test_explicit_inherited_mode_still_propagates(
+        self, tmp_path: Path, mock_setup: dict[str, MagicMock]
+    ) -> None:
+        """An explicit ``--permission-mode`` carried from implement still overrides."""
+        from wade.models.permission import PermissionMode
+
+        self._seed_actionable_thread(mock_setup)
+        with (
+            patch(
+                "wade.services.review_service.resolve_permission_mode",
+                return_value=PermissionMode.AUTO,
+            ) as mock_rpm,
+            patch("wade.services.review_service.resolve_effort", return_value=None),
+        ):
+            start(target="42", permission_mode="auto", permission_mode_explicit=True)
+
+        assert mock_rpm.call_args.args[0] == "auto"
+
+    def test_explicit_yolo_alias_propagates(
+        self, tmp_path: Path, mock_setup: dict[str, MagicMock]
+    ) -> None:
+        """``wade implement --yolo`` folds to an explicit yolo that reaches resolution."""
+        from wade.models.permission import PermissionMode
+
+        self._seed_actionable_thread(mock_setup)
+        with (
+            patch(
+                "wade.services.review_service.resolve_permission_mode",
+                return_value=PermissionMode.YOLO,
+            ) as mock_rpm,
+            patch("wade.services.review_service.resolve_effort", return_value=None),
+        ):
+            start(target="42", yolo=True)
+
+        # The --yolo fold sets permission_mode="yolo" + explicit before resolution.
+        assert mock_rpm.call_args.args[0] == PermissionMode.YOLO.value
 
 
 # ---------------------------------------------------------------------------
@@ -1403,7 +1589,7 @@ class TestGetReviewStatus:
         assert result is not None
         assert result.approvals == ["alice"]
 
-    @patch("wade.services.review_service._check_review_bot_status", return_value=None)
+    @patch("wade.services.review_service._check_review_bot_status", return_value=(None, None))
     @patch("wade.services.review_service.filter_actionable_threads")
     @patch("wade.services.review_service.git_pr.get_pr_for_branch")
     @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
@@ -1466,7 +1652,7 @@ class TestGetComprehensiveReviewStatus:
         assert result.has_changes_requested is True
         assert result.changes_requested_by == ["bob"]
 
-    @patch("wade.services.review_service._check_review_bot_status", return_value=None)
+    @patch("wade.services.review_service._check_review_bot_status", return_value=(None, None))
     @patch("wade.services.review_service.filter_actionable_threads", return_value=[])
     def test_fallback_on_not_implemented(
         self,
@@ -1621,6 +1807,8 @@ class TestQuietNextStepsPrompt:
             detach=False,
             ai_explicit=False,
             model_explicit=False,
+            effort=None,
+            effort_explicit=False,
             permission_mode=None,
             permission_mode_explicit=False,
         )
@@ -1669,6 +1857,8 @@ class TestQuietNextStepsPrompt:
             detach=True,
             ai_explicit=True,
             model_explicit=True,
+            effort=None,
+            effort_explicit=False,
             permission_mode="yolo",
             permission_mode_explicit=False,
         )
@@ -2020,3 +2210,156 @@ class TestPollForReviews:
         result = poll_for_reviews(provider, tmp_path, 99, "feat/42", bot_settle=0)
 
         assert result == PollOutcome.COMMENTS_FOUND
+
+
+# ---------------------------------------------------------------------------
+# #389 — ai.review_pr_comments.* honored by the auto-launched review session
+# ---------------------------------------------------------------------------
+
+
+class TestReviewSessionAutonomyE2E:
+    """Detach-path checks that ``ai.review_pr_comments.*`` reaches the launch
+    command through the *real* resolvers, even though the implementation flow
+    forwarded a non-explicit (config/default-derived) permission mode (#389).
+    """
+
+    @staticmethod
+    def _run_detach(
+        config: object, tmp_path: Path, **start_kwargs: object
+    ) -> tuple[bool, MagicMock, MagicMock]:
+        from crossby.ai_tools import AbstractAITool
+
+        from wade.models.review import PRReviewStatus
+
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir(exist_ok=True)
+        worktree_path = tmp_path / "wt"
+        worktree_path.mkdir(exist_ok=True)
+
+        provider = MagicMock()
+        provider.read_task.return_value = Task(
+            id="42", title="Fix the widget", body="broken", state=TaskState.OPEN
+        )
+
+        thread = ReviewThread(
+            comments=[ReviewComment(author="alice", body="Fix", path="main.py", line=1)]
+        )
+        status = PRReviewStatus(actionable_threads=[thread], all_unresolved_threads=[thread])
+
+        adapter = MagicMock()
+        adapter.build_launch_command.return_value = ["claude"]
+        adapter.is_model_compatible.return_value = True
+        # A bare MagicMock caps would drop every effort level (knowledge b545203e):
+        # set supports_effort + an unrestricted supported_efforts so "high" survives.
+        caps = MagicMock()
+        caps.supports_effort = True
+        caps.supported_efforts = ()
+        adapter.capabilities.return_value = caps
+
+        with (
+            patch("wade.services.review_service.load_config", return_value=config),
+            patch("wade.services.review_service.get_provider", return_value=provider),
+            patch("wade.services.review_service.git_repo.get_repo_root", return_value=repo_root),
+            patch(
+                "wade.services.review_service.git_repo.get_current_branch",
+                side_effect=GitError("detached"),
+            ),
+            patch(
+                "wade.services.review_service.git_branch.make_branch_name",
+                return_value="feat/42-fix-the-widget",
+            ),
+            patch(
+                "wade.services.review_service.git_worktree.list_worktrees",
+                return_value=[{"path": str(worktree_path), "branch": "feat/42-fix-the-widget"}],
+            ),
+            patch(
+                "wade.services.review_service.git_pr.get_pr_for_branch",
+                return_value=PRLookup(
+                    found=True,
+                    pr=PRRef(number=99, url="https://x", state="OPEN", isDraft=False),
+                ),
+            ),
+            patch(
+                "wade.services.review_service.get_comprehensive_review_status",
+                return_value=status,
+            ),
+            patch("wade.services.review_service.bootstrap_worktree"),
+            patch.object(AbstractAITool, "get", return_value=adapter),
+            patch("wade.services.review_service.deliver_prompt_if_needed"),
+            patch("wade.services.review_service._detect_ai_cli_env", return_value=None),
+            patch("wade.services.review_service.set_terminal_title"),
+            patch("wade.services.review_service.start_title_keeper"),
+            patch("wade.services.review_service.stop_title_keeper"),
+            patch(
+                "wade.services.review_service.launch_in_new_terminal", return_value=True
+            ) as mock_launch,
+        ):
+            result = start(target="42", detach=True, **start_kwargs)  # type: ignore[arg-type]
+
+        return result, adapter, mock_launch
+
+    def test_config_yolo_launches_in_yolo_despite_non_explicit_implement_mode(
+        self, tmp_path: Path
+    ) -> None:
+        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
+
+        config = ProjectConfig(
+            ai=AIConfig(review_pr_comments=AICommandConfig(tool="claude", permission_mode="yolo"))
+        )
+        # Mirror the post-`done` auto-launch: implement forwards a resolved-but-
+        # non-explicit "default" (the shadowing trap this fix removes).
+        result, adapter, mock_launch = self._run_detach(
+            config, tmp_path, permission_mode="default", permission_mode_explicit=False
+        )
+
+        assert result is True
+        mock_launch.assert_called_once()
+        kwargs = adapter.build_launch_command.call_args.kwargs
+        assert kwargs["yolo"] is True
+
+    def test_config_unset_falls_back_to_default_not_yolo(self, tmp_path: Path) -> None:
+        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
+
+        # review_pr_comments unset, but ai.implement.yolo is on — it must NOT leak.
+        config = ProjectConfig(
+            ai=AIConfig(
+                review_pr_comments=AICommandConfig(tool="claude"),
+                implement=AICommandConfig(permission_mode="yolo"),
+            )
+        )
+        result, adapter, _ = self._run_detach(
+            config, tmp_path, permission_mode="default", permission_mode_explicit=False
+        )
+
+        assert result is True
+        kwargs = adapter.build_launch_command.call_args.kwargs
+        assert kwargs["yolo"] is False
+
+    def test_config_tool_model_effort_reach_launch(self, tmp_path: Path) -> None:
+        from crossby.models.ai import EffortLevel
+
+        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
+
+        config = ProjectConfig(
+            ai=AIConfig(
+                review_pr_comments=AICommandConfig(
+                    tool="claude", model="claude-sonnet-5", effort="high"
+                )
+            )
+        )
+        # Mirror the auto-launch: implement forwards its resolved tool/model
+        # non-explicitly. Config must win over both — not just the model reaching
+        # launch, but the inherited "gpt-5" being dropped rather than shadowing it.
+        result, adapter, _ = self._run_detach(
+            config,
+            tmp_path,
+            ai_tool="copilot",
+            model="gpt-5",
+            ai_explicit=False,
+            model_explicit=False,
+        )
+
+        assert result is True
+        kwargs = adapter.build_launch_command.call_args.kwargs
+        assert kwargs["model"] == "claude-sonnet-5"
+        assert kwargs["effort"] == EffortLevel.HIGH

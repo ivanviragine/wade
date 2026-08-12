@@ -33,7 +33,7 @@ from __future__ import annotations
 from enum import StrEnum
 
 from crossby.models.config import ComplexityModelMapping as ComplexityModelMapping
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 
 from wade.models.permission import PermissionMode, coerce_permission_mode
 from wade.models.session import MergeStrategy
@@ -108,6 +108,7 @@ AI_COMMAND_NAMES: tuple[str, ...] = (
     "review_plan",
     "review_implementation",
     "review_batch",
+    "review_pr_comments",
 )
 """Canonical per-command AI config sections supported by WADE."""
 
@@ -130,6 +131,7 @@ class AIConfig(BaseModel):
     review_plan: AICommandConfig = AICommandConfig()
     review_implementation: AICommandConfig = AICommandConfig()
     review_batch: AICommandConfig = AICommandConfig()
+    review_pr_comments: AICommandConfig = AICommandConfig()
 
 
 class PermissionsConfig(BaseModel):
@@ -149,11 +151,96 @@ class KnowledgeConfig(BaseModel):
     path: str = "KNOWLEDGE.md"
 
 
+class PreCommitConfig(BaseModel):
+    """``hooks.pre_commit`` — commands run by the managed ``pre-commit`` git hook.
+
+    Both default to unset, so **nothing is installed unless opted in**. When
+    either is set, a per-worktree ``pre-commit`` hook runs the configured
+    command(s); a non-zero exit blocks the commit. This is a **quality** gate,
+    not an enforcement boundary — ``git commit --no-verify`` bypasses it.
+    """
+
+    lint: str | None = None
+    test: str | None = None
+
+
+class CommitMsgConfig(BaseModel):
+    """``hooks.commit_msg`` — the managed ``commit-msg`` git hook.
+
+    ``conventional: true`` installs a per-worktree ``commit-msg`` hook that
+    rejects a subject line which is not a Conventional Commit. Off by default;
+    bypassable with ``git commit --no-verify``.
+    """
+
+    conventional: bool = False
+
+
+class PostToolUseConfig(BaseModel):
+    """``hooks.post_tool_use`` — in-turn lint feedback fed to context-capable tools.
+
+    Off by default. When ``enabled`` and a lint command is resolvable, a
+    PostToolUse hook lints the just-edited file and injects any findings back to
+    the agent as context so it can fix them while the edit is still in working
+    memory. ``lint_cmd`` is a **file-scoped** linter (the edited path is appended
+    as a positional arg); when unset, wade falls back to ``pre_commit.lint`` run
+    **unscoped** (whole-repo). ``timeout`` bounds the per-edit run (skip on
+    overrun). Named ``lint_cmd`` — not ``lint`` — to avoid a string-vs-boolean
+    key collision with :attr:`PreCommitConfig.lint`.
+    """
+
+    enabled: bool = False
+    lint_cmd: str | None = None
+    timeout: int = 10
+
+
 class HooksConfig(BaseModel):
     """Hooks configuration for worktree lifecycle."""
 
     post_worktree_create: str | None = None
     copy_to_worktree: list[str] = []
+    pre_commit: PreCommitConfig = PreCommitConfig()
+    commit_msg: CommitMsgConfig = CommitMsgConfig()
+    post_tool_use: PostToolUseConfig = PostToolUseConfig()
+
+
+class DoneConfig(BaseModel):
+    """Completion-gate toggles for the session ``done`` command (#349).
+
+    Every gate defaults **on** — enforcing a complete workflow is the point of
+    the ``done`` gate. Each field is an escape hatch a project can flip off in
+    ``.wade.yml`` when a gate does not fit its flow:
+
+    - ``require_pr_summary`` — refuse when ``PR-SUMMARY.md`` is missing, empty, or
+      still a template placeholder (implementation sessions).
+    - ``require_sync`` — auto-sync a branch behind main, refuse only on conflict
+      (implementation sessions).
+    - ``require_review`` — refuse unless ``wade review implementation`` ran for
+      the current sha (both session types).
+    - ``require_resolved_threads`` — refuse on unresolved PR review threads
+      (review-pr-comments sessions).
+    - ``require_conventional_title`` — refuse when the issue title is not a
+      conventional-commit title, and sync an open PR's title to the (validated)
+      issue title so a corrected title reaches the PR (both session types). The
+      PR title is derived from the issue title verbatim, so this is what keeps
+      the ``PR Title Lint`` CI check green.
+    - ``pre_push_backstop`` — install the per-worktree pre-push git hook that
+      refuses a push lacking a current ``.wade/done@<sha>`` marker.
+    - ``max_review_passes`` — cap on the review→fix→re-review loop for
+      **implementation sessions** (#384). Once this many distinct commits have
+      been reviewed without an exact-sha ``reviewed`` marker for the current tip,
+      ``done`` completes anyway (with a notice) rather than looping forever. A
+      **strict** positive integer — ``0``/negative *and* non-int YAML scalars
+      (``true``, ``"2"``, ``2.0``) are rejected at load, not coerced (a plain
+      ``PositiveInt`` would silently accept ``true``→1, ``"2"``→2, ``2.0``→2).
+    """
+
+    require_pr_summary: bool = True
+    require_sync: bool = True
+    require_review: bool = True
+    require_resolved_threads: bool = True
+    require_conventional_title: bool = True
+    pre_push_backstop: bool = True
+    max_review_passes: StrictInt = Field(default=2, gt=0)
 
 
 class ProjectSettings(BaseModel):
@@ -182,6 +269,7 @@ class ProjectConfig(BaseModel):
     permissions: PermissionsConfig = PermissionsConfig()
     hooks: HooksConfig = HooksConfig()
     knowledge: KnowledgeConfig = KnowledgeConfig()
+    done: DoneConfig = DoneConfig()
 
     # Resolved values (set after loading, not in YAML)
     config_path: str | None = Field(default=None, exclude=True)

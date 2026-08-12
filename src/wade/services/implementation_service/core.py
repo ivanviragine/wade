@@ -25,8 +25,9 @@ from wade.git import repo as git_repo
 from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
+from wade.models.hooks import SessionPhase
 from wade.models.permission import permission_mode_launch_kwargs
-from wade.models.session import ImplementResult, MergeStatus
+from wade.models.session import ImplementResult, MergeStatus, SyncEventType, SyncResult
 from wade.models.task import Task
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
@@ -64,6 +65,7 @@ from wade.services.task_service import (
 )
 from wade.ui import prompts
 from wade.ui.console import console
+from wade.utils import stale_base
 from wade.utils.body_markers import enforce_body_budget, update_body_preserving_markers
 from wade.utils.terminal import (
     compose_implement_title,
@@ -111,6 +113,9 @@ def _detect_ai_cli_env() -> str | None:
     # Cursor CLI
     if os.environ.get("CURSOR_CLI"):
         return "CURSOR_CLI"
+    # Antigravity CLI (agy) sets ANTIGRAVITY_AGENT=1 in its session env
+    if os.environ.get("ANTIGRAVITY_AGENT"):
+        return "ANTIGRAVITY_AGENT"
     return None
 
 
@@ -205,6 +210,166 @@ def _capture_post_session_usage(
             logger.info("implementation.impl_usage_issue_updated", issue=issue_number)
 
     return effective_model
+
+
+# ---------------------------------------------------------------------------
+# Stale-base surfacing (#407) — loud, in-session signal when catchup can't advance
+# ---------------------------------------------------------------------------
+
+# Human/agent-facing phrasing per reason token, used in the prompt banner + console panel.
+_STALE_REASON_LABELS = {
+    stale_base.REASON_UNTRACKED_CONFLICT: (
+        "startup catchup hit an untracked-file collision and did not advance"
+    ),
+    stale_base.REASON_MERGE_CONFLICT: "startup catchup hit a merge conflict and aborted",
+    stale_base.REASON_SKIP_WORKTREE: (
+        "startup catchup was blocked by a wade-managed file and did not advance"
+    ),
+    stale_base.REASON_UNKNOWN: "startup catchup did not advance",
+}
+
+
+def _classify_catchup_failure(result: SyncResult) -> str:
+    """Map a failed catchup ``SyncResult`` to a stale-base reason token (#407)."""
+    if result.conflicts:
+        return stale_base.REASON_MERGE_CONFLICT
+    for ev in result.events:
+        if ev.event == SyncEventType.UNTRACKED_CONFLICT:
+            return stale_base.REASON_UNTRACKED_CONFLICT
+        if ev.event == SyncEventType.CONFLICT:
+            return stale_base.REASON_MERGE_CONFLICT
+    return stale_base.REASON_UNKNOWN
+
+
+def _commits_behind_base(repo_root: Path, base: str, current: str) -> int | None:
+    """Count commits ``current`` is behind its base, reusing the ref catchup already fetched.
+
+    Prefers ``origin/<base>`` (fetched by catchup on every reachable path before it could
+    fail) and falls back to the local ``<base>`` — never triggering a *second* fetch on
+    session start (#407). Returns ``None`` when neither ref resolves (lag unknown), which is
+    NOT the same as 0 (verified up to date): an unknown lag must never clear a marker an
+    earlier startup wrote (#408 review).
+    """
+    refs: list[str] = []
+    try:
+        if git_repo.has_remote(repo_root):
+            refs.append(f"origin/{base}")
+    except GitError:
+        pass
+    refs.append(base)
+    for ref in refs:
+        try:
+            # Inverted args on purpose: commits_ahead(repo, X, Y) = `rev-list --count Y..X`
+            # = commits on X not on Y. With X=base-ref, Y=current that is commits the base
+            # has that `current` lacks — i.e. how far `current` is BEHIND the base.
+            return git_branch.commits_ahead(repo_root, ref, current)
+        except GitError:
+            continue
+    return None
+
+
+def _surface_stale_base_if_behind(
+    *,
+    repo_root: Path,
+    worktree_path: Path,
+    base: str,
+    current: str,
+    reason: str,
+) -> str | None:
+    """Loudly surface a stale base after startup catchup, returning the prompt banner (#407).
+
+    On commits-behind > 0: escalate to prominent error-level output, persist the
+    ``.wade/stale_base`` marker (count + reason), and return the warning text to inject
+    into the initial prompt. On == 0 (branch caught up): clear any stale marker and return
+    ``None``. On unknown lag (neither base ref resolves): leave any existing marker
+    untouched and return ``None`` — never erasing an earlier startup's warning (#408 review).
+    """
+    behind = _commits_behind_base(repo_root, base, current)
+    if behind is None:
+        # Lag unknown (neither base ref resolved) — never clear a marker an earlier startup
+        # wrote, and do not emit a count-less banner. A verified 0 still clears below (#408).
+        return None
+    if behind <= 0:
+        stale_base.clear_stale_base(worktree_path)
+        return None
+
+    stale_base.write_stale_base(worktree_path, behind, reason)
+
+    plural = "S" if behind != 1 else ""
+    label = _STALE_REASON_LABELS.get(reason, _STALE_REASON_LABELS[stale_base.REASON_UNKNOWN])
+    warning = (
+        f"⚠️ BRANCH IS {behind} COMMIT{plural} BEHIND {base} — {label}. "
+        "Do NOT start work until you sync: run `wade implementation-session sync` "
+        "(resolve any conflicts it reports), then re-check with `wade status`. "
+        "You are building against an outdated base until this is resolved."
+    )
+    console.panel(
+        warning,
+        title="⚠ Stale base — startup catchup did not advance",
+        border_style="error",
+    )
+    return warning
+
+
+def _catchup_and_surface_staleness(
+    *,
+    repo_root: Path,
+    worktree_path: Path,
+    branch_name: str,
+    effective_base: str,
+) -> str | None:
+    """Run startup catchup and surface any staleness, returning the prompt banner (#407).
+
+    Catchup is documented as non-blocking: whatever it does (succeed, fail cleanly, or
+    raise), this always computes commits-behind and surfaces a stale base LOUDLY — a
+    boxed panel plus a ``.wade/stale_base`` marker the AI prompt and every subsequent
+    session-start hook re-inject. Neither the catchup call nor the staleness surfacing
+    itself may ever propagate an exception out of session start (#408 review) — that
+    would be a strictly worse regression than the silent-stale-base bug this exists to
+    fix, since it would abort the session launch entirely instead of just proceeding
+    on a base whose staleness is now at least visible.
+    """
+    catchup_result: SyncResult | None = None
+    catchup_reason = stale_base.REASON_UNKNOWN
+    catchup_raised = False
+    try:
+        catchup_result = catchup(project_root=worktree_path)
+        if not catchup_result.success:
+            catchup_reason = _classify_catchup_failure(catchup_result)
+    except Exception as exc:
+        logger.debug("start.catchup_failed", exc_info=True)
+        catchup_raised = True
+        # No result to inspect — a non-conflict GitError naming a file "would be
+        # overwritten by merge" is the skip-worktree blocker; anything else is
+        # unknown. Either way the staleness surfacing below still fires loudly.
+        catchup_reason = (
+            stale_base.REASON_SKIP_WORKTREE
+            if "overwritten by merge" in str(exc)
+            else stale_base.REASON_UNKNOWN
+        )
+
+    resolved_base = (
+        catchup_result.main_branch
+        if catchup_result and catchup_result.main_branch
+        else effective_base
+    )
+    stale_warning: str | None = None
+    try:
+        stale_warning = _surface_stale_base_if_behind(
+            repo_root=repo_root,
+            worktree_path=worktree_path,
+            base=resolved_base,
+            current=branch_name,
+            reason=catchup_reason,
+        )
+    except Exception:
+        logger.debug("start.stale_base_surface_failed", exc_info=True)
+    if catchup_raised and stale_warning is None:
+        # catchup() itself raised and nothing else was surfaced (lag unresolved, or the
+        # surfacing step above also failed) — restore the pre-#407 fallback warning so
+        # this never looks identical to a verified up-to-date branch (#408 review).
+        console.warn("Startup catchup failed — proceeding anyway.")
+    return stale_warning
 
 
 # ---------------------------------------------------------------------------
@@ -495,6 +660,7 @@ def start(
             repo_root,
             skills=IMPLEMENT_SKILLS,
             selected_ai_tool=resolved_tool,
+            session_phase=SessionPhase.IMPLEMENT,
         )
 
         # Store stacked base branch metadata so sync can use it instead of main
@@ -504,21 +670,16 @@ def start(
             (wade_dir / "base_branch").write_text(base_branch + "\n")
             console.detail(f"Stacked on {base_branch}")
 
-        # Catchup: sync worktree with base branch before AI launch (non-blocking)
-        try:
-            catchup_result = catchup(project_root=worktree_path)
-            if not catchup_result.success:
-                if catchup_result.conflicts:
-                    console.warn(
-                        "Startup catchup: merge conflict — "
-                        "run `git merge origin/<base>` manually to resolve, then "
-                        "re-run `wade implementation-session catchup --json` for inspection."
-                    )
-                else:
-                    console.warn("Startup catchup failed — proceeding anyway.")
-        except Exception:
-            logger.debug("start.catchup_failed", exc_info=True)
-            console.warn("Startup catchup failed — proceeding anyway.")
+        # Catchup: sync worktree with base branch before AI launch (non-blocking).
+        # Whatever the outcome, compute commits-behind and surface a stale base LOUDLY
+        # and in-session (marker + prompt banner) so no session ever proceeds silently
+        # on an outdated base — regardless of *why* catchup did not advance (#407).
+        stale_warning = _catchup_and_surface_staleness(
+            repo_root=repo_root,
+            worktree_path=worktree_path,
+            branch_name=branch_name,
+            effective_base=effective_base,
+        )
 
         # Add in-progress label and move to in-progress on project board (both non-critical)
         with contextlib.suppress(Exception):
@@ -529,7 +690,12 @@ def start(
         # Build implementation prompt (skipped when resuming a session)
         prompt: str | None = None
         if not resume_session_id:
-            prompt = build_implementation_prompt(task, resolved_tool, has_plan=bool(plan_content))
+            prompt = build_implementation_prompt(
+                task,
+                resolved_tool,
+                has_plan=bool(plan_content),
+                stale_warning=stale_warning,
+            )
             snippet = "\n".join(prompt.splitlines()[:5]) + "\n…"
             console.panel(snippet, title="Implementation Prompt (preview)")
         else:
@@ -761,9 +927,20 @@ def _resolve_task_target(
     target_path = Path(target).expanduser()
     if target_path.is_file():
         from wade.services.task_service import create_from_plan_file
+        from wade.utils.conventional import ConventionalTitleError
 
         console.info(f"Creating issue from plan file: {target}")
-        task = create_from_plan_file(target_path, config=config, provider=provider)
+        try:
+            task = create_from_plan_file(target_path, config=config, provider=provider)
+        except ConventionalTitleError as e:
+            # Title comes from the plan file — disable Rich markup so bracket
+            # tokens in it are shown literally rather than parsed as markup.
+            console.error(str(e), markup=False)
+            console.hint(
+                f"Fix the plan file's `# Title` heading in {target} to a "
+                "conventional-commit title, then re-run."
+            )
+            return None
         return task
 
     # Treat as issue number — strip leading "#" so "#123" and "123" both work

@@ -434,3 +434,143 @@ class TestCliParsing:
         assert (
             resolve_permission_mode("plan", None, ProjectConfig(), "plan") is PermissionMode.DEFAULT
         )
+
+    def test_review_plan_permission_mode_forwarded(self) -> None:
+        from typer.testing import CliRunner
+
+        from wade.cli.review import review_app
+        from wade.models.delegation import DelegationMode, DelegationResult
+
+        res = DelegationResult(success=True, feedback="", mode=DelegationMode.PROMPT, skipped=True)
+        with patch(
+            "wade.services.review_delegation_service.review_plan", return_value=res
+        ) as mock_review:
+            result = CliRunner().invoke(
+                review_app, ["plan", "PLAN.md", "--permission-mode", "auto"]
+            )
+        assert result.exit_code == 0
+        assert mock_review.call_args.kwargs["permission_mode"] == "auto"
+        assert mock_review.call_args.kwargs["permission_mode_explicit"] is True
+
+    def test_review_implementation_yolo_alias_forwarded(self) -> None:
+        from typer.testing import CliRunner
+
+        from wade.cli.review import review_app
+        from wade.models.delegation import DelegationMode, DelegationResult
+
+        res = DelegationResult(success=True, feedback="", mode=DelegationMode.PROMPT, skipped=True)
+        with patch(
+            "wade.services.review_delegation_service.review_implementation", return_value=res
+        ) as mock_review:
+            result = CliRunner().invoke(review_app, ["implementation", "--yolo"])
+        assert result.exit_code == 0
+        assert mock_review.call_args.kwargs["yolo"] is True
+
+    def test_review_batch_permission_mode_forwarded(self) -> None:
+        from typer.testing import CliRunner
+
+        from wade.cli.review import review_app
+        from wade.models.delegation import DelegationMode, DelegationResult
+
+        res = DelegationResult(success=True, feedback="", mode=DelegationMode.PROMPT, skipped=True)
+        with patch(
+            "wade.services.batch_review_service.review_batch", return_value=res
+        ) as mock_batch:
+            result = CliRunner().invoke(review_app, ["batch", "7", "--permission-mode", "yolo"])
+        assert result.exit_code == 0
+        assert mock_batch.call_args.kwargs["permission_mode"] == "yolo"
+        assert mock_batch.call_args.kwargs["permission_mode_explicit"] is True
+
+    def test_task_deps_permission_mode_forwarded(self) -> None:
+        from typer.testing import CliRunner
+
+        from wade.cli.task import task_app
+        from wade.models.deps import DependencyGraph
+
+        with patch(
+            "wade.services.deps_service.analyze_deps", return_value=DependencyGraph()
+        ) as mock_deps:
+            result = CliRunner().invoke(
+                task_app, ["deps", "1", "2", "--permission-mode", "accept-edits"]
+            )
+        assert result.exit_code == 0
+        assert mock_deps.call_args.kwargs["permission_mode"] == "accept-edits"
+        assert mock_deps.call_args.kwargs["permission_mode_explicit"] is True
+
+    def test_task_deps_yolo_alias_forwarded(self) -> None:
+        from typer.testing import CliRunner
+
+        from wade.cli.task import task_app
+        from wade.models.deps import DependencyGraph
+
+        with patch(
+            "wade.services.deps_service.analyze_deps", return_value=DependencyGraph()
+        ) as mock_deps:
+            result = CliRunner().invoke(task_app, ["deps", "1", "2", "--yolo"])
+        assert result.exit_code == 0
+        assert mock_deps.call_args.kwargs["yolo"] is True
+
+
+# ---------------------------------------------------------------------------
+# Permission-mode descriptors — surfaced next to the bare enum value
+# ---------------------------------------------------------------------------
+
+
+class TestPermissionModeDescriptions:
+    def test_every_mode_has_a_descriptor(self) -> None:
+        from wade.models.permission import PERMISSION_MODE_DESCRIPTIONS, PermissionMode
+
+        for mode in PermissionMode:
+            assert PERMISSION_MODE_DESCRIPTIONS.get(mode), f"missing descriptor for {mode}"
+
+    def test_default_descriptor_explains_default(self) -> None:
+        from wade.models.permission import PermissionMode, describe_permission_mode
+
+        # A `default` session must state what "default" means.
+        assert describe_permission_mode(PermissionMode.DEFAULT) == (
+            "tool prompts before edits & commands"
+        )
+
+    def test_yolo_descriptor(self) -> None:
+        from wade.models.permission import PermissionMode, describe_permission_mode
+
+        assert describe_permission_mode(PermissionMode.YOLO) == "skips all permission prompts"
+
+
+# ---------------------------------------------------------------------------
+# Deterministic guard — the yolo flag must survive into the built Claude command
+# ---------------------------------------------------------------------------
+
+
+class TestYoloFlagPresentInClaudeCommand:
+    def test_claude_yolo_command_contains_skip_permissions(self) -> None:
+        """Guards the WADE→crossby seam: requesting yolo must emit Claude's
+        ``--dangerously-skip-permissions`` in the built launch command.
+
+        If this ever fails while the flag *is* present but ignored by Claude
+        because it follows the initial-message positional, that is an upstream
+        crossby arg-ordering bug (out of scope for WADE)."""
+        from crossby.ai_tools import AbstractAITool
+        from crossby.models.ai import AIToolID
+
+        from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
+
+        adapter = AbstractAITool.get(AIToolID("claude"))
+        cmd = adapter.build_launch_command(
+            initial_message="do it",
+            **permission_mode_launch_kwargs(PermissionMode.YOLO),
+        )
+        assert "--dangerously-skip-permissions" in cmd
+
+    def test_default_command_omits_skip_permissions(self) -> None:
+        from crossby.ai_tools import AbstractAITool
+        from crossby.models.ai import AIToolID
+
+        from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
+
+        adapter = AbstractAITool.get(AIToolID("claude"))
+        cmd = adapter.build_launch_command(
+            initial_message="do it",
+            **permission_mode_launch_kwargs(PermissionMode.DEFAULT),
+        )
+        assert "--dangerously-skip-permissions" not in cmd

@@ -862,8 +862,8 @@ class TestReviewPrCommentsSessionCommands:
     ) -> None:
         """review-pr-comments-session done should push and update the draft PR path."""
         issue_number = 55
-        issue_title = "Finalize review comments session"
-        branch_name = "feat/55-finalize-review-comments-session"
+        issue_title = "fix: finalize review comments session"
+        branch_name = "feat/55-fix-finalize-review-comments-session"
         worktree_path, pr_number = _bootstrap_review_target(
             e2e_repo=e2e_repo,
             mock_gh_cli=mock_gh_cli,
@@ -883,7 +883,9 @@ class TestReviewPrCommentsSessionCommands:
         _git(["add", "-A"], cwd=worktree_path)
         _git(["commit", "-m", "fix: address review comments"], cwd=worktree_path)
 
-        result = _run(["review-pr-comments-session", "done"], cwd=worktree_path)
+        # --skip-review bypasses the review-ran gate; this contract exercises the
+        # done→PR mechanics (thread gate + push + PR update), not the review gate.
+        result = _run(["review-pr-comments-session", "done", "--skip-review"], cwd=worktree_path)
 
         assert result.returncode == 0
         origin_repo = e2e_repo.parent / "origin.git"

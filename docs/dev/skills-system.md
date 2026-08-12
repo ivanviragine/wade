@@ -72,9 +72,10 @@ The installer expands these placeholders when copying skill files to a project. 
 4. Add the skill to `INJECT_SKILLS` if it is not already there
 
 Partials carry **no H2 heading of their own** when a session folds multiple
-sections around them. For example `user-interaction.md` is heading-less prose
-injected inside each skill's `## Talking to the user` section — the skill owns the
-single heading, so the fold never produces a duplicate H2.
+sections around them. For example `user-interaction.md` is injected inside each
+skill's `## Talking to the user` section — it may use `###` subheadings (e.g. its
+`### Communication style` block) but never its own H2, so the skill owns the
+single H2 and the fold never produces a duplicate.
 
 Partials also carry **no step number**. `doc-update-step.md` is inserted at a
 different position in each session (Step 2 in implement, after review; Step 1 in
@@ -144,15 +145,18 @@ or they are not installed. Review needs its **own** `reference/recovery.md` and
 `REVIEW_SKILLS` installs only `review-pr-comments-session`, `task`, and
 `knowledge`. Some duplication between the paired files is expected and correct.
 
-### The ≤ 8,000-char budget test
+### The session-start budget test
 
 `tests/integration/test_skill_context_budget.py` pins the combined size of the
 session-start payload — launch prompt + rendered `SKILL.md` (partials expanded,
-reviews enabled) — at **≤ 8,000 chars** for each of implement / plan / review, so
-the budget cannot silently regress. The unit is **chars** (a deliberate proxy for
-tokens; measured token savings differ slightly). If a skill edit pushes a session
-over budget, move the added detail into a `reference/*.md` and leave a one-line
-pointer rather than inflating the always-loaded `SKILL.md`.
+reviews enabled) — under a fixed char ceiling (`BUDGET_CHARS`, currently **8,400**)
+for each of implement / plan / review, so the budget cannot silently regress. The
+unit is **chars** (a deliberate proxy for tokens; measured token savings differ
+slightly). If a skill edit pushes a session over budget, move the added detail
+into a `reference/*.md` and leave a one-line pointer rather than inflating the
+always-loaded `SKILL.md` — or, for a short load-bearing note that must be
+always-loaded, bump `BUDGET_CHARS` with a documented reason (the ceiling exists to
+force that decision to be explicit and reviewed, not to forbid it).
 
 **Computed placeholders must be rendered, not left literal.** `{doc_targets}` is
 resolved per project at install time (see [Documentation

@@ -22,7 +22,24 @@ from wade.skills.installer import (
 )
 
 # Session-start payload ceiling (launch prompt + rendered SKILL.md), in chars.
-BUDGET_CHARS = 8000
+# Bumped 8000 -> 8200 for #392: the implementation-session skill gained a short,
+# load-bearing note that the issue title (and thus the derived PR title) must be
+# conventional-commit format — code now enforces this at `done`, and the note
+# tells the agent how to react.
+# Bumped 8200 -> 8400 for #367: `done` now records the review outcome (reviewed /
+# skipped / gate-disabled, with the pass count) as a `## Review Status` block in
+# the PR body, and the closing-step partial gained a short, load-bearing note that
+# `--skip-review` is therefore visible, not a silent shortcut. The guard still
+# catches *silent* regressions; this bump is the explicit, reviewed adjustment it
+# is designed to force.
+# Bumped 8400 -> 9100 for #401: the shared `{user_interaction_prompt}` partial
+# gained a short "Communication style — report by exception" section (inherited by
+# all three session skills) so sessions stay terse on success and surface
+# problems/decisions with complexity + a recommendation. The added text was
+# trimmed to its minimum first (and offset by cutting per-step narration); this
+# bump is the explicit, reviewed adjustment the guard is designed to force, and it
+# still catches *silent* regressions.
+BUDGET_CHARS = 9100
 
 # (session label, launch prompt template, phase skill dir name)
 _SESSIONS = [
