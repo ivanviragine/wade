@@ -654,6 +654,20 @@ def _wade_owned_untracked_paths(cwd: Path, config: ProjectConfig) -> set[str]:
     return owned
 
 
+def _strip_wade_gitattributes_block(content: str) -> str:
+    """Remove wade's managed knowledge ``merge=union`` block, leaving only whatever
+    unrelated, user-authored rules the local ``.gitattributes`` also carries."""
+    from wade.skills.installer import (
+        KNOWLEDGE_ATTRIBUTES_MARKER_END,
+        KNOWLEDGE_ATTRIBUTES_MARKER_START,
+    )
+    from wade.utils.markdown import remove_marker_block
+
+    return remove_marker_block(
+        content, KNOWLEDGE_ATTRIBUTES_MARKER_START, KNOWLEDGE_ATTRIBUTES_MARKER_END
+    )
+
+
 def _is_discardable_untracked(cwd: Path, rel: str, merge_ref: str) -> bool:
     """True when deleting the untracked local ``rel`` loses no data.
 
@@ -664,18 +678,23 @@ def _is_discardable_untracked(cwd: Path, rel: str, merge_ref: str) -> bool:
     ``.ratings.jsonl``. Deleting those would destroy agent-authored knowledge, the exact
     class this issue guards against. So a data file is discardable only when it adds nothing
     over ``main``'s incoming version (empty, or every non-blank line already present there).
-    ``.gitattributes`` is pure wade-managed config, regenerated post-merge by
-    ``ensure_knowledge_merge_attributes`` — always safe to discard.
+    ``.gitattributes`` gets the same treatment with wade's managed ``merge=union`` block
+    (regenerated post-merge by ``ensure_knowledge_merge_attributes``) stripped first — a
+    resumed worktree can carry unrelated, user-authored rules alongside that block, and the
+    incoming base need not contain them, so it is NOT unconditionally discardable (#407
+    review).
     """
-    if rel == ".gitattributes":
-        return True
     local_path = cwd / rel
     try:
         local = local_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return True  # nothing on disk to lose
     except (OSError, UnicodeDecodeError):
         return False  # unreadable → do not risk deleting it
+    if rel == ".gitattributes":
+        local = _strip_wade_gitattributes_block(local)
     if not local.strip():
-        return True  # empty → nothing to lose
+        return True  # empty (or wade-managed content only) → nothing to lose
     incoming = git_repo.show_file_at_ref(cwd, merge_ref, rel)
     if incoming is None:
         return False  # no incoming version to fall back on → do not delete
@@ -698,6 +717,35 @@ def _reconcile_untracked_migration_files(cwd: Path, collisions: list[str]) -> No
                 logger.debug("catchup.reconcile_removed_untracked", path=rel)
         except OSError:
             logger.debug("catchup.reconcile_unlink_failed", path=rel, exc_info=True)
+
+
+def _backup_untracked_files(cwd: Path, paths: list[str]) -> dict[str, bytes]:
+    """Read *paths* before :func:`_reconcile_untracked_migration_files` deletes them, so
+    they can be put back if the merge that was meant to replace them never completes."""
+    backup: dict[str, bytes] = {}
+    for rel in paths:
+        try:
+            backup[rel] = (cwd / rel).read_bytes()
+        except OSError:
+            logger.debug("catchup.reconcile_backup_failed", path=rel, exc_info=True)
+    return backup
+
+
+def _restore_untracked_files(cwd: Path, backup: dict[str, bytes]) -> None:
+    """Write back files removed for a reconcile whose merge did not complete (conflict,
+    abort, or a failure raised before the merge even ran) — the same class of data loss
+    the reconcile itself guards against must not reappear on the failure path (#407 review).
+    """
+    for rel, data in backup.items():
+        target = cwd / rel
+        if target.exists():
+            continue  # merge already produced a (tracked) version — do not clobber it
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            logger.debug("catchup.reconcile_restored_untracked", path=rel)
+        except OSError:
+            logger.debug("catchup.reconcile_restore_failed", path=rel, exc_info=True)
 
 
 def _files_blocking_merge(error_text: str) -> list[str]:
@@ -895,6 +943,7 @@ def catchup(
     stash_sha: str | None = None
     already_fetched = False
     knowledge_reconciled = False
+    reconcile_targets: list[str] = []
 
     if preflight.dirty_category == _DirtyCategory.USER_DIRTY:
         if no_stash:
@@ -923,16 +972,15 @@ def catchup(
             # agent entries (not just fresh bootstrap content) — those are never deleted.
             # Any other untracked path, or one carrying unique local data, still aborts and
             # is surfaced loudly by Part A. This delete is deliberately catchup-only (sync()
-            # keeps aborting so it never destroys agent-authored knowledge — #407).
+            # keeps aborting so it never destroys agent-authored knowledge — #407). The actual
+            # delete is deferred to just before the merge attempt below — a --dry-run must
+            # not mutate the worktree, and a failure between here and the merge (stash, or
+            # the merge itself) must not strand the files gone with nothing to show for it
+            # (#407 review).
             if set(collisions) <= _wade_owned_untracked_paths(cwd, config) and all(
                 _is_discardable_untracked(cwd, c, merge_ref_for_probe) for c in collisions
             ):
-                _reconcile_untracked_migration_files(cwd, collisions)
-                knowledge_reconciled = True
-                if not json_output:
-                    console.detail(
-                        "Reconciled migration-owned untracked files: " + ", ".join(collisions)
-                    )
+                reconcile_targets = collisions
             else:
                 emit(SyncEventType.UNTRACKED_CONFLICT, paths="\n".join(collisions))
                 if not json_output:
@@ -969,7 +1017,30 @@ def catchup(
 
     result: SyncResult | None = None
     stash_restored = True
+    untracked_backup: dict[str, bytes] = {}
     try:
+        if reconcile_targets:
+            if dry_run:
+                if not json_output:
+                    console.detail(
+                        "Dry run: would reconcile migration-owned untracked files: "
+                        + ", ".join(reconcile_targets)
+                    )
+            else:
+                # Backed up, then deleted right before the merge that is meant to replace
+                # them — never at collision-detection time. If the merge below does not
+                # complete (conflict, abort, or a raise from an unrelated blocking file),
+                # the ``finally`` below restores them rather than leaving them silently
+                # gone (#407 review).
+                untracked_backup = _backup_untracked_files(cwd, reconcile_targets)
+                _reconcile_untracked_migration_files(cwd, reconcile_targets)
+                knowledge_reconciled = True
+                if not json_output:
+                    console.detail(
+                        "Reconciled migration-owned untracked files: "
+                        + ", ".join(reconcile_targets)
+                    )
+
         result = _catchup_merge(
             repo_root,
             cwd,
@@ -991,6 +1062,10 @@ def catchup(
             except Exception:
                 logger.debug("catchup.reensure_knowledge_attrs_failed", exc_info=True)
     finally:
+        # The merge that was supposed to replace the reconciled files did not complete —
+        # put them back so a conflict/abort/raise never leaves them silently gone.
+        if untracked_backup and not (result is not None and result.success):
+            _restore_untracked_files(cwd, untracked_backup)
         # Always restore an autostash — even if _catchup_merge raised an unreconcilable
         # skip-worktree GitError — so a session's stashed tracked changes are never
         # silently orphaned (the exact silent-data-at-risk class #407 targets). On the

@@ -138,6 +138,54 @@ class TestMigrationStraddleAdvances:
         assert "KNOWLEDGE.md" not in gitignore.split("# wade:worktree:start")[0]
 
 
+class TestCatchupDryRunPreservesFiles:
+    def test_dry_run_does_not_delete_reconcile_targets(self, tmp_path: Path) -> None:
+        """--dry-run is documented as 'Preview without merging' — it must not delete the
+        untracked migration files it would otherwise reconcile (#407 review)."""
+        wt = _build_straddle(tmp_path)
+        before = (wt / ".gitattributes").read_text(encoding="utf-8")
+
+        with patch(f"{_SYNC}.load_config", return_value=_cfg()):
+            result = catchup(dry_run=True, project_root=wt)
+
+        assert result.success is True, result.events
+        assert (wt / ".gitattributes").read_text(encoding="utf-8") == before
+        # Nothing was actually merged.
+        _git(wt, "fetch", "origin")
+        assert git_branch.commits_ahead(wt, "origin/main", "feat/1-x") == 1
+
+
+class TestCatchupRestoresOnIncompleteMerge:
+    def test_conflict_unrelated_to_reconcile_restores_deleted_files(self, tmp_path: Path) -> None:
+        """If the reconcile deletes the migration-owned untracked files but the merge then
+        aborts for an unrelated reason (a real conflict elsewhere), the deleted files must
+        come back rather than vanish with no merge to show for it (#407 review)."""
+        wt = _build_straddle(tmp_path)
+        repo = tmp_path / "repo"
+
+        # A further commit on main, conflicting with a further commit on the feature
+        # branch, on a file untouched by the migration itself.
+        (repo / "README.md").write_text("main change\n", encoding="utf-8")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-m", "main: touch README")
+        _git(repo, "push", "origin", "main")
+
+        (wt / "README.md").write_text("feature change\n", encoding="utf-8")
+        _git(wt, "add", "-A")
+        _git(wt, "commit", "-m", "feat: touch README")
+
+        before = (wt / ".gitattributes").read_text(encoding="utf-8")
+
+        with patch(f"{_SYNC}.load_config", return_value=_cfg()):
+            result = catchup(project_root=wt)
+
+        assert result.success is False
+        assert "README.md" in result.conflicts
+        # The reconciled untracked file must be restored, not lost, since the merge
+        # that was meant to replace it never completed.
+        assert (wt / ".gitattributes").read_text(encoding="utf-8") == before
+
+
 class TestNonWadeUntrackedAborts:
     def test_collision_with_non_wade_path_aborts_and_preserves(self, tmp_path: Path) -> None:
         from wade.models.session import SyncEventType
@@ -232,9 +280,39 @@ class TestIsDiscardableUntracked:
         _git(repo, "commit", "-m", "add knowledge")
         return repo
 
-    def test_gitattributes_always_discardable(self, tmp_path: Path) -> None:
+    def test_gitattributes_missing_locally_is_discardable(self, tmp_path: Path) -> None:
         repo = tmp_path / "repo"
         _init_repo(repo)
+        assert _is_discardable_untracked(repo, ".gitattributes", "HEAD") is True
+
+    def test_gitattributes_with_only_wade_block_is_discardable(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        ensure_knowledge_merge_attributes(repo, _cfg())  # writes ONLY the wade block
+        assert _is_discardable_untracked(repo, ".gitattributes", "HEAD") is True
+
+    def test_gitattributes_with_unrelated_local_rule_not_discardable(self, tmp_path: Path) -> None:
+        """A user-authored rule alongside wade's marker must NOT be silently discarded when
+        the incoming base doesn't have it (#407 review)."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _git(repo, "commit", "--allow-empty", "-m", "init")  # HEAD has no .gitattributes
+        ensure_knowledge_merge_attributes(repo, _cfg())
+        gitattrs = repo / ".gitattributes"
+        gitattrs.write_text(
+            "*.bin filter=lfs\n" + gitattrs.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        assert _is_discardable_untracked(repo, ".gitattributes", "HEAD") is False
+
+    def test_gitattributes_with_unrelated_rule_also_upstream_is_discardable(
+        self, tmp_path: Path
+    ) -> None:
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        (repo / ".gitattributes").write_text("*.bin filter=lfs\n", encoding="utf-8")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-m", "add gitattributes")
+        ensure_knowledge_merge_attributes(repo, _cfg())  # appends the wade block locally
         assert _is_discardable_untracked(repo, ".gitattributes", "HEAD") is True
 
     def test_empty_local_is_discardable(self, tmp_path: Path) -> None:
