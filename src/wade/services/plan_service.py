@@ -814,7 +814,12 @@ def _branch_work_in_flight(repo_root: Path, branch_name: str, base: str) -> bool
     try:
         return git_branch.commits_ahead(repo_root, branch_name, compare_base) > 1
     except GitError:
-        return False
+        # Cannot tell how far the branch has advanced (base deleted upstream, or a
+        # narrow clone that lacks it). Fail CLOSED — treat as in-flight so the
+        # retarget requires explicit confirmation rather than silently diverging
+        # the worktree's merge target from the PR (#376 review).
+        logger.debug("plan.in_flight_commits_check_failed", exc_info=True)
+        return True
 
 
 def _base_retarget_is_safe(

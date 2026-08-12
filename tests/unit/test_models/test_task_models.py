@@ -174,6 +174,13 @@ class TestParseBaseBranchFromBody:
         # validator can flag it rather than silently truncating to "use".
         assert parse_base_branch_from_body("## Base Branch\nuse develop\n") == "use develop"
 
+    def test_unrelated_heading_prefix_not_misparsed(self) -> None:
+        # A different heading that merely starts with "Base Branch" must NOT be read
+        # as a declaration — the heading is matched exactly, mirroring the sections
+        # parser so validate_plan_dir's section-key check stays consistent (#376).
+        body = "## Base Branch Notes\nsome prose about branching\n"
+        assert parse_base_branch_from_body(body) is None
+
 
 class TestParseComplexityFromLabels:
     def test_parses_lowercase_label(self) -> None:

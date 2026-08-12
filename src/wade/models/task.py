@@ -155,14 +155,19 @@ def parse_base_branch_from_body(body: str) -> str | None:
     in_section = False
     for line in body.split("\n"):
         stripped = line.strip()
-        if stripped.lower().startswith("## base branch"):
-            in_section = True
-            continue
-        if in_section:
-            if stripped.startswith("## "):
+        if stripped.startswith("## "):
+            # Match the heading EXACTLY, mirroring PlanFile.sections' parser. A
+            # prefix match ("## base branch"...) would misread an unrelated
+            # "## Base Branch Notes" heading as a declaration — and since
+            # validate_plan_dir keys its empty-section check on the exact
+            # "base branch" section name, that misparse would slip through (#376).
+            if stripped[3:].strip().lower() == "base branch":
+                in_section = True
+                continue
+            if in_section:
                 break  # Next section — no value found
-            if stripped:
-                return stripped.strip(_BASE_BRANCH_EDGE_CHARS) or None
+        elif in_section and stripped:
+            return stripped.strip(_BASE_BRANCH_EDGE_CHARS) or None
     return None
 
 

@@ -1088,6 +1088,19 @@ class TestBranchWorkInFlight:
         ):
             assert _branch_work_in_flight(tmp_path, "feat/1-x", "main") is False
 
+    def test_unresolvable_base_fails_closed_as_in_flight(self, tmp_path: Path) -> None:
+        # commits_ahead raises (base deleted upstream / narrow clone) → we cannot
+        # tell whether work is in flight, so err on the safe side and treat it as
+        # in-flight so the retarget requires confirmation (#376 review).
+        from wade.git.repo import GitError
+
+        with (
+            patch("wade.git.worktree.list_worktrees", return_value=[]),
+            patch("wade.git.branch.resolve_start_point", return_value="develop"),
+            patch("wade.git.branch.commits_ahead", side_effect=GitError("bad revision")),
+        ):
+            assert _branch_work_in_flight(tmp_path, "feat/1-x", "develop") is True
+
 
 class TestBaseRetargetGuard:
     def _issue(self) -> Task:
