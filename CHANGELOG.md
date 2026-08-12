@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.44.3] — 2026-08-12
+
+### Refactoring
+
+- move deterministic git-hook logic out of skills.installer (service-layer boundary) (#412) (d93468d)
+
 ## [v0.44.2] — 2026-08-12
 
 ### Bug Fixes

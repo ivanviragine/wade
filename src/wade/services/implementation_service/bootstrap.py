@@ -456,12 +456,12 @@ def _install_managed_git_hooks(worktree_path: Path, config: ProjectConfig) -> No
     and the installer graceful-degrades on old git, so a failure is swallowed to a
     warning and never crashes bootstrap.
     """
-    from wade.skills.installer import (
+    from wade.git.hooks import (
         build_commit_msg_hook_script,
         build_pre_commit_hook_script,
-        load_hook_template,
         reconcile_worktree_git_hooks,
     )
+    from wade.utils.templates import load_hook_template
 
     hooks: dict[str, str] = {}
 
