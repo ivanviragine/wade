@@ -1117,6 +1117,29 @@ class TestImplementationStartBaseBranch:
 
         assert result.success is False
 
+    def test_override_to_main_clears_stale_base_file(self, tmp_path: Path) -> None:
+        """`--base main` retargets a PR previously on a non-main base and deletes the
+        stale .wade/base_branch so catchup/sync/done stop targeting the old base (#376)."""
+        provider = MagicMock()
+        provider.read_task.return_value = Task(id="42", title="Test task")
+
+        with contextlib.ExitStack() as stack:
+            self._enter_common_patches(stack, tmp_path, provider, pr_base="develop")
+            update_base = stack.enter_context(
+                patch("wade.git.pr.update_pr_base", return_value=True)
+            )
+            # A stale pin left by a previous non-main run on the reused worktree.
+            wade_dir = self._worktree_path(tmp_path) / ".wade"
+            wade_dir.mkdir(parents=True, exist_ok=True)
+            (wade_dir / "base_branch").write_text("develop\n")
+
+            result = start("42", project_root=tmp_path, base_branch="main")
+
+        assert result.success is True
+        update_base.assert_called_once()  # develop -> main retarget
+        base_file = self._worktree_path(tmp_path) / ".wade" / "base_branch"
+        assert not base_file.exists()
+
 
 # ---------------------------------------------------------------------------
 # Implementation batch tests

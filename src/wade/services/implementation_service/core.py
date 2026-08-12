@@ -692,11 +692,19 @@ def start(
         # branch — written whenever the effective base differs from main, not only
         # when --base was passed (e.g. a base inherited from the draft PR). This is
         # the core fix for the wrong-merge-target gap (#376).
+        wade_dir = worktree_path / ".wade"
+        base_file = wade_dir / "base_branch"
         if effective_base != main_branch:
-            wade_dir = worktree_path / ".wade"
             wade_dir.mkdir(exist_ok=True)
-            (wade_dir / "base_branch").write_text(effective_base + "\n")
+            base_file.write_text(effective_base + "\n")
             console.detail(f"Base branch: {effective_base}")
+        elif base_file.exists():
+            # The effective base resolved back to main (e.g. `--base main` retargeted
+            # a reused worktree's PR that was previously pinned to a non-main base).
+            # Leaving the old pin in place would make catchup/sync/done keep merging
+            # into the stale base and defeat the override — delete it (#376).
+            base_file.unlink()
+            console.detail(f"Base branch reset to {main_branch}")
 
         # Catchup: sync worktree with base branch before AI launch (non-blocking).
         # Whatever the outcome, compute commits-behind and surface a stale base LOUDLY

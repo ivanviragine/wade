@@ -6,6 +6,7 @@ from ``templates/prompts/`` (not symlinked) — see knowledge entry b61e247e.
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 import structlog
@@ -129,6 +130,17 @@ def bootstrap_draft_pr(
     # as a remote tracking ref. If neither a local branch nor origin/<base> exists,
     # fail with an actionable message rather than a raw git error from create_branch.
     start_point = git_branch.resolve_start_point(repo_root, effective_base)
+    if start_point is None and git_repo.has_remote(repo_root):
+        # A local cache miss is NOT proof the branch is absent on origin — a teammate
+        # may have just pushed it and our remote-tracking refs are stale. Fetch the
+        # specific ref into origin/<base> (an explicit refspec so it also works in a
+        # single-branch clone whose default fetch refspec would skip it), then
+        # re-resolve before giving up (#376).
+        with contextlib.suppress(GitError):
+            git_repo.fetch_ref(
+                repo_root, "origin", f"{effective_base}:refs/remotes/origin/{effective_base}"
+            )
+        start_point = git_branch.resolve_start_point(repo_root, effective_base)
     if start_point is None:
         console.error(
             f"Base branch '{effective_base}' does not exist locally or on origin. "

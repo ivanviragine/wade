@@ -120,7 +120,7 @@ class TestSyncReadsBaseBranchMetadata:
     @patch("wade.services.implementation_service.sync.git_branch")
     @patch("wade.services.implementation_service.sync.git_repo")
     @patch("wade.services.implementation_service.sync.load_config")
-    def test_sync_ignores_nonexistent_stored_base(
+    def test_sync_honors_uncached_stored_base(
         self,
         mock_config: MagicMock,
         mock_repo: MagicMock,
@@ -128,7 +128,10 @@ class TestSyncReadsBaseBranchMetadata:
         mock_sync: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """A stored base that exists neither locally nor on origin falls back to main."""
+        """A stored base is authoritative even when cached neither locally nor on
+        origin (single-branch / narrow-refspec clone). It must be honored, NOT
+        silently swapped for main — the fetch/merge path surfaces an unresolvable
+        base as an error instead (#376)."""
         from wade.models.config import ProjectConfig
         from wade.services.implementation_service import sync
 
@@ -139,17 +142,58 @@ class TestSyncReadsBaseBranchMetadata:
         mock_repo.has_remote.return_value = False
         mock_repo.detect_main_branch.return_value = "main"
         mock_branch.commits_ahead.return_value = 0
+        # Neither the local branch nor origin/<base> is cached — yet the stored
+        # base must still be the resolved target, not a fall-back to main.
         mock_branch.branch_exists.return_value = False
         mock_branch.remote_ref_exists.return_value = False
 
         wade_dir = tmp_path / ".wade"
         wade_dir.mkdir()
-        (wade_dir / "base_branch").write_text("ghost-branch\n")
+        (wade_dir / "base_branch").write_text("develop\n")
 
         result = sync(project_root=tmp_path)
 
         assert result.success is True
-        assert result.main_branch == "main"
+        assert result.main_branch == "develop"
+
+    @patch("wade.services.implementation_service.sync.git_sync")
+    @patch("wade.services.implementation_service.sync.git_branch")
+    @patch("wade.services.implementation_service.sync.git_repo")
+    @patch("wade.services.implementation_service.sync.load_config")
+    def test_sync_unresolvable_stored_base_errors_not_falls_back(
+        self,
+        mock_config: MagicMock,
+        mock_repo: MagicMock,
+        mock_branch: MagicMock,
+        mock_sync: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """When even a fetch cannot resolve the stored base, sync surfaces a
+        behind-count error against that base rather than silently merging into
+        main (#376)."""
+        from wade.git.repo import GitError
+        from wade.models.config import ProjectConfig
+        from wade.services.implementation_service import sync
+
+        mock_config.return_value = ProjectConfig()
+        mock_repo.get_repo_root.return_value = tmp_path
+        mock_repo.get_current_branch.return_value = "feat/20-child"
+        mock_repo.is_clean.return_value = True
+        # has_remote True → _resolve_merge_ref fetches and returns origin/develop,
+        # but the ref is unresolvable so commits_ahead raises.
+        mock_repo.has_remote.return_value = True
+        mock_branch.commits_ahead.side_effect = GitError("bad revision 'origin/develop'")
+
+        wade_dir = tmp_path / ".wade"
+        wade_dir.mkdir()
+        (wade_dir / "base_branch").write_text("develop\n")
+
+        result = sync(project_root=tmp_path)
+
+        assert result.success is False
+        assert result.main_branch == "develop"
+        errors = [e for e in result.events if e.event == SyncEventType.ERROR]
+        assert any(e.data.get("reason") == "behind_count_failed" for e in errors)
 
     @patch("wade.services.implementation_service.sync.git_sync")
     @patch("wade.services.implementation_service.sync.git_branch")

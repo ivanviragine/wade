@@ -26,6 +26,15 @@ _BAD_BASE = (
     "# feat: add retry logic\n\n## Complexity\ncomplex\n\n"
     "## Base Branch\nuse develop\n\n## Tasks\n- Do it\n"
 )
+# Heading present but no value before the next section — must be an error, not
+# silently treated as "absent → default to main" (#376).
+_EMPTY_BASE = (
+    "# feat: add retry logic\n\n## Complexity\ncomplex\n\n## Base Branch\n\n## Tasks\n- Do it\n"
+)
+# Heading present with only a placeholder (backticks) that parses to no value.
+_EMPTY_BASE_BACKTICKS = (
+    "# feat: add retry logic\n\n## Complexity\ncomplex\n\n## Base Branch\n``\n\n## Tasks\n- Do it\n"
+)
 
 
 def _write(plan_dir: Path, name: str, content: str) -> None:
@@ -46,6 +55,20 @@ class TestValidateBaseBranch:
 
     def test_malformed_base_is_an_error(self, tmp_path: Path) -> None:
         _write(tmp_path, "PLAN.md", _BAD_BASE)
+        result = validate_plan_dir(tmp_path)
+        assert result.has_errors is True
+        assert any("Base Branch" in d.message for d in result.errors)
+
+    def test_empty_base_section_is_an_error(self, tmp_path: Path) -> None:
+        # A present-but-empty section is distinct from an omitted one: the parsed
+        # value is None for both, so the section map disambiguates (#376).
+        _write(tmp_path, "PLAN.md", _EMPTY_BASE)
+        result = validate_plan_dir(tmp_path)
+        assert result.has_errors is True
+        assert any("Base Branch" in d.message for d in result.errors)
+
+    def test_empty_base_section_placeholder_is_an_error(self, tmp_path: Path) -> None:
+        _write(tmp_path, "PLAN.md", _EMPTY_BASE_BACKTICKS)
         result = validate_plan_dir(tmp_path)
         assert result.has_errors is True
         assert any("Base Branch" in d.message for d in result.errors)

@@ -563,14 +563,20 @@ def plan(
                 plan_files = selected
                 console.info(f"Found {len(plan_files)} plan file(s)")
                 if len(plan_files) == 1:
-                    _attach_plan_to_existing_issue(
+                    if not _attach_plan_to_existing_issue(
                         provider=provider,
                         config=config,
                         issue=existing_issue,
                         plan_file=plan_files[0],
                         repo_root=repo_root,
                         yolo=resolved_yolo,
-                    )
+                    ):
+                        # The retarget guard refused an in-flight base change. Preserve
+                        # the freshly generated plan and abort — finalizing here would
+                        # discard it when the worktree is force-removed below (#376).
+                        _preserve_generated_plans(plan_dir, repo_root, planning_worktree)
+                        stop_title_keeper()
+                        return False
                     finalize_issue_numbers = [existing_issue.id]
                 else:
                     finalize_issue_numbers = _supersede_issue_with_plans(
@@ -906,7 +912,7 @@ def _attach_plan_to_existing_issue(
     repo_root: Path | None,
     *,
     yolo: bool = False,
-) -> None:
+) -> bool:
     """Attach a single plan file to an existing issue via a draft PR.
 
     Reuses the same label / PR / body-update logic as _create_issues_from_plans
@@ -916,6 +922,13 @@ def _attach_plan_to_existing_issue(
     When the plan declares a base branch that differs from an already-in-flight
     PR's base, the retarget is guarded (:func:`_base_retarget_is_safe`) so it is
     never applied silently.
+
+    Returns ``False`` only when that guard refuses the retarget — the caller must
+    then preserve the freshly generated plan and abort finalization instead of
+    finalizing the issue against the stale PR and force-removing the worktree,
+    which would discard the replacement plan (#376). Every other path (attached,
+    draft-PR creation failed, or not in a git repo) returns ``True`` so the
+    existing finalize-then-cleanup flow is unchanged.
     """
     # Add complexity label
     if plan_file.complexity:
@@ -927,7 +940,7 @@ def _attach_plan_to_existing_issue(
     # Bootstrap draft PR with full plan content
     if repo_root is not None:
         if not _base_retarget_is_safe(config, issue, plan_file, repo_root, yolo=yolo):
-            return
+            return False
         pr_info = bootstrap_draft_pr(
             issue_number=issue.id,
             issue_title=issue.title,
@@ -952,6 +965,7 @@ def _attach_plan_to_existing_issue(
             console.warn(f"Could not create draft PR for #{issue.id}")
     else:
         console.warn("Not in a git repo — skipping draft PR creation.")
+    return True
 
 
 _SUPERSEDE_BANNER_RE = re.compile(r"\A\s*>\s*\*\*Superseded by[^\n]*\*\*\n*")

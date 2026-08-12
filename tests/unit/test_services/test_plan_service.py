@@ -948,7 +948,7 @@ class TestAttachPlanToExistingIssue:
             # No open PR yet → the in-flight retarget guard is a no-op (never hits gh).
             patch("wade.git.pr.get_pr_for_branch", return_value=PRLookup(found=False)),
         ):
-            _attach_plan_to_existing_issue(
+            attached = _attach_plan_to_existing_issue(
                 provider=provider,
                 config=ProjectConfig(),
                 issue=issue,
@@ -956,10 +956,38 @@ class TestAttachPlanToExistingIssue:
                 repo_root=tmp_path,
             )
 
+        assert attached is True
         provider.update_task.assert_called_once()
         updated_body = provider.update_task.call_args.kwargs["body"]
         assert "Original body" in updated_body
         assert "PR #99" in updated_body
+
+    def test_returns_false_when_retarget_guard_refuses(self, tmp_path: Path) -> None:
+        # When the in-flight retarget guard refuses, the plan must NOT be attached
+        # and the caller is told so (False) — the bootstrap is never reached (#376).
+        provider = MagicMock()
+        issue = Task(id="42", title="Some issue", body="Original body")
+        plan_path = tmp_path / "PLAN.md"
+        plan_path.write_text("# feat: thing\n\n## Tasks\n- Do it\n")
+        plan_file = PlanFile.from_markdown(plan_path)
+
+        with (
+            patch("wade.services.plan_service._base_retarget_is_safe", return_value=False),
+            patch("wade.services.plan_service.bootstrap_draft_pr") as mock_bootstrap,
+            patch("wade.services.plan_service.add_complexity_label"),
+            patch("wade.services.plan_service.console"),
+        ):
+            attached = _attach_plan_to_existing_issue(
+                provider=provider,
+                config=ProjectConfig(),
+                issue=issue,
+                plan_file=plan_file,
+                repo_root=tmp_path,
+            )
+
+        assert attached is False
+        mock_bootstrap.assert_not_called()
+        provider.update_task.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -1868,6 +1896,43 @@ class TestStrictValidationGateWiring:
         mock_attach.assert_called_once()
         assert mock_attach.call_args.kwargs["plan_file"] is good
         mock_supersede.assert_not_called()
+
+    def test_existing_issue_refused_retarget_preserves_plan(self, tmp_path: Path) -> None:
+        # The plan is valid but attaching it would retarget an in-flight PR, which the
+        # guard refuses. plan() must salvage the freshly generated plan and abort —
+        # never finalize the issue against the stale PR and force-remove the worktree,
+        # discarding the replacement plan (#376).
+        provider = MagicMock()
+        existing = Task(id="330", title="Some bug", body="Original")
+        provider.read_task.return_value = existing
+        adapter = self._adapter()
+        good = self._valid(tmp_path)
+        validation = PlanValidationResult(diagnostics=[])
+
+        with contextlib.ExitStack() as stack:
+            for p in self._base_patches(tmp_path, provider, adapter, [good], validation):
+                stack.enter_context(p)
+            mock_prompts = stack.enter_context(patch("wade.services.plan_service.prompts"))
+            mock_prompts.is_tty.return_value = False
+            # Guard refuses the in-flight retarget.
+            mock_attach = stack.enter_context(
+                patch(
+                    "wade.services.plan_service._attach_plan_to_existing_issue",
+                    return_value=False,
+                )
+            )
+            mock_finalize = stack.enter_context(
+                patch("wade.services.plan_service._finalize_issues", return_value=None)
+            )
+            preserve = stack.enter_context(
+                patch("wade.services.plan_service._preserve_generated_plans")
+            )
+
+            assert plan(project_root=tmp_path, issue_id="330") is False
+
+        mock_attach.assert_called_once()
+        mock_finalize.assert_not_called()  # aborted before finalization
+        preserve.assert_called_once()  # replacement plan salvaged, not discarded
 
     def test_existing_issue_all_invalid_mutates_nothing(self, tmp_path: Path) -> None:
         provider = MagicMock()

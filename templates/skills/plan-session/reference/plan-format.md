@@ -50,6 +50,9 @@ develop
   configured main branch and behavior is unchanged.
 - The value is a single branch name (no spaces or special characters). A
   malformed value fails `wade plan-session done`.
+- A present `## Base Branch` heading **must** name a branch — an empty section
+  (heading with no value) is rejected by `wade plan-session done`, not treated
+  as "omitted". Remove the heading to default to main.
 - The branch must exist (locally or on the remote) before you run
   `wade implement`, or draft-PR creation fails with an actionable error.
 - To override or set a base at implement time instead, use

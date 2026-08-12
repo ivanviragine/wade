@@ -93,6 +93,7 @@ def validate_plan_dir(plan_dir: Path) -> PlanValidationResult:
     - No plan files found
     - Missing ``# Title`` heading
     - Missing or invalid ``## Complexity`` section
+    - Empty ``## Base Branch`` section (present heading with no value)
     - Malformed ``## Base Branch`` value (present but not a well-formed git ref)
 
     Warnings (exit 0):
@@ -145,7 +146,23 @@ def validate_plan_dir(plan_dir: Path) -> PlanValidationResult:
                 )
             )
 
-        if plan.base_branch is not None and not is_valid_git_ref(plan.base_branch):
+        # ``plan.base_branch is None`` conflates an omitted section (valid — defaults
+        # to main) with a present-but-empty one (malformed). The parsed section map
+        # tells them apart: a ``## Base Branch`` heading always registers a
+        # ``"base branch"`` key, so a present key with no parsed value is the empty
+        # case, which the documented rule forbids (#376 review).
+        if "base branch" in plan.sections and plan.base_branch is None:
+            result.diagnostics.append(
+                PlanDiagnostic(
+                    file=md_file.name,
+                    level=PlanDiagnosticLevel.ERROR,
+                    message=(
+                        "Empty '## Base Branch' section. A present section must name a "
+                        "single git branch; remove the section to default to main."
+                    ),
+                )
+            )
+        elif plan.base_branch is not None and not is_valid_git_ref(plan.base_branch):
             result.diagnostics.append(
                 PlanDiagnostic(
                     file=md_file.name,

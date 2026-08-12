@@ -1387,8 +1387,10 @@ class TestDone:
         assert mock_pr.called
         assert mock_pr.call_args[1]["main_branch"] == "develop"
 
-    def test_done_ignores_nonexistent_stored_base(self, tmp_git_repo: Path) -> None:
-        """A stored base that exists neither locally nor on origin falls back to main (#376)."""
+    def test_done_honors_uncached_stored_base(self, tmp_git_repo: Path) -> None:
+        """A stored base is authoritative even when cached neither locally nor on
+        origin (narrow-refspec clone): done() targets it, letting `gh pr create
+        --base` surface an unavailable ref rather than silently targeting main (#376)."""
         import subprocess
 
         from wade.git.worktree import create_worktree
@@ -1431,7 +1433,7 @@ class TestDone:
             done(project_root=wt_dir)
 
         assert mock_pr.called
-        assert mock_pr.call_args[1]["main_branch"] == "main"
+        assert mock_pr.call_args[1]["main_branch"] == "ghost-branch"
 
 
 # ---------------------------------------------------------------------------
