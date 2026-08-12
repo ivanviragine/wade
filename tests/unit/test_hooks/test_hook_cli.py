@@ -776,17 +776,16 @@ class TestMemoryAllowPathsResolver:
         """
         from wade.hooks.cli import _encode_claude_project_path
 
-        # pytest's tmp_path lives under the OS temp dir, which the scratch
-        # exemption (#409) now matches by prefix — redirect the subprocess's own
-        # $TMPDIR elsewhere so `broad_target` below is not accidentally scratch.
-        monkeypatch.setenv("TMPDIR", "/nonexistent-tmpdir-for-test-isolation")
+        # `/tmp` is unconditionally in the scratch allowlist (#409) and
+        # `tempfile.gettempdir()` falls back to it when `$TMPDIR` is unusable, so
+        # overriding `$TMPDIR` alone cannot exclude `broad_target` from scratch —
+        # use a fixed non-temporary target instead (it need not exist on disk).
         config_home = tmp_path / "claude-home"
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_home))
         encoded = _encode_claude_project_path(Path(WT).resolve())
         project_dir = config_home / "projects" / encoded
         project_dir.mkdir(parents=True)
-        broad_target = tmp_path / "broad-target"
-        broad_target.mkdir()
+        broad_target = Path("/wade-test-broad-target")
         (project_dir / "memory").symlink_to(broad_target)
 
         target = project_dir / "memory" / "settings.json"
