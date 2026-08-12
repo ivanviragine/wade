@@ -21,7 +21,7 @@ def get_templates_dir() -> Path:
     2. Inside the installed package (pip install) — wade/templates/
     """
     # 1. Dev mode: walk up from src/wade/utils/templates.py → repo root
-    repo_root = Path(__file__).parent.parent.parent.parent
+    repo_root = get_wade_repo_root()
     dev_templates = repo_root / "templates"
     if dev_templates.is_dir() and (dev_templates / "skills").is_dir():
         return dev_templates
