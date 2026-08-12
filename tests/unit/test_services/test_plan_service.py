@@ -10,7 +10,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from crossby.models.ai import TokenUsage
 
-from wade.models.config import AIConfig, ProjectConfig
+from wade.git.pr import PRLookup, PRRef
+from wade.models.config import AIConfig, ProjectConfig, ProjectSettings
 from wade.models.task import CloseReason, Complexity, PlanFile, Task
 from wade.services.ai_resolution import resolve_ai_tool, resolve_model
 from wade.services.plan_service import (
@@ -18,6 +19,9 @@ from wade.services.plan_service import (
     PlanDiagnosticLevel,
     PlanValidationResult,
     _attach_plan_to_existing_issue,
+    _base_retarget_is_safe,
+    _branch_work_in_flight,
+    _create_issues_from_plans,
     _finalize_issues,
     _offer_to_implement,
     _persist_plan_issue_ref,
@@ -941,6 +945,8 @@ class TestAttachPlanToExistingIssue:
             ),
             patch("wade.services.plan_service.add_complexity_label"),
             patch("wade.services.plan_service.console"),
+            # No open PR yet → the in-flight retarget guard is a no-op (never hits gh).
+            patch("wade.git.pr.get_pr_for_branch", return_value=PRLookup(found=False)),
         ):
             _attach_plan_to_existing_issue(
                 provider=provider,
@@ -954,6 +960,184 @@ class TestAttachPlanToExistingIssue:
         updated_body = provider.update_task.call_args.kwargs["body"]
         assert "Original body" in updated_body
         assert "PR #99" in updated_body
+
+
+# ---------------------------------------------------------------------------
+# Base branch (#376) — plan pipeline threading + in-flight retarget guard
+# ---------------------------------------------------------------------------
+
+
+def _open_pr_lookup(number: int = 99) -> PRLookup:
+    return PRLookup(found=True, pr=PRRef(number=number, url="http://x", state="OPEN"))
+
+
+def _cfg_main() -> ProjectConfig:
+    """ProjectConfig with main_branch set to avoid detect_main_branch subprocess."""
+    return ProjectConfig(project=ProjectSettings(main_branch="main"))
+
+
+class TestCreateIssuesFromPlansBaseBranch:
+    def _make_plan(self, tmp_path: Path, *, base_section: str = "") -> PlanFile:
+        plan_path = tmp_path / "PLAN.md"
+        plan_path.write_text(
+            "# feat: thing\n\n## Complexity\nmedium\n" + base_section + "\n## Tasks\n- Do it\n"
+        )
+        return PlanFile.from_markdown(plan_path)
+
+    def test_threads_declared_base_into_bootstrap(self, tmp_path: Path) -> None:
+        plan_file = self._make_plan(tmp_path, base_section="\n## Base Branch\ndevelop\n")
+        assert plan_file.base_branch == "develop"
+        provider = MagicMock()
+        provider.create_task.return_value = Task(id="7", title="feat: thing")
+
+        with (
+            patch(
+                "wade.services.plan_service.bootstrap_draft_pr",
+                return_value={"number": 5, "url": "http://x/5"},
+            ) as mock_bootstrap,
+            patch("wade.services.plan_service.add_complexity_label"),
+            patch("wade.services.plan_service.console"),
+        ):
+            created, failed = _create_issues_from_plans(
+                provider=provider,
+                config=_cfg_main(),
+                plan_files=[plan_file],
+                repo_root=tmp_path,
+            )
+
+        assert created == ["7"]
+        assert failed == []
+        assert mock_bootstrap.call_args.kwargs["base_branch"] == "develop"
+
+    def test_absent_base_section_passes_none(self, tmp_path: Path) -> None:
+        plan_file = self._make_plan(tmp_path)
+        assert plan_file.base_branch is None
+        provider = MagicMock()
+        provider.create_task.return_value = Task(id="8", title="feat: thing")
+
+        with (
+            patch(
+                "wade.services.plan_service.bootstrap_draft_pr",
+                return_value={"number": 5, "url": "http://x/5"},
+            ) as mock_bootstrap,
+            patch("wade.services.plan_service.add_complexity_label"),
+            patch("wade.services.plan_service.console"),
+        ):
+            _create_issues_from_plans(
+                provider=provider,
+                config=_cfg_main(),
+                plan_files=[plan_file],
+                repo_root=tmp_path,
+            )
+
+        assert mock_bootstrap.call_args.kwargs["base_branch"] is None
+
+
+class TestBranchWorkInFlight:
+    def test_active_worktree_is_in_flight(self, tmp_path: Path) -> None:
+        with patch(
+            "wade.git.worktree.list_worktrees",
+            return_value=[{"path": "/wt", "branch": "feat/1-x"}],
+        ):
+            assert _branch_work_in_flight(tmp_path, "feat/1-x", "main") is True
+
+    def test_commits_past_scaffold_is_in_flight(self, tmp_path: Path) -> None:
+        with (
+            patch("wade.git.worktree.list_worktrees", return_value=[]),
+            patch("wade.git.branch.resolve_start_point", return_value="main"),
+            patch("wade.git.branch.commits_ahead", return_value=3),
+        ):
+            assert _branch_work_in_flight(tmp_path, "feat/1-x", "main") is True
+
+    def test_bare_scaffold_is_not_in_flight(self, tmp_path: Path) -> None:
+        with (
+            patch("wade.git.worktree.list_worktrees", return_value=[]),
+            patch("wade.git.branch.resolve_start_point", return_value="main"),
+            patch("wade.git.branch.commits_ahead", return_value=1),
+        ):
+            assert _branch_work_in_flight(tmp_path, "feat/1-x", "main") is False
+
+
+class TestBaseRetargetGuard:
+    def _issue(self) -> Task:
+        return Task(id="42", title="feat: thing")
+
+    def _plan(self, tmp_path: Path, base: str | None) -> PlanFile:
+        section = f"\n## Base Branch\n{base}\n" if base else "\n"
+        plan_path = tmp_path / "PLAN.md"
+        plan_path.write_text(f"# feat: thing\n\n## Complexity\nmedium\n{section}\n## Tasks\n- Do\n")
+        return PlanFile.from_markdown(plan_path)
+
+    def _run(self, tmp_path: Path, base: str | None, *, yolo: bool = False) -> bool:
+        return _base_retarget_is_safe(
+            _cfg_main(), self._issue(), self._plan(tmp_path, base), tmp_path, yolo=yolo
+        )
+
+    def test_no_open_pr_is_safe(self, tmp_path: Path) -> None:
+        with patch("wade.git.pr.get_pr_for_branch", return_value=PRLookup(found=False)):
+            assert self._run(tmp_path, "develop") is True
+
+    def test_unchanged_base_is_safe(self, tmp_path: Path) -> None:
+        with (
+            patch("wade.git.pr.get_pr_for_branch", return_value=_open_pr_lookup()),
+            patch("wade.git.pr.get_pr_base_branch", return_value="develop"),
+        ):
+            assert self._run(tmp_path, "develop") is True
+
+    def test_base_change_not_in_flight_is_safe(self, tmp_path: Path) -> None:
+        with (
+            patch("wade.git.pr.get_pr_for_branch", return_value=_open_pr_lookup()),
+            patch("wade.git.pr.get_pr_base_branch", return_value="main"),
+            patch("wade.services.plan_service._branch_work_in_flight", return_value=False),
+        ):
+            assert self._run(tmp_path, "develop") is True
+
+    def test_base_change_in_flight_non_tty_is_refused(self, tmp_path: Path) -> None:
+        with (
+            patch("wade.git.pr.get_pr_for_branch", return_value=_open_pr_lookup()),
+            patch("wade.git.pr.get_pr_base_branch", return_value="main"),
+            patch("wade.services.plan_service._branch_work_in_flight", return_value=True),
+            patch("wade.services.plan_service.prompts") as mock_prompts,
+            patch("wade.services.plan_service.console"),
+        ):
+            mock_prompts.is_tty.return_value = False
+            assert self._run(tmp_path, "develop") is False
+
+    def test_base_change_in_flight_yolo_is_refused(self, tmp_path: Path) -> None:
+        with (
+            patch("wade.git.pr.get_pr_for_branch", return_value=_open_pr_lookup()),
+            patch("wade.git.pr.get_pr_base_branch", return_value="main"),
+            patch("wade.services.plan_service._branch_work_in_flight", return_value=True),
+            patch("wade.services.plan_service.prompts") as mock_prompts,
+            patch("wade.services.plan_service.console"),
+        ):
+            mock_prompts.is_tty.return_value = True
+            assert self._run(tmp_path, "develop", yolo=True) is False
+            mock_prompts.confirm.assert_not_called()
+
+    def test_base_change_in_flight_tty_confirm_proceeds(self, tmp_path: Path) -> None:
+        with (
+            patch("wade.git.pr.get_pr_for_branch", return_value=_open_pr_lookup()),
+            patch("wade.git.pr.get_pr_base_branch", return_value="main"),
+            patch("wade.services.plan_service._branch_work_in_flight", return_value=True),
+            patch("wade.services.plan_service.prompts") as mock_prompts,
+            patch("wade.services.plan_service.console"),
+        ):
+            mock_prompts.is_tty.return_value = True
+            mock_prompts.confirm.return_value = True
+            assert self._run(tmp_path, "develop") is True
+
+    def test_base_removal_keeps_pr_base_and_proceeds(self, tmp_path: Path) -> None:
+        # Plan drops the Base Branch section while the PR targets a non-main base:
+        # wade never auto-reverts, so this proceeds (bootstrap won't retarget) after a warning.
+        with (
+            patch("wade.git.pr.get_pr_for_branch", return_value=_open_pr_lookup()),
+            patch("wade.git.pr.get_pr_base_branch", return_value="develop"),
+            patch("wade.services.plan_service._branch_work_in_flight", return_value=True),
+            patch("wade.services.plan_service.console") as mock_console,
+        ):
+            assert self._run(tmp_path, None) is True
+            mock_console.warn.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

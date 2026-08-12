@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -1016,6 +1017,101 @@ class TestImplementationStart:
         assert result.success is False
         mock_bootstrap.assert_not_called()
         mock_confirm.assert_not_called()
+
+
+class TestImplementationStartBaseBranch:
+    """start() base resolution (#376): inherit the draft PR's base, --base override."""
+
+    _PR_BODY = "Implements #42\n<!-- wade:plan:start -->\nplan\n<!-- wade:plan:end -->"
+    _CORE = "wade.services.implementation_service.core"
+
+    def _make_config(self) -> ProjectConfig:
+        return ProjectConfig(project=ProjectSettings(main_branch="main"))
+
+    def _open_pr(self) -> PRLookup:
+        return PRLookup(found=True, pr=PRRef(number=7, url="http://x/7", state="OPEN"))
+
+    def _worktree_path(self, tmp_path: Path) -> Path:
+        # Mirrors core.start(): <worktrees_dir>/<repo_name>/<branch with / -> ->.
+        return tmp_path / "wt" / tmp_path.name / "feat-42-test-task"
+
+    def _enter_common_patches(
+        self,
+        stack: contextlib.ExitStack,
+        tmp_path: Path,
+        provider: MagicMock,
+        *,
+        pr_base: str,
+    ) -> None:
+        """Enter every patch shared by these tests EXCEPT update_pr_base (asserted per-test)."""
+        self._worktree_path(tmp_path).mkdir(parents=True, exist_ok=True)
+        c = self._CORE
+        stack.enter_context(patch(f"{c}.load_config", return_value=self._make_config()))
+        stack.enter_context(patch(f"{c}.get_provider", return_value=provider))
+        stack.enter_context(patch("wade.git.repo.get_repo_root", return_value=tmp_path))
+        stack.enter_context(patch(f"{c}._resolve_worktrees_dir", return_value=tmp_path / "wt"))
+        stack.enter_context(patch("wade.git.pr.get_pr_for_branch", return_value=self._open_pr()))
+        stack.enter_context(patch("wade.git.pr.get_pr_body", return_value=self._PR_BODY))
+        stack.enter_context(patch("wade.git.pr.get_pr_base_branch", return_value=pr_base))
+        stack.enter_context(patch("wade.git.branch.branch_exists", return_value=True))
+        stack.enter_context(patch("wade.git.worktree.list_worktrees", return_value=[]))
+        stack.enter_context(patch("wade.git.worktree.checkout_existing_branch_worktree"))
+        stack.enter_context(patch(f"{c}.write_plan_md"))
+        stack.enter_context(patch(f"{c}.bootstrap_worktree"))
+        stack.enter_context(patch(f"{c}._detect_ai_cli_env", return_value=None))
+        stack.enter_context(patch(f"{c}._catchup_and_surface_staleness", return_value=None))
+        stack.enter_context(
+            patch("crossby.ai_tools.base.AbstractAITool.detect_installed", return_value=[])
+        )
+        mock_prompts = stack.enter_context(patch(f"{c}.prompts"))
+        mock_prompts.is_tty.return_value = False
+
+    def test_inherits_base_from_existing_pr_and_persists(self, tmp_path: Path) -> None:
+        """No --base + open PR on develop → worktree base inherits develop and is persisted."""
+        provider = MagicMock()
+        provider.read_task.return_value = Task(id="42", title="Test task")
+
+        with contextlib.ExitStack() as stack:
+            self._enter_common_patches(stack, tmp_path, provider, pr_base="develop")
+            update_base = stack.enter_context(
+                patch("wade.git.pr.update_pr_base", return_value=True)
+            )
+            result = start("42", project_root=tmp_path)
+
+        assert result.success is True
+        base_file = self._worktree_path(tmp_path) / ".wade" / "base_branch"
+        assert base_file.read_text().strip() == "develop"
+        update_base.assert_not_called()  # inheriting is not a retarget
+
+    def test_explicit_base_override_retargets_pr(self, tmp_path: Path) -> None:
+        """--base X while the PR targets main → update_pr_base called, X persisted."""
+        provider = MagicMock()
+        provider.read_task.return_value = Task(id="42", title="Test task")
+
+        with contextlib.ExitStack() as stack:
+            self._enter_common_patches(stack, tmp_path, provider, pr_base="main")
+            update_base = stack.enter_context(
+                patch("wade.git.pr.update_pr_base", return_value=True)
+            )
+            result = start("42", project_root=tmp_path, base_branch="release/x")
+
+        assert result.success is True
+        update_base.assert_called_once()
+        assert update_base.call_args.args[2] == "release/x"
+        base_file = self._worktree_path(tmp_path) / ".wade" / "base_branch"
+        assert base_file.read_text().strip() == "release/x"
+
+    def test_failed_retarget_aborts(self, tmp_path: Path) -> None:
+        """A failed update_pr_base surfaces failure rather than proceeding on a stale base."""
+        provider = MagicMock()
+        provider.read_task.return_value = Task(id="42", title="Test task")
+
+        with contextlib.ExitStack() as stack:
+            self._enter_common_patches(stack, tmp_path, provider, pr_base="main")
+            stack.enter_context(patch("wade.git.pr.update_pr_base", return_value=False))
+            result = start("42", project_root=tmp_path, base_branch="release/x")
+
+        assert result.success is False
 
 
 # ---------------------------------------------------------------------------

@@ -376,6 +376,7 @@ def _handle_pr(args: list[str], state: dict[str, object]) -> int:
                     "state": pr.get("state", "OPEN"),
                     "isDraft": bool(pr.get("isDraft", False)),
                     "body": pr.get("body", ""),
+                    "baseRefName": pr.get("base", "main"),
                 }
             )
         )
@@ -391,6 +392,12 @@ def _handle_pr(args: list[str], state: dict[str, object]) -> int:
         body = _find_flag(args, "--body")
         if body is not None:
             pr["body"] = body
+        title = _find_flag(args, "--title")
+        if title is not None:
+            pr["title"] = title
+        new_base = _find_flag(args, "--base")
+        if new_base is not None:
+            pr["base"] = new_base
         _save_state(state)
         return 0
 

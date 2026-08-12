@@ -49,6 +49,46 @@ def branch_exists(repo_root: Path, branch_name: str) -> bool:
     return result.returncode == 0
 
 
+def remote_ref_exists(repo_root: Path, branch_name: str, remote: str = "origin") -> bool:
+    """Check whether a remote-tracking ref (``<remote>/<branch>``) exists locally.
+
+    Args:
+        repo_root: Repository root directory.
+        branch_name: Short branch name (without the remote prefix).
+        remote: Remote name (default ``origin``).
+
+    Returns:
+        True if ``refs/remotes/<remote>/<branch_name>`` resolves.
+    """
+    result = _run_git(
+        "rev-parse",
+        "--verify",
+        f"refs/remotes/{remote}/{branch_name}",
+        cwd=repo_root,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def resolve_start_point(repo_root: Path, base_branch: str) -> str | None:
+    """Resolve a base branch to a local commit-ish usable as a branch start point.
+
+    A base declared in a plan (e.g. ``develop``) may exist only as a remote
+    tracking ref. ``git branch <new> develop`` will not resolve a remote-only
+    ``develop`` (short names resolve local heads, not ``origin/develop``), so this
+    prefers the local branch and falls back to ``origin/<base>``.
+
+    Returns:
+        ``base_branch`` if a local branch exists, ``origin/<base_branch>`` if only
+        the remote ref exists, or ``None`` if neither is found.
+    """
+    if branch_exists(repo_root, base_branch):
+        return base_branch
+    if remote_ref_exists(repo_root, base_branch):
+        return f"origin/{base_branch}"
+    return None
+
+
 def create_branch(
     repo_root: Path,
     branch_name: str,

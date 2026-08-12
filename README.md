@@ -143,7 +143,26 @@ wade 42
 
 Short aliases: `wade p` (plan), `wade i <N>` (implement), `wade r <N>` (review pr-comments).
 
-Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level>`, `--permission-mode <tier>`, and `--yolo` to override configured defaults. `implement` also supports `--detach` (new terminal tab) and `--cd` (print worktree path only).
+Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level>`, `--permission-mode <tier>`, and `--yolo` to override configured defaults. `implement` also supports `--detach` (new terminal tab), `--cd` (print worktree path only), and `--base <branch>` (see below).
+
+### Base branch
+
+By default WADE branches from and merges into the project's configured main branch (`project.main_branch` in `.wade.yml`, falling back to the repo's detected default). To target a different branch — e.g. `develop` or a `release/*` branch — declare it once, at planning time, in an optional `## Base Branch` section of the plan file:
+
+```markdown
+## Base Branch
+develop
+```
+
+The draft PR is then branched from and targeted at `develop`, and `wade implement` cuts the worktree from it and merges back into it. Omit the section to keep the default (main). The base is persisted as the draft PR's own base, so `wade implement <N>` recovers it automatically — no extra flags needed.
+
+To choose or override the base at implement time, pass `--base`:
+
+```bash
+wade implement 42 --base develop   # branch from, target, and merge into develop
+```
+
+`--base` overrides the plan-declared base and retargets the existing draft PR to match. A malformed base value fails `wade plan-session done`; a base branch that does not exist fails draft-PR creation with an actionable message. Re-running planning that would change the base of a PR whose work is already in flight is not applied silently — it requires explicit confirmation.
 
 `--permission-mode` sets how much autonomy the AI tool is granted — an axis
 independent of the delegation `--mode` (which controls *how* a tool is

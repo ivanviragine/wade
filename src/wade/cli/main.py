@@ -275,7 +275,10 @@ def implement_cmd(
         None, "--chain", hidden=True, help="Comma-separated issue IDs for sequential continuation."
     ),
     base: str | None = typer.Option(
-        None, "--base", hidden=True, help="Base branch for stacked chain execution."
+        None,
+        "--base",
+        help="Base branch to branch from and merge into (retargets the draft PR). "
+        "Overrides the plan-declared base; defaults to the project's main branch.",
     ),
 ) -> None:
     """Start an implementation session on an issue."""
@@ -552,7 +555,10 @@ def implement_alias(
         None, "--chain", hidden=True, help="Comma-separated issue IDs for sequential continuation."
     ),
     base: str | None = typer.Option(
-        None, "--base", hidden=True, help="Base branch for stacked chain execution."
+        None,
+        "--base",
+        help="Base branch to branch from and merge into (retargets the draft PR). "
+        "Overrides the plan-declared base; defaults to the project's main branch.",
     ),
 ) -> None:
     """Alias for implement."""

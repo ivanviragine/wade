@@ -132,6 +132,40 @@ def parse_complexity_from_body(body: str) -> Complexity | None:
     return None
 
 
+# Characters stripped from the ends of a raw "Base Branch" value: surrounding
+# markdown backticks and quotes plus whitespace. Internal whitespace is left
+# intact on purpose so a malformed value (e.g. ``feature x``) survives to the
+# plan-done validator instead of being silently truncated to a valid-looking ref.
+_BASE_BRANCH_EDGE_CHARS = "`\"' "
+
+
+def parse_base_branch_from_body(body: str) -> str | None:
+    """Parse a ``## Base Branch`` section from markdown body text.
+
+    Scans for a ``## Base Branch`` heading (case-insensitive) and returns the
+    first non-empty line beneath it, with surrounding backticks/quotes/whitespace
+    stripped. Returns ``None`` when the section is absent or holds no non-empty
+    value — both mean "use the configured main branch".
+
+    The value is intentionally **not** split on internal whitespace: a malformed
+    entry like ``feature x`` is returned verbatim so
+    :func:`wade.utils.plan_validation.validate_plan_dir` can flag it as an error,
+    rather than being silently truncated to a valid-looking ``feature``.
+    """
+    in_section = False
+    for line in body.split("\n"):
+        stripped = line.strip()
+        if stripped.lower().startswith("## base branch"):
+            in_section = True
+            continue
+        if in_section:
+            if stripped.startswith("## "):
+                break  # Next section — no value found
+            if stripped:
+                return stripped.strip(_BASE_BRANCH_EDGE_CHARS) or None
+    return None
+
+
 def parse_complexity_from_labels(labels: list[Label]) -> Complexity | None:
     """Extract complexity from a ``complexity:X`` label.
 
@@ -230,6 +264,7 @@ class PlanFile(BaseModel):
     path: Path
     title: str = Field(max_length=256)
     complexity: Complexity | None = None
+    base_branch: str | None = None
     body: str
     sections: dict[str, str] = {}
 
@@ -240,6 +275,7 @@ class PlanFile(BaseModel):
         The first line must be a `# Title` heading.
         Sections are extracted from `## Heading` markers.
         Complexity is parsed from a `## Complexity` section if present.
+        A base branch is parsed from an optional `## Base Branch` section.
         """
         content = path.read_text(encoding="utf-8")
         lines = content.split("\n")
@@ -277,11 +313,13 @@ class PlanFile(BaseModel):
             sections[current_section] = "\n".join(current_lines).strip()
 
         complexity = parse_complexity_from_body(body)
+        base_branch = parse_base_branch_from_body(body)
 
         return cls(
             path=path,
             title=title,
             complexity=complexity,
+            base_branch=base_branch,
             body=body,
             sections=sections,
         )

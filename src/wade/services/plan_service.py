@@ -569,6 +569,7 @@ def plan(
                         issue=existing_issue,
                         plan_file=plan_files[0],
                         repo_root=repo_root,
+                        yolo=resolved_yolo,
                     )
                     finalize_issue_numbers = [existing_issue.id]
                 else:
@@ -761,6 +762,7 @@ def _create_issues_from_plans(
                 plan_body=plan.body,
                 config=config,
                 repo_root=repo_root,
+                base_branch=plan.base_branch,
             )
             if pr_info:
                 pr_number = pr_info.get("number", "?")
@@ -781,18 +783,128 @@ def _create_issues_from_plans(
     return created, failed
 
 
+def _branch_work_in_flight(repo_root: Path, branch_name: str, base: str) -> bool:
+    """Return True when a branch's implementation appears to have started.
+
+    "In flight" means either an active worktree is checked out on the branch, or
+    the branch has advanced past its bare scaffold commit (more than one commit
+    ahead of its base). Both signal that a worktree's ``.wade/base_branch`` may
+    already be pinned to the current base, so silently retargeting the PR would
+    diverge the two and merge into the wrong branch.
+    """
+    from wade.git import branch as git_branch
+    from wade.git import worktree as git_worktree
+    from wade.git.repo import GitError
+
+    try:
+        for wt in git_worktree.list_worktrees(repo_root):
+            if wt.get("branch") == branch_name:
+                return True
+    except Exception:
+        logger.debug("plan.in_flight_worktree_check_failed", exc_info=True)
+
+    # Compare against a locally-resolvable ref (the base may be remote-only).
+    compare_base = git_branch.resolve_start_point(repo_root, base) or base
+    try:
+        return git_branch.commits_ahead(repo_root, branch_name, compare_base) > 1
+    except GitError:
+        return False
+
+
+def _base_retarget_is_safe(
+    config: ProjectConfig,
+    issue: Task,
+    plan_file: PlanFile,
+    repo_root: Path,
+    *,
+    yolo: bool,
+) -> bool:
+    """Guard re-planning from silently changing an in-flight PR's base.
+
+    Returns True when it is safe to proceed with (re)bootstrapping the draft PR —
+    i.e. there is no open PR yet, the base is unchanged, or the change was
+    explicitly confirmed. Returns False to abort (an in-flight base change was
+    refused), leaving the PR and its base intact.
+
+    Base *removal* (the section deleted on re-plan) is a documented no-op:
+    ``bootstrap_draft_pr`` never retargets when no base is passed, so an existing
+    PR keeps its current base. We surface this rather than silently reverting an
+    in-flight PR to main — the exact wrong-merge-target risk this feature avoids.
+    """
+    from wade.git import branch as git_branch
+    from wade.git import pr as git_pr
+    from wade.git import repo as git_repo
+
+    branch_name = git_branch.make_branch_name(
+        config.project.branch_prefix, int(issue.id), issue.title
+    )
+    lookup = git_pr.get_pr_for_branch(repo_root, branch_name)
+    if not (lookup.is_open and lookup.pr is not None):
+        return True  # No open PR to retarget — fresh create path is always safe.
+
+    main_branch = config.project.main_branch or git_repo.detect_main_branch(repo_root)
+    current_base = git_pr.get_pr_base_branch(repo_root, lookup.pr.number) or main_branch
+    desired_effective = plan_file.base_branch or main_branch
+    if desired_effective == current_base:
+        return True  # No base change requested.
+
+    in_flight = _branch_work_in_flight(repo_root, branch_name, current_base)
+
+    if plan_file.base_branch is None:
+        # Base section removed on re-plan. bootstrap_draft_pr won't retarget, so
+        # the PR keeps its current (non-main) base. Inform, then proceed.
+        console.warn(
+            f"Plan removed the '## Base Branch' section, but PR #{lookup.pr.number} "
+            f"keeps its current base '{current_base}' (wade does not auto-revert an "
+            "existing PR's base). Retarget it explicitly with "
+            f"`wade implement {issue.id} --base {main_branch}` if intended."
+        )
+        return True
+
+    if not in_flight:
+        return True  # Only a scaffold so far — retargeting is safe.
+
+    console.error(
+        f"Re-planning would change PR #{lookup.pr.number}'s base from "
+        f"'{current_base}' to '{desired_effective}', but implementation is already "
+        "in flight (a worktree exists or commits were made). Retargeting now would "
+        "diverge the worktree's merge target from the PR."
+    )
+    if (
+        prompts.is_tty()
+        and not yolo
+        and prompts.confirm(
+            f"Retarget PR #{lookup.pr.number} base to '{desired_effective}' anyway?",
+            default=False,
+        )
+    ):
+        return True
+    console.info(
+        f"Left PR #{lookup.pr.number} targeting '{current_base}'. "
+        f"To retarget deliberately, run `wade implement {issue.id} "
+        f"--base {desired_effective}`."
+    )
+    return False
+
+
 def _attach_plan_to_existing_issue(
     provider: AbstractTaskProvider,
     config: ProjectConfig,
     issue: Task,
     plan_file: PlanFile,
     repo_root: Path | None,
+    *,
+    yolo: bool = False,
 ) -> None:
     """Attach a single plan file to an existing issue via a draft PR.
 
     Reuses the same label / PR / body-update logic as _create_issues_from_plans
     but skips issue creation since the issue already exists.  The original issue
     body is preserved — the PR link is appended rather than replacing it.
+
+    When the plan declares a base branch that differs from an already-in-flight
+    PR's base, the retarget is guarded (:func:`_base_retarget_is_safe`) so it is
+    never applied silently.
     """
     # Add complexity label
     if plan_file.complexity:
@@ -803,12 +915,15 @@ def _attach_plan_to_existing_issue(
 
     # Bootstrap draft PR with full plan content
     if repo_root is not None:
+        if not _base_retarget_is_safe(config, issue, plan_file, repo_root, yolo=yolo):
+            return
         pr_info = bootstrap_draft_pr(
             issue_number=issue.id,
             issue_title=issue.title,
             plan_body=plan_file.body,
             config=config,
             repo_root=repo_root,
+            base_branch=plan_file.base_branch,
         )
         if pr_info:
             pr_number = pr_info.get("number", "?")

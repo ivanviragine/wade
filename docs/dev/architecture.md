@@ -765,6 +765,7 @@ When wade installs skills into a target project (per session, via worktree boots
 **`wade implement`:**
 - `--detach` — Launch AI in a new terminal tab/window (non-blocking). Uses `build_launch_command()` + `launch_in_new_terminal()`.
 - `--cd` — Create worktree, print its path to stdout, and exit without launching AI. Deterministic setup still runs first (for example worktree bootstrap and draft-PR bootstrap when needed). Used internally by `wade cd`.
+- `--base <branch>` — Base branch to branch from, target, and merge into. Precedence at implement time: explicit `--base` (or the chain-derived base threaded by `--chain`) > the existing draft PR's base (`get_pr_base_branch`, recorded at plan time from a plan file's optional `## Base Branch` section) > `config.project.main_branch` (or `detect_main_branch`). The resolved base is persisted to `.wade/base_branch` before startup catchup so `sync`/`done` merge into it. An explicit `--base` that differs from the draft PR's base retargets the PR via `update_pr_base`; a failed retarget aborts rather than leaving a stale base. `--chain` remains hidden and threads the previous task's branch as the next task's base (treated exactly like an explicit `--base`).
 
 **`wade implementation-session done`:**
 - `target` (positional) — Optional issue number, worktree name, or plan file path. When a file path is given, creates the issue first; when a number/name, finds the worktree; when omitted, detects from current branch.

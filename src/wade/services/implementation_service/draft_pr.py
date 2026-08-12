@@ -122,12 +122,23 @@ def bootstrap_draft_pr(
     main_branch = config.project.main_branch or git_repo.detect_main_branch(repo_root)
     effective_base = base_branch or main_branch
 
+    # Resolve a local commit-ish to cut from — a plan-declared base may exist only
+    # as a remote tracking ref. If neither a local branch nor origin/<base> exists,
+    # fail with an actionable message rather than a raw git error from create_branch.
+    start_point = git_branch.resolve_start_point(repo_root, effective_base)
+    if start_point is None:
+        console.error(
+            f"Base branch '{effective_base}' does not exist locally or on origin. "
+            "Create and push it before implementation, or choose an existing base."
+        )
+        return None
+
     if not git_branch.branch_exists(repo_root, branch_name):
-        git_branch.create_branch(repo_root, branch_name, effective_base)
+        git_branch.create_branch(repo_root, branch_name, start_point)
         logger.info("bootstrap_draft_pr.branch_created", branch=branch_name)
 
     # Scaffold commit so GitHub accepts the draft PR (needs ≥1 commit ahead of base)
-    if git_branch.commits_ahead(repo_root, branch_name, effective_base) == 0:
+    if git_branch.commits_ahead(repo_root, branch_name, start_point) == 0:
         git_branch.create_scaffold_commit(
             repo_root,
             branch_name,

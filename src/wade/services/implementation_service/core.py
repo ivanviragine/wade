@@ -568,11 +568,32 @@ def start(
                 ),
             )
 
-        # Resolve main branch and compute worktree path (only needed for worktree creation)
+        # Resolve main branch and the effective base. Precedence (#376):
+        #   explicit --base (or chain-derived base_branch)
+        #   > existing draft PR base (recorded at plan time)
+        #   > config.project.main_branch (or detect_main_branch)
         main_branch = config.project.main_branch or git_repo.detect_main_branch(repo_root)
-
-        # For stacked branches (chain execution), use the provided base instead of main
-        effective_base = base_branch or main_branch
+        resolved_base = base_branch
+        if existing_pr is not None:
+            current_pr_base = git_pr.get_pr_base_branch(repo_root, existing_pr.number)
+            if resolved_base is None:
+                # No explicit override — inherit the base the plan recorded on the PR.
+                if current_pr_base:
+                    resolved_base = current_pr_base
+            elif current_pr_base and current_pr_base != resolved_base:
+                # Explicit override differs from the PR's base — retarget so the
+                # worktree, PR, and merge target stay consistent. A failed retarget
+                # must abort rather than leave a stale PR base (#376).
+                console.step(
+                    f"Retargeting PR #{existing_pr.number} base "
+                    f"{current_pr_base} -> {resolved_base}..."
+                )
+                if not git_pr.update_pr_base(repo_root, existing_pr.number, resolved_base):
+                    console.error(
+                        f"Failed to retarget PR #{existing_pr.number} to {resolved_base}."
+                    )
+                    return ImplementResult(success=False)
+        effective_base = resolved_base or main_branch
 
         worktrees_dir = _resolve_worktrees_dir(config, repo_root)
         repo_name = repo_root.name
@@ -663,12 +684,15 @@ def start(
             session_phase=SessionPhase.IMPLEMENT,
         )
 
-        # Store stacked base branch metadata so sync can use it instead of main
-        if base_branch:
+        # Persist the resolved base so catchup/sync/done merge into the correct
+        # branch — written whenever the effective base differs from main, not only
+        # when --base was passed (e.g. a base inherited from the draft PR). This is
+        # the core fix for the wrong-merge-target gap (#376).
+        if effective_base != main_branch:
             wade_dir = worktree_path / ".wade"
             wade_dir.mkdir(exist_ok=True)
-            (wade_dir / "base_branch").write_text(base_branch + "\n")
-            console.detail(f"Stacked on {base_branch}")
+            (wade_dir / "base_branch").write_text(effective_base + "\n")
+            console.detail(f"Base branch: {effective_base}")
 
         # Catchup: sync worktree with base branch before AI launch (non-blocking).
         # Whatever the outcome, compute commits-behind and surface a stale base LOUDLY

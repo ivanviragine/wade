@@ -18,11 +18,46 @@ from wade.utils.plan_validation import (
 _VALID = "# feat: add retry logic\n\n## Complexity\ncomplex\n\n## Tasks\n- Do it\n"
 _NO_COMPLEXITY = "# feat: add retry logic\n\n## Tasks\n- Do it\n"
 _BAD_TITLE = "# add retry logic\n\n## Complexity\ncomplex\n\n## Tasks\n- Do it\n"
+_VALID_WITH_BASE = (
+    "# feat: add retry logic\n\n## Complexity\ncomplex\n\n"
+    "## Base Branch\ndevelop\n\n## Tasks\n- Do it\n"
+)
+_BAD_BASE = (
+    "# feat: add retry logic\n\n## Complexity\ncomplex\n\n"
+    "## Base Branch\nuse develop\n\n## Tasks\n- Do it\n"
+)
 
 
 def _write(plan_dir: Path, name: str, content: str) -> None:
     plan_dir.mkdir(parents=True, exist_ok=True)
     (plan_dir / name).write_text(content, encoding="utf-8")
+
+
+class TestValidateBaseBranch:
+    def test_absent_base_section_is_valid(self, tmp_path: Path) -> None:
+        _write(tmp_path, "PLAN.md", _VALID)
+        result = validate_plan_dir(tmp_path)
+        assert not any("Base Branch" in d.message for d in result.errors)
+
+    def test_well_formed_base_is_valid(self, tmp_path: Path) -> None:
+        _write(tmp_path, "PLAN.md", _VALID_WITH_BASE)
+        result = validate_plan_dir(tmp_path)
+        assert result.has_errors is False
+
+    def test_malformed_base_is_an_error(self, tmp_path: Path) -> None:
+        _write(tmp_path, "PLAN.md", _BAD_BASE)
+        result = validate_plan_dir(tmp_path)
+        assert result.has_errors is True
+        assert any("Base Branch" in d.message for d in result.errors)
+
+    def test_malformed_base_does_not_block_has_valid_plan_for_other_files(
+        self, tmp_path: Path
+    ) -> None:
+        # A malformed base makes its own file invalid but a sibling valid file
+        # still counts as "the session produced something usable".
+        _write(tmp_path, "PLAN.md", _BAD_BASE)
+        _write(tmp_path, "PLAN-2.md", _VALID)
+        assert has_valid_plan(tmp_path) is True
 
 
 class TestHasValidPlan:
