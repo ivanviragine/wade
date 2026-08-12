@@ -108,6 +108,12 @@ class TestPlanGuardCLI:
         return _run("pre_tool_use", "plan", "claude", stdin, root=root)
 
     def test_source_inside_worktree_denied(self, tmp_path: Path) -> None:
+        # pytest's tmp_path lives under the OS temp dir, which the scratch
+        # exemption (#409) now matches by prefix — but the write target here is
+        # a *child of the worktree root itself* (both derived from tmp_path), so
+        # the plan-artifact exemption's root-awareness (_is_scratch_outside_worktree)
+        # denies it regardless of the temp-prefix match. No $TMPDIR isolation
+        # needed, unlike tests where the target and worktree root diverge.
         r = self._plan(str(tmp_path / "src" / "foo.py"), str(tmp_path))
         assert r.returncode == 2
         assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -121,6 +127,40 @@ class TestPlanGuardCLI:
         # /etc/PLAN.md has an allowed basename but lives outside the worktree —
         # containment (which plan mode also enforces) must block it.
         r = self._plan("/etc/PLAN.md", str(tmp_path))
+        assert r.returncode == 2
+
+
+class TestFilePathChannelScratchCLI:
+    """File-path channel (Write/Edit tool calls) now shares the shell channel's
+    always-allowed scratch exemption (#409) — a temp-dir write is allowed under
+    both the ``worktree`` and ``plan`` guards, not just via a shell redirect.
+    """
+
+    def _write(self, path: str) -> str:
+        return json.dumps({"tool_name": "Write", "tool_input": {"file_path": path}})
+
+    def test_temp_write_allowed_worktree_mode(self) -> None:
+        r = _run_lean("pre_tool_use", "worktree", "claude", self._write("/tmp/wade-scratch.log"))
+        assert r.returncode == 0
+        assert r.stdout == ""
+
+    def test_temp_write_allowed_plan_mode(self) -> None:
+        # The exact failure this issue fixes: a plan-mode Write tool call to a
+        # system temp dir used to be denied as a non-artifact.
+        r = _run_lean("pre_tool_use", "plan", "claude", self._write("/tmp/wade-scratch.log"))
+        assert r.returncode == 0
+        assert r.stdout == ""
+
+    def test_dev_null_write_allowed_plan_mode(self) -> None:
+        r = _run_lean("pre_tool_use", "plan", "claude", self._write("/dev/null"))
+        assert r.returncode == 0
+
+    def test_tmpfoo_sibling_still_denied_plan_mode(self) -> None:
+        r = _run_lean("pre_tool_use", "plan", "claude", self._write("/tmpfoo/out"))
+        assert r.returncode == 2
+
+    def test_dev_shm_still_denied_worktree_mode(self) -> None:
+        r = _run_lean("pre_tool_use", "worktree", "claude", self._write("/dev/shm/out"))
         assert r.returncode == 2
 
 
@@ -738,13 +778,16 @@ class TestMemoryAllowPathsResolver:
         """
         from wade.hooks.cli import _encode_claude_project_path
 
+        # `/tmp` is unconditionally in the scratch allowlist (#409) and
+        # `tempfile.gettempdir()` falls back to it when `$TMPDIR` is unusable, so
+        # overriding `$TMPDIR` alone cannot exclude `broad_target` from scratch —
+        # use a fixed non-temporary target instead (it need not exist on disk).
         config_home = tmp_path / "claude-home"
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_home))
         encoded = _encode_claude_project_path(Path(WT).resolve())
         project_dir = config_home / "projects" / encoded
         project_dir.mkdir(parents=True)
-        broad_target = tmp_path / "broad-target"
-        broad_target.mkdir()
+        broad_target = Path("/wade-test-broad-target")
         (project_dir / "memory").symlink_to(broad_target)
 
         target = project_dir / "memory" / "settings.json"

@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [Unreleased]
+
+### Bug Fixes
+
+- revert unsafe git-redirect "last flag wins" and scope exact-temp-dir match (0bb4cc2)
+- reset git_dir_redirect_seen_in_root when a later -C resolves outside (5b3be40)
+- rebase shell-guard base on cd, honor last -C, allow exact temp dir (bfcbda6)
+- git -C overriding a stale scratch cd falsely denied in shell guard (676d1e4)
+- scope plan-artifact scratch exemption to outside worktree_root (ae0b638)
+- allow writes to system temp dirs through worktree/plan write-guards (c9af33f)
+
+### Documentation
+
+- correct architecture.md for the reverted last-flag-wins fix (ed0b63d)
+- document base-rebase-on-cd and last-flag-wins in architecture.md (e28d92a)
+- regenerate CHANGELOG.md to restore dropped v0.35.2/v0.43.1 sections (c68ac57)
+- format raw identifiers as inline code in KNOWLEDGE.md (d8b775e)
+- document cross-invocation cd persistence as a residual gap (32479d5)
+
+### Tests
+
+- correct misleading TMPDIR-isolation comment in a plan-guard test (21ac85a)
+- fix broken TMPDIR-based scratch isolation in memory-leaf test (24f4ef2)
+
 ## [v0.44.1] — 2026-08-12
 
 ### Bug Fixes
@@ -15,6 +39,12 @@ The format is based on [Conventional Commits](https://conventionalcommits.org/).
 ### Features
 
 - make WADE session output report-by-exception (terse on success) (#402) (9f96c94)
+
+## [v0.43.1] — 2026-08-12
+
+### Bug Fixes
+
+- surface stale base loudly and reconcile migration collisions at catchup (68150ef)
 
 ## [v0.43.0] — 2026-08-11
 
@@ -166,6 +196,16 @@ The format is based on [Conventional Commits](https://conventionalcommits.org/).
 ### Chores
 
 - bump crossby to v0.11.0 and adopt newer models (Opus 5) (#345) (d9ac8a5)
+
+## [v0.35.2] — 2026-07-24
+
+### Bug Fixes
+
+- exclude scaffold-branch commits from generated changelog (c40a9ca)
+
+### Chores
+
+- bump crossby to v0.11.0 and adopt newer models (Opus 5) (ff0ab48)
 
 ## [v0.35.1] — 2026-07-24
 
