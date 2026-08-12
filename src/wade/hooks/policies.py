@@ -720,7 +720,15 @@ def shell_containment(
        the current segment (a real shell's cwd persists across ``&&``/``;``/``|``,
        unlike a per-invocation ``-C`` flag) — so ``cd /tmp/x && git clean -fd``
        gets the same denial even though it has no ``-C`` flag and ``clean`` has no
-       path operand of its own to catch.
+       path operand of its own to catch. A **same-segment** directory-redirect
+       flag that resolves *inside* root overrides the buffered scratch ``cd`` for
+       that one invocation, exactly like a real shell: ``cd /tmp/x && git -C
+       /repo/wt clean -fd`` is allowed — git's own ``-C`` takes precedence over
+       the shell's cwd, so the write lands in-root regardless of the earlier
+       ``cd``. Tracked separately from ``git_dir_redirect_outside_token`` (which
+       only fires for an *outside*-root flag) via ``git_dir_redirect_seen_in_root``,
+       since "no redirect flag this segment" and "redirect flag present and
+       in-root" both leave the outside-token at ``None`` but must be told apart.
     7. In plan mode only: any output redirect, an in-place edit flag (``sed -i``,
        ``--in-place``) on a command that *has* one (:data:`_IN_PLACE_COMMANDS` —
        ``grep -i`` and ``ls -i`` are ordinary read flags), or an operand of a write
@@ -893,6 +901,16 @@ def shell_containment(
     # spellings are directory-redirect flags with the same escape shape.
     awaiting_git_dir_redirect = False
     git_dir_redirect_outside_token: str | None = None
+    # True once THIS segment has seen a `-C`/`--work-tree`/`--git-dir` flag that
+    # resolved *inside* root (spaced or glued/``=``-joined). Distinguishes "no
+    # redirect flag in this segment" from "redirect flag present and in-root" —
+    # both leave `git_dir_redirect_outside_token` at ``None``, but only the
+    # latter should override a stale `cwd_outside_root_token` from an earlier
+    # segment's scratch ``cd``: git's own `-C` overrides the shell's cwd for
+    # that invocation, so ``cd /tmp/x && git -C /repo/wt clean -fd`` must not be
+    # denied on the buffered ``cd`` alone. Reset at segment separators, same as
+    # `git_dir_redirect_outside_token`.
+    git_dir_redirect_seen_in_root = False
     # A successful `cd`/`pushd` to a directory outside the root (necessarily
     # always-allowed scratch — a non-scratch outside target denies immediately
     # below) redirects git's implicit working dir for every later segment of this
@@ -926,6 +944,7 @@ def shell_containment(
             pending_redirect = None
             awaiting_git_dir_redirect = False
             git_dir_redirect_outside_token = None
+            git_dir_redirect_seen_in_root = False
             continue
 
         redirect = _REDIRECT_RE.match(token)
@@ -1002,6 +1021,8 @@ def shell_containment(
             resolved = _resolve_shell_path(token, base=base)
             if resolved is None or not _within(resolved, root):
                 git_dir_redirect_outside_token = token
+            else:
+                git_dir_redirect_seen_in_root = True
             continue
 
         if command_name == "git" and token in ("-C", "--work-tree", "--git-dir"):
@@ -1029,6 +1050,8 @@ def shell_containment(
             resolved = _resolve_shell_path(git_dir_redirect, base=base)
             if resolved is None or not _within(resolved, root):
                 git_dir_redirect_outside_token = git_dir_redirect
+            else:
+                git_dir_redirect_seen_in_root = True
             continue
 
         # In-place editors (`sed -i`, `perl -i`, `yq -i`, …) rewrite their operands.
@@ -1057,7 +1080,16 @@ def shell_containment(
             # Same blast radius reached the plain way: `cd /tmp/x && git clean -fd`
             # has no `-C` flag and no path operand for `clean` to catch, but a
             # prior `cd` already moved git's implicit working dir outside root.
-            if cwd_outside_root_token is not None:
+            # Skipped when THIS segment's own directory-redirect flag resolved
+            # inside root (`git_dir_redirect_seen_in_root`): git's `-C` overrides
+            # the shell's cwd for that invocation, so `cd /tmp/x && git -C
+            # /repo/wt clean -fd` is a legitimate in-root write and must not be
+            # denied on the stale buffered `cd` alone. A redirect flag resolving
+            # *outside* root already returned above via
+            # `git_dir_redirect_outside_token`, so reaching here with the flag
+            # unset means either no redirect flag was present this segment (cwd
+            # applies) or it was present and in-root (cwd is overridden).
+            if cwd_outside_root_token is not None and not git_dir_redirect_seen_in_root:
                 return deny_outside("prior 'cd' target", cwd_outside_root_token)
 
         # A path glued to a flag or operand (``--output=/tmp/x``, ``of=/tmp/x``)

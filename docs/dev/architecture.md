@@ -232,6 +232,26 @@ through any of these six spellings can touch every file under `<dir>`, not
 just a direct memory/scratch write, so they stay strict even when `<dir>` is
 the active tool's own memory root **or** a system temp dir (`git -C /tmp/x
 clean -fd` is denied, even though a direct write to `/tmp/x` is scratch-exempt).
+
+The identical blast radius is reachable the plain way, without any `-C` flag at
+all: a `cd`/`pushd` to a directory outside `worktree_root` (necessarily
+always-allowed scratch — a non-scratch outside target already denies at the
+`cd`-target check) redirects git's implicit working directory for the rest of
+the *whole command line*, not just the current segment — a real shell's cwd
+persists across `&&`/`;`/`|`, unlike a per-invocation `-C` flag. So `cd /tmp/x
+&& git clean -fd` gets the same denial as `git -C /tmp/x clean -fd` even though
+it has no `-C` flag and `clean` has no path operand of its own for the
+enumerated-write-command check to catch. `cwd_outside_root_token` buffers this
+across segments (unlike the git-directory-redirect buffer, which resets per
+segment) and is cleared by a later `cd` that lands back inside root. A
+**same-segment** directory-redirect flag that itself resolves inside root
+overrides the buffered scratch `cd` for that one invocation, exactly like a
+real shell would: `cd /tmp/x && git -C /repo/wt clean -fd` is allowed, since
+git's own `-C` takes precedence over the shell's cwd. This is tracked
+separately (`git_dir_redirect_seen_in_root`) from the outside-root buffer,
+because "no redirect flag this segment" and "redirect flag present and
+in-root" both leave the outside-root buffer unset but must be told apart.
+
 It also unglues paths from other flags
 (`--output=/etc/x`, `-o/etc/x`, `of=/etc/x`) and keeps those **glued** forms
 contained in every mode (a tokenizer cannot tell a glued read flag from a glued

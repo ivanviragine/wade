@@ -312,6 +312,24 @@ class TestShellContainment:
         d = shell_containment(_shell("cd /tmp/x && git -C /tmp/x log"), worktree_root=WT)
         assert d.action == "allow"
 
+    def test_cd_into_temp_then_git_c_back_into_root_write_allowed(self) -> None:
+        """Regression: a same-segment `-C` back inside root must override the
+        buffered scratch `cd`, not get denied on the stale flag alone — git's own
+        `-C` takes precedence over the shell's cwd for that invocation, exactly
+        like a real shell. Found by `wade review implementation` as a
+        false-positive in the rule-6 `cd`-tracking fix. (Not parametrized over
+        plan_mode: in plan mode every git write subcommand is already denied
+        because the subcommand token itself — e.g. ``clean`` — is never a plan
+        artifact, an unrelated pre-existing check that would mask this one.)"""
+        d = shell_containment(_shell("cd /tmp/x && git -C /repo/wt clean -fd"), worktree_root=WT)
+        assert d.action == "allow"
+
+    def test_cd_into_temp_then_git_c_into_other_outside_dir_denied(self) -> None:
+        """A same-segment `-C` that itself points outside root still denies —
+        the override only applies when the redirect resolves in-root."""
+        d = shell_containment(_shell("cd /tmp/x && git -C /tmp/y clean -fd"), worktree_root=WT)
+        assert d.action == "deny"
+
     def test_cd_into_worktree_subdir_then_git_clean_allowed(self) -> None:
         """A ``cd`` that stays inside the worktree must not trip the new check."""
         d = shell_containment(_shell("cd src && git clean -fd"), worktree_root=WT)

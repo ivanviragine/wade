@@ -561,3 +561,9 @@ shell_containment's base = _resolve_shell_path(event.cwd) trust (src/wade/hooks/
 In src/wade/hooks/policies.py, the plan-artifact-rule scratch exemption must be root-aware, not just `_is_always_allowed_scratch`: if worktree_root itself resolves under a system temp dir (ephemeral clone, CI job, configured temp worktree dir), every in-worktree path also matches the temp-prefix test, so the plain check would exempt ordinary source writes from the plan-artifact allowlist. Fixed via `_is_scratch_outside_worktree(path, root)` (scratch AND outside root) used only by the three plan-artifact exemption call sites (plan_artifact_only, shell_containment's check_redirect_target/check_non_artifact) — baseline containment (_contained) doesn't need it since in-root paths are already allowed via _within regardless of check order.
 
 ---
+
+## 14e4057b5d6b | 2026-08-12 | implementation | tags: hooks, write-guards, git, gotcha | Issue #409
+
+In src/wade/hooks/policies.py's shell_containment, the cwd_outside_root_token check (rule 6's cd-into-scratch tracking, #409) had a false positive: a same-segment -C/--work-tree/--git-dir flag resolving back inside root did not override a stale buffered cd from an earlier segment, so 'cd /tmp/x && git -C /repo/wt clean -fd' (a safe, legitimate write) was wrongly denied. Fixed with a separate per-segment git_dir_redirect_seen_in_root flag: git_dir_redirect_outside_token alone can't distinguish 'no redirect flag this segment' from 'redirect flag present and in-root' since both leave it at None. Found by wade review implementation via direct execution of the guard function, not static reading.
+
+---
