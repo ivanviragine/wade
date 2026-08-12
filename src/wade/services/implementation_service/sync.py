@@ -6,6 +6,7 @@ Also hosts worktree staleness classification, shared by the cleanup module.
 from __future__ import annotations
 
 import json
+from collections import Counter
 from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
@@ -683,6 +684,11 @@ def _is_discardable_untracked(cwd: Path, rel: str, merge_ref: str) -> bool:
     resumed worktree can carry unrelated, user-authored rules alongside that block, and the
     incoming base need not contain them, so it is NOT unconditionally discardable (#407
     review).
+
+    Lines are compared as **multisets** (not sets): an append-only ``.ratings.jsonl`` may
+    carry the *same* serialized vote record twice while the incoming base has it once —
+    deleting the local copy would silently drop the duplicate. Requiring at-least-equal
+    multiplicity keeps that from being treated as discardable (#408 review).
     """
     local_path = cwd / rel
     try:
@@ -698,8 +704,8 @@ def _is_discardable_untracked(cwd: Path, rel: str, merge_ref: str) -> bool:
     incoming = git_repo.show_file_at_ref(cwd, merge_ref, rel)
     if incoming is None:
         return False  # no incoming version to fall back on → do not delete
-    local_lines = {ln for ln in local.splitlines() if ln.strip()}
-    incoming_lines = {ln for ln in incoming.splitlines() if ln.strip()}
+    local_lines = Counter(ln for ln in local.splitlines() if ln.strip())
+    incoming_lines = Counter(ln for ln in incoming.splitlines() if ln.strip())
     return local_lines <= incoming_lines
 
 
@@ -719,15 +725,21 @@ def _reconcile_untracked_migration_files(cwd: Path, collisions: list[str]) -> No
             logger.debug("catchup.reconcile_unlink_failed", path=rel, exc_info=True)
 
 
-def _backup_untracked_files(cwd: Path, paths: list[str]) -> dict[str, bytes]:
+def _backup_untracked_files(cwd: Path, paths: list[str]) -> dict[str, bytes] | None:
     """Read *paths* before :func:`_reconcile_untracked_migration_files` deletes them, so
-    they can be put back if the merge that was meant to replace them never completes."""
+    they can be put back if the merge that was meant to replace them never completes.
+
+    Returns ``None`` when *any* path cannot be read — the caller must then skip the
+    reconcile entirely rather than delete a file it could not back up, or the exact
+    silent-data-loss the backup guards against reappears on the failure path (#408 review).
+    """
     backup: dict[str, bytes] = {}
     for rel in paths:
         try:
             backup[rel] = (cwd / rel).read_bytes()
         except OSError:
             logger.debug("catchup.reconcile_backup_failed", path=rel, exc_info=True)
+            return None
     return backup
 
 
@@ -833,10 +845,16 @@ def _reconcile_skip_worktree_collision(cwd: Path, blocking: list[str]) -> Callab
             if git_repo.is_file_tracked(cwd, ".gitignore"):
                 git_repo.skip_worktree_file(cwd, ".gitignore")
         if pointer_files:
-            pointer.ensure_pointer(cwd)  # rewrites the appropriate pointer target
-            for pf in pointer_files:
-                if git_repo.is_file_tracked(cwd, pf):
-                    git_repo.skip_worktree_file(cwd, pf)
+            # Re-skip the file ensure_pointer ACTUALLY wrote to — not the original
+            # pointer_files. The merge may have introduced a higher-priority target (e.g.
+            # the base adds AGENTS.md while the worktree used CLAUDE.md), so ensure_pointer
+            # rewrites the block into that new target; skipping the old one instead would
+            # leave the freshly written block visible as a dirty change (#408 review).
+            written = pointer.ensure_pointer(cwd)  # rewrites the appropriate pointer target
+            if written is not None:
+                rel = Path(written).name  # AGENTS.md / CLAUDE.md live at the repo root
+                if git_repo.is_file_tracked(cwd, rel):
+                    git_repo.skip_worktree_file(cwd, rel)
 
     return restore
 
@@ -1031,15 +1049,22 @@ def catchup(
                 # them — never at collision-detection time. If the merge below does not
                 # complete (conflict, abort, or a raise from an unrelated blocking file),
                 # the ``finally`` below restores them rather than leaving them silently
-                # gone (#407 review).
-                untracked_backup = _backup_untracked_files(cwd, reconcile_targets)
-                _reconcile_untracked_migration_files(cwd, reconcile_targets)
-                knowledge_reconciled = True
-                if not json_output:
-                    console.detail(
-                        "Reconciled migration-owned untracked files: "
-                        + ", ".join(reconcile_targets)
-                    )
+                # gone (#407 review). If ANY target can't be backed up, skip the reconcile
+                # entirely — deleting a file we couldn't back up would strand it with no
+                # merge to show for it; the merge then aborts and Part A surfaces the stale
+                # base loudly instead (#408 review).
+                backed_up = _backup_untracked_files(cwd, reconcile_targets)
+                if backed_up is None:
+                    logger.debug("catchup.reconcile_skipped_backup_failed")
+                else:
+                    untracked_backup = backed_up
+                    _reconcile_untracked_migration_files(cwd, reconcile_targets)
+                    knowledge_reconciled = True
+                    if not json_output:
+                        console.detail(
+                            "Reconciled migration-owned untracked files: "
+                            + ", ".join(reconcile_targets)
+                        )
 
         result = _catchup_merge(
             repo_root,

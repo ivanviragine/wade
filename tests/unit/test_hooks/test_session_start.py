@@ -487,6 +487,18 @@ class TestStaleBaseWarning:
         assert payload is not None
         assert "BEHIND BASE" not in payload
 
+    def test_included_for_review_phase(self, tmp_path: Path) -> None:
+        # #408: a REVIEW worktree can carry the marker too (it reuses the implement
+        # worktree), and its remedy must point at the review session's own sync command —
+        # not the implementation one.
+        _write_plan(tmp_path)
+        self._write_marker(tmp_path, 3)
+        payload = session_start_context(tmp_path, SessionPhase.REVIEW)
+        assert payload is not None
+        assert "3 COMMITS BEHIND BASE" in payload
+        assert "wade review-pr-comments-session sync" in payload
+        assert "wade implementation-session sync" not in payload
+
     def test_zero_behind_marker_omitted(self, tmp_path: Path) -> None:
         # A defensive 0-count marker carries no warning (the branch is not behind).
         _write_plan(tmp_path)
@@ -503,7 +515,7 @@ class TestStaleBaseWarning:
 
         _write_plan(tmp_path, first_line="# Issue #351: " + "x" * 400)
         self._write_marker(tmp_path, 24)
-        stale_line = policies._stale_base_line(24)
+        stale_line = policies._stale_base_line(24, SessionPhase.IMPLEMENT)
         # Cap just above the branded stale line so everything after it truncates away.
         monkeypatch.setattr(policies, "_SESSION_CONTEXT_MAX_CHARS", len(stale_line) + 12)
         payload = session_start_context(tmp_path, SessionPhase.IMPLEMENT)

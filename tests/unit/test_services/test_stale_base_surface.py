@@ -79,12 +79,14 @@ class TestCommitsBehindBase:
 
     @patch(f"{_CORE}.git_branch")
     @patch(f"{_CORE}.git_repo")
-    def test_returns_zero_when_no_ref_resolves(
+    def test_returns_none_when_no_ref_resolves(
         self, mock_repo: MagicMock, mock_branch: MagicMock
     ) -> None:
+        # Neither ref resolves → lag is UNKNOWN, not a verified 0. Returning None keeps
+        # _surface_stale_base_if_behind from clearing an earlier startup's marker (#408).
         mock_repo.has_remote.return_value = False
         mock_branch.commits_ahead.side_effect = GitError("bad ref")
-        assert _commits_behind_base(Path("/repo"), "main", "feat/1-x") == 0
+        assert _commits_behind_base(Path("/repo"), "main", "feat/1-x") is None
 
 
 class TestSurfaceStaleBase:
@@ -132,6 +134,31 @@ class TestSurfaceStaleBase:
         )
         assert warning is None
         assert stale_base.read_stale_base(tmp_path) is None
+        mock_console.panel.assert_not_called()
+
+    @patch(f"{_CORE}.console")
+    @patch(f"{_CORE}.git_branch")
+    @patch(f"{_CORE}.git_repo")
+    def test_unknown_lag_preserves_existing_marker(
+        self, mock_repo: MagicMock, mock_branch: MagicMock, mock_console: MagicMock, tmp_path: Path
+    ) -> None:
+        # #408: neither base ref resolves → lag UNKNOWN. A marker an earlier startup wrote
+        # must survive (NOT be cleared as if caught up), and no count-less banner is emitted —
+        # otherwise the session proceeds silently on a stale base, the exact #407 failure.
+        stale_base.write_stale_base(tmp_path, 4, stale_base.REASON_UNTRACKED_CONFLICT)
+        mock_repo.has_remote.return_value = False
+        mock_branch.commits_ahead.side_effect = GitError("bad ref")
+        warning = _surface_stale_base_if_behind(
+            repo_root=tmp_path,
+            worktree_path=tmp_path,
+            base="main",
+            current="feat/1-x",
+            reason=stale_base.REASON_UNKNOWN,
+        )
+        assert warning is None
+        marker = stale_base.read_stale_base(tmp_path)
+        assert marker is not None
+        assert marker.behind == 4
         mock_console.panel.assert_not_called()
 
 

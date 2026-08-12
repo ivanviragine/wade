@@ -18,9 +18,10 @@ started tracking wade-managed/regenerable files your worktree only had as
 untracked copies — `.gitattributes`, `KNOWLEDGE.md`, `KNOWLEDGE.ratings.jsonl` —
 **catchup** (startup only) discards those untracked copies, merges in the base's
 now-tracked versions, and restores the `merge=union` block. It also clears the
-`--skip-worktree` `.gitignore` `wade:worktree` block (and the `AGENTS.md`
-`wade:pointer` block, but **only** when that block is the *entire* local
-difference) so the merge is no longer blocked, then re-injects them afterward.
+`--skip-worktree` `.gitignore` `wade:worktree` block (and the `AGENTS.md` /
+`CLAUDE.md` `wade:pointer` block, but **only** when that block is the *entire*
+local difference) so the merge is no longer blocked, then re-injects them
+afterward.
 This is startup-only: the mid/end-session `sync` never blind-deletes an untracked
 `KNOWLEDGE.md` (it may hold real, uncommitted knowledge you added this session).
 

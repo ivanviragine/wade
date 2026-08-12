@@ -17,6 +17,7 @@ from wade.git import repo as git_repo
 from wade.models.config import KnowledgeConfig, ProjectConfig, ProjectSettings
 from wade.services.implementation_service.bootstrap import write_worktree_gitignore
 from wade.services.implementation_service.sync import (
+    _backup_untracked_files,
     _files_blocking_merge,
     _is_discardable_untracked,
     _pointer_diff_is_only_block,
@@ -47,6 +48,10 @@ def _init_repo(path: Path) -> None:
     _git(path, "init", "-b", "main")
     _git(path, "config", "user.email", "t@t.com")
     _git(path, "config", "user.name", "T")
+    # Isolate from a developer's global commit.gpgsign/tag.gpgsign so real-git commits
+    # here never fail for signing reasons unrelated to the code under test.
+    _git(path, "config", "commit.gpgsign", "false")
+    _git(path, "config", "tag.gpgsign", "false")
 
 
 def _build_straddle(
@@ -330,12 +335,63 @@ class TestIsDiscardableUntracked:
         (repo / "KNOWLEDGE.md").write_text("# K\nline-a\nLOCAL-ONLY\n", encoding="utf-8")
         assert _is_discardable_untracked(repo, "KNOWLEDGE.md", "HEAD") is False
 
+    def test_duplicate_local_line_not_discardable(self, tmp_path: Path) -> None:
+        # #408: an append-only log (e.g. .ratings.jsonl) can carry the SAME record twice
+        # while the incoming base has it once. Set semantics would call this discardable and
+        # silently drop the duplicate vote; multiset semantics correctly refuse the delete.
+        repo = self._commit_main_knowledge(tmp_path, "# K\n\nvote-x\n")
+        (repo / "KNOWLEDGE.md").write_text("# K\nvote-x\nvote-x\n", encoding="utf-8")
+        assert _is_discardable_untracked(repo, "KNOWLEDGE.md", "HEAD") is False
+
     def test_missing_incoming_not_discardable(self, tmp_path: Path) -> None:
         repo = tmp_path / "repo"
         _init_repo(repo)
         (repo / "KNOWLEDGE.md").write_text("local content\n", encoding="utf-8")
         # No KNOWLEDGE.md at HEAD → no incoming fallback → refuse to delete.
         assert _is_discardable_untracked(repo, "KNOWLEDGE.md", "HEAD") is False
+
+
+class TestBackupUntrackedFiles:
+    def test_returns_none_when_any_path_cannot_be_read(self, tmp_path: Path) -> None:
+        # #408: a partial backup would let the reconcile delete an un-backed-up file with no
+        # way to restore it. Any unreadable path aborts the WHOLE backup (returns None) so the
+        # caller skips the reconcile rather than stranding data.
+        (tmp_path / "present.txt").write_text("data\n", encoding="utf-8")
+        assert _backup_untracked_files(tmp_path, ["present.txt", "missing.txt"]) is None
+
+    def test_returns_full_map_when_all_paths_read(self, tmp_path: Path) -> None:
+        (tmp_path / "a.txt").write_text("a\n", encoding="utf-8")
+        (tmp_path / "b.txt").write_text("b\n", encoding="utf-8")
+        assert _backup_untracked_files(tmp_path, ["a.txt", "b.txt"]) == {
+            "a.txt": b"a\n",
+            "b.txt": b"b\n",
+        }
+
+
+class TestNestedUntrackedCollision:
+    def test_detects_file_in_wholly_untracked_directory(self, tmp_path: Path) -> None:
+        # #408: a custom knowledge path such as docs/LEARNINGS.md, untracked inside a wholly
+        # untracked docs/ dir, is reported by `git status` only as `?? docs/`. Expanding
+        # untracked dirs (--untracked-files=all) is what lets the collision be detected here
+        # rather than surfacing later as a hard merge abort.
+        from wade.git.stash import detect_untracked_collisions
+
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-m", "seed")
+        _git(repo, "branch", "feat")
+        # main advances to TRACK a nested docs/LEARNINGS.md.
+        (repo / "docs").mkdir()
+        (repo / "docs" / "LEARNINGS.md").write_text("upstream\n", encoding="utf-8")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-m", "add nested learnings")
+        # Back on the pre-migration base: the whole docs/ dir exists only as untracked.
+        _git(repo, "checkout", "feat")
+        (repo / "docs").mkdir(exist_ok=True)
+        (repo / "docs" / "LEARNINGS.md").write_text("local\n", encoding="utf-8")
+        assert "docs/LEARNINGS.md" in detect_untracked_collisions(repo, "main")
 
 
 class TestPointerGuard:

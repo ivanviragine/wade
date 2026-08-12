@@ -1115,17 +1115,27 @@ def _issue_line(parsed: tuple[str, str]) -> str:
     return f"Issue #{issue_id} — {title}"
 
 
-def _stale_base_line(count: int) -> str:
+def _stale_base_line(count: int, phase: SessionPhase) -> str:
     """Render the fixed, short ``N commits behind`` staleness warning line (#407).
 
     Deliberately a single line of ~100 chars so it fits well under
     :data:`_SESSION_CONTEXT_MAX_CHARS` and is emitted *first*, meaning the tail-truncation
     below can never drop it or land its ``…`` mid-warning.
+
+    The remedy points at the *phase's own* sync command — ``review-pr-comments-session`` for
+    a REVIEW worktree, ``implementation-session`` otherwise — since both session groups
+    provide ``sync`` and each passes the ``session_type`` its conflict-hint/stash handling
+    needs (#408 review).
     """
     plural = "S" if count != 1 else ""
+    sync_cmd = (
+        "wade review-pr-comments-session sync"
+        if phase is SessionPhase.REVIEW
+        else "wade implementation-session sync"
+    )
     return (
         f"⚠️ BRANCH IS {count} COMMIT{plural} BEHIND BASE — startup catchup did not advance "
-        "it; do NOT start work until you run `wade implementation-session sync`."
+        f"it; do NOT start work until you run `{sync_cmd}`."
     )
 
 
@@ -1168,7 +1178,7 @@ def session_start_context(worktree_root: Path, phase: SessionPhase) -> str | Non
 
         stale = read_stale_base(worktree_root)
         if stale is not None and stale.behind > 0:
-            lines.append(_stale_base_line(stale.behind))
+            lines.append(_stale_base_line(stale.behind, phase))
 
     # Where each phase's issue ref lives on disk (impl/review: the root PLAN.md;
     # plan: the metadata file a ``--issue-id`` session persists). ``None`` → no

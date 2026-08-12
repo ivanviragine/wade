@@ -241,13 +241,14 @@ def _classify_catchup_failure(result: SyncResult) -> str:
     return stale_base.REASON_UNKNOWN
 
 
-def _commits_behind_base(repo_root: Path, base: str, current: str) -> int:
+def _commits_behind_base(repo_root: Path, base: str, current: str) -> int | None:
     """Count commits ``current`` is behind its base, reusing the ref catchup already fetched.
 
     Prefers ``origin/<base>`` (fetched by catchup on every reachable path before it could
     fail) and falls back to the local ``<base>`` — never triggering a *second* fetch on
-    session start (#407). Returns 0 when neither ref resolves (nothing verifiable to warn
-    about).
+    session start (#407). Returns ``None`` when neither ref resolves (lag unknown), which is
+    NOT the same as 0 (verified up to date): an unknown lag must never clear a marker an
+    earlier startup wrote (#408 review).
     """
     refs: list[str] = []
     try:
@@ -264,7 +265,7 @@ def _commits_behind_base(repo_root: Path, base: str, current: str) -> int:
             return git_branch.commits_ahead(repo_root, ref, current)
         except GitError:
             continue
-    return 0
+    return None
 
 
 def _surface_stale_base_if_behind(
@@ -280,9 +281,14 @@ def _surface_stale_base_if_behind(
     On commits-behind > 0: escalate to prominent error-level output, persist the
     ``.wade/stale_base`` marker (count + reason), and return the warning text to inject
     into the initial prompt. On == 0 (branch caught up): clear any stale marker and return
-    ``None``.
+    ``None``. On unknown lag (neither base ref resolves): leave any existing marker
+    untouched and return ``None`` — never erasing an earlier startup's warning (#408 review).
     """
     behind = _commits_behind_base(repo_root, base, current)
+    if behind is None:
+        # Lag unknown (neither base ref resolved) — never clear a marker an earlier startup
+        # wrote, and do not emit a count-less banner. A verified 0 still clears below (#408).
+        return None
     if behind <= 0:
         stale_base.clear_stale_base(worktree_path)
         return None
