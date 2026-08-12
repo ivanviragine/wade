@@ -95,9 +95,8 @@ def done(
                     console.warn(message)
                 elif level == "info":
                     console.info(message)
-            if not messages:
+            if status.is_all_clear:
                 console.info(
-                    "SESSION COMPLETE — push succeeded. "
                     "Report by exception: give the PR/URL and what's next, and only call out "
                     "anything that needs the developer's attention. Suggest they exit the session."
                 )
