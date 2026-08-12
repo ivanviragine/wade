@@ -70,6 +70,17 @@ No circular dependencies. Models are pure data. Services orchestrate. **Never im
 > GitHub (PR/issue body markers, labels) and worktree files, **not** SQLite. The
 > code still exists but is inert; removal is tracked as #357 C5.
 
+> **Deterministic git-hook install/reconcile/build logic lives in `git/hooks.py`**
+> (git layer), not `skills/installer.py`. Packaged template-asset loaders
+> (prompt/skill/hook templates) live in `utils/templates.py`, a leaf module.
+> Leaf `utils/` modules import nothing from wade, so any layer — including the
+> git layer — may import them without breaking the rules above.
+> `skills` itself is a lower utility/template layer — services may import it for
+> **skill-file management** (`install_skills`, the `*_SKILLS` registries,
+> `ensure_knowledge_merge_attributes`, gitignore/cross-tool constants), never the
+> reverse. Those residual `service -> skills` imports are sanctioned, not
+> layering violations.
+
 AI tool adapters are not part of this repo — they live in the external [`crossby`](https://github.com/ivanviragine/crossby) package (`pyproject.toml`). See `docs/dev/architecture.md` for what moved there.
 
 CLI modules are thin dispatch — they parse flags via Typer, then call service methods. Business logic lives in `services/`, not in `cli/`.

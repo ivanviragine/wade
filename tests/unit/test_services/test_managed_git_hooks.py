@@ -13,7 +13,7 @@ import subprocess
 from pathlib import Path
 
 from wade.git import repo as git_repo
-from wade.skills.installer import (
+from wade.git.hooks import (
     build_commit_msg_hook_script,
     build_pre_commit_hook_script,
     install_worktree_git_hooks,

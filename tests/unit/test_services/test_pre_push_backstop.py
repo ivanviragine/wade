@@ -7,8 +7,9 @@ import subprocess
 from pathlib import Path
 
 from wade.git import repo as git_repo
-from wade.skills.installer import install_worktree_git_hooks, load_hook_template
+from wade.git.hooks import install_worktree_git_hooks
 from wade.utils import markers
+from wade.utils.templates import load_hook_template
 
 _ZERO = "0" * 40
 

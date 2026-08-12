@@ -28,9 +28,7 @@ def _run(tmp_path: Path, *, plan_mode: bool, config: ProjectConfig):
     wt.mkdir()
     repo = tmp_path / "repo"
     repo.mkdir()
-    with patch(
-        "wade.skills.installer.install_worktree_git_hooks", return_value=True
-    ) as mock_install:
+    with patch("wade.git.hooks.install_worktree_git_hooks", return_value=True) as mock_install:
         bootstrap_worktree(wt, config, repo, plan_mode=plan_mode)
     return mock_install
 
@@ -93,7 +91,7 @@ class TestBootstrapManagedGitHooks:
         repo.mkdir()
         config = ProjectConfig(project=ProjectSettings(), done=DoneConfig(pre_push_backstop=True))
         with patch(
-            "wade.skills.installer.install_worktree_git_hooks",
+            "wade.git.hooks.install_worktree_git_hooks",
             side_effect=RuntimeError("boom"),
         ) as mock_install:
             # A hook-install error must never crash bootstrap.
@@ -115,11 +113,11 @@ class TestBootstrapManagedGitHooks:
         )
         with (
             patch(
-                "wade.skills.installer.build_pre_commit_hook_script",
+                "wade.git.hooks.build_pre_commit_hook_script",
                 side_effect=FileNotFoundError("no pre-commit template"),
             ),
             patch(
-                "wade.skills.installer.build_commit_msg_hook_script",
+                "wade.git.hooks.build_commit_msg_hook_script",
                 side_effect=FileNotFoundError("no commit-msg template"),
             ),
             patch.object(bootstrap_mod.logger, "warning") as warning,
