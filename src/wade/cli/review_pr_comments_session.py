@@ -87,7 +87,9 @@ def done(
 
         status = get_review_status()
         if status is not None:
-            messages = format_review_status_summary(status)
+            messages = format_review_status_summary(
+                status, include_all_clear=not status.is_all_clear
+            )
             for level, message in messages:
                 if level == "success":
                     console.success(message)
@@ -105,7 +107,8 @@ def done(
                 "SESSION COMPLETE — push succeeded, but review status could not be verified. "
                 "Report by exception: give the PR/URL and what's next. Recommend checking the "
                 "review status directly on the PR page — easy fix — then ask via the native "
-                "question component whether to check now or exit."
+                'question component with options "Check now (recommended)" first and "Exit" '
+                "second."
             )
     raise typer.Exit(0 if success else 1)
 

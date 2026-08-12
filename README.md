@@ -412,10 +412,12 @@ wade installs Skills that teach your AI agent the workflow — issue format, pla
 
 Sessions report **by exception**: terse on success — just the actionable
 handles (issue/PR numbers, URLs, the next command), never a list of completed
-steps or a reassurance that nothing broke. The agent only stops to talk when
-something needs your attention or a decision only you can make, stating what
-it is, its complexity (easy/medium/complex/very_complex), and a
-recommendation before asking.
+steps or a reassurance that nothing broke. When something needs your
+attention or a decision only you can make, the agent reports it in 1–2
+sentences with brief context, its complexity
+(easy/medium/complex/very_complex), and a recommendation. It then asks
+through the native question component, with the recommended option first and
+labelled "(recommended)".
 
 ## Worktree Hooks
 
