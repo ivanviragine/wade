@@ -107,11 +107,13 @@ class TestPlanGuardCLI:
         stdin = json.dumps({"tool_name": "Write", "tool_input": {"file_path": file_path}})
         return _run("pre_tool_use", "plan", "claude", stdin, root=root)
 
-    def test_source_inside_worktree_denied(self, tmp_path: Path, monkeypatch) -> None:
+    def test_source_inside_worktree_denied(self, tmp_path: Path) -> None:
         # pytest's tmp_path lives under the OS temp dir, which the scratch
-        # exemption (#409) now matches by prefix — redirect the subprocess's own
-        # $TMPDIR elsewhere so this worktree is not accidentally treated as scratch.
-        monkeypatch.setenv("TMPDIR", "/nonexistent-tmpdir-for-test-isolation")
+        # exemption (#409) now matches by prefix — but the write target here is
+        # a *child of the worktree root itself* (both derived from tmp_path), so
+        # the plan-artifact exemption's root-awareness (_is_scratch_outside_worktree)
+        # denies it regardless of the temp-prefix match. No $TMPDIR isolation
+        # needed, unlike tests where the target and worktree root diverge.
         r = self._plan(str(tmp_path / "src" / "foo.py"), str(tmp_path))
         assert r.returncode == 2
         assert json.loads(r.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
