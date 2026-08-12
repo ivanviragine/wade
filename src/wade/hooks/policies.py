@@ -742,6 +742,19 @@ def shell_containment(
       an in-place editor outside :data:`_IN_PLACE_COMMANDS`. Neither can escape the
       root (rule 4 still contains enumerated writes) — they can only write a
       non-artifact inside it.
+    - **``cd`` persisting across separate tool calls, not just within one command
+      string.** ``cwd_outside_root_token`` (rule 6) only tracks a ``cd``/``pushd``
+      seen *while scanning this one ``event.command``* — it starts fresh on every
+      :func:`shell_containment` call. Some tools' shell tool (e.g. Claude Code's
+      Bash) persist the working directory *across* separate tool calls, so
+      ``cd /tmp/x`` in one call followed by a bare ``git clean -fd`` (no ``-C``, no
+      ``cd``) in the **next** call reports ``event.cwd == /tmp/x`` — which ``base``
+      trusts unconditionally (see the top of this function) — and escapes with no
+      operand or directory-redirect flag in *that* command for any rule to catch.
+      Pre-existing (the unconditional ``base = cwd_resolved`` trust predates this
+      exemption work), not something this guard's single-command tokenizer can fix
+      without tracking cwd across calls — a candidate follow-up, not a regression
+      here.
 
     Args:
         event: Normalized hook event; only :attr:`HookEvent.command` is read.

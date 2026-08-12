@@ -549,3 +549,9 @@ Write-guard temp/scratch is now allowed in both plan and impl mode (#409), which
 In src/wade/hooks/policies.py's shell_containment, the always-allowed-scratch exemption (_is_always_allowed_scratch: temp dirs + devices) covers only direct file writes, NOT git directory-redirect flags (-C/--work-tree/--git-dir, spaced or glued/=-joined). Rule 6's buffering checks those with strict _within(root) instead of _contained, so 'git -C /tmp/x clean -fd' stays denied even though a direct write to /tmp/x is scratch-exempt — a directory-scoped write can touch every file under <dir>, a far larger blast radius than one scratch file.
 
 ---
+
+## de9cb5388ad2 | 2026-08-12 | implementation | tags: hooks, write-guards, gotcha | Issue #409
+
+shell_containment's base = _resolve_shell_path(event.cwd) trust (src/wade/hooks/policies.py) is unconditional and predates #409 — some tools' shell execution (e.g. Claude Code's Bash) persists cwd across SEPARATE tool calls, not just within one command string. So cd /tmp/x in one call followed by a bare 'git clean -fd' (no -C, no cd) in the next call reports event.cwd=/tmp/x, and nothing in this single-command tokenizer catches it (rule 6's cwd_outside_root_token resets fresh per shell_containment call). Found by wade review implementation on the #409 cd-into-scratch fix; documented as a residual gap, not fixed, since it needs cross-call cwd tracking outside this predicate's scope.
+
+---
