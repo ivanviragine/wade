@@ -1033,7 +1033,12 @@ def shell_containment(
             awaiting_git_dir_redirect = False
             resolved = _resolve_shell_path(token, base=base)
             if resolved is None or not _within(resolved, root):
+                # Symmetric with the ``else`` branch below: keeps "last flag wins"
+                # an invariant of both tokens together, not just of
+                # ``git_dir_redirect_outside_token``'s check-order-dependent
+                # precedence over ``seen_in_root`` at the write-subcommand check.
                 git_dir_redirect_outside_token = token
+                git_dir_redirect_seen_in_root = False
             else:
                 # A later in-root redirect flag overrides an earlier outside one in
                 # the same segment (git -C /tmp/x -C /repo/wt log): git itself only
@@ -1067,7 +1072,9 @@ def shell_containment(
         if git_dir_redirect is not None:
             resolved = _resolve_shell_path(git_dir_redirect, base=base)
             if resolved is None or not _within(resolved, root):
+                # See the spaced-flag branch above: symmetric reset.
                 git_dir_redirect_outside_token = git_dir_redirect
+                git_dir_redirect_seen_in_root = False
             else:
                 # See the spaced-flag branch above: a later in-root redirect
                 # overrides an earlier outside one in the same segment.
