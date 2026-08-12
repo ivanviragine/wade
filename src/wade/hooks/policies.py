@@ -18,6 +18,17 @@ Guards today:
   its target in ``command``, not ``file_path``, and the two path guards above
   would wave it through. This closes that channel.
 
+Scratch allowlist: all three guards — via :func:`_contained` on the file-path
+channel (:func:`worktree_containment`, :func:`plan_artifact_only`) and
+:func:`_is_always_allowed_scratch` directly on the shell channel
+(:func:`shell_containment`) — permit writes to system temp dirs (``/tmp``,
+``$TMPDIR``) and a small exact allowlist of discard/console devices
+(``/dev/null`` …), in **both** worktree and plan mode. This is shared,
+ephemeral scratch space outside the worktree, not a plan artifact or the
+tool's memory; see :func:`_is_always_allowed_scratch` for the union and
+:func:`_temp_write_prefixes` / :data:`_ALWAYS_ALLOWED_DEVICES` for why the two
+sets stay separate constants.
+
 Memory allowlist (``allow_paths``): all three guards accept an ``allow_paths``
 tuple — the *active* tool's own memory location for *this session*, resolved by
 :func:`wade.hooks.cli._memory_allow_paths` (e.g. Claude
@@ -140,9 +151,13 @@ def worktree_containment(
     *empty* payload to allow before reaching here, so this only sees events that
     actually described a write.)
 
-    ``allow_paths`` is the **only** relaxation here: unlike the shell channel,
-    this file-path channel does not share the temp-dir / device scratch
-    exemption, so a memory root is the sole out-of-worktree target it permits.
+    Beyond the worktree itself, two kinds of out-of-worktree target are permitted,
+    both via :func:`_contained`: an allowed memory subtree (``allow_paths``) and
+    always-allowed scratch — system temp dirs and a small exact device allowlist
+    (:func:`_is_always_allowed_scratch`) — shared, ephemeral scratch space that is
+    safe to write even though it sits outside the worktree. This mirrors the shell
+    channel's (:func:`shell_containment`) scratch exemption, so the two channels
+    agree on what "contained" means.
     """
     if not event.is_write:
         return HookDecision.allow()
@@ -164,7 +179,7 @@ def worktree_containment(
         )
 
     root = worktree_root.resolve()
-    if _within(resolved, root) or _under_any(resolved, allow_paths):
+    if _contained(resolved, root, allow_paths):
         return HookDecision.allow()
     return HookDecision.deny(
         f"BLOCKED by worktree guard: cannot write to '{event.file_path}'. "
@@ -208,6 +223,14 @@ def plan_artifact_only(
     memory writable in plan mode without loosening the artifact rule for
     in-worktree paths.
 
+    System temp dirs and discard/console devices (:func:`_is_always_allowed_scratch`)
+    are exempted the same way, checked **after** the memory exemption and
+    **before** :func:`_is_plan_artifact`: a scratch path also resolves outside
+    ``worktree_root``, so the artifact check would otherwise deny it as a
+    non-artifact. ``resolved`` is computed unconditionally (not only when
+    ``allow_paths`` is set) so this exemption applies even when no memory
+    allowlist is configured for the session — the common case.
+
     A non-write tool call is allowed. The ``posixpath`` normalization collapses
     ``../`` traversal so escapes like ``.claude/plans/../../src/x.py`` are blocked.
     """
@@ -218,13 +241,16 @@ def plan_artifact_only(
     if not event.is_write or not event.file_path:
         return HookDecision.allow()
 
-    if allow_paths:
-        try:
-            resolved = _resolve_path(event.file_path)
-        except (OSError, ValueError):
-            resolved = None
-        if resolved is not None and _under_any(resolved, allow_paths):
+    try:
+        resolved = _resolve_path(event.file_path)
+    except (OSError, ValueError):
+        resolved = None
+
+    if resolved is not None:
+        if allow_paths and _under_any(resolved, allow_paths):
             return HookDecision.allow()  # memory subtree — exempt from artifact rule
+        if _is_always_allowed_scratch(resolved):
+            return HookDecision.allow()  # temp/device scratch — exempt from artifact rule
 
     if _is_plan_artifact(event.file_path):
         return HookDecision.allow()
@@ -280,10 +306,23 @@ def _temp_write_prefixes() -> tuple[str, ...]:
 
     System temp dirs sit outside the worktree but are legitimate shared scratch
     space — agents and wade itself stage throwaway files there (headless-review
-    logs, patches, ``mktemp`` output). Resolved so macOS's ``/tmp``→``/private/tmp``
+    logs, patches, ``mktemp`` output). Allowed in **both** worktree and plan mode,
+    on **both** the shell channel (:func:`shell_containment`) and the file-path
+    channel (:func:`worktree_containment` / :func:`plan_artifact_only`), via
+    :func:`_is_always_allowed_scratch`. Resolved so macOS's ``/tmp``→``/private/tmp``
     and ``$TMPDIR`` (``/var/folders/…``, itself under a ``/private`` symlink) match
     the *resolved* path :func:`_contained` compares against; each ends in a
     separator so ``/tmp/`` never matches a sibling like ``/tmpfoo``.
+
+    **Accepted-risk note:** unlike a discard device, a temp write persists real
+    bytes to disk. Allowing it in *both* plan and impl mode opens a narrow
+    cross-session channel — a compromised/prompt-injected plan session (no shell
+    execution) could stage a file in ``$TMPDIR`` that a later impl session (which
+    *does* have shell execution) reads or executes. Accepted because system temp is
+    world-shared scratch already reachable by any local process on the machine, and
+    impl mode already allowed it — but it is why :data:`_ALWAYS_ALLOWED_DEVICES` and
+    these prefixes stay **separate constants** rather than one merged set (see that
+    docstring).
     """
     prefixes: set[str] = set()
     for raw in ("/tmp", tempfile.gettempdir()):
@@ -300,15 +339,21 @@ def _temp_write_prefixes() -> tuple[str, ...]:
 # worktree/repo file, so writes to these exact paths are always allowed; every real
 # project/source path outside the root stays contained. System temp dirs
 # (:func:`_temp_write_prefixes`) are the other write exception — shared scratch
-# space outside the worktree.
+# space outside the worktree. Both exceptions are unioned by
+# :func:`_is_always_allowed_scratch` and apply in worktree AND plan mode, on both
+# the shell and file-path channels.
 #
 # This is an *exact* allowlist, deliberately not a `/dev/` prefix: Linux mounts
 # writable filesystems under `/dev/` too (`/dev/shm` tmpfs, `/dev/mqueue`,
 # `/dev/hugepages`), where a write persists a real file outside the worktree — a
-# bare prefix match would wave `tee /dev/shm/out` straight through. Devices are the
-# one exception plan mode also honors (not plan artifacts, yet persist nothing);
-# temp dirs are real scratch files and stay denied in plan mode. That difference is
-# why the device set is its own constant rather than folded into the temp prefixes.
+# bare prefix match would wave `tee /dev/shm/out` straight through.
+#
+# The device set stays its own constant rather than folding into the temp
+# prefixes: a device persists NOTHING (matched exactly, by design), while a temp
+# write persists real bytes to disk (matched by prefix, over a whole shared
+# directory tree) — conflating a persist-nothing sink with a real scratch file
+# would blur that distinction even though both are now allowed in every mode. See
+# :func:`_temp_write_prefixes` for the accepted-risk note this split preserves.
 #
 # Only self-resolving character-device *nodes* belong here — the caller matches the
 # ``Path.resolve()``-d target, so the std-stream symlinks (`/dev/stdout` and friends
@@ -334,9 +379,12 @@ def _is_always_allowed_device(path: Path) -> bool:
     prefix: Linux exposes writable filesystems under ``/dev/`` too — ``/dev/shm``
     (tmpfs), ``/dev/mqueue``, ``/dev/hugepages`` — where a write persists a real
     file *outside* the worktree. Only these enumerated sinks persist nothing and
-    escape no worktree, so plan mode allows them even though they are not plan
-    artifacts. Temp dirs stay denied in plan mode (they are real scratch files),
-    which is why the device set is split from the temp prefixes.
+    escape no worktree, so both worktree and plan mode allow them even though they
+    are not plan artifacts. System temp dirs (:func:`_temp_write_prefixes`) are
+    also allowed in every mode now, via the shared :func:`_is_always_allowed_scratch`
+    union — but the two sets stay separate constants, since a device persists
+    nothing while a temp write persists a real file; see
+    :func:`_temp_write_prefixes` for the rationale that split preserves.
     """
     return str(path) in _ALWAYS_ALLOWED_DEVICES
 
@@ -505,17 +553,33 @@ def _under_any(path: Path, roots: tuple[Path, ...]) -> bool:
     return any(_within(path, r) for r in roots)
 
 
-def _contained(path: Path, root: Path, allow_paths: tuple[Path, ...] = ()) -> bool:
-    """True when ``path`` is inside ``root``, an always-allowed location, or a memory root.
+def _is_always_allowed_scratch(path: Path) -> bool:
+    """True when ``path`` is always-allowed scratch: a known device OR a temp prefix.
 
-    Always-allowed locations cover known discard/console devices
-    (:data:`_ALWAYS_ALLOWED_DEVICES` — ``/dev/null`` …, matched exactly) and system
-    temp dirs (``/tmp``, ``$TMPDIR`` via :data:`_ALWAYS_ALLOWED_PATH_PREFIXES``,
-    matched by prefix) — shared scratch space that is safe to write even though it
-    is outside ``root``. ``allow_paths`` are the active tool's memory subtrees
-    (:func:`_under_any`), permitted despite being outside the worktree.
+    The union both write channels treat as safe to target even though it sits
+    outside the worktree — a known discard/console device
+    (:func:`_is_always_allowed_device`) or a system temp dir
+    (:data:`_ALWAYS_ALLOWED_PATH_PREFIXES`). Single-sourced here so
+    :func:`_contained` (file-path channel, via :func:`worktree_containment` and
+    :func:`plan_artifact_only`) and the shell channel's plan-mode exemptions
+    (:func:`shell_containment`'s ``check_redirect_target`` / ``check_non_artifact``)
+    cannot drift on what counts as scratch.
     """
-    if _is_always_allowed_device(path) or str(path).startswith(_ALWAYS_ALLOWED_PATH_PREFIXES):
+    return _is_always_allowed_device(path) or str(path).startswith(_ALWAYS_ALLOWED_PATH_PREFIXES)
+
+
+def _contained(path: Path, root: Path, allow_paths: tuple[Path, ...] = ()) -> bool:
+    """True when ``path`` is inside ``root``, always-allowed scratch, or a memory root.
+
+    Always-allowed scratch (:func:`_is_always_allowed_scratch`) covers known
+    discard/console devices (:data:`_ALWAYS_ALLOWED_DEVICES` — ``/dev/null`` …,
+    matched exactly) and system temp dirs (``/tmp``, ``$TMPDIR`` via
+    :data:`_ALWAYS_ALLOWED_PATH_PREFIXES`, matched by prefix) — shared scratch space
+    that is safe to write even though it is outside ``root``. ``allow_paths`` are the
+    active tool's memory subtrees (:func:`_under_any`), permitted despite being
+    outside the worktree.
+    """
+    if _is_always_allowed_scratch(path):
         return True
     return _within(path, root) or _under_any(path, allow_paths)
 
@@ -540,16 +604,19 @@ def shell_containment(
     ``git -C ../crossby log``) never mutates state, so a read operand may resolve
     anywhere. The guard's job is to keep *writes* inside the root.
 
-    **System temp dirs and discard/console devices are write exceptions.** ``/tmp``,
-    ``$TMPDIR``, and a small exact allowlist of devices (``/dev/null``, ``/dev/zero`` …)
-    resolve as "contained" even though they sit outside the root
-    (:func:`_temp_write_prefixes` / :data:`_ALWAYS_ALLOWED_DEVICES`, via
-    :data:`_ALWAYS_ALLOWED_PATH_PREFIXES` and :func:`_is_always_allowed_device`). The
-    device allowlist is *exact*, not a ``/dev/`` prefix — Linux mounts writable
-    filesystems there too (``/dev/shm``), so ``tee /dev/shm/out`` stays contained.
-    Plan mode still denies temp-dir writes as non-artifacts (real scratch files);
-    device writes are additionally allowed in plan mode
-    (:func:`_is_always_allowed_device`) since they persist nothing.
+    **System temp dirs and discard/console devices are write exceptions, in every
+    mode.** ``/tmp``, ``$TMPDIR``, and a small exact allowlist of devices
+    (``/dev/null``, ``/dev/zero`` …) resolve as "contained" even though they sit
+    outside the root (:func:`_is_always_allowed_scratch`, unioning
+    :func:`_temp_write_prefixes` / :data:`_ALWAYS_ALLOWED_DEVICES`). The device
+    allowlist is *exact*, not a ``/dev/`` prefix — Linux mounts writable filesystems
+    there too (``/dev/shm``), so ``tee /dev/shm/out`` stays contained. Both temp
+    writes and device writes are additionally exempt from the plan-artifact rule in
+    plan mode (:func:`_is_always_allowed_scratch`, checked in
+    ``check_redirect_target`` / ``check_non_artifact`` below) — devices persist
+    nothing, and temp writes are accepted as world-shared scratch already reachable
+    by any local process (see :func:`_temp_write_prefixes` for the cross-session
+    accepted-risk note this widening carries).
 
     **The active tool's memory allow-root is also writable.** ``allow_paths`` (the
     tool's own allow-root for this session — see
@@ -603,18 +670,29 @@ def shell_containment(
        ``diff`` (read subcommands) stay allowed; ``git -C <outside> clean`` would
        otherwise delete untracked files outside with no later path operand to
        catch it — ``--work-tree``/``--git-dir`` are functionally the same
-       redirection, just spelled differently. Checked only against ``root`` —
-       ``allow_paths`` (the memory exception, rule 4/5's `_contained` call) does
-       not apply to any of these six spellings: a git
-       write scoped to a redirected directory can touch every file under
-       ``<dir>``, not just a direct memory write.
+       redirection, just spelled differently. Checked with **strict** ``_within``
+       against ``root`` only — neither ``allow_paths`` (the memory exception,
+       rule 4/5's `_contained` call) nor the scratch exemption
+       (:func:`_is_always_allowed_scratch`) applies to any of these six spellings,
+       so ``git -C /tmp/x clean -fd`` stays denied even though a direct write to
+       ``/tmp/x`` is scratch-exempt: a git write scoped to a redirected directory
+       can touch every file under ``<dir>``, not just a single scratch/memory
+       write. The identical blast radius reached the plain way — a prior
+       ``cd``/``pushd`` to a directory outside root (necessarily scratch; a
+       non-scratch outside target already denies at rule 3) redirects git's
+       implicit working dir for the rest of the *whole command line*, not just
+       the current segment (a real shell's cwd persists across ``&&``/``;``/``|``,
+       unlike a per-invocation ``-C`` flag) — so ``cd /tmp/x && git clean -fd``
+       gets the same denial even though it has no ``-C`` flag and ``clean`` has no
+       path operand of its own to catch.
     7. In plan mode only: any output redirect, an in-place edit flag (``sed -i``,
        ``--in-place``) on a command that *has* one (:data:`_IN_PLACE_COMMANDS` —
        ``grep -i`` and ``ls -i`` are ordinary read flags), or an operand of a write
-       command whose path is not a plan artifact — **except a device node**
-       (``/dev/null`` and friends), which stays allowed in plan mode
-       (:func:`_is_always_allowed_device`): it is a discard/console sink, not a
-       plan artifact, but writing it persists nothing.
+       command whose path is not a plan artifact — **except always-allowed scratch**
+       (a temp path or a device node like ``/dev/null``), which stays allowed in
+       plan mode (:func:`_is_always_allowed_scratch`): a device persists nothing,
+       and a temp write is accepted world-shared scratch, so neither need be a plan
+       artifact.
 
     **This is defense-in-depth, not a completeness guarantee.** It stops the
     non-obfuscated cases — the ones an agent actually produces — and is trivially
@@ -716,7 +794,7 @@ def shell_containment(
             plan_mode
             and not _under_any(resolved, allow_paths)
             and not _is_plan_artifact_path(resolved, root)
-            and not _is_always_allowed_device(resolved)
+            and not _is_always_allowed_scratch(resolved)
         ):
             return HookDecision.deny(
                 f"BLOCKED by plan-session guard: redirecting output to '{target}' "
@@ -738,7 +816,7 @@ def shell_containment(
             not plan_mode
             or _under_any(resolved, allow_paths)
             or _is_plan_artifact_path(resolved, root)
-            or _is_always_allowed_device(resolved)
+            or _is_always_allowed_scratch(resolved)
         ):
             return None
         return HookDecision.deny(
@@ -762,6 +840,16 @@ def shell_containment(
     # spellings are directory-redirect flags with the same escape shape.
     awaiting_git_dir_redirect = False
     git_dir_redirect_outside_token: str | None = None
+    # A successful `cd`/`pushd` to a directory outside the root (necessarily
+    # always-allowed scratch — a non-scratch outside target denies immediately
+    # below) redirects git's implicit working dir for every later segment of this
+    # SAME shell command, exactly like a `-C`/`--work-tree`/`--git-dir` flag —
+    # `cd /tmp/x && git clean -fd` has the identical blast radius as
+    # `git -C /tmp/x clean -fd`. Unlike `git_dir_redirect_outside_token`, this is
+    # NOT reset at segment separators: a real shell's cwd persists across
+    # `&&`/`;`/`|`, so the buffered directory must too. Cleared when a later `cd`
+    # returns inside the root.
+    cwd_outside_root_token: str | None = None
 
     def end_segment() -> HookDecision | None:
         """A segment that ended while `cd` still wanted a target went to $HOME."""
@@ -834,22 +922,32 @@ def shell_containment(
             resolved = _resolve_shell_path(token, base=base)
             if resolved is None or not _contained(resolved, root):
                 return deny_outside(f"{command_name} target", token)
+            # Allowed either because it's in-worktree or (the only other way
+            # `_contained` passes) always-allowed scratch — track which, so a
+            # later git write subcommand in this same command line can be denied
+            # the same way one reached via `-C` into scratch already is.
+            cwd_outside_root_token = None if _within(resolved, root) else token
             continue
 
         # Spaced git directory-redirect flag: buffer the directory from the NEXT
         # token. A read through it is fine (``git -C ../crossby log``,
         # ``git --work-tree ../crossby log``); a later git *write* subcommand in
         # the same segment turns a buffered *outside* dir into a denial. Checked
-        # only against ``root`` — NOT ``allow_paths`` — below. git's own parser
-        # (git.c) accepts ``-C``, ``--work-tree``, and ``--git-dir`` both spaced
-        # and ``=``-joined identically, so all three must be buffered here too —
-        # not just ``-C`` (a prior review already caught the missing
+        # with strict ``_within`` against ``root`` only — NOT ``_contained`` (no
+        # ``allow_paths``, no temp/device scratch exemption) — below: a git write
+        # subcommand scoped to a directory can touch every file under it, a far
+        # larger blast radius than a single scratch file, so a redirect into
+        # ``/tmp``/``$TMPDIR`` stays denied even though a direct write there is
+        # always-allowed scratch (:func:`_is_always_allowed_scratch`). git's own
+        # parser (git.c) accepts ``-C``, ``--work-tree``, and ``--git-dir`` both
+        # spaced and ``=``-joined identically, so all three must be buffered here
+        # too — not just ``-C`` (a prior review already caught the missing
         # ``=``-joined ``--work-tree``/``--git-dir`` forms; this closes the
         # remaining spaced-without-``=`` gap for those same two flags).
         if awaiting_git_dir_redirect:
             awaiting_git_dir_redirect = False
             resolved = _resolve_shell_path(token, base=base)
-            if resolved is None or not _contained(resolved, root):
+            if resolved is None or not _within(resolved, root):
                 git_dir_redirect_outside_token = token
             continue
 
@@ -861,10 +959,12 @@ def shell_containment(
         # ``=``-joined ``--work-tree=<dir>`` / ``--git-dir=<dir>`` forms:
         # resolved directly from the same token instead of falling through to
         # the generic `_embedded_path` branch below. That branch checks
-        # ``allow_paths``, which would let e.g. ``git -C<memory-dir> clean -fd``
-        # reach the memory exception — a write reached through any
-        # directory-redirect flag can touch every file under ``<dir>``, not just
-        # a direct memory write; all spellings must stay as strict as spaced
+        # ``allow_paths`` (and, via `_contained`, temp/device scratch), which
+        # would let e.g. ``git -C<memory-dir> clean -fd`` reach the memory
+        # exception or ``git -C/tmp/x clean -fd`` reach the scratch exception —
+        # a write reached through any directory-redirect flag can touch every
+        # file under ``<dir>``, not just a direct memory/scratch write; all
+        # spellings must stay as strict (``_within``, root only) as spaced
         # ``-C``.
         if command_name == "git" and token.startswith("-C") and token != "-C":
             git_dir_redirect = token[2:]
@@ -874,7 +974,7 @@ def shell_containment(
             git_dir_redirect = None
         if git_dir_redirect is not None:
             resolved = _resolve_shell_path(git_dir_redirect, base=base)
-            if resolved is None or not _contained(resolved, root):
+            if resolved is None or not _within(resolved, root):
                 git_dir_redirect_outside_token = git_dir_redirect
             continue
 
@@ -901,6 +1001,11 @@ def shell_containment(
             # path operand to catch it — deny on the buffered directory.
             if git_dir_redirect_outside_token is not None:
                 return deny_outside("git directory-redirect flag", git_dir_redirect_outside_token)
+            # Same blast radius reached the plain way: `cd /tmp/x && git clean -fd`
+            # has no `-C` flag and no path operand for `clean` to catch, but a
+            # prior `cd` already moved git's implicit working dir outside root.
+            if cwd_outside_root_token is not None:
+                return deny_outside("prior 'cd' target", cwd_outside_root_token)
 
         # A path glued to a flag or operand (``--output=/tmp/x``, ``of=/tmp/x``)
         # is invisible to `_looks_like_path`, and `of=/tmp/x` would resolve

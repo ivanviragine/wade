@@ -171,8 +171,8 @@ trusting the agent to follow the skill. The split across the two repos:
 
 | Guard | Event | Failure mode | Blocks |
 |-------|-------|--------------|--------|
-| `worktree` | PreToolUse | **closed** (deny) | Writes resolving outside the worktree (except the active tool's memory subtree — see [Memory allowlist](#memory-allowlist)) |
-| `plan` | PreToolUse | **closed** (deny) | Writes to anything but plan artifacts (the memory subtree is also exempt) |
+| `worktree` | PreToolUse | **closed** (deny) | Writes resolving outside the worktree (except the active tool's memory subtree and always-allowed scratch — see [Memory allowlist](#memory-allowlist) and below) |
+| `plan` | PreToolUse | **closed** (deny) | Writes to anything but plan artifacts (the memory subtree and always-allowed scratch are also exempt) |
 | `session-complete` | Stop | **open** (allow) | Ending an impl/review turn with commits ahead of base and no current `done` marker (once) |
 | `plan-complete` | Stop | **open** (allow) | Ending a plan turn with no valid `PLAN*.md` in `.wade/plans` (once) |
 
@@ -212,8 +212,9 @@ input redirects excepted (a read); `cd`/`pushd` targets; and operands of *write*
 commands — `_PLAN_WRITE_COMMANDS` (`tee`/`cp`/`mv`/`touch`/`mkdir` …), git write
 subcommands `_GIT_WRITE_SUBCOMMANDS` (`checkout`/`clean`/`clone`/`init`/`worktree`
 …), and in-place editors (`sed -i`, `perl -i`) — that resolve outside. In plan
-mode it additionally rejects those same writes when aimed at non-artifacts, and
-denies the in-place `-i` flag outright.
+mode it additionally rejects those same writes when aimed at non-artifacts
+(except always-allowed scratch — see below), and denies the in-place `-i`
+flag outright.
 
 Every git directory-redirect flag is buffered the same way, in every spelling
 git's own parser (`git.c`) accepts: `-C`, `--work-tree`, and `--git-dir` are
@@ -224,29 +225,38 @@ reads/writes), each spaced (`-C <dir>`) or glued/`=`-joined (`-C<dir>`,
 subcommand) is allowed, but a git *write* subcommand after one of these
 pointed outside (`git -C /outside clean -fd`, `git -C/outside clean -fd`,
 `git --work-tree /outside clean -fd`, `git --git-dir=/outside clean -fd`) is
-denied — there is no later path operand to catch it otherwise. Checked only
-against `worktree_root`, never `allow_paths`: a write reached through any of
-these six spellings can touch every file under `<dir>`, not just a direct
-memory write, so they stay strict even when `<dir>` is the active tool's own
-memory root. It also unglues paths from other flags
+denied — there is no later path operand to catch it otherwise. Checked with
+**strict** `_within` against `worktree_root` only, never `allow_paths` and
+never the always-allowed-scratch exemption described below: a write reached
+through any of these six spellings can touch every file under `<dir>`, not
+just a direct memory/scratch write, so they stay strict even when `<dir>` is
+the active tool's own memory root **or** a system temp dir (`git -C /tmp/x
+clean -fd` is denied, even though a direct write to `/tmp/x` is scratch-exempt).
+It also unglues paths from other flags
 (`--output=/etc/x`, `-o/etc/x`, `of=/etc/x`) and keeps those **glued** forms
 contained in every mode (a tokenizer cannot tell a glued read flag from a glued
 write flag, so a few glued reads are denied too), treats bash's
 `>&file` as a write while skipping true fd duplication (`2>&1`), denies a bare
 `cd` (it lands in `$HOME`), and exempts known discard/console devices
 (`>/dev/null 2>&1`) plus system temp dirs (`/tmp`, `$TMPDIR`) — shared scratch space
-where writes are always allowed. These two exemptions diverge in plan mode: devices
-are pure discard sinks (nothing is persisted), so plan mode allows them even though
-they are not plan artifacts; temp dirs are real scratch files, so plan mode still
-denies them as non-artifacts. That is why `_ALWAYS_ALLOWED_DEVICES` is a separate
-constant from the temp-dir prefixes (`_ALWAYS_ALLOWED_PATH_PREFIXES`), consulted
-together by `_contained`. The device set is an **exact** allowlist (`/dev/null`,
-`/dev/zero`, …), not a `/dev/` prefix: Linux mounts writable filesystems under
-`/dev/` too (`/dev/shm` tmpfs, `/dev/mqueue`), where a write persists a real file
-outside the worktree, so a bare prefix would let `tee /dev/shm/out` escape. The
-temp/device exemption is scoped to `shell_containment`; the file-path guard
-`worktree_containment` does **not** share it — its only out-of-worktree exception
-is the memory allowlist below.
+where writes are always allowed, in **every** mode. `_ALWAYS_ALLOWED_DEVICES` and
+the temp-dir prefixes (`_ALWAYS_ALLOWED_PATH_PREFIXES`) stay **separate constants**,
+unioned by `_is_always_allowed_scratch` and consulted together by `_contained`: a
+device persists nothing (matched by an **exact** allowlist — `/dev/null`,
+`/dev/zero`, … — not a `/dev/` prefix, since Linux mounts writable filesystems under
+`/dev/` too, e.g. `/dev/shm` tmpfs, `/dev/mqueue`, where a write persists a real file
+outside the worktree and a bare prefix would let `tee /dev/shm/out` escape), while a
+temp write persists a real file (matched by prefix). Both are exempt from the
+plan-mode plan-artifact rule for the same reason devices always were: the accepted
+risk is a compromised plan session (no shell execution) staging bytes in `$TMPDIR`
+that a later impl session (which has shell execution) could read or execute —
+judged acceptable because system temp is world-shared scratch already reachable by
+any local process, and impl mode already allowed it. The scratch exemption
+(`_is_always_allowed_scratch`) is shared by `shell_containment` **and** the
+file-path guards (`worktree_containment`, `plan_artifact_only`, both via
+`_contained`) — the two channels no longer diverge on what counts as always-allowed
+scratch. (Rule 6's git directory-redirect buffering is the sole exception, kept
+**stricter** than a direct write even for a temp `<dir>` — see above.)
 
 ### Memory allowlist
 

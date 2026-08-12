@@ -537,3 +537,15 @@ git's own parser (git.c) accepts -C, --work-tree, and --git-dir both spaced (--f
 In _memory_allow_paths (hooks/cli.py), never .resolve() the full memory allow-path in one call — resolve only the leaf's parent, then reattach the leaf name (memory/, the encoded project dir, sessions/) literally, so a symlink swapped in for the leaf itself cannot silently widen the allow-root to its target (e.g. ~/.claude, exposing settings.json that holds the hooks block). Also resolve worktree_root before encoding it into the Claude/Cursor project-dir name — an unresolved worktree path (e.g. reached through a symlinked worktrees_dir) encodes a different string than the one the launched tool's own CWD resolves to, leaving its real memory writes denied.
 
 ---
+
+## 5ed84c25601d | 2026-08-12 | implementation | tags: hooks, write-guards, security | Issue #409
+
+Write-guard temp/scratch is now allowed in both plan and impl mode (#409), which accepts a narrow cross-session covert channel: a compromised plan session (no shell execution) can stage bytes in $TMPDIR that a later impl session (which has shell execution) reads/executes. Judged acceptable since system temp is world-shared scratch any local process can already reach, and impl mode already allowed it — but it is why _ALWAYS_ALLOWED_DEVICES and the temp prefixes in src/wade/hooks/policies.py stay separate constants; don't merge them without re-deciding this tradeoff.
+
+---
+
+## 8af3d744375f | 2026-08-12 | implementation | tags: hooks, write-guards, git | Issue #409
+
+In src/wade/hooks/policies.py's shell_containment, the always-allowed-scratch exemption (_is_always_allowed_scratch: temp dirs + devices) covers only direct file writes, NOT git directory-redirect flags (-C/--work-tree/--git-dir, spaced or glued/=-joined). Rule 6's buffering checks those with strict _within(root) instead of _contained, so 'git -C /tmp/x clean -fd' stays denied even though a direct write to /tmp/x is scratch-exempt — a directory-scoped write can touch every file under <dir>, a far larger blast radius than one scratch file.
+
+---
