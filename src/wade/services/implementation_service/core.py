@@ -311,6 +311,67 @@ def _surface_stale_base_if_behind(
     return warning
 
 
+def _catchup_and_surface_staleness(
+    *,
+    repo_root: Path,
+    worktree_path: Path,
+    branch_name: str,
+    effective_base: str,
+) -> str | None:
+    """Run startup catchup and surface any staleness, returning the prompt banner (#407).
+
+    Catchup is documented as non-blocking: whatever it does (succeed, fail cleanly, or
+    raise), this always computes commits-behind and surfaces a stale base LOUDLY — a
+    boxed panel plus a ``.wade/stale_base`` marker the AI prompt and every subsequent
+    session-start hook re-inject. Neither the catchup call nor the staleness surfacing
+    itself may ever propagate an exception out of session start (#408 review) — that
+    would be a strictly worse regression than the silent-stale-base bug this exists to
+    fix, since it would abort the session launch entirely instead of just proceeding
+    on a base whose staleness is now at least visible.
+    """
+    catchup_result: SyncResult | None = None
+    catchup_reason = stale_base.REASON_UNKNOWN
+    catchup_raised = False
+    try:
+        catchup_result = catchup(project_root=worktree_path)
+        if not catchup_result.success:
+            catchup_reason = _classify_catchup_failure(catchup_result)
+    except Exception as exc:
+        logger.debug("start.catchup_failed", exc_info=True)
+        catchup_raised = True
+        # No result to inspect — a non-conflict GitError naming a file "would be
+        # overwritten by merge" is the skip-worktree blocker; anything else is
+        # unknown. Either way the staleness surfacing below still fires loudly.
+        catchup_reason = (
+            stale_base.REASON_SKIP_WORKTREE
+            if "overwritten by merge" in str(exc)
+            else stale_base.REASON_UNKNOWN
+        )
+
+    resolved_base = (
+        catchup_result.main_branch
+        if catchup_result and catchup_result.main_branch
+        else effective_base
+    )
+    stale_warning: str | None = None
+    try:
+        stale_warning = _surface_stale_base_if_behind(
+            repo_root=repo_root,
+            worktree_path=worktree_path,
+            base=resolved_base,
+            current=branch_name,
+            reason=catchup_reason,
+        )
+    except Exception:
+        logger.debug("start.stale_base_surface_failed", exc_info=True)
+    if catchup_raised and stale_warning is None:
+        # catchup() itself raised and nothing else was surfaced (lag unresolved, or the
+        # surfacing step above also failed) — restore the pre-#407 fallback warning so
+        # this never looks identical to a verified up-to-date branch (#408 review).
+        console.warn("Startup catchup failed — proceeding anyway.")
+    return stale_warning
+
+
 # ---------------------------------------------------------------------------
 # Implementation start
 # ---------------------------------------------------------------------------
@@ -613,34 +674,11 @@ def start(
         # Whatever the outcome, compute commits-behind and surface a stale base LOUDLY
         # and in-session (marker + prompt banner) so no session ever proceeds silently
         # on an outdated base — regardless of *why* catchup did not advance (#407).
-        catchup_result: SyncResult | None = None
-        catchup_reason = stale_base.REASON_UNKNOWN
-        try:
-            catchup_result = catchup(project_root=worktree_path)
-            if not catchup_result.success:
-                catchup_reason = _classify_catchup_failure(catchup_result)
-        except Exception as exc:
-            logger.debug("start.catchup_failed", exc_info=True)
-            # No result to inspect — a non-conflict GitError naming a file "would be
-            # overwritten by merge" is the skip-worktree blocker; anything else is
-            # unknown. Either way Part A below still surfaces the staleness loudly.
-            catchup_reason = (
-                stale_base.REASON_SKIP_WORKTREE
-                if "overwritten by merge" in str(exc)
-                else stale_base.REASON_UNKNOWN
-            )
-
-        resolved_base = (
-            catchup_result.main_branch
-            if catchup_result and catchup_result.main_branch
-            else effective_base
-        )
-        stale_warning = _surface_stale_base_if_behind(
+        stale_warning = _catchup_and_surface_staleness(
             repo_root=repo_root,
             worktree_path=worktree_path,
-            base=resolved_base,
-            current=branch_name,
-            reason=catchup_reason,
+            branch_name=branch_name,
+            effective_base=effective_base,
         )
 
         # Add in-progress label and move to in-progress on project board (both non-critical)

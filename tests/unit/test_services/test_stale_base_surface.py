@@ -9,6 +9,7 @@ from wade.git.repo import GitError
 from wade.models.session import SyncEvent, SyncEventType, SyncResult
 from wade.models.task import Task
 from wade.services.implementation_service.core import (
+    _catchup_and_surface_staleness,
     _classify_catchup_failure,
     _commits_behind_base,
     _surface_stale_base_if_behind,
@@ -160,6 +161,100 @@ class TestSurfaceStaleBase:
         assert marker is not None
         assert marker.behind == 4
         mock_console.panel.assert_not_called()
+
+
+class TestCatchupAndSurfaceStaleness:
+    """#408 review: catchup is documented as non-blocking — neither the catchup() call
+    nor the staleness-surfacing step that follows it may ever propagate an exception
+    out of session start.
+    """
+
+    @patch(f"{_CORE}.console")
+    @patch(f"{_CORE}.git_branch")
+    @patch(f"{_CORE}.git_repo")
+    @patch(f"{_CORE}.catchup")
+    def test_surface_step_raising_does_not_propagate(
+        self,
+        mock_catchup: MagicMock,
+        mock_repo: MagicMock,
+        mock_branch: MagicMock,
+        mock_console: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        # catchup() itself succeeds, but the staleness-surfacing step (e.g. a non-GitError
+        # raised deep in commits_ahead's int() parsing) raises. This must not crash start().
+        mock_catchup.return_value = SyncResult(
+            success=True, current_branch="feat/1-x", main_branch="main"
+        )
+        mock_repo.has_remote.return_value = True
+        mock_branch.commits_ahead.side_effect = ValueError("unexpected git output")
+
+        warning = _catchup_and_surface_staleness(
+            repo_root=tmp_path,
+            worktree_path=tmp_path,
+            branch_name="feat/1-x",
+            effective_base="main",
+        )
+
+        assert warning is None
+        mock_console.warn.assert_not_called()  # catchup() itself did not raise
+
+    @patch(f"{_CORE}.console")
+    @patch(f"{_CORE}.git_branch")
+    @patch(f"{_CORE}.git_repo")
+    @patch(f"{_CORE}.catchup")
+    def test_catchup_raise_with_unresolvable_lag_falls_back_to_warning(
+        self,
+        mock_catchup: MagicMock,
+        mock_repo: MagicMock,
+        mock_branch: MagicMock,
+        mock_console: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        # catchup() raises AND neither base ref resolves afterward (lag unknown) — the
+        # pre-#407 fallback warning must still fire; the caller cannot be left silent.
+        mock_catchup.side_effect = GitError("network unreachable")
+        mock_repo.has_remote.return_value = False
+        mock_branch.commits_ahead.side_effect = GitError("bad ref")
+
+        warning = _catchup_and_surface_staleness(
+            repo_root=tmp_path,
+            worktree_path=tmp_path,
+            branch_name="feat/1-x",
+            effective_base="main",
+        )
+
+        assert warning is None
+        mock_console.warn.assert_called_once_with("Startup catchup failed — proceeding anyway.")
+
+    @patch(f"{_CORE}.console")
+    @patch(f"{_CORE}.git_branch")
+    @patch(f"{_CORE}.git_repo")
+    @patch(f"{_CORE}.catchup")
+    def test_catchup_raise_with_resolvable_behind_skips_redundant_warning(
+        self,
+        mock_catchup: MagicMock,
+        mock_repo: MagicMock,
+        mock_branch: MagicMock,
+        mock_console: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        # catchup() raises, but the base ref still resolves and shows real lag — the loud
+        # panel already communicates this; the generic fallback warning would be redundant.
+        mock_catchup.side_effect = GitError("would be overwritten by merge: .gitignore")
+        mock_repo.has_remote.return_value = True
+        mock_branch.commits_ahead.return_value = 5
+
+        warning = _catchup_and_surface_staleness(
+            repo_root=tmp_path,
+            worktree_path=tmp_path,
+            branch_name="feat/1-x",
+            effective_base="main",
+        )
+
+        assert warning is not None
+        assert "5 COMMIT" in warning
+        mock_console.warn.assert_not_called()
 
 
 class TestPromptInjection:
