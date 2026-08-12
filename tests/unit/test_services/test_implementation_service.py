@@ -1140,6 +1140,21 @@ class TestImplementationStartBaseBranch:
         base_file = self._worktree_path(tmp_path) / ".wade" / "base_branch"
         assert not base_file.exists()
 
+    def test_malformed_explicit_base_is_rejected(self, tmp_path: Path) -> None:
+        """A hand-typed --base with whitespace / invalid ref chars fails fast — symmetric
+        with the plan-declared path validated at plan-done, and before any work (#376)."""
+        provider = MagicMock()
+
+        with (
+            patch(f"{self._CORE}.load_config", return_value=self._make_config()),
+            patch(f"{self._CORE}.get_provider", return_value=provider),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+        ):
+            result = start("42", project_root=tmp_path, base_branch="bad base")
+
+        assert result.success is False
+        provider.read_task.assert_not_called()  # rejected before the issue is read
+
 
 # ---------------------------------------------------------------------------
 # Implementation batch tests

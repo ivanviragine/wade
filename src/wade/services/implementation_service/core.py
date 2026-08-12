@@ -67,6 +67,7 @@ from wade.ui import prompts
 from wade.ui.console import console
 from wade.utils import stale_base
 from wade.utils.body_markers import enforce_body_budget, update_body_preserving_markers
+from wade.utils.gitref import is_valid_git_ref
 from wade.utils.terminal import (
     compose_implement_title,
     launch_in_new_terminal,
@@ -427,6 +428,18 @@ def start(
         repo_root = git_repo.get_repo_root(cwd)
     except GitError:
         console.error_with_fix("Not inside a git repository", "Navigate to your project directory")
+        return ImplementResult(success=False)
+
+    # Validate an explicit base for well-formedness, symmetric with the
+    # plan-declared path (validated at plan-done via is_valid_git_ref). A
+    # chain-derived base is a generated branch name and always passes; a hand-typed
+    # `--base` with spaces or invalid ref characters fails fast here with a clear
+    # message instead of a later, murkier "does not exist" from ref resolution.
+    if base_branch and not is_valid_git_ref(base_branch):
+        console.error_with_fix(
+            f"Invalid --base value {base_branch!r}",
+            "Use a single well-formed git branch name (no spaces or special characters)",
+        )
         return ImplementResult(success=False)
 
     # When cd_only, redirect all status output to stderr so stdout stays
