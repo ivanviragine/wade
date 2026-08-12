@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from wade.git import branch as git_branch
 from wade.git import repo as git_repo
@@ -462,3 +462,83 @@ class TestFilesBlockingMerge:
         # A non-managed file in the blocking set → do not reconcile (defer to Part A).
         blocking = [".gitignore", "src/app.py"]
         assert _reconcile_skip_worktree_collision(repo, blocking) is None
+
+
+class TestCatchupRetryReusesResolvedRef:
+    """#408 review: the skip-worktree-collision retry in ``_catchup_merge`` must reuse the
+    exact merge ref resolved for the first attempt. Re-resolving on retry would let a first
+    attempt whose fetch failed (falling back to the local base branch) get silently swapped
+    for a stale cached ``origin/<main>`` on retry — recreating the #407 silent
+    stale-session failure this whole feature exists to prevent.
+    """
+
+    @patch(f"{_SYNC}._reconcile_skip_worktree_collision")
+    @patch(f"{_SYNC}.git_sync")
+    @patch(f"{_SYNC}.git_branch")
+    @patch(f"{_SYNC}.git_repo")
+    def test_retry_uses_local_fallback_ref_when_first_fetch_failed(
+        self,
+        mock_repo: MagicMock,
+        mock_branch: MagicMock,
+        mock_sync: MagicMock,
+        mock_reconcile: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        from wade.git.repo import GitError
+        from wade.models.session import SyncResult
+        from wade.services.implementation_service.sync import _catchup_merge
+
+        mock_repo.has_remote.return_value = True
+        mock_sync.fetch_origin.side_effect = GitError("network unreachable")
+
+        blocking_error = GitError(
+            "git merge main failed (exit 1): error: Your local changes to the following "
+            "files would be overwritten by merge:\n\t.gitignore\nAborting\n"
+        )
+        restore = MagicMock()
+        mock_reconcile.return_value = restore
+        mock_sync.merge_branch.side_effect = [
+            blocking_error,
+            SyncResult(
+                success=True, current_branch="feat/1-x", main_branch="main", commits_merged=2
+            ),
+        ]
+
+        seen_refs: list[str] = []
+
+        def commits_ahead(_repo_root: Path, ref: str, _current: str) -> int:
+            seen_refs.append(ref)
+            # A stale cached origin/main (from an earlier, unrelated fetch) that already
+            # looks merged — the bug this guards against would query THIS ref on retry
+            # and silently report 0 (falsely up to date).
+            return 0 if ref == "origin/main" else 2
+
+        mock_branch.commits_ahead.side_effect = commits_ahead
+
+        events: list[tuple[str, dict[str, object]]] = []
+
+        def emit(event: str, **data: object) -> None:
+            events.append((event, data))
+
+        result = _catchup_merge(
+            tmp_path,
+            tmp_path,
+            "feat/1-x",
+            "main",
+            emit,
+            dry_run=False,
+            json_output=True,
+            already_fetched=False,
+        )
+
+        # Fetch attempted exactly once — the retry reuses the ref resolved up front
+        # instead of re-deciding fetch state (and does NOT fetch a second time).
+        assert mock_sync.fetch_origin.call_count == 1
+        # Both the pre-merge behind-count and the merge itself, on BOTH attempts, used
+        # the local fallback ref — never the stale cached origin/main.
+        assert seen_refs == ["main", "main"]
+        merge_refs = [call.args[1] for call in mock_sync.merge_branch.call_args_list]
+        assert merge_refs == ["main", "main"]
+        assert result.success is True
+        assert result.commits_merged == 2
+        restore.assert_called_once()

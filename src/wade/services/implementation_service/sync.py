@@ -319,6 +319,39 @@ def _handle_stash_restoration(
     return False
 
 
+def _resolve_merge_ref(
+    repo_root: Path,
+    resolved_main: str,
+    already_fetched: bool,
+    json_output: bool,
+) -> str:
+    """Fetch origin (unless ``already_fetched``) and return the ref to merge from.
+
+    Falls back to the local ``resolved_main`` branch when there is no remote, or the
+    fetch fails — the caller must NOT assume the returned ref is ``origin/<main>``.
+    """
+    try:
+        has_remote = git_repo.has_remote(repo_root)
+    except GitError:
+        has_remote = False
+
+    if not has_remote:
+        return resolved_main
+
+    if already_fetched:
+        return f"origin/{resolved_main}"
+
+    try:
+        git_sync.fetch_origin(repo_root)
+        if not json_output:
+            console.detail(f"Fetched latest from origin/{resolved_main}")
+        return f"origin/{resolved_main}"
+    except GitError:
+        if not json_output:
+            console.warn("Fetch failed; using local main")
+        return resolved_main
+
+
 def _merge_base(
     repo_root: Path,
     current: str,
@@ -330,6 +363,7 @@ def _merge_base(
     abort_on_conflict: bool = False,
     session_type: str = "implementation",
     already_fetched: bool = False,
+    merge_ref: str | None = None,
 ) -> SyncResult:
     """Fetch, count commits behind, and merge base branch into current branch.
 
@@ -350,30 +384,22 @@ def _merge_base(
         session_type: Used in the conflict hint message.
         already_fetched: Skip the fetch step — the caller already fetched
             origin (e.g. for the autostash collision probe) and the local
-            ``origin/<main>`` ref is fresh enough for the merge.
+            ``origin/<main>`` ref is fresh enough for the merge. Ignored when
+            ``merge_ref`` is given.
+        merge_ref: Pre-resolved ref to merge from, bypassing the internal
+            fetch/fallback resolution entirely. Callers that invoke
+            ``_merge_base`` more than once for the same logical attempt (e.g.
+            the catchup skip-worktree retry in ``_catchup_merge``) must resolve
+            the ref once via ``_resolve_merge_ref`` and pass it here for every
+            call — re-resolving per call could silently swap a fetch-failure
+            fallback (local ``resolved_main``) for a stale cached
+            ``origin/<main>`` on retry, and vice versa.
 
     Returns:
         SyncResult with success/conflicts/commits_merged (events=[]).
     """
-    # Fetch
-    merge_ref = resolved_main
-    try:
-        has_remote = git_repo.has_remote(repo_root)
-    except GitError:
-        has_remote = False
-
-    if has_remote:
-        if already_fetched:
-            merge_ref = f"origin/{resolved_main}"
-        else:
-            try:
-                git_sync.fetch_origin(repo_root)
-                merge_ref = f"origin/{resolved_main}"
-                if not json_output:
-                    console.detail(f"Fetched latest from origin/{resolved_main}")
-            except GitError:
-                if not json_output:
-                    console.warn("Fetch failed; using local main")
+    if merge_ref is None:
+        merge_ref = _resolve_merge_ref(repo_root, resolved_main, already_fetched, json_output)
 
     # Count commits behind
     try:
@@ -875,10 +901,16 @@ def _catchup_merge(
     otherwise abort the merge with a *non-conflict* ``GitError``.
 
     Catchup-only. On the first such abort the blocks are cleared, the merge is retried
-    once (reusing the ref already fetched — no second fetch), then the blocks are
-    re-injected. A collision touching any unmanaged file, or a pointer file carrying a
-    real edit, re-raises so Part A surfaces it loudly.
+    once, then the blocks are re-injected. A collision touching any unmanaged file, or a
+    pointer file carrying a real edit, re-raises so Part A surfaces it loudly.
+
+    The merge ref is resolved exactly ONCE — via ``_resolve_merge_ref`` — and reused for
+    both the initial attempt and the retry. Re-resolving per attempt would let a failed
+    fetch on the first attempt (which falls back to the local ``resolved_main``) get
+    silently replaced by a stale cached ``origin/<main>`` on retry, recreating the #407
+    silent stale-session failure (#408 review).
     """
+    merge_ref = _resolve_merge_ref(repo_root, resolved_main, already_fetched, json_output)
     try:
         return _merge_base(
             repo_root,
@@ -888,7 +920,7 @@ def _catchup_merge(
             dry_run=dry_run,
             json_output=json_output,
             abort_on_conflict=True,
-            already_fetched=already_fetched,
+            merge_ref=merge_ref,
         )
     except GitError as exc:
         blocking = _files_blocking_merge(str(exc))
@@ -912,7 +944,7 @@ def _catchup_merge(
                 dry_run=dry_run,
                 json_output=json_output,
                 abort_on_conflict=True,
-                already_fetched=True,
+                merge_ref=merge_ref,
             )
         finally:
             restore()
