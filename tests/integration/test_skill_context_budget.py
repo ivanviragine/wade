@@ -32,7 +32,14 @@ from wade.skills.installer import (
 # `--skip-review` is therefore visible, not a silent shortcut. The guard still
 # catches *silent* regressions; this bump is the explicit, reviewed adjustment it
 # is designed to force.
-BUDGET_CHARS = 8400
+# Bumped 8400 -> 9100 for #401: the shared `{user_interaction_prompt}` partial
+# gained a short "Communication style — report by exception" section (inherited by
+# all three session skills) so sessions stay terse on success and surface
+# problems/decisions with complexity + a recommendation. The added text was
+# trimmed to its minimum first (and offset by cutting per-step narration); this
+# bump is the explicit, reviewed adjustment the guard is designed to force, and it
+# still catches *silent* regressions.
+BUDGET_CHARS = 9100
 
 # (session label, launch prompt template, phase skill dir name)
 _SESSIONS = [

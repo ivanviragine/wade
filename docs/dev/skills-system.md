@@ -72,9 +72,10 @@ The installer expands these placeholders when copying skill files to a project. 
 4. Add the skill to `INJECT_SKILLS` if it is not already there
 
 Partials carry **no H2 heading of their own** when a session folds multiple
-sections around them. For example `user-interaction.md` is heading-less prose
-injected inside each skill's `## Talking to the user` section — the skill owns the
-single heading, so the fold never produces a duplicate H2.
+sections around them. For example `user-interaction.md` is injected inside each
+skill's `## Talking to the user` section — it may use `###` subheadings (e.g. its
+`### Communication style` block) but never its own H2, so the skill owns the
+single H2 and the fold never produces a duplicate.
 
 Partials also carry **no step number**. `doc-update-step.md` is inserted at a
 different position in each session (Step 2 in implement, after review; Step 1 in

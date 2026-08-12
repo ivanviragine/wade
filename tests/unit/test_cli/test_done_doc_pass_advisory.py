@@ -67,3 +67,22 @@ class TestReviewPrCommentsSessionDoneDocPassAdvisory:
         assert "SESSION COMPLETE" not in result.output
         # The stale-coverage warning is surfaced instead ("reviewed" survives wrapping).
         assert "reviewed" in result.output
+
+    @patch("wade.services.review_service.get_review_status")
+    @patch("wade.services.implementation_service.done", return_value=True)
+    def test_all_clear_suppresses_duplicate_reassurance(
+        self, _mock_done: MagicMock, mock_status: MagicMock
+    ) -> None:
+        """#402: an all-clear status must not print both the formatter's own
+        "nothing to address"/"SESSION COMPLETE" line and the report-by-exception
+        guidance — the guidance line already covers that ground."""
+        from wade.models.review import PRReview, PRReviewStatus, ReviewState
+
+        mock_status.return_value = PRReviewStatus(
+            reviews=[PRReview(author="alice", state=ReviewState.APPROVED)]
+        )
+        result = runner.invoke(app, ["review-pr-comments-session", "done"])
+        assert result.exit_code == 0
+        assert "SESSION COMPLETE" not in result.output
+        assert "nothing to address" not in result.output
+        assert "Report by exception" in result.output
