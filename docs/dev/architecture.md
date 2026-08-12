@@ -252,6 +252,20 @@ separately (`git_dir_redirect_seen_in_root`) from the outside-root buffer,
 because "no redirect flag this segment" and "redirect flag present and
 in-root" both leave the outside-root buffer unset but must be told apart.
 
+An accepted `cd`/`pushd` also rebases the tokenizer's `base` (the directory
+later relative paths resolve against) to the new cwd — not just the
+`cwd_outside_root_token` bookkeeping above. Without this, a *relative*
+directory-redirect flag after a scratch `cd` (`git -C .`, `--work-tree .`,
+`--git-dir .`) would resolve against the stale original `base` and wrongly
+read as in-root, bypassing the same-blast-radius denial `cd /tmp/x && git
+clean -fd` already gets. `base` is rebased only in the `cd`/`pushd` handler,
+never by a directory-redirect flag itself, so a same-segment `-C` still
+overrides containment for that one git invocation without permanently
+changing where later, unrelated tokens resolve. Within a single segment, git
+itself only honors the *last* `-C`/`--work-tree`/`--git-dir` flag, so a later
+occurrence that resolves in-root clears an earlier one's buffered outside
+token (`git -C /tmp/x -C /repo/wt clean -fd` is allowed).
+
 It also unglues paths from other flags
 (`--output=/etc/x`, `-o/etc/x`, `of=/etc/x`) and keeps those **glued** forms
 contained in every mode (a tokenizer cannot tell a glued read flag from a glued
