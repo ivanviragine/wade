@@ -95,12 +95,13 @@ src/wade/
 │   ├── worktree.py      # Worktree create/remove/list
 │   ├── branch.py        # Branch naming, creation, deletion
 │   ├── sync.py          # Fetch + merge, conflict detection
-│   └── pr.py            # PR creation, merge
+│   ├── pr.py            # PR creation, merge
+│   └── hooks.py         # Per-worktree git-hook install/reconcile (core.hooksPath, prior-hook chaining)
 ├── hooks/               # Guard policies (invoked via `wade hook` / `wade-hook`)
 │   ├── cli.py           # Lean `wade-hook` entry point (dialect maps, guard routing)
 │   └── policies.py      # worktree_containment / plan_artifact_only / shell_containment / session_complete
 ├── skills/              # Skill file management
-│   ├── installer.py     # Install/update/remove skill files
+│   ├── installer.py     # Install/update/remove skill files (skill-management only — deterministic git-hook logic lives in git/hooks.py)
 │   └── pointer.py       # AGENTS.md pointer insertion/detection
 ├── config/              # Configuration management
 │   ├── loader.py        # Find + parse .wade.yml (walk up from CWD)
@@ -123,7 +124,8 @@ src/wade/
     ├── http.py          # HTTPClient for REST API providers
     ├── markers.py       # sha-keyed .wade/<name>@<sha> completion markers (done, reviewed, stop-nudged)
     ├── update_check.py  # Version checking, self-upgrade hints
-    └── install.py       # Self-upgrade helpers (venv/source detection, re-exec)
+    ├── install.py       # Self-upgrade helpers (venv/source detection, re-exec)
+    └── templates.py     # Packaged template-asset resolution (prompt/skill/git-hook loaders — leaf, no wade imports)
 ```
 
 > `templates/hooks/pre-push` is the completion-gate backstop script installed
@@ -572,12 +574,12 @@ the sync gate's behind-count is `commits_ahead(repo, origin/<main>, branch)`
 branch in the branch position. Inverting either is a silent bug.
 
 The **pre-push backstop** (`templates/hooks/pre-push`, installed by
-`skills/installer.py:install_worktree_git_hooks`) makes the gate hard to skip: git
+`git/hooks.py:install_worktree_git_hooks`) makes the gate hard to skip: git
 runs it with cwd at the worktree top, so it tests `[[ -f ".wade/done@${sha}" ]]`
 in pure shell. It is wired per-worktree via `extensions.worktreeConfig` +
 `git config --worktree core.hooksPath .wade/githooks` (git ≥ 2.20; **graceful
 degrade** to warn-and-skip otherwise), so it never leaks to the main checkout or
-sibling worktrees. Because `core.hooksPath` *replaces* `.git/hooks`, the installer
+sibling worktrees. Because `core.hooksPath` *replaces* `.git/hooks`, `git/hooks.py`
 detects any pre-existing hook once at first install, persisting it per-hook to
 `.wade/githooks/.chain-<hook_name>` (so `pre-push`/`pre-commit`/`commit-msg` each
 chain to their own captured prior), and the wade hook **chains** to it (re-emitting
