@@ -232,9 +232,10 @@ class TestShellContainment:
         """System temp dirs (``/tmp``, ``$TMPDIR``) are shared scratch space — writes to a
         file *under* them are allowed even though they resolve outside the worktree.
 
-        The dir prefix carries a trailing separator so ``/tmp/`` can't match a sibling
-        like ``/tmpfoo``; that also means the bare dir (``cd /tmp``) is not itself a
-        target, which is fine — the use case is staging scratch *files*."""
+        The prefix match also accepts the exact dir (``/tmp`` itself, not just a
+        trailing-separator-joined child), while still rejecting an unrelated sibling
+        like ``/tmpfoo`` that merely shares the string prefix — see
+        ``test_exact_temp_dir_target_allowed`` and ``test_tmpfoo_sibling_denied``."""
         assert shell_containment(_shell(command), worktree_root=WT).action == "allow"
 
     def test_system_tmpdir_writes_allowed(self) -> None:
@@ -268,6 +269,11 @@ class TestShellContainment:
         )
         assert d.action == "deny"
 
+    def test_exact_temp_dir_target_allowed(self) -> None:
+        """The temp dir itself (not just a file under it) is allowed — a prefix
+        stored with a trailing separator must not exclude the exact directory."""
+        assert worktree_containment(_write("/tmp"), worktree_root=WT).action == "allow"
+
     def test_git_c_temp_dir_write_denied(self) -> None:
         """Task 1b: a git write reached through a directory-redirect flag stays
         denied even for a temp ``<dir>`` — a directory-scoped destructive op has a
@@ -293,6 +299,19 @@ class TestShellContainment:
     def test_git_dir_redirect_temp_dir_write_denied_all_spellings(self, command: str) -> None:
         """Every directory-redirect spelling stays strict against a temp target."""
         assert shell_containment(_shell(command), worktree_root=WT).action == "deny"
+
+    def test_later_c_flag_overrides_earlier_outside_one(self) -> None:
+        """git only honors the last ``-C`` — a later in-root ``-C`` must clear the
+        outside marker an earlier ``-C`` buffered, or a legitimate write is denied
+        on a redirect git itself no longer applies."""
+        d = shell_containment(_shell("git -C /tmp/x -C /repo/wt clean -fd"), worktree_root=WT)
+        assert d.action == "allow"
+
+    def test_later_c_flag_outside_still_denied(self) -> None:
+        """The reverse order still denies — the *last* flag is outside root, so the
+        effective directory git would use is outside too."""
+        d = shell_containment(_shell("git -C /repo/wt -C /tmp/x clean -fd"), worktree_root=WT)
+        assert d.action == "deny"
 
     @pytest.mark.parametrize("plan_mode", [False, True])
     def test_cd_into_temp_then_git_clean_denied(self, plan_mode: bool) -> None:
@@ -328,6 +347,23 @@ class TestShellContainment:
         """A same-segment `-C` that itself points outside root still denies —
         the override only applies when the redirect resolves in-root."""
         d = shell_containment(_shell("cd /tmp/x && git -C /tmp/y clean -fd"), worktree_root=WT)
+        assert d.action == "deny"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "cd /tmp/x && git -C . clean -fd",
+            "cd /tmp/x && git --work-tree . clean -fd",
+            "cd /tmp/x && git --git-dir . clean -fd",
+        ],
+    )
+    def test_cd_into_temp_then_relative_git_dir_redirect_denied(self, command: str) -> None:
+        """A *relative* directory-redirect flag after a scratch ``cd`` must resolve
+        against the new cwd, not the stale original one — otherwise ``-C .``
+        resolves back to the worktree root and wrongly reads as in-root, bypassing
+        the very check ``cd /tmp/x && git clean -fd`` (no ``-C`` at all) already
+        denies. Found by review as a bypass of the rule-6 ``cd``-tracking fix."""
+        d = shell_containment(_shell(command), worktree_root=WT)
         assert d.action == "deny"
 
     def test_cd_into_worktree_subdir_then_git_clean_allowed(self) -> None:

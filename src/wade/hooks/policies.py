@@ -578,7 +578,13 @@ def _is_always_allowed_scratch(path: Path) -> bool:
     *plan-artifact* exemption call sites need a stricter, root-aware variant —
     see :func:`_is_scratch_outside_worktree`.
     """
-    return _is_always_allowed_device(path) or str(path).startswith(_ALWAYS_ALLOWED_PATH_PREFIXES)
+    if _is_always_allowed_device(path):
+        return True
+    text = str(path)
+    return any(
+        text == prefix.rstrip("/") or text.startswith(prefix)
+        for prefix in _ALWAYS_ALLOWED_PATH_PREFIXES
+    )
 
 
 def _is_scratch_outside_worktree(path: Path, root: Path) -> bool:
@@ -646,7 +652,7 @@ def shell_containment(
     outside the root (:func:`_is_always_allowed_scratch`, unioning
     :func:`_temp_write_prefixes` / :data:`_ALWAYS_ALLOWED_DEVICES`). The device
     allowlist is *exact*, not a ``/dev/`` prefix — Linux mounts writable filesystems
-    there too (``/dev/shm``), so ``tee /dev/shm/out`` stays contained. Both temp
+    there too (``/dev/shm``), so ``tee /dev/shm/out`` stays denied. Both temp
     writes and device writes are additionally exempt from the plan-artifact rule in
     plan mode (:func:`_is_always_allowed_scratch`, checked in
     ``check_redirect_target`` / ``check_non_artifact`` below) — devices persist
@@ -999,6 +1005,13 @@ def shell_containment(
             # later git write subcommand in this same command line can be denied
             # the same way one reached via `-C` into scratch already is.
             cwd_outside_root_token = None if _within(resolved, root) else token
+            # A real shell resolves later relative paths against the new cwd, not
+            # the original one — without this, a relative git directory-redirect
+            # flag (`git -C .`, `--work-tree .`, `--git-dir .`) after `cd`ing into
+            # scratch would resolve against the stale `base` instead of the
+            # scratch dir, wrongly reporting the redirect as in-root and bypassing
+            # the `cwd_outside_root_token` deny above.
+            base = resolved
             continue
 
         # Spaced git directory-redirect flag: buffer the directory from the NEXT
@@ -1022,6 +1035,11 @@ def shell_containment(
             if resolved is None or not _within(resolved, root):
                 git_dir_redirect_outside_token = token
             else:
+                # A later in-root redirect flag overrides an earlier outside one in
+                # the same segment (git -C /tmp/x -C /repo/wt log): git itself only
+                # honors the last -C, so a stale outside token from an earlier flag
+                # must not survive to wrongly deny this in-root invocation.
+                git_dir_redirect_outside_token = None
                 git_dir_redirect_seen_in_root = True
             continue
 
@@ -1051,6 +1069,9 @@ def shell_containment(
             if resolved is None or not _within(resolved, root):
                 git_dir_redirect_outside_token = git_dir_redirect
             else:
+                # See the spaced-flag branch above: a later in-root redirect
+                # overrides an earlier outside one in the same segment.
+                git_dir_redirect_outside_token = None
                 git_dir_redirect_seen_in_root = True
             continue
 
