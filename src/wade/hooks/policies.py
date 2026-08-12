@@ -581,10 +581,25 @@ def _is_always_allowed_scratch(path: Path) -> bool:
     if _is_always_allowed_device(path):
         return True
     text = str(path)
-    return any(
-        text == prefix.rstrip("/") or text.startswith(prefix)
-        for prefix in _ALWAYS_ALLOWED_PATH_PREFIXES
-    )
+    return any(text.startswith(prefix) for prefix in _ALWAYS_ALLOWED_PATH_PREFIXES)
+
+
+def _is_temp_root(path: Path) -> bool:
+    """True when ``path`` is exactly a system temp dir's root (``/tmp``, ``$TMPDIR``).
+
+    Deliberately **not** folded into :func:`_is_always_allowed_scratch`, whose
+    trailing-separator prefix match is used by every *write* check (redirect
+    targets, write-command operands, the file-path channel) — treating the
+    temp root itself as a valid write target there would let a destructive
+    command target the shared directory wholesale (``rm -rf /tmp``, ``mv /tmp
+    x``), a far larger blast radius than a single scratch file and one every
+    other same-user process/session sharing that temp dir would feel. This
+    predicate exists solely so ``cd``/``pushd`` — pure navigation, not a write
+    — can land on the bare temp dir (``cd /tmp``) without also having to
+    accept it as a write-command operand.
+    """
+    text = str(path)
+    return any(text == prefix.rstrip("/") for prefix in _ALWAYS_ALLOWED_PATH_PREFIXES)
 
 
 def _is_scratch_outside_worktree(path: Path, root: Path) -> bool:
@@ -998,7 +1013,7 @@ def shell_containment(
                 return deny_outside(f"{command_name} target", token)
             awaiting_cd_target = False
             resolved = _resolve_shell_path(token, base=base)
-            if resolved is None or not _contained(resolved, root):
+            if resolved is None or not (_contained(resolved, root) or _is_temp_root(resolved)):
                 return deny_outside(f"{command_name} target", token)
             # Allowed either because it's in-worktree or (the only other way
             # `_contained` passes) always-allowed scratch — track which, so a
@@ -1033,18 +1048,25 @@ def shell_containment(
             awaiting_git_dir_redirect = False
             resolved = _resolve_shell_path(token, base=base)
             if resolved is None or not _within(resolved, root):
-                # Symmetric with the ``else`` branch below: keeps "last flag wins"
-                # an invariant of both tokens together, not just of
-                # ``git_dir_redirect_outside_token``'s check-order-dependent
-                # precedence over ``seen_in_root`` at the write-subcommand check.
+                # Sticky once set: does NOT get cleared by a later in-root flag
+                # in the same segment. A naive "last flag wins" reset is unsafe
+                # here — repeated relative ``-C`` values chain from the
+                # *preceding* ``-C`` (not from ``base``), so a later relative
+                # ``-C .`` after an outside ``-C`` can resolve back to root
+                # while git's real effective directory is still outside
+                # (``git -C /tmp/x -C . clean -fd``); and ``--work-tree``/
+                # ``--git-dir`` are independent settings, not alternatives, so
+                # an in-root ``--git-dir`` does not override an outside
+                # ``--work-tree`` (``git --work-tree=/outside
+                # --git-dir=/repo/wt/.git clean -fd`` still cleans
+                # ``/outside``). Correctly resolving either case needs
+                # per-flag-type effective-directory tracking, not a shared
+                # last-one-wins token — out of scope here; staying strict
+                # (fail closed) is the safe trade-off, at the cost of
+                # over-denying the narrower, legitimate `-C a -C b` case where
+                # the final absolute `-C` truly does replace the first.
                 git_dir_redirect_outside_token = token
-                git_dir_redirect_seen_in_root = False
             else:
-                # A later in-root redirect flag overrides an earlier outside one in
-                # the same segment (git -C /tmp/x -C /repo/wt log): git itself only
-                # honors the last -C, so a stale outside token from an earlier flag
-                # must not survive to wrongly deny this in-root invocation.
-                git_dir_redirect_outside_token = None
                 git_dir_redirect_seen_in_root = True
             continue
 
@@ -1072,13 +1094,9 @@ def shell_containment(
         if git_dir_redirect is not None:
             resolved = _resolve_shell_path(git_dir_redirect, base=base)
             if resolved is None or not _within(resolved, root):
-                # See the spaced-flag branch above: symmetric reset.
+                # See the spaced-flag branch above: sticky, not cleared later.
                 git_dir_redirect_outside_token = git_dir_redirect
-                git_dir_redirect_seen_in_root = False
             else:
-                # See the spaced-flag branch above: a later in-root redirect
-                # overrides an earlier outside one in the same segment.
-                git_dir_redirect_outside_token = None
                 git_dir_redirect_seen_in_root = True
             continue
 
