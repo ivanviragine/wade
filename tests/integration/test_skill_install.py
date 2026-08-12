@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 
 class TestSkillInstallation:
     def test_install_copies_skill_files(self, tmp_git_repo: Path) -> None:
@@ -59,13 +61,19 @@ class TestSkillInstallation:
         skills_dir = tmp_git_repo / ".claude" / "skills"
         assert not skills_dir.exists()
 
-    def test_partial_expansion_in_installed_skill(self, tmp_git_repo: Path) -> None:
+    @pytest.mark.parametrize(
+        "skill_name",
+        ["implementation-session", "plan-session", "review-pr-comments-session"],
+    )
+    def test_partial_expansion_in_installed_skill(
+        self, tmp_git_repo: Path, skill_name: str
+    ) -> None:
         """Partial placeholders are expanded when skills are copied to a project."""
         from wade.skills.installer import install_skills
 
-        install_skills(tmp_git_repo, skills=["plan-session"])
+        install_skills(tmp_git_repo, skills=[skill_name])
 
-        skill_md = tmp_git_repo / ".claude" / "skills" / "plan-session" / "SKILL.md"
+        skill_md = tmp_git_repo / ".claude" / "skills" / skill_name / "SKILL.md"
         assert skill_md.is_file()
         content = skill_md.read_text(encoding="utf-8")
         assert "{user_interaction_prompt}" not in content, "Placeholder must be expanded"
@@ -73,6 +81,10 @@ class TestSkillInstallation:
         assert "Key decision points:" in content, "Partial content must be injected"
         assert "report by exception" in content.lower(), (
             "Communication style (report-by-exception) rule must be injected"
+        )
+        assert "Default to terse" in content, "Terseness clause must be injected"
+        assert "**complexity**" in content and "recommended option first" in content, (
+            "Complexity + recommendation clause must be injected"
         )
 
     def test_review_enforcement_rule_expanded_by_default(self, tmp_git_repo: Path) -> None:

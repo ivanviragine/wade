@@ -104,8 +104,9 @@ def done(
         else:
             console.warn(
                 "SESSION COMPLETE — push succeeded, but review status could not be verified. "
-                "Report by exception: give the PR/URL and what's next, and only call out "
-                "anything that needs the developer's attention. Suggest they exit the session."
+                "Report by exception: give the PR/URL and what's next. Recommend checking the "
+                "review status directly on the PR page — easy fix — then ask via the native "
+                "question component whether to check now or exit."
             )
     raise typer.Exit(0 if success else 1)
 

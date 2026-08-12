@@ -136,7 +136,7 @@ def done(
         console.warn(DOC_PASS_ADVISORY)
 
         console.info(
-            "SESSION COMPLETE — do not make further changes. "
+            "SESSION COMPLETE. "
             "Report by exception: give the PR/URL and what's next, and only call out "
             "anything that needs the developer's attention. Suggest they exit the session."
         )
