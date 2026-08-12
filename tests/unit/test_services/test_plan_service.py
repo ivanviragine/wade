@@ -967,8 +967,11 @@ class TestAttachPlanToExistingIssue:
 # ---------------------------------------------------------------------------
 
 
-def _open_pr_lookup(number: int = 99) -> PRLookup:
-    return PRLookup(found=True, pr=PRRef(number=number, url="http://x", state="OPEN"))
+def _open_pr_lookup(number: int = 99, base: str = "main") -> PRLookup:
+    return PRLookup(
+        found=True,
+        pr=PRRef(number=number, url="http://x", state="OPEN", baseRefName=base),
+    )
 
 
 def _cfg_main() -> ProjectConfig:
@@ -1077,25 +1080,32 @@ class TestBaseRetargetGuard:
         with patch("wade.git.pr.get_pr_for_branch", return_value=PRLookup(found=False)):
             assert self._run(tmp_path, "develop") is True
 
-    def test_unchanged_base_is_safe(self, tmp_path: Path) -> None:
+    def test_lookup_failure_is_refused(self, tmp_path: Path) -> None:
+        # A transient gh error is not "no PR" — abort rather than risk a silent retarget.
         with (
-            patch("wade.git.pr.get_pr_for_branch", return_value=_open_pr_lookup()),
-            patch("wade.git.pr.get_pr_base_branch", return_value="develop"),
+            patch(
+                "wade.git.pr.get_pr_for_branch",
+                return_value=PRLookup(found=False, lookup_failed=True),
+            ),
+            patch("wade.services.plan_service.console") as mock_console,
         ):
+            assert self._run(tmp_path, "develop") is False
+            mock_console.error.assert_called_once()
+
+    def test_unchanged_base_is_safe(self, tmp_path: Path) -> None:
+        with patch("wade.git.pr.get_pr_for_branch", return_value=_open_pr_lookup(base="develop")):
             assert self._run(tmp_path, "develop") is True
 
     def test_base_change_not_in_flight_is_safe(self, tmp_path: Path) -> None:
         with (
-            patch("wade.git.pr.get_pr_for_branch", return_value=_open_pr_lookup()),
-            patch("wade.git.pr.get_pr_base_branch", return_value="main"),
+            patch("wade.git.pr.get_pr_for_branch", return_value=_open_pr_lookup(base="main")),
             patch("wade.services.plan_service._branch_work_in_flight", return_value=False),
         ):
             assert self._run(tmp_path, "develop") is True
 
     def test_base_change_in_flight_non_tty_is_refused(self, tmp_path: Path) -> None:
         with (
-            patch("wade.git.pr.get_pr_for_branch", return_value=_open_pr_lookup()),
-            patch("wade.git.pr.get_pr_base_branch", return_value="main"),
+            patch("wade.git.pr.get_pr_for_branch", return_value=_open_pr_lookup(base="main")),
             patch("wade.services.plan_service._branch_work_in_flight", return_value=True),
             patch("wade.services.plan_service.prompts") as mock_prompts,
             patch("wade.services.plan_service.console"),
@@ -1105,8 +1115,7 @@ class TestBaseRetargetGuard:
 
     def test_base_change_in_flight_yolo_is_refused(self, tmp_path: Path) -> None:
         with (
-            patch("wade.git.pr.get_pr_for_branch", return_value=_open_pr_lookup()),
-            patch("wade.git.pr.get_pr_base_branch", return_value="main"),
+            patch("wade.git.pr.get_pr_for_branch", return_value=_open_pr_lookup(base="main")),
             patch("wade.services.plan_service._branch_work_in_flight", return_value=True),
             patch("wade.services.plan_service.prompts") as mock_prompts,
             patch("wade.services.plan_service.console"),
@@ -1117,8 +1126,7 @@ class TestBaseRetargetGuard:
 
     def test_base_change_in_flight_tty_confirm_proceeds(self, tmp_path: Path) -> None:
         with (
-            patch("wade.git.pr.get_pr_for_branch", return_value=_open_pr_lookup()),
-            patch("wade.git.pr.get_pr_base_branch", return_value="main"),
+            patch("wade.git.pr.get_pr_for_branch", return_value=_open_pr_lookup(base="main")),
             patch("wade.services.plan_service._branch_work_in_flight", return_value=True),
             patch("wade.services.plan_service.prompts") as mock_prompts,
             patch("wade.services.plan_service.console"),
@@ -1131,8 +1139,7 @@ class TestBaseRetargetGuard:
         # Plan drops the Base Branch section while the PR targets a non-main base:
         # wade never auto-reverts, so this proceeds (bootstrap won't retarget) after a warning.
         with (
-            patch("wade.git.pr.get_pr_for_branch", return_value=_open_pr_lookup()),
-            patch("wade.git.pr.get_pr_base_branch", return_value="develop"),
+            patch("wade.git.pr.get_pr_for_branch", return_value=_open_pr_lookup(base="develop")),
             patch("wade.services.plan_service._branch_work_in_flight", return_value=True),
             patch("wade.services.plan_service.console") as mock_console,
         ):

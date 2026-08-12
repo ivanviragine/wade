@@ -1028,8 +1028,11 @@ class TestImplementationStartBaseBranch:
     def _make_config(self) -> ProjectConfig:
         return ProjectConfig(project=ProjectSettings(main_branch="main"))
 
-    def _open_pr(self) -> PRLookup:
-        return PRLookup(found=True, pr=PRRef(number=7, url="http://x/7", state="OPEN"))
+    def _open_pr(self, base: str = "main") -> PRLookup:
+        return PRLookup(
+            found=True,
+            pr=PRRef(number=7, url="http://x/7", state="OPEN", baseRefName=base),
+        )
 
     def _worktree_path(self, tmp_path: Path) -> Path:
         # Mirrors core.start(): <worktrees_dir>/<repo_name>/<branch with / -> ->.
@@ -1050,9 +1053,10 @@ class TestImplementationStartBaseBranch:
         stack.enter_context(patch(f"{c}.get_provider", return_value=provider))
         stack.enter_context(patch("wade.git.repo.get_repo_root", return_value=tmp_path))
         stack.enter_context(patch(f"{c}._resolve_worktrees_dir", return_value=tmp_path / "wt"))
-        stack.enter_context(patch("wade.git.pr.get_pr_for_branch", return_value=self._open_pr()))
+        stack.enter_context(
+            patch("wade.git.pr.get_pr_for_branch", return_value=self._open_pr(base=pr_base))
+        )
         stack.enter_context(patch("wade.git.pr.get_pr_body", return_value=self._PR_BODY))
-        stack.enter_context(patch("wade.git.pr.get_pr_base_branch", return_value=pr_base))
         stack.enter_context(patch("wade.git.branch.branch_exists", return_value=True))
         stack.enter_context(patch("wade.git.worktree.list_worktrees", return_value=[]))
         stack.enter_context(patch("wade.git.worktree.checkout_existing_branch_worktree"))

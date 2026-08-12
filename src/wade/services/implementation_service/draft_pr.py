@@ -106,11 +106,14 @@ def bootstrap_draft_pr(
         return None
     if lookup.is_open and lookup.pr is not None:
         existing = lookup.pr
-        # If a stacked base was requested but the existing PR targets main,
-        # re-target it to the parent branch.
-        if base_branch and not git_pr.update_pr_base(repo_root, existing.number, base_branch):
-            console.error(f"Failed to retarget PR #{existing.number} to {base_branch}.")
-            return None
+        # If a base was requested and differs from the PR's current base, retarget
+        # it (stacked chain, or a plan-declared base). Skip the gh call when the
+        # base already matches, and report success so the change is visible.
+        if base_branch and base_branch != existing.base_ref_name:
+            if not git_pr.update_pr_base(repo_root, existing.number, base_branch):
+                console.error(f"Failed to retarget PR #{existing.number} to {base_branch}.")
+                return None
+            console.detail(f"Retargeted PR #{existing.number} base to {base_branch}")
         logger.info(
             "bootstrap_draft_pr.existing",
             branch=branch_name,

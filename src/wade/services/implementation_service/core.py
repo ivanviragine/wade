@@ -575,7 +575,11 @@ def start(
         main_branch = config.project.main_branch or git_repo.detect_main_branch(repo_root)
         resolved_base = base_branch
         if existing_pr is not None:
-            current_pr_base = git_pr.get_pr_base_branch(repo_root, existing_pr.number)
+            # Use the base from the PR lookup already performed above. A failed
+            # lookup was aborted earlier (lookup_failed), so this base is reliable
+            # — unlike a fresh get_pr_base_branch() call, whose None conflates
+            # "no base" with "gh failed" and would silently fall back to main.
+            current_pr_base = existing_pr.base_ref_name or None
             if resolved_base is None:
                 # No explicit override — inherit the base the plan recorded on the PR.
                 if current_pr_base:

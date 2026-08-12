@@ -839,11 +839,22 @@ def _base_retarget_is_safe(
         config.project.branch_prefix, int(issue.id), issue.title
     )
     lookup = git_pr.get_pr_for_branch(repo_root, branch_name)
+    if lookup.lookup_failed:
+        # A transient gh error is NOT "no PR" (git/pr.py contract). We cannot tell
+        # whether a retarget would be safe, so abort rather than risk one — the
+        # user can re-run the attach once gh recovers.
+        console.error(
+            f"Could not look up the PR for {branch_name} — transient gh error; "
+            "re-run once it recovers."
+        )
+        return False
     if not (lookup.is_open and lookup.pr is not None):
         return True  # No open PR to retarget — fresh create path is always safe.
 
     main_branch = config.project.main_branch or git_repo.detect_main_branch(repo_root)
-    current_base = git_pr.get_pr_base_branch(repo_root, lookup.pr.number) or main_branch
+    # Base from the successful lookup — no separate get_pr_base_branch() call whose
+    # None would conflate "no base" with "gh failed".
+    current_base = lookup.pr.base_ref_name or main_branch
     desired_effective = plan_file.base_branch or main_branch
     if desired_effective == current_base:
         return True  # No base change requested.

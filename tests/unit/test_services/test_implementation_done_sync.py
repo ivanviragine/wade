@@ -1325,6 +1325,114 @@ class TestDone:
         call_kwargs = mock_pr.call_args
         assert call_kwargs[1]["main_branch"] == "feat/1-parent"
 
+    def test_done_reads_remote_only_stored_base(self, tmp_git_repo: Path) -> None:
+        """done() honors a stored base that exists only on origin, not locally (#376)."""
+        import subprocess
+
+        from wade.git import branch as git_branch
+        from wade.git.worktree import create_worktree
+        from wade.services.implementation_service import done
+
+        # Bare origin with main + develop; delete local develop so only origin/develop remains.
+        origin = tmp_git_repo.parent / "origin.git"
+        subprocess.run(["git", "init", "--bare", str(origin)], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "remote", "add", "origin", str(origin)], cwd=tmp_git_repo, check=True
+        )
+        subprocess.run(["git", "push", "origin", "main"], cwd=tmp_git_repo, check=True)
+        git_branch.create_branch(tmp_git_repo, "develop", "main")
+        subprocess.run(["git", "push", "origin", "develop"], cwd=tmp_git_repo, check=True)
+        subprocess.run(["git", "branch", "-D", "develop"], cwd=tmp_git_repo, check=True)
+        subprocess.run(["git", "fetch", "origin"], cwd=tmp_git_repo, check=True)
+
+        assert git_branch.branch_exists(tmp_git_repo, "develop") is False
+        assert git_branch.remote_ref_exists(tmp_git_repo, "develop") is True
+
+        wt_dir = tmp_git_repo.parent / "wt-remote-base"
+        create_worktree(tmp_git_repo, "feat/2-child", wt_dir, "main")
+        (wt_dir / ".gitignore").write_text(".wade/\n")
+        wade_dir = wt_dir / ".wade"
+        wade_dir.mkdir(parents=True, exist_ok=True)
+        (wade_dir / "base_branch").write_text("develop\n")
+        (wt_dir / "test.txt").write_text("test")
+        subprocess.run(["git", "add", ".gitignore", "test.txt"], cwd=wt_dir, check=True)
+        subprocess.run(["git", "commit", "-m", "test"], cwd=wt_dir, check=True)
+
+        mock_provider = MagicMock()
+        mock_provider.read_task.return_value = Task(
+            id="2", title="feat: child", body="", state=TaskState.OPEN
+        )
+        mock_provider.find_parent_issue.return_value = None
+
+        with (
+            patch(
+                "wade.services.implementation_service.done.load_config",
+                return_value=ProjectConfig(
+                    project=ProjectSettings(main_branch="main"),
+                    done=DoneConfig(
+                        require_pr_summary=False,
+                        require_sync=False,
+                        require_review=False,
+                    ),
+                ),
+            ),
+            patch(
+                "wade.services.implementation_service.done.get_provider", return_value=mock_provider
+            ),
+            patch("wade.services.implementation_service.done._done_via_pr") as mock_pr,
+        ):
+            mock_pr.return_value = True
+            done(project_root=wt_dir)
+
+        assert mock_pr.called
+        assert mock_pr.call_args[1]["main_branch"] == "develop"
+
+    def test_done_ignores_nonexistent_stored_base(self, tmp_git_repo: Path) -> None:
+        """A stored base that exists neither locally nor on origin falls back to main (#376)."""
+        import subprocess
+
+        from wade.git.worktree import create_worktree
+        from wade.services.implementation_service import done
+
+        wt_dir = tmp_git_repo.parent / "wt-ghost-base"
+        create_worktree(tmp_git_repo, "feat/2-child", wt_dir, "main")
+        (wt_dir / ".gitignore").write_text(".wade/\n")
+        wade_dir = wt_dir / ".wade"
+        wade_dir.mkdir(parents=True, exist_ok=True)
+        (wade_dir / "base_branch").write_text("ghost-branch\n")
+        (wt_dir / "test.txt").write_text("test")
+        subprocess.run(["git", "add", ".gitignore", "test.txt"], cwd=wt_dir, check=True)
+        subprocess.run(["git", "commit", "-m", "test"], cwd=wt_dir, check=True)
+
+        mock_provider = MagicMock()
+        mock_provider.read_task.return_value = Task(
+            id="2", title="feat: child", body="", state=TaskState.OPEN
+        )
+        mock_provider.find_parent_issue.return_value = None
+
+        with (
+            patch(
+                "wade.services.implementation_service.done.load_config",
+                return_value=ProjectConfig(
+                    project=ProjectSettings(main_branch="main"),
+                    done=DoneConfig(
+                        require_pr_summary=False,
+                        require_sync=False,
+                        require_review=False,
+                    ),
+                ),
+            ),
+            patch(
+                "wade.services.implementation_service.done.get_provider", return_value=mock_provider
+            ),
+            patch("wade.services.implementation_service.done._done_via_pr") as mock_pr,
+        ):
+            mock_pr.return_value = True
+            done(project_root=wt_dir)
+
+        assert mock_pr.called
+        assert mock_pr.call_args[1]["main_branch"] == "main"
+
 
 # ---------------------------------------------------------------------------
 # List sessions tests

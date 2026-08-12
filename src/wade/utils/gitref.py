@@ -14,10 +14,11 @@ from __future__ import annotations
 
 import re
 
-# Characters git forbids anywhere in a ref name, plus ASCII control chars,
-# whitespace, and DEL. Inside the class: ``\x00-\x20`` covers controls + space +
-# tab + newline; the rest are git's explicitly-disallowed ref characters.
-_FORBIDDEN_RE = re.compile(r"[\x00-\x20\x7f ~^:?*\[\\]")
+# Characters git forbids anywhere in a ref name, plus ASCII control chars and
+# DEL. The ``\x00-\x20`` range already covers all control chars, tab, newline,
+# and space (0x20); ``\x7f`` adds DEL; the rest are git's explicitly-disallowed
+# ref characters.
+_FORBIDDEN_RE = re.compile(r"[\x00-\x20\x7f~^:?*\[\\]")
 
 
 def is_valid_git_ref(ref: str) -> bool:
