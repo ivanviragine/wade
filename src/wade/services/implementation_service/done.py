@@ -246,13 +246,20 @@ def done(
             console.error("Cannot detect main branch")
             return False
 
-    # Check for stacked base branch metadata (written by start() for chain execution).
-    # When present, target the parent branch instead of main — same as sync().
+    # Check for a stored base branch (written by start() for a chain or a
+    # plan-declared/`--base` base). When present, target it instead of main —
+    # same as sync(). Accept a base that exists locally OR only as a remote ref
+    # (origin/<base>): a plan-declared base may never be local, and the merge /
+    # PR paths resolve origin/<base>. Requiring a local branch here would merge
+    # into main and defeat the feature (#376).
     if wt_path:
         base_branch_file = wt_path / ".wade" / "base_branch"
         if base_branch_file.is_file():
             stored_base = base_branch_file.read_text().strip()
-            if stored_base and git_branch.branch_exists(repo_root, stored_base):
+            if stored_base and (
+                git_branch.branch_exists(repo_root, stored_base)
+                or git_branch.remote_ref_exists(repo_root, stored_base)
+            ):
                 main_branch = stored_base
 
     # Completion gates run AFTER the clean + tracked-managed gates and BEFORE

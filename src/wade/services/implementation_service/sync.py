@@ -180,13 +180,20 @@ def _sync_preflight(
         emit(SyncEventType.ERROR, reason="detached_head")
         return SyncResult(success=False, current_branch="", main_branch=main_branch_override or "")
 
-    # Stacked branch: prefer the stored parent branch over main.
+    # Stacked / non-main base: prefer the stored base branch over main. Accept a
+    # base that exists locally OR only as a remote ref (origin/<base>) — a
+    # plan-declared base like `develop` may never be checked out locally, and
+    # _resolve_merge_ref merges origin/<base> anyway. Requiring a local branch
+    # here would drop the stored base and merge into main (#376).
     main_branch = main_branch_override
     if not main_branch:
         base_branch_file = cwd / ".wade" / "base_branch"
         if base_branch_file.is_file():
             stored_base = base_branch_file.read_text().strip()
-            if stored_base and git_branch.branch_exists(repo_root, stored_base):
+            if stored_base and (
+                git_branch.branch_exists(repo_root, stored_base)
+                or git_branch.remote_ref_exists(repo_root, stored_base)
+            ):
                 main_branch = stored_base
 
     resolved_main = main_branch or config.project.main_branch
