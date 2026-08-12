@@ -501,3 +501,9 @@ The durable, human-legible record of session state is the PR body (marker-bounde
 Headless review/deps timeout auto-scales from prompt size + reasoning effort (`effective_timeout`/`scaled_timeout`, delegation_service.py, #366) and retries once with a longer budget on timeout. An explicit `ai.<cmd>.timeout` deliberately bypasses BOTH the scaling and the retry — used verbatim. That is the escape hatch for orchestrators with a hard tool-timeout (set it below the harness limit); do not 'fix' it to always scale.
 
 ---
+
+## 5d2c207a05e7 | 2026-08-12 | implementation | tags: git, worktree | Issue #407
+
+git/stash.py::detect_untracked_collisions parses `git status --porcelain`, which COLLAPSES a wholly-untracked new directory to a single `?? dir/` entry (no per-file lines). It skips paths ending in `/`, so an untracked file inside a brand-new untracked dir is NEVER reported as a merge collision — only files whose parent dir is already tracked (or at repo root) surface. This bounds catchup's #407 wade-owned-subset reconcile: .gitattributes/KNOWLEDGE.* live at repo root so they are always probed, but any future wade-managed file placed under a fresh untracked subdir would silently escape the probe. Verified while writing tests/unit/test_services/test_catchup_reconcile.py.
+
+---

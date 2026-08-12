@@ -445,3 +445,68 @@ class TestPayloadSkillNoOverlap:
             payload = session_start_context(tmp_path, phase)
             assert payload is not None
             assert len(payload) <= _SESSION_CONTEXT_MAX_CHARS
+
+
+class TestStaleBaseWarning:
+    """#407: a ``.wade/stale_base`` marker prepends a loud 'N commits behind' warning."""
+
+    def _write_marker(self, root: Path, behind: int, reason: str = "untracked_conflict") -> None:
+        from wade.utils import stale_base
+
+        stale_base.write_stale_base(root, behind, reason)
+
+    def test_included_when_marker_present(self, tmp_path: Path) -> None:
+        _write_plan(tmp_path)
+        self._write_marker(tmp_path, 24)
+        payload = session_start_context(tmp_path, SessionPhase.IMPLEMENT)
+        assert payload is not None
+        assert "24 COMMITS BEHIND BASE" in payload
+        # It must be the FIRST line (after the [wade] brand) so tail-truncation can't drop it.
+        assert payload.splitlines()[0].startswith("[wade] ⚠️ BRANCH IS 24 COMMITS BEHIND")
+        # The issue line still follows.
+        assert "Issue #351" in payload
+
+    def test_singular_commit(self, tmp_path: Path) -> None:
+        _write_plan(tmp_path)
+        self._write_marker(tmp_path, 1)
+        payload = session_start_context(tmp_path, SessionPhase.IMPLEMENT)
+        assert payload is not None
+        assert "1 COMMIT BEHIND BASE" in payload
+
+    def test_omitted_when_marker_absent(self, tmp_path: Path) -> None:
+        _write_plan(tmp_path)
+        payload = session_start_context(tmp_path, SessionPhase.IMPLEMENT)
+        assert payload is not None
+        assert "BEHIND BASE" not in payload
+
+    def test_omitted_for_plan_phase(self, tmp_path: Path) -> None:
+        # Plan worktrees never carry the marker; the plan phase must not read it.
+        _write_plan_issue_ref(tmp_path)
+        self._write_marker(tmp_path, 12)
+        payload = session_start_context(tmp_path, SessionPhase.PLAN)
+        assert payload is not None
+        assert "BEHIND BASE" not in payload
+
+    def test_zero_behind_marker_omitted(self, tmp_path: Path) -> None:
+        # A defensive 0-count marker carries no warning (the branch is not behind).
+        _write_plan(tmp_path)
+        self._write_marker(tmp_path, 0)
+        payload = session_start_context(tmp_path, SessionPhase.IMPLEMENT)
+        assert payload is not None
+        assert "BEHIND BASE" not in payload
+
+    def test_survives_when_rest_of_context_is_at_budget(self, monkeypatch, tmp_path: Path) -> None:
+        # With the budget shrunk below the natural payload length, the tail is
+        # truncated — but the stale warning is emitted FIRST and must survive intact,
+        # never losing characters or landing the "…" mid-warning.
+        import wade.hooks.policies as policies
+
+        _write_plan(tmp_path, first_line="# Issue #351: " + "x" * 400)
+        self._write_marker(tmp_path, 24)
+        stale_line = policies._stale_base_line(24)
+        # Cap just above the branded stale line so everything after it truncates away.
+        monkeypatch.setattr(policies, "_SESSION_CONTEXT_MAX_CHARS", len(stale_line) + 12)
+        payload = session_start_context(tmp_path, SessionPhase.IMPLEMENT)
+        assert payload is not None
+        assert stale_line in payload
+        assert payload.startswith("[wade] ⚠️ BRANCH IS 24 COMMITS BEHIND")

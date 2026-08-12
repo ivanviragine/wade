@@ -6,6 +6,7 @@ Also hosts worktree staleness classification, shared by the cleanup module.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from wade.git import repo as git_repo
 from wade.git import stash as git_stash
 from wade.git import sync as git_sync
 from wade.git.repo import GitError
+from wade.models.config import ProjectConfig
 from wade.models.session import (
     SyncEvent,
     SyncEventType,
@@ -34,6 +36,7 @@ from wade.services.implementation_service.bootstrap import (
     _identify_session_dirty_files,
 )
 from wade.ui.console import console
+from wade.utils import stale_base
 
 logger = structlog.get_logger()
 
@@ -386,6 +389,9 @@ def _merge_base(
 
     if behind == 0:
         emit(SyncEventType.UP_TO_DATE, branch=current, main=resolved_main)
+        # Caught up → any prior stale-base warning no longer applies (#407). ``repo_root``
+        # is the worktree root, where ``.wade/`` lives.
+        stale_base.clear_stale_base(repo_root)
         if not json_output:
             console.success("Already up to date.")
         emit(SyncEventType.DONE, branch=current, main=resolved_main)
@@ -406,6 +412,8 @@ def _merge_base(
 
     if merge_result.success:
         emit(SyncEventType.MERGED, commits_merged=behind)
+        # Merge succeeded → branch advanced onto base; clear any stale-base warning (#407).
+        stale_base.clear_stale_base(repo_root)
         if not json_output:
             console.success(f"Merged {behind} commit(s).")
         emit(SyncEventType.DONE, branch=current, main=resolved_main)
@@ -608,6 +616,242 @@ def sync(
     )
 
 
+# ---------------------------------------------------------------------------
+# Catchup-only migration reconcile (#407)
+# ---------------------------------------------------------------------------
+#
+# These helpers run ONLY on the catchup() path — session startup, before the AI
+# launches — where an untracked KNOWLEDGE.md / .gitattributes holds nothing but
+# bootstrap/carry-forward content that is safe to discard. They must NEVER be wired
+# into sync() (mid/end-session): by then the agent may have ``knowledge add``ed real,
+# still-uncommitted entries into that untracked KNOWLEDGE.md, and a blind
+# remove-and-remerge would destroy them. The delete/strip semantics below are
+# deliberately not extracted into a shared helper sync() also calls (#407 Part B).
+
+# Tracked, wade-managed files bootstrap marks ``--skip-worktree`` (so their injected
+# blocks never read as dirty). When ``main`` also changed one, git refuses to merge over
+# the hidden local change with a *non-conflict* GitError — the collision this reconciles.
+# CLAUDE.md is included because ``_do_suppress_pointer_artifacts`` marks it skip-worktree
+# when it is the pointer target (a project with a tracked CLAUDE.md and no AGENTS.md).
+_POINTER_FILES = ("AGENTS.md", "CLAUDE.md")
+_MANAGED_SKIP_WORKTREE_FILES = (*_POINTER_FILES, ".gitignore")
+
+
+def _wade_owned_untracked_paths(cwd: Path, config: ProjectConfig) -> set[str]:
+    """Repo-relative untracked paths catchup may safely discard so the merge can bring in
+    ``main``'s now-tracked versions: ``.gitattributes`` plus the knowledge file and its
+    ``.ratings.jsonl`` sibling (resolved exactly as knowledge resolution does)."""
+    owned = {".gitattributes"}
+    from wade.utils.knowledge_file import resolve_knowledge_path, resolve_ratings_path
+
+    try:
+        kpath = resolve_knowledge_path(cwd, config.knowledge)
+        root = cwd.resolve()
+        owned.add(kpath.relative_to(root).as_posix())
+        owned.add(resolve_ratings_path(kpath).relative_to(root).as_posix())
+    except (ValueError, OSError):
+        pass
+    return owned
+
+
+def _is_discardable_untracked(cwd: Path, rel: str, merge_ref: str) -> bool:
+    """True when deleting the untracked local ``rel`` loses no data.
+
+    Startup catchup's "safe to discard" assumption holds for a freshly bootstrapped
+    worktree, but ``catchup()`` also runs on **resumed** sessions (``start()`` calls it on
+    every ``wade implement``, including the reused-worktree path) — where the agent may have
+    ``knowledge add``ed real, still-uncommitted entries into an untracked ``KNOWLEDGE.md`` /
+    ``.ratings.jsonl``. Deleting those would destroy agent-authored knowledge, the exact
+    class this issue guards against. So a data file is discardable only when it adds nothing
+    over ``main``'s incoming version (empty, or every non-blank line already present there).
+    ``.gitattributes`` is pure wade-managed config, regenerated post-merge by
+    ``ensure_knowledge_merge_attributes`` — always safe to discard.
+    """
+    if rel == ".gitattributes":
+        return True
+    local_path = cwd / rel
+    try:
+        local = local_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False  # unreadable → do not risk deleting it
+    if not local.strip():
+        return True  # empty → nothing to lose
+    incoming = git_repo.show_file_at_ref(cwd, merge_ref, rel)
+    if incoming is None:
+        return False  # no incoming version to fall back on → do not delete
+    local_lines = {ln for ln in local.splitlines() if ln.strip()}
+    incoming_lines = {ln for ln in incoming.splitlines() if ln.strip()}
+    return local_lines <= incoming_lines
+
+
+def _reconcile_untracked_migration_files(cwd: Path, collisions: list[str]) -> None:
+    """Delete the untracked local copies so the merge brings in main's tracked versions.
+
+    Catchup-only; the caller verifies each path is wade-owned AND discardable first
+    (:func:`_is_discardable_untracked`) so real agent-authored knowledge is never deleted.
+    """
+    for rel in collisions:
+        target = cwd / rel
+        try:
+            if target.is_symlink() or target.is_file():
+                target.unlink()
+                logger.debug("catchup.reconcile_removed_untracked", path=rel)
+        except OSError:
+            logger.debug("catchup.reconcile_unlink_failed", path=rel, exc_info=True)
+
+
+def _files_blocking_merge(error_text: str) -> list[str]:
+    """Parse the file paths from git's 'would be overwritten by merge' abort message."""
+    files: list[str] = []
+    capturing = False
+    for line in error_text.splitlines():
+        if "would be overwritten by merge" in line:
+            capturing = True
+            continue
+        if not capturing:
+            continue
+        if line.startswith(("\t", "    ")):
+            stripped = line.strip()
+            if stripped:
+                files.append(stripped)
+        elif line.strip():
+            break
+    return files
+
+
+def _pointer_diff_is_only_block(cwd: Path, filename: str) -> bool:
+    """True when the ONLY difference between the working ``filename`` (an ``AGENTS.md`` /
+    ``CLAUDE.md`` pointer target) and its committed (HEAD) version is the wade-managed
+    ``wade:pointer`` block.
+
+    This is the safety guard ``recovery.md`` prescribes before stripping the block — a real
+    pointer-file edit mixed in must NOT be discarded (return False → defer to the loud
+    Part A path). A skip-worktree'd file shows no ``git diff``, so compare the working copy
+    (pointer block removed) against HEAD directly.
+    """
+    from wade.skills import pointer
+    from wade.utils.markdown import remove_marker_block
+
+    head = git_repo.show_file_at_head(cwd, filename)
+    if head is None:
+        return False
+    try:
+        working = (cwd / filename).read_text(encoding="utf-8")
+    except OSError:
+        return False
+    stripped = remove_marker_block(working, pointer.MARKER_START, pointer.MARKER_END)
+    return stripped.strip() == head.strip()
+
+
+def _reconcile_skip_worktree_collision(cwd: Path, blocking: list[str]) -> Callable[[], None] | None:
+    """Clear wade-managed ``--skip-worktree`` blocks that block the merge; return a
+    ``restore()`` thunk to re-inject + re-skip them afterward.
+
+    Returns ``None`` (do NOT reconcile → defer to Part A's loud path) when a *non-managed*
+    file also blocks the merge, or when a pointer file (``AGENTS.md`` / ``CLAUDE.md``)
+    carries a real edit beyond its pointer block. Guards are checked before any mutation so
+    a refusal leaves the tree untouched.
+    """
+    managed = [f for f in blocking if f in _MANAGED_SKIP_WORKTREE_FILES]
+    if not managed or set(blocking) - set(managed):
+        return None
+    pointer_files = [f for f in managed if f in _POINTER_FILES]
+    # Guard first (no mutation yet): never strip a pointer file with a real edit mixed in.
+    for pf in pointer_files:
+        if not _pointer_diff_is_only_block(cwd, pf):
+            logger.debug("catchup.reconcile_pointer_real_edit_abort", file=pf)
+            return None
+
+    from wade.services.implementation_service.bootstrap import (
+        strip_worktree_gitignore,
+        write_worktree_gitignore,
+    )
+    from wade.skills import pointer
+
+    reconcile_gitignore = ".gitignore" in managed
+    for f in managed:
+        if f == ".gitignore":
+            git_repo.unskip_worktree_file(cwd, ".gitignore")
+            strip_worktree_gitignore(cwd)
+        else:  # pointer file
+            git_repo.unskip_worktree_file(cwd, f)
+            pointer.remove_pointer(cwd / f)
+
+    def restore() -> None:
+        # Re-inject the managed blocks after the merge and re-apply --skip-worktree so
+        # they stay hidden for the rest of the session (mirrors the recovery.md flow).
+        if reconcile_gitignore:
+            write_worktree_gitignore(cwd)
+            if git_repo.is_file_tracked(cwd, ".gitignore"):
+                git_repo.skip_worktree_file(cwd, ".gitignore")
+        if pointer_files:
+            pointer.ensure_pointer(cwd)  # rewrites the appropriate pointer target
+            for pf in pointer_files:
+                if git_repo.is_file_tracked(cwd, pf):
+                    git_repo.skip_worktree_file(cwd, pf)
+
+    return restore
+
+
+def _catchup_merge(
+    repo_root: Path,
+    cwd: Path,
+    current: str,
+    resolved_main: str,
+    emit: Any,
+    *,
+    dry_run: bool,
+    json_output: bool,
+    already_fetched: bool,
+) -> SyncResult:
+    """Run the catchup merge, transparently reconciling a wade-managed ``--skip-worktree``
+    collision (``.gitignore`` / ``AGENTS.md`` / ``CLAUDE.md`` pointer block) that would
+    otherwise abort the merge with a *non-conflict* ``GitError``.
+
+    Catchup-only. On the first such abort the blocks are cleared, the merge is retried
+    once (reusing the ref already fetched — no second fetch), then the blocks are
+    re-injected. A collision touching any unmanaged file, or a pointer file carrying a
+    real edit, re-raises so Part A surfaces it loudly.
+    """
+    try:
+        return _merge_base(
+            repo_root,
+            current,
+            resolved_main,
+            emit,
+            dry_run=dry_run,
+            json_output=json_output,
+            abort_on_conflict=True,
+            already_fetched=already_fetched,
+        )
+    except GitError as exc:
+        blocking = _files_blocking_merge(str(exc))
+        if not blocking:
+            raise
+        restore = _reconcile_skip_worktree_collision(cwd, blocking)
+        if restore is None:
+            raise
+        if not json_output:
+            # Present-continuous: the retry below may still fail/raise — do not claim done.
+            console.detail(
+                "Clearing wade-managed skip-worktree blocks and retrying merge: "
+                + ", ".join(blocking)
+            )
+        try:
+            return _merge_base(
+                repo_root,
+                current,
+                resolved_main,
+                emit,
+                dry_run=dry_run,
+                json_output=json_output,
+                abort_on_conflict=True,
+                already_fetched=True,
+            )
+        finally:
+            restore()
+
+
 def catchup(
     dry_run: bool = False,
     main_branch: str | None = None,
@@ -650,6 +894,7 @@ def catchup(
 
     stash_sha: str | None = None
     already_fetched = False
+    knowledge_reconciled = False
 
     if preflight.dirty_category == _DirtyCategory.USER_DIRTY:
         if no_stash:
@@ -670,15 +915,34 @@ def catchup(
 
         collisions = git_stash.detect_untracked_collisions(cwd, merge_ref_for_probe)
         if collisions:
-            emit(SyncEventType.UNTRACKED_CONFLICT, paths="\n".join(collisions))
-            if not json_output:
-                console.error("Untracked files would be overwritten by the merge:")
-                for p in collisions:
-                    console.detail(p)
-                console.hint("Commit, move, or delete these files before syncing.")
-            return SyncResult(
-                success=False, current_branch=current, main_branch=resolved_main, events=events
-            )
+            # Auto-reconcile ONLY when EVERY colliding path is wade-owned AND discardable —
+            # remove the untracked copies so the merge brings in main's now-tracked versions
+            # across the #386 knowledge-store migration. "Discardable" (per
+            # _is_discardable_untracked) guards the RESUME case: catchup runs on every
+            # `wade implement`, so an untracked KNOWLEDGE.md here may hold real, uncommitted
+            # agent entries (not just fresh bootstrap content) — those are never deleted.
+            # Any other untracked path, or one carrying unique local data, still aborts and
+            # is surfaced loudly by Part A. This delete is deliberately catchup-only (sync()
+            # keeps aborting so it never destroys agent-authored knowledge — #407).
+            if set(collisions) <= _wade_owned_untracked_paths(cwd, config) and all(
+                _is_discardable_untracked(cwd, c, merge_ref_for_probe) for c in collisions
+            ):
+                _reconcile_untracked_migration_files(cwd, collisions)
+                knowledge_reconciled = True
+                if not json_output:
+                    console.detail(
+                        "Reconciled migration-owned untracked files: " + ", ".join(collisions)
+                    )
+            else:
+                emit(SyncEventType.UNTRACKED_CONFLICT, paths="\n".join(collisions))
+                if not json_output:
+                    console.error("Untracked files would be overwritten by the merge:")
+                    for p in collisions:
+                        console.detail(p)
+                    console.hint("Commit, move, or delete these files before syncing.")
+                return SyncResult(
+                    success=False, current_branch=current, main_branch=resolved_main, events=events
+                )
 
         if preflight.has_tracked_changes:
             try:
@@ -703,24 +967,42 @@ def catchup(
     if not json_output:
         console.step(f"Catching up {current} with {resolved_main}")
 
-    result = _merge_base(
-        repo_root,
-        current,
-        resolved_main,
-        emit,
-        dry_run=dry_run,
-        json_output=json_output,
-        abort_on_conflict=True,
-        already_fetched=already_fetched,
-    )
-
+    result: SyncResult | None = None
     stash_restored = True
-    if stash_sha is not None:
-        # Merge aborted on conflict or succeeded — restore stash either way.
-        stash_restored = _handle_stash_restoration(
-            stash_sha, cwd, result.success, emit, json_output
+    try:
+        result = _catchup_merge(
+            repo_root,
+            cwd,
+            current,
+            resolved_main,
+            emit,
+            dry_run=dry_run,
+            json_output=json_output,
+            already_fetched=already_fetched,
         )
 
+        # After a reconcile-and-merge that pulled in main's now-tracked knowledge files,
+        # restore the wade-managed ``merge=union`` block in .gitattributes (idempotent).
+        if knowledge_reconciled and result.success and config.knowledge.enabled:
+            from wade.skills.installer import ensure_knowledge_merge_attributes
+
+            try:
+                ensure_knowledge_merge_attributes(cwd, config)
+            except Exception:
+                logger.debug("catchup.reensure_knowledge_attrs_failed", exc_info=True)
+    finally:
+        # Always restore an autostash — even if _catchup_merge raised an unreconcilable
+        # skip-worktree GitError — so a session's stashed tracked changes are never
+        # silently orphaned (the exact silent-data-at-risk class #407 targets). On the
+        # raise path this runs, then the exception propagates so Part A (core.py) still
+        # surfaces the staleness loudly; the ``return`` below is skipped.
+        if stash_sha is not None:
+            merge_ok = result.success if result is not None else False
+            stash_restored = _handle_stash_restoration(stash_sha, cwd, merge_ok, emit, json_output)
+
+    # ``result`` is always set here: the only path past the try/finally is a normal
+    # return from _catchup_merge — a raise propagates through the finally and skips this.
+    assert result is not None
     return SyncResult(
         success=result.success and stash_restored,
         current_branch=result.current_branch,

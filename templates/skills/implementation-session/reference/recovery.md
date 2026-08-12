@@ -13,8 +13,28 @@ automatically. Session artifacts (PLAN.md, PR-SUMMARY.md, etc.) are never
 stashed. Use `--no-stash` for the strict behavior (fail on any uncommitted
 changes).
 
-**Merge conflict reported at startup**: catchup always aborts the merge and
-leaves the worktree clean — there are no markers to resolve.
+**Migration-owned collisions are auto-reconciled.** When the base branch has
+started tracking wade-managed/regenerable files your worktree only had as
+untracked copies — `.gitattributes`, `KNOWLEDGE.md`, `KNOWLEDGE.ratings.jsonl` —
+**catchup** (startup only) discards those untracked copies, merges in the base's
+now-tracked versions, and restores the `merge=union` block. It also clears the
+`--skip-worktree` `.gitignore` `wade:worktree` block (and the `AGENTS.md`
+`wade:pointer` block, but **only** when that block is the *entire* local
+difference) so the merge is no longer blocked, then re-injects them afterward.
+This is startup-only: the mid/end-session `sync` never blind-deletes an untracked
+`KNOWLEDGE.md` (it may hold real, uncommitted knowledge you added this session).
+
+**If catchup can't advance, you'll know in-session — loudly.** Whatever the
+reason (untracked collision on a non-wade file, a real merge conflict, or an
+`AGENTS.md` that carries a real edit alongside the pointer), catchup does **not**
+proceed silently on a stale base. It prints a boxed error naming how many commits
+behind you are, writes a `.wade/stale_base` marker, and re-injects a
+`⚠️ BRANCH IS N COMMITS BEHIND` banner into your session context on every
+startup/resume/compaction. **Do not start work until you sync.** The marker is
+cleared automatically once a later `sync`/`catchup` reaches "up to date".
+
+**Merge conflict reported at startup**: on a genuine *content* conflict catchup
+aborts the merge and leaves the worktree clean — there are no markers to resolve.
 `wade implementation-session catchup --json` is inspection-only: it re-runs the
 same aborted catchup to report which files conflict, then aborts again.
 
@@ -52,7 +72,13 @@ merges, then restores them (disable with `--no-stash`).
 
 - **`untracked_conflict`**: untracked files in your worktree would be overwritten
   by the incoming merge. The paths are listed in the error. Commit, move, or
-  delete them, then re-run.
+  delete them, then re-run. Note: at **startup catchup**, a collision made up
+  *only* of wade-managed/regenerable files (`.gitattributes`, `KNOWLEDGE.md`,
+  `KNOWLEDGE.ratings.jsonl`) is reconciled automatically and does **not** surface
+  here — this error fires only when a *non-wade* untracked path is involved (and
+  in `sync`, where nothing is ever auto-deleted). When it fires and catchup could
+  not advance, heed the `⚠️ BRANCH IS N COMMITS BEHIND` in-session banner and
+  `sync` before starting work.
 - **`stash_left_behind`**: the stash pop conflicted after a successful merge.
   Your changes are preserved. Recover with:
 
