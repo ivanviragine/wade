@@ -4,17 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.44.1] — 2026-08-12
+
+### Bug Fixes
+
+- wade implement startup catchup silently aborts on knowledge-store-migration untracked_conflict, leaving the session on a stale base (#408) (9968583)
+
 ## [v0.44.0] — 2026-08-12
 
 ### Features
 
 - make WADE session output report-by-exception (terse on success) (#402) (9f96c94)
-
-## [v0.43.1] — 2026-08-12
-
-### Bug Fixes
-
-- surface stale base loudly and reconcile migration collisions at catchup (68150ef)
 
 ## [v0.43.0] — 2026-08-11
 
@@ -166,16 +166,6 @@ The format is based on [Conventional Commits](https://conventionalcommits.org/).
 ### Chores
 
 - bump crossby to v0.11.0 and adopt newer models (Opus 5) (#345) (d9ac8a5)
-
-## [v0.35.2] — 2026-07-24
-
-### Bug Fixes
-
-- exclude scaffold-branch commits from generated changelog (c40a9ca)
-
-### Chores
-
-- bump crossby to v0.11.0 and adopt newer models (Opus 5) (ff0ab48)
 
 ## [v0.35.1] — 2026-07-24
 
