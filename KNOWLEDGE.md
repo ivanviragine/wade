@@ -501,3 +501,15 @@ The durable, human-legible record of session state is the PR body (marker-bounde
 Headless review/deps timeout auto-scales from prompt size + reasoning effort (`effective_timeout`/`scaled_timeout`, delegation_service.py, #366) and retries once with a longer budget on timeout. An explicit `ai.<cmd>.timeout` deliberately bypasses BOTH the scaling and the retry — used verbatim. That is the escape hatch for orchestrators with a hard tool-timeout (set it below the harness limit); do not 'fix' it to always scale.
 
 ---
+
+## 94ae0a8fd4c9 | 2026-08-12 | implementation | tags: skills, session-output, architecture | Issue #401
+
+The developer-facing session summary lives in TWO coupled surfaces that must be edited together or they contradict each other: the skill "Present results" steps (templates/skills/{plan,implementation,review-pr-comments}-session/SKILL.md) AND the post-`done` `console.info`/`console.warn` advisory strings in src/wade/cli/*_session.py. Both done CLIs share one service (see entry 851bb6ec) but each owns its own advisory text, so a reporting-convention change (e.g. report-by-exception) must touch every SKILL.md step and every CLI completion string.
+
+---
+
+## 69f9e60c7c9f | 2026-08-12 | implementation | tags: skills, partials, context-budget | Issue #401
+
+Communication rules shared across all session skills belong in templates/skills/_partials/user-interaction.md (placeholder {user_interaction_prompt}), expanded into all three session skills by installer.py's _SKILL_PARTIALS. Gotcha: the rendered partial counts against the session-start payload budget asserted in tests/integration/test_skill_context_budget.py (BUDGET_CHARS) — adding a section there can trip the guard, requiring a documented budget bump.
+
+---

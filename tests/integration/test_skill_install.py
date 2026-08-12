@@ -71,6 +71,9 @@ class TestSkillInstallation:
         assert "{user_interaction_prompt}" not in content, "Placeholder must be expanded"
         assert "## Talking to the user" in content, "Folded heading must be present"
         assert "Key decision points:" in content, "Partial content must be injected"
+        assert "report by exception" in content.lower(), (
+            "Communication style (report-by-exception) rule must be injected"
+        )
 
     def test_review_enforcement_rule_expanded_by_default(self, tmp_git_repo: Path) -> None:
         """review_enforcement_rule partial is included by default (reviews enabled)."""

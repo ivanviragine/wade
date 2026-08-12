@@ -98,14 +98,14 @@ def done(
             if not messages:
                 console.info(
                     "SESSION COMPLETE — push succeeded. "
-                    "Present the workflow recap, current state, and next steps to the user. "
-                    "Suggest they exit the session."
+                    "Report by exception: give the PR/URL and what's next, and only call out "
+                    "anything that needs the developer's attention. Suggest they exit the session."
                 )
         else:
             console.warn(
                 "SESSION COMPLETE — push succeeded, but review status could not be verified. "
-                "Present the workflow recap, current state, and next steps to the user. "
-                "Suggest they exit the session."
+                "Report by exception: give the PR/URL and what's next, and only call out "
+                "anything that needs the developer's attention. Suggest they exit the session."
             )
     raise typer.Exit(0 if success else 1)
 
