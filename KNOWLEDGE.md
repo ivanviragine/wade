@@ -505,6 +505,18 @@ Headless review/deps timeout auto-scales from prompt size + reasoning effort (`e
 ## 5d2c207a05e7 | 2026-08-12 | implementation | tags: git, worktree | Issue #407
 
 git/stash.py::detect_untracked_collisions parses `git status --porcelain`, which COLLAPSES a wholly-untracked new directory to a single `?? dir/` entry (no per-file lines). It skips paths ending in `/`, so an untracked file inside a brand-new untracked dir is NEVER reported as a merge collision — only files whose parent dir is already tracked (or at repo root) surface. This bounds catchup's #407 wade-owned-subset reconcile: .gitattributes/KNOWLEDGE.* live at repo root so they are always probed, but any future wade-managed file placed under a fresh untracked subdir would silently escape the probe. Verified while writing tests/unit/test_services/test_catchup_reconcile.py.
+## 94ae0a8fd4c9 | 2026-08-12 | implementation | tags: skills, session-output, architecture | Issue #401
+
+The developer-facing session summary lives in TWO coupled surfaces that must be edited together or they contradict each other: the skill "Present results" steps (templates/skills/{plan,implementation,review-pr-comments}-session/SKILL.md) AND the post-`done` `console.info`/`console.warn` advisory strings in src/wade/cli/*_session.py. Both done CLIs share one service (see entry 851bb6ec) but each owns its own advisory text, so a reporting-convention change (e.g. report-by-exception) must touch every SKILL.md step and every CLI completion string.
+
+---
+
+## 69f9e60c7c9f | 2026-08-12 | implementation | tags: skills, partials, context-budget | Issue #401
+
+Communication rules shared across all session skills belong in templates/skills/_partials/user-interaction.md (placeholder {user_interaction_prompt}), expanded into all three session skills by installer.py's _SKILL_PARTIALS. Gotcha: the rendered partial counts against the session-start payload budget asserted in tests/integration/test_skill_context_budget.py (BUDGET_CHARS) — adding a section there can trip the guard, requiring a documented budget bump.
+
+---
+
 ## e59b12e3f67d | 2026-08-11 | implementation | tags: hooks, write-guards | Issue #387
 
 The per-tool memory allowlist (`_TOOL_MEMORY_DIRS` in `hooks/cli.py`, threaded as `allow_paths` into the three write guards) MUST target only the memory subtree (e.g. `~/.claude/projects`), never the tool's config home — `~/.claude/settings.json` holds the `hooks` block, so allowlisting all of `~/.claude` would let a guarded session strip its own guard and permanently disable it. In `shell_containment`, memory membership (`_under_any`) must be checked BEFORE `_is_plan_artifact_path`/`_is_always_allowed_device`, which report any out-of-root path (memory included) as a non-artifact and would otherwise deny a plan-mode memory redirect. Per-tool memory locations are mirrored wade-side (static maps, kept off the hot per-edit path) like the dialect maps; migrating them into crossby's `AIToolCapabilities` is the open follow-up.

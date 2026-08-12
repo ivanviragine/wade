@@ -136,8 +136,8 @@ def done(
         console.warn(DOC_PASS_ADVISORY)
 
         console.info(
-            "SESSION COMPLETE — do not make further changes. "
-            "Present the workflow recap, current state, and next steps to the user. "
-            "Suggest they exit the session."
+            "SESSION COMPLETE. "
+            "Report by exception: give the PR/URL and what's next, and only call out "
+            "anything that needs the developer's attention. Suggest they exit the session."
         )
     raise typer.Exit(0 if success else 1)

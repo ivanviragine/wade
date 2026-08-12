@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.44.0] — 2026-08-12
+
+### Features
+
+- make WADE session output report-by-exception (terse on success) (#402) (9f96c94)
+
 ## [v0.43.1] — 2026-08-12
 
 ### Bug Fixes

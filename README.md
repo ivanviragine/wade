@@ -408,6 +408,17 @@ wade installs Skills that teach your AI agent the workflow — issue format, pla
 | `review-pr-comments-session` | Review session rules and workflow |
 | `deps` | Dependency analysis between issues |
 
+### Session communication
+
+Sessions report **by exception**: terse on success — just the actionable
+handles (issue/PR numbers, URLs, the next command), never a list of completed
+steps or a reassurance that nothing broke. When something needs your
+attention or a decision only you can make, the agent reports it in 1–2
+sentences with brief context, its complexity
+(easy/medium/complex/very_complex), and a recommendation. It then asks
+through the native question component, with the recommended option first and
+labelled "(recommended)".
+
 ## Worktree Hooks
 
 Configure automated setup when worktrees are created via `wade implement` or `wade implement-batch`. Add a `hooks` section to `.wade.yml`:

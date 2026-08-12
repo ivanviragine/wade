@@ -560,6 +560,8 @@ LEVEL_WARN = "warn"
 
 def format_review_status_summary(
     status: PRReviewStatus,
+    *,
+    include_all_clear: bool = True,
 ) -> list[tuple[str, str]]:
     """Format a PRReviewStatus into (level, message) tuples for console display.
 
@@ -571,7 +573,9 @@ def format_review_status_summary(
     - Bot in-progress / paused (warn)
     - Approvals (success)
     - Pending reviewers (info)
-    - All-clear (success)
+    - All-clear (success), unless ``include_all_clear`` is False — callers that
+      already emit their own report-by-exception line for the all-clear case
+      pass this to avoid a redundant "nothing to address" reassurance.
     """
     messages: list[tuple[str, str]] = []
 
@@ -645,7 +649,7 @@ def format_review_status_summary(
         messages.append((LEVEL_INFO, f"Awaiting review from {names}."))
 
     # All-clear
-    if status.is_all_clear:
+    if include_all_clear and status.is_all_clear:
         if not status.approvals and thread_count == 0:
             messages.append((LEVEL_SUCCESS, "All review threads resolved — nothing to address."))
         elif status.approvals and thread_count == 0:

@@ -1004,6 +1004,26 @@ class TestFormatReviewStatusSummary:
         )
         assert not any("SESSION COMPLETE" in m[1] for m in messages)
 
+    def test_include_all_clear_false_suppresses_reassurance(self) -> None:
+        from wade.models.review import PRReviewStatus, format_review_status_summary
+
+        status = PRReviewStatus()
+        messages = format_review_status_summary(status, include_all_clear=False)
+        assert messages == []
+
+    def test_include_all_clear_false_keeps_other_messages(self) -> None:
+        from wade.models.review import (
+            PRReview,
+            PRReviewStatus,
+            ReviewState,
+            format_review_status_summary,
+        )
+
+        status = PRReviewStatus(reviews=[PRReview(author="alice", state=ReviewState.APPROVED)])
+        messages = format_review_status_summary(status, include_all_clear=False)
+        assert any("@alice" in m[1] and m[0] == "success" for m in messages)
+        assert not any("SESSION COMPLETE" in m[1] for m in messages)
+
 
 # ---------------------------------------------------------------------------
 # latest_signal_ts

@@ -49,9 +49,9 @@ def done(
 
     console.info(
         "SESSION COMPLETE — do not implement anything. "
-        "Present the workflow recap and what happens next to the user. "
-        "Suggest they exit the session now. "
-        "wade will read the plan files and create GitHub issues and draft PRs automatically."
+        "Report by exception: tell the user what happens next (wade will read the "
+        "plan files and create GitHub issues and draft PRs automatically) and only "
+        "call out anything that needs their attention. Suggest they exit the session now."
     )
 
     raise typer.Exit(0)
