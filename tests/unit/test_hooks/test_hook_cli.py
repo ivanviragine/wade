@@ -608,3 +608,235 @@ class TestStopNeverTrapsOnUsageError:
         assert r.returncode == 2
         r = self._raw("--timeout", "stop", "--guard", "worktree", "--tool", "claude")
         assert r.returncode == 2
+
+
+class TestMemoryAllowPathsResolver:
+    """Unit cover for ``_memory_allow_paths`` — per-tool, per-session path composition."""
+
+    def test_claude_resolves_this_sessions_memory_subdir(self) -> None:
+        from wade.hooks.cli import _encode_claude_project_path, _memory_allow_paths
+
+        encoded = _encode_claude_project_path(Path(WT))
+        expected = (Path.home() / ".claude" / "projects" / encoded / "memory").resolve()
+        assert _memory_allow_paths("claude", Path(WT)) == (expected,)
+
+    def test_claude_does_not_allow_the_whole_projects_tree(self) -> None:
+        # The old (pre-narrowing) allow-root — must no longer be what's returned.
+        from wade.hooks.cli import _memory_allow_paths
+
+        (allowed,) = _memory_allow_paths("claude", Path(WT))
+        assert allowed != (Path.home() / ".claude" / "projects").resolve()
+
+    def test_claude_honors_config_dir_override(self, monkeypatch) -> None:
+        from wade.hooks.cli import _encode_claude_project_path, _memory_allow_paths
+
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/isolated/claude-home")
+        encoded = _encode_claude_project_path(Path(WT))
+        expected = (Path("/isolated/claude-home") / "projects" / encoded / "memory").resolve(
+            strict=False
+        )
+        assert _memory_allow_paths("claude", Path(WT)) == (expected,)
+
+    def test_codex_honors_config_home_override(self, monkeypatch) -> None:
+        from wade.hooks.cli import _memory_allow_paths
+
+        monkeypatch.setenv("CODEX_HOME", "/isolated/codex-home")
+        expected = (Path("/isolated/codex-home") / "sessions").resolve(strict=False)
+        assert _memory_allow_paths("codex", Path(WT)) == (expected,)
+
+    def test_cursor_resolves_this_sessions_project_dir(self) -> None:
+        from wade.hooks.cli import _encode_cursor_project_path, _memory_allow_paths
+
+        encoded = _encode_cursor_project_path(Path(WT))
+        expected = (Path.home() / ".cursor" / "projects" / encoded).resolve()
+        assert _memory_allow_paths("cursor", Path(WT)) == (expected,)
+
+    def test_case_insensitive_and_trimmed(self) -> None:
+        from wade.hooks.cli import _encode_claude_project_path, _memory_allow_paths
+
+        encoded = _encode_claude_project_path(Path(WT))
+        expected = (Path.home() / ".claude" / "projects" / encoded / "memory").resolve()
+        assert _memory_allow_paths("  CLAUDE ", Path(WT)) == (expected,)
+
+    def test_empty_tuple_tools_have_no_bypass(self) -> None:
+        # Copilot / Antigravity-CLI keep memory in-repo — intentional empty tuple.
+        from wade.hooks.cli import _memory_allow_paths
+
+        assert _memory_allow_paths("copilot", Path(WT)) == ()
+        assert _memory_allow_paths("antigravity-cli", Path(WT)) == ()
+
+    def test_unknown_tool_has_no_bypass(self) -> None:
+        from wade.hooks.cli import _memory_allow_paths
+
+        assert _memory_allow_paths("nonesuch", Path(WT)) == ()
+
+    def test_home_unresolvable_degrades_to_no_bypass(self, monkeypatch) -> None:
+        """HOME unset → ``Path.home()`` raises; the resolver returns () and never raises."""
+        from wade.hooks import cli
+
+        def _boom() -> Path:
+            raise RuntimeError("home unresolvable")
+
+        monkeypatch.setattr(cli.Path, "home", staticmethod(_boom))
+        assert cli._memory_allow_paths("claude", Path(WT)) == ()
+
+    def test_symlinked_worktree_root_is_canonicalized_before_encoding(self, tmp_path) -> None:
+        """A ``worktree_root`` reached through a symlink must encode the canonical path.
+
+        Regression for #388: if ``project.worktrees_dir`` is configured through a
+        symlink, git worktree creation and the launched tool both observe the
+        canonical (resolved) CWD — so the allowlist must encode that same
+        canonical path, not the symlink spelling, or the tool's real memory
+        writes stay denied.
+        """
+        from wade.hooks.cli import _encode_claude_project_path, _memory_allow_paths
+
+        real_root = tmp_path / "real-worktree"
+        real_root.mkdir()
+        link_root = tmp_path / "link-worktree"
+        link_root.symlink_to(real_root)
+
+        encoded = _encode_claude_project_path(real_root.resolve())
+        expected = (Path.home() / ".claude" / "projects" / encoded / "memory").resolve()
+        assert _memory_allow_paths("claude", link_root) == (expected,)
+
+    def test_symlinked_memory_leaf_does_not_widen_the_allowlist(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """A memory leaf that is itself a symlink to a broader dir must not widen the exception.
+
+        Regression for #388: if the computed leaf (``.../memory``) is a symlink
+        to e.g. the tool's whole config home, resolving it here used to widen
+        the exception to that entire target — permitting writes to files like
+        the tool's own hook settings. The fix resolves only the leaf's parent,
+        then reattaches the leaf name literally, so the returned allow-path
+        stays the (unresolved) leaf spelling, never its symlink target.
+        """
+        from wade.hooks.cli import _encode_claude_project_path, _memory_allow_paths
+
+        config_home = tmp_path / "claude-home"
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_home))
+        encoded = _encode_claude_project_path(Path(WT).resolve())
+        project_dir = config_home / "projects" / encoded
+        project_dir.mkdir(parents=True)
+        broad_target = tmp_path / "broad-target"
+        broad_target.mkdir()
+        (project_dir / "memory").symlink_to(broad_target)
+
+        (allowed,) = _memory_allow_paths("claude", Path(WT))
+        assert allowed == project_dir / "memory"
+        assert allowed != broad_target.resolve()
+
+    def test_write_through_symlinked_memory_leaf_stays_denied(self, tmp_path, monkeypatch) -> None:
+        """End-to-end: a write that resolves through a symlinked memory leaf is denied.
+
+        Simulates a compromised session that replaced its own ``memory`` dir
+        with a symlink to a broader directory. Even though the write target's
+        *string* sits under the leaf, ``_resolve_path`` follows the real
+        filesystem symlink to the broader target, which no longer falls under
+        the (unresolved) allow-path — so the write-guard denies it.
+        """
+        from wade.hooks.cli import _encode_claude_project_path
+
+        config_home = tmp_path / "claude-home"
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_home))
+        encoded = _encode_claude_project_path(Path(WT).resolve())
+        project_dir = config_home / "projects" / encoded
+        project_dir.mkdir(parents=True)
+        broad_target = tmp_path / "broad-target"
+        broad_target.mkdir()
+        (project_dir / "memory").symlink_to(broad_target)
+
+        target = project_dir / "memory" / "settings.json"
+        stdin = json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(target)}})
+        r = _run_lean("pre_tool_use", "worktree", "claude", stdin)
+        assert r.returncode == 2
+
+
+class TestPerToolMemoryDirsCoverHookWriters:
+    """Mirror of :class:`TestPerToolDialectsMatchCrossby`: the memory map must not drift."""
+
+    def test_memory_dirs_key_set_matches_hook_writers(self) -> None:
+        from wade.hooks.cli import _TOOL_DIALECTS, _TOOL_MEMORY_DIRS
+        from wade.services.implementation_service.bootstrap import _hook_writers
+
+        installed = {tool_id.value for tool_id, _ in _hook_writers()}
+        assert set(_TOOL_MEMORY_DIRS) == installed, set(_TOOL_MEMORY_DIRS) ^ installed
+        # ...and stays aligned with the dialect map (the same 5 guarded tools).
+        assert set(_TOOL_MEMORY_DIRS) == set(_TOOL_DIALECTS)
+
+
+class TestMemoryAllowlistCLI:
+    """End-to-end through the lean entry point: a claude session may write its own
+    memory subtree in both worktree and plan modes; its config/auth files, a sibling
+    repo, and a tool with no memory entry all stay denied.
+    """
+
+    def _mem_target(self) -> Path:
+        from wade.hooks.cli import _encode_claude_project_path
+
+        encoded = _encode_claude_project_path(Path(WT))
+        return Path.home() / ".claude" / "projects" / encoded / "memory" / "note.md"
+
+    def _mem_write(self) -> str:
+        target = str(self._mem_target())
+        return json.dumps({"tool_name": "Write", "tool_input": {"file_path": target}})
+
+    def test_memory_write_allowed_worktree_mode(self) -> None:
+        r = _run_lean("pre_tool_use", "worktree", "claude", self._mem_write())
+        assert r.returncode == 0
+        assert r.stdout == ""
+
+    def test_memory_write_allowed_plan_mode(self) -> None:
+        r = _run_lean("pre_tool_use", "plan", "claude", self._mem_write())
+        assert r.returncode == 0
+        assert r.stdout == ""
+
+    def test_memory_shell_redirect_allowed_plan_mode(self) -> None:
+        # Exercises the shell channel + the _is_plan_artifact_path ordering trap.
+        stdin = json.dumps(
+            {"tool_name": "Bash", "tool_input": {"command": f"echo x > {self._mem_target()}"}}
+        )
+        r = _run_lean("pre_tool_use", "plan", "claude", stdin)
+        assert r.returncode == 0
+
+    def test_sibling_project_memory_denied(self) -> None:
+        # A different worktree's encoded memory dir is not *this* session's own —
+        # the allowlist is scoped per-session, not the whole ~/.claude/projects tree.
+        from wade.hooks.cli import _encode_claude_project_path
+
+        encoded = _encode_claude_project_path(Path("/repo/other-wt"))
+        target = Path.home() / ".claude" / "projects" / encoded / "memory" / "note.md"
+        stdin = json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(target)}})
+        r = _run_lean("pre_tool_use", "worktree", "claude", stdin)
+        assert r.returncode == 2
+
+    def test_session_transcript_write_denied(self) -> None:
+        # Sibling to memory/ under the same encoded project dir, but not memory
+        # itself — must stay denied even for this session's own project dir.
+        from wade.hooks.cli import _encode_claude_project_path
+
+        encoded = _encode_claude_project_path(Path(WT))
+        target = Path.home() / ".claude" / "projects" / encoded / "session.jsonl"
+        stdin = json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(target)}})
+        r = _run_lean("pre_tool_use", "worktree", "claude", stdin)
+        assert r.returncode == 2
+
+    def test_config_file_write_denied(self) -> None:
+        # ~/.claude/settings.json holds the hooks block — outside the memory subtree.
+        settings = str(Path.home() / ".claude" / "settings.json")
+        stdin = json.dumps({"tool_name": "Write", "tool_input": {"file_path": settings}})
+        r = _run_lean("pre_tool_use", "worktree", "claude", stdin)
+        assert r.returncode == 2
+
+    def test_sibling_repo_write_denied(self) -> None:
+        stdin = json.dumps({"tool_name": "Write", "tool_input": {"file_path": "/etc/passwd"}})
+        r = _run_lean("pre_tool_use", "worktree", "claude", stdin)
+        assert r.returncode == 2
+
+    def test_empty_tuple_tool_gets_no_bypass(self) -> None:
+        # Antigravity-CLI has an empty memory entry, so the claude memory path is just
+        # another out-of-worktree write for it — denied.
+        stdin = json.dumps({"tool_name": "Write", "tool_input": {"path": str(self._mem_target())}})
+        r = _run_lean("pre_tool_use", "worktree", "antigravity-cli", stdin)
+        assert r.returncode == 2

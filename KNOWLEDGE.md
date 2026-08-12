@@ -511,5 +511,38 @@ The developer-facing session summary lives in TWO coupled surfaces that must be 
 ## 69f9e60c7c9f | 2026-08-12 | implementation | tags: skills, partials, context-budget | Issue #401
 
 Communication rules shared across all session skills belong in templates/skills/_partials/user-interaction.md (placeholder {user_interaction_prompt}), expanded into all three session skills by installer.py's _SKILL_PARTIALS. Gotcha: the rendered partial counts against the session-start payload budget asserted in tests/integration/test_skill_context_budget.py (BUDGET_CHARS) — adding a section there can trip the guard, requiring a documented budget bump.
+## e59b12e3f67d | 2026-08-11 | implementation | tags: hooks, write-guards | Issue #387
+
+The per-tool memory allowlist (`_TOOL_MEMORY_DIRS` in `hooks/cli.py`, threaded as `allow_paths` into the three write guards) MUST target only the memory subtree (e.g. `~/.claude/projects`), never the tool's config home — `~/.claude/settings.json` holds the `hooks` block, so allowlisting all of `~/.claude` would let a guarded session strip its own guard and permanently disable it. In `shell_containment`, memory membership (`_under_any`) must be checked BEFORE `_is_plan_artifact_path`/`_is_always_allowed_device`, which report any out-of-root path (memory included) as a non-artifact and would otherwise deny a plan-mode memory redirect. Per-tool memory locations are mirrored wade-side (static maps, kept off the hot per-edit path) like the dialect maps; migrating them into crossby's `AIToolCapabilities` is the open follow-up.
+
+---
+
+## b1e7f60c6de6 | 2026-08-11 | implementation | tags: hooks, write-guards, memory-allowlist | Issue #387
+
+The per-tool memory allowlist (`_memory_allow_paths(tool, worktree_root)` in `hooks/cli.py`) must scope to THIS session's own memory leaf, never a shared parent — Claude's is `<config-home>/projects/<encoded-worktree>/memory/` (sibling session transcripts live un-nested one level up, so allowlisting the parent over-grants), Cursor's is `<config-home>/projects/<encoded-worktree>/`, Codex's is `<config-home>/sessions/` (can't be narrowed further — rollouts are filed by date, not by project); `<config-home>` honors each tool's data-home relocation env var (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`) before falling back to `Path.home() / ".<tool>"`. `git -C <dir>` (spaced or glued) must be checked only against `worktree_root`, never `allow_paths` — a `-C`-scoped write can touch every file under `<dir>`, not just a direct memory write, so it stays strict even when `<dir>` is the active tool's own memory root.
+
+---
+
+## d72ebea928d4 | 2026-08-11 | implementation | tags: hooks, write-guards, memory-allowlist, gotcha | Issue #387
+
+In `_memory_allow_paths` (hooks/cli.py), only Claude's memory allow-root is scoped to BOTH this session AND memory alone — Cursor's allow-root is the whole per-project dir (crossby's own reader globs it for session-transcript JSON too, so a guarded Cursor session can rewrite/delete its own transcripts) and Codex's is the entire `~/.codex/sessions/` tree shared flat across every project on the machine (rollouts are filed by date, not project — no per-project dir exists to key on). This is inherent to how each tool stores data, not a bug; do not assume "memory allowlist" implies session-scoped or memory-only isolation for Codex/Cursor without checking the per-tool breakdown in the function's docstring.
+
+---
+
+## 347c02cc5d78 | 2026-08-11 | implementation | tags: hooks, write-guards, git, gotcha | Issue #387
+
+In shell_containment (policies.py), git's directory-redirect flags — spaced/glued -C<dir>, --work-tree=<dir>, --git-dir=<dir> — are functionally equivalent for containment purposes (all four redirect where git reads/writes) and must ALL be buffered and checked only against worktree_root, never allow_paths, before falling through to the generic _embedded_path check (which honors allow_paths). Hardening only -C left --work-tree=/--git-dir= as an equivalent bypass reaching the memory allow-root via the generic check; found by wade review implementation on the -C fix itself. Also: the glued -C<dir> buffering must not require "/" in the token — a relative dir like -C.. has none and would otherwise fall through unguarded.
+
+---
+
+## 2ed460b892d0 | 2026-08-11 | implementation | tags: hooks, write-guards, git, gotcha | Issue #387
+
+git's own parser (git.c) accepts -C, --work-tree, and --git-dir both spaced (--flag value) and =-joined (--flag=value) identically -- when hardening the memory-write guard's git-directory-redirect handling in shell_containment, ALL SIX spellings (2 flags x 2 join-styles, plus glued -C<dir>) must be buffered the same way (checked only against worktree_root, never allow_paths), not just the =-joined form. A first fix only added --work-tree=/--git-dir= handling and missed the spaced form entirely (git --work-tree /outside clean -fd sailed through with zero containment check) -- found by a second wade review implementation pass on the FIRST fix. When hardening one flag-spelling of a multi-spelling escape, enumerate every spelling git's parser actually accepts before considering it closed.
+
+---
+
+## a4498637a961 | 2026-08-11 | implementation | tags: hooks, write-guards, memory-allowlist, symlink | Issue #387
+
+In _memory_allow_paths (hooks/cli.py), never .resolve() the full memory allow-path in one call — resolve only the leaf's parent, then reattach the leaf name (memory/, the encoded project dir, sessions/) literally, so a symlink swapped in for the leaf itself cannot silently widen the allow-root to its target (e.g. ~/.claude, exposing settings.json that holds the hooks block). Also resolve worktree_root before encoding it into the Claude/Cursor project-dir name — an unresolved worktree path (e.g. reached through a symlinked worktrees_dir) encodes a different string than the one the launched tool's own CWD resolves to, leaving its real memory writes denied.
 
 ---
