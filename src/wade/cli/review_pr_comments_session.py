@@ -87,9 +87,9 @@ def done(
 
         status = get_review_status()
         if status is not None:
-            messages = format_review_status_summary(
-                status, include_all_clear=not status.is_all_clear
-            )
+            # include_all_clear only matters when status.is_all_clear is True — the
+            # done()-specific guidance below covers that case, so always suppress it here.
+            messages = format_review_status_summary(status, include_all_clear=False)
             for level, message in messages:
                 if level == "success":
                     console.success(message)
