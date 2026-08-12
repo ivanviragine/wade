@@ -240,6 +240,58 @@ class TestCatchupDirtyWorktree:
         assert any(e.data.get("reason") == "dirty_worktree" for e in error_events)
 
 
+class TestCatchupStashNotOrphaned:
+    """#407: an autostash must be restored even if the merge step RAISES.
+
+    When reconcile cannot handle a blocking file, ``_catchup_merge`` re-raises so Part A
+    surfaces the staleness — but the stash created before it must NOT be orphaned.
+    """
+
+    @patch("wade.services.implementation_service.sync._handle_stash_restoration")
+    @patch("wade.services.implementation_service.sync._catchup_merge")
+    @patch("wade.services.implementation_service.sync.git_stash")
+    @patch("wade.services.implementation_service.bootstrap.git_repo")
+    @patch("wade.services.implementation_service.sync.git_repo")
+    @patch("wade.services.implementation_service.sync.load_config")
+    def test_stash_restored_when_merge_raises(
+        self,
+        mock_config: MagicMock,
+        mock_repo: MagicMock,
+        mock_bootstrap_repo: MagicMock,
+        mock_stash: MagicMock,
+        mock_merge: MagicMock,
+        mock_restore: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        import pytest
+
+        from wade.git.repo import GitError
+        from wade.models.config import ProjectConfig
+        from wade.services.implementation_service import catchup
+
+        mock_config.return_value = ProjectConfig()
+        mock_repo.get_repo_root.return_value = tmp_path
+        mock_repo.get_current_branch.return_value = "feat/1-my-feature"
+        mock_repo.is_clean.return_value = False
+        mock_repo.has_remote.return_value = False
+        mock_repo.detect_main_branch.return_value = "main"
+        # A non-session tracked change → USER_DIRTY with stashable content.
+        mock_bootstrap_repo.get_dirty_file_paths.return_value = ["src/main.py"]
+        mock_repo.get_dirty_status.return_value = {"staged": 1, "unstaged": 0, "untracked": 0}
+        mock_stash.detect_untracked_collisions.return_value = []
+        mock_stash.create_named_stash.return_value = ("stash-sha", "stash-name")
+        # The merge step raises an unreconcilable non-conflict GitError.
+        mock_merge.side_effect = GitError("would be overwritten by merge: some/file")
+
+        with pytest.raises(GitError):
+            catchup(project_root=tmp_path)
+
+        # The stash was restored (not silently orphaned) despite the raise.
+        mock_restore.assert_called_once()
+        assert mock_restore.call_args.args[0] == "stash-sha"
+        assert mock_restore.call_args.args[2] is False  # merge_ok=False on the raise path
+
+
 class TestCatchupDryRun:
     """Dry-run mode: preview without merging."""
 

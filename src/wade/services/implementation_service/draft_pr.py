@@ -182,7 +182,10 @@ def _build_implementation_issue_context_header(task: Task) -> str:
 
 
 def build_implementation_prompt(
-    task: Task, ai_tool: str | None = None, has_plan: bool = False
+    task: Task,
+    ai_tool: str | None = None,
+    has_plan: bool = False,
+    stale_warning: str | None = None,
 ) -> str:
     """Build the initial prompt for an implementation session.
 
@@ -190,6 +193,10 @@ def build_implementation_prompt(
     description is prepended inline so the AI has it without relying on
     @PLAN.md.  When a plan already exists, PLAN.md carries the full context
     and the inline header is skipped to avoid duplication.
+
+    When *stale_warning* is provided (startup catchup could not advance the branch
+    onto its base — #407), it is prepended to the very top so the first turn sees the
+    staleness banner before anything else.
     """
     from wade.skills.installer import get_templates_dir
 
@@ -200,4 +207,6 @@ def build_implementation_prompt(
     prompt = template.format(issue_number=task.id, issue_title=task.title)
     if task.body and not has_plan:
         prompt = _build_implementation_issue_context_header(task) + prompt
+    if stale_warning:
+        prompt = stale_warning.rstrip() + "\n\n" + prompt
     return prompt

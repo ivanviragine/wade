@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.44.1] — 2026-08-12
+
+### Bug Fixes
+
+- wade implement startup catchup silently aborts on knowledge-store-migration untracked_conflict, leaving the session on a stale base (#408) (9968583)
+
 ## [v0.44.0] — 2026-08-12
 
 ### Features

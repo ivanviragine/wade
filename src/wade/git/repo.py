@@ -454,16 +454,25 @@ def unskip_worktree_file(cwd: Path, filename: str) -> None:
     _run_git("update-index", "--no-skip-worktree", filename, cwd=cwd, check=False)
 
 
+def show_file_at_ref(cwd: Path, ref: str, relpath: str) -> str | None:
+    """Return the ``<ref>:<relpath>`` blob content, or None if absent.
+
+    None covers a path missing at that ref (or a git failure) — the caller treats
+    that as "no such version".
+    """
+    result = _run_git("show", f"{ref}:{relpath}", cwd=cwd, check=False)
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
 def show_file_at_head(cwd: Path, relpath: str) -> str | None:
     """Return the committed ``HEAD:<relpath>`` blob content, or None if absent.
 
     None covers an untracked/uncommitted path (or a git failure) — the caller
     treats that as "no committed version".
     """
-    result = _run_git("show", f"HEAD:{relpath}", cwd=cwd, check=False)
-    if result.returncode != 0:
-        return None
-    return result.stdout
+    return show_file_at_ref(cwd, "HEAD", relpath)
 
 
 def checkout_paths(cwd: Path, *paths: str) -> bool:
