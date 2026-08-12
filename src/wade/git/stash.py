@@ -192,7 +192,12 @@ def detect_untracked_collisions(cwd: Path, merge_ref: str) -> list[str]:
     if not added_files:
         return []
 
-    status_result = _run_git("status", "--porcelain", cwd=cwd, check=False)
+    # ``--untracked-files=all`` expands wholly-untracked directories to their individual
+    # files. Without it git collapses e.g. a fully untracked ``docs/`` to a single ``?? docs/``
+    # entry, and a nested knowledge target such as ``docs/LEARNINGS.md`` (a custom knowledge
+    # path) would be missed here — the collision would then only surface as a hard merge
+    # abort instead of being reconciled (#408 review).
+    status_result = _run_git("status", "--porcelain", "--untracked-files=all", cwd=cwd, check=False)
     if status_result.returncode != 0:
         return []
     untracked: set[str] = set()
