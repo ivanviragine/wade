@@ -261,10 +261,19 @@ read as in-root, bypassing the same-blast-radius denial `cd /tmp/x && git
 clean -fd` already gets. `base` is rebased only in the `cd`/`pushd` handler,
 never by a directory-redirect flag itself, so a same-segment `-C` still
 overrides containment for that one git invocation without permanently
-changing where later, unrelated tokens resolve. Within a single segment, git
-itself only honors the *last* `-C`/`--work-tree`/`--git-dir` flag, so a later
-occurrence that resolves in-root clears an earlier one's buffered outside
-token (`git -C /tmp/x -C /repo/wt clean -fd` is allowed).
+changing where later, unrelated tokens resolve. The outside-root buffer is
+**sticky within a segment**, not "last flag wins": once any
+`-C`/`--work-tree`/`--git-dir` occurrence resolves outside root, a later
+occurrence resolving in-root does *not* clear it (`git -C /tmp/x -C /repo/wt
+clean -fd` stays denied). A naive reset was tried and reverted — repeated
+relative `-C` values chain from the *preceding* `-C`, not the segment's
+original cwd, so `git -C /tmp/x -C . clean -fd`'s second flag can resolve
+back to root while git's real effective directory is still outside; and
+`--work-tree`/`--git-dir` are independent settings, not last-one-wins
+alternatives, so an in-root `--git-dir` must not clear an outside
+`--work-tree`'s denial. Correctly resolving the narrower, legitimate
+`-C a -C b` case needs per-flag-type effective-directory tracking, not a
+shared token — out of scope for now; staying strict is the safe trade-off.
 
 It also unglues paths from other flags
 (`--output=/etc/x`, `-o/etc/x`, `of=/etc/x`) and keeps those **glued** forms
@@ -291,6 +300,15 @@ file-path guards (`worktree_containment`, `plan_artifact_only`, both via
 `_contained`) — the two channels no longer diverge on what counts as always-allowed
 scratch. (Rule 6's git directory-redirect buffering is the sole exception, kept
 **stricter** than a direct write even for a temp `<dir>` — see above.)
+
+`_is_always_allowed_scratch` matches temp dirs **by prefix only**, never the
+bare dir itself — a separate, narrow `_is_temp_root` predicate lets
+`cd`/`pushd` land on the bare temp dir (`cd /tmp`, pure navigation), but
+write-command operands, redirect targets, and the file-path channel
+deliberately stay prefix-only, so a destructive command can't target the whole
+shared directory (`rm -rf /tmp` stays denied). A version of the exact-dir
+concession folded into the general scratch predicate was tried and reverted
+for exactly this reason.
 
 The **plan-artifact exemption specifically** (not baseline containment) uses a
 stricter, `worktree_root`-aware variant, `_is_scratch_outside_worktree`, rather
