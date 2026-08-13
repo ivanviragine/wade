@@ -635,7 +635,7 @@ def plan(
         if selected:
             plan_files = selected
             console.info(f"Found {len(plan_files)} plan file(s)")
-            created_numbers, _failed_files = _create_issues_from_plans(
+            created_numbers, failed_files = _create_issues_from_plans(
                 provider=provider,
                 config=config,
                 plan_files=plan_files,
@@ -655,10 +655,31 @@ def plan(
                     effort=resolved_effort,
                     yolo=resolved_yolo,
                 )
-                _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+                if failed_files:
+                    # Some plans never became draft PRs (e.g. an unresolvable declared
+                    # base). Their content lives only in the planning worktree, so
+                    # preserve it instead of removing the worktree and discarding the
+                    # un-persisted plans (#376 review).
+                    console.warn(
+                        f"{len(failed_files)} plan(s) could not be persisted to a draft "
+                        f"PR; preserving planning output. Failed: {', '.join(failed_files)}"
+                    )
+                    _preserve_generated_plans(plan_dir, repo_root, planning_worktree)
+                else:
+                    _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
                 if offer_result is not None:
                     return offer_result
                 return True
+            if failed_files:
+                # Nothing was persisted, but plans were generated — preserve them so a
+                # re-run recovers the output rather than losing it with the worktree.
+                console.warn(
+                    f"No plan was persisted to a draft PR — {len(failed_files)} plan(s) "
+                    f"failed; preserving planning output. Failed: {', '.join(failed_files)}"
+                )
+                _preserve_generated_plans(plan_dir, repo_root, planning_worktree)
+                stop_title_keeper()
+                return False
             console.warn("No issues were created from plan files.")
         else:
             # Strict gate rejected the batch (all invalid, or the user aborted a
@@ -784,7 +805,17 @@ def _create_issues_from_plans(
                 except Exception as e:
                     logger.warning("plan.pr_link_update_failed", error=str(e))
             else:
-                console.warn(f"Could not create draft PR for #{task.id}")
+                # The draft PR never got created (e.g. a plan-declared base that can't
+                # be resolved). The full plan lives only in the planning worktree — if
+                # we counted this as created, the caller would finalize the issue and
+                # force-remove the worktree, discarding the plan. Record it as failed so
+                # the caller preserves the planning output instead (#376 review).
+                console.warn(
+                    f"Could not create draft PR for #{task.id} — the plan was not "
+                    "persisted; preserving planning output."
+                )
+                failed.append(plan.path.name)
+                continue
 
         created.append(task.id)
 
@@ -954,8 +985,18 @@ def _reconcile_inflight_worktree_base(
             None,
         )
     except Exception:
-        logger.debug("plan.inflight_worktree_lookup_failed", exc_info=True)
-        return True
+        # The PR is already retargeted; if a worktree exists we cannot confirm its
+        # merge-target pin matches the new base, so a resumed sync/done could target
+        # the old one. Fail CLOSED — surface it and let the caller preserve-and-abort
+        # rather than report success on a possibly-divergent pin (#376 review).
+        logger.warning("plan.inflight_worktree_lookup_failed", exc_info=True)
+        console.error(
+            f"Retargeted the PR to '{declared_base}', but could not read the repo's "
+            f"worktrees to update the in-flight merge-target pin. If a worktree exists "
+            f"for #{issue.id}, set its .wade/base_branch to '{declared_base}' (or delete "
+            "it if the base is the main branch) before resuming implementation."
+        )
+        return False
     if wt_path is None:
         return True  # No worktree checked out — nothing to reconcile.
 
@@ -963,7 +1004,10 @@ def _reconcile_inflight_worktree_base(
     if not main_branch:
         try:
             main_branch = git_repo.detect_main_branch(repo_root)
-        except GitError:
+        except (GitError, OSError):
+            # detect_main_branch shells out to git; a spawn failure raises OSError, not
+            # only GitError. Preserve the None fallback so pin reconciliation continues
+            # through the caller's preserve-and-abort path (#376 review).
             main_branch = None
 
     base_file = wt_path / ".wade" / "base_branch"

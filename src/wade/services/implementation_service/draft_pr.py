@@ -106,35 +106,55 @@ def _branch_has_real_work(repo_root: Path, branch_name: str, base: str | None) -
     so the old base's commits would leak into the new base's diff. This is the
     *guard* signal: an in-flight branch must not be retargeted silently. It is
     deliberately **not** about a checked-out worktree — ``wade implement --cd`` cuts
-    a scaffold worktree with no commits, which is not divergent work. A count that
-    cannot be computed fails **closed** (returns ``True``) so an indeterminate branch
-    is never silently retargeted (#376).
+    a scaffold worktree with no commits, which is not divergent work.
+
+    The head may live only on origin — a fresh clone whose PR branch was never
+    checked out locally. Resolve it to a local ref or ``origin/<branch>`` before
+    measuring, so a scaffold-only *remote* PR is classified as scaffold work rather
+    than misclassified as real work by a failed local ``rev-list`` (#376 review). A
+    head that resolves nowhere, or a count that cannot be computed, fails **closed**
+    (returns ``True``) so an indeterminate branch is never silently retargeted.
     """
     if not base:
         return False
     try:
+        head_ref = git_branch.resolve_start_point(repo_root, branch_name)
+        if head_ref is None:
+            logger.debug("draft_pr.real_work_head_unresolved", branch=branch_name)
+            return True
         start = git_branch.resolve_start_point(repo_root, base) or base
-        return git_branch.commits_ahead(repo_root, branch_name, start) > 1
+        return git_branch.commits_ahead(repo_root, head_ref, start) > 1
     except (GitError, OSError, ValueError):
         logger.debug("draft_pr.real_work_commits_check_failed", exc_info=True)
         return True
 
 
-def _branch_is_checked_out(repo_root: Path, branch_name: str) -> bool:
-    """Return ``True`` when *branch_name* is checked out in some worktree.
+def _find_checked_out_worktree(repo_root: Path, branch_name: str) -> tuple[bool, Path | None]:
+    """Locate the worktree, if any, that has *branch_name* checked out.
 
-    A checked-out branch cannot be moved with ``git branch -f`` — the reroot below
-    would fail — so this gates the *recreate*, independently of whether the branch
-    holds real work. Fails **closed** (returns ``True`` → do not rewrite) when the
-    worktree list cannot be read.
+    A checked-out branch cannot be moved with ``git branch -f``; it must be re-rooted in
+    place (a hard reset inside its worktree), so the reroot needs the worktree *path*, not
+    just a yes/no.
+
+    Returns a ``(checked_out, path)`` pair:
+
+    - ``(True, <path>)`` — checked out; ``<path>`` is where to reset it.
+    - ``(False, None)`` — definitively not checked out anywhere.
+    - ``(True, None)`` — the worktree list could not be read. Fails **closed**: treated as
+      checked-out-with-unknown-path so the caller refuses the retarget rather than
+      attempting a ``git branch -f`` that would either fail or silently mis-handle a branch
+      that really is checked out.
     """
     from wade.git import worktree as git_worktree
 
     try:
-        return any(wt.get("branch") == branch_name for wt in git_worktree.list_worktrees(repo_root))
+        for wt in git_worktree.list_worktrees(repo_root):
+            if wt.get("branch") == branch_name:
+                return True, Path(wt["path"])
+        return False, None
     except Exception:
         logger.debug("draft_pr.worktree_check_failed", exc_info=True)
-        return True
+        return True, None
 
 
 def reroot_scaffold_branch_for_retarget(
@@ -150,35 +170,75 @@ def reroot_scaffold_branch_for_retarget(
     branch cut from *old_base* keeps that base's commits, which would then merge
     into *new_base* once the PR is retargeted (the later startup catchup merge
     cannot remove them). When the branch is scaffold-only — only its scaffold commit
-    beyond *old_base* and not checked out in any worktree — rebuild it rooted on
-    *new_base* and force-push; this is loss-free.
+    beyond *old_base* — rebuild it rooted on *new_base* and force-push; this is
+    loss-free whether or not it is checked out (an in-place hard reset handles the
+    checked-out case).
 
-    A branch is left untouched when it carries real work (rewriting in-flight history
-    is destructive) or is checked out in a worktree (``git branch -f`` would fail).
-    The caller must guard/confirm the resulting retarget of a real-work branch
-    separately (the plan flow via :func:`_base_retarget_is_safe`, ``start()`` via
-    :func:`_branch_has_real_work`) so it is never applied silently.
+    A real-work branch is left untouched (rewriting in-flight history is
+    destructive); the caller confirms/aborts that retarget separately (the plan flow
+    via :func:`_base_retarget_is_safe`, ``start()`` via :func:`_branch_has_real_work`)
+    so it is never applied silently. A scaffold-only branch is rebuilt on the new base
+    and force-pushed — via ``git branch -f`` when it is not checked out, or a hard reset
+    inside its worktree when it is (``git branch -f`` cannot move a checked-out branch).
+    It **aborts** rather than retarget onto a stale branch when the reroot cannot be done
+    loss-free: an unresolvable *old* base (cannot prove the branch is scaffold-only — a
+    reset might discard real commits), a checked-out worktree carrying uncommitted tracked
+    changes (a hard reset would discard them) or one whose path can't be resolved, or an
+    unresolvable *new* base / failed git op.
 
     Returns:
         ``True`` — safe to proceed with the PR-base edit: the branch was recreated,
-        or deliberately left as-is. ``False`` — a scaffold-only branch needed
-        recreating but the new base could not be resolved or the git operation
-        failed; the caller must abort rather than retarget onto a stale branch.
+        or deliberately left as-is because it carries real work the caller guards.
+        ``False`` — the branch could not be safely rerooted; the caller must abort
+        rather than retarget onto a stale branch.
     """
-    # Real commits past the scaffold, or a checked-out worktree we cannot ``git
-    # branch -f`` over → leave the branch as-is; only a scaffold-only, un-checked-out
-    # branch is safe to rebuild.
-    if _branch_has_real_work(repo_root, branch_name, old_base) or _branch_is_checked_out(
-        repo_root, branch_name
-    ):
+    # Without a resolvable old base we can neither prove the branch is scaffold-only
+    # (a reset could discard real commits) nor safely retarget it as-is (old-base
+    # commits would leak into the new diff). Abort so the caller surfaces it (#376
+    # review).
+    if not old_base:
+        console.error(
+            f"Cannot retarget the PR for '{branch_name}': its current base is unknown, "
+            "so wade cannot prove the branch is a rerootable scaffold. Retarget it "
+            "manually once the base is resolvable."
+        )
+        return False
+
+    # Real commits past the scaffold → leave the branch as-is; the caller confirms or
+    # aborts this retarget separately, so a real-work retarget is never silent.
+    if _branch_has_real_work(repo_root, branch_name, old_base):
         return True
 
-    # Scaffold-only: rebuild the branch rooted on the new base and force-push it.
+    # Scaffold-only: rebuild it rooted on the new base and force-push — loss-free. A
+    # checked-out branch (the `wade implement --cd` case) is re-rooted *in place* (a hard
+    # reset inside its worktree) since `git branch -f` refuses a checked-out branch;
+    # otherwise the retarget would leave old-base commits leaking into the new diff.
+    checked_out, worktree_path = _find_checked_out_worktree(repo_root, branch_name)
     new_start = _resolve_base_start_point(repo_root, new_base)
     if new_start is None:
         return False  # resolver already reported why
     try:
-        git_branch.reset_branch(repo_root, branch_name, new_start)
+        if checked_out:
+            if worktree_path is None:
+                # Checked out somewhere we can't resolve (worktree list unreadable) → we
+                # can't reset the right worktree. Abort and require cleanup.
+                console.error(
+                    f"Branch '{branch_name}' appears checked out but its worktree could "
+                    "not be resolved, so it cannot be re-rooted before retargeting. Remove "
+                    "the worktree (`wade cleanup` or `git worktree remove`) and retry."
+                )
+                return False
+            if git_repo.has_tracked_changes(worktree_path):
+                # A hard reset would discard these edits — refuse rather than lose work.
+                console.error(
+                    f"Branch '{branch_name}' is checked out with uncommitted changes in "
+                    f"{worktree_path}, so it cannot be re-rooted onto '{new_base}' before "
+                    "retargeting. Commit or stash them (or remove the worktree) and retry."
+                )
+                return False
+            git_branch.reset_worktree_hard(worktree_path, new_start)
+        else:
+            git_branch.reset_branch(repo_root, branch_name, new_start)
         git_branch.create_scaffold_commit(
             repo_root, branch_name, f"chore: scaffold branch for #{issue_number}"
         )

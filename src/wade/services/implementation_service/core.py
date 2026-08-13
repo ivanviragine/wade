@@ -437,7 +437,9 @@ def start(
     # chain-derived base is a generated branch name and always passes; a hand-typed
     # `--base` with spaces or invalid ref characters fails fast here with a clear
     # message instead of a later, murkier "does not exist" from ref resolution.
-    if base_branch and not is_valid_git_ref(base_branch):
+    # Check ``is not None`` (not truthiness) so an explicit empty ``--base ""`` is
+    # rejected rather than silently inheriting the PR/main base (#376 review).
+    if base_branch is not None and not is_valid_git_ref(base_branch):
         console.error_with_fix(
             f"Invalid --base value {base_branch!r}",
             "Use a single well-formed git branch name (no spaces or special characters)",

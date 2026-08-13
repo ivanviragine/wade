@@ -153,6 +153,28 @@ def reset_branch(
     _run_git_with_retry("branch", "-f", branch_name, start_point, cwd=repo_root)
 
 
+def reset_worktree_hard(worktree_path: Path, start_point: str) -> None:
+    """Force-move the branch checked out in *worktree_path* to *start_point*.
+
+    ``git branch -f`` refuses to move a checked-out branch, so re-root such a branch by
+    running ``git reset --hard`` *inside its worktree* instead. This discards uncommitted
+    changes to **tracked** files in that worktree (untracked files are left in place), so
+    callers must confirm the worktree carries no tracked changes first (see
+    :func:`wade.git.repo.has_tracked_changes`). Used to re-root a scaffold-only branch
+    that is checked out — e.g. after ``wade implement --cd`` — before retargeting its PR,
+    so the old base's commits don't leak into the new base's diff (#376 review).
+
+    Args:
+        worktree_path: The worktree in which the target branch is checked out.
+        start_point: Commit, branch, or tag to move the branch (and worktree) onto.
+
+    Raises:
+        GitError: If the reset fails.
+    """
+    log.info("branch.reset_worktree_hard", worktree=str(worktree_path), start_point=start_point)
+    _run_git_with_retry("reset", "--hard", start_point, cwd=worktree_path)
+
+
 def create_scaffold_commit(
     repo_root: Path,
     branch_name: str,

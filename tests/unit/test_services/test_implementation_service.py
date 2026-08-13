@@ -1198,6 +1198,22 @@ class TestImplementationStartBaseBranch:
         assert result.success is False
         provider.read_task.assert_not_called()  # rejected before the issue is read
 
+    def test_empty_explicit_base_is_rejected(self, tmp_path: Path) -> None:
+        """An explicit `--base ""` is malformed and must fail fast — validating on
+        `is not None` (not truthiness) so an empty value is rejected rather than silently
+        inheriting the PR/main base (#376 review)."""
+        provider = MagicMock()
+
+        with (
+            patch(f"{self._CORE}.load_config", return_value=self._make_config()),
+            patch(f"{self._CORE}.get_provider", return_value=provider),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+        ):
+            result = start("42", project_root=tmp_path, base_branch="")
+
+        assert result.success is False
+        provider.read_task.assert_not_called()  # rejected before the issue is read
+
 
 # ---------------------------------------------------------------------------
 # Implementation batch tests

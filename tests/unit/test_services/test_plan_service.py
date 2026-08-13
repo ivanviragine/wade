@@ -1125,6 +1125,30 @@ class TestCreateIssuesFromPlansBaseBranch:
 
         assert mock_bootstrap.call_args.kwargs["base_branch"] is None
 
+    def test_bootstrap_failure_records_plan_as_failed(self, tmp_path: Path) -> None:
+        # An unresolvable declared base makes bootstrap_draft_pr return None. The plan
+        # was never persisted to a PR, so it must be recorded as failed (not created) —
+        # else the caller finalizes the issue and force-removes the planning worktree,
+        # discarding the plan (#376 review).
+        plan_file = self._make_plan(tmp_path, base_section="\n## Base Branch\ndevelop\n")
+        provider = MagicMock()
+        provider.create_task.return_value = Task(id="9", title="feat: thing")
+
+        with (
+            patch("wade.services.plan_service.bootstrap_draft_pr", return_value=None),
+            patch("wade.services.plan_service.add_complexity_label"),
+            patch("wade.services.plan_service.console"),
+        ):
+            created, failed = _create_issues_from_plans(
+                provider=provider,
+                config=_cfg_main(),
+                plan_files=[plan_file],
+                repo_root=tmp_path,
+            )
+
+        assert created == []
+        assert failed == [plan_file.path.name]
+
 
 class TestBranchWorkInFlight:
     def test_active_worktree_is_in_flight(self, tmp_path: Path) -> None:
@@ -1278,6 +1302,20 @@ class TestReconcileInflightWorktreeBase:
             ok = _reconcile_inflight_worktree_base(_cfg_main(), self._issue(), tmp_path, "develop")
         assert ok is True
         assert not (tmp_path / ".wade").exists()
+
+    def test_worktree_discovery_failure_fails_closed(self, tmp_path: Path) -> None:
+        # list_worktrees raising *after* the PR is retargeted means we cannot confirm an
+        # in-flight worktree's pin matches the new base — fail CLOSED (False) so the
+        # caller preserves-and-aborts rather than reporting success on a possibly-stale
+        # pin that would merge a resumed session into the old base (#376 review).
+        with (
+            patch("wade.git.branch.make_branch_name", return_value="feat/42-thing"),
+            patch("wade.git.worktree.list_worktrees", side_effect=OSError("git failed")),
+            patch("wade.services.plan_service.console") as mock_console,
+        ):
+            ok = _reconcile_inflight_worktree_base(_cfg_main(), self._issue(), tmp_path, "develop")
+        assert ok is False
+        mock_console.error.assert_called_once()
 
     def test_write_failure_returns_false(self, tmp_path: Path) -> None:
         # A read-only worktree (write raises OSError) must not be swallowed: the PR
