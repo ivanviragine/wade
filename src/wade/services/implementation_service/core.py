@@ -599,13 +599,16 @@ def start(
                 # No explicit override — inherit the base the plan recorded on the PR.
                 if current_pr_base:
                     resolved_base = current_pr_base
-            elif current_pr_base and current_pr_base != resolved_base:
-                # Explicit override differs from the PR's base — retarget so the
-                # worktree, PR, and merge target stay consistent. A failed retarget
-                # must abort rather than leave a stale PR base (#376).
+            elif current_pr_base != resolved_base:
+                # Explicit override differs from the PR's base (or the PR base could
+                # not be read) — retarget so the worktree, PR, and merge target stay
+                # consistent. Retargeting even on an unknown current base avoids
+                # writing a `.wade/base_branch` pin that diverges from the actual PR
+                # base. A failed retarget must abort rather than leave a stale base
+                # (#376).
                 console.step(
                     f"Retargeting PR #{existing_pr.number} base "
-                    f"{current_pr_base} -> {resolved_base}..."
+                    f"{current_pr_base or '(unknown)'} -> {resolved_base}..."
                 )
                 # Editing the PR base alone leaves the head branch rooted on the old
                 # base, so that base's commits would merge into the new one. A

@@ -23,6 +23,7 @@ logger = structlog.get_logger()
 __all__ = [
     "PLAN_MARKER_END",
     "PLAN_MARKER_START",
+    "_branch_has_real_work",
     "_build_implementation_issue_context_header",
     "bootstrap_draft_pr",
     "build_implementation_prompt",
