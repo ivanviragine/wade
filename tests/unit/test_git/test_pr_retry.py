@@ -17,6 +17,7 @@ from wade.git.pr import (
     PRRef,
     _diagnose_stale_pr_head,
     _get_branch_tip_oid,
+    _get_pr_head_ref,
     _is_stale_pr_head_error,
     _is_transient_gh_error,
     create_pr,
@@ -224,6 +225,41 @@ class TestStalePrHeadDetection:
     )
     def test_non_stale_does_not_match(self, stderr: str) -> None:
         assert _is_stale_pr_head_error(stderr) is False
+
+
+class TestGetPrHeadRef:
+    @patch("wade.git.pr._run_gh")
+    def test_returns_oid_and_name(self, mock_gh: MagicMock) -> None:
+        mock_gh.return_value = _json_proc(
+            {"headRefOid": "2698105aaaaaaaa", "headRefName": "feat/376-x"}
+        )
+        assert _get_pr_head_ref(Path("/repo"), 377) == ("2698105aaaaaaaa", "feat/376-x")
+
+    @patch("wade.git.pr._run_gh")
+    def test_non_zero_exit_returns_none(self, mock_gh: MagicMock) -> None:
+        mock_gh.return_value = _proc(1, stderr="HTTP 404: Not Found")
+        assert _get_pr_head_ref(Path("/repo"), 7) is None
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"headRefName": "feat/x"},  # missing headRefOid
+            {"headRefOid": "abc123"},  # missing headRefName
+            {"headRefOid": "", "headRefName": "feat/x"},  # empty oid
+            {"headRefOid": "abc123", "headRefName": ""},  # empty name
+        ],
+    )
+    @patch("wade.git.pr._run_gh")
+    def test_incomplete_json_returns_none(
+        self, mock_gh: MagicMock, payload: dict[str, object]
+    ) -> None:
+        mock_gh.return_value = _json_proc(payload)
+        assert _get_pr_head_ref(Path("/repo"), 7) is None
+
+    @patch("wade.git.pr._run_gh")
+    def test_malformed_json_returns_none(self, mock_gh: MagicMock) -> None:
+        mock_gh.return_value = _proc(0, stdout="not json")
+        assert _get_pr_head_ref(Path("/repo"), 7) is None
 
 
 class TestDiagnoseStalePrHead:
