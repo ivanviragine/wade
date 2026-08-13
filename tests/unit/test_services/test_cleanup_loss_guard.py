@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from wade.git.repo import GitError
+from wade.models.worktree import Worktree
 from wade.services.implementation_service.cleanup import (
     _cleanup_worktree,
     _worktree_loss_risk,
@@ -207,7 +208,7 @@ class TestCleanupWorktreeGuard:
         stack.enter_context(
             patch(
                 f"{_CLEANUP}.git_worktree.list_worktrees",
-                return_value=[{"path": "/repo/wt", "branch": "feat/42-x"}],
+                return_value=[Worktree(path="/repo/wt", branch="feat/42-x")],
             )
         )
         stack.enter_context(patch(f"{_CLEANUP}._worktree_loss_risk", return_value=losses))

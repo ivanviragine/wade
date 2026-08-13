@@ -26,6 +26,7 @@ from wade.models.config import (
 )
 from wade.models.session import MergeStatus
 from wade.models.task import Task
+from wade.models.worktree import Worktree
 from wade.services.implementation_service import (
     _BATCH_STATUS_DONE,
     _BATCH_STATUS_IN_PROGRESS,
@@ -767,7 +768,7 @@ class TestImplementationStart:
             patch("wade.git.repo.get_repo_root", return_value=tmp_path),
             patch(
                 "wade.git.worktree.list_worktrees",
-                return_value=[{"path": str(existing_wt), "branch": branch_name}],
+                return_value=[Worktree(path=str(existing_wt), branch=branch_name)],
             ),
             patch("wade.git.worktree.create_worktree") as mock_create,
             patch("wade.services.implementation_service.core.write_plan_md"),

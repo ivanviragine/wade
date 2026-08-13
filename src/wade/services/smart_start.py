@@ -12,7 +12,6 @@ import webbrowser
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
-from typing import Any
 
 import structlog
 from crossby.ai_tools import AbstractAITool
@@ -26,6 +25,7 @@ from wade.git import repo as git_repo
 from wade.git.repo import GitError
 from wade.models.permission import PermissionMode
 from wade.models.session import MergeStatus, SessionRecord
+from wade.models.worktree import Worktree
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.services.implementation_service import _merge_pr, check_tracking_issue_and_batch
@@ -209,7 +209,7 @@ def smart_start(
     # Extract draft state and worktree presence
     is_draft = lookup.pr.is_draft
     worktrees = git_worktree.list_worktrees(repo_root)
-    has_worktree = any(wt.get("branch") == branch_name for wt in worktrees)
+    has_worktree = any(wt.branch == branch_name for wt in worktrees)
 
     # Build dynamic menu based on PR state and worktree
     menu_options: list[tuple[str, Callable[[], bool]]] = []
@@ -237,7 +237,7 @@ def smart_start(
             )
         )
         review_worktree_path = next(
-            (Path(wt["path"]) for wt in worktrees if wt.get("branch") == branch_name),
+            (Path(wt.path) for wt in worktrees if wt.branch == branch_name),
             None,
         )
         menu_options.append(
@@ -355,11 +355,11 @@ def _run_merge_pr(
     pr_number: int,
     task_id: str,
     provider: AbstractTaskProvider,
-    worktrees: list[Any],
+    worktrees: list[Worktree],
 ) -> bool:
     """Execute the merge PR action from the menu."""
     worktree_path = next(
-        (Path(wt["path"]) for wt in worktrees if wt.get("branch") == branch_name),
+        (Path(wt.path) for wt in worktrees if wt.branch == branch_name),
         None,
     )
     if worktree_path is None:

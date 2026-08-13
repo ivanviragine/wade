@@ -34,8 +34,8 @@ def find_worktree_path(
     worktrees = git_worktree.list_worktrees(repo_root)
 
     for wt in worktrees:
-        wt_branch = wt.get("branch", "")
-        wt_path = wt.get("path", "")
+        wt_branch = wt.branch or ""
+        wt_path = wt.path
 
         # Match by issue number in branch name
         if f"/{target}-" in wt_branch or wt_branch.endswith(f"/{target}"):

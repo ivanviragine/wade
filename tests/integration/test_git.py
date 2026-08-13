@@ -317,7 +317,7 @@ class TestListWorktrees:
         worktrees = list_worktrees(tmp_git_repo)
         assert len(worktrees) >= 1
         # The main checkout should be listed
-        paths = [wt["path"] for wt in worktrees]
+        paths = [wt.path for wt in worktrees]
         assert str(tmp_git_repo.resolve()) in [str(Path(p).resolve()) for p in paths]
 
     def test_lists_created_worktrees(self, tmp_git_repo: Path, tmp_path: Path) -> None:
@@ -328,7 +328,7 @@ class TestListWorktrees:
         create_worktree(tmp_git_repo, "branch-b", wt2, base_branch=main)
 
         worktrees = list_worktrees(tmp_git_repo)
-        branches = [wt.get("branch", "") for wt in worktrees]
+        branches = [wt.branch or "" for wt in worktrees]
         assert "branch-a" in branches
         assert "branch-b" in branches
 
@@ -345,16 +345,16 @@ class TestRemoveWorktree:
 
         # Should no longer appear in worktree list
         worktrees = list_worktrees(tmp_git_repo)
-        branches = [wt.get("branch", "") for wt in worktrees]
+        branches = [wt.branch or "" for wt in worktrees]
         assert "temp-branch" not in branches
 
 
 class TestPruneWorktrees:
     def test_prune_does_not_error_on_clean_repo(self, tmp_git_repo: Path) -> None:
         # Pruning a clean repo should preserve the existing worktree set.
-        before = sorted(list_worktrees(tmp_git_repo), key=lambda wt: wt["path"])
+        before = sorted(list_worktrees(tmp_git_repo), key=lambda wt: wt.path)
         prune_worktrees(tmp_git_repo)
-        after = sorted(list_worktrees(tmp_git_repo), key=lambda wt: wt["path"])
+        after = sorted(list_worktrees(tmp_git_repo), key=lambda wt: wt.path)
         assert after == before
         assert len(after) >= 1
 

@@ -73,8 +73,8 @@ def list_sessions(
 
     # The first worktree is the main checkout — skip unless --all
     for i, wt in enumerate(worktrees):
-        wt_branch = wt.get("branch", "")
-        wt_path = wt.get("path", "")
+        wt_branch = wt.branch or ""
+        wt_path = wt.path
 
         # Skip main checkout unless --all
         if i == 0 and not show_all:
@@ -241,8 +241,8 @@ def _remove_stale(
         if i == 0:
             continue  # Skip main
 
-        wt_branch = wt.get("branch", "")
-        wt_path = wt.get("path", "")
+        wt_branch = wt.branch or ""
+        wt_path = wt.path
         issue_number = extract_issue_from_branch(wt_branch)
 
         # Look up the issue exactly as list_sessions() does so classify_staleness
@@ -291,22 +291,24 @@ def _remove_stale(
         return True
 
     console.rule(f"Stale worktrees ({len(stale_wts)})")
-    for wt in stale_wts:
-        console.step(f"[{wt['staleness'].upper()}] {wt['branch']}")
-        console.detail(f"Path: {wt['path']}")
+    for stale in stale_wts:
+        console.step(f"[{stale['staleness'].upper()}] {stale['branch']}")
+        console.detail(f"Path: {stale['path']}")
 
     if not force:
         console.info("Use --force to remove these worktrees.")
         return True
 
     removed = 0
-    for wt in stale_wts:
+    for stale in stale_wts:
         # A2: even with --force (skip confirmation), _cleanup_worktree still
         # refuses a worktree carrying uncommitted changes or unmerged local
         # commits unless --discard-dirty was passed. STALE_REMOTE_GONE says
         # nothing about local commits, so a remote-gone branch with unpushed
         # work is preserved here, not silently nuked.
-        if _cleanup_worktree(repo_root, Path(wt["path"]), main_branch, discard_dirty=discard_dirty):
+        if _cleanup_worktree(
+            repo_root, Path(stale["path"]), main_branch, discard_dirty=discard_dirty
+        ):
             removed += 1
 
     console.panel(f"  Removed {removed} stale worktree(s)", title="Stale cleanup")
@@ -436,8 +438,8 @@ def _cleanup_worktree(
     worktrees = git_worktree.list_worktrees(main_root)
     branch_name: str | None = None
     for wt in worktrees:
-        if wt.get("path") == str(wt_path):
-            branch_name = wt.get("branch")
+        if wt.path == str(wt_path):
+            branch_name = wt.branch
             break
 
     # A2 loss guard — never silently discard a dirty worktree or force-delete a

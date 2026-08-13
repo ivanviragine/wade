@@ -9,6 +9,7 @@ from wade.git.pr import PRLookup, PRRef
 from wade.git.repo import GitError
 from wade.models.review import PollOutcome
 from wade.models.task import Task, TaskState
+from wade.models.worktree import Worktree
 from wade.services.smart_start import SmartStartContext, _run_review_pr_comments, smart_start
 
 
@@ -271,7 +272,7 @@ class TestSmartStartDraftPR:
     @patch("wade.ui.prompts.is_tty", return_value=True)
     @patch(
         "wade.git.worktree.list_worktrees",
-        return_value=[{"branch": "feat/42-fix", "path": "/tmp/wt"}],
+        return_value=[Worktree(branch="feat/42-fix", path="/tmp/wt")],
     )
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
     @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")

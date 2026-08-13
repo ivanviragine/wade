@@ -856,7 +856,7 @@ def _branch_work_in_flight(repo_root: Path, branch_name: str, base: str) -> bool
 
     try:
         for wt in git_worktree.list_worktrees(repo_root):
-            if wt.get("branch") == branch_name:
+            if wt.branch == branch_name:
                 return True
     except Exception:
         logger.debug("plan.in_flight_worktree_check_failed", exc_info=True)
@@ -984,9 +984,9 @@ def _reconcile_inflight_worktree_base(
     try:
         wt_path = next(
             (
-                Path(wt["path"])
+                Path(wt.path)
                 for wt in git_worktree.list_worktrees(repo_root)
-                if wt.get("branch") == branch_name
+                if wt.branch == branch_name
             ),
             None,
         )

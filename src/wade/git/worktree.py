@@ -7,6 +7,7 @@ from pathlib import Path
 import structlog
 
 from wade.git.repo import _run_git, _run_git_with_retry
+from wade.models import Worktree
 
 log = structlog.get_logger(__name__)
 
@@ -142,39 +143,42 @@ def remove_worktree(repo_root: Path, worktree_path: Path, force: bool = True) ->
     _run_git_with_retry(*args, cwd=repo_root)
 
 
-def list_worktrees(repo_root: Path) -> list[dict[str, str]]:
+def list_worktrees(repo_root: Path) -> list[Worktree]:
     """List all worktrees for a repository.
 
     Args:
         repo_root: Root of the main repository checkout.
 
     Returns:
-        List of dicts, each with keys: "path", "head", "branch".
-        The branch value is the short ref name (e.g., "main") or
-        "(detached)" for detached HEAD worktrees.
+        List of :class:`~wade.models.Worktree` entries with typed ``path``,
+        ``head``, and ``branch`` attributes. The branch value is the short ref
+        name (e.g., "main") or "(detached)" for detached HEAD worktrees.
     """
     result = _run_git("worktree", "list", "--porcelain", cwd=repo_root)
-    worktrees: list[dict[str, str]] = []
-    current: dict[str, str] = {}
+    worktrees: list[Worktree] = []
+    current: Worktree | None = None
 
     for line in result.stdout.splitlines():
         if line.startswith("worktree "):
-            if current:
+            if current is not None:
                 worktrees.append(current)
-            current = {"path": line[len("worktree ") :]}
+            current = Worktree(path=line[len("worktree ") :])
+        elif current is None:
+            # Porcelain output always opens an entry with a "worktree " line;
+            # ignore anything before the first one.
+            continue
         elif line.startswith("HEAD "):
-            current["head"] = line[len("HEAD ") :]
+            current.head = line[len("HEAD ") :]
         elif line.startswith("branch "):
             # Refs come as "refs/heads/branch-name"
-            ref = line[len("branch ") :]
-            current["branch"] = ref.removeprefix("refs/heads/")
+            current.branch = line[len("branch ") :].removeprefix("refs/heads/")
         elif line.strip() == "detached":
-            current["branch"] = "(detached)"
-        elif line.strip() == "" and current:
+            current.branch = "(detached)"
+        elif line.strip() == "":
             worktrees.append(current)
-            current = {}
+            current = None
 
-    if current:
+    if current is not None:
         worktrees.append(current)
 
     return worktrees

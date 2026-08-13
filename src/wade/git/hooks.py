@@ -328,7 +328,7 @@ def _maybe_disable_worktree_config_extension(worktree_path: Path) -> None:
         # A worktree-scoped read needs the extension still enabled — it is, since
         # we only unset it below. Any lingering hooksPath override (wade's or the
         # user's) means a sibling still depends on worktree config.
-        if git_repo.get_config_value(Path(wt["path"]), "core.hooksPath", worktree=True):
+        if git_repo.get_config_value(Path(wt.path), "core.hooksPath", worktree=True):
             return
     git_repo.unset_config_value(worktree_path, "extensions.worktreeConfig")
     logger.debug("skills.worktree_config_extension_disabled", path=str(worktree_path))

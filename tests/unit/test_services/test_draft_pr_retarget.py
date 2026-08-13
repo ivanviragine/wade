@@ -18,6 +18,7 @@ from unittest.mock import MagicMock, patch
 
 from wade.git.pr import PRLookup, PRRef
 from wade.git.repo import GitError
+from wade.models.worktree import Worktree
 from wade.services.implementation_service.draft_pr import (
     _branch_has_real_work,
     _find_checked_out_worktree,
@@ -96,7 +97,7 @@ class TestRerootScaffoldBranch:
     @patch(f"{_D}.git_branch.resolve_start_point", side_effect=_resolver())
     @patch(
         "wade.git.worktree.list_worktrees",
-        return_value=[{"path": "/wt", "branch": "feat/42-x"}],
+        return_value=[Worktree(path="/wt", branch="feat/42-x")],
     )
     def test_checked_out_scaffold_branch_rerooted_in_place(
         self,
@@ -131,7 +132,7 @@ class TestRerootScaffoldBranch:
     @patch(f"{_D}.git_branch.resolve_start_point", side_effect=_resolver())
     @patch(
         "wade.git.worktree.list_worktrees",
-        return_value=[{"path": "/wt", "branch": "feat/42-x"}],
+        return_value=[Worktree(path="/wt", branch="feat/42-x")],
     )
     def test_checked_out_dirty_worktree_aborts(
         self,
@@ -328,7 +329,7 @@ class TestBranchWorkSignals:
 
     @patch(
         "wade.git.worktree.list_worktrees",
-        return_value=[{"path": "/wt", "branch": "feat/42-x"}],
+        return_value=[Worktree(path="/wt", branch="feat/42-x")],
     )
     def test_checked_out(self, _wt: MagicMock) -> None:
         assert _find_checked_out_worktree(Path("/repo"), "feat/42-x") == (True, Path("/wt"))
