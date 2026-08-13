@@ -171,8 +171,8 @@ def _find_checked_out_worktree(repo_root: Path, branch_name: str) -> tuple[bool,
 
     try:
         for wt in git_worktree.list_worktrees(repo_root):
-            if wt.get("branch") == branch_name:
-                return True, Path(wt["path"])
+            if wt.branch == branch_name:
+                return True, Path(wt.path)
         return False, None
     except Exception:
         logger.debug("draft_pr.worktree_check_failed", exc_info=True)

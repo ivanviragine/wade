@@ -695,9 +695,9 @@ def start(
         # Reuse the worktree if the branch already exists (idempotent re-run)
         existing_wt = next(
             (
-                Path(wt["path"])
+                Path(wt.path)
                 for wt in git_worktree.list_worktrees(repo_root)
-                if wt.get("branch") == branch_name
+                if wt.branch == branch_name
             ),
             None,
         )

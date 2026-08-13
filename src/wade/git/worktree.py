@@ -7,6 +7,7 @@ from pathlib import Path
 import structlog
 
 from wade.git.repo import _run_git, _run_git_with_retry
+from wade.models import Worktree
 
 log = structlog.get_logger(__name__)
 
@@ -142,25 +143,25 @@ def remove_worktree(repo_root: Path, worktree_path: Path, force: bool = True) ->
     _run_git_with_retry(*args, cwd=repo_root)
 
 
-def list_worktrees(repo_root: Path) -> list[dict[str, str]]:
+def list_worktrees(repo_root: Path) -> list[Worktree]:
     """List all worktrees for a repository.
 
     Args:
         repo_root: Root of the main repository checkout.
 
     Returns:
-        List of dicts, each with keys: "path", "head", "branch".
-        The branch value is the short ref name (e.g., "main") or
-        "(detached)" for detached HEAD worktrees.
+        List of :class:`~wade.models.Worktree` entries with typed ``path``,
+        ``head``, and ``branch`` attributes. The branch value is the short ref
+        name (e.g., "main") or "(detached)" for detached HEAD worktrees.
     """
     result = _run_git("worktree", "list", "--porcelain", cwd=repo_root)
-    worktrees: list[dict[str, str]] = []
+    worktrees: list[Worktree] = []
     current: dict[str, str] = {}
 
     for line in result.stdout.splitlines():
         if line.startswith("worktree "):
             if current:
-                worktrees.append(current)
+                worktrees.append(Worktree(**current))
             current = {"path": line[len("worktree ") :]}
         elif line.startswith("HEAD "):
             current["head"] = line[len("HEAD ") :]
@@ -171,11 +172,11 @@ def list_worktrees(repo_root: Path) -> list[dict[str, str]]:
         elif line.strip() == "detached":
             current["branch"] = "(detached)"
         elif line.strip() == "" and current:
-            worktrees.append(current)
+            worktrees.append(Worktree(**current))
             current = {}
 
     if current:
-        worktrees.append(current)
+        worktrees.append(Worktree(**current))
 
     return worktrees
 

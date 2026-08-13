@@ -20,7 +20,7 @@ class TestCreateDetachedWorktree:
 
         # Verify it shows as detached in worktree list
         worktrees = list_worktrees(tmp_git_repo)
-        detached = [wt for wt in worktrees if wt.get("branch") == "(detached)"]
+        detached = [wt for wt in worktrees if wt.branch == "(detached)"]
         assert len(detached) >= 1
 
     def test_detached_worktree_at_head(self, tmp_git_repo: Path, tmp_path: Path) -> None:
@@ -63,7 +63,7 @@ class TestCreateDetachedWorktree:
         remove_worktree(tmp_git_repo, wt_path)
 
         worktrees = list_worktrees(tmp_git_repo)
-        wt_paths = [wt["path"] for wt in worktrees]
+        wt_paths = [wt.path for wt in worktrees]
         assert str(wt_path) not in wt_paths
 
     def test_multiple_detached_worktrees(self, tmp_git_repo: Path, tmp_path: Path) -> None:
@@ -77,7 +77,7 @@ class TestCreateDetachedWorktree:
         assert wt2.is_dir()
 
         worktrees = list_worktrees(tmp_git_repo)
-        detached = [wt for wt in worktrees if wt.get("branch") == "(detached)"]
+        detached = [wt for wt in worktrees if wt.branch == "(detached)"]
         assert len(detached) >= 2
 
     def test_detached_worktree_creates_nested_parent_dirs(

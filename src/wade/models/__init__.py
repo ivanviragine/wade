@@ -32,6 +32,7 @@ from wade.models.session import (
     WorktreeState,
 )
 from wade.models.task import Complexity, Label, LabelType, PlanFile, Task, TaskState
+from wade.models.worktree import Worktree
 
 __all__ = [
     "AICommandConfig",
@@ -67,5 +68,6 @@ __all__ = [
     "TaskState",
     "TokenUsage",
     "WorkflowEvent",
+    "Worktree",
     "WorktreeState",
 ]

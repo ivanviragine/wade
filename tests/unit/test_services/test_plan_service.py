@@ -13,6 +13,7 @@ from crossby.models.ai import TokenUsage
 from wade.git.pr import PRLookup, PRRef
 from wade.models.config import AIConfig, ProjectConfig, ProjectSettings
 from wade.models.task import CloseReason, Complexity, PlanFile, Task
+from wade.models.worktree import Worktree
 from wade.services.ai_resolution import resolve_ai_tool, resolve_model
 from wade.services.plan_service import (
     PlanDiagnostic,
@@ -1180,7 +1181,7 @@ class TestBranchWorkInFlight:
     def test_active_worktree_is_in_flight(self, tmp_path: Path) -> None:
         with patch(
             "wade.git.worktree.list_worktrees",
-            return_value=[{"path": "/wt", "branch": "feat/1-x"}],
+            return_value=[Worktree(path="/wt", branch="feat/1-x")],
         ):
             assert _branch_work_in_flight(tmp_path, "feat/1-x", "main") is True
 
@@ -1320,8 +1321,8 @@ class TestReconcileInflightWorktreeBase:
     def _issue(self) -> Task:
         return Task(id="42", title="feat: thing")
 
-    def _wt_entry(self, wt: Path) -> list[dict[str, str]]:
-        return [{"path": str(wt), "branch": "feat/42-thing"}]
+    def _wt_entry(self, wt: Path) -> list[Worktree]:
+        return [Worktree(path=str(wt), branch="feat/42-thing")]
 
     def test_writes_pin_for_inflight_worktree(self, tmp_path: Path) -> None:
         wt = tmp_path / "wt"

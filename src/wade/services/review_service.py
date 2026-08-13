@@ -569,9 +569,9 @@ def start(
 
     existing_wt = next(
         (
-            Path(wt["path"])
+            Path(wt.path)
             for wt in git_worktree.list_worktrees(repo_root)
-            if wt.get("branch") == branch_name
+            if wt.branch == branch_name
         ),
         None,
     )

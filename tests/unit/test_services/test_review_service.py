@@ -13,6 +13,7 @@ from wade.git.pr import PRLookup, PRRef
 from wade.git.repo import GitError
 from wade.models.review import ReviewComment, ReviewThread
 from wade.models.task import Task, TaskState
+from wade.models.worktree import Worktree
 from wade.services.implementation_service import (
     REVIEW_USAGE_MARKER_END,
     REVIEW_USAGE_MARKER_START,
@@ -416,7 +417,7 @@ class TestReviewServiceStart:
             ),
             "list_worktrees": patch(
                 "wade.services.review_service.git_worktree.list_worktrees",
-                return_value=[{"path": str(worktree_path), "branch": "feat/42-fix-the-widget"}],
+                return_value=[Worktree(path=str(worktree_path), branch="feat/42-fix-the-widget")],
             ),
             "get_pr_for_branch": patch(
                 "wade.services.review_service.git_pr.get_pr_for_branch",
@@ -2270,7 +2271,7 @@ class TestReviewSessionAutonomyE2E:
             ),
             patch(
                 "wade.services.review_service.git_worktree.list_worktrees",
-                return_value=[{"path": str(worktree_path), "branch": "feat/42-fix-the-widget"}],
+                return_value=[Worktree(path=str(worktree_path), branch="feat/42-fix-the-widget")],
             ),
             patch(
                 "wade.services.review_service.git_pr.get_pr_for_branch",
