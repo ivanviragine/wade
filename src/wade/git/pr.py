@@ -140,6 +140,21 @@ def _is_transient_gh_error(stderr: str) -> bool:
     return any(sig in lowered for sig in _TRANSIENT_GH_SIGNALS)
 
 
+# GitHub rejects a merge with this message when `gh pr merge` sends an
+# `expectedHeadOid` (the PR record's head SHA) that no longer matches the
+# branch ref's real tip. Kept OUT of _TRANSIENT_GH_SIGNALS on purpose: that
+# tuple is shared by every _run_gh(retries=N) caller (update_pr_body,
+# mark_pr_ready, update_pr_base, update_pr_title), so adding it there would
+# broaden retry behavior well beyond merges. This signal needs its own bounded
+# fast-retry + diagnosis path local to merge_pr (see _diagnose_stale_pr_head).
+_STALE_PR_HEAD_SIGNAL = "head branch is out of date"
+
+
+def _is_stale_pr_head_error(stderr: str) -> bool:
+    """Return True when *stderr* is GitHub's stale-PR-head merge rejection."""
+    return _STALE_PR_HEAD_SIGNAL in stderr.lower()
+
+
 def _run_gh(
     *args: str,
     cwd: Path,
@@ -207,6 +222,96 @@ def _get_pr_state(repo_root: Path, pr_number: int) -> str | None:
         return state or None
     except (json.JSONDecodeError, KeyError):
         return None
+
+
+def _get_pr_head_ref(repo_root: Path, pr_number: int) -> tuple[str, str] | None:
+    """Return a PR's ``(headRefOid, headRefName)`` from GitHub's PR record.
+
+    ``headRefOid`` is the head SHA ``gh pr merge`` sends as its optimistic-
+    concurrency ``expectedHeadOid`` guard; ``headRefName`` is the branch to
+    cross-check against. Returns None on non-zero exit or incomplete/unparseable
+    output.
+    """
+    result = _run_gh(
+        "pr",
+        "view",
+        str(pr_number),
+        "--json",
+        "headRefOid,headRefName",
+        cwd=repo_root,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    try:
+        data = json.loads(result.stdout)
+        oid = data.get("headRefOid", "")
+        name = data.get("headRefName", "")
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return None
+    if not oid or not name:
+        return None
+    return oid, name
+
+
+def _get_branch_tip_oid(repo_root: Path, branch: str) -> str | None:
+    """Return the true tip SHA of *branch* as GitHub's git ref sees it.
+
+    Uses the SINGULAR ``git/ref/heads/<branch>`` path — an exact match that
+    returns a single ref object with ``.object.sha``. The plural
+    ``git/refs/...`` form is a prefix match returning an array; it must not be
+    used here. ``gh api`` substitutes ``{owner}``/``{repo}`` from the repo at
+    ``cwd=repo_root``; branch names with slashes are fine in the path. Returns
+    None on non-zero exit or unparseable output.
+    """
+    result = _run_gh(
+        "api",
+        f"repos/{{owner}}/{{repo}}/git/ref/heads/{branch}",
+        cwd=repo_root,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    try:
+        data = json.loads(result.stdout)
+        sha: str = data["object"]["sha"]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return None
+    return sha or None
+
+
+def _diagnose_stale_pr_head(repo_root: Path, pr_number: int) -> str | None:
+    """Return an actionable message when a PR's head record is stale, else None.
+
+    GitHub's "Head branch is out of date" merge rejection is ambiguous: it fires
+    both when the branch is genuinely behind its base (GitHub's rebase advice is
+    correct) AND when GitHub's async PR-synchronize job hasn't advanced the PR's
+    ``head.sha`` to the branch's real tip (the branch is already fine; rebase
+    advice is misleading). Comparing the PR head OID against the branch ref tip
+    distinguishes the two:
+
+    - Either fetch fails → None (never fabricate a diagnosis).
+    - OIDs equal → None (genuine branch-behind-base; the caller keeps GitHub's
+      raw message, whose rebase advice fits).
+    - OIDs differ → the stale-sync case; return a message naming both SHAs and
+      the ``gh pr close``/``reopen`` resync that clears it.
+    """
+    head = _get_pr_head_ref(repo_root, pr_number)
+    if head is None:
+        return None
+    head_oid, branch = head
+    tip_oid = _get_branch_tip_oid(repo_root, branch)
+    if tip_oid is None:
+        return None
+    if head_oid == tip_oid:
+        return None
+    return (
+        f"PR #{pr_number} merge blocked: GitHub's PR record is stale "
+        f"(head {head_oid[:9]} ≠ branch tip {tip_oid[:9]}). The branch is "
+        f"fully pushed and fine — GitHub's async PR sync hasn't caught up. "
+        f"Force a resync with:  gh pr close {pr_number} && gh pr reopen "
+        f"{pr_number}  then retry the merge."
+    )
 
 
 def create_pr(
@@ -367,7 +472,10 @@ def merge_pr(
     # re-check the PR state: if it is already MERGED the earlier attempt actually
     # succeeded (its response was just lost to a transient error), so we return
     # success instead of re-attempting the irreversible merge (knowledge
-    # b6ca74e5). Only transient failures are retried.
+    # b6ca74e5). Transient failures and GitHub's stale-PR-head rejection
+    # ("head branch is out of date") are retried; the latter, if it persists,
+    # then gets an actionable diagnosis (see _diagnose_stale_pr_head) in place of
+    # GitHub's misleading raw message.
     max_retries = 3
     attempt = 0
     while True:
@@ -377,16 +485,31 @@ def merge_pr(
         if _get_pr_state(repo_root, pr_number) == "MERGED":
             log.info("pr.merge.already_merged", pr_number=pr_number)
             return
-        if attempt < max_retries and _is_transient_gh_error(result.stderr):
+        stale = _is_stale_pr_head_error(result.stderr)
+        if attempt < max_retries and (_is_transient_gh_error(result.stderr) or stale):
+            # Bounded fast-retry absorbs a genuine sub-second push→merge race,
+            # where GitHub's PR head OID has simply not caught up yet.
             attempt += 1
             log.warning(
                 "pr.merge.retrying",
                 pr_number=pr_number,
                 attempt=attempt,
+                stale_head=stale,
                 stderr=result.stderr.strip()[:200],
             )
             time.sleep(attempt)
             continue
+        if stale:
+            diagnosis = _diagnose_stale_pr_head(repo_root, pr_number)
+            if diagnosis:
+                log.error("pr.merge.stale_head", pr_number=pr_number)
+                raise GhCliError(diagnosis)
+            # Intentional TOCTOU fallback: if GitHub's async PR sync completes
+            # DURING the bounded retries above, _diagnose_stale_pr_head now sees
+            # matching OIDs (or genuine branch-behind-base) and returns None, so
+            # we fall through to GitHub's raw "try the merge again" message —
+            # correct in that instant. Do NOT convert this into an unbounded
+            # retry loop.
         raise GhCliError(
             f"gh pr merge {pr_number} failed (exit {result.returncode}): {result.stderr.strip()}"
         )

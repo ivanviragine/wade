@@ -626,3 +626,9 @@ Base-retarget ordering hazard (#376, bootstrap_draft_pr): reroot_scaffold_branch
 Base-retarget guard drift (#376, plan_service.py): _branch_work_in_flight (plan re-attach guard, gates _base_retarget_is_safe) and _branch_has_real_work (draft_pr reroot guard) are the SAME 'is this branch safe to rewrite' signal and MUST agree — they drifted once (fixing one's count-only check while leaving the other exposed a silent-retarget bug: a single real commit passed _branch_work_in_flight's >1 check → no confirmation → PR retargeted while the branch stayed on the old base, polluting the diff). Fix: _branch_work_in_flight now delegates its real-work half to _branch_has_real_work (so the empty-scaffold-vs-real-commit tip check lives in one place); it keeps its OWN extra worktree-present=in-flight check on top, because the plan path also guards the worktree's .wade/base_branch merge-target pin, which the reroot does not. Do not re-add a second commits_ahead copy here.
 
 ---
+
+## 4c1aee5a1817 | 2026-08-13 | implementation | tags: git, gh | Issue #414
+
+gh api repos/{owner}/{repo}/git/ref/heads/<branch> (SINGULAR 'ref') returns ONE ref object with .object.sha — the branch tip GitHub sees. The plural git/refs/heads/<branch> form is a PREFIX match returning an ARRAY, so .object.sha is absent and a naive parser silently gets None. git/pr.py _get_branch_tip_oid uses the singular form to compare the branch tip against a PR's headRefOid and distinguish a genuinely-behind branch from GitHub's stale async PR-sync (the recoverable 'Head branch is out of date' merge rejection, #414).
+
+---
