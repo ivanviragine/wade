@@ -48,9 +48,13 @@ from wade.services.implementation_service.bootstrap import (
     write_plan_md,
 )
 from wade.services.implementation_service.draft_pr import (
+    _branch_has_real_work,
+    _resolve_head_sha,
+    _restore_scaffold_head,
     bootstrap_draft_pr,
     build_implementation_prompt,
     extract_plan_from_pr_body,
+    reroot_scaffold_branch_for_retarget,
 )
 from wade.services.implementation_service.lifecycle import _post_implementation_lifecycle
 from wade.services.implementation_service.sync import catchup
@@ -67,6 +71,7 @@ from wade.ui import prompts
 from wade.ui.console import console
 from wade.utils import stale_base
 from wade.utils.body_markers import enforce_body_budget, update_body_preserving_markers
+from wade.utils.gitref import is_valid_git_ref
 from wade.utils.terminal import (
     compose_implement_title,
     launch_in_new_terminal,
@@ -429,6 +434,20 @@ def start(
         console.error_with_fix("Not inside a git repository", "Navigate to your project directory")
         return ImplementResult(success=False)
 
+    # Validate an explicit base for well-formedness, symmetric with the
+    # plan-declared path (validated at plan-done via is_valid_git_ref). A
+    # chain-derived base is a generated branch name and always passes; a hand-typed
+    # `--base` with spaces or invalid ref characters fails fast here with a clear
+    # message instead of a later, murkier "does not exist" from ref resolution.
+    # Check ``is not None`` (not truthiness) so an explicit empty ``--base ""`` is
+    # rejected rather than silently inheriting the PR/main base (#376 review).
+    if base_branch is not None and not is_valid_git_ref(base_branch):
+        console.error_with_fix(
+            f"Invalid --base value {base_branch!r}",
+            "Use a single well-formed git branch name (no spaces or special characters)",
+        )
+        return ImplementResult(success=False)
+
     # When cd_only, redirect all status output to stderr so stdout stays
     # clean for the machine-readable worktree path.
     _original_out = console.out
@@ -568,11 +587,89 @@ def start(
                 ),
             )
 
-        # Resolve main branch and compute worktree path (only needed for worktree creation)
+        # Resolve main branch and the effective base. Precedence (#376):
+        #   explicit --base (or chain-derived base_branch)
+        #   > existing draft PR base (recorded at plan time)
+        #   > config.project.main_branch (or detect_main_branch)
         main_branch = config.project.main_branch or git_repo.detect_main_branch(repo_root)
-
-        # For stacked branches (chain execution), use the provided base instead of main
-        effective_base = base_branch or main_branch
+        resolved_base = base_branch
+        if existing_pr is not None:
+            # Use the base from the PR lookup already performed above. A failed
+            # lookup was aborted earlier (lookup_failed), so this base is reliable
+            # — unlike a fresh get_pr_base_branch() call, whose None conflates
+            # "no base" with "gh failed" and would silently fall back to main.
+            current_pr_base = existing_pr.base_ref_name or None
+            if resolved_base is None:
+                # No explicit override — inherit the base the plan recorded on the PR.
+                if current_pr_base:
+                    resolved_base = current_pr_base
+            elif current_pr_base != resolved_base:
+                # Explicit override differs from the PR's base — retarget so the worktree,
+                # PR, and merge target stay consistent; a failed retarget must abort rather
+                # than leave a stale base (#376). When the PR base can't be read
+                # (current_pr_base is None), the reroot below refuses — it cannot prove the
+                # branch is a rerootable scaffold — and this aborts, safer than resetting a
+                # branch of unknown provenance.
+                console.step(
+                    f"Retargeting PR #{existing_pr.number} base "
+                    f"{current_pr_base or '(unknown)'} -> {resolved_base}..."
+                )
+                # Editing the PR base alone leaves the head branch rooted on the old
+                # base, so that base's commits would merge into the new one. A
+                # scaffold-only branch is re-rooted below; but a branch with in-flight
+                # work cannot be rewritten without discarding it, so guard that case
+                # (confirm/abort) rather than silently polluting the PR — mirrors the
+                # plan flow's _base_retarget_is_safe (#376 review).
+                #
+                # `_branch_has_real_work(None)` returns False (skip the confirmation) when
+                # the base is unknown; that stays safe only because reroot's `if not
+                # old_base` is the *authoritative* guard for an unknown base and aborts
+                # below. Keep the two in step if either changes (#376 review).
+                if _branch_has_real_work(repo_root, branch_name, current_pr_base):
+                    console.error(
+                        f"PR #{existing_pr.number}'s branch already has in-flight work, so "
+                        f"retargeting its base to '{resolved_base}' cannot rewrite history — "
+                        f"'{current_pr_base}'s commits would then merge into '{resolved_base}'."
+                    )
+                    if not (
+                        prompts.is_tty()
+                        and not yolo
+                        and prompts.confirm(
+                            f"Retarget PR #{existing_pr.number} base to '{resolved_base}' anyway?",
+                            default=False,
+                        )
+                    ):
+                        console.info(
+                            f"Left PR #{existing_pr.number} targeting '{current_pr_base}'. "
+                            "Merge or finish the in-flight work first, then retarget."
+                        )
+                        return ImplementResult(success=False)
+                # Re-root a scaffold-only branch on the new base first (#376 review).
+                # The reroot force-pushes the rewritten head *before* the base edit, so
+                # capture the pre-reroot head: a failed edit would otherwise leave the
+                # remote branch (new base) and the PR (old base) divergent. Roll the head
+                # back to keep them consistent — mirroring bootstrap_draft_pr (#376 review).
+                head_ref = git_branch.resolve_start_point(repo_root, branch_name)
+                pre_reroot_sha = _resolve_head_sha(repo_root, head_ref) if head_ref else None
+                if not reroot_scaffold_branch_for_retarget(
+                    repo_root, branch_name, current_pr_base, resolved_base, task.id
+                ):
+                    return ImplementResult(success=False)
+                if not git_pr.update_pr_base(repo_root, existing_pr.number, resolved_base):
+                    console.error(
+                        f"Failed to retarget PR #{existing_pr.number} to {resolved_base}."
+                    )
+                    # Only roll back when the reroot actually rewrote the head (SHA
+                    # changed). A real-work branch is left untouched by the reroot, so a
+                    # restore would be a needless hard reset that could discard uncommitted
+                    # work (#376 review).
+                    post_reroot_sha = _resolve_head_sha(repo_root, branch_name)
+                    if pre_reroot_sha and post_reroot_sha and pre_reroot_sha != post_reroot_sha:
+                        _restore_scaffold_head(
+                            repo_root, branch_name, pre_reroot_sha, existing_pr.number
+                        )
+                    return ImplementResult(success=False)
+        effective_base = resolved_base or main_branch
 
         worktrees_dir = _resolve_worktrees_dir(config, repo_root)
         repo_name = repo_root.name
@@ -663,12 +760,23 @@ def start(
             session_phase=SessionPhase.IMPLEMENT,
         )
 
-        # Store stacked base branch metadata so sync can use it instead of main
-        if base_branch:
-            wade_dir = worktree_path / ".wade"
+        # Persist the resolved base so catchup/sync/done merge into the correct
+        # branch — written whenever the effective base differs from main, not only
+        # when --base was passed (e.g. a base inherited from the draft PR). This is
+        # the core fix for the wrong-merge-target gap (#376).
+        wade_dir = worktree_path / ".wade"
+        base_file = wade_dir / "base_branch"
+        if effective_base != main_branch:
             wade_dir.mkdir(exist_ok=True)
-            (wade_dir / "base_branch").write_text(base_branch + "\n")
-            console.detail(f"Stacked on {base_branch}")
+            base_file.write_text(effective_base + "\n")
+            console.detail(f"Base branch: {effective_base}")
+        elif base_file.exists():
+            # The effective base resolved back to main (e.g. `--base main` retargeted
+            # a reused worktree's PR that was previously pinned to a non-main base).
+            # Leaving the old pin in place would make catchup/sync/done keep merging
+            # into the stale base and defeat the override — delete it (#376).
+            base_file.unlink()
+            console.detail(f"Base branch reset to {main_branch}")
 
         # Catchup: sync worktree with base branch before AI launch (non-blocking).
         # Whatever the outcome, compute commits-behind and surface a stale base LOUDLY

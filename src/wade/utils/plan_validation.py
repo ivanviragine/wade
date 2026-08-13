@@ -32,6 +32,7 @@ from wade.utils.conventional import (
 from wade.utils.conventional import (
     conventional_title_error,
 )
+from wade.utils.gitref import is_valid_git_ref
 
 # ---------------------------------------------------------------------------
 # Plan file discovery
@@ -92,9 +93,15 @@ def validate_plan_dir(plan_dir: Path) -> PlanValidationResult:
     - No plan files found
     - Missing ``# Title`` heading
     - Missing or invalid ``## Complexity`` section
+    - Empty ``## Base Branch`` section (present heading with no value)
+    - Malformed ``## Base Branch`` value (present but not a well-formed git ref)
 
     Warnings (exit 0):
     - Missing recommended sections (``## Tasks``, ``## Acceptance Criteria``)
+
+    A ``## Base Branch`` section is optional; when absent the work targets the
+    configured main branch. When present, its value must be a single well-formed
+    git branch name (existence is checked later, when the draft PR is created).
     """
     result = PlanValidationResult()
     md_files = discover_plan_files(plan_dir)
@@ -136,6 +143,35 @@ def validate_plan_dir(plan_dir: Path) -> PlanValidationResult:
                     file=md_file.name,
                     level=PlanDiagnosticLevel.ERROR,
                     message=conventional_title_error(plan.title),
+                )
+            )
+
+        # ``plan.base_branch is None`` conflates an omitted section (valid — defaults
+        # to main) with a present-but-empty one (malformed). The parsed section map
+        # tells them apart: a ``## Base Branch`` heading always registers a
+        # ``"base branch"`` key, so a present key with no parsed value is the empty
+        # case, which the documented rule forbids (#376 review).
+        if "base branch" in plan.sections and plan.base_branch is None:
+            result.diagnostics.append(
+                PlanDiagnostic(
+                    file=md_file.name,
+                    level=PlanDiagnosticLevel.ERROR,
+                    message=(
+                        "Empty '## Base Branch' section. A present section must name a "
+                        "single git branch; remove the section to default to main."
+                    ),
+                )
+            )
+        elif plan.base_branch is not None and not is_valid_git_ref(plan.base_branch):
+            result.diagnostics.append(
+                PlanDiagnostic(
+                    file=md_file.name,
+                    level=PlanDiagnosticLevel.ERROR,
+                    message=(
+                        f"Invalid '## Base Branch' value {plan.base_branch!r}. "
+                        "Must be a single well-formed git branch name "
+                        "(no whitespace or special characters)."
+                    ),
                 )
             )
 

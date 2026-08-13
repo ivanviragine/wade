@@ -17,6 +17,7 @@ from wade.models.task import (
     infer_label_type,
     is_tracking_issue,
     parse_all_issue_refs,
+    parse_base_branch_from_body,
     parse_complexity_from_body,
     parse_complexity_from_labels,
     parse_tracking_child_ids,
@@ -136,6 +137,49 @@ class TestParseComplexityFromBody:
 
     def test_case_insensitive_heading(self) -> None:
         assert parse_complexity_from_body("## COMPLEXITY\neasy\n") == Complexity.EASY
+
+
+class TestParseBaseBranchFromBody:
+    def test_simple_value(self) -> None:
+        assert parse_base_branch_from_body("## Base Branch\ndevelop\n") == "develop"
+
+    def test_slashed_branch_name(self) -> None:
+        assert parse_base_branch_from_body("## Base Branch\nrelease/1.2\n") == "release/1.2"
+
+    def test_case_insensitive_heading(self) -> None:
+        assert parse_base_branch_from_body("## BASE BRANCH\ndevelop\n") == "develop"
+
+    def test_missing_section(self) -> None:
+        assert parse_base_branch_from_body("## Complexity\nmedium\n") is None
+
+    def test_empty_body(self) -> None:
+        assert parse_base_branch_from_body("") is None
+
+    def test_blank_value_returns_none(self) -> None:
+        assert parse_base_branch_from_body("## Base Branch\n\n## Tasks\n- do\n") is None
+
+    def test_strips_backticks_and_quotes(self) -> None:
+        assert parse_base_branch_from_body("## Base Branch\n`develop`\n") == "develop"
+        assert parse_base_branch_from_body('## Base Branch\n"develop"\n') == "develop"
+
+    def test_first_non_empty_line_wins_ignoring_extra_text(self) -> None:
+        body = "## Base Branch\n\ndevelop\n\nSome extra explanation.\n"
+        assert parse_base_branch_from_body(body) == "develop"
+
+    def test_stops_at_next_section(self) -> None:
+        assert parse_base_branch_from_body("## Base Branch\n## Tasks\n- do\n") is None
+
+    def test_malformed_value_preserved_for_validation(self) -> None:
+        # Internal whitespace is NOT split away — kept verbatim so the plan-done
+        # validator can flag it rather than silently truncating to "use".
+        assert parse_base_branch_from_body("## Base Branch\nuse develop\n") == "use develop"
+
+    def test_unrelated_heading_prefix_not_misparsed(self) -> None:
+        # A different heading that merely starts with "Base Branch" must NOT be read
+        # as a declaration — the heading is matched exactly, mirroring the sections
+        # parser so validate_plan_dir's section-key check stays consistent (#376).
+        body = "## Base Branch Notes\nsome prose about branching\n"
+        assert parse_base_branch_from_body(body) is None
 
 
 class TestParseComplexityFromLabels:
@@ -280,3 +324,20 @@ class TestPlanFile:
 
         result = PlanFile.from_markdown(plan)
         assert result.complexity is None
+
+    def test_from_markdown_parses_base_branch(self, tmp_path: Path) -> None:
+        plan = tmp_path / "PLAN.md"
+        plan.write_text(
+            "# feat: thing\n\n## Complexity\nmedium\n\n## Base Branch\ndevelop\n\n"
+            "## Tasks\n- [ ] Do it\n"
+        )
+
+        result = PlanFile.from_markdown(plan)
+        assert result.base_branch == "develop"
+
+    def test_from_markdown_base_branch_defaults_none(self, tmp_path: Path) -> None:
+        plan = tmp_path / "PLAN.md"
+        plan.write_text("# feat: thing\n\n## Complexity\nmedium\n")
+
+        result = PlanFile.from_markdown(plan)
+        assert result.base_branch is None

@@ -563,13 +563,22 @@ def plan(
                 plan_files = selected
                 console.info(f"Found {len(plan_files)} plan file(s)")
                 if len(plan_files) == 1:
-                    _attach_plan_to_existing_issue(
+                    if not _attach_plan_to_existing_issue(
                         provider=provider,
                         config=config,
                         issue=existing_issue,
                         plan_file=plan_files[0],
                         repo_root=repo_root,
-                    )
+                        yolo=resolved_yolo,
+                    ):
+                        # Attach did not fully succeed — the retarget guard refused an
+                        # in-flight base change, draft-PR bootstrap failed, or the
+                        # worktree merge-target pin could not be reconciled. Preserve
+                        # the freshly generated plan and abort — finalizing here would
+                        # discard it when the worktree is force-removed below (#376).
+                        _preserve_generated_plans(plan_dir, repo_root, planning_worktree)
+                        stop_title_keeper()
+                        return False
                     finalize_issue_numbers = [existing_issue.id]
                 else:
                     finalize_issue_numbers = _supersede_issue_with_plans(
@@ -626,7 +635,7 @@ def plan(
         if selected:
             plan_files = selected
             console.info(f"Found {len(plan_files)} plan file(s)")
-            created_numbers, _failed_files = _create_issues_from_plans(
+            created_numbers, failed_files = _create_issues_from_plans(
                 provider=provider,
                 config=config,
                 plan_files=plan_files,
@@ -646,10 +655,31 @@ def plan(
                     effort=resolved_effort,
                     yolo=resolved_yolo,
                 )
-                _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
+                if failed_files:
+                    # Some plans never became draft PRs (e.g. an unresolvable declared
+                    # base). Their content lives only in the planning worktree, so
+                    # preserve it instead of removing the worktree and discarding the
+                    # un-persisted plans (#376 review).
+                    console.warn(
+                        f"{len(failed_files)} plan(s) could not be persisted to a draft "
+                        f"PR; preserving planning output. Failed: {', '.join(failed_files)}"
+                    )
+                    _preserve_generated_plans(plan_dir, repo_root, planning_worktree)
+                else:
+                    _cleanup_plan_dir_or_worktree(plan_dir, repo_root, planning_worktree)
                 if offer_result is not None:
                     return offer_result
                 return True
+            if failed_files:
+                # Nothing was persisted, but plans were generated — preserve them so a
+                # re-run recovers the output rather than losing it with the worktree.
+                console.warn(
+                    f"No plan was persisted to a draft PR — {len(failed_files)} plan(s) "
+                    f"failed; preserving planning output. Failed: {', '.join(failed_files)}"
+                )
+                _preserve_generated_plans(plan_dir, repo_root, planning_worktree)
+                stop_title_keeper()
+                return False
             console.warn("No issues were created from plan files.")
         else:
             # Strict gate rejected the batch (all invalid, or the user aborted a
@@ -761,6 +791,7 @@ def _create_issues_from_plans(
                 plan_body=plan.body,
                 config=config,
                 repo_root=repo_root,
+                base_branch=plan.base_branch,
             )
             if pr_info:
                 pr_number = pr_info.get("number", "?")
@@ -774,11 +805,239 @@ def _create_issues_from_plans(
                 except Exception as e:
                     logger.warning("plan.pr_link_update_failed", error=str(e))
             else:
-                console.warn(f"Could not create draft PR for #{task.id}")
+                # The draft PR never got created (e.g. a plan-declared base that can't
+                # be resolved). The full plan lives only in the planning worktree — if
+                # we counted this as created, the caller would finalize the issue and
+                # force-remove the worktree, discarding the plan. Record it as failed so
+                # the caller preserves the planning output instead (#376 review).
+                #
+                # The lightweight issue already exists on GitHub, though. Leaving it open
+                # would orphan an issue with no full plan, and re-running the no-issue
+                # planning flow would create a *second* issue for the same plan. Close it
+                # (best-effort) so retries don't accumulate duplicates (#376 review).
+                console.warn(
+                    f"Could not create draft PR for #{task.id} — the plan was not "
+                    "persisted; preserving planning output."
+                )
+                try:
+                    provider.close_task(task.id, reason=CloseReason.NOT_PLANNED)
+                    console.detail(
+                        f"Closed #{task.id} (no plan persisted) to avoid an orphaned issue"
+                    )
+                except Exception as e:
+                    logger.warning("plan.orphan_issue_close_failed", issue=task.id, error=str(e))
+                failed.append(plan.path.name)
+                continue
 
         created.append(task.id)
 
     return created, failed
+
+
+def _branch_work_in_flight(repo_root: Path, branch_name: str, base: str) -> bool:
+    """Return True when a branch's implementation appears to have started.
+
+    "In flight" means either an active worktree is checked out on the branch, or the
+    branch carries real work past its bare scaffold commit. Both signal that a worktree's
+    ``.wade/base_branch`` may already be pinned to the current base, so silently
+    retargeting the PR would diverge the two and merge into the wrong branch.
+
+    The real-work half delegates to :func:`_branch_has_real_work` — the **same** signal the
+    reroot uses to decide whether a retarget can be applied loss-free — so the two never
+    drift: being exactly one commit ahead is real work only when that commit is not WADE's
+    empty scaffold (an amended scaffold, a squash to one commit, or a PR opened outside
+    WADE), and an indeterminate count fails closed as in-flight (#376 review). A
+    checked-out worktree counts as in-flight here even though it is **not** real work for
+    the reroot: the plan path additionally guards the worktree's merge-target pin, which
+    the reroot does not touch.
+    """
+    from wade.git import worktree as git_worktree
+    from wade.services.implementation_service.draft_pr import _branch_has_real_work
+
+    try:
+        for wt in git_worktree.list_worktrees(repo_root):
+            if wt.get("branch") == branch_name:
+                return True
+    except Exception:
+        logger.debug("plan.in_flight_worktree_check_failed", exc_info=True)
+
+    return _branch_has_real_work(repo_root, branch_name, base)
+
+
+def _base_retarget_is_safe(
+    config: ProjectConfig,
+    issue: Task,
+    plan_file: PlanFile,
+    repo_root: Path,
+    *,
+    yolo: bool,
+) -> bool:
+    """Guard re-planning from silently changing an in-flight PR's base.
+
+    Returns True when it is safe to proceed with (re)bootstrapping the draft PR —
+    i.e. there is no open PR yet, the base is unchanged, or the change was
+    explicitly confirmed. Returns False to abort (an in-flight base change was
+    refused), leaving the PR and its base intact.
+
+    Base *removal* (the section deleted on re-plan) is a documented no-op:
+    ``bootstrap_draft_pr`` never retargets when no base is passed, so an existing
+    PR keeps its current base. We surface this rather than silently reverting an
+    in-flight PR to main — the exact wrong-merge-target risk this feature avoids.
+    """
+    from wade.git import branch as git_branch
+    from wade.git import pr as git_pr
+    from wade.git import repo as git_repo
+
+    branch_name = git_branch.make_branch_name(
+        config.project.branch_prefix, int(issue.id), issue.title
+    )
+    lookup = git_pr.get_pr_for_branch(repo_root, branch_name)
+    if lookup.lookup_failed:
+        # A transient gh error is NOT "no PR" (git/pr.py contract). We cannot tell
+        # whether a retarget would be safe, so abort rather than risk one — the
+        # user can re-run the attach once gh recovers.
+        console.error(
+            f"Could not look up the PR for {branch_name} — transient gh error; "
+            "re-run once it recovers."
+        )
+        return False
+    if not (lookup.is_open and lookup.pr is not None):
+        return True  # No open PR to retarget — fresh create path is always safe.
+
+    main_branch = config.project.main_branch or git_repo.detect_main_branch(repo_root)
+    # Base from the successful lookup — no separate get_pr_base_branch() call whose
+    # None would conflate "no base" with "gh failed".
+    current_base = lookup.pr.base_ref_name or main_branch
+    desired_effective = plan_file.base_branch or main_branch
+    if desired_effective == current_base:
+        return True  # No base change requested.
+
+    in_flight = _branch_work_in_flight(repo_root, branch_name, current_base)
+
+    if plan_file.base_branch is None:
+        # Base section removed on re-plan. bootstrap_draft_pr won't retarget, so
+        # the PR keeps its current (non-main) base. Inform, then proceed.
+        console.warn(
+            f"Plan removed the '## Base Branch' section, but PR #{lookup.pr.number} "
+            f"keeps its current base '{current_base}' (wade does not auto-revert an "
+            "existing PR's base). Retarget it explicitly with "
+            f"`wade implement {issue.id} --base {main_branch}` if intended."
+        )
+        return True
+
+    if not in_flight:
+        return True  # Only a scaffold so far — retargeting is safe.
+
+    console.error(
+        f"Re-planning would change PR #{lookup.pr.number}'s base from "
+        f"'{current_base}' to '{desired_effective}', but implementation is already "
+        "in flight (a worktree exists or commits were made). Retargeting now would "
+        "diverge the worktree's merge target from the PR."
+    )
+    if (
+        prompts.is_tty()
+        and not yolo
+        and prompts.confirm(
+            f"Retarget PR #{lookup.pr.number} base to '{desired_effective}' anyway?",
+            default=False,
+        )
+    ):
+        return True
+    console.info(
+        f"Left PR #{lookup.pr.number} targeting '{current_base}'. "
+        f"To retarget deliberately, run `wade implement {issue.id} "
+        f"--base {desired_effective}`."
+    )
+    return False
+
+
+def _reconcile_inflight_worktree_base(
+    config: ProjectConfig, issue: Task, repo_root: Path, declared_base: str | None
+) -> bool:
+    """Bring an in-flight worktree's ``.wade/base_branch`` in line with a just-applied
+    PR retarget, so a resumed session's ``sync``/``done`` merge into the new base — not
+    the pre-retarget one (#376 review).
+
+    Only acts when a worktree is actually checked out on the branch; otherwise there is
+    no pin to diverge (``start()`` writes a fresh one later). Mirrors ``start()``'s
+    write-or-clear rule: pin a non-main base, clear the file when the base is ``main``.
+    A base *removal* (``declared_base is None``) is a documented no-op — ``bootstrap_draft_pr``
+    does not retarget, so the existing pin stays correct and is left untouched.
+
+    Returns ``True`` when the pin was reconciled or no reconciliation was needed (no
+    worktree, or a base removal). Returns ``False`` when the pin write/clear *failed*
+    (e.g. a read-only worktree): the PR was already retargeted, so a stale pin would
+    silently merge a resumed session into the old base — the caller must surface this
+    and must not report success (#376 review).
+    """
+    from wade.git import branch as git_branch
+    from wade.git import repo as git_repo
+    from wade.git import worktree as git_worktree
+    from wade.git.repo import GitError
+
+    if declared_base is None:
+        return True
+
+    branch_name = git_branch.make_branch_name(
+        config.project.branch_prefix, int(issue.id), issue.title
+    )
+    try:
+        wt_path = next(
+            (
+                Path(wt["path"])
+                for wt in git_worktree.list_worktrees(repo_root)
+                if wt.get("branch") == branch_name
+            ),
+            None,
+        )
+    except Exception:
+        # The PR is already retargeted; if a worktree exists we cannot confirm its
+        # merge-target pin matches the new base, so a resumed sync/done could target
+        # the old one. Fail CLOSED — surface it and let the caller preserve-and-abort
+        # rather than report success on a possibly-divergent pin (#376 review).
+        logger.warning("plan.inflight_worktree_lookup_failed", exc_info=True)
+        console.error(
+            f"Retargeted the PR to '{declared_base}', but could not read the repo's "
+            f"worktrees to update the in-flight merge-target pin. If a worktree exists "
+            f"for #{issue.id}, set its .wade/base_branch to '{declared_base}' (or delete "
+            "it if the base is the main branch) before resuming implementation."
+        )
+        return False
+    if wt_path is None:
+        return True  # No worktree checked out — nothing to reconcile.
+
+    main_branch = config.project.main_branch
+    if not main_branch:
+        try:
+            main_branch = git_repo.detect_main_branch(repo_root)
+        except (GitError, OSError):
+            # detect_main_branch shells out to git; a spawn failure raises OSError, not
+            # only GitError. Preserve the None fallback so pin reconciliation continues
+            # through the caller's preserve-and-abort path (#376 review).
+            main_branch = None
+
+    base_file = wt_path / ".wade" / "base_branch"
+    try:
+        if declared_base != main_branch:
+            base_file.parent.mkdir(exist_ok=True)
+            base_file.write_text(declared_base + "\n")
+        elif base_file.exists():
+            # Retargeted back to main — clear the stale non-main pin.
+            base_file.unlink()
+    except OSError:
+        # The PR base is already changed; a stale pin here would merge a resumed
+        # session into the OLD base. Surface it loudly and fail so the caller aborts
+        # rather than reporting success on a divergent merge target (#376 review).
+        logger.warning("plan.inflight_worktree_base_write_failed", exc_info=True)
+        console.error(
+            f"Retargeted PR to '{declared_base}', but could not update the worktree's "
+            f"merge-target pin at {base_file}. A resumed session would still merge into "
+            f"its old base. Restore write access to the worktree, then set that file to "
+            f"'{declared_base}' (or delete it if the base is '{main_branch}') before "
+            "resuming implementation."
+        )
+        return False
+    return True
 
 
 def _attach_plan_to_existing_issue(
@@ -787,12 +1046,27 @@ def _attach_plan_to_existing_issue(
     issue: Task,
     plan_file: PlanFile,
     repo_root: Path | None,
-) -> None:
+    *,
+    yolo: bool = False,
+) -> bool:
     """Attach a single plan file to an existing issue via a draft PR.
 
     Reuses the same label / PR / body-update logic as _create_issues_from_plans
     but skips issue creation since the issue already exists.  The original issue
     body is preserved — the PR link is appended rather than replacing it.
+
+    When the plan declares a base branch that differs from an already-in-flight
+    PR's base, the retarget is guarded (:func:`_base_retarget_is_safe`) so it is
+    never applied silently.
+
+    Returns ``False`` when attaching did not fully succeed and the caller must
+    preserve the freshly generated plan and abort finalization — instead of
+    finalizing the issue and force-removing the planning worktree, which would
+    discard the replacement plan (#376). That covers three cases: the retarget
+    guard refused an in-flight base change, ``bootstrap_draft_pr`` failed to
+    create/retarget the draft PR, or the in-flight worktree's merge-target pin
+    could not be reconciled after a retarget. Returns ``True`` on success and on
+    the "not in a git repo" path (no draft PR is expected there).
     """
     # Add complexity label
     if plan_file.complexity:
@@ -803,17 +1077,30 @@ def _attach_plan_to_existing_issue(
 
     # Bootstrap draft PR with full plan content
     if repo_root is not None:
+        if not _base_retarget_is_safe(config, issue, plan_file, repo_root, yolo=yolo):
+            return False
         pr_info = bootstrap_draft_pr(
             issue_number=issue.id,
             issue_title=issue.title,
             plan_body=plan_file.body,
             config=config,
             repo_root=repo_root,
+            base_branch=plan_file.base_branch,
         )
         if pr_info:
             pr_number = pr_info.get("number", "?")
             pr_url = pr_info.get("url", "")
             console.success(f"Draft PR #{pr_number}: {pr_url}")
+
+            # A confirmed in-flight retarget changed the PR's base above; keep the
+            # existing worktree's merge-target pin in step so sync/done don't keep
+            # targeting the old base (#376 review). No-op when no worktree exists.
+            # A failed write is not swallowed — abort so the caller preserves the
+            # plan instead of finalizing on a divergent merge target.
+            if not _reconcile_inflight_worktree_base(
+                config, issue, repo_root, plan_file.base_branch
+            ):
+                return False
 
             # Preserve the original issue body and append the PR link
             original_body = (issue.body or "").rstrip("\n")
@@ -823,9 +1110,15 @@ def _attach_plan_to_existing_issue(
             except Exception as e:
                 logger.warning("plan.pr_link_update_failed", error=str(e))
         else:
+            # Draft-PR bootstrap failed (missing declared base, a failed retarget,
+            # or a transient gh error). The plan lives only in the worktree/plan
+            # dir; finalizing now would discard it when the worktree is force-
+            # removed. Signal preserve-and-abort instead of reporting success (#376).
             console.warn(f"Could not create draft PR for #{issue.id}")
+            return False
     else:
         console.warn("Not in a git repo — skipping draft PR creation.")
+    return True
 
 
 _SUPERSEDE_BANNER_RE = re.compile(r"\A\s*>\s*\*\*Superseded by[^\n]*\*\*\n*")

@@ -350,6 +350,24 @@ def is_clean(path: Path) -> bool:
     return result.stdout.strip() == ""
 
 
+def has_tracked_changes(path: Path) -> bool:
+    """Return True when the worktree has uncommitted changes to *tracked* files.
+
+    Ignores untracked files (``--untracked-files=no``): a freshly bootstrapped scaffold
+    worktree is full of untracked output (``.wade/``, ``PLAN.md``, installed skills) that
+    must not count as "dirty". Used to decide whether a checked-out scaffold branch can be
+    safely hard-reset for a base retarget without discarding real edits (#376 review).
+
+    Args:
+        path: Any directory inside the repo/worktree.
+
+    Returns:
+        True if any tracked file is staged or modified.
+    """
+    result = _run_git("status", "--porcelain", "--untracked-files=no", cwd=path)
+    return result.stdout.strip() != ""
+
+
 def get_remote_url(path: Path) -> str | None:
     """Return the URL of the 'origin' remote, or None if not configured.
 

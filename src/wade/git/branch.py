@@ -49,6 +49,46 @@ def branch_exists(repo_root: Path, branch_name: str) -> bool:
     return result.returncode == 0
 
 
+def remote_ref_exists(repo_root: Path, branch_name: str, remote: str = "origin") -> bool:
+    """Check whether a remote-tracking ref (``<remote>/<branch>``) exists locally.
+
+    Args:
+        repo_root: Repository root directory.
+        branch_name: Short branch name (without the remote prefix).
+        remote: Remote name (default ``origin``).
+
+    Returns:
+        True if ``refs/remotes/<remote>/<branch_name>`` resolves.
+    """
+    result = _run_git(
+        "rev-parse",
+        "--verify",
+        f"refs/remotes/{remote}/{branch_name}",
+        cwd=repo_root,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def resolve_start_point(repo_root: Path, base_branch: str) -> str | None:
+    """Resolve a base branch to a local commit-ish usable as a branch start point.
+
+    A base declared in a plan (e.g. ``develop``) may exist only as a remote
+    tracking ref. ``git branch <new> develop`` will not resolve a remote-only
+    ``develop`` (short names resolve local heads, not ``origin/develop``), so this
+    prefers the local branch and falls back to ``origin/<base>``.
+
+    Returns:
+        ``base_branch`` if a local branch exists, ``origin/<base_branch>`` if only
+        the remote ref exists, or ``None`` if neither is found.
+    """
+    if branch_exists(repo_root, base_branch):
+        return base_branch
+    if remote_ref_exists(repo_root, base_branch):
+        return f"origin/{base_branch}"
+    return None
+
+
 def create_branch(
     repo_root: Path,
     branch_name: str,
@@ -87,6 +127,52 @@ def delete_branch(
     log.info("branch.delete", branch=branch_name, force=force)
     # Retry transient ref-lock contention from parallel sessions (C3).
     _run_git_with_retry("branch", flag, branch_name, cwd=repo_root)
+
+
+def reset_branch(
+    repo_root: Path,
+    branch_name: str,
+    start_point: str,
+) -> None:
+    """Force-move an existing local branch ref to *start_point* (``git branch -f``).
+
+    Re-roots a branch without a checkout. The branch must not be checked out in any
+    worktree (git refuses ``-f`` on a checked-out branch). Used to rebuild a
+    scaffold-only branch on a new base before retargeting its PR, so the old base's
+    commits do not leak into the new base's diff (#376).
+
+    Args:
+        repo_root: Repository root directory.
+        branch_name: Existing local branch to move.
+        start_point: Commit, branch, or tag to move the branch onto.
+
+    Raises:
+        GitError: If the branch is checked out or the move fails.
+    """
+    log.info("branch.reset", branch=branch_name, start_point=start_point)
+    _run_git_with_retry("branch", "-f", branch_name, start_point, cwd=repo_root)
+
+
+def reset_worktree_hard(worktree_path: Path, start_point: str) -> None:
+    """Force-move the branch checked out in *worktree_path* to *start_point*.
+
+    ``git branch -f`` refuses to move a checked-out branch, so re-root such a branch by
+    running ``git reset --hard`` *inside its worktree* instead. This discards uncommitted
+    changes to **tracked** files in that worktree (untracked files are left in place), so
+    callers must confirm the worktree carries no tracked changes first (see
+    :func:`wade.git.repo.has_tracked_changes`). Used to re-root a scaffold-only branch
+    that is checked out — e.g. after ``wade implement --cd`` — before retargeting its PR,
+    so the old base's commits don't leak into the new base's diff (#376 review).
+
+    Args:
+        worktree_path: The worktree in which the target branch is checked out.
+        start_point: Commit, branch, or tag to move the branch (and worktree) onto.
+
+    Raises:
+        GitError: If the reset fails.
+    """
+    log.info("branch.reset_worktree_hard", worktree=str(worktree_path), start_point=start_point)
+    _run_git_with_retry("reset", "--hard", start_point, cwd=worktree_path)
 
 
 def create_scaffold_commit(
@@ -220,3 +306,34 @@ def commits_ahead(repo_root: Path, branch: str, base: str) -> int:
         cwd=repo_root,
     )
     return int(result.stdout.strip())
+
+
+def tip_commit_is_empty(repo_root: Path, ref: str) -> bool | None:
+    """Return whether *ref*'s tip commit introduces no changes vs its first parent.
+
+    WADE's scaffold commit is an *empty* commit — :func:`create_scaffold_commit` reuses
+    the parent's tree — so an empty tip (tree identical to its first parent's) is the
+    reliable signature of a scaffold-only branch. A real one-commit branch (an amended
+    scaffold, a squash down to a single commit, or a PR opened outside WADE) changes the
+    tree. Callers use this to tell a rerootable scaffold apart from real work a reroot
+    would discard when a branch is exactly one commit ahead of its base (#376 review).
+
+    Returns:
+        ``True``  — the tip changes nothing (tree == first parent's tree): a scaffold.
+        ``False`` — the tip introduces changes, or is a root commit (no parent) which is
+                    never WADE's scaffold.
+        ``None``  — emptiness could not be determined (ref unresolvable / git error), so
+                    callers fail closed rather than reroot an indeterminate branch.
+    """
+    tip = _run_git(
+        "rev-parse", "--verify", "--quiet", f"{ref}^{{tree}}", cwd=repo_root, check=False
+    )
+    if tip.returncode != 0:
+        return None
+    parent = _run_git(
+        "rev-parse", "--verify", "--quiet", f"{ref}~1^{{tree}}", cwd=repo_root, check=False
+    )
+    if parent.returncode != 0:
+        # No first parent → a root commit, which is never WADE's scaffold.
+        return False
+    return tip.stdout.strip() == parent.stdout.strip()

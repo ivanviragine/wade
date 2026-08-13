@@ -44,6 +44,7 @@ class PRRef(BaseModel):
     title: str = ""
     state: str = ""
     is_draft: bool = Field(default=False, alias="isDraft")
+    base_ref_name: str = Field(default="", alias="baseRefName")
 
 
 class PRLookup(BaseModel):
@@ -471,7 +472,7 @@ def get_pr_for_branch(repo_root: Path, branch: str) -> PRLookup:
         "view",
         branch,
         "--json",
-        "number,url,title,state,isDraft",
+        "number,url,title,state,isDraft,baseRefName",
         cwd=repo_root,
         check=False,
     )
@@ -489,6 +490,7 @@ def get_pr_for_branch(repo_root: Path, branch: str) -> PRLookup:
             title=data.get("title", ""),
             state=data.get("state", ""),
             isDraft=data.get("isDraft", False),
+            baseRefName=data.get("baseRefName", ""),
         )
     except (json.JSONDecodeError, KeyError, TypeError):
         return PRLookup(found=False, lookup_failed=True)

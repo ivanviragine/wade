@@ -180,13 +180,19 @@ def _sync_preflight(
         emit(SyncEventType.ERROR, reason="detached_head")
         return SyncResult(success=False, current_branch="", main_branch=main_branch_override or "")
 
-    # Stacked branch: prefer the stored parent branch over main.
+    # Stacked / non-main base: prefer the stored base branch over main. The stored
+    # value is authoritative — start() writes it from the PR's own base — so it is
+    # honored WITHOUT a local-ref existence check. In a single-branch / narrow-refspec
+    # clone a plan-declared base like `develop` may be cached neither locally nor as
+    # origin/<base>; gating on existence here would silently drop it and merge into
+    # main. _resolve_merge_ref fetches origin and _merge_base surfaces an unavailable
+    # base as an error, so an unresolvable stored base fails loudly instead (#376).
     main_branch = main_branch_override
     if not main_branch:
         base_branch_file = cwd / ".wade" / "base_branch"
         if base_branch_file.is_file():
             stored_base = base_branch_file.read_text().strip()
-            if stored_base and git_branch.branch_exists(repo_root, stored_base):
+            if stored_base:
                 main_branch = stored_base
 
     resolved_main = main_branch or config.project.main_branch

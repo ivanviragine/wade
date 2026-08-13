@@ -77,6 +77,89 @@ class TestImplementTaskCommand:
             == 1
         )
 
+    def test_implement_cd_with_base_creates_draft_pr_from_base(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """implement --base develop should cut the branch from and target the PR at develop."""
+        issue_number = 42
+        _seed_mock_issue(
+            mock_gh_cli["state_file"],
+            issue_number=issue_number,
+            title="Add base branch support",
+            body="## Tasks\n- do it\n",
+        )
+        origin_repo = _init_origin_remote(e2e_repo)
+        # A real, pushable base branch to cut work from.
+        _git(["branch", "develop", "main"], cwd=e2e_repo)
+        _git(["push", "origin", "develop"], cwd=e2e_repo)
+
+        branch_name = "feat/42-add-base-branch-support"
+        expected_worktree = (
+            e2e_repo.parent / ".worktrees" / e2e_repo.name / branch_name.replace("/", "-")
+        )
+
+        result = _run(["implement", str(issue_number), "--base", "develop", "--cd"], cwd=e2e_repo)
+        assert result.returncode == 0, result.stderr
+        assert Path(result.stdout.strip()) == expected_worktree
+        assert _remote_has_branch(origin_repo, branch_name)
+
+        # Draft PR targets develop.
+        _assert_gh_called_with(
+            mock_gh_cli["log_file"],
+            ["pr", "create", "--base", "develop", "--head", branch_name, "--draft"],
+        )
+        pr_num = _find_mock_pr_number_by_head(mock_gh_cli["state_file"], branch_name)
+        state = json.loads(mock_gh_cli["state_file"].read_text())
+        assert state["prs"][pr_num]["base"] == "develop"
+
+        # The resolved base is persisted so sync/done merge into develop, not main.
+        base_file = expected_worktree / ".wade" / "base_branch"
+        assert base_file.read_text(encoding="utf-8").strip() == "develop"
+
+    def test_implement_cd_base_override_retargets_existing_pr(
+        self,
+        e2e_repo: Path,
+        mock_gh_cli: MockGhCli,
+    ) -> None:
+        """A later --base override retargets the existing draft PR and re-pins the worktree base."""
+        issue_number = 42
+        _seed_mock_issue(
+            mock_gh_cli["state_file"],
+            issue_number=issue_number,
+            title="Add base branch support",
+            body="## Tasks\n- do it\n",
+        )
+        _init_origin_remote(e2e_repo)
+        _git(["branch", "develop", "main"], cwd=e2e_repo)
+        _git(["push", "origin", "develop"], cwd=e2e_repo)
+
+        branch_name = "feat/42-add-base-branch-support"
+        expected_worktree = (
+            e2e_repo.parent / ".worktrees" / e2e_repo.name / branch_name.replace("/", "-")
+        )
+
+        # First run bootstraps a draft PR targeting main.
+        first = _run(["implement", str(issue_number), "--cd"], cwd=e2e_repo)
+        assert first.returncode == 0, first.stderr
+        pr_num = _find_mock_pr_number_by_head(mock_gh_cli["state_file"], branch_name)
+        state = json.loads(mock_gh_cli["state_file"].read_text())
+        assert state["prs"][pr_num]["base"] == "main"
+
+        # Second run overrides the base → the PR is retargeted via `gh pr edit --base`.
+        second = _run(["implement", str(issue_number), "--base", "develop", "--cd"], cwd=e2e_repo)
+        assert second.returncode == 0, second.stderr
+
+        _assert_gh_called_with(
+            mock_gh_cli["log_file"],
+            ["pr", "edit", str(pr_num), "--base", "develop"],
+        )
+        state = json.loads(mock_gh_cli["state_file"].read_text())
+        assert state["prs"][pr_num]["base"] == "develop"
+        base_file = expected_worktree / ".wade" / "base_branch"
+        assert base_file.read_text(encoding="utf-8").strip() == "develop"
+
     def test_implement_task_fails_for_unknown_issue_without_pr_side_effects(
         self,
         e2e_repo: Path,

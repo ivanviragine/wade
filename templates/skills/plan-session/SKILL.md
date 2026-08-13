@@ -65,6 +65,15 @@ Every plan needs a `## Complexity` value — one of `easy`, `medium`, `complex`,
 @.claude/skills/plan-session/reference/plan-format.md for LOC guidance and the
 model-tier mapping.
 
+## Base branch
+
+By default work branches from and merges into the project's main branch. If the
+user says this work should target a different branch (e.g. `develop` or a
+`release/*` branch), record it in an optional `## Base Branch` section in the
+plan file (a single branch name). Omit the section otherwise. The draft PR wade
+creates after you exit is branched from and targeted at that base. See
+@.claude/skills/plan-session/reference/plan-format.md for the exact format.
+
 ## What NOT to do
 
 - Do not create GitHub Issues — wade does this after you exit

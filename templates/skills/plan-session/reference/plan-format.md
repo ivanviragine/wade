@@ -30,7 +30,37 @@ What to build / change.
 |---------|------|
 | **Title** | First `# Heading` — becomes the GitHub issue title. Must start with a conventional commit prefix (`feat`, `fix`, `refactor`, `docs`, `chore`, `test`, `perf`, `ci`, `build`) followed by `:` and a space. Example: `feat: add retry logic`. Required. |
 | **Complexity** | `## Complexity` with one of: `easy`, `medium`, `complex`, `very_complex`. Used by `wade implement` to auto-select the AI model. Also applied as a `complexity:X` label on the issue. |
+| **Base Branch** | *Optional.* `## Base Branch` with a single branch name. When present, the draft PR branches from and targets that base; the worktree is cut from it and the work merges back into it. **Omit** to use the project's configured main branch — but this default applies only when the draft PR is **first created**. When re-planning an issue whose draft PR already exists, omitting the section **preserves the PR's current base** (WADE never auto-reverts an existing PR to main); declare the main branch explicitly to retarget it back. The value must be a well-formed git branch name that already exists (locally or on the remote) when the draft PR is created — WADE creates that PR right after planning, before `wade implement` runs. |
 | **Body** | Everything after the title becomes the draft PR plan content. The issue itself gets a lightweight summary. |
+
+## Base branch (optional)
+
+Only add a `## Base Branch` section when the user explicitly wants the work to
+target a branch other than the project's main branch:
+
+```markdown
+## Base Branch
+develop
+```
+
+- Omit the section entirely for the common case — everything defaults to the
+  configured main branch and behavior is unchanged.
+- The value is a single branch name (no spaces or special characters). A
+  malformed value fails `wade plan-session done`.
+- A present `## Base Branch` heading **must** name a branch — an empty section
+  (heading with no value) is rejected by `wade plan-session done`, not treated
+  as "omitted". Remove the heading to default to main.
+- The "omit → main" default only applies when the draft PR is first created.
+  **Re-planning** an issue whose draft PR already exists and omitting the section
+  keeps that PR on its current base — WADE will not silently revert an in-flight
+  PR to main. To move it back, declare `## Base Branch` with the main branch name
+  explicitly (or run `wade implement <N> --base <main>`).
+- The branch must exist (locally or on the remote) when the draft PR is
+  created — which happens right after planning (`wade plan-session done`),
+  before `wade implement` runs — or draft-PR creation fails with an actionable
+  error.
+- To override or set a base at implement time instead, use
+  `wade implement <N> --base <branch>` — it retargets the draft PR too.
 
 ## Complexity values & model tier
 

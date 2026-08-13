@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -1016,6 +1017,249 @@ class TestImplementationStart:
         assert result.success is False
         mock_bootstrap.assert_not_called()
         mock_confirm.assert_not_called()
+
+
+class TestImplementationStartBaseBranch:
+    """start() base resolution (#376): inherit the draft PR's base, --base override."""
+
+    _PR_BODY = "Implements #42\n<!-- wade:plan:start -->\nplan\n<!-- wade:plan:end -->"
+    _CORE = "wade.services.implementation_service.core"
+
+    def _make_config(self) -> ProjectConfig:
+        return ProjectConfig(project=ProjectSettings(main_branch="main"))
+
+    def _open_pr(self, base: str = "main") -> PRLookup:
+        return PRLookup(
+            found=True,
+            pr=PRRef(number=7, url="http://x/7", state="OPEN", baseRefName=base),
+        )
+
+    def _worktree_path(self, tmp_path: Path) -> Path:
+        # Mirrors core.start(): <worktrees_dir>/<repo_name>/<branch with / -> ->.
+        return tmp_path / "wt" / tmp_path.name / "feat-42-test-task"
+
+    def _enter_common_patches(
+        self,
+        stack: contextlib.ExitStack,
+        tmp_path: Path,
+        provider: MagicMock,
+        *,
+        pr_base: str,
+    ) -> None:
+        """Enter every patch shared by these tests EXCEPT update_pr_base (asserted per-test)."""
+        self._worktree_path(tmp_path).mkdir(parents=True, exist_ok=True)
+        c = self._CORE
+        stack.enter_context(patch(f"{c}.load_config", return_value=self._make_config()))
+        stack.enter_context(patch(f"{c}.get_provider", return_value=provider))
+        stack.enter_context(patch("wade.git.repo.get_repo_root", return_value=tmp_path))
+        stack.enter_context(patch(f"{c}._resolve_worktrees_dir", return_value=tmp_path / "wt"))
+        stack.enter_context(
+            patch("wade.git.pr.get_pr_for_branch", return_value=self._open_pr(base=pr_base))
+        )
+        stack.enter_context(patch("wade.git.pr.get_pr_body", return_value=self._PR_BODY))
+        stack.enter_context(patch("wade.git.branch.branch_exists", return_value=True))
+        stack.enter_context(patch("wade.git.worktree.list_worktrees", return_value=[]))
+        stack.enter_context(patch("wade.git.worktree.checkout_existing_branch_worktree"))
+        # Default: a scaffold-only branch — no in-flight work, and its re-root on the
+        # new base is a no-op stub (the real re-root has its own tests). Per-test
+        # overrides model the in-flight case (#376 review).
+        stack.enter_context(patch(f"{c}._branch_has_real_work", return_value=False))
+        stack.enter_context(patch(f"{c}.reroot_scaffold_branch_for_retarget", return_value=True))
+        stack.enter_context(patch(f"{c}.write_plan_md"))
+        stack.enter_context(patch(f"{c}.bootstrap_worktree"))
+        stack.enter_context(patch(f"{c}._detect_ai_cli_env", return_value=None))
+        stack.enter_context(patch(f"{c}._catchup_and_surface_staleness", return_value=None))
+        stack.enter_context(
+            patch("crossby.ai_tools.base.AbstractAITool.detect_installed", return_value=[])
+        )
+        mock_prompts = stack.enter_context(patch(f"{c}.prompts"))
+        mock_prompts.is_tty.return_value = False
+
+    def test_inherits_base_from_existing_pr_and_persists(self, tmp_path: Path) -> None:
+        """No --base + open PR on develop → worktree base inherits develop and is persisted."""
+        provider = MagicMock()
+        provider.read_task.return_value = Task(id="42", title="Test task")
+
+        with contextlib.ExitStack() as stack:
+            self._enter_common_patches(stack, tmp_path, provider, pr_base="develop")
+            update_base = stack.enter_context(
+                patch("wade.git.pr.update_pr_base", return_value=True)
+            )
+            result = start("42", project_root=tmp_path)
+
+        assert result.success is True
+        base_file = self._worktree_path(tmp_path) / ".wade" / "base_branch"
+        assert base_file.read_text().strip() == "develop"
+        update_base.assert_not_called()  # inheriting is not a retarget
+
+    def test_explicit_base_override_retargets_pr(self, tmp_path: Path) -> None:
+        """--base X while the PR targets main → update_pr_base called, X persisted."""
+        provider = MagicMock()
+        provider.read_task.return_value = Task(id="42", title="Test task")
+
+        with contextlib.ExitStack() as stack:
+            self._enter_common_patches(stack, tmp_path, provider, pr_base="main")
+            update_base = stack.enter_context(
+                patch("wade.git.pr.update_pr_base", return_value=True)
+            )
+            result = start("42", project_root=tmp_path, base_branch="release/x")
+
+        assert result.success is True
+        update_base.assert_called_once()
+        assert update_base.call_args.args[2] == "release/x"
+        base_file = self._worktree_path(tmp_path) / ".wade" / "base_branch"
+        assert base_file.read_text().strip() == "release/x"
+
+    def test_failed_retarget_aborts(self, tmp_path: Path) -> None:
+        """A failed update_pr_base surfaces failure rather than proceeding on a stale base."""
+        provider = MagicMock()
+        provider.read_task.return_value = Task(id="42", title="Test task")
+
+        with contextlib.ExitStack() as stack:
+            self._enter_common_patches(stack, tmp_path, provider, pr_base="main")
+            stack.enter_context(patch("wade.git.pr.update_pr_base", return_value=False))
+            result = start("42", project_root=tmp_path, base_branch="release/x")
+
+        assert result.success is False
+
+    def test_failed_retarget_restores_rerooted_head(self, tmp_path: Path) -> None:
+        """When update_pr_base fails after the reroot force-pushed the rewritten head, the
+        head is rolled back so the remote branch and the still-old-base PR stay consistent —
+        the same rollback bootstrap_draft_pr added, wired into start()'s parallel retarget
+        entry point (#376 review)."""
+        provider = MagicMock()
+        provider.read_task.return_value = Task(id="42", title="Test task")
+
+        with contextlib.ExitStack() as stack:
+            self._enter_common_patches(stack, tmp_path, provider, pr_base="main")
+            stack.enter_context(patch("wade.git.pr.update_pr_base", return_value=False))
+            # Model a reroot that rewrote the head: pre != post SHA → restore expected.
+            stack.enter_context(
+                patch(f"{self._CORE}._resolve_head_sha", side_effect=["oldsha", "newsha"])
+            )
+            restore = stack.enter_context(patch(f"{self._CORE}._restore_scaffold_head"))
+            result = start("42", project_root=tmp_path, base_branch="release/x")
+
+        assert result.success is False
+        restore.assert_called_once_with(tmp_path, "feat/42-test-task", "oldsha", 7)
+
+    def test_failed_retarget_skips_restore_when_head_unchanged(self, tmp_path: Path) -> None:
+        """A real-work branch is left untouched by the reroot (SHA unchanged), so a failed
+        retarget must NOT hard-reset it — skip the restore to avoid discarding work (#376)."""
+        provider = MagicMock()
+        provider.read_task.return_value = Task(id="42", title="Test task")
+
+        with contextlib.ExitStack() as stack:
+            self._enter_common_patches(stack, tmp_path, provider, pr_base="main")
+            stack.enter_context(patch("wade.git.pr.update_pr_base", return_value=False))
+            stack.enter_context(
+                patch(f"{self._CORE}._resolve_head_sha", side_effect=["samesha", "samesha"])
+            )
+            restore = stack.enter_context(patch(f"{self._CORE}._restore_scaffold_head"))
+            result = start("42", project_root=tmp_path, base_branch="release/x")
+
+        assert result.success is False
+        restore.assert_not_called()
+
+    def test_override_to_main_clears_stale_base_file(self, tmp_path: Path) -> None:
+        """`--base main` retargets a PR previously on a non-main base and deletes the
+        stale .wade/base_branch so catchup/sync/done stop targeting the old base (#376)."""
+        provider = MagicMock()
+        provider.read_task.return_value = Task(id="42", title="Test task")
+
+        with contextlib.ExitStack() as stack:
+            self._enter_common_patches(stack, tmp_path, provider, pr_base="develop")
+            update_base = stack.enter_context(
+                patch("wade.git.pr.update_pr_base", return_value=True)
+            )
+            # A stale pin left by a previous non-main run on the reused worktree.
+            wade_dir = self._worktree_path(tmp_path) / ".wade"
+            wade_dir.mkdir(parents=True, exist_ok=True)
+            (wade_dir / "base_branch").write_text("develop\n")
+
+            result = start("42", project_root=tmp_path, base_branch="main")
+
+        assert result.success is True
+        update_base.assert_called_once()  # develop -> main retarget
+        base_file = self._worktree_path(tmp_path) / ".wade" / "base_branch"
+        assert not base_file.exists()
+
+    def test_inflight_base_override_aborts_without_confirmation(self, tmp_path: Path) -> None:
+        """A --base retarget on a branch with in-flight work cannot rewrite history, so
+        without a TTY confirmation it aborts rather than silently flipping the PR base and
+        polluting its diff with the old base's commits — mirrors the plan guard (#376)."""
+        provider = MagicMock()
+        provider.read_task.return_value = Task(id="42", title="Test task")
+
+        with contextlib.ExitStack() as stack:
+            self._enter_common_patches(stack, tmp_path, provider, pr_base="develop")
+            # Override the scaffold default: this branch carries real work.
+            stack.enter_context(patch(f"{self._CORE}._branch_has_real_work", return_value=True))
+            update_base = stack.enter_context(
+                patch("wade.git.pr.update_pr_base", return_value=True)
+            )
+            result = start("42", project_root=tmp_path, base_branch="main")
+
+        assert result.success is False
+        update_base.assert_not_called()  # PR base never silently flipped
+
+    def test_empty_pr_base_aborts_retarget_when_base_unknown(self, tmp_path: Path) -> None:
+        """If the PR's base reads back empty, the current base is unknown, so the reroot
+        cannot prove the branch is a rerootable scaffold and refuses — `start()` must abort
+        before touching the PR base rather than blindly reset/force-push a branch of unknown
+        provenance (#376 review). The reroot's own abort-on-unknown-base is unit-tested in
+        test_draft_pr_retarget; here we model that refusal to verify start()'s wiring."""
+        provider = MagicMock()
+        provider.read_task.return_value = Task(id="42", title="Test task")
+
+        with contextlib.ExitStack() as stack:
+            self._enter_common_patches(stack, tmp_path, provider, pr_base="")
+            # Override the scaffold default: the real reroot returns False for an unknown
+            # (empty) old base — model that here.
+            stack.enter_context(
+                patch(
+                    f"{self._CORE}.reroot_scaffold_branch_for_retarget",
+                    return_value=False,
+                )
+            )
+            update_base = stack.enter_context(
+                patch("wade.git.pr.update_pr_base", return_value=True)
+            )
+            result = start("42", project_root=tmp_path, base_branch="develop")
+
+        assert result.success is False
+        update_base.assert_not_called()  # PR base never touched on an unprovable reroot
+
+    def test_malformed_explicit_base_is_rejected(self, tmp_path: Path) -> None:
+        """A hand-typed --base with whitespace / invalid ref chars fails fast — symmetric
+        with the plan-declared path validated at plan-done, and before any work (#376)."""
+        provider = MagicMock()
+
+        with (
+            patch(f"{self._CORE}.load_config", return_value=self._make_config()),
+            patch(f"{self._CORE}.get_provider", return_value=provider),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+        ):
+            result = start("42", project_root=tmp_path, base_branch="bad base")
+
+        assert result.success is False
+        provider.read_task.assert_not_called()  # rejected before the issue is read
+
+    def test_empty_explicit_base_is_rejected(self, tmp_path: Path) -> None:
+        """An explicit `--base ""` is malformed and must fail fast — validating on
+        `is not None` (not truthiness) so an empty value is rejected rather than silently
+        inheriting the PR/main base (#376 review)."""
+        provider = MagicMock()
+
+        with (
+            patch(f"{self._CORE}.load_config", return_value=self._make_config()),
+            patch(f"{self._CORE}.get_provider", return_value=provider),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+        ):
+            result = start("42", project_root=tmp_path, base_branch="")
+
+        assert result.success is False
+        provider.read_task.assert_not_called()  # rejected before the issue is read
 
 
 # ---------------------------------------------------------------------------
