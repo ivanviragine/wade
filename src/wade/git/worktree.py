@@ -156,27 +156,30 @@ def list_worktrees(repo_root: Path) -> list[Worktree]:
     """
     result = _run_git("worktree", "list", "--porcelain", cwd=repo_root)
     worktrees: list[Worktree] = []
-    current: dict[str, str] = {}
+    current: Worktree | None = None
 
     for line in result.stdout.splitlines():
         if line.startswith("worktree "):
-            if current:
-                worktrees.append(Worktree(**current))
-            current = {"path": line[len("worktree ") :]}
+            if current is not None:
+                worktrees.append(current)
+            current = Worktree(path=line[len("worktree ") :])
+        elif current is None:
+            # Porcelain output always opens an entry with a "worktree " line;
+            # ignore anything before the first one.
+            continue
         elif line.startswith("HEAD "):
-            current["head"] = line[len("HEAD ") :]
+            current.head = line[len("HEAD ") :]
         elif line.startswith("branch "):
             # Refs come as "refs/heads/branch-name"
-            ref = line[len("branch ") :]
-            current["branch"] = ref.removeprefix("refs/heads/")
+            current.branch = line[len("branch ") :].removeprefix("refs/heads/")
         elif line.strip() == "detached":
-            current["branch"] = "(detached)"
-        elif line.strip() == "" and current:
-            worktrees.append(Worktree(**current))
-            current = {}
+            current.branch = "(detached)"
+        elif line.strip() == "":
+            worktrees.append(current)
+            current = None
 
-    if current:
-        worktrees.append(Worktree(**current))
+    if current is not None:
+        worktrees.append(current)
 
     return worktrees
 
