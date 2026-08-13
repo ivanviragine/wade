@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.45.2] — 2026-08-13
+
+### Refactoring
+
+- shared typed worktree model for list_worktrees() consumers (#416) (69931c7)
+
 ## [v0.45.1] — 2026-08-13
 
 ### Bug Fixes
