@@ -27,6 +27,7 @@ __all__ = [
     "bootstrap_draft_pr",
     "build_implementation_prompt",
     "extract_plan_from_pr_body",
+    "reroot_scaffold_branch_for_retarget",
 ]
 
 PLAN_MARKER_START = "<!-- wade:plan:start -->"
@@ -58,6 +59,106 @@ def extract_plan_from_pr_body(pr_body: str) -> str | None:
         return None
     content = pr_body[start_idx + len(PLAN_MARKER_START) : end_idx]
     return content.strip()
+
+
+def _resolve_base_start_point(repo_root: Path, base: str) -> str | None:
+    """Resolve *base* to a local commit-ish usable as a branch start point.
+
+    A plan-declared base may exist only as a remote tracking ref. If neither a
+    local branch nor ``origin/<base>`` resolves, fetch the specific ref (an
+    explicit refspec so it works even in a single-branch clone whose default fetch
+    refspec would skip it) and re-resolve before giving up. Reports an actionable
+    error and returns ``None`` when the base is genuinely absent or the fetch
+    fails (#376).
+    """
+    start_point = git_branch.resolve_start_point(repo_root, base)
+    if start_point is None and git_repo.has_remote(repo_root):
+        # A local cache miss is NOT proof the branch is absent on origin — a teammate
+        # may have just pushed it and our remote-tracking refs are stale.
+        try:
+            git_repo.fetch_ref(repo_root, "origin", f"{base}:refs/remotes/origin/{base}")
+        except GitError as e:
+            # The fetch itself failed. A missing ref on origin AND a network/auth
+            # error both land here, so don't claim the branch is simply absent —
+            # surface the underlying git error so the real cause (unreachable remote
+            # vs. truly-missing ref) is visible (#376 review).
+            console.error(
+                f"Could not fetch base branch '{base}' from origin: {e}. "
+                "Verify the branch exists on origin and the remote is reachable."
+            )
+            return None
+        start_point = git_branch.resolve_start_point(repo_root, base)
+    if start_point is None:
+        console.error(
+            f"Base branch '{base}' does not exist locally or on origin. "
+            "Create and push it before implementation, or choose an existing base."
+        )
+        return None
+    return start_point
+
+
+def reroot_scaffold_branch_for_retarget(
+    repo_root: Path,
+    branch_name: str,
+    old_base: str | None,
+    new_base: str,
+    issue_number: str,
+) -> bool:
+    """Re-root a scaffold-only branch on *new_base* before its PR is retargeted.
+
+    Editing a PR's base does not rewrite its head branch's ancestry: a scaffold
+    branch cut from *old_base* keeps that base's commits, which would then merge
+    into *new_base* once the PR is retargeted (the later startup catchup merge
+    cannot remove them). When the branch is scaffold-only — no worktree checked out
+    on it and only its scaffold commit beyond *old_base* — rebuild it rooted on
+    *new_base* and force-push; this is loss-free.
+
+    Branches carrying real work (an active worktree, or commits past the scaffold)
+    are left untouched: rewriting in-flight history is destructive, and that
+    retarget path is reached only after an explicit confirmation upstream.
+
+    Returns:
+        ``True`` — safe to proceed with the PR-base edit: the branch was recreated,
+        or deliberately left as-is. ``False`` — a scaffold-only branch needed
+        recreating but the new base could not be resolved or the git operation
+        failed; the caller must abort rather than retarget onto a stale branch.
+    """
+    from wade.git import worktree as git_worktree
+
+    # An active worktree on the branch means in-flight work — never rewrite it.
+    try:
+        if any(wt.get("branch") == branch_name for wt in git_worktree.list_worktrees(repo_root)):
+            return True
+    except Exception:
+        logger.debug("bootstrap_draft_pr.reroot_worktree_check_failed", exc_info=True)
+        return True
+
+    # Real work beyond the scaffold (relative to the OLD base) → leave as-is. A count
+    # failure is indeterminate — do not rewrite a branch we cannot measure.
+    if old_base:
+        try:
+            old_start = git_branch.resolve_start_point(repo_root, old_base) or old_base
+            if git_branch.commits_ahead(repo_root, branch_name, old_start) > 1:
+                return True
+        except (GitError, OSError, ValueError):
+            logger.debug("bootstrap_draft_pr.reroot_commits_check_failed", exc_info=True)
+            return True
+
+    # Scaffold-only: rebuild the branch rooted on the new base and force-push it.
+    new_start = _resolve_base_start_point(repo_root, new_base)
+    if new_start is None:
+        return False  # resolver already reported why
+    try:
+        git_branch.reset_branch(repo_root, branch_name, new_start)
+        git_branch.create_scaffold_commit(
+            repo_root, branch_name, f"chore: scaffold branch for #{issue_number}"
+        )
+        git_repo.push_branch(repo_root, branch_name, force=True)
+    except GitError as e:
+        console.error(f"Could not re-root scaffold branch '{branch_name}' on '{new_base}': {e}.")
+        return False
+    console.detail(f"Re-rooted scaffold branch on '{new_base}' before retarget")
+    return True
 
 
 def bootstrap_draft_pr(
@@ -110,6 +211,15 @@ def bootstrap_draft_pr(
         # it (stacked chain, or a plan-declared base). Skip the gh call when the
         # base already matches, and report success so the change is visible.
         if base_branch and base_branch != existing.base_ref_name:
+            # Editing the PR base alone does NOT rewrite the head branch's ancestry:
+            # a scaffold branch cut from the old base still carries that base's
+            # commits, which would then merge into the new base (the later startup
+            # catchup merge cannot remove them). Re-root a scaffold-only branch on
+            # the new base first — loss-free — before retargeting (#376 review).
+            if not reroot_scaffold_branch_for_retarget(
+                repo_root, branch_name, existing.base_ref_name, base_branch, issue_number
+            ):
+                return None
             if not git_pr.update_pr_base(repo_root, existing.number, base_branch):
                 console.error(f"Failed to retarget PR #{existing.number} to {base_branch}.")
                 return None
@@ -128,33 +238,8 @@ def bootstrap_draft_pr(
     # Resolve a local commit-ish to cut from — a plan-declared base may exist only
     # as a remote tracking ref. If neither a local branch nor origin/<base> exists,
     # fail with an actionable message rather than a raw git error from create_branch.
-    start_point = git_branch.resolve_start_point(repo_root, effective_base)
-    if start_point is None and git_repo.has_remote(repo_root):
-        # A local cache miss is NOT proof the branch is absent on origin — a teammate
-        # may have just pushed it and our remote-tracking refs are stale. Fetch the
-        # specific ref into origin/<base> (an explicit refspec so it also works in a
-        # single-branch clone whose default fetch refspec would skip it), then
-        # re-resolve before giving up (#376).
-        try:
-            git_repo.fetch_ref(
-                repo_root, "origin", f"{effective_base}:refs/remotes/origin/{effective_base}"
-            )
-        except GitError as e:
-            # The fetch itself failed. A missing ref on origin AND a network/auth
-            # error both land here, so don't claim the branch is simply absent —
-            # surface the underlying git error so the real cause (unreachable
-            # remote vs. truly-missing ref) is visible (#376 review).
-            console.error(
-                f"Could not fetch base branch '{effective_base}' from origin: {e}. "
-                "Verify the branch exists on origin and the remote is reachable."
-            )
-            return None
-        start_point = git_branch.resolve_start_point(repo_root, effective_base)
+    start_point = _resolve_base_start_point(repo_root, effective_base)
     if start_point is None:
-        console.error(
-            f"Base branch '{effective_base}' does not exist locally or on origin. "
-            "Create and push it before implementation, or choose an existing base."
-        )
         return None
 
     if not git_branch.branch_exists(repo_root, branch_name):

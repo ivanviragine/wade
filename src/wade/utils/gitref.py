@@ -31,6 +31,11 @@ def is_valid_git_ref(ref: str) -> bool:
     """
     if not ref:
         return False
+    if ref == "HEAD":
+        # Git reserves HEAD: ``git check-ref-format --branch HEAD`` exits 128 with
+        # "'HEAD' is not a valid branch name". Only the whole ref is reserved
+        # (case-sensitive) — ``feat/HEAD`` and ``head`` remain valid.
+        return False
     if _FORBIDDEN_RE.search(ref):
         return False
     if ".." in ref or "//" in ref or "@{" in ref:

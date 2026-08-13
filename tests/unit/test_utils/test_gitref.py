@@ -47,7 +47,20 @@ class TestIsValidGitRef:
             "comp.lock/tail",  # a path component ending in .lock
             "release/.candidate",  # a non-leading component beginning with a dot
             ".hidden/tail",  # leading component beginning with a dot
+            "HEAD",  # git reserves HEAD — check-ref-format --branch rejects it
         ],
     )
     def test_invalid_refs(self, ref: str) -> None:
         assert is_valid_git_ref(ref) is False
+
+    @pytest.mark.parametrize(
+        "ref",
+        [
+            "head",  # case-sensitive — only the exact all-caps HEAD is reserved
+            "Head",
+            "feat/HEAD",  # HEAD is reserved only as the whole ref, not a component
+            "release/HEAD",
+        ],
+    )
+    def test_head_reserved_only_as_whole_ref(self, ref: str) -> None:
+        assert is_valid_git_ref(ref) is True

@@ -129,6 +129,30 @@ def delete_branch(
     _run_git_with_retry("branch", flag, branch_name, cwd=repo_root)
 
 
+def reset_branch(
+    repo_root: Path,
+    branch_name: str,
+    start_point: str,
+) -> None:
+    """Force-move an existing local branch ref to *start_point* (``git branch -f``).
+
+    Re-roots a branch without a checkout. The branch must not be checked out in any
+    worktree (git refuses ``-f`` on a checked-out branch). Used to rebuild a
+    scaffold-only branch on a new base before retargeting its PR, so the old base's
+    commits do not leak into the new base's diff (#376).
+
+    Args:
+        repo_root: Repository root directory.
+        branch_name: Existing local branch to move.
+        start_point: Commit, branch, or tag to move the branch onto.
+
+    Raises:
+        GitError: If the branch is checked out or the move fails.
+    """
+    log.info("branch.reset", branch=branch_name, start_point=start_point)
+    _run_git_with_retry("branch", "-f", branch_name, start_point, cwd=repo_root)
+
+
 def create_scaffold_commit(
     repo_root: Path,
     branch_name: str,

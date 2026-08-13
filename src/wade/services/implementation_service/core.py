@@ -51,6 +51,7 @@ from wade.services.implementation_service.draft_pr import (
     bootstrap_draft_pr,
     build_implementation_prompt,
     extract_plan_from_pr_body,
+    reroot_scaffold_branch_for_retarget,
 )
 from wade.services.implementation_service.lifecycle import _post_implementation_lifecycle
 from wade.services.implementation_service.sync import catchup
@@ -605,6 +606,13 @@ def start(
                     f"Retargeting PR #{existing_pr.number} base "
                     f"{current_pr_base} -> {resolved_base}..."
                 )
+                # Editing the PR base alone leaves the head branch rooted on the old
+                # base, so that base's commits would merge into the new one. Re-root
+                # a scaffold-only branch on the new base first (#376 review).
+                if not reroot_scaffold_branch_for_retarget(
+                    repo_root, branch_name, current_pr_base, resolved_base, task.id
+                ):
+                    return ImplementResult(success=False)
                 if not git_pr.update_pr_base(repo_root, existing_pr.number, resolved_base):
                     console.error(
                         f"Failed to retarget PR #{existing_pr.number} to {resolved_base}."

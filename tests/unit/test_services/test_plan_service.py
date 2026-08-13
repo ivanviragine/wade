@@ -990,6 +990,67 @@ class TestAttachPlanToExistingIssue:
         mock_bootstrap.assert_not_called()
         provider.update_task.assert_not_called()
 
+    def test_returns_false_when_bootstrap_fails(self, tmp_path: Path) -> None:
+        # bootstrap_draft_pr returning None (missing base, failed retarget, gh
+        # error) must NOT finalize the issue — the plan lives only in the worktree,
+        # so the caller has to preserve-and-abort rather than discard it (#376).
+        provider = MagicMock()
+        issue = Task(id="42", title="Some issue", body="Original body")
+        plan_path = tmp_path / "PLAN.md"
+        plan_path.write_text("# feat: thing\n\n## Tasks\n- Do it\n")
+        plan_file = PlanFile.from_markdown(plan_path)
+
+        with (
+            patch("wade.services.plan_service._base_retarget_is_safe", return_value=True),
+            patch("wade.services.plan_service.bootstrap_draft_pr", return_value=None),
+            patch("wade.services.plan_service.add_complexity_label"),
+            patch("wade.services.plan_service.console"),
+        ):
+            attached = _attach_plan_to_existing_issue(
+                provider=provider,
+                config=ProjectConfig(),
+                issue=issue,
+                plan_file=plan_file,
+                repo_root=tmp_path,
+            )
+
+        assert attached is False
+        provider.update_task.assert_not_called()
+
+    def test_returns_false_when_reconcile_fails(self, tmp_path: Path) -> None:
+        # The PR was retargeted, but the in-flight worktree's pin could not be
+        # updated — a resumed session would merge into the old base. Abort so the
+        # plan is preserved instead of finalizing on a divergent target (#376).
+        provider = MagicMock()
+        issue = Task(id="42", title="Some issue", body="Original body")
+        plan_path = tmp_path / "PLAN.md"
+        plan_path.write_text("# feat: thing\n\n## Tasks\n- Do it\n")
+        plan_file = PlanFile.from_markdown(plan_path)
+
+        with (
+            patch("wade.services.plan_service._base_retarget_is_safe", return_value=True),
+            patch(
+                "wade.services.plan_service.bootstrap_draft_pr",
+                return_value={"number": 99, "url": "http://x/99"},
+            ),
+            patch(
+                "wade.services.plan_service._reconcile_inflight_worktree_base",
+                return_value=False,
+            ),
+            patch("wade.services.plan_service.add_complexity_label"),
+            patch("wade.services.plan_service.console"),
+        ):
+            attached = _attach_plan_to_existing_issue(
+                provider=provider,
+                config=ProjectConfig(),
+                issue=issue,
+                plan_file=plan_file,
+                repo_root=tmp_path,
+            )
+
+        assert attached is False
+        provider.update_task.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # Base branch (#376) — plan pipeline threading + in-flight retarget guard
@@ -1205,7 +1266,8 @@ class TestReconcileInflightWorktreeBase:
             patch("wade.git.branch.make_branch_name", return_value="feat/42-thing"),
             patch("wade.git.worktree.list_worktrees", return_value=self._wt_entry(wt)),
         ):
-            _reconcile_inflight_worktree_base(_cfg_main(), self._issue(), tmp_path, "develop")
+            ok = _reconcile_inflight_worktree_base(_cfg_main(), self._issue(), tmp_path, "develop")
+        assert ok is True
         assert (wt / ".wade" / "base_branch").read_text().strip() == "develop"
 
     def test_no_worktree_is_noop(self, tmp_path: Path) -> None:
@@ -1213,8 +1275,25 @@ class TestReconcileInflightWorktreeBase:
             patch("wade.git.branch.make_branch_name", return_value="feat/42-thing"),
             patch("wade.git.worktree.list_worktrees", return_value=[]),
         ):
-            _reconcile_inflight_worktree_base(_cfg_main(), self._issue(), tmp_path, "develop")
+            ok = _reconcile_inflight_worktree_base(_cfg_main(), self._issue(), tmp_path, "develop")
+        assert ok is True
         assert not (tmp_path / ".wade").exists()
+
+    def test_write_failure_returns_false(self, tmp_path: Path) -> None:
+        # A read-only worktree (write raises OSError) must not be swallowed: the PR
+        # is already retargeted, so the stale pin would merge into the old base.
+        # Surface it (False) so the caller aborts rather than reports success (#376).
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        with (
+            patch("wade.git.branch.make_branch_name", return_value="feat/42-thing"),
+            patch("wade.git.worktree.list_worktrees", return_value=self._wt_entry(wt)),
+            patch("wade.services.plan_service.Path.write_text", side_effect=OSError("read-only")),
+            patch("wade.services.plan_service.console") as mock_console,
+        ):
+            ok = _reconcile_inflight_worktree_base(_cfg_main(), self._issue(), tmp_path, "develop")
+        assert ok is False
+        mock_console.error.assert_called_once()
 
     def test_retarget_to_main_clears_stale_pin(self, tmp_path: Path) -> None:
         wt = tmp_path / "wt"
