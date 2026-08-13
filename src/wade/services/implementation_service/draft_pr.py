@@ -97,6 +97,45 @@ def _resolve_base_start_point(repo_root: Path, base: str) -> str | None:
     return start_point
 
 
+def _branch_has_real_work(repo_root: Path, branch_name: str, base: str | None) -> bool:
+    """Return ``True`` when *branch_name* carries real work beyond its scaffold commit.
+
+    "Real work" means the branch is more than one commit ahead of *base* (i.e. past
+    the bare scaffold commit) — commits a retarget cannot rewrite without discarding,
+    so the old base's commits would leak into the new base's diff. This is the
+    *guard* signal: an in-flight branch must not be retargeted silently. It is
+    deliberately **not** about a checked-out worktree — ``wade implement --cd`` cuts
+    a scaffold worktree with no commits, which is not divergent work. A count that
+    cannot be computed fails **closed** (returns ``True``) so an indeterminate branch
+    is never silently retargeted (#376).
+    """
+    if not base:
+        return False
+    try:
+        start = git_branch.resolve_start_point(repo_root, base) or base
+        return git_branch.commits_ahead(repo_root, branch_name, start) > 1
+    except (GitError, OSError, ValueError):
+        logger.debug("draft_pr.real_work_commits_check_failed", exc_info=True)
+        return True
+
+
+def _branch_is_checked_out(repo_root: Path, branch_name: str) -> bool:
+    """Return ``True`` when *branch_name* is checked out in some worktree.
+
+    A checked-out branch cannot be moved with ``git branch -f`` — the reroot below
+    would fail — so this gates the *recreate*, independently of whether the branch
+    holds real work. Fails **closed** (returns ``True`` → do not rewrite) when the
+    worktree list cannot be read.
+    """
+    from wade.git import worktree as git_worktree
+
+    try:
+        return any(wt.get("branch") == branch_name for wt in git_worktree.list_worktrees(repo_root))
+    except Exception:
+        logger.debug("draft_pr.worktree_check_failed", exc_info=True)
+        return True
+
+
 def reroot_scaffold_branch_for_retarget(
     repo_root: Path,
     branch_name: str,
@@ -109,13 +148,15 @@ def reroot_scaffold_branch_for_retarget(
     Editing a PR's base does not rewrite its head branch's ancestry: a scaffold
     branch cut from *old_base* keeps that base's commits, which would then merge
     into *new_base* once the PR is retargeted (the later startup catchup merge
-    cannot remove them). When the branch is scaffold-only — no worktree checked out
-    on it and only its scaffold commit beyond *old_base* — rebuild it rooted on
+    cannot remove them). When the branch is scaffold-only — only its scaffold commit
+    beyond *old_base* and not checked out in any worktree — rebuild it rooted on
     *new_base* and force-push; this is loss-free.
 
-    Branches carrying real work (an active worktree, or commits past the scaffold)
-    are left untouched: rewriting in-flight history is destructive, and that
-    retarget path is reached only after an explicit confirmation upstream.
+    A branch is left untouched when it carries real work (rewriting in-flight history
+    is destructive) or is checked out in a worktree (``git branch -f`` would fail).
+    The caller must guard/confirm the resulting retarget of a real-work branch
+    separately (the plan flow via :func:`_base_retarget_is_safe`, ``start()`` via
+    :func:`_branch_has_real_work`) so it is never applied silently.
 
     Returns:
         ``True`` — safe to proceed with the PR-base edit: the branch was recreated,
@@ -123,26 +164,13 @@ def reroot_scaffold_branch_for_retarget(
         recreating but the new base could not be resolved or the git operation
         failed; the caller must abort rather than retarget onto a stale branch.
     """
-    from wade.git import worktree as git_worktree
-
-    # An active worktree on the branch means in-flight work — never rewrite it.
-    try:
-        if any(wt.get("branch") == branch_name for wt in git_worktree.list_worktrees(repo_root)):
-            return True
-    except Exception:
-        logger.debug("bootstrap_draft_pr.reroot_worktree_check_failed", exc_info=True)
+    # Real commits past the scaffold, or a checked-out worktree we cannot ``git
+    # branch -f`` over → leave the branch as-is; only a scaffold-only, un-checked-out
+    # branch is safe to rebuild.
+    if _branch_has_real_work(repo_root, branch_name, old_base) or _branch_is_checked_out(
+        repo_root, branch_name
+    ):
         return True
-
-    # Real work beyond the scaffold (relative to the OLD base) → leave as-is. A count
-    # failure is indeterminate — do not rewrite a branch we cannot measure.
-    if old_base:
-        try:
-            old_start = git_branch.resolve_start_point(repo_root, old_base) or old_base
-            if git_branch.commits_ahead(repo_root, branch_name, old_start) > 1:
-                return True
-        except (GitError, OSError, ValueError):
-            logger.debug("bootstrap_draft_pr.reroot_commits_check_failed", exc_info=True)
-            return True
 
     # Scaffold-only: rebuild the branch rooted on the new base and force-push it.
     new_start = _resolve_base_start_point(repo_root, new_base)

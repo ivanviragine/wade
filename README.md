@@ -162,7 +162,7 @@ To choose or override the base at implement time, pass `--base`:
 wade implement 42 --base develop   # branch from, target, and merge into develop
 ```
 
-`--base` overrides the plan-declared base and retargets the existing draft PR to match. A malformed base value is rejected up front — whether declared in the plan (fails `wade plan-session done`) or passed as `--base` (fails fast when you run `wade implement`); a well-formed base branch that does not exist fails draft-PR creation with an actionable message. Re-running planning that would change the base of a PR whose work is already in flight is not applied silently — it requires explicit confirmation.
+`--base` overrides the plan-declared base and retargets the existing draft PR to match. A malformed base value is rejected up front — whether declared in the plan (fails `wade plan-session done`) or passed as `--base` (fails fast when you run `wade implement`); a well-formed base branch that does not exist fails draft-PR creation with an actionable message. Changing the base of a PR whose work is already in flight — whether by re-running planning or by `wade implement --base` — is not applied silently: it requires explicit confirmation, because the branch's existing history cannot be moved onto the new base without discarding it.
 
 `--permission-mode` sets how much autonomy the AI tool is granted — an axis
 independent of the delegation `--mode` (which controls *how* a tool is

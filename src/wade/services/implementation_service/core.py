@@ -48,6 +48,7 @@ from wade.services.implementation_service.bootstrap import (
     write_plan_md,
 )
 from wade.services.implementation_service.draft_pr import (
+    _branch_has_real_work,
     bootstrap_draft_pr,
     build_implementation_prompt,
     extract_plan_from_pr_body,
@@ -607,8 +608,31 @@ def start(
                     f"{current_pr_base} -> {resolved_base}..."
                 )
                 # Editing the PR base alone leaves the head branch rooted on the old
-                # base, so that base's commits would merge into the new one. Re-root
-                # a scaffold-only branch on the new base first (#376 review).
+                # base, so that base's commits would merge into the new one. A
+                # scaffold-only branch is re-rooted below; but a branch with in-flight
+                # work cannot be rewritten without discarding it, so guard that case
+                # (confirm/abort) rather than silently polluting the PR — mirrors the
+                # plan flow's _base_retarget_is_safe (#376 review).
+                if _branch_has_real_work(repo_root, branch_name, current_pr_base):
+                    console.error(
+                        f"PR #{existing_pr.number}'s branch already has in-flight work, so "
+                        f"retargeting its base to '{resolved_base}' cannot rewrite history — "
+                        f"'{current_pr_base}'s commits would then merge into '{resolved_base}'."
+                    )
+                    if not (
+                        prompts.is_tty()
+                        and not yolo
+                        and prompts.confirm(
+                            f"Retarget PR #{existing_pr.number} base to '{resolved_base}' anyway?",
+                            default=False,
+                        )
+                    ):
+                        console.info(
+                            f"Left PR #{existing_pr.number} targeting '{current_pr_base}'. "
+                            "Merge or finish the in-flight work first, then retarget."
+                        )
+                        return ImplementResult(success=False)
+                # Re-root a scaffold-only branch on the new base first (#376 review).
                 if not reroot_scaffold_branch_for_retarget(
                     repo_root, branch_name, current_pr_base, resolved_base, task.id
                 ):

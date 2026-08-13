@@ -4,8 +4,8 @@ Editing a PR's base does not rewrite its head branch's ancestry. A scaffold bran
 cut from the old base (e.g. ``develop``) keeps that base's commits, which would then
 merge into the new base (``main``) once the PR is retargeted. ``bootstrap_draft_pr``
 re-roots a scaffold-only branch on the new base first — loss-free — before retargeting
-(#376 review). Branches carrying real work (a worktree, or commits past the scaffold)
-are left untouched.
+(#376 review). A branch with real work (commits past the scaffold) or one checked out
+in a worktree (which ``git branch -f`` cannot move) is left untouched.
 """
 
 from __future__ import annotations
@@ -14,7 +14,10 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from wade.git.pr import PRLookup, PRRef
+from wade.git.repo import GitError
 from wade.services.implementation_service.draft_pr import (
+    _branch_has_real_work,
+    _branch_is_checked_out,
     bootstrap_draft_pr,
     reroot_scaffold_branch_for_retarget,
 )
@@ -66,14 +69,21 @@ class TestRerootScaffoldBranch:
         mock_push.assert_called_once_with(Path("/repo"), "feat/42-x", force=True)
 
     @patch(f"{_D}.git_branch.reset_branch")
+    @patch(f"{_D}.git_branch.commits_ahead", return_value=1)
+    @patch(f"{_D}.git_branch.resolve_start_point", return_value="develop")
     @patch(
         "wade.git.worktree.list_worktrees",
         return_value=[{"path": "/wt", "branch": "feat/42-x"}],
     )
-    def test_active_worktree_leaves_branch_untouched(
-        self, _wt: MagicMock, mock_reset: MagicMock
+    def test_checked_out_scaffold_branch_left_untouched(
+        self,
+        _wt: MagicMock,
+        _resolve: MagicMock,
+        _ahead: MagicMock,
+        mock_reset: MagicMock,
     ) -> None:
-        # In-flight work must never be rewritten — proceed with the PR-base edit only.
+        # Scaffold-only (1 commit) but checked out in a worktree — `git branch -f`
+        # would fail, so leave it as-is and let update_pr_base proceed.
         ok = reroot_scaffold_branch_for_retarget(
             Path("/repo"), "feat/42-x", "develop", "main", "42"
         )
@@ -123,6 +133,40 @@ class TestRerootScaffoldBranch:
 
         assert ok is False
         mock_reset.assert_not_called()
+
+
+class TestBranchWorkSignals:
+    """`_branch_has_real_work` is commits-only (the guard signal); a mere checked-out
+    worktree is not divergent work — only `_branch_is_checked_out` sees it (#376)."""
+
+    @patch(f"{_D}.git_branch.commits_ahead", return_value=1)
+    @patch(f"{_D}.git_branch.resolve_start_point", return_value="main")
+    def test_scaffold_only_is_not_real_work(self, _resolve: MagicMock, _ahead: MagicMock) -> None:
+        assert _branch_has_real_work(Path("/repo"), "feat/42-x", "main") is False
+
+    @patch(f"{_D}.git_branch.commits_ahead", return_value=4)
+    @patch(f"{_D}.git_branch.resolve_start_point", return_value="main")
+    def test_commits_past_scaffold_is_real_work(
+        self, _resolve: MagicMock, _ahead: MagicMock
+    ) -> None:
+        assert _branch_has_real_work(Path("/repo"), "feat/42-x", "main") is True
+
+    @patch(f"{_D}.git_branch.commits_ahead", side_effect=GitError("no base"))
+    @patch(f"{_D}.git_branch.resolve_start_point", return_value="main")
+    def test_uncomputable_count_fails_closed(self, _resolve: MagicMock, _ahead: MagicMock) -> None:
+        # Indeterminate → treat as real work so the retarget is never applied silently.
+        assert _branch_has_real_work(Path("/repo"), "feat/42-x", "main") is True
+
+    @patch("wade.git.worktree.list_worktrees", return_value=[])
+    def test_not_checked_out(self, _wt: MagicMock) -> None:
+        assert _branch_is_checked_out(Path("/repo"), "feat/42-x") is False
+
+    @patch(
+        "wade.git.worktree.list_worktrees",
+        return_value=[{"path": "/wt", "branch": "feat/42-x"}],
+    )
+    def test_checked_out(self, _wt: MagicMock) -> None:
+        assert _branch_is_checked_out(Path("/repo"), "feat/42-x") is True
 
 
 class TestBootstrapRetargetReroots:

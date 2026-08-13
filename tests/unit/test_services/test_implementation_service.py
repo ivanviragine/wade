@@ -1060,6 +1060,11 @@ class TestImplementationStartBaseBranch:
         stack.enter_context(patch("wade.git.branch.branch_exists", return_value=True))
         stack.enter_context(patch("wade.git.worktree.list_worktrees", return_value=[]))
         stack.enter_context(patch("wade.git.worktree.checkout_existing_branch_worktree"))
+        # Default: a scaffold-only branch — no in-flight work, and its re-root on the
+        # new base is a no-op stub (the real re-root has its own tests). Per-test
+        # overrides model the in-flight case (#376 review).
+        stack.enter_context(patch(f"{c}._branch_has_real_work", return_value=False))
+        stack.enter_context(patch(f"{c}.reroot_scaffold_branch_for_retarget", return_value=True))
         stack.enter_context(patch(f"{c}.write_plan_md"))
         stack.enter_context(patch(f"{c}.bootstrap_worktree"))
         stack.enter_context(patch(f"{c}._detect_ai_cli_env", return_value=None))
@@ -1139,6 +1144,25 @@ class TestImplementationStartBaseBranch:
         update_base.assert_called_once()  # develop -> main retarget
         base_file = self._worktree_path(tmp_path) / ".wade" / "base_branch"
         assert not base_file.exists()
+
+    def test_inflight_base_override_aborts_without_confirmation(self, tmp_path: Path) -> None:
+        """A --base retarget on a branch with in-flight work cannot rewrite history, so
+        without a TTY confirmation it aborts rather than silently flipping the PR base and
+        polluting its diff with the old base's commits — mirrors the plan guard (#376)."""
+        provider = MagicMock()
+        provider.read_task.return_value = Task(id="42", title="Test task")
+
+        with contextlib.ExitStack() as stack:
+            self._enter_common_patches(stack, tmp_path, provider, pr_base="develop")
+            # Override the scaffold default: this branch carries real work.
+            stack.enter_context(patch(f"{self._CORE}._branch_has_real_work", return_value=True))
+            update_base = stack.enter_context(
+                patch("wade.git.pr.update_pr_base", return_value=True)
+            )
+            result = start("42", project_root=tmp_path, base_branch="main")
+
+        assert result.success is False
+        update_base.assert_not_called()  # PR base never silently flipped
 
     def test_malformed_explicit_base_is_rejected(self, tmp_path: Path) -> None:
         """A hand-typed --base with whitespace / invalid ref chars fails fast — symmetric
