@@ -1197,8 +1197,22 @@ class TestBranchWorkInFlight:
             patch("wade.git.worktree.list_worktrees", return_value=[]),
             patch("wade.git.branch.resolve_start_point", return_value="main"),
             patch("wade.git.branch.commits_ahead", return_value=1),
+            patch("wade.git.branch.tip_commit_is_empty", return_value=True),
         ):
             assert _branch_work_in_flight(tmp_path, "feat/1-x", "main") is False
+
+    def test_single_non_empty_commit_is_in_flight(self, tmp_path: Path) -> None:
+        # Exactly one commit ahead but the tip touched the tree (amended scaffold / squash
+        # / a PR opened outside WADE) → real work. The guard must require confirmation, in
+        # lock-step with the reroot's _branch_has_real_work, or a silent retarget would
+        # pollute the PR's diff with the old base's commits (#376 review).
+        with (
+            patch("wade.git.worktree.list_worktrees", return_value=[]),
+            patch("wade.git.branch.resolve_start_point", return_value="main"),
+            patch("wade.git.branch.commits_ahead", return_value=1),
+            patch("wade.git.branch.tip_commit_is_empty", return_value=False),
+        ):
+            assert _branch_work_in_flight(tmp_path, "feat/1-x", "main") is True
 
     def test_unresolvable_base_fails_closed_as_in_flight(self, tmp_path: Path) -> None:
         # commits_ahead raises (base deleted upstream / narrow clone) → we cannot

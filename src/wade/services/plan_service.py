@@ -837,15 +837,22 @@ def _create_issues_from_plans(
 def _branch_work_in_flight(repo_root: Path, branch_name: str, base: str) -> bool:
     """Return True when a branch's implementation appears to have started.
 
-    "In flight" means either an active worktree is checked out on the branch, or
-    the branch has advanced past its bare scaffold commit (more than one commit
-    ahead of its base). Both signal that a worktree's ``.wade/base_branch`` may
-    already be pinned to the current base, so silently retargeting the PR would
-    diverge the two and merge into the wrong branch.
+    "In flight" means either an active worktree is checked out on the branch, or the
+    branch carries real work past its bare scaffold commit. Both signal that a worktree's
+    ``.wade/base_branch`` may already be pinned to the current base, so silently
+    retargeting the PR would diverge the two and merge into the wrong branch.
+
+    The real-work half delegates to :func:`_branch_has_real_work` — the **same** signal the
+    reroot uses to decide whether a retarget can be applied loss-free — so the two never
+    drift: being exactly one commit ahead is real work only when that commit is not WADE's
+    empty scaffold (an amended scaffold, a squash to one commit, or a PR opened outside
+    WADE), and an indeterminate count fails closed as in-flight (#376 review). A
+    checked-out worktree counts as in-flight here even though it is **not** real work for
+    the reroot: the plan path additionally guards the worktree's merge-target pin, which
+    the reroot does not touch.
     """
-    from wade.git import branch as git_branch
     from wade.git import worktree as git_worktree
-    from wade.git.repo import GitError
+    from wade.services.implementation_service.draft_pr import _branch_has_real_work
 
     try:
         for wt in git_worktree.list_worktrees(repo_root):
@@ -854,20 +861,7 @@ def _branch_work_in_flight(repo_root: Path, branch_name: str, base: str) -> bool
     except Exception:
         logger.debug("plan.in_flight_worktree_check_failed", exc_info=True)
 
-    # Compare against a locally-resolvable ref (the base may be remote-only). Both
-    # the resolve and the count run under the same guard: the git probes use
-    # check=False (no GitError) but _run_git can still raise OSError, and
-    # commits_ahead can raise ValueError on unparsable output.
-    try:
-        compare_base = git_branch.resolve_start_point(repo_root, base) or base
-        return git_branch.commits_ahead(repo_root, branch_name, compare_base) > 1
-    except (GitError, OSError, ValueError):
-        # Cannot tell how far the branch has advanced (base deleted upstream, or a
-        # narrow clone that lacks it). Fail CLOSED — treat as in-flight so the
-        # retarget requires explicit confirmation rather than silently diverging
-        # the worktree's merge target from the PR (#376 review).
-        logger.debug("plan.in_flight_commits_check_failed", exc_info=True)
-        return True
+    return _branch_has_real_work(repo_root, branch_name, base)
 
 
 def _base_retarget_is_safe(
