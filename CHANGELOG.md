@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.45.0] — 2026-08-13
+
+### Features
+
+- support a configurable base branch for plans and implementation (#377) (7bbde95)
+
 ## [v0.44.3] — 2026-08-12
 
 ### Refactoring
