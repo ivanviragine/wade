@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.45.1] — 2026-08-13
+
+### Bug Fixes
+
+- merge_pr hard-fails on recoverable "Head branch is out of date" (stale PR head sync) (#415) (d81a658)
+
 ## [v0.45.0] — 2026-08-13
 
 ### Features
