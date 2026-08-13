@@ -101,19 +101,28 @@ def _resolve_base_start_point(repo_root: Path, base: str) -> str | None:
 def _branch_has_real_work(repo_root: Path, branch_name: str, base: str | None) -> bool:
     """Return ``True`` when *branch_name* carries real work beyond its scaffold commit.
 
-    "Real work" means the branch is more than one commit ahead of *base* (i.e. past
-    the bare scaffold commit) — commits a retarget cannot rewrite without discarding,
-    so the old base's commits would leak into the new base's diff. This is the
-    *guard* signal: an in-flight branch must not be retargeted silently. It is
-    deliberately **not** about a checked-out worktree — ``wade implement --cd`` cuts
-    a scaffold worktree with no commits, which is not divergent work.
+    "Real work" means commits a retarget cannot rewrite without discarding, so the old
+    base's commits would leak into the new base's diff. This is the *guard* signal: an
+    in-flight branch must not be retargeted silently. It is deliberately **not** about a
+    checked-out worktree — ``wade implement --cd`` cuts a scaffold worktree with no
+    commits, which is not divergent work.
 
-    The head may live only on origin — a fresh clone whose PR branch was never
-    checked out locally. Resolve it to a local ref or ``origin/<branch>`` before
-    measuring, so a scaffold-only *remote* PR is classified as scaffold work rather
-    than misclassified as real work by a failed local ``rev-list`` (#376 review). A
-    head that resolves nowhere, or a count that cannot be computed, fails **closed**
-    (returns ``True``) so an indeterminate branch is never silently retargeted.
+    A bare commit count cannot tell WADE's *empty* scaffold commit apart from a real
+    one-commit implementation, so being exactly one commit ahead is **not** proof of a
+    scaffold: a user may have amended the scaffold with their work, squashed the branch
+    to a single commit, or opened the PR outside WADE with one real commit. For the
+    single-commit case we inspect the commit itself — only an *empty* tip (no tree change
+    vs its parent, the signature of :func:`create_scaffold_commit`) is a rerootable
+    scaffold; anything that touched the tree is real work a reroot would discard
+    (#376 review). More than one commit ahead is always real work.
+
+    The head may live only on origin — a fresh clone whose PR branch was never checked
+    out locally. Resolve it to a local ref or ``origin/<branch>`` before measuring, so a
+    scaffold-only *remote* PR is classified as scaffold work rather than misclassified as
+    real work by a failed local ``rev-list`` (#376 review). A head that resolves nowhere,
+    a count that cannot be computed, or an emptiness check that cannot be resolved all
+    fail **closed** (return ``True``) so an indeterminate branch is never silently
+    retargeted (and never hard-reset).
     """
     if not base:
         return False
@@ -123,7 +132,18 @@ def _branch_has_real_work(repo_root: Path, branch_name: str, base: str | None) -
             logger.debug("draft_pr.real_work_head_unresolved", branch=branch_name)
             return True
         start = git_branch.resolve_start_point(repo_root, base) or base
-        return git_branch.commits_ahead(repo_root, head_ref, start) > 1
+        ahead = git_branch.commits_ahead(repo_root, head_ref, start)
+        if ahead == 0:
+            return False
+        if ahead > 1:
+            return True
+        # Exactly one commit ahead: rerootable only if that commit is WADE's empty
+        # scaffold. A non-empty tip is real work; an indeterminate result fails closed.
+        empty = git_branch.tip_commit_is_empty(repo_root, head_ref)
+        if empty is None:
+            logger.debug("draft_pr.real_work_tip_emptiness_unknown", branch=branch_name)
+            return True
+        return not empty
     except (GitError, OSError, ValueError):
         logger.debug("draft_pr.real_work_commits_check_failed", exc_info=True)
         return True
@@ -155,6 +175,45 @@ def _find_checked_out_worktree(repo_root: Path, branch_name: str) -> tuple[bool,
     except Exception:
         logger.debug("draft_pr.worktree_check_failed", exc_info=True)
         return True, None
+
+
+def _resolve_head_sha(repo_root: Path, ref: str) -> str | None:
+    """Resolve *ref* to a commit SHA, or ``None`` if it cannot be resolved."""
+    try:
+        return git_repo.rev_parse(repo_root, ref)
+    except GitError:
+        return None
+
+
+def _restore_scaffold_head(
+    repo_root: Path, branch_name: str, target_sha: str, pr_number: int
+) -> None:
+    """Roll *branch_name* (local ref + remote) back to *target_sha* after a failed retarget.
+
+    Called only when :func:`reroot_scaffold_branch_for_retarget` already force-pushed a
+    rewritten head but the subsequent PR-base edit failed — which would otherwise leave
+    the remote branch rerooted on the new base while the PR still targets the old one
+    (divergent ancestry that can leak new-base commits into the old-base PR and makes a
+    non-interactive retry misclassify the rerooted branch as real work). Restoring the
+    pre-reroot head keeps the two consistent so a retry starts from a clean, correctly
+    classified scaffold (#376 review). Best-effort: reports loudly if it cannot, since the
+    divergence then needs manual cleanup.
+    """
+    checked_out, worktree_path = _find_checked_out_worktree(repo_root, branch_name)
+    try:
+        if checked_out and worktree_path is not None:
+            git_branch.reset_worktree_hard(worktree_path, target_sha)
+        else:
+            git_branch.reset_branch(repo_root, branch_name, target_sha)
+        git_repo.push_branch(repo_root, branch_name, force=True)
+    except GitError as e:
+        console.error(
+            f"Could not restore branch '{branch_name}' after PR #{pr_number}'s base edit "
+            f"failed: {e}. The remote branch may be rerooted while the PR still targets the "
+            "old base — reset the branch manually before retrying."
+        )
+        return
+    console.detail(f"Restored '{branch_name}' to its pre-retarget state after the failed PR edit")
 
 
 def reroot_scaffold_branch_for_retarget(
@@ -305,12 +364,25 @@ def bootstrap_draft_pr(
             # commits, which would then merge into the new base (the later startup
             # catchup merge cannot remove them). Re-root a scaffold-only branch on
             # the new base first — loss-free — before retargeting (#376 review).
+            #
+            # The reroot force-pushes the rewritten head *before* the base edit, so
+            # capture the pre-reroot head first: if the edit then fails, the remote
+            # branch (now on the new base) and the PR (still on the old base) would
+            # diverge. Roll the head back to keep them consistent (#376 review).
+            head_ref = git_branch.resolve_start_point(repo_root, branch_name)
+            pre_reroot_sha = _resolve_head_sha(repo_root, head_ref) if head_ref else None
             if not reroot_scaffold_branch_for_retarget(
                 repo_root, branch_name, existing.base_ref_name, base_branch, issue_number
             ):
                 return None
             if not git_pr.update_pr_base(repo_root, existing.number, base_branch):
                 console.error(f"Failed to retarget PR #{existing.number} to {base_branch}.")
+                # Only roll back when the reroot actually rewrote the head (SHA changed).
+                # A real-work branch is left untouched by the reroot, so a restore would
+                # be a needless hard reset that could discard uncommitted work (#376).
+                post_reroot_sha = _resolve_head_sha(repo_root, branch_name)
+                if pre_reroot_sha and post_reroot_sha and pre_reroot_sha != post_reroot_sha:
+                    _restore_scaffold_head(repo_root, branch_name, pre_reroot_sha, existing.number)
                 return None
             console.detail(f"Retargeted PR #{existing.number} base to {base_branch}")
         logger.info(

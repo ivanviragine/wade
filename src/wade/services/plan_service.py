@@ -810,10 +810,22 @@ def _create_issues_from_plans(
                 # we counted this as created, the caller would finalize the issue and
                 # force-remove the worktree, discarding the plan. Record it as failed so
                 # the caller preserves the planning output instead (#376 review).
+                #
+                # The lightweight issue already exists on GitHub, though. Leaving it open
+                # would orphan an issue with no full plan, and re-running the no-issue
+                # planning flow would create a *second* issue for the same plan. Close it
+                # (best-effort) so retries don't accumulate duplicates (#376 review).
                 console.warn(
                     f"Could not create draft PR for #{task.id} — the plan was not "
                     "persisted; preserving planning output."
                 )
+                try:
+                    provider.close_task(task.id, reason=CloseReason.NOT_PLANNED)
+                    console.detail(
+                        f"Closed #{task.id} (no plan persisted) to avoid an orphaned issue"
+                    )
+                except Exception as e:
+                    logger.warning("plan.orphan_issue_close_failed", issue=task.id, error=str(e))
                 failed.append(plan.path.name)
                 continue
 

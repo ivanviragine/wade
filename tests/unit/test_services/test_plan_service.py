@@ -1129,10 +1129,36 @@ class TestCreateIssuesFromPlansBaseBranch:
         # An unresolvable declared base makes bootstrap_draft_pr return None. The plan
         # was never persisted to a PR, so it must be recorded as failed (not created) —
         # else the caller finalizes the issue and force-removes the planning worktree,
-        # discarding the plan (#376 review).
+        # discarding the plan (#376 review). The already-created lightweight issue is
+        # closed so it does not orphan and a re-run does not accumulate a duplicate.
         plan_file = self._make_plan(tmp_path, base_section="\n## Base Branch\ndevelop\n")
         provider = MagicMock()
         provider.create_task.return_value = Task(id="9", title="feat: thing")
+
+        with (
+            patch("wade.services.plan_service.bootstrap_draft_pr", return_value=None),
+            patch("wade.services.plan_service.add_complexity_label"),
+            patch("wade.services.plan_service.console"),
+        ):
+            created, failed = _create_issues_from_plans(
+                provider=provider,
+                config=_cfg_main(),
+                plan_files=[plan_file],
+                repo_root=tmp_path,
+            )
+
+        assert created == []
+        assert failed == [plan_file.path.name]
+        provider.close_task.assert_called_once_with("9", reason=CloseReason.NOT_PLANNED)
+
+    def test_bootstrap_failure_swallows_orphan_close_error(self, tmp_path: Path) -> None:
+        # Closing the orphaned issue is best-effort: a close failure must not mask the
+        # underlying bootstrap failure or crash the batch — the plan is still recorded as
+        # failed so the caller preserves the planning output (#376 review).
+        plan_file = self._make_plan(tmp_path, base_section="\n## Base Branch\ndevelop\n")
+        provider = MagicMock()
+        provider.create_task.return_value = Task(id="9", title="feat: thing")
+        provider.close_task.side_effect = RuntimeError("gh down")
 
         with (
             patch("wade.services.plan_service.bootstrap_draft_pr", return_value=None),

@@ -306,3 +306,34 @@ def commits_ahead(repo_root: Path, branch: str, base: str) -> int:
         cwd=repo_root,
     )
     return int(result.stdout.strip())
+
+
+def tip_commit_is_empty(repo_root: Path, ref: str) -> bool | None:
+    """Return whether *ref*'s tip commit introduces no changes vs its first parent.
+
+    WADE's scaffold commit is an *empty* commit — :func:`create_scaffold_commit` reuses
+    the parent's tree — so an empty tip (tree identical to its first parent's) is the
+    reliable signature of a scaffold-only branch. A real one-commit branch (an amended
+    scaffold, a squash down to a single commit, or a PR opened outside WADE) changes the
+    tree. Callers use this to tell a rerootable scaffold apart from real work a reroot
+    would discard when a branch is exactly one commit ahead of its base (#376 review).
+
+    Returns:
+        ``True``  — the tip changes nothing (tree == first parent's tree): a scaffold.
+        ``False`` — the tip introduces changes, or is a root commit (no parent) which is
+                    never WADE's scaffold.
+        ``None``  — emptiness could not be determined (ref unresolvable / git error), so
+                    callers fail closed rather than reroot an indeterminate branch.
+    """
+    tip = _run_git(
+        "rev-parse", "--verify", "--quiet", f"{ref}^{{tree}}", cwd=repo_root, check=False
+    )
+    if tip.returncode != 0:
+        return None
+    parent = _run_git(
+        "rev-parse", "--verify", "--quiet", f"{ref}~1^{{tree}}", cwd=repo_root, check=False
+    )
+    if parent.returncode != 0:
+        # No first parent → a root commit, which is never WADE's scaffold.
+        return False
+    return tip.stdout.strip() == parent.stdout.strip()

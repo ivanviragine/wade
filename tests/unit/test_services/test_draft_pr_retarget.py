@@ -21,6 +21,7 @@ from wade.git.repo import GitError
 from wade.services.implementation_service.draft_pr import (
     _branch_has_real_work,
     _find_checked_out_worktree,
+    _restore_scaffold_head,
     bootstrap_draft_pr,
     reroot_scaffold_branch_for_retarget,
 )
@@ -58,6 +59,7 @@ def _resolver(**mapping: str | None) -> Callable[[Path, str], str | None]:
 
 
 class TestRerootScaffoldBranch:
+    @patch(f"{_D}.git_branch.tip_commit_is_empty", return_value=True)
     @patch(f"{_D}.git_repo.push_branch")
     @patch(f"{_D}.git_branch.create_scaffold_commit")
     @patch(f"{_D}.git_branch.reset_branch")
@@ -72,6 +74,7 @@ class TestRerootScaffoldBranch:
         mock_reset: MagicMock,
         mock_scaffold: MagicMock,
         mock_push: MagicMock,
+        _tip: MagicMock,
     ) -> None:
         # Scaffold-only (1 commit) and not checked out → rebuild on the new base.
         ok = reroot_scaffold_branch_for_retarget(
@@ -83,6 +86,7 @@ class TestRerootScaffoldBranch:
         mock_scaffold.assert_called_once()
         mock_push.assert_called_once_with(Path("/repo"), "feat/42-x", force=True)
 
+    @patch(f"{_D}.git_branch.tip_commit_is_empty", return_value=True)
     @patch(f"{_D}.git_repo.push_branch")
     @patch(f"{_D}.git_branch.create_scaffold_commit")
     @patch(f"{_D}.git_branch.reset_worktree_hard")
@@ -104,6 +108,7 @@ class TestRerootScaffoldBranch:
         mock_reset_wt: MagicMock,
         mock_scaffold: MagicMock,
         mock_push: MagicMock,
+        _tip: MagicMock,
     ) -> None:
         # Scaffold-only (1 commit) but checked out and clean — `git branch -f` can't move
         # it, so re-root it in place with a hard reset inside its worktree (never leave it
@@ -117,6 +122,7 @@ class TestRerootScaffoldBranch:
         mock_scaffold.assert_called_once()
         mock_push.assert_called_once_with(Path("/repo"), "feat/42-x", force=True)
 
+    @patch(f"{_D}.git_branch.tip_commit_is_empty", return_value=True)
     @patch(f"{_D}.console")
     @patch(f"{_D}.git_branch.reset_worktree_hard")
     @patch(f"{_D}.git_branch.reset_branch")
@@ -136,6 +142,7 @@ class TestRerootScaffoldBranch:
         mock_reset_branch: MagicMock,
         mock_reset_wt: MagicMock,
         _console: MagicMock,
+        _tip: MagicMock,
     ) -> None:
         # Checked out with uncommitted tracked changes — a hard reset would discard them,
         # so abort and require the user to commit/stash or remove the worktree.
@@ -165,6 +172,28 @@ class TestRerootScaffoldBranch:
         assert ok is True
         mock_reset.assert_not_called()
 
+    @patch(f"{_D}.git_branch.reset_branch")
+    @patch(f"{_D}.git_branch.tip_commit_is_empty", return_value=False)
+    @patch(f"{_D}.git_branch.commits_ahead", return_value=1)
+    @patch(f"{_D}.git_branch.resolve_start_point", side_effect=_resolver())
+    @patch("wade.git.worktree.list_worktrees", return_value=[])
+    def test_single_non_empty_commit_left_untouched(
+        self,
+        _wt: MagicMock,
+        _resolve: MagicMock,
+        _ahead: MagicMock,
+        _tip: MagicMock,
+        mock_reset: MagicMock,
+    ) -> None:
+        # Exactly one commit ahead but the tip is NOT empty → real work, not WADE's
+        # scaffold. Leave it untouched instead of hard-resetting the user's commit away
+        # (the count alone would have wrongly treated it as scaffold-only) (#376 review).
+        ok = reroot_scaffold_branch_for_retarget(
+            Path("/repo"), "feat/42-x", "develop", "main", "42"
+        )
+        assert ok is True
+        mock_reset.assert_not_called()
+
     @patch(f"{_D}.console")
     @patch(f"{_D}.git_branch.reset_branch")
     def test_unresolvable_old_base_aborts(
@@ -179,6 +208,7 @@ class TestRerootScaffoldBranch:
         assert ok is False
         mock_reset.assert_not_called()
 
+    @patch(f"{_D}.git_branch.tip_commit_is_empty", return_value=True)
     @patch(f"{_D}.git_branch.reset_branch")
     @patch(f"{_D}.git_repo.has_remote", return_value=False)
     @patch(f"{_D}.git_branch.commits_ahead", return_value=1)
@@ -193,6 +223,7 @@ class TestRerootScaffoldBranch:
         _ahead: MagicMock,
         _has_remote: MagicMock,
         mock_reset: MagicMock,
+        _tip: MagicMock,
     ) -> None:
         # Old base resolves; the new base resolves nowhere and there is no remote to
         # fetch from → abort rather than retarget onto a branch we could not rebuild.
@@ -208,10 +239,45 @@ class TestBranchWorkSignals:
     """`_branch_has_real_work` is commits-only (the guard signal); a mere checked-out
     worktree is not divergent work — only `_find_checked_out_worktree` sees it (#376)."""
 
+    @patch(f"{_D}.git_branch.tip_commit_is_empty", return_value=True)
     @patch(f"{_D}.git_branch.commits_ahead", return_value=1)
     @patch(f"{_D}.git_branch.resolve_start_point", side_effect=_resolver())
-    def test_scaffold_only_is_not_real_work(self, _resolve: MagicMock, _ahead: MagicMock) -> None:
+    def test_scaffold_only_is_not_real_work(
+        self, _resolve: MagicMock, _ahead: MagicMock, _tip: MagicMock
+    ) -> None:
+        # One commit ahead AND that commit is empty (WADE's scaffold) → not real work.
         assert _branch_has_real_work(Path("/repo"), "feat/42-x", "main") is False
+
+    @patch(f"{_D}.git_branch.tip_commit_is_empty", return_value=False)
+    @patch(f"{_D}.git_branch.commits_ahead", return_value=1)
+    @patch(f"{_D}.git_branch.resolve_start_point", side_effect=_resolver())
+    def test_single_non_empty_commit_is_real_work(
+        self, _resolve: MagicMock, _ahead: MagicMock, mock_tip: MagicMock
+    ) -> None:
+        # One commit ahead but the tip touched the tree (amended scaffold / squash / a PR
+        # opened outside WADE) → real work; a bare count would have wrongly reset it (#376).
+        assert _branch_has_real_work(Path("/repo"), "feat/42-x", "main") is True
+        mock_tip.assert_called_once()
+
+    @patch(f"{_D}.git_branch.tip_commit_is_empty", return_value=None)
+    @patch(f"{_D}.git_branch.commits_ahead", return_value=1)
+    @patch(f"{_D}.git_branch.resolve_start_point", side_effect=_resolver())
+    def test_single_commit_emptiness_unknown_fails_closed(
+        self, _resolve: MagicMock, _ahead: MagicMock, _tip: MagicMock
+    ) -> None:
+        # Cannot determine whether the single commit is empty → fail closed as real work
+        # so an indeterminate branch is never silently hard-reset.
+        assert _branch_has_real_work(Path("/repo"), "feat/42-x", "main") is True
+
+    @patch(f"{_D}.git_branch.tip_commit_is_empty")
+    @patch(f"{_D}.git_branch.commits_ahead", return_value=0)
+    @patch(f"{_D}.git_branch.resolve_start_point", side_effect=_resolver())
+    def test_zero_commits_ahead_is_not_real_work(
+        self, _resolve: MagicMock, _ahead: MagicMock, mock_tip: MagicMock
+    ) -> None:
+        # No commits beyond base → nothing to discard; the emptiness probe is not needed.
+        assert _branch_has_real_work(Path("/repo"), "feat/42-x", "main") is False
+        mock_tip.assert_not_called()
 
     @patch(f"{_D}.git_branch.commits_ahead", return_value=4)
     @patch(f"{_D}.git_branch.resolve_start_point", side_effect=_resolver())
@@ -238,20 +304,23 @@ class TestBranchWorkSignals:
         assert _branch_has_real_work(Path("/repo"), "feat/42-x", "main") is True
         mock_ahead.assert_not_called()
 
+    @patch(f"{_D}.git_branch.tip_commit_is_empty", return_value=True)
     @patch(f"{_D}.git_branch.commits_ahead", return_value=1)
     @patch(
         f"{_D}.git_branch.resolve_start_point",
         side_effect=_resolver(**{"feat/42-x": "origin/feat/42-x"}),
     )
     def test_remote_only_head_measured_via_origin(
-        self, _resolve: MagicMock, mock_ahead: MagicMock
+        self, _resolve: MagicMock, mock_ahead: MagicMock, mock_tip: MagicMock
     ) -> None:
-        # Fresh clone: the PR head lives only on origin. It is still measured (1 commit
-        # → scaffold-only → not real work) instead of being misclassified by a failed
-        # local rev-list (#376 review).
+        # Fresh clone: the PR head lives only on origin. It is still measured (1 empty
+        # commit → scaffold-only → not real work) instead of being misclassified by a
+        # failed local rev-list (#376 review).
         assert _branch_has_real_work(Path("/repo"), "feat/42-x", "main") is False
         # measured against the resolved origin head, not the bare local branch name
         assert mock_ahead.call_args[0][1] == "origin/feat/42-x"
+        # emptiness probed against the same resolved origin head
+        assert mock_tip.call_args[0][1] == "origin/feat/42-x"
 
     @patch("wade.git.worktree.list_worktrees", return_value=[])
     def test_not_checked_out(self, _wt: MagicMock) -> None:
@@ -306,3 +375,104 @@ class TestBootstrapRetargetReroots:
 
         assert result is None  # a failed re-root aborts before the PR base is edited
         mock_update.assert_not_called()
+
+    @patch(f"{_D}._restore_scaffold_head")
+    @patch(f"{_D}._resolve_head_sha", side_effect=["oldsha", "newsha"])
+    @patch(f"{_D}.git_branch.resolve_start_point", return_value="feat/42-x")
+    @patch(f"{_D}.reroot_scaffold_branch_for_retarget", return_value=True)
+    @patch(f"{_D}.git_pr.update_pr_base", return_value=False)
+    @patch(f"{_D}.git_branch.make_branch_name", return_value="feat/42-x")
+    def test_restores_head_when_update_pr_base_fails(
+        self,
+        _mk: MagicMock,
+        _update: MagicMock,
+        _reroot: MagicMock,
+        _resolve: MagicMock,
+        _sha: MagicMock,
+        mock_restore: MagicMock,
+    ) -> None:
+        # The reroot rewrote the head (SHA changed) but the PR-base edit failed — roll the
+        # head back to its pre-reroot SHA so the remote branch and the still-old-base PR
+        # don't diverge (#376 review).
+        with patch(f"{_D}.git_pr.get_pr_for_branch", return_value=_open_pr("develop")):
+            result = bootstrap_draft_pr(
+                "42", "Title", "plan body", _cfg(), Path("/repo"), base_branch="main"
+            )
+
+        assert result is None
+        mock_restore.assert_called_once_with(Path("/repo"), "feat/42-x", "oldsha", 5)
+
+    @patch(f"{_D}._restore_scaffold_head")
+    @patch(f"{_D}._resolve_head_sha", side_effect=["samesha", "samesha"])
+    @patch(f"{_D}.git_branch.resolve_start_point", return_value="feat/42-x")
+    @patch(f"{_D}.reroot_scaffold_branch_for_retarget", return_value=True)
+    @patch(f"{_D}.git_pr.update_pr_base", return_value=False)
+    @patch(f"{_D}.git_branch.make_branch_name", return_value="feat/42-x")
+    def test_no_restore_when_reroot_left_head_unchanged(
+        self,
+        _mk: MagicMock,
+        _update: MagicMock,
+        _reroot: MagicMock,
+        _resolve: MagicMock,
+        _sha: MagicMock,
+        mock_restore: MagicMock,
+    ) -> None:
+        # A real-work branch is left untouched by the reroot (SHA unchanged), so a restore
+        # would be a needless hard reset that could discard uncommitted work — skip it.
+        with patch(f"{_D}.git_pr.get_pr_for_branch", return_value=_open_pr("develop")):
+            result = bootstrap_draft_pr(
+                "42", "Title", "plan body", _cfg(), Path("/repo"), base_branch="main"
+            )
+
+        assert result is None
+        mock_restore.assert_not_called()
+
+
+class TestRestoreScaffoldHead:
+    @patch(f"{_D}.git_repo.push_branch")
+    @patch(f"{_D}.git_branch.reset_branch")
+    @patch(f"{_D}.git_branch.reset_worktree_hard")
+    @patch(f"{_D}._find_checked_out_worktree", return_value=(False, None))
+    def test_restores_not_checked_out(
+        self,
+        _find: MagicMock,
+        mock_reset_wt: MagicMock,
+        mock_reset_branch: MagicMock,
+        mock_push: MagicMock,
+    ) -> None:
+        _restore_scaffold_head(Path("/repo"), "feat/42-x", "oldsha", 5)
+        mock_reset_branch.assert_called_once_with(Path("/repo"), "feat/42-x", "oldsha")
+        mock_reset_wt.assert_not_called()
+        mock_push.assert_called_once_with(Path("/repo"), "feat/42-x", force=True)
+
+    @patch(f"{_D}.git_repo.push_branch")
+    @patch(f"{_D}.git_branch.reset_branch")
+    @patch(f"{_D}.git_branch.reset_worktree_hard")
+    @patch(f"{_D}._find_checked_out_worktree", return_value=(True, Path("/wt")))
+    def test_restores_checked_out_in_worktree(
+        self,
+        _find: MagicMock,
+        mock_reset_wt: MagicMock,
+        mock_reset_branch: MagicMock,
+        mock_push: MagicMock,
+    ) -> None:
+        # `git branch -f` can't move a checked-out branch → reset inside its worktree.
+        _restore_scaffold_head(Path("/repo"), "feat/42-x", "oldsha", 5)
+        mock_reset_wt.assert_called_once_with(Path("/wt"), "oldsha")
+        mock_reset_branch.assert_not_called()
+        mock_push.assert_called_once_with(Path("/repo"), "feat/42-x", force=True)
+
+    @patch(f"{_D}.console")
+    @patch(f"{_D}.git_repo.push_branch", side_effect=GitError("push denied"))
+    @patch(f"{_D}.git_branch.reset_branch")
+    @patch(f"{_D}._find_checked_out_worktree", return_value=(False, None))
+    def test_reports_when_restore_fails(
+        self,
+        _find: MagicMock,
+        _reset: MagicMock,
+        _push: MagicMock,
+        mock_console: MagicMock,
+    ) -> None:
+        # A failed restore leaves divergence needing manual cleanup — report it loudly.
+        _restore_scaffold_head(Path("/repo"), "feat/42-x", "oldsha", 5)
+        mock_console.error.assert_called_once()
