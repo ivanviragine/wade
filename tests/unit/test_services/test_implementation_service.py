@@ -1122,6 +1122,45 @@ class TestImplementationStartBaseBranch:
 
         assert result.success is False
 
+    def test_failed_retarget_restores_rerooted_head(self, tmp_path: Path) -> None:
+        """When update_pr_base fails after the reroot force-pushed the rewritten head, the
+        head is rolled back so the remote branch and the still-old-base PR stay consistent —
+        the same rollback bootstrap_draft_pr added, wired into start()'s parallel retarget
+        entry point (#376 review)."""
+        provider = MagicMock()
+        provider.read_task.return_value = Task(id="42", title="Test task")
+
+        with contextlib.ExitStack() as stack:
+            self._enter_common_patches(stack, tmp_path, provider, pr_base="main")
+            stack.enter_context(patch("wade.git.pr.update_pr_base", return_value=False))
+            # Model a reroot that rewrote the head: pre != post SHA → restore expected.
+            stack.enter_context(
+                patch(f"{self._CORE}._resolve_head_sha", side_effect=["oldsha", "newsha"])
+            )
+            restore = stack.enter_context(patch(f"{self._CORE}._restore_scaffold_head"))
+            result = start("42", project_root=tmp_path, base_branch="release/x")
+
+        assert result.success is False
+        restore.assert_called_once_with(tmp_path, "feat/42-test-task", "oldsha", 7)
+
+    def test_failed_retarget_skips_restore_when_head_unchanged(self, tmp_path: Path) -> None:
+        """A real-work branch is left untouched by the reroot (SHA unchanged), so a failed
+        retarget must NOT hard-reset it — skip the restore to avoid discarding work (#376)."""
+        provider = MagicMock()
+        provider.read_task.return_value = Task(id="42", title="Test task")
+
+        with contextlib.ExitStack() as stack:
+            self._enter_common_patches(stack, tmp_path, provider, pr_base="main")
+            stack.enter_context(patch("wade.git.pr.update_pr_base", return_value=False))
+            stack.enter_context(
+                patch(f"{self._CORE}._resolve_head_sha", side_effect=["samesha", "samesha"])
+            )
+            restore = stack.enter_context(patch(f"{self._CORE}._restore_scaffold_head"))
+            result = start("42", project_root=tmp_path, base_branch="release/x")
+
+        assert result.success is False
+        restore.assert_not_called()
+
     def test_override_to_main_clears_stale_base_file(self, tmp_path: Path) -> None:
         """`--base main` retargets a PR previously on a non-main base and deletes the
         stale .wade/base_branch so catchup/sync/done stop targeting the old base (#376)."""

@@ -49,6 +49,8 @@ from wade.services.implementation_service.bootstrap import (
 )
 from wade.services.implementation_service.draft_pr import (
     _branch_has_real_work,
+    _resolve_head_sha,
+    _restore_scaffold_head,
     bootstrap_draft_pr,
     build_implementation_prompt,
     extract_plan_from_pr_body,
@@ -643,6 +645,12 @@ def start(
                         )
                         return ImplementResult(success=False)
                 # Re-root a scaffold-only branch on the new base first (#376 review).
+                # The reroot force-pushes the rewritten head *before* the base edit, so
+                # capture the pre-reroot head: a failed edit would otherwise leave the
+                # remote branch (new base) and the PR (old base) divergent. Roll the head
+                # back to keep them consistent — mirroring bootstrap_draft_pr (#376 review).
+                head_ref = git_branch.resolve_start_point(repo_root, branch_name)
+                pre_reroot_sha = _resolve_head_sha(repo_root, head_ref) if head_ref else None
                 if not reroot_scaffold_branch_for_retarget(
                     repo_root, branch_name, current_pr_base, resolved_base, task.id
                 ):
@@ -651,6 +659,15 @@ def start(
                     console.error(
                         f"Failed to retarget PR #{existing_pr.number} to {resolved_base}."
                     )
+                    # Only roll back when the reroot actually rewrote the head (SHA
+                    # changed). A real-work branch is left untouched by the reroot, so a
+                    # restore would be a needless hard reset that could discard uncommitted
+                    # work (#376 review).
+                    post_reroot_sha = _resolve_head_sha(repo_root, branch_name)
+                    if pre_reroot_sha and post_reroot_sha and pre_reroot_sha != post_reroot_sha:
+                        _restore_scaffold_head(
+                            repo_root, branch_name, pre_reroot_sha, existing_pr.number
+                        )
                     return ImplementResult(success=False)
         effective_base = resolved_base or main_branch
 

@@ -25,6 +25,8 @@ __all__ = [
     "PLAN_MARKER_START",
     "_branch_has_real_work",
     "_build_implementation_issue_context_header",
+    "_resolve_head_sha",
+    "_restore_scaffold_head",
     "bootstrap_draft_pr",
     "build_implementation_prompt",
     "extract_plan_from_pr_body",
