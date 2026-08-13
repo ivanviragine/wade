@@ -1164,24 +1164,32 @@ class TestImplementationStartBaseBranch:
         assert result.success is False
         update_base.assert_not_called()  # PR base never silently flipped
 
-    def test_empty_pr_base_still_retargets_to_explicit_base(self, tmp_path: Path) -> None:
-        """If the PR's base reads back empty, an explicit --base must still retarget so the
-        local .wade/base_branch pin never diverges from the actual PR base (#376 review)."""
+    def test_empty_pr_base_aborts_retarget_when_base_unknown(self, tmp_path: Path) -> None:
+        """If the PR's base reads back empty, the current base is unknown, so the reroot
+        cannot prove the branch is a rerootable scaffold and refuses — `start()` must abort
+        before touching the PR base rather than blindly reset/force-push a branch of unknown
+        provenance (#376 review). The reroot's own abort-on-unknown-base is unit-tested in
+        test_draft_pr_retarget; here we model that refusal to verify start()'s wiring."""
         provider = MagicMock()
         provider.read_task.return_value = Task(id="42", title="Test task")
 
         with contextlib.ExitStack() as stack:
             self._enter_common_patches(stack, tmp_path, provider, pr_base="")
+            # Override the scaffold default: the real reroot returns False for an unknown
+            # (empty) old base — model that here.
+            stack.enter_context(
+                patch(
+                    f"{self._CORE}.reroot_scaffold_branch_for_retarget",
+                    return_value=False,
+                )
+            )
             update_base = stack.enter_context(
                 patch("wade.git.pr.update_pr_base", return_value=True)
             )
             result = start("42", project_root=tmp_path, base_branch="develop")
 
-        assert result.success is True
-        update_base.assert_called_once()
-        assert update_base.call_args.args[2] == "develop"
-        base_file = self._worktree_path(tmp_path) / ".wade" / "base_branch"
-        assert base_file.read_text().strip() == "develop"
+        assert result.success is False
+        update_base.assert_not_called()  # PR base never touched on an unprovable reroot
 
     def test_malformed_explicit_base_is_rejected(self, tmp_path: Path) -> None:
         """A hand-typed --base with whitespace / invalid ref chars fails fast — symmetric

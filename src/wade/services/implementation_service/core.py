@@ -602,12 +602,12 @@ def start(
                 if current_pr_base:
                     resolved_base = current_pr_base
             elif current_pr_base != resolved_base:
-                # Explicit override differs from the PR's base (or the PR base could
-                # not be read) — retarget so the worktree, PR, and merge target stay
-                # consistent. Retargeting even on an unknown current base avoids
-                # writing a `.wade/base_branch` pin that diverges from the actual PR
-                # base. A failed retarget must abort rather than leave a stale base
-                # (#376).
+                # Explicit override differs from the PR's base — retarget so the worktree,
+                # PR, and merge target stay consistent; a failed retarget must abort rather
+                # than leave a stale base (#376). When the PR base can't be read
+                # (current_pr_base is None), the reroot below refuses — it cannot prove the
+                # branch is a rerootable scaffold — and this aborts, safer than resetting a
+                # branch of unknown provenance.
                 console.step(
                     f"Retargeting PR #{existing_pr.number} base "
                     f"{current_pr_base or '(unknown)'} -> {resolved_base}..."
@@ -618,6 +618,11 @@ def start(
                 # work cannot be rewritten without discarding it, so guard that case
                 # (confirm/abort) rather than silently polluting the PR — mirrors the
                 # plan flow's _base_retarget_is_safe (#376 review).
+                #
+                # `_branch_has_real_work(None)` returns False (skip the confirmation) when
+                # the base is unknown; that stays safe only because reroot's `if not
+                # old_base` is the *authoritative* guard for an unknown base and aborts
+                # below. Keep the two in step if either changes (#376 review).
                 if _branch_has_real_work(repo_root, branch_name, current_pr_base):
                     console.error(
                         f"PR #{existing_pr.number}'s branch already has in-flight work, so "
