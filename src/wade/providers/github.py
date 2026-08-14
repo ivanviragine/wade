@@ -898,6 +898,22 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
 
     # --- Project board operations ---
 
+    @staticmethod
+    def _project_scope_missing(stderr: str) -> bool:
+        """Whether a gh Projects v2 error in *stderr* signals a missing OAuth scope.
+
+        Board moves need the ``project`` scope. gh surfaces its absence two ways
+        depending on the call: the GraphQL API's ``INSUFFICIENT_SCOPES`` error
+        type, and the CLI's human-readable "required scopes ... 'read:project'"
+        message on the read query. Match either so the actionable hint fires on
+        whichever call fails first.
+        """
+        return (
+            "INSUFFICIENT_SCOPES" in stderr
+            or "read:project" in stderr
+            or "required scopes" in stderr
+        )
+
     def move_to_in_progress(self, task_id: str) -> bool:
         """Move an issue to 'In Progress' on GitHub Projects v2.
 
@@ -950,7 +966,6 @@ query($owner: String!, $repo: String!, $number: Int!) {
                     f"query={query}",
                 ],
                 check=True,
-                retries=3,
             )
 
             data = json.loads(result.stdout)
@@ -961,7 +976,18 @@ query($owner: String!, $repo: String!, $number: Int!) {
                 .get("projectItems", {})
                 .get("nodes", [])
             )
-        except (CommandError, json.JSONDecodeError):
+        except CommandError as e:
+            # Board move is best-effort. Surface the actionable scope hint here:
+            # this read query fails before the mutation path that also checks it,
+            # so this is the only place the user would otherwise see just a raw
+            # gh scope error. Don't retry a non-transient permission failure.
+            if self._project_scope_missing(e.stderr):
+                logger.warning(
+                    "github.project_scope_missing",
+                    hint="Run: gh auth refresh -s project",
+                )
+            return False
+        except json.JSONDecodeError:
             return False
 
         # Find "In Progress" option across all linked projects
@@ -1016,7 +1042,6 @@ mutation($project_id: ID!, $item_id: ID!, $field_id: ID!, $option_id: String!) {
                         f"query={mutation}",
                     ],
                     check=True,
-                    retries=3,
                 )
                 logger.info(
                     "github.moved_to_in_progress",
@@ -1024,7 +1049,9 @@ mutation($project_id: ID!, $item_id: ID!, $field_id: ID!, $option_id: String!) {
                 )
                 return True
             except CommandError as e:
-                if "INSUFFICIENT_SCOPES" in e.stderr:
+                # A read-capable token may still lack *write* project scope, so
+                # the mutation can fail on scope even when the query succeeded.
+                if self._project_scope_missing(e.stderr):
                     logger.warning(
                         "github.project_scope_missing",
                         hint="Run: gh auth refresh -s project",

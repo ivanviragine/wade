@@ -646,6 +646,42 @@ class TestMoveToInProgress:
 
         assert result is False
 
+    def test_project_scope_missing_classifier(self) -> None:
+        """The scope classifier matches both gh error wordings, and nothing else."""
+        cls = GitHubProvider._project_scope_missing
+        # GraphQL API error type (surfaced on the mutation path).
+        assert cls("errors: [{ type: INSUFFICIENT_SCOPES }]") is True
+        # gh CLI human-readable message (surfaced on the read query).
+        assert cls("requires one of the following scopes: ['read:project']") is True
+        assert cls("Your token has not been granted the required scopes") is True
+        # Unrelated failures must not masquerade as a scope problem.
+        assert cls("some unrelated GraphQL error") is False
+        assert cls("") is False
+
+    @patch("wade.providers.github.run")
+    def test_read_scope_error_is_nonfatal(
+        self, mock_run: MagicMock, provider: GitHubProvider
+    ) -> None:
+        """A missing project scope on the read query returns False (non-fatal).
+
+        This path previously swallowed the error silently; it must still return
+        False rather than raise — now while also surfacing the scope hint — even
+        though the failing read never reaches the mutation path's scope check.
+        """
+        nwo_response = _make_completed("owner/repo\n")
+        scope_err = CommandError(
+            ["gh"],
+            1,
+            "Your token has not been granted the required scopes to execute this "
+            "query. The 'id' field requires one of the following scopes: "
+            "['read:project'], but your token has only been granted: ['gist']",
+        )
+        mock_run.side_effect = [nwo_response, scope_err]
+
+        result = provider.move_to_in_progress("191")
+
+        assert result is False
+
 
 # ---------------------------------------------------------------------------
 # Registry tests
