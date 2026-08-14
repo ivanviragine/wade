@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.45.3] — 2026-08-14
+
+### Bug Fixes
+
+- resolve worktree/branch by issue number + project-scope UX (#417) (6158a41)
+
 ## [v0.45.2] — 2026-08-13
 
 ### Refactoring
