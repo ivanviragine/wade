@@ -75,19 +75,64 @@ logger = structlog.get_logger()
 # ---------------------------------------------------------------------------
 
 
-def _resolve_task_branch(config: ProjectConfig, task: Task, repo_root: Path) -> str:
-    """Resolve the branch name for a task.
+def _find_existing_branch_for_issue(repo_root: Path, issue: str) -> str | None:
+    """Return the name of an existing branch that belongs to *issue*, or ``None``.
 
-    Prefers the currently checked-out branch when its issue number matches the
-    task; falls back to make_branch_name for out-of-worktree or detached-HEAD
-    callers.
+    Matches by the stable issue *number* — first the worktrees, then local and
+    remote branches — never by a freshly slugified title. The slug is frozen into
+    the branch at ``wade implement`` time, so a title edited afterward (commonly:
+    the issue renamed to conventional-commit form when its PR opens) would make a
+    reconstructed name drift from the real branch. A worktree's branch is
+    preferred because it is the exact ref checked out for the issue.
     """
+    with contextlib.suppress(GitError):
+        for wt in git_worktree.list_worktrees(repo_root):
+            if wt.branch and extract_issue_from_branch(wt.branch) == issue:
+                return wt.branch
+
+    # No live worktree (e.g. it was cleaned up while the PR stayed open) — fall
+    # back to any local or remote branch carrying the issue number so the
+    # remote-recovery path fetches the *real* branch rather than a drifted name.
+    with contextlib.suppress(GitError):
+        for name in git_branch.list_branch_names(repo_root):
+            short = name[len("origin/") :] if name.startswith("origin/") else name
+            if extract_issue_from_branch(short) == issue:
+                return short
+
+    return None
+
+
+def _resolve_task_branch(config: ProjectConfig, task: Task, repo_root: Path) -> str:
+    """Resolve the branch name for a task by its stable issue *number*.
+
+    Resolution order:
+
+    1. the currently checked-out branch, when it already carries this issue
+       (an in-worktree caller — authoritative);
+    2. an existing worktree / local / remote branch carrying this issue number
+       (see :func:`_find_existing_branch_for_issue`);
+    3. a name reconstructed from the current title — only when nothing for this
+       issue exists yet (first-time creation).
+
+    Resolving by number rather than by re-slugifying ``task.title`` is
+    deliberate: the branch slug is frozen at ``wade implement`` time, so a title
+    edited afterward regenerates a *different* name and orphans the real
+    worktree/PR — the "No worktree or remote branch found for issue #N" failure
+    this guards against.
+    """
+    issue = str(int(task.id))
+
     try:
         current_branch = git_repo.get_current_branch(repo_root)
-        if extract_issue_from_branch(current_branch) == str(int(task.id)):
+        if extract_issue_from_branch(current_branch) == issue:
             return current_branch
     except GitError:
         pass
+
+    existing = _find_existing_branch_for_issue(repo_root, issue)
+    if existing is not None:
+        return existing
+
     return git_branch.make_branch_name(
         config.project.branch_prefix,
         int(task.id),
@@ -125,8 +170,8 @@ def fetch_reviews(
         console.error(f"Could not read issue #{issue_number}: {e}")
         return False
 
-    # Find branch and PR — prefer actual checked-out branch (authoritative);
-    # fall back to reconstructed name for out-of-worktree or detached-HEAD callers.
+    # Resolve the branch by issue number (worktree / local / remote), not by
+    # re-slugifying the title — the title may have drifted since implement.
     branch_name = _resolve_task_branch(config, task, repo_root)
 
     lookup = git_pr.get_pr_for_branch(repo_root, branch_name)
