@@ -646,6 +646,93 @@ class TestMoveToInProgress:
 
         assert result is False
 
+    def test_project_scope_missing_classifier(self) -> None:
+        """The scope classifier matches both gh error wordings, and nothing else."""
+        cls = GitHubProvider._project_scope_missing
+        # GraphQL API error type (surfaced on the mutation path).
+        assert cls("errors: [{ type: INSUFFICIENT_SCOPES }]") is True
+        # gh CLI human-readable message (surfaced on the read query).
+        assert cls("requires one of the following scopes: ['read:project']") is True
+        assert cls("Your token has not been granted the required scopes") is True
+        # Unrelated failures must not masquerade as a scope problem.
+        assert cls("some unrelated GraphQL error") is False
+        assert cls("") is False
+
+    @patch("wade.providers.github.run")
+    def test_read_scope_error_is_nonfatal(
+        self, mock_run: MagicMock, provider: GitHubProvider
+    ) -> None:
+        """A missing project scope on the read query returns False (non-fatal).
+
+        This path previously swallowed the error silently; it must still return
+        False rather than raise — now while also surfacing the scope hint — even
+        though the failing read never reaches the mutation path's scope check.
+        """
+        nwo_response = _make_completed("owner/repo\n")
+        scope_err = CommandError(
+            ["gh"],
+            1,
+            "Your token has not been granted the required scopes to execute this "
+            "query. The 'id' field requires one of the following scopes: "
+            "['read:project'], but your token has only been granted: ['gist']",
+        )
+        mock_run.side_effect = [nwo_response, scope_err]
+
+        with patch("wade.providers.github.logger") as mock_logger:
+            result = provider.move_to_in_progress("191")
+
+        assert result is False
+        # Hint must be emitted at a VISIBLE level (logger.error), since the CLI
+        # logs at ERROR by default — a logger.warning would be swallowed.
+        mock_logger.error.assert_any_call(
+            "github.project_scope_missing", hint="Run: gh auth refresh -s project"
+        )
+
+    @patch("wade.providers.github.run")
+    def test_mutation_scope_error_hints_and_is_nonfatal(
+        self, mock_run: MagicMock, provider: GitHubProvider
+    ) -> None:
+        """A write-scope failure on the mutation (read succeeded) also surfaces the hint."""
+        nwo_response = _make_completed("owner/repo\n")
+        query_response = _make_completed(
+            json.dumps(
+                {
+                    "data": {
+                        "repository": {
+                            "issue": {
+                                "projectItems": {
+                                    "nodes": [
+                                        {
+                                            "id": "item-id",
+                                            "project": {
+                                                "id": "project-id",
+                                                "field": {
+                                                    "id": "field-id",
+                                                    "options": [
+                                                        {"id": "opt-id", "name": "In Progress"}
+                                                    ],
+                                                },
+                                            },
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            )
+        )
+        scope_err = CommandError(["gh"], 1, "errors: [{ type: INSUFFICIENT_SCOPES }]")
+        mock_run.side_effect = [nwo_response, query_response, scope_err]
+
+        with patch("wade.providers.github.logger") as mock_logger:
+            result = provider.move_to_in_progress("191")
+
+        assert result is False
+        mock_logger.error.assert_any_call(
+            "github.project_scope_missing", hint="Run: gh auth refresh -s project"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Registry tests

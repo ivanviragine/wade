@@ -93,6 +93,13 @@ Requires [gh CLI](https://cli.github.com/) (authenticated) and at least one supp
 gh auth login    # if not already authenticated
 ```
 
+To let WADE move issues across a GitHub Projects (v2) board (e.g. to *In Progress*),
+also grant the `project` scope. This is optional — everything else works without it:
+
+```bash
+gh auth refresh -s project
+```
+
 ## Quick Start
 
 Initialize WADE in your project (once):

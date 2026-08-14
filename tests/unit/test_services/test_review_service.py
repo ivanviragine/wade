@@ -22,6 +22,7 @@ from wade.services.implementation_service import (
 )
 from wade.services.review_service import (
     _capture_review_session_usage,
+    _find_existing_branch_for_issue,
     _post_review_lifecycle,
     _quiet_next_steps_prompt,
     _recover_worktree,
@@ -500,6 +501,63 @@ class TestReviewServiceStart:
         result = start(target="42")
         assert result is False
 
+    def test_resolves_worktree_by_issue_when_title_drifted(
+        self, mock_setup: dict[str, MagicMock]
+    ) -> None:
+        """A title edited after `wade implement` must not orphan the worktree.
+
+        The reconstructed name (make_branch_name) drifts from the real, frozen
+        branch; start() must still find the worktree by issue number and use the
+        real branch for PR lookup — never the drifted reconstruction.
+        """
+        # Simulate the issue having been retitled since implement: the
+        # regenerated slug no longer matches the branch frozen into the worktree.
+        mock_setup["make_branch_name"].return_value = "feat/42-totally-renamed"
+        with patch(
+            "wade.services.review_service.git_repo.get_current_branch",
+            side_effect=GitError("on main"),
+        ):
+            result = start(target="42")
+
+        assert result is True
+        # Resolution used the worktree's real (frozen) branch, never the drifted
+        # slug reconstructed from the current title.
+        called_branch = mock_setup["get_pr_for_branch"].call_args[0][1]
+        assert called_branch == "feat/42-fix-the-widget"
+        assert called_branch != "feat/42-totally-renamed"
+
+    def test_recovers_by_issue_when_title_drifted(self, mock_setup: dict[str, MagicMock]) -> None:
+        """With no live worktree, recovery fetches the real remote branch.
+
+        When the worktree was cleaned up but the PR branch still exists on the
+        remote, resolution falls back to the remote branch *by issue number* so
+        _recover_worktree fetches the real branch rather than a drifted slug.
+        """
+        mock_setup["make_branch_name"].return_value = "feat/42-totally-renamed"
+        mock_setup["list_worktrees"].return_value = []  # worktree already cleaned up
+        with (
+            patch(
+                "wade.services.review_service.git_repo.get_current_branch",
+                side_effect=GitError("on main"),
+            ),
+            patch(
+                "wade.services.review_service.git_branch.list_branch_names",
+                return_value={"main", "origin/feat/42-fix-the-widget"},
+            ),
+            patch(
+                "wade.services.review_service._recover_worktree",
+                return_value=Path("/tmp/recovered"),
+            ) as mock_recover,
+        ):
+            result = start(target="42")
+
+        assert result is True
+        # Recovery used the real remote branch resolved by issue number, never the
+        # drifted slug reconstructed from the current title.
+        recover_branch = mock_recover.call_args[0][1]
+        assert recover_branch == "feat/42-fix-the-widget"
+        assert recover_branch != "feat/42-totally-renamed"
+
     def test_merged_pr_returns_false(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock]
     ) -> None:
@@ -899,6 +957,50 @@ class TestCaptureReviewSessionUsage:
             )
 
         assert result == "claude-opus-4-6"
+
+
+# ---------------------------------------------------------------------------
+# _find_existing_branch_for_issue — resolve / disambiguate by issue number
+# ---------------------------------------------------------------------------
+
+
+class TestFindExistingBranchForIssue:
+    """Branch resolution by issue number, including same-issue ambiguity (#417 review)."""
+
+    def test_prefers_reconstructed_name_on_ambiguity(self, tmp_path: Path) -> None:
+        """>1 same-issue branch, no worktree → prefer the freshest (reconstructed) name."""
+        with (
+            patch("wade.services.review_service.git_worktree.list_worktrees", return_value=[]),
+            patch(
+                "wade.services.review_service.git_branch.list_branch_names",
+                return_value={"main", "feat/42-old-slug", "feat/42-new-slug"},
+            ),
+        ):
+            got = _find_existing_branch_for_issue(tmp_path, "42", preferred="feat/42-new-slug")
+        assert got == "feat/42-new-slug"
+
+    def test_ambiguity_without_preference_is_deterministic(self, tmp_path: Path) -> None:
+        """Ambiguous match without a preference is sorted (stable), not hash-ordered."""
+        branches = {"main", "feat/42-old-slug", "feat/42-new-slug"}
+        with (
+            patch("wade.services.review_service.git_worktree.list_worktrees", return_value=[]),
+            patch(
+                "wade.services.review_service.git_branch.list_branch_names",
+                return_value=branches,
+            ),
+        ):
+            first = _find_existing_branch_for_issue(tmp_path, "42")
+            second = _find_existing_branch_for_issue(tmp_path, "42")
+        assert first == second == "feat/42-new-slug"  # sorted(): "new" < "old"
+
+    def test_worktree_branch_wins_over_reconstructed(self, tmp_path: Path) -> None:
+        """A live worktree's branch is authoritative even when a preferred name is given."""
+        with patch(
+            "wade.services.review_service.git_worktree.list_worktrees",
+            return_value=[Worktree(path=str(tmp_path / "wt"), branch="feat/42-frozen-slug")],
+        ):
+            got = _find_existing_branch_for_issue(tmp_path, "42", preferred="feat/42-renamed")
+        assert got == "feat/42-frozen-slug"
 
 
 # ---------------------------------------------------------------------------
