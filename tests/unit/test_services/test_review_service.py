@@ -22,6 +22,7 @@ from wade.services.implementation_service import (
 )
 from wade.services.review_service import (
     _capture_review_session_usage,
+    _find_existing_branch_for_issue,
     _post_review_lifecycle,
     _quiet_next_steps_prompt,
     _recover_worktree,
@@ -519,10 +520,11 @@ class TestReviewServiceStart:
             result = start(target="42")
 
         assert result is True
-        # Resolution came from the worktree's real branch, not the drifted slug.
-        mock_setup["make_branch_name"].assert_not_called()
+        # Resolution used the worktree's real (frozen) branch, never the drifted
+        # slug reconstructed from the current title.
         called_branch = mock_setup["get_pr_for_branch"].call_args[0][1]
         assert called_branch == "feat/42-fix-the-widget"
+        assert called_branch != "feat/42-totally-renamed"
 
     def test_recovers_by_issue_when_title_drifted(self, mock_setup: dict[str, MagicMock]) -> None:
         """With no live worktree, recovery fetches the real remote branch.
@@ -550,9 +552,11 @@ class TestReviewServiceStart:
             result = start(target="42")
 
         assert result is True
-        mock_setup["make_branch_name"].assert_not_called()
+        # Recovery used the real remote branch resolved by issue number, never the
+        # drifted slug reconstructed from the current title.
         recover_branch = mock_recover.call_args[0][1]
         assert recover_branch == "feat/42-fix-the-widget"
+        assert recover_branch != "feat/42-totally-renamed"
 
     def test_merged_pr_returns_false(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock]
@@ -953,6 +957,50 @@ class TestCaptureReviewSessionUsage:
             )
 
         assert result == "claude-opus-4-6"
+
+
+# ---------------------------------------------------------------------------
+# _find_existing_branch_for_issue — resolve / disambiguate by issue number
+# ---------------------------------------------------------------------------
+
+
+class TestFindExistingBranchForIssue:
+    """Branch resolution by issue number, including same-issue ambiguity (#417 review)."""
+
+    def test_prefers_reconstructed_name_on_ambiguity(self, tmp_path: Path) -> None:
+        """>1 same-issue branch, no worktree → prefer the freshest (reconstructed) name."""
+        with (
+            patch("wade.services.review_service.git_worktree.list_worktrees", return_value=[]),
+            patch(
+                "wade.services.review_service.git_branch.list_branch_names",
+                return_value={"main", "feat/42-old-slug", "feat/42-new-slug"},
+            ),
+        ):
+            got = _find_existing_branch_for_issue(tmp_path, "42", preferred="feat/42-new-slug")
+        assert got == "feat/42-new-slug"
+
+    def test_ambiguity_without_preference_is_deterministic(self, tmp_path: Path) -> None:
+        """Ambiguous match without a preference is sorted (stable), not hash-ordered."""
+        branches = {"main", "feat/42-old-slug", "feat/42-new-slug"}
+        with (
+            patch("wade.services.review_service.git_worktree.list_worktrees", return_value=[]),
+            patch(
+                "wade.services.review_service.git_branch.list_branch_names",
+                return_value=branches,
+            ),
+        ):
+            first = _find_existing_branch_for_issue(tmp_path, "42")
+            second = _find_existing_branch_for_issue(tmp_path, "42")
+        assert first == second == "feat/42-new-slug"  # sorted(): "new" < "old"
+
+    def test_worktree_branch_wins_over_reconstructed(self, tmp_path: Path) -> None:
+        """A live worktree's branch is authoritative even when a preferred name is given."""
+        with patch(
+            "wade.services.review_service.git_worktree.list_worktrees",
+            return_value=[Worktree(path=str(tmp_path / "wt"), branch="feat/42-frozen-slug")],
+        ):
+            got = _find_existing_branch_for_issue(tmp_path, "42", preferred="feat/42-renamed")
+        assert got == "feat/42-frozen-slug"
 
 
 # ---------------------------------------------------------------------------

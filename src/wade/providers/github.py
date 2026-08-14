@@ -977,12 +977,14 @@ query($owner: String!, $repo: String!, $number: Int!) {
                 .get("nodes", [])
             )
         except CommandError as e:
-            # Board move is best-effort. Surface the actionable scope hint here:
-            # this read query fails before the mutation path that also checks it,
-            # so this is the only place the user would otherwise see just a raw
-            # gh scope error. Don't retry a non-transient permission failure.
+            # Board move is best-effort, but surface the actionable scope hint at a
+            # VISIBLE level: the CLI logs at ERROR by default (logging/setup.py), so a
+            # logger.warning would be swallowed. This read query fails before the
+            # mutation path that also checks scope, so it's the only place the user
+            # would otherwise see just a raw gh error. Don't retry (a permission
+            # failure is not transient; providers must not import the UI console).
             if self._project_scope_missing(e.stderr):
-                logger.warning(
+                logger.error(
                     "github.project_scope_missing",
                     hint="Run: gh auth refresh -s project",
                 )
@@ -1049,10 +1051,11 @@ mutation($project_id: ID!, $item_id: ID!, $field_id: ID!, $option_id: String!) {
                 )
                 return True
             except CommandError as e:
-                # A read-capable token may still lack *write* project scope, so
-                # the mutation can fail on scope even when the query succeeded.
+                # A read-capable token may still lack *write* project scope, so the
+                # mutation can fail on scope even when the query succeeded. Emit at
+                # ERROR so the hint is visible at the default log level.
                 if self._project_scope_missing(e.stderr):
-                    logger.warning(
+                    logger.error(
                         "github.project_scope_missing",
                         hint="Run: gh auth refresh -s project",
                     )

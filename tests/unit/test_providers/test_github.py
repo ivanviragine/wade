@@ -678,9 +678,60 @@ class TestMoveToInProgress:
         )
         mock_run.side_effect = [nwo_response, scope_err]
 
-        result = provider.move_to_in_progress("191")
+        with patch("wade.providers.github.logger") as mock_logger:
+            result = provider.move_to_in_progress("191")
 
         assert result is False
+        # Hint must be emitted at a VISIBLE level (logger.error), since the CLI
+        # logs at ERROR by default — a logger.warning would be swallowed.
+        mock_logger.error.assert_any_call(
+            "github.project_scope_missing", hint="Run: gh auth refresh -s project"
+        )
+
+    @patch("wade.providers.github.run")
+    def test_mutation_scope_error_hints_and_is_nonfatal(
+        self, mock_run: MagicMock, provider: GitHubProvider
+    ) -> None:
+        """A write-scope failure on the mutation (read succeeded) also surfaces the hint."""
+        nwo_response = _make_completed("owner/repo\n")
+        query_response = _make_completed(
+            json.dumps(
+                {
+                    "data": {
+                        "repository": {
+                            "issue": {
+                                "projectItems": {
+                                    "nodes": [
+                                        {
+                                            "id": "item-id",
+                                            "project": {
+                                                "id": "project-id",
+                                                "field": {
+                                                    "id": "field-id",
+                                                    "options": [
+                                                        {"id": "opt-id", "name": "In Progress"}
+                                                    ],
+                                                },
+                                            },
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                }
+            )
+        )
+        scope_err = CommandError(["gh"], 1, "errors: [{ type: INSUFFICIENT_SCOPES }]")
+        mock_run.side_effect = [nwo_response, query_response, scope_err]
+
+        with patch("wade.providers.github.logger") as mock_logger:
+            result = provider.move_to_in_progress("191")
+
+        assert result is False
+        mock_logger.error.assert_any_call(
+            "github.project_scope_missing", hint="Run: gh auth refresh -s project"
+        )
 
 
 # ---------------------------------------------------------------------------

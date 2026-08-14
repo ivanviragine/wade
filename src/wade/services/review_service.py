@@ -75,7 +75,9 @@ logger = structlog.get_logger()
 # ---------------------------------------------------------------------------
 
 
-def _find_existing_branch_for_issue(repo_root: Path, issue: str) -> str | None:
+def _find_existing_branch_for_issue(
+    repo_root: Path, issue: str, preferred: str | None = None
+) -> str | None:
     """Return the name of an existing branch that belongs to *issue*, or ``None``.
 
     Matches by the stable issue *number* — first the worktrees, then local and
@@ -84,6 +86,13 @@ def _find_existing_branch_for_issue(repo_root: Path, issue: str) -> str | None:
     the issue renamed to conventional-commit form when its PR opens) would make a
     reconstructed name drift from the real branch. A worktree's branch is
     preferred because it is the exact ref checked out for the issue.
+
+    When more than one branch carries the issue number (e.g. a closed PR was
+    retitled and implementation restarted), selection is deterministic:
+    ``list_branch_names`` returns an unordered set, so prefer *preferred* — the
+    name reconstructed from the issue's *current* title, i.e. the freshest
+    branch — and otherwise fall back to sorted order rather than returning a
+    hash-ordered (across-run nondeterministic) element.
     """
     with contextlib.suppress(GitError):
         for wt in git_worktree.list_worktrees(repo_root):
@@ -94,10 +103,15 @@ def _find_existing_branch_for_issue(repo_root: Path, issue: str) -> str | None:
     # back to any local or remote branch carrying the issue number so the
     # remote-recovery path fetches the *real* branch rather than a drifted name.
     with contextlib.suppress(GitError):
+        matches: set[str] = set()
         for name in git_branch.list_branch_names(repo_root):
             short = name[len("origin/") :] if name.startswith("origin/") else name
             if extract_issue_from_branch(short) == issue:
-                return short
+                matches.add(short)
+        if preferred is not None and preferred in matches:
+            return preferred
+        if matches:
+            return sorted(matches)[0]
 
     return None
 
@@ -129,15 +143,16 @@ def _resolve_task_branch(config: ProjectConfig, task: Task, repo_root: Path) -> 
     except GitError:
         pass
 
-    existing = _find_existing_branch_for_issue(repo_root, issue)
-    if existing is not None:
-        return existing
-
-    return git_branch.make_branch_name(
+    # Reconstruct the current-title name once: it is both the tiebreaker preference
+    # for _find_existing_branch_for_issue (prefer the freshest branch when an issue
+    # has several) and the fallback when no branch for the issue exists yet.
+    reconstructed = git_branch.make_branch_name(
         config.project.branch_prefix,
         int(task.id),
         task.title,
     )
+    existing = _find_existing_branch_for_issue(repo_root, issue, preferred=reconstructed)
+    return existing if existing is not None else reconstructed
 
 
 def fetch_reviews(
