@@ -1,10 +1,14 @@
 """Unit tests for ``_build_implement_cmd`` — the batch ``wade implement`` child command.
 
-Regression coverage for the permission-mode propagation bug: batch children reload
-the project config and re-resolve their own permission mode, so an explicitly
-resolved ``default`` that is *not* forwarded lets each child resolve back to a
-``yolo``-configured ``ai.implement`` — launching with more autonomy than confirmed.
-The resolved mode must therefore be forwarded unconditionally.
+The permission mode is forwarded to children **only when it was explicit**. Two
+bugs bound this and both are covered here:
+
+- An explicit ``default`` (e.g. the user downgrading from a yolo-configured
+  ``ai.implement``) must be forwarded, else each child reloads the config and
+  re-resolves back to ``yolo`` — more autonomy than confirmed.
+- An implicit ``default`` must NOT be forwarded, else ``wade implement`` treats it
+  as explicit and suppresses a child's own config-driven autonomy downstream
+  (e.g. a non-default ``ai.review_pr_comments.permission_mode``).
 """
 
 from __future__ import annotations
@@ -15,13 +19,9 @@ from wade.models.permission import PermissionMode
 from wade.services.implementation_service.batch import _build_implement_cmd
 
 
-def _mode_value(cmd: list[str]) -> str:
-    return cmd[cmd.index("--permission-mode") + 1]
-
-
 class TestBuildImplementCmd:
-    def test_forwards_default_permission_mode(self) -> None:
-        """An explicitly resolved ``default`` is forwarded so children can't
+    def test_forwards_explicit_default_permission_mode(self) -> None:
+        """An explicitly chosen ``default`` is forwarded so children can't
         re-resolve a yolo config back to yolo."""
         cmd = _build_implement_cmd(
             "42",
@@ -30,10 +30,39 @@ class TestBuildImplementCmd:
             model_explicit=False,
             effort=None,
             permission_mode=PermissionMode.DEFAULT,
+            permission_mode_explicit=True,
         )
         assert cmd == ["wade", "implement", "42", "--ai", "claude", "--permission-mode", "default"]
 
-    def test_forwards_yolo_permission_mode(self) -> None:
+    def test_omits_implicit_default_permission_mode(self) -> None:
+        """An implicit ``default`` is NOT forwarded — left for the child to
+        re-resolve, so it doesn't look explicit downstream."""
+        cmd = _build_implement_cmd(
+            "42",
+            tool="claude",
+            model=None,
+            model_explicit=False,
+            effort=None,
+            permission_mode=PermissionMode.DEFAULT,
+            permission_mode_explicit=False,
+        )
+        assert "--permission-mode" not in cmd
+
+    def test_omits_implicit_yolo_permission_mode(self) -> None:
+        """Even a non-default mode stays unforwarded when implicit — the child
+        re-resolves the same yolo from the shared config."""
+        cmd = _build_implement_cmd(
+            "9",
+            tool="claude",
+            model=None,
+            model_explicit=False,
+            effort=None,
+            permission_mode=PermissionMode.YOLO,
+            permission_mode_explicit=False,
+        )
+        assert "--permission-mode" not in cmd
+
+    def test_forwards_explicit_yolo_permission_mode(self) -> None:
         cmd = _build_implement_cmd(
             "7",
             tool="claude",
@@ -41,8 +70,9 @@ class TestBuildImplementCmd:
             model_explicit=False,
             effort=None,
             permission_mode=PermissionMode.YOLO,
+            permission_mode_explicit=True,
         )
-        assert _mode_value(cmd) == "yolo"
+        assert cmd[cmd.index("--permission-mode") + 1] == "yolo"
 
     def test_model_only_forwarded_when_explicit(self) -> None:
         implicit = _build_implement_cmd(
@@ -52,6 +82,7 @@ class TestBuildImplementCmd:
             model_explicit=False,
             effort=None,
             permission_mode=PermissionMode.DEFAULT,
+            permission_mode_explicit=False,
         )
         assert "--model" not in implicit
         explicit = _build_implement_cmd(
@@ -61,6 +92,7 @@ class TestBuildImplementCmd:
             model_explicit=True,
             effort=None,
             permission_mode=PermissionMode.DEFAULT,
+            permission_mode_explicit=False,
         )
         assert "--model" in explicit
         assert explicit[explicit.index("--model") + 1] == "claude-opus-4.8"
@@ -73,8 +105,9 @@ class TestBuildImplementCmd:
             model_explicit=False,
             effort=EffortLevel.HIGH,
             permission_mode=PermissionMode.ACCEPT_EDITS,
+            permission_mode_explicit=True,
             chain_ids=["4", "5"],
         )
         assert cmd[cmd.index("--effort") + 1] == "high"
         assert cmd[cmd.index("--chain") + 1] == "4,5"
-        assert _mode_value(cmd) == "accept-edits"
+        assert cmd[cmd.index("--permission-mode") + 1] == "accept-edits"
