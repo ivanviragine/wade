@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import re
+import shlex
 import shutil
 import webbrowser
 from enum import StrEnum
@@ -86,12 +87,25 @@ def _post_implementation_lifecycle(
     )
 
 
+_UNTRACKED_COLLISION_MARKER = "untracked working tree files would be overwritten by merge"
+_LOCAL_CHANGES_MARKER = "Your local changes to the following files would be overwritten"
+
+
 def _parse_overwrite_paths(stderr: str) -> list[str]:
-    """Extract conflicting file paths from a git 'would be overwritten' error."""
+    """Extract conflicting file paths from the untracked-collision error block.
+
+    Anchors on :data:`_UNTRACKED_COLLISION_MARKER` specifically, not the generic
+    "would be overwritten by merge" substring both this and
+    :data:`_LOCAL_CHANGES_MARKER` share. When git reports both failure classes
+    in one stderr (local-changes block first, untracked block second),
+    matching the generic substring would start parsing at the local-changes
+    block, so the caller would move tracked, locally-modified files aside as
+    if they were untracked collisions instead of stashing them.
+    """
     paths: list[str] = []
     in_block = False
     for line in stderr.splitlines():
-        if "would be overwritten by merge" in line:
+        if _UNTRACKED_COLLISION_MARKER in line:
             in_block = True
             continue
         if in_block:
@@ -106,9 +120,6 @@ def _warn_pull_sync_failed() -> None:
     console.warn("Could not sync local main branch after merge.")
     console.hint("Run 'git pull' manually to update your local branch.")
 
-
-_UNTRACKED_COLLISION_MARKER = "untracked working tree files would be overwritten by merge"
-_LOCAL_CHANGES_MARKER = "Your local changes to the following files would be overwritten"
 
 # Each loop iteration in ``_pull_main_after_merge`` resolves exactly ONE failure
 # class (move-aside untracked collisions OR stash tracked local changes) and then
@@ -177,7 +188,9 @@ def _restore_backed_up(pairs: list[tuple[Path, Path]]) -> None:
                 exc_info=True,
             )
             console.warn(f"Could not restore backed-up file to {original}.")
-            console.hint(f"Restore it manually: mv {backup} {original}")
+            console.hint(
+                f"Restore it manually: mv {shlex.quote(str(backup))} {shlex.quote(str(original))}"
+            )
 
 
 def _cleanup_empty_backup_dirs(main_root: Path) -> None:

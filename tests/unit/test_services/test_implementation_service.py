@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import shlex
 import shutil
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -1684,6 +1685,16 @@ class TestParseOverwritePaths:
         paths = _parse_overwrite_paths("fatal: some other error\n")
         assert paths == []
 
+    def test_ignores_local_changes_block_when_both_present(self) -> None:
+        """When git reports both failure classes in one stderr (local-changes
+        block first, untracked block second), parsing must anchor on the
+        untracked marker specifically — not the generic "would be overwritten
+        by merge" substring both blocks share — or it would return the
+        tracked, locally-modified path instead of the untracked one."""
+        combined_stderr = LOCAL_CHANGES_STDERR + UNTRACKED_STDERR
+        paths = _parse_overwrite_paths(combined_stderr)
+        assert paths == [".claude/settings.json", ".wade-managed"]
+
 
 class TestPullMainAfterMerge:
     def test_untracked_backed_up_then_retry(self, tmp_path: Path) -> None:
@@ -2087,6 +2098,50 @@ class TestPullMainAfterMerge:
         assert any(f"mv {managed_backup} {managed}" in msg for msg in hint_calls)
         # ...and the stash was still popped (one bad move never strands the stash).
         mock_pop.assert_called_once_with(tmp_path)
+
+    def test_restore_failure_shell_quotes_paths_with_spaces(self, tmp_path: Path) -> None:
+        """The manual `mv` recovery command must be safely copy-pasteable even
+        when the repo or a colliding filename contains a space — unquoted paths
+        would not execute as shown and could trigger unintended shell
+        expansion."""
+        repo_root = tmp_path / "my repo"
+        settings = repo_root / ".claude" / "settings.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text("{}")
+
+        settings_backup = repo_root / ".wade" / "pull-backups" / ".claude" / "settings.json"
+
+        real_move = shutil.move
+
+        def flaky_move(src: str, dst: str) -> object:
+            if str(src) == str(settings_backup):
+                raise OSError("simulated restore failure")
+            return real_move(src, dst)
+
+        stderr = (
+            "error: The following untracked working tree files would be overwritten by merge:\n"
+            "\t.claude/settings.json\n"
+            "Please move or remove them before you merge.\n"
+        )
+        untracked_fail = MagicMock(returncode=1, stderr=stderr)
+        unknown_fail = MagicMock(returncode=1, stderr="fatal: unable to access remote\n")
+
+        with (
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.pull_ff_only",
+                side_effect=[untracked_fail, unknown_fail],
+            ),
+            patch(
+                "wade.services.implementation_service.lifecycle.shutil.move",
+                side_effect=flaky_move,
+            ),
+            patch("wade.services.implementation_service.lifecycle.console") as mock_console,
+        ):
+            _pull_main_after_merge(repo_root)
+
+        hint_calls = [c.args[0] for c in mock_console.hint.call_args_list]
+        expected = f"mv {shlex.quote(str(settings_backup))} {shlex.quote(str(settings))}"
+        assert any(expected in msg for msg in hint_calls)
 
     def test_no_movable_files_breaks_and_warns(self, tmp_path: Path) -> None:
         """An untracked error whose colliding files are all already gone makes no
