@@ -34,6 +34,7 @@ from wade.services.implementation_service import (
     _BATCH_STATUS_MERGED,
     _BATCH_STATUS_NOT_STARTED,
     _BATCH_STATUS_UNKNOWN,
+    MAX_RESOLVE_ATTEMPTS,
     ImplementResult,
     _build_graph_from_issues,
     _build_implementation_issue_context_header,
@@ -1905,6 +1906,63 @@ class TestPullMainAfterMerge:
         # ...and the stashed tracked changes were popped back.
         mock_stash.assert_called_once_with(tmp_path)
         mock_pop.assert_called_once_with(tmp_path)
+
+    def test_cap_exhaustion_rolls_back(self, tmp_path: Path) -> None:
+        """Three full resolve iterations that each make progress but whose retry
+        still fails exhaust MAX_RESOLVE_ATTEMPTS: the loop ends and rolls back
+        every move plus the stash. Guards the cap boundary itself (distinct from
+        the no-progress early exit and the 2-iteration combined path)."""
+        assert MAX_RESOLVE_ATTEMPTS == 3  # this test asserts the exact-cap path
+        file_a = tmp_path / ".claude" / "settings.json"
+        file_a.parent.mkdir(parents=True)
+        file_a.write_text("A")
+        file_b = tmp_path / ".wade-managed"
+        file_b.write_text("B")
+
+        stderr_a = (
+            "error: The following untracked working tree files would be overwritten by merge:\n"
+            "\t.claude/settings.json\n"
+            "Please move or remove them before you merge.\n"
+        )
+        stderr_b = (
+            "error: The following untracked working tree files would be overwritten by merge:\n"
+            "\t.wade-managed\n"
+            "Please move or remove them before you merge.\n"
+        )
+        # pull1 -> iter1 moves A -> pull2 (local) -> iter2 stashes -> pull3 (B
+        # untracked) -> iter3 moves B -> pull4 still fails -> loop ends (cap).
+        pulls = [
+            MagicMock(returncode=1, stderr=stderr_a),
+            MagicMock(returncode=1, stderr=LOCAL_CHANGES_STDERR),
+            MagicMock(returncode=1, stderr=stderr_b),
+            MagicMock(returncode=1, stderr="fatal: unable to access remote\n"),
+        ]
+
+        with (
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.pull_ff_only",
+                side_effect=pulls,
+            ) as mock_pull,
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.stash",
+                return_value=MagicMock(returncode=0),
+            ),
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.stash_pop",
+                return_value=MagicMock(returncode=0),
+            ) as mock_pop,
+            patch("wade.services.implementation_service.lifecycle.console") as mock_console,
+        ):
+            _pull_main_after_merge(tmp_path)
+
+        # Exactly the entry pull + 3 retries — the cap stopped a 4th resolution.
+        assert mock_pull.call_count == 4
+        # Both moved files restored, stash popped, and the user warned.
+        assert file_a.read_text() == "A"
+        assert file_b.read_text() == "B"
+        mock_pop.assert_called_once_with(tmp_path)
+        warn_calls = [c.args[0] for c in mock_console.warn.call_args_list]
+        assert any("Could not sync local main" in msg for msg in warn_calls)
 
     def test_terminal_failure_after_stash_and_move_rolls_back_both(self, tmp_path: Path) -> None:
         """Both a move and a stash happened, then the final retry fails: the

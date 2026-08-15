@@ -31,6 +31,7 @@ from wade.ui.console import console
 logger = structlog.get_logger()
 
 __all__ = [
+    "MAX_RESOLVE_ATTEMPTS",
     "ReviewStatus",
     "ReviewStatusKind",
     "SessionType",
@@ -142,11 +143,14 @@ def _move_untracked_aside(main_root: Path, rel_paths: list[str]) -> list[tuple[P
         try:
             backup.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(original), str(backup))
-            moved.append((original, backup))
         except OSError:
             logger.warning("pull.backup_untracked_failed", path=str(original), exc_info=True)
-        with contextlib.suppress(OSError):
-            original.parent.rmdir()
+        else:
+            moved.append((original, backup))
+            # Only tidy up the now-empty parent after a *successful* move — on a
+            # failed move ``original`` is still there, so its parent isn't empty.
+            with contextlib.suppress(OSError):
+                original.parent.rmdir()
     return moved
 
 
