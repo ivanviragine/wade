@@ -386,17 +386,19 @@ def _patch_config(
             section["tool"] = implement_tool
         else:
             section.pop("tool", None)
-        # ``model`` is the one tool-specific key here: resolve_model prefers this
-        # command-scoped value over the freshly-written ``models.<tool>`` mapping and
-        # drops it as incompatible for a different tool, so a stale pin would shadow
-        # the re-init's model choice. Drop it only on a *confirmed* effective-tool
-        # change; portable keys (permission_mode / yolo / effort / mode / enabled /
-        # timeout) always survive.
+        # ``model`` and ``effort`` are the tool-specific keys here: resolve_model /
+        # resolve_effort both give the command-scoped value precedence over the
+        # freshly-written ``models.<tool>`` mapping, then reject it for a different
+        # tool — an incompatible model or an unsupported effort (e.g. agy rejects
+        # ``xhigh``) resolves to ``None`` — so a stale pin silently shadows the
+        # re-init's choice. Drop both only on a *confirmed* effective-tool change;
+        # portable keys (permission_mode / yolo / mode / enabled / timeout) survive.
         existing_tool = existing.get("tool") if isinstance(existing, dict) else None
         old_effective_tool = existing_tool or old_default_tool
         new_effective_tool = implement_tool or ai_tool
         if old_effective_tool and new_effective_tool and old_effective_tool != new_effective_tool:
             section.pop("model", None)
+            section.pop("effort", None)
         if section:
             ai["implement"] = section
         elif "implement" in ai:
