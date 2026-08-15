@@ -214,8 +214,6 @@ class DoneConfig(BaseModel):
       still a template placeholder (implementation sessions).
     - ``require_sync`` — auto-sync a branch behind main, refuse only on conflict
       (implementation sessions).
-    - ``require_review`` — refuse unless ``wade review implementation`` ran for
-      the current sha (both session types).
     - ``require_resolved_threads`` — refuse on unresolved PR review threads
       (review-pr-comments sessions).
     - ``require_conventional_title`` — refuse when the issue title is not a
@@ -236,7 +234,6 @@ class DoneConfig(BaseModel):
 
     require_pr_summary: bool = True
     require_sync: bool = True
-    require_review: bool = True
     require_resolved_threads: bool = True
     require_conventional_title: bool = True
     pre_push_backstop: bool = True

@@ -571,7 +571,7 @@ class TestReviewStatusBlockContract:
     """#367: `done` projects the review status into the durable PR body.
 
     Complements the unit tests (pure classifier + renderer) by exercising the
-    config wiring end to end — the ``done.require_review``/``--skip-review``/
+    config wiring end to end — the ``--skip-review`` /
     reviewed-marker paths all reach the PR body a human reviewer actually sees.
     """
 
@@ -649,35 +649,6 @@ class TestReviewStatusBlockContract:
         assert self._MARKER in body
         assert f"Reviewed at `{head[:7]}`" in body
 
-    def test_require_review_disabled_records_gate_disabled_note(
-        self,
-        e2e_repo: Path,
-        mock_gh_cli: MockGhCli,
-    ) -> None:
-        """`done.require_review: false` surfaces a "review gate disabled" note (#367).
-
-        Exercises the config wiring end to end (not just the pure classifier): the
-        toggle is set in the project config the worktree inherits, and done — with
-        no review run at all — still records why the gate did not apply.
-        """
-        config_path = e2e_repo / ".wade.yml"
-        config_path.write_text(
-            config_path.read_text(encoding="utf-8") + "\ndone:\n  require_review: false\n",
-            encoding="utf-8",
-        )
-
-        worktree_path, branch = self._bootstrap(
-            e2e_repo, mock_gh_cli, 363, "fix: reflect the disabled review gate"
-        )
-
-        result = _run(["implementation-session", "done"], cwd=worktree_path)
-        assert result.returncode == 0, result.stdout + result.stderr
-
-        body = _pr_body_for_branch(mock_gh_cli["state_file"], branch)
-        assert self._MARKER in body
-        assert "Review gate disabled" in body
-        assert "done.require_review: false" in body
-
     def test_reviews_disabled_records_gate_disabled_note(
         self,
         e2e_repo: Path,
@@ -685,9 +656,8 @@ class TestReviewStatusBlockContract:
     ) -> None:
         """`ai.review_implementation.enabled: false` surfaces the gate-disabled note (#367).
 
-        Distinct config path from `done.require_review: false`: reviews are off
-        project-wide, so the review-ran gate auto-skips — done still records *why*
-        (the `review_implementation.enabled: false` wording) in the PR body.
+        Reviews are off project-wide, so the review-ran gate auto-skips — done still
+        records *why* (the `review_implementation.enabled: false` wording) in the PR body.
         """
         config_path = e2e_repo / ".wade.yml"
         config_path.write_text(

@@ -550,8 +550,7 @@ also decides from, so the two can't drift — returns a frozen `ReviewStatus`
 (`kind`, `passes`, `session_type`, `reviewed_sha`) that `_render_review_status`
 turns into a one-line `## Review Status` section wrapped in
 `wade:review-status:start/end` markers. It records reviewed-at-`<sha>` /
-skipped (`--skip-review`) / gate-disabled (`done.require_review: false` or
-`review_implementation.enabled: false`) / cap-reached, and shows the review-pass
+skipped (`--skip-review`) / gate-disabled (`review_implementation.enabled: false`) / cap-reached, and shows the review-pass
 count so a skipped-but-attempted run reads differently from a never-run one. Like
 the `wade:summary` block it is marker-scoped (upserted before the
 `wade:impl-usage` table, idempotent on re-run, preserving any concurrent edit
@@ -647,7 +646,6 @@ knowledge:
 done:                        # completion-gate toggles (all default true)
   require_pr_summary: true
   require_sync: true
-  require_review: true
   require_resolved_threads: true
   require_conventional_title: true  # block a non-conventional issue title; sync it onto the PR (#392)
   pre_push_backstop: true

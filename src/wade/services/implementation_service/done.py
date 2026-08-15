@@ -550,10 +550,10 @@ def _classify_review(
 
     Pure and side-effect-free: it only reads sha-keyed markers and config. The
     exact-sha fast path is checked **first** — a ``reviewed@<head_sha>`` marker
-    is positive evidence that review ran, so it outranks the ``--skip-review`` /
-    ``require_review`` hatches and the disabled flag: a reviewed commit must
+    is positive evidence that review ran, so it outranks the ``--skip-review``
+    hatch and the disabled flag: a reviewed commit must
     never be reported as skipped/gate-disabled (#367). Only when no marker
-    exists do the hatches and disabled flag take over, followed by the
+    exists do the hatch and disabled flag take over, followed by the
     impl-only pass cap. The pass count (distinct ``review-pass@*`` markers) is
     read for **both** session types — a listdir failure yields ``0`` (fail
     toward re-gating), never a false "cap reached" — and carried on the
@@ -567,8 +567,6 @@ def _classify_review(
         kind = ReviewStatusKind.DISABLED
     elif skip_review:
         kind = ReviewStatusKind.SKIPPED_FLAG
-    elif not config.done.require_review:
-        kind = ReviewStatusKind.REQUIRE_OFF
     elif session_type == "implementation" and passes >= config.done.max_review_passes:
         kind = ReviewStatusKind.CAP_REACHED
     else:
@@ -612,17 +610,15 @@ def _gate_review_ran(
     console output.
 
     Auto-skipped when reviews are disabled (``review_implementation.enabled:
-    false``) — the marker is not written then either. Hatches: ``--skip-review``
-    and ``done.require_review: false``.
+    false``) — the marker is not written then either. Hatch: ``--skip-review``.
     """
     status = _classify_review(config, worktree_root, head_sha, skip_review, session_type)
     kind = status.kind
 
-    # Hatches, disabled, and the exact-sha fast path all pass silently.
+    # Hatch, disabled, and the exact-sha fast path all pass silently.
     if kind in (
         ReviewStatusKind.DISABLED,
         ReviewStatusKind.SKIPPED_FLAG,
-        ReviewStatusKind.REQUIRE_OFF,
         ReviewStatusKind.REVIEWED,
     ):
         return True
@@ -661,7 +657,6 @@ def _gate_review_ran(
     console.hint(
         "If review keeps looping, break it with `wade implementation-session done --skip-review`."
     )
-    console.hint("Bypass: set `done.require_review: false` in .wade.yml.")
     return False
 
 
@@ -673,7 +668,6 @@ def _print_review_refusal() -> None:
         "A clean merge of main is accepted without re-review, but new commits "
         "require a fresh review — the marker is keyed to the commit sha."
     )
-    console.hint("Bypass: set `done.require_review: false` in .wade.yml.")
 
 
 def _behind_count(repo_root: Path, main_branch: str, branch: str) -> int | None:

@@ -148,7 +148,7 @@ it fails, debug and fix it — do NOT bypass.
   threads* above), then re-run `done`. A transient `gh` lookup failure does not
   block. Hatch: `done.require_resolved_threads: false` in `.wade.yml`.
 - `wade review implementation` has not run for the current commit → run it, or
-  pass `--skip-review`. Hatch: `done.require_review: false`.
+  pass `--skip-review`.
 
 `done` also records the review outcome as a `## Review Status` line in the PR body
 (reviewed at `<sha>` / skipped via `--skip-review` / gate disabled), with the

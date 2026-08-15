@@ -1308,7 +1308,6 @@ class TestDone:
                     done=DoneConfig(
                         require_pr_summary=False,
                         require_sync=False,
-                        require_review=False,
                     ),
                 ),
             ),
@@ -1318,7 +1317,7 @@ class TestDone:
             patch("wade.services.implementation_service.done._done_via_pr") as mock_pr,
         ):
             mock_pr.return_value = True
-            done(project_root=wt_dir)
+            done(project_root=wt_dir, skip_review=True)
 
         # Verify _done_via_pr was called with parent branch, not main
         assert mock_pr.called
@@ -1372,7 +1371,6 @@ class TestDone:
                     done=DoneConfig(
                         require_pr_summary=False,
                         require_sync=False,
-                        require_review=False,
                     ),
                 ),
             ),
@@ -1382,7 +1380,7 @@ class TestDone:
             patch("wade.services.implementation_service.done._done_via_pr") as mock_pr,
         ):
             mock_pr.return_value = True
-            done(project_root=wt_dir)
+            done(project_root=wt_dir, skip_review=True)
 
         assert mock_pr.called
         assert mock_pr.call_args[1]["main_branch"] == "develop"
@@ -1420,7 +1418,6 @@ class TestDone:
                     done=DoneConfig(
                         require_pr_summary=False,
                         require_sync=False,
-                        require_review=False,
                     ),
                 ),
             ),
@@ -1430,7 +1427,7 @@ class TestDone:
             patch("wade.services.implementation_service.done._done_via_pr") as mock_pr,
         ):
             mock_pr.return_value = True
-            done(project_root=wt_dir)
+            done(project_root=wt_dir, skip_review=True)
 
         assert mock_pr.called
         assert mock_pr.call_args[1]["main_branch"] == "ghost-branch"

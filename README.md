@@ -344,7 +344,7 @@ escape hatch under a `done:` block in `.wade.yml` (all default on):
 |------|---------------|-------|
 | PR-SUMMARY | `PR-SUMMARY.md` is missing, empty, or still a template placeholder (implementation only) | `done.require_pr_summary: false` |
 | Sync | the branch is behind main — auto-syncs first, refuses only on conflict (implementation only) | `done.require_sync: false` |
-| Review ran | `wade review implementation` did not run for the current commit. **Implementation sessions bound this loop:** after `done.max_review_passes` (default 2) review→fix→re-review cycles, `done` completes anyway with a notice instead of looping forever | `--skip-review`, `done.require_review: false` (auto-off when `ai.review_implementation.enabled: false`) |
+| Review ran | `wade review implementation` did not run for the current commit. **Implementation sessions bound this loop:** after `done.max_review_passes` (default 2) review→fix→re-review cycles, `done` completes anyway with a notice instead of looping forever | `--skip-review` (auto-off when `ai.review_implementation.enabled: false`) |
 | Resolved threads | unresolved PR review threads remain (review-comments only) | `done.require_resolved_threads: false` |
 | Conventional title | the issue title is not a conventional-commit title (the PR title is derived from it, so it would fail `PR Title Lint`) — blocks; when valid but the open PR's title differs, syncs the PR title to match (both session types) — if that sync fails while the PR's current title is itself non-conventional (lint would fail), `done` fails so it can be retried | `done.require_conventional_title: false` |
 | Knowledge valid | the knowledge file is structurally corrupt — duplicate entry IDs or unresolved conflict markers (e.g. from a `merge=union` merge) | *none — gated by `knowledge.enabled`; no `done.*` hatch* |
@@ -359,7 +359,7 @@ the gate hard to skip, not an airtight boundary.
 
 `done` also writes a **`## Review Status`** line into the PR body recording the
 review outcome — reviewed at `<sha>`, skipped via `--skip-review`, gate disabled
-(`done.require_review: false` / `ai.review_implementation.enabled: false`), or
+(`ai.review_implementation.enabled: false`), or
 completed at the review-pass cap — with the review-pass count. A skipped or
 never-run review is therefore visible to reviewers in the PR itself, not just in
 the worktree-local `.wade/` markers that are discarded when the session ends.
