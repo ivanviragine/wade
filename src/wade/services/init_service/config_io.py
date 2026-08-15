@@ -347,6 +347,9 @@ def _patch_config(
 
     # Patch AI tool and default model
     ai = raw.get("ai", {}) or {}
+    # Captured before the overwrite below: the implement-section patch further down
+    # needs the *previous* default to tell whether the effective implement tool changed.
+    old_default_tool = ai.get("default_tool")
     if ai_tool and (force or not ai.get("default_tool")):
         ai["default_tool"] = str(ai_tool)
         raw["ai"] = ai
@@ -383,6 +386,17 @@ def _patch_config(
             section["tool"] = implement_tool
         else:
             section.pop("tool", None)
+        # ``model`` is the one tool-specific key here: resolve_model prefers this
+        # command-scoped value over the freshly-written ``models.<tool>`` mapping and
+        # drops it as incompatible for a different tool, so a stale pin would shadow
+        # the re-init's model choice. Drop it only on a *confirmed* effective-tool
+        # change; portable keys (permission_mode / yolo / effort / mode / enabled /
+        # timeout) always survive.
+        existing_tool = existing.get("tool") if isinstance(existing, dict) else None
+        old_effective_tool = existing_tool or old_default_tool
+        new_effective_tool = implement_tool or ai_tool
+        if old_effective_tool and new_effective_tool and old_effective_tool != new_effective_tool:
+            section.pop("model", None)
         if section:
             ai["implement"] = section
         elif "implement" in ai:

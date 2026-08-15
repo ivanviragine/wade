@@ -1029,6 +1029,43 @@ class TestPatchConfig:
         config = yaml.safe_load(config_path.read_text())
         assert config["ai"]["implement"] == {"yolo": True, "tool": "antigravity-cli"}
 
+    def test_force_drops_stale_implement_model_on_tool_change(self, tmp_path: Path) -> None:
+        """A tool-specific ``ai.implement.model`` is cleared when the impl tool changes.
+
+        Otherwise the stale pin outranks the freshly-written ``models.<new-tool>``
+        mapping (resolve_model precedence) and gets dropped as incompatible, so the
+        re-init's model choice is silently ignored. Portable keys still survive.
+        """
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nai:\n  default_tool: claude\n"
+            "  implement:\n    model: claude-opus-4.8\n    yolo: true\n"
+        )
+        _patch_config(
+            config_path,
+            "claude",
+            ComplexityModelMapping(),
+            implement_tool="antigravity-cli",
+            force=True,
+        )
+        config = yaml.safe_load(config_path.read_text())
+        # model (pinned for claude) is dropped; yolo (portable) survives; tool set.
+        assert config["ai"]["implement"] == {"yolo": True, "tool": "antigravity-cli"}
+
+    def test_force_keeps_implement_model_when_tool_unchanged(self, tmp_path: Path) -> None:
+        """An ``ai.implement.model`` survives re-init when the effective tool is unchanged."""
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nai:\n  default_tool: claude\n"
+            "  implement:\n    model: claude-opus-4.8\n    yolo: true\n"
+        )
+        # implement_tool == default tool → effective tool stays claude → model kept.
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), implement_tool="claude", force=True
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["implement"] == {"model": "claude-opus-4.8", "yolo": True}
+
     def test_force_sets_command_overrides(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
