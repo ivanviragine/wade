@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.45.4] — 2026-08-15
+
+### Bug Fixes
+
+- _pull_main_after_merge untracked-collision backup is never restored on retry failure (#420) (de59eb7)
+
 ## [v0.45.3] — 2026-08-14
 
 ### Bug Fixes
