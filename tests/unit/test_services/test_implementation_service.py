@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import shutil
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -1697,9 +1698,12 @@ class TestPullMainAfterMerge:
         fail_result = MagicMock(returncode=1, stderr=UNTRACKED_STDERR)
         ok_result = MagicMock(returncode=0, stderr="")
 
-        with patch(
-            "wade.services.implementation_service.lifecycle.git_repo.pull_ff_only",
-            side_effect=[fail_result, ok_result],
+        with (
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.pull_ff_only",
+                side_effect=[fail_result, ok_result],
+            ),
+            patch("wade.services.implementation_service.lifecycle.console") as mock_console,
         ):
             _pull_main_after_merge(tmp_path)
 
@@ -1710,6 +1714,11 @@ class TestPullMainAfterMerge:
         backup_root = tmp_path / ".wade" / "pull-backups"
         assert (backup_root / ".claude" / "settings.json").read_text() == "{}"
         assert (backup_root / ".wade-managed").read_text() == "# managed"
+        # The success path (test_untracked_success_keeps_backup) prints the notice
+        # so a human sees where the set-aside files went; no failure warning fires.
+        warn_calls = [c.args[0] for c in mock_console.warn.call_args_list]
+        assert any("Backed up untracked files" in msg for msg in warn_calls)
+        assert not any("Could not sync local main" in msg for msg in warn_calls)
 
     def test_local_changes_triggers_stash_and_retry(self, tmp_path: Path) -> None:
         """Tracked-files error triggers stash, pull retry, then stash pop."""
@@ -1822,6 +1831,224 @@ class TestPullMainAfterMerge:
         mock_pop.assert_called_once_with(tmp_path)
         mock_console.warn.assert_called_once()
         mock_console.hint.assert_called_once()
+
+    def test_untracked_retry_failure_restores_files(self, tmp_path: Path) -> None:
+        """Core regression: when the retry pull fails after moving untracked
+        collisions aside, the files are restored to their original paths (a
+        failed sync is a no-op) and a warning is printed."""
+        settings = tmp_path / ".claude" / "settings.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text("{}")
+        managed = tmp_path / ".wade-managed"
+        managed.write_text("# managed")
+
+        untracked_fail = MagicMock(returncode=1, stderr=UNTRACKED_STDERR)
+        unknown_fail = MagicMock(returncode=1, stderr="fatal: unable to access remote\n")
+
+        with (
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.pull_ff_only",
+                side_effect=[untracked_fail, unknown_fail],
+            ),
+            patch("wade.services.implementation_service.lifecycle.console") as mock_console,
+        ):
+            _pull_main_after_merge(tmp_path)
+
+        # Files are back where they started, with their original content...
+        assert settings.read_text() == "{}"
+        assert managed.read_text() == "# managed"
+        # ...and nothing is stranded in the backup dir (rolled back cleanly).
+        backup_root = tmp_path / ".wade" / "pull-backups"
+        assert not (backup_root / ".claude" / "settings.json").exists()
+        assert not (backup_root / ".wade-managed").exists()
+        # A failed sync warns the user.
+        warn_calls = [c.args[0] for c in mock_console.warn.call_args_list]
+        assert any("Could not sync local main" in msg for msg in warn_calls)
+
+    def test_untracked_then_local_changes_combined(self, tmp_path: Path) -> None:
+        """The combined scenario MAX_RESOLVE_ATTEMPTS keeps a spare for:
+        untracked collision -> move aside -> retry fails with a *local-changes*
+        error -> stash -> retry succeeds. Both classes handled; final tree state
+        correct (untracked files backed up, stash popped)."""
+        settings = tmp_path / ".claude" / "settings.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text("{}")
+        managed = tmp_path / ".wade-managed"
+        managed.write_text("# managed")
+
+        untracked_fail = MagicMock(returncode=1, stderr=UNTRACKED_STDERR)
+        local_fail = MagicMock(returncode=1, stderr=LOCAL_CHANGES_STDERR)
+        ok = MagicMock(returncode=0, stderr="")
+
+        with (
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.pull_ff_only",
+                side_effect=[untracked_fail, local_fail, ok],
+            ),
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.stash",
+                return_value=MagicMock(returncode=0),
+            ) as mock_stash,
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.stash_pop",
+                return_value=MagicMock(returncode=0),
+            ) as mock_pop,
+        ):
+            _pull_main_after_merge(tmp_path)
+
+        # Untracked files preserved in the backup dir on the success path...
+        assert not settings.exists()
+        assert not managed.exists()
+        backup_root = tmp_path / ".wade" / "pull-backups"
+        assert (backup_root / ".claude" / "settings.json").read_text() == "{}"
+        assert (backup_root / ".wade-managed").read_text() == "# managed"
+        # ...and the stashed tracked changes were popped back.
+        mock_stash.assert_called_once_with(tmp_path)
+        mock_pop.assert_called_once_with(tmp_path)
+
+    def test_terminal_failure_after_stash_and_move_rolls_back_both(self, tmp_path: Path) -> None:
+        """Both a move and a stash happened, then the final retry fails: the
+        rollback restores the moved files AND pops the stash before warning."""
+        settings = tmp_path / ".claude" / "settings.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text("{}")
+        managed = tmp_path / ".wade-managed"
+        managed.write_text("# managed")
+
+        untracked_fail = MagicMock(returncode=1, stderr=UNTRACKED_STDERR)
+        local_fail = MagicMock(returncode=1, stderr=LOCAL_CHANGES_STDERR)
+        unknown_fail = MagicMock(returncode=1, stderr="fatal: unable to access remote\n")
+
+        with (
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.pull_ff_only",
+                side_effect=[untracked_fail, local_fail, unknown_fail],
+            ),
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.stash",
+                return_value=MagicMock(returncode=0),
+            ),
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.stash_pop",
+                return_value=MagicMock(returncode=0),
+            ) as mock_pop,
+            patch("wade.services.implementation_service.lifecycle.console") as mock_console,
+        ):
+            _pull_main_after_merge(tmp_path)
+
+        # Moved files restored to their original paths...
+        assert settings.read_text() == "{}"
+        assert managed.read_text() == "# managed"
+        # ...the stash was popped during rollback...
+        mock_pop.assert_called_once_with(tmp_path)
+        # ...and the user was warned about the failed sync.
+        warn_calls = [c.args[0] for c in mock_console.warn.call_args_list]
+        assert any("Could not sync local main" in msg for msg in warn_calls)
+
+    def test_untracked_retry_failure_restores_nested_path(self, tmp_path: Path) -> None:
+        """A nested collision path whose parent dir is rmdir'd during move-aside
+        is still restored on rollback — proving _restore_backed_up recreates the
+        parent dir rather than hitting the manual-command fallback."""
+        settings = tmp_path / ".claude" / "settings.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text("{}")
+
+        nested_stderr = (
+            "error: The following untracked working tree files would be overwritten by merge:\n"
+            "\t.claude/settings.json\n"
+            "Please move or remove them before you merge.\n"
+        )
+        untracked_fail = MagicMock(returncode=1, stderr=nested_stderr)
+        unknown_fail = MagicMock(returncode=1, stderr="fatal: unable to access remote\n")
+
+        with (
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.pull_ff_only",
+                side_effect=[untracked_fail, unknown_fail],
+            ),
+            patch("wade.services.implementation_service.lifecycle.console"),
+        ):
+            _pull_main_after_merge(tmp_path)
+
+        # The .claude/ parent was rmdir'd during move-aside then recreated here.
+        assert settings.read_text() == "{}"
+        assert not (tmp_path / ".wade" / "pull-backups" / ".claude").exists()
+
+    def test_restore_failure_prints_manual_command_and_continues(self, tmp_path: Path) -> None:
+        """If restoring one pair raises OSError, the exact `mv` recovery command
+        is surfaced, the *other* pairs are still restored, and stash_pop runs."""
+        settings = tmp_path / ".claude" / "settings.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text("{}")
+        managed = tmp_path / ".wade-managed"
+        managed.write_text("# managed")
+
+        managed_backup = tmp_path / ".wade" / "pull-backups" / ".wade-managed"
+
+        real_move = shutil.move
+
+        def flaky_move(src: str, dst: str) -> object:
+            # Fail only when restoring .wade-managed (moving it back out of the
+            # backup dir); every other move — including move-aside — is real.
+            if str(src) == str(managed_backup):
+                raise OSError("simulated restore failure")
+            return real_move(src, dst)
+
+        untracked_fail = MagicMock(returncode=1, stderr=UNTRACKED_STDERR)
+        local_fail = MagicMock(returncode=1, stderr=LOCAL_CHANGES_STDERR)
+        unknown_fail = MagicMock(returncode=1, stderr="fatal: unable to access remote\n")
+
+        with (
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.pull_ff_only",
+                side_effect=[untracked_fail, local_fail, unknown_fail],
+            ),
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.stash",
+                return_value=MagicMock(returncode=0),
+            ),
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.stash_pop",
+                return_value=MagicMock(returncode=0),
+            ) as mock_pop,
+            patch(
+                "wade.services.implementation_service.lifecycle.shutil.move",
+                side_effect=flaky_move,
+            ),
+            patch("wade.services.implementation_service.lifecycle.console") as mock_console,
+        ):
+            _pull_main_after_merge(tmp_path)
+
+        # The other pair (settings.json) was still restored despite the failure...
+        assert settings.read_text() == "{}"
+        # ...the un-restorable file remains safe in the backup dir...
+        assert not managed.exists()
+        assert managed_backup.read_text() == "# managed"
+        # ...the exact manual recovery command was surfaced to the user...
+        hint_calls = [c.args[0] for c in mock_console.hint.call_args_list]
+        assert any(f"mv {managed_backup} {managed}" in msg for msg in hint_calls)
+        # ...and the stash was still popped (one bad move never strands the stash).
+        mock_pop.assert_called_once_with(tmp_path)
+
+    def test_no_movable_files_breaks_and_warns(self, tmp_path: Path) -> None:
+        """An untracked error whose colliding files are all already gone makes no
+        progress: the loop breaks immediately (no retry) and warns — covering the
+        no-progress early exit, distinct from cap exhaustion."""
+        untracked_fail = MagicMock(returncode=1, stderr=UNTRACKED_STDERR)
+
+        with (
+            patch(
+                "wade.services.implementation_service.lifecycle.git_repo.pull_ff_only",
+                side_effect=[untracked_fail],
+            ) as mock_pull,
+            patch("wade.services.implementation_service.lifecycle.console") as mock_console,
+        ):
+            _pull_main_after_merge(tmp_path)
+
+        # No retry — the entry pull is the only call.
+        assert mock_pull.call_count == 1
+        warn_calls = [c.args[0] for c in mock_console.warn.call_args_list]
+        assert any("Could not sync local main" in msg for msg in warn_calls)
 
 
 class TestCapturePostSessionUsage:
