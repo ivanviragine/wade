@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import re
+import shlex
 import shutil
 import webbrowser
 from enum import StrEnum
@@ -31,17 +32,20 @@ from wade.ui.console import console
 logger = structlog.get_logger()
 
 __all__ = [
+    "MAX_RESOLVE_ATTEMPTS",
     "ReviewStatus",
     "ReviewStatusKind",
     "SessionType",
     "_apply_pr_refs",
     "_build_pr_body",
     "_merge_pr",
+    "_move_untracked_aside",
     "_parse_overwrite_paths",
     "_post_implementation_lifecycle",
     "_post_implementation_lifecycle_pr",
     "_pull_main_after_merge",
     "_render_review_status",
+    "_restore_backed_up",
     "_strip_summary_section",
     "_warn_pull_sync_failed",
 ]
@@ -83,12 +87,25 @@ def _post_implementation_lifecycle(
     )
 
 
+_UNTRACKED_COLLISION_MARKER = "untracked working tree files would be overwritten by merge"
+_LOCAL_CHANGES_MARKER = "Your local changes to the following files would be overwritten"
+
+
 def _parse_overwrite_paths(stderr: str) -> list[str]:
-    """Extract conflicting file paths from a git 'would be overwritten' error."""
+    """Extract conflicting file paths from the untracked-collision error block.
+
+    Anchors on :data:`_UNTRACKED_COLLISION_MARKER` specifically, not the generic
+    "would be overwritten by merge" substring both this and
+    :data:`_LOCAL_CHANGES_MARKER` share. When git reports both failure classes
+    in one stderr (local-changes block first, untracked block second),
+    matching the generic substring would start parsing at the local-changes
+    block, so the caller would move tracked, locally-modified files aside as
+    if they were untracked collisions instead of stashing them.
+    """
     paths: list[str] = []
     in_block = False
     for line in stderr.splitlines():
-        if "would be overwritten by merge" in line:
+        if _UNTRACKED_COLLISION_MARKER in line:
             in_block = True
             continue
         if in_block:
@@ -104,70 +121,196 @@ def _warn_pull_sync_failed() -> None:
     console.hint("Run 'git pull' manually to update your local branch.")
 
 
+# Each loop iteration in ``_pull_main_after_merge`` resolves exactly ONE failure
+# class (move-aside untracked collisions OR stash tracked local changes) and then
+# retries the pull once. The worst *supported* real scenario is 2 iterations —
+# untracked-collision -> move -> retry-fail -> local-changes -> stash ->
+# retry-succeed — so the cap is 3 (one spare). The spare exists so a future edit
+# that adds a third resolvable class (or reorders these two) cannot silently
+# starve the combined path of a retry. If you raise or lower this, keep
+# ``test_untracked_then_local_changes_combined`` green — it exercises the
+# 2-iteration path this cap must always leave room for.
+MAX_RESOLVE_ATTEMPTS = 3
+
+
+def _move_untracked_aside(main_root: Path, rel_paths: list[str]) -> list[tuple[Path, Path]]:
+    """Move still-present untracked collision files into ``.wade/pull-backups``.
+
+    Returns ``(original, backup)`` pairs for every file actually moved, so the
+    caller can either keep them (finalize on a successful retry) or hand them to
+    :func:`_restore_backed_up` (roll back on terminal failure). Paths git named
+    but already gone are skipped, so an empty return means "no progress possible"
+    — the caller uses that to break out of the resolve loop rather than retry a
+    pull that would fail identically. Preserves the historical
+    ``mkdir(parents=True)`` create + suppressed-``rmdir`` parent cleanup.
+    """
+    backup_root = main_root / ".wade" / "pull-backups"
+    moved: list[tuple[Path, Path]] = []
+    for rel_path in rel_paths:
+        original = main_root / rel_path
+        if not original.exists():
+            continue
+        backup = backup_root / rel_path
+        try:
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(original), str(backup))
+        except OSError:
+            logger.warning("pull.backup_untracked_failed", path=str(original), exc_info=True)
+        else:
+            moved.append((original, backup))
+            # Only tidy up the now-empty parent after a *successful* move — on a
+            # failed move ``original`` is still there, so its parent isn't empty.
+            with contextlib.suppress(OSError):
+                original.parent.rmdir()
+    return moved
+
+
+def _restore_backed_up(pairs: list[tuple[Path, Path]]) -> None:
+    """Move each backed-up file back to its original path, in reverse order.
+
+    Recreates the original parent dir first: :func:`_move_untracked_aside`
+    ``rmdir``'s a parent it emptied (e.g. ``.claude/`` for
+    ``.claude/settings.json``), so without the ``mkdir`` the restore of a nested
+    path would raise ``FileNotFoundError`` on the *common* case, not just the
+    truly-unrecoverable one. On ``OSError`` for a single pair, log it, print the
+    exact ``mv`` recovery command, and keep going — one bad move must never
+    strand the remaining files.
+    """
+    for original, backup in reversed(pairs):
+        try:
+            original.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(backup), str(original))
+        except OSError:
+            logger.warning(
+                "pull.restore_backup_failed",
+                backup=str(backup),
+                original=str(original),
+                exc_info=True,
+            )
+            console.warn(f"Could not restore backed-up file to {original}.")
+            console.hint(
+                f"Restore it manually: mv {shlex.quote(str(backup))} {shlex.quote(str(original))}"
+            )
+
+
+def _cleanup_empty_backup_dirs(main_root: Path) -> None:
+    """Best-effort removal of now-empty dirs under ``.wade/pull-backups``.
+
+    Called only after a rollback moved files back out. ``rmdir`` refuses
+    non-empty dirs, so backups accumulated by *earlier successful* syncs (kept on
+    purpose — see :func:`_pull_main_after_merge`) are never touched.
+    """
+    backup_root = main_root / ".wade" / "pull-backups"
+    if not backup_root.is_dir():
+        return
+    # Deepest-first so a child dir is cleared before its parent is tried.
+    for path in sorted(backup_root.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+        if path.is_dir():
+            with contextlib.suppress(OSError):
+                path.rmdir()
+    with contextlib.suppress(OSError):
+        backup_root.rmdir()
+
+
+def _pop_stash_or_warn(main_root: Path) -> None:
+    """Pop the stash taken during the resolve loop, warning on a pop conflict."""
+    pop_result = git_repo.stash_pop(main_root)
+    if pop_result.returncode != 0:
+        console.warn("Could not restore stashed local changes.")
+        console.hint("Resolve conflicts, then inspect `git stash list`.")
+
+
 def _pull_main_after_merge(repo_root: Path) -> None:
-    """Pull the latest main branch after a successful PR merge.
+    """Fast-forward the local main branch after a successful PR merge — atomically.
 
-    Handles the common case where wade-managed files (skills, settings) were
-    installed by ``wade init`` as untracked files in the repo root. When the PR
-    being merged introduced those same files as tracked, a plain ``git pull``
-    aborts with "untracked files would be overwritten". This helper detects that
-    condition, backs up the conflicting untracked files into ``.wade/pull-backups``
-    (never deleting them, since git reports arbitrary untracked collisions here —
-    not only wade-managed files), then retries the pull so the tracked versions
-    take their place.
+    **Contract:** if main cannot be fast-forwarded, the working tree is left
+    *exactly as it was on entry* (a true no-op) and a warning is printed. On
+    success, main is advanced and any set-aside untracked files are preserved in
+    ``.wade/pull-backups`` with a notice (unchanged happy-path behavior). This
+    atomicity covers the function's own **logical** failure paths (aborted pulls,
+    a failed stash, restorable moves); it is *not* crash-safe against the process
+    being killed mid-sequence — there is no journal/resume, so a hard kill
+    between two ``shutil.move`` calls could still strand files.
 
-    Also handles local modifications to tracked files (e.g. ``wade init``
-    modifying ``.gitignore``) by stashing, pulling, and popping the stash.
+    Two failure classes are resolved by a small bounded loop
+    (:data:`MAX_RESOLVE_ATTEMPTS`), and they compose because they act on disjoint
+    path sets:
+
+    - **Untracked collisions** (wade-managed files installed by ``wade init`` as
+      untracked, then introduced as *tracked* by the merged PR) → each colliding,
+      still-present file is moved aside into ``.wade/pull-backups`` and the pull
+      retried. We deliberately do **not** ``git stash --include-untracked`` here:
+      after a successful pull brings the file back *tracked*, ``git stash pop``
+      would collide ("already exists, no checkout") on the common, expected wade
+      happy path (a previously-untracked managed file becoming tracked), turning
+      today's clean success into a noisy stash-conflict on essentially every
+      merge that introduces a managed file. Move-aside keeps the happy path
+      clean; the rollback below is what makes it atomic. Do not "fix" this back.
+    - **Local changes** to tracked files (e.g. ``wade init`` touching
+      ``.gitignore``) → ``git stash`` (at most once), retry the pull, pop later.
+
+    On any terminal failure (cap reached, unknown error, or no movable file left
+    to make progress), the moved files are restored to their original paths and
+    any stash is popped **before** warning, so the tree returns to entry state.
 
     Pulling main only makes sense in the *main checkout*: a ``git pull`` run from
-    a linked worktree (which is on a feature branch) would target the wrong
-    branch, so we resolve the main checkout root first.
+    a linked worktree (on a feature branch) would target the wrong branch, so we
+    resolve the main checkout root first.
     """
     main_root = git_repo.main_checkout_root(repo_root)
+
     result = git_repo.pull_ff_only(main_root)
     if result.returncode == 0:
         return
-    if "untracked working tree files would be overwritten by merge" in result.stderr:
-        # NEVER delete the colliding files — git reports every untracked
-        # collision here, not just wade-managed ones, so unlinking could destroy
-        # user data. Move each aside into a backup dir before retrying the pull.
-        backup_root = main_root / ".wade" / "pull-backups"
-        backed_up: list[Path] = []
-        for rel_path in _parse_overwrite_paths(result.stderr):
-            target = main_root / rel_path
-            if not target.exists():
-                continue
-            dest = backup_root / rel_path
-            try:
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(target), str(dest))
-                backed_up.append(dest)
-            except OSError:
-                logger.warning("pull.backup_untracked_failed", path=str(target), exc_info=True)
-            with contextlib.suppress(OSError):
-                target.parent.rmdir()
-        retry = git_repo.pull_ff_only(main_root)
-        if backed_up:
-            console.warn("Backed up untracked files that collided with the merge:")
-            for dest in backed_up:
-                console.detail(str(dest))
-        if retry.returncode != 0:
-            _warn_pull_sync_failed()
-    elif "Your local changes to the following files would be overwritten" in result.stderr:
-        # Stash local changes, pull, then restore
-        stash_result = git_repo.stash(main_root)
-        if stash_result.returncode != 0:
-            _warn_pull_sync_failed()
+
+    moved: list[tuple[Path, Path]] = []
+    stashed = False
+
+    for _ in range(MAX_RESOLVE_ATTEMPTS):
+        stderr = result.stderr
+        if _UNTRACKED_COLLISION_MARKER in stderr:
+            # NEVER delete colliding files — git reports every untracked collision
+            # here, not just wade-managed ones, so unlinking could destroy user
+            # data. Move each aside so the tracked versions can land on retry.
+            newly_moved = _move_untracked_aside(main_root, _parse_overwrite_paths(stderr))
+            if not newly_moved:
+                # Nothing could be moved (all already gone) — no progress is
+                # possible, so a retry would just fail identically. Bail out.
+                break
+            moved.extend(newly_moved)
+        elif _LOCAL_CHANGES_MARKER in stderr:
+            if stashed:
+                # Already stashed once; a second local-changes error means the
+                # stash did not clear the obstruction, so re-stashing would loop.
+                break
+            if git_repo.stash(main_root).returncode != 0:
+                break
+            stashed = True
+        else:
+            # Unknown error class — nothing actionable to resolve.
+            break
+
+        result = git_repo.pull_ff_only(main_root)
+        if result.returncode == 0:
+            # Success → finalize: keep moved files in the backup dir (with the
+            # existing notice) and pop any stash we took.
+            if moved:
+                console.warn("Backed up untracked files that collided with the merge:")
+                for _original, backup in moved:
+                    console.detail(str(backup))
+            if stashed:
+                _pop_stash_or_warn(main_root)
             return
-        retry = git_repo.pull_ff_only(main_root)
-        pop_result = git_repo.stash_pop(main_root)
-        if pop_result.returncode != 0:
-            console.warn("Could not restore stashed local changes.")
-            console.hint("Resolve conflicts, then inspect `git stash list`.")
-        if retry.returncode != 0:
-            _warn_pull_sync_failed()
-    else:
-        _warn_pull_sync_failed()
+
+    # Terminal failure → roll back to the entry state (a failed sync is a no-op),
+    # then warn. Restore moved files first, pop any stash, and best-effort clear
+    # the now-empty backup dirs so nothing is stranded in .wade/pull-backups.
+    _restore_backed_up(moved)
+    if stashed:
+        _pop_stash_or_warn(main_root)
+    if moved:
+        _cleanup_empty_backup_dirs(main_root)
+    _warn_pull_sync_failed()
 
 
 def _post_implementation_lifecycle_pr(
