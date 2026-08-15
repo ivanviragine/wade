@@ -661,7 +661,6 @@ def _gate_review_ran(
     console.hint(
         "If review keeps looping, break it with `wade implementation-session done --skip-review`."
     )
-    console.hint("Bypass: set `done.require_review: false` in .wade.yml.")
     return False
 
 
@@ -673,7 +672,6 @@ def _print_review_refusal() -> None:
         "A clean merge of main is accepted without re-review, but new commits "
         "require a fresh review — the marker is keyed to the commit sha."
     )
-    console.hint("Bypass: set `done.require_review: false` in .wade.yml.")
 
 
 def _behind_count(repo_root: Path, main_branch: str, branch: str) -> int | None:
