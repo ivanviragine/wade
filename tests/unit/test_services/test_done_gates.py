@@ -171,6 +171,10 @@ class TestReviewRanGate:
     def test_skip_review_hatch(self, tmp_path: Path) -> None:
         assert _gate_review_ran(ProjectConfig(), tmp_path, "abc", skip_review=True) is True
 
+    def test_require_review_hatch(self, tmp_path: Path) -> None:
+        config = ProjectConfig(done=DoneConfig(require_review=False))
+        assert _gate_review_ran(config, tmp_path, "abc", skip_review=False) is True
+
     def test_auto_skipped_when_reviews_disabled(self, tmp_path: Path) -> None:
         config = ProjectConfig(
             ai=AIConfig(review_implementation=AICommandConfig(enabled=False)),

@@ -194,6 +194,7 @@ class TestParseConfigFile:
         # Every completion gate defaults on — enforcement is the point (#349).
         assert config.done.require_pr_summary is True
         assert config.done.require_sync is True
+        assert config.done.require_review is True
         assert config.done.require_resolved_threads is True
         assert config.done.require_conventional_title is True
         assert config.done.pre_push_backstop is True
@@ -205,6 +206,7 @@ class TestParseConfigFile:
             "done:\n"
             "  require_pr_summary: false\n"
             "  require_sync: false\n"
+            "  require_review: false\n"
             "  require_resolved_threads: false\n"
             "  require_conventional_title: false\n"
             "  pre_push_backstop: false\n"
@@ -213,6 +215,7 @@ class TestParseConfigFile:
         config = parse_config_file(config_path)
         assert config.done.require_pr_summary is False
         assert config.done.require_sync is False
+        assert config.done.require_review is False
         assert config.done.require_resolved_threads is False
         assert config.done.require_conventional_title is False
         assert config.done.pre_push_backstop is False

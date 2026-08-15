@@ -509,6 +509,7 @@ class ReviewStatusKind(StrEnum):
 
     REVIEWED = "reviewed"  # exact-sha ``reviewed@<head>`` marker present
     SKIPPED_FLAG = "skipped_flag"  # ``--skip-review`` passed
+    REQUIRE_OFF = "require_off"  # ``done.require_review: false``
     DISABLED = "disabled"  # ``review_implementation.enabled: false``
     CAP_REACHED = "cap_reached"  # impl-only; pass cap hit with no fresh review
     NOT_REVIEWED = "not_reviewed"  # gate would refuse (rendering fallback)
@@ -557,10 +558,10 @@ def _render_review_status(status: ReviewStatus) -> str:
     (``passes == 0``) — the core #367 legibility fix; see
     :func:`_review_pass_phrase` for why the count is phrased as attempted
     reviews, not confirmed-successful ones. The count is honest for both
-    session types and rendered for the gate-disabled outcome too
-    (``DISABLED``), not just the skipped/not-reviewed ones, so a
-    disabled gate never masks an already-recorded review history — and that
-    branch always states the final commit was not reviewed, without
+    session types and rendered for the gate-disabled outcomes too
+    (``REQUIRE_OFF``/``DISABLED``), not just the skipped/not-reviewed ones, so a
+    disabled gate never masks an already-recorded review history — and those
+    two branches always state the final commit was not reviewed, without
     claiming *when* relative to the gate the passes happened: marker files
     carry no timestamp, so that chronology can't be known (#367 follow-up).
     ``CAP_REACHED`` is only ever produced for implementation sessions (the
@@ -585,6 +586,14 @@ def _render_review_status(status: ReviewStatus) -> str:
             f"⚠️ Completed with {_review_pass_phrase(status.passes)}; the final commit "
             "was not freshly reviewed (`done.max_review_passes` cap reached)."
         )
+    elif kind is ReviewStatusKind.REQUIRE_OFF:
+        # The leading info emoji is intentional PR-body markdown, not an identifier.
+        line = (
+            "ℹ️ Review gate disabled (`done.require_review: false`); "  # noqa: RUF001
+            "the final commit was not reviewed."
+        )
+        if status.passes > 0:
+            line += f" {_review_pass_phrase(status.passes).capitalize()}."
     elif kind is ReviewStatusKind.DISABLED:
         line = (
             "ℹ️ Review gate disabled (`review_implementation.enabled: false`); "  # noqa: RUF001

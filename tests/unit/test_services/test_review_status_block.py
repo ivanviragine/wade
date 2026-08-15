@@ -21,6 +21,7 @@ from wade.git.pr import PRLookup, PRRef
 from wade.models.config import (
     AICommandConfig,
     AIConfig,
+    DoneConfig,
     ProjectConfig,
     ProjectSettings,
 )
@@ -59,6 +60,11 @@ class TestClassifyReview:
     def test_skip_flag(self, tmp_path: Path) -> None:
         status = _classify_review(ProjectConfig(), tmp_path, "head", skip_review=True)
         assert status.kind is ReviewStatusKind.SKIPPED_FLAG
+
+    def test_require_off(self, tmp_path: Path) -> None:
+        config = ProjectConfig(done=DoneConfig(require_review=False))
+        status = _classify_review(config, tmp_path, "head", skip_review=False)
+        assert status.kind is ReviewStatusKind.REQUIRE_OFF
 
     def test_disabled(self, tmp_path: Path) -> None:
         config = ProjectConfig(ai=AIConfig(review_implementation=AICommandConfig(enabled=False)))
@@ -110,6 +116,14 @@ class TestClassifyReview:
         # --skip-review was also passed on this run (#367).
         markers.write_marker(tmp_path, "reviewed", "head")
         status = _classify_review(ProjectConfig(), tmp_path, "head", skip_review=True)
+        assert status.kind is ReviewStatusKind.REVIEWED
+
+    def test_reviewed_precedes_require_off(self, tmp_path: Path) -> None:
+        # A project that permanently sets require_review: false must still
+        # report REVIEWED for a commit that was actually reviewed.
+        markers.write_marker(tmp_path, "reviewed", "head")
+        config = ProjectConfig(done=DoneConfig(require_review=False))
+        status = _classify_review(config, tmp_path, "head", skip_review=False)
         assert status.kind is ReviewStatusKind.REVIEWED
 
     def test_reviewed_precedes_disabled(self, tmp_path: Path) -> None:
@@ -182,6 +196,23 @@ class TestRenderReviewStatus:
         out = _render_review_status(_status(ReviewStatusKind.CAP_REACHED, passes=2))
         assert "done.max_review_passes" in out
         assert "review attempted on 2 distinct commits" in out
+
+    def test_require_off_note(self) -> None:
+        out = _render_review_status(_status(ReviewStatusKind.REQUIRE_OFF))
+        assert "Review gate disabled" in out
+        assert "done.require_review: false" in out
+        assert "final commit was not reviewed" in out
+
+    def test_require_off_with_passes_shows_pass_history(self) -> None:
+        # A gate-disabled outcome must not discard a prior pass history — the
+        # distinction between "review never ran" and "ran, but not for the final
+        # commit" must survive even when the gate itself is off (#367 follow-up).
+        out = _render_review_status(_status(ReviewStatusKind.REQUIRE_OFF, passes=2))
+        assert "Review gate disabled" in out
+        assert "final commit was not reviewed" in out
+        assert "Review attempted on 2 distinct commits" in out
+        # No invented chronology — marker files carry no config-change timestamp.
+        assert "before the gate was disabled" not in out
 
     def test_disabled_note(self) -> None:
         out = _render_review_status(_status(ReviewStatusKind.DISABLED))

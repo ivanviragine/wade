@@ -204,6 +204,7 @@ class TestValidateConfig:
             "done:\n"
             "  require_pr_summary: true\n"
             "  require_sync: false\n"
+            "  require_review: true\n"
             "  require_resolved_threads: false\n"
             "  pre_push_backstop: true\n"
         )
