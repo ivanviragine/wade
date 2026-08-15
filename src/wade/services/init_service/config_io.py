@@ -370,13 +370,24 @@ def _patch_config(
         raw["ai"] = ai
         changed = True
 
-    # Patch implement tool override
+    # Patch implement tool override. Manage ONLY the ``tool`` key: any other
+    # implement-scoped keys a user set by hand (model / effort / mode /
+    # permission_mode / yolo / enabled / timeout — all valid under ``ai.implement``
+    # and honored by the loader) must survive a re-init. Replacing the section
+    # wholesale or ``del``-ing it silently dropped them, so mutate a copy and keep
+    # the section iff anything is left.
     if force:
+        existing = ai.get("implement")
+        section: dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
         if implement_tool and implement_tool != ai_tool:
-            ai["implement"] = {"tool": implement_tool}
-            changed = True
+            section["tool"] = implement_tool
+        else:
+            section.pop("tool", None)
+        if section:
+            ai["implement"] = section
         elif "implement" in ai:
             del ai["implement"]
+        if ai.get("implement") != existing:
             changed = True
         raw["ai"] = ai
     elif implement_tool and implement_tool != ai_tool and not ai.get("implement"):
