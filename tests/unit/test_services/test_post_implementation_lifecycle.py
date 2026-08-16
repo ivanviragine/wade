@@ -474,6 +474,47 @@ def test_pr_strategy_attached_repo_root_skips_reattach(
     assert status == MergeStatus.MERGED
 
 
+@pytest.mark.parametrize("network_access", [True, False, None])
+@patch("wade.services.review_service.start")
+@patch("wade.services.review_service.poll_for_reviews")
+@patch("wade.services.implementation_service.lifecycle.prompts.select", return_value=1)
+@patch("wade.services.implementation_service.lifecycle.prompts.confirm", return_value=False)
+@patch(
+    "wade.services.implementation_service.lifecycle.git_pr.get_pr_for_branch",
+    return_value=PRLookup(
+        found=True, pr=PRRef(number=99, url="https://example/pr/99", state="OPEN")
+    ),
+)
+def test_wait_for_reviews_threads_network_access_into_review(
+    _mock_get_pr: MagicMock,
+    _mock_confirm: MagicMock,
+    _mock_select: MagicMock,
+    mock_poll: MagicMock,
+    mock_review_start: MagicMock,
+    network_access: bool | None,
+    tmp_path: Path,
+) -> None:
+    """An explicit --network/--no-network pin survives the 'Wait for reviews'
+    hand-off: the follow-on review session receives the same tri-state rather
+    than silently re-resolving it from config."""
+    from wade.models.review import PollOutcome
+
+    mock_poll.return_value = PollOutcome.COMMENTS_FOUND
+    provider = MagicMock()
+    with patch("wade.services.implementation_service.lifecycle.prompts.is_tty", return_value=True):
+        _post_implementation_lifecycle(
+            tmp_path / "repo",
+            "feat/42-test",
+            42,
+            tmp_path / "wt",
+            provider,
+            network_access=network_access,
+        )
+
+    mock_review_start.assert_called_once()
+    assert mock_review_start.call_args.kwargs["network_access"] is network_access
+
+
 @patch("wade.services.implementation_service.core.write_plan_md")
 @patch("wade.services.implementation_service.core._post_implementation_lifecycle")
 @patch("wade.services.implementation_service.core.launch_in_new_terminal", return_value=True)

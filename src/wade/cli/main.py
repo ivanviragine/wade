@@ -214,6 +214,18 @@ _PERMISSION_MODE_OPT = typer.Option(
     autocompletion=complete_permission_modes,
 )
 
+# Shared tri-state flag for the Codex sandbox network policy. ``--network``
+# enables network access inside the sandbox (needed for git fetch/push, hence
+# the network legs of sync/done); ``--no-network`` forces it off; omitted (None)
+# defers to ``ai.network_access`` config, which itself defaults to disabled. Only
+# Codex acts on it — every other tool ignores it upstream.
+_NETWORK_ACCESS_OPT = typer.Option(
+    None,
+    "--network/--no-network",
+    help="Allow network access inside the Codex sandbox (default: off; "
+    "required for git fetch/push under Codex). Overrides ai.network_access.",
+)
+
 
 @app.command("plan", rich_help_panel="Workflow")
 def plan_cmd(
@@ -271,6 +283,7 @@ def implement_cmd(
     ),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
     permission_mode: str | None = _PERMISSION_MODE_OPT,
+    network_access: bool | None = _NETWORK_ACCESS_OPT,
     chain: str | None = typer.Option(
         None, "--chain", hidden=True, help="Comma-separated issue IDs for sequential continuation."
     ),
@@ -308,6 +321,7 @@ def implement_cmd(
         effort_explicit=effort is not None,
         yolo=yolo or None,
         permission_mode=permission_mode,
+        network_access=network_access,
         base_branch=current_base,
     )
 
@@ -343,6 +357,7 @@ def implement_cmd(
             effort_explicit=effort is not None,
             yolo=yolo or None,
             permission_mode=permission_mode,
+            network_access=network_access,
             base_branch=current_base,
         )
 
@@ -419,6 +434,7 @@ def address_reviews_cmd(
     detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
     permission_mode: str | None = _PERMISSION_MODE_OPT,
+    network_access: bool | None = _NETWORK_ACCESS_OPT,
 ) -> None:
     """Address PR review comments (hidden alias for review pr-comments)."""
     from wade.cli.review import review_pr_comments_cmd
@@ -430,6 +446,7 @@ def address_reviews_cmd(
         detach=detach,
         yolo=yolo,
         permission_mode=permission_mode,
+        network_access=network_access,
     )
 
 
@@ -472,6 +489,7 @@ def smart_start_cmd(
     ),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
     permission_mode: str | None = _PERMISSION_MODE_OPT,
+    network_access: bool | None = _NETWORK_ACCESS_OPT,
 ) -> None:
     """Internal dispatch for `wade <N>` — routes to implement or review pr-comments.
 
@@ -495,6 +513,7 @@ def smart_start_cmd(
         effort_explicit=effort is not None,
         yolo=yolo or None,
         permission_mode=permission_mode,
+        network_access=network_access,
     )
     raise typer.Exit(0 if success else 1)
 
@@ -552,6 +571,7 @@ def implement_alias(
     ),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
     permission_mode: str | None = _PERMISSION_MODE_OPT,
+    network_access: bool | None = _NETWORK_ACCESS_OPT,
     chain: str | None = typer.Option(
         None, "--chain", hidden=True, help="Comma-separated issue IDs for sequential continuation."
     ),
@@ -573,6 +593,7 @@ def implement_alias(
         cd_only=cd_only,
         yolo=yolo,
         permission_mode=permission_mode,
+        network_access=network_access,
         chain=chain,
         base=base,
     )
@@ -590,6 +611,7 @@ def reviews_alias(
     detach: bool = typer.Option(False, "--detach", help="Launch AI in a new terminal."),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
     permission_mode: str | None = _PERMISSION_MODE_OPT,
+    network_access: bool | None = _NETWORK_ACCESS_OPT,
 ) -> None:
     """Alias for review pr-comments."""
     from wade.cli.review import review_pr_comments_cmd
@@ -601,6 +623,7 @@ def reviews_alias(
         detach=detach,
         yolo=yolo,
         permission_mode=permission_mode,
+        network_access=network_access,
     )
 
 

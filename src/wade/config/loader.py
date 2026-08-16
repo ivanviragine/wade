@@ -203,6 +203,7 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
             ai_raw.get("permission_mode"), source="ai.permission_mode"
         ),
         yolo=ai_raw.get("yolo"),
+        network_access=ai_raw.get("network_access"),
         **command_configs,
     )
 
@@ -352,6 +353,7 @@ def _parse_command_config(raw: dict[str, Any] | None) -> AICommandConfig:
             raw.get("permission_mode"), source="ai.<command>.permission_mode"
         ),
         yolo=raw.get("yolo"),
+        network_access=raw.get("network_access"),
         enabled=raw.get("enabled"),
         timeout=raw.get("timeout"),
     )

@@ -312,6 +312,12 @@ def run_ai_planning_session(
         initial_message=prompt,
         effort=effort,
         allowed_commands=allowed_commands,
+        # A planning session may run in a linked planning worktree; grant its
+        # out-of-root git metadata so a sandboxed Codex plan session can commit
+        # generated plan artefacts. Network off — planning never fetches/pushes.
+        # Inert for a main checkout and for every non-Codex tool.
+        working_dir=session_cwd,
+        network_access=False,
         **permission_mode_launch_kwargs(permission_mode),
     )
     console.info(f"Plan directory: {plan_dir}")

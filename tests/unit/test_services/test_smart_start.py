@@ -766,7 +766,8 @@ class TestRunReviewPrComments:
         mock_start: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """COMMENTS_FOUND outcome delegates to review_service.start()."""
+        """COMMENTS_FOUND outcome delegates to review_service.start(), forwarding
+        the explicit --no-network pin so the review session cannot re-resolve it."""
         provider = MagicMock()
         ctx = SmartStartContext(
             target="42",
@@ -780,6 +781,7 @@ class TestRunReviewPrComments:
             effort=None,
             effort_explicit=False,
             yolo=None,
+            network_access=False,
         )
         result = _run_review_pr_comments(
             ctx,
@@ -803,6 +805,7 @@ class TestRunReviewPrComments:
             yolo=None,
             permission_mode=None,
             permission_mode_explicit=False,
+            network_access=False,
         )
 
     @patch("wade.services.review_service._quiet_next_steps_prompt")
@@ -816,7 +819,8 @@ class TestRunReviewPrComments:
         mock_quiet: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """QUIET_TIMEOUT outcome calls _quiet_next_steps_prompt()."""
+        """QUIET_TIMEOUT outcome calls _quiet_next_steps_prompt(), forwarding the
+        explicit --network pin so a later re-launch preserves the decision."""
         provider = MagicMock()
         ctx = SmartStartContext(
             target="42",
@@ -830,6 +834,7 @@ class TestRunReviewPrComments:
             effort=None,
             effort_explicit=False,
             yolo=None,
+            network_access=True,
         )
         result = _run_review_pr_comments(
             ctx,
@@ -855,6 +860,7 @@ class TestRunReviewPrComments:
             model_explicit=False,
             permission_mode=None,
             permission_mode_explicit=False,
+            network_access=True,
         )
 
 

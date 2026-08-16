@@ -165,6 +165,12 @@ def review_pr_comments_cmd(
         help="Autonomy tier: default, accept-edits, auto, or yolo.",
         autocompletion=complete_permission_modes,
     ),
+    network_access: bool | None = typer.Option(
+        None,
+        "--network/--no-network",
+        help="Allow network access inside the Codex sandbox (default: off; "
+        "required for git fetch/push under Codex). Overrides ai.network_access.",
+    ),
 ) -> None:
     """Address PR review comments."""
     from wade.services.review_service import start as do_start
@@ -182,6 +188,7 @@ def review_pr_comments_cmd(
         yolo=yolo or None,
         permission_mode=permission_mode,
         permission_mode_explicit=permission_mode is not None,
+        network_access=network_access,
     )
     raise typer.Exit(0 if success else 1)
 
