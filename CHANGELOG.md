@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.45.6] — 2026-08-16
+
+### Bug Fixes
+
+- forward resolved permission mode to child sessions when explicit (#426) (fbdd9c9)
+
 ## [v0.45.5] — 2026-08-16
 
 ### Bug Fixes
