@@ -13,8 +13,10 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from wade.git.branch import make_branch_name
-from wade.git.pr import PRSummary
+from wade.git.pr import GhCliError, PRSummary
 from wade.git.repo import GitError
 from wade.models.worktree import Worktree
 from wade.services.implementation_service._shared import (
@@ -195,3 +197,21 @@ class TestFindOpenPrBranchForIssue:
             ],
         ):
             assert find_open_pr_branch_for_issue(tmp_path, 42) == "feat/42-newer"
+
+    def test_listing_failure_propagates_not_swallowed(self, tmp_path: Path) -> None:
+        """A `gh pr list` failure must raise, not look like 'no open PR' (#428 review).
+
+        Treating an unknown listing as absence would let a caller bootstrap a
+        duplicate PR while a live one exists on another same-issue branch.
+        """
+        with (
+            patch(f"{_S}.git_pr.list_prs", side_effect=GhCliError("gh boom")),
+            pytest.raises(GhCliError),
+        ):
+            find_open_pr_branch_for_issue(tmp_path, 42)
+
+    def test_requests_failure_aware_listing(self, tmp_path: Path) -> None:
+        """The resolver must opt into raise-on-error so failures are distinguishable."""
+        with patch(f"{_S}.git_pr.list_prs", return_value=[]) as mock_list:
+            find_open_pr_branch_for_issue(tmp_path, 42)
+        assert mock_list.call_args.kwargs.get("raise_on_error") is True

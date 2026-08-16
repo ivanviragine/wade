@@ -151,14 +151,15 @@ def find_open_pr_branch_for_issue(repo_root: Path, issue_id: int | str) -> str |
     (which a branch-name-ordering tiebreak could otherwise pick). One
     ``gh pr list`` call.
 
-    Returns ``None`` when no open PR matches (nothing to resume — start fresh) or
-    when the listing fails (``list_prs`` returns ``[]`` on error); callers then
-    fall back to git-based resolution.
+    Returns ``None`` only when no open PR genuinely matches (nothing to resume —
+    start fresh). Raises :class:`~wade.git.pr.GhCliError` when the listing itself
+    fails: callers MUST NOT treat that as absence (an open PR may exist on another
+    same-issue branch), and should abort/report rather than bootstrap a duplicate.
     """
     issue = str(int(issue_id))
     matches = [
         pr
-        for pr in git_pr.list_prs(repo_root, state="open")
+        for pr in git_pr.list_prs(repo_root, state="open", raise_on_error=True)
         if extract_issue_from_branch(pr.head_ref_name) == issue
     ]
     if not matches:

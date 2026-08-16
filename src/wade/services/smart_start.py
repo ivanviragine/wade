@@ -189,7 +189,13 @@ def smart_start(
         # PR) or a drifted title can shadow the issue's real open PR. Prefer the
         # open PR's branch so we resume it here rather than mislabelling it closed
         # and routing to a fresh implement (#428 review).
-        open_branch = find_open_pr_branch_for_issue(repo_root, task.id)
+        try:
+            open_branch = find_open_pr_branch_for_issue(repo_root, task.id)
+        except git_pr.GhCliError:
+            # Could not list PRs — route on the original lookup. The implement flow
+            # (the only path that bootstraps) makes the authoritative, failure-aware
+            # call, so we never open a duplicate PR from here.
+            open_branch = None
         if open_branch and open_branch != branch_name:
             branch_name = open_branch
             lookup = git_pr.get_pr_for_branch(repo_root, branch_name)

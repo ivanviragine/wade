@@ -705,6 +705,21 @@ class TestDetectAiCliEnv:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _default_no_open_pr_for_issue() -> object:
+    """Default the issue→open-PR resolver to 'none' so any start() test in this
+    module skips the not-open-PR gate's ``gh pr list`` (which now raises on
+    failure). Tests that exercise resume-by-open-PR override this with their own
+    patch. Module-scoped so it also covers start() tests outside
+    ``TestImplementationStart`` (e.g. tracking-detection).
+    """
+    with patch(
+        "wade.services.implementation_service.core.find_open_pr_branch_for_issue",
+        return_value=None,
+    ):
+        yield
+
+
 class TestImplementationStart:
     """Tests for implementation_service.start() — exercises the full start() orchestration."""
 
@@ -714,18 +729,6 @@ class TestImplementationStart:
     def _make_config(self) -> ProjectConfig:
         """ProjectConfig with main_branch set to avoid detect_main_branch subprocess call."""
         return ProjectConfig(project=ProjectSettings(main_branch="main"))
-
-    @pytest.fixture(autouse=True)
-    def _default_no_open_pr(self):
-        """Default the issue→open-PR resolver to 'none' so start() tests don't spawn
-        a real ``gh pr list`` in the not-open-PR gate. Tests that exercise
-        resume-by-open-PR override this with their own patch.
-        """
-        with patch(
-            "wade.services.implementation_service.core.find_open_pr_branch_for_issue",
-            return_value=None,
-        ):
-            yield
 
     def test_creates_worktree(self, tmp_path: Path) -> None:
         """Happy path: no existing worktree, no draft PR → create_worktree called, returns True."""
@@ -933,6 +936,53 @@ class TestImplementationStart:
 
         assert result.success is True
         # Resumed the open PR's branch; no fresh branch created, no third PR bootstrapped.
+        mock_bootstrap.assert_not_called()
+        mock_create.assert_not_called()
+
+    def test_aborts_when_open_pr_listing_fails(self, tmp_path: Path) -> None:
+        """A `gh pr list` failure in the not-open gate must abort, not bootstrap.
+
+        Otherwise a transient listing failure would look like 'no open PR' and
+        scaffold a duplicate over a live PR on another same-issue branch (#428).
+        """
+        from wade.git.pr import GhCliError
+
+        task = Task(id="42", title="renamed title")
+        mock_provider = MagicMock()
+        mock_provider.read_task.return_value = task
+
+        with (
+            patch(
+                "wade.services.implementation_service.core.load_config",
+                return_value=self._make_config(),
+            ),
+            patch(
+                "wade.services.implementation_service.core.get_provider", return_value=mock_provider
+            ),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch(
+                "wade.services.implementation_service._shared.git_repo.get_current_branch",
+                return_value="main",
+            ),
+            patch("wade.git.worktree.list_worktrees", return_value=[]),
+            # Resolved branch has a CLOSED PR → gate consults the open-PR listing…
+            patch(
+                "wade.git.pr.get_pr_for_branch",
+                return_value=PRLookup(found=True, pr=PRRef(number=7, state="CLOSED")),
+            ),
+            # …and that listing fails: must abort rather than treat as absence.
+            patch(
+                "wade.services.implementation_service.core.find_open_pr_branch_for_issue",
+                side_effect=GhCliError("gh pr list failed"),
+            ),
+            patch("wade.git.worktree.create_worktree") as mock_create,
+            patch("wade.services.implementation_service.core.bootstrap_draft_pr") as mock_bootstrap,
+            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
+        ):
+            mock_prompts.is_tty.return_value = False
+            result = start("42", project_root=tmp_path)
+
+        assert result.success is False
         mock_bootstrap.assert_not_called()
         mock_create.assert_not_called()
 

@@ -522,9 +522,21 @@ def start(
         #      reconstruct — so the session's worktree and the draft PR agree rather
         #      than diverging onto the stale branch.
         if not pr_lookup.is_open:
-            resume_branch = find_open_pr_branch_for_issue(
-                repo_root, task.id
-            ) or git_branch.make_branch_name(config.project.branch_prefix, int(task.id), task.title)
+            try:
+                open_pr_branch = find_open_pr_branch_for_issue(repo_root, task.id)
+            except git_pr.GhCliError:
+                # Could NOT list open PRs — this is not "no open PR". Bootstrapping
+                # now could scaffold a duplicate over a live PR that lives on another
+                # same-issue branch we simply cannot see. Abort, like a failed PR
+                # lookup, rather than treat an unknown listing as absence (#428).
+                console.error_with_fix(
+                    f"Could not list open PRs for issue #{task.id}",
+                    "Transient gh error — try again shortly",
+                )
+                return ImplementResult(success=False)
+            resume_branch = open_pr_branch or git_branch.make_branch_name(
+                config.project.branch_prefix, int(task.id), task.title
+            )
             if resume_branch != branch_name:
                 branch_name = resume_branch
                 pr_lookup = git_pr.get_pr_for_branch(repo_root, branch_name)
