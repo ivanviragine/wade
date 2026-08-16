@@ -14,14 +14,27 @@ from pathlib import Path
 from unittest.mock import patch
 
 from wade.git.branch import make_branch_name
+from wade.git.pr import PRSummary
 from wade.git.repo import GitError
 from wade.models.worktree import Worktree
 from wade.services.implementation_service._shared import (
     find_existing_branch_for_issue,
+    find_open_pr_branch_for_issue,
     resolve_task_branch,
 )
 
 _S = "wade.services.implementation_service._shared"
+
+
+def _pr(number: int, head: str, updated: str | None = None) -> PRSummary:
+    return PRSummary(
+        number=number,
+        url=f"https://example/pr/{number}",
+        headRefName=head,
+        state="OPEN",
+        isDraft=False,
+        updatedAt=updated,
+    )
 
 
 class TestFindExistingBranchForIssue:
@@ -138,3 +151,47 @@ class TestResolveTaskBranch:
         ):
             got = resolve_task_branch(tmp_path, "42", "Renamed", "feat")
         assert got == "feat/42-frozen-slug"
+
+
+class TestFindOpenPrBranchForIssue:
+    """Resume ambiguity settled by PR *state*, not branch-name ordering."""
+
+    def test_returns_open_pr_head_branch(self, tmp_path: Path) -> None:
+        with patch(
+            f"{_S}.git_pr.list_prs",
+            return_value=[_pr(9, "feat/42-live-branch")],
+        ):
+            assert find_open_pr_branch_for_issue(tmp_path, 42) == "feat/42-live-branch"
+
+    def test_ignores_other_issues(self, tmp_path: Path) -> None:
+        with patch(
+            f"{_S}.git_pr.list_prs",
+            return_value=[_pr(9, "feat/99-other"), _pr(10, "feat/420-not-42")],
+        ):
+            assert find_open_pr_branch_for_issue(tmp_path, 42) is None
+
+    def test_none_when_no_open_prs(self, tmp_path: Path) -> None:
+        with patch(f"{_S}.git_pr.list_prs", return_value=[]):
+            assert find_open_pr_branch_for_issue(tmp_path, 42) is None
+
+    def test_picks_live_branch_over_stale_same_issue_branch(self, tmp_path: Path) -> None:
+        """The exact P1: a closed PR's branch coexists with the live open PR's.
+
+        list_prs(state="open") only returns the open one, so the live branch is
+        selected regardless of how the branch names sort.
+        """
+        with patch(
+            f"{_S}.git_pr.list_prs",
+            return_value=[_pr(9, "feat/42-zzz-open")],  # sorts after a hypothetical closed 'aaa'
+        ):
+            assert find_open_pr_branch_for_issue(tmp_path, 42) == "feat/42-zzz-open"
+
+    def test_multiple_open_prs_prefers_most_recently_updated(self, tmp_path: Path) -> None:
+        with patch(
+            f"{_S}.git_pr.list_prs",
+            return_value=[
+                _pr(9, "feat/42-older", updated="2026-08-01T00:00:00Z"),
+                _pr(10, "feat/42-newer", updated="2026-08-15T00:00:00Z"),
+            ],
+        ):
+            assert find_open_pr_branch_for_issue(tmp_path, 42) == "feat/42-newer"

@@ -715,6 +715,18 @@ class TestImplementationStart:
         """ProjectConfig with main_branch set to avoid detect_main_branch subprocess call."""
         return ProjectConfig(project=ProjectSettings(main_branch="main"))
 
+    @pytest.fixture(autouse=True)
+    def _default_no_open_pr(self):
+        """Default the issue→open-PR resolver to 'none' so start() tests don't spawn
+        a real ``gh pr list`` in the not-open-PR gate. Tests that exercise
+        resume-by-open-PR override this with their own patch.
+        """
+        with patch(
+            "wade.services.implementation_service.core.find_open_pr_branch_for_issue",
+            return_value=None,
+        ):
+            yield
+
     def test_creates_worktree(self, tmp_path: Path) -> None:
         """Happy path: no existing worktree, no draft PR → create_worktree called, returns True."""
         task = self._make_task()
@@ -839,6 +851,8 @@ class TestImplementationStart:
                 "wade.services.implementation_service.core._detect_ai_cli_env", return_value=None
             ),
             patch("wade.git.pr.get_pr_for_branch", side_effect=pr_by_branch),
+            # No live open PR for the issue (autouse _default_no_open_pr) → gate
+            # falls back to the title branch.
             patch(
                 "wade.services.implementation_service.core.bootstrap_draft_pr",
                 return_value={"number": 1, "url": "http://test"},
@@ -853,6 +867,74 @@ class TestImplementationStart:
         mock_bootstrap.assert_called_once()
         mock_create.assert_called_once()
         assert mock_create.call_args.kwargs["branch_name"] == reconstructed
+
+    def test_open_pr_on_other_branch_is_resumed_not_rebootstrapped(self, tmp_path: Path) -> None:
+        """Ambiguity is settled by PR state, not branch-name ordering (#428 review).
+
+        The issue has a stale branch (closed PR) that resolution adopts by number,
+        AND a live open PR on a different branch. start() must resume the open PR's
+        branch rather than bootstrap a third PR on the reconstructed title branch.
+        """
+        task = Task(id="42", title="renamed title")
+        stale_branch = "feat/42-original-slug"
+        live_branch = "feat/42-open-pr-branch"
+
+        mock_provider = MagicMock()
+        mock_provider.read_task.return_value = task
+
+        def pr_by_branch(_repo_root: Path, branch: str) -> PRLookup:
+            if branch == live_branch:
+                return PRLookup(found=True, pr=PRRef(number=9, state="OPEN"))
+            if branch == stale_branch:
+                return PRLookup(found=True, pr=PRRef(number=7, state="CLOSED"))
+            return PRLookup(found=False)
+
+        with (
+            patch(
+                "wade.services.implementation_service.core.load_config",
+                return_value=self._make_config(),
+            ),
+            patch(
+                "wade.services.implementation_service.core.get_provider", return_value=mock_provider
+            ),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch(
+                "wade.services.implementation_service._shared.git_repo.get_current_branch",
+                return_value="main",
+            ),
+            patch(
+                "wade.git.worktree.list_worktrees",
+                return_value=[Worktree(path=str(tmp_path / "wt"), branch=stale_branch)],
+            ),
+            patch("wade.git.branch.branch_exists", return_value=True),
+            patch("wade.services.implementation_service.core.git_repo.fetch_ref"),
+            patch("wade.git.worktree.checkout_existing_branch_worktree"),
+            patch("wade.git.worktree.create_worktree") as mock_create,
+            patch("wade.services.implementation_service.core.write_plan_md"),
+            patch("wade.services.implementation_service.core.bootstrap_worktree"),
+            patch("crossby.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
+            patch(
+                "wade.services.implementation_service.core._detect_ai_cli_env", return_value=None
+            ),
+            patch("wade.git.pr.get_pr_for_branch", side_effect=pr_by_branch),
+            patch("wade.git.pr.get_pr_body", return_value=None),
+            # A live open PR exists for the issue on a different branch.
+            patch(
+                "wade.services.implementation_service.core.find_open_pr_branch_for_issue",
+                return_value=live_branch,
+            ),
+            patch(
+                "wade.services.implementation_service.core.bootstrap_draft_pr",
+            ) as mock_bootstrap,
+            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
+        ):
+            mock_prompts.is_tty.return_value = False
+            result = start("42", project_root=tmp_path)
+
+        assert result.success is True
+        # Resumed the open PR's branch; no fresh branch created, no third PR bootstrapped.
+        mock_bootstrap.assert_not_called()
+        mock_create.assert_not_called()
 
     def test_returns_false_on_creation_failure(self, tmp_path: Path) -> None:
         """create_worktree raises GitError → start() returns False."""

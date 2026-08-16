@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 
 from wade.git import branch as git_branch
+from wade.git import pr as git_pr
 from wade.git import repo as git_repo
 from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
@@ -19,6 +20,7 @@ from wade.git.repo import GitError
 __all__ = [
     "extract_issue_from_branch",
     "find_existing_branch_for_issue",
+    "find_open_pr_branch_for_issue",
     "find_worktree_path",
     "resolve_task_branch",
 ]
@@ -137,3 +139,32 @@ def resolve_task_branch(
     reconstructed = git_branch.make_branch_name(branch_prefix, int(issue_id), title)
     existing = find_existing_branch_for_issue(repo_root, issue, preferred=reconstructed)
     return existing if existing is not None else reconstructed
+
+
+def find_open_pr_branch_for_issue(repo_root: Path, issue_id: int | str) -> str | None:
+    """Head branch of the OPEN PR that belongs to *issue_id*, or ``None``.
+
+    Where :func:`find_existing_branch_for_issue` matches branches by name, this
+    settles resume ambiguity by PR *state*: among any branches carrying the issue
+    number, the live open PR is the one to resume — regardless of how the title
+    has drifted or how many stale same-issue branches a closed PR left behind
+    (which a branch-name-ordering tiebreak could otherwise pick). One
+    ``gh pr list`` call.
+
+    Returns ``None`` when no open PR matches (nothing to resume — start fresh) or
+    when the listing fails (``list_prs`` returns ``[]`` on error); callers then
+    fall back to git-based resolution.
+    """
+    issue = str(int(issue_id))
+    matches = [
+        pr
+        for pr in git_pr.list_prs(repo_root, state="open")
+        if extract_issue_from_branch(pr.head_ref_name) == issue
+    ]
+    if not matches:
+        return None
+    # Deterministic when several open PRs carry the issue number (rare): the most
+    # recently updated wins. ``updated_at`` is an ISO-8601 string, so a reverse
+    # lexical sort is chronological; the PR number breaks exact ties.
+    matches.sort(key=lambda pr: (pr.updated_at or "", pr.number), reverse=True)
+    return matches[0].head_ref_name

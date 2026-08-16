@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from wade.git.pr import PRLookup, PRRef
 from wade.git.repo import GitError
 from wade.models.review import PollOutcome
@@ -15,6 +17,16 @@ from wade.services.smart_start import SmartStartContext, _run_review_pr_comments
 
 def _make_task() -> Task:
     return Task(id="42", title="Fix the widget", state=TaskState.OPEN, body="")
+
+
+@pytest.fixture(autouse=True)
+def _default_no_open_pr() -> object:
+    """Default the issue→open-PR resolver to 'none' so routing tests don't spawn a
+    real ``gh pr list`` in the not-open-PR path. The resume-by-open-PR test
+    overrides this with its own patch.
+    """
+    with patch("wade.services.smart_start.find_open_pr_branch_for_issue", return_value=None):
+        yield
 
 
 class TestSmartStartNoPR:
@@ -691,6 +703,53 @@ class TestSmartStartResolvesByIssueNumber:
         # The PR was resolved by the branch the worktree lives on — not the
         # branch a fresh slug of the new title would produce.
         mock_pr.assert_called_once_with(tmp_path, frozen_branch)
+
+    @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
+    @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
+    @patch("wade.services.smart_start.git_repo.get_repo_root")
+    @patch("wade.services.smart_start.get_provider")
+    @patch("wade.services.smart_start.load_config")
+    def test_resumes_open_pr_when_resolved_branch_is_closed(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_pr: MagicMock,
+        mock_implement: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Ambiguity settled by PR state: a stale closed branch must not shadow the
+        issue's live open PR on another branch (#428 review)."""
+        mock_repo_root.return_value = tmp_path
+        mock_config.return_value.project.branch_prefix = "feat"
+        stale_branch = "feat/42-closed-pr-branch"
+        live_branch = "feat/42-open-pr-branch"
+        mock_get_provider.return_value.read_task.return_value = _make_task()
+
+        def pr_by_branch(_repo_root: Path, branch: str) -> PRLookup:
+            if branch == live_branch:
+                return PRLookup(found=True, pr=PRRef(number=9, state="OPEN", isDraft=False))
+            return PRLookup(found=True, pr=PRRef(number=7, state="CLOSED"))
+
+        mock_pr.side_effect = pr_by_branch
+
+        with (
+            patch(f"{self._SHARED}.git_repo.get_current_branch", return_value="main"),
+            patch(
+                f"{self._SHARED}.git_worktree.list_worktrees",
+                return_value=[Worktree(path=str(tmp_path / "wt"), branch=stale_branch)],
+            ),
+            patch(
+                "wade.services.smart_start.find_open_pr_branch_for_issue",
+                return_value=live_branch,
+            ),
+        ):
+            result = smart_start("42", project_root=tmp_path, cd_only=True)
+
+        assert result is True
+        # Re-looked up the live open PR's branch rather than treating the issue as
+        # closed and starting fresh.
+        assert mock_pr.call_args_list[-1].args == (tmp_path, live_branch)
 
 
 class TestRunReviewPrComments:

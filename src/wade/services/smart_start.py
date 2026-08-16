@@ -30,6 +30,7 @@ from wade.providers.registry import get_provider
 from wade.services.implementation_service import (
     _merge_pr,
     check_tracking_issue_and_batch,
+    find_open_pr_branch_for_issue,
     resolve_task_branch,
 )
 from wade.ui.console import console
@@ -183,6 +184,20 @@ def smart_start(
         # implement flow rather than acting on an unknown PR state.
         console.warn("Could not look up the PR for this branch — proceeding with implement.")
         return ctx.run_implement()
+    if not lookup.is_open:
+        # The resolved branch is not a live PR — a stale same-issue branch (closed
+        # PR) or a drifted title can shadow the issue's real open PR. Prefer the
+        # open PR's branch so we resume it here rather than mislabelling it closed
+        # and routing to a fresh implement (#428 review).
+        open_branch = find_open_pr_branch_for_issue(repo_root, task.id)
+        if open_branch and open_branch != branch_name:
+            branch_name = open_branch
+            lookup = git_pr.get_pr_for_branch(repo_root, branch_name)
+            if lookup.lookup_failed:
+                console.warn(
+                    "Could not look up the PR for this branch — proceeding with implement."
+                )
+                return ctx.run_implement()
     if not lookup.found or lookup.pr is None:
         # No PR → normal implement flow
         return ctx.run_implement()

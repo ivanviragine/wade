@@ -40,6 +40,7 @@ from wade.services.ai_resolution import (
 )
 from wade.services.implementation_service._shared import (
     extract_issue_from_branch,
+    find_open_pr_branch_for_issue,
     find_worktree_path,
     resolve_task_branch,
 )
@@ -511,21 +512,21 @@ def start(
             )
             return ImplementResult(success=False)
 
-        # resolve_task_branch matches by issue number, so it also adopts a branch
-        # left behind by a CLOSED/MERGED PR (or one that never got a PR). Those are
-        # not resumable: this run starts fresh, and bootstrap_draft_pr reconstructs
-        # a NEW title-based branch for its draft PR — so keeping the stale branch
-        # here would set up the session's worktree on it while the draft PR points
-        # at a different branch (#428 review). When the resolved branch has no open
-        # PR, fall back to the current-title name so the worktree and the
-        # bootstrapped PR agree; the re-lookup can also still surface an open PR
-        # that lives on the title-based branch.
+        # resolve_task_branch matches by issue number, so it can adopt a branch left
+        # behind by a CLOSED/MERGED PR (or one that never got a PR) — and, when an
+        # issue has several such branches, a branch-name tiebreak could pick a dead
+        # one over a live one. When the resolved branch is not itself an open PR,
+        # settle the branch by PR *state* (#428 review):
+        #   1. resume the issue's OPEN PR if one exists (on any branch), else
+        #   2. start fresh on the current-title name — what bootstrap_draft_pr will
+        #      reconstruct — so the session's worktree and the draft PR agree rather
+        #      than diverging onto the stale branch.
         if not pr_lookup.is_open:
-            reconstructed_branch = git_branch.make_branch_name(
-                config.project.branch_prefix, int(task.id), task.title
-            )
-            if branch_name != reconstructed_branch:
-                branch_name = reconstructed_branch
+            resume_branch = find_open_pr_branch_for_issue(
+                repo_root, task.id
+            ) or git_branch.make_branch_name(config.project.branch_prefix, int(task.id), task.title)
+            if resume_branch != branch_name:
+                branch_name = resume_branch
                 pr_lookup = git_pr.get_pr_for_branch(repo_root, branch_name)
                 if pr_lookup.lookup_failed:
                     console.error_with_fix(
