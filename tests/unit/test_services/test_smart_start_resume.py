@@ -256,7 +256,7 @@ class TestSmartStartResumeIntegration:
         return_value=[Worktree(branch="feat/42-fix", path="/tmp/wt")],
     )
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
-    @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.smart_start.resolve_task_branch", return_value="feat/42-fix")
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")
     @patch("wade.services.smart_start.load_config")
@@ -302,7 +302,7 @@ class TestSmartStartResumeIntegration:
         return_value=[Worktree(branch="feat/42-fix", path="/tmp/wt")],
     )
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
-    @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.smart_start.resolve_task_branch", return_value="feat/42-fix")
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")
     @patch("wade.services.smart_start.load_config")
@@ -346,7 +346,7 @@ class TestSmartStartResumeIntegration:
         return_value=[Worktree(branch="feat/42-fix", path="/tmp/wt")],
     )
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
-    @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.smart_start.resolve_task_branch", return_value="feat/42-fix")
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")
     @patch("wade.services.smart_start.load_config")
@@ -383,7 +383,7 @@ class TestSmartStartResumeIntegration:
     @patch("wade.ui.prompts.is_tty", return_value=True)
     @patch("wade.git.worktree.list_worktrees", return_value=[])
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
-    @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.smart_start.resolve_task_branch", return_value="feat/42-fix")
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")
     @patch("wade.services.smart_start.load_config")

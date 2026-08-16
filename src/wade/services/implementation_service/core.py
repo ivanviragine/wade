@@ -41,6 +41,7 @@ from wade.services.ai_resolution import (
 from wade.services.implementation_service._shared import (
     extract_issue_from_branch,
     find_worktree_path,
+    resolve_task_branch,
 )
 from wade.services.implementation_service.bootstrap import (
     _resolve_worktrees_dir,
@@ -484,12 +485,16 @@ def start(
         console.rule(f"implement #{task.id}")
         console.kv("Issue", console.issue_ref(task.id, task.title))
 
-        # Generate deterministic branch name early — only needs config + task, so it
-        # can be computed before AI selection to allow the PR/plan check below.
-        branch_name = git_branch.make_branch_name(
-            config.project.branch_prefix,
-            int(task.id),
-            task.title,
+        # Resolve the branch early — needs only config + task, so it can be
+        # computed before AI selection to allow the PR/plan check below. Resolve
+        # by the stable issue *number* rather than re-slugifying the title: the
+        # slug is frozen at the first ``wade implement``, but ``done`` later
+        # rewrites the issue title to add the required conventional-commit prefix.
+        # A reconstructed name would then drift from the real branch, so the
+        # PR/plan lookup below would miss the live draft PR and re-bootstrap a
+        # duplicate — leaving the resumed task with "no plan attached".
+        branch_name = resolve_task_branch(
+            repo_root, task.id, task.title, config.project.branch_prefix
         )
 
         # Check for existing draft PR (from plan flow) before AI selection so that
