@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.45.9] — 2026-08-16
+
+### Bug Fixes
+
+- apply resolved autonomy mode to resumed implementation sessions (#427) (30cc8c9)
+
 ## [v0.45.8] — 2026-08-16
 
 ### Chores
