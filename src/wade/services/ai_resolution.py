@@ -241,6 +241,31 @@ def resolve_permission_mode(
     return PermissionMode.DEFAULT
 
 
+def resolve_network_access(
+    network_access: bool | None,
+    config: ProjectConfig,
+    command: str = "plan",
+) -> bool:
+    """Resolve the Codex sandbox network policy from args -> config -> ``False``.
+
+    Fallback chain (highest precedence first):
+      1. Explicit ``--network`` / ``--no-network`` CLI value
+      2. Command-specific config (``ai.<command>.network_access``)
+      3. Global config (``ai.network_access``)
+      4. ``False`` (network **disabled by default**)
+
+    Network is off unless the project (or CLI) opts in — this is a deliberate
+    safety default: wade forwards the resolved bool as an explicit pin so an
+    ambient Codex ``config.toml`` can never silently enable network access for a
+    wade-managed sandbox. Non-Codex tools ignore the value (crossby
+    capability-gates it via ``supports_network_access``), so this resolves for
+    every tool but only Codex acts on it.
+    """
+    if network_access is not None:
+        return network_access
+    return config.get_network_access(command)
+
+
 def resolve_yolo(
     yolo: bool | None,
     config: ProjectConfig,

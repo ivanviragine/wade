@@ -39,7 +39,12 @@ from wade.skills.installer import (
 # trimmed to its minimum first (and offset by cutting per-step narration); this
 # bump is the explicit, reviewed adjustment the guard is designed to force, and it
 # still catches *silent* regressions.
-BUDGET_CHARS = 9100
+# Bumped 9100 -> 9400 for #423: the implementation-session "First action" block
+# gained a short, load-bearing `WORKTREE_GIT_BLOCKED` case (exit code 3) telling
+# the agent how to react when a worktree's git metadata is not writable under a
+# Codex sandbox. The note was trimmed to its minimum first; this bump is the
+# explicit, reviewed adjustment the guard is designed to force.
+BUDGET_CHARS = 9400
 
 # (session label, launch prompt template, phase skill dir name)
 _SESSIONS = [

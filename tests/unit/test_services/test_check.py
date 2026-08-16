@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from wade.models.config import (
     AI_COMMAND_NAMES,
     AICommandConfig,
@@ -62,6 +64,103 @@ class TestCheckWorktree:
         assert "toplevel=" in output
         assert "branch=" in output
         assert "gitdir=" in output
+
+
+def _add_worktree(repo: Path, name: str = "worktree", branch: str = "probe-branch") -> Path:
+    import subprocess
+
+    wt_path = repo.parent / name
+    subprocess.run(
+        ["git", "worktree", "add", str(wt_path), "-b", branch],
+        cwd=repo,
+        capture_output=True,
+        check=True,
+    )
+    return wt_path
+
+
+def _probe_artefacts(*dirs: Path) -> list[Path]:
+    """Return any lingering ``.wade-write-probe-*`` files under *dirs*."""
+    found: list[Path] = []
+    for d in dirs:
+        if d.is_dir():
+            found.extend(d.glob(".wade-write-probe-*"))
+    return found
+
+
+class TestWorktreeGitReadinessProbe:
+    """The IN_WORKTREE branch probes that out-of-root git metadata is writable."""
+
+    def test_writable_worktree_passes_and_leaves_no_artefacts(self, tmp_git_repo: Path) -> None:
+        from wade.git import repo as git_repo
+
+        wt_path = _add_worktree(tmp_git_repo)
+        result = check_worktree(wt_path)
+        assert result.status == CheckStatus.IN_WORKTREE
+        assert result.exit_code == CheckExitCode.IN_WORKTREE
+        assert result.blocked_paths == []
+
+        # Cleanup ran — the created probe files were removed from both git dirs.
+        private = Path(git_repo.get_git_dir(wt_path) or "")
+        common = Path(git_repo.get_git_common_dir(wt_path) or "")
+        if not common.is_absolute():
+            common = wt_path / common
+        assert _probe_artefacts(private, common) == []
+
+    def test_blocked_when_write_denied_names_path_and_leaves_no_artefacts(
+        self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Simulate an OS-sandbox denial by making the probe WRITE raise — not a
+        # chmod (CI often runs as root, where mode bits don't block writes).
+        wt_path = _add_worktree(tmp_git_repo)
+
+        orig_write_text = Path.write_text
+
+        def deny_probe_write(self: Path, *args: object, **kwargs: object) -> int:
+            if self.name.startswith(".wade-write-probe-"):
+                raise OSError("Operation not permitted")
+            return orig_write_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(Path, "write_text", deny_probe_write)
+
+        result = check_worktree(wt_path)
+        assert result.status == CheckStatus.WORKTREE_GIT_BLOCKED
+        assert result.exit_code == CheckExitCode.WORKTREE_GIT_BLOCKED
+        assert result.exit_code == 3  # documented free exit code (0/1/2 taken)
+        assert result.blocked_paths, "must name at least one blocked metadata dir"
+
+        output = result.format_output()
+        assert "WORKTREE_GIT_BLOCKED" in output
+        # Every blocked path is surfaced, plus an actionable relaunch hint.
+        for blocked in result.blocked_paths:
+            assert f"blocked={blocked}" in output
+        assert "relaunch" in output.lower()
+
+        # No probe artefacts left behind (the write raised before creating one).
+        monkeypatch.undo()
+        from wade.git import repo as git_repo
+
+        private = Path(git_repo.get_git_dir(wt_path) or "")
+        common = Path(git_repo.get_git_common_dir(wt_path) or "")
+        if not common.is_absolute():
+            common = wt_path / common
+        assert _probe_artefacts(private, common) == []
+
+    def test_main_checkout_is_not_probed(
+        self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A main checkout never runs the probe, so a would-be-denying write patch
+        # cannot flip it to WORKTREE_GIT_BLOCKED.
+        def boom(self: Path, *args: object, **kwargs: object) -> int:
+            if self.name.startswith(".wade-write-probe-"):
+                raise AssertionError("probe must not run in a main checkout")
+            raise AssertionError("unexpected probe write in a main checkout")
+
+        monkeypatch.setattr(Path, "write_text", boom)
+
+        result = check_worktree(tmp_git_repo)
+        assert result.status == CheckStatus.IN_MAIN_CHECKOUT
+        assert result.exit_code == CheckExitCode.IN_MAIN_CHECKOUT
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +249,28 @@ class TestValidateConfig:
         result = validate_config(tmp_path)
         assert result.exit_code == ConfigExitCode.INVALID
         assert any("ai.review_plan.timeout" in e for e in result.errors)
+
+    def test_valid_network_access_global_and_command(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text(
+            "version: 2\nai:\n  network_access: true\n  implement:\n    network_access: false\n"
+        )
+        result = validate_config(tmp_path)
+        assert result.is_valid, f"Errors: {result.errors}"
+
+    def test_invalid_global_network_access(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nai:\n  network_access: sometimes\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("ai.network_access: must be true or false" in e for e in result.errors)
+
+    def test_invalid_command_network_access(self, tmp_path: Path) -> None:
+        config = tmp_path / ".wade.yml"
+        config.write_text("version: 2\nai:\n  implement:\n    network_access: 1\n")
+        result = validate_config(tmp_path)
+        assert result.exit_code == ConfigExitCode.INVALID
+        assert any("ai.implement.network_access: must be true or false" in e for e in result.errors)
 
     def test_unsupported_top_level_key(self, tmp_path: Path) -> None:
         config = tmp_path / ".wade.yml"

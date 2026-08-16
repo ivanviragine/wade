@@ -43,6 +43,7 @@ from wade.services.ai_resolution import (
     resolve_ai_tool,
     resolve_effort,
     resolve_model,
+    resolve_network_access,
     resolve_permission_mode,
 )
 from wade.services.implementation_service import (
@@ -581,6 +582,7 @@ def start(
     yolo: bool | None = None,
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
+    network_access: bool | None = None,
 ) -> bool:
     """Start a review-addressing session on an issue.
 
@@ -809,6 +811,9 @@ def start(
     resolved_permission_mode = resolve_permission_mode(
         effective_pm, yolo, config, "review_pr_comments"
     )
+    # Codex sandbox network policy (default disabled); always pinned explicitly
+    # at launch so ambient Codex config can never silently enable it.
+    resolved_network_access = resolve_network_access(network_access, config, "review_pr_comments")
 
     if not detach:
         (
@@ -877,6 +882,8 @@ def start(
                 trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
                 initial_message=prompt,
                 effort=resolved_effort,
+                working_dir=worktree_path,
+                network_access=resolved_network_access,
                 **permission_mode_launch_kwargs(resolved_permission_mode),
             )
         except (ValueError, KeyError):
@@ -907,6 +914,7 @@ def start(
                 transcript_path=transcript_path,
                 trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
                 effort=resolved_effort,
+                network_access=resolved_network_access,
                 **permission_mode_launch_kwargs(resolved_permission_mode),
             )
             launch_completed = True

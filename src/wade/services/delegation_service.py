@@ -240,6 +240,12 @@ def _delegate_headless(request: DelegationRequest) -> DelegationResult:
         trusted_dirs=trusted,
         allowed_commands=request.allowed_commands or None,
         effort=_parse_effort(request.effort),
+        # Grant a linked worktree's out-of-root git metadata so a sandboxed Codex
+        # deps/review run can do local git work; network stays off (these
+        # headless commands are read/analytical and never fetch/push). Inert for
+        # a main checkout and for every non-Codex tool.
+        working_dir=session_cwd,
+        network_access=False,
         **permission_mode_launch_kwargs(PermissionMode.DEFAULT),
     )
 
@@ -348,6 +354,9 @@ def _delegate_interactive(request: DelegationRequest) -> DelegationResult:
             trusted_dirs=trusted,
             allowed_commands=request.allowed_commands or None,
             effort=_parse_effort(request.effort),
+            # Same as the headless path: grant a linked worktree's git metadata
+            # for sandboxed git writes; network off (inert for non-Codex).
+            network_access=False,
             **permission_mode_launch_kwargs(request.permission_mode),
         )
 

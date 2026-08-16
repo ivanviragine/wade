@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
 from enum import IntEnum, StrEnum
 from pathlib import Path
 from typing import Any
@@ -43,6 +45,7 @@ class CheckStatus(StrEnum):
     IN_WORKTREE = "IN_WORKTREE"
     IN_MAIN_CHECKOUT = "IN_MAIN_CHECKOUT"
     NOT_IN_GIT_REPO = "NOT_IN_GIT_REPO"
+    WORKTREE_GIT_BLOCKED = "WORKTREE_GIT_BLOCKED"
 
 
 class CheckExitCode(IntEnum):
@@ -51,6 +54,13 @@ class CheckExitCode(IntEnum):
     IN_WORKTREE = 0
     NOT_IN_GIT_REPO = 1
     IN_MAIN_CHECKOUT = 2
+    # A linked worktree whose out-of-root git metadata (private and/or common
+    # git dir) is not writable — e.g. an AI session launched into a sandbox that
+    # never granted those dirs as writable roots. The tree looks like a worktree,
+    # but git writes (index, refs, objects) would fail. Distinct exit code so the
+    # agent can react. (3 is free in run_check's 0/1/2 space; handle_sync_result
+    # uses 4 but that is a different command's exit space — no collision.)
+    WORKTREE_GIT_BLOCKED = 3
 
 
 class ConfigExitCode(IntEnum):
@@ -71,12 +81,15 @@ class CheckResult:
         toplevel: str | None = None,
         branch: str | None = None,
         git_dir: str | None = None,
+        blocked_paths: list[str] | None = None,
     ) -> None:
         self.status = status
         self.exit_code = exit_code
         self.toplevel = toplevel
         self.branch = branch
         self.git_dir = git_dir
+        # Git-metadata dirs that failed the write probe (WORKTREE_GIT_BLOCKED only).
+        self.blocked_paths = blocked_paths or []
 
     def format_output(self) -> str:
         """Format as structured text output matching Bash behavior."""
@@ -87,6 +100,19 @@ class CheckResult:
             lines.append(f"branch={self.branch}")
         if self.git_dir is not None:
             lines.append(f"gitdir={self.git_dir}")
+        for blocked in self.blocked_paths:
+            lines.append(f"blocked={blocked}")
+        if self.status == CheckStatus.WORKTREE_GIT_BLOCKED:
+            lines.append(
+                "error: git metadata is not writable — this linked worktree's "
+                "private/common git dir lives outside the sandbox writable set, "
+                "so git writes (index, refs, objects) and wade sync/done will fail."
+            )
+            lines.append(
+                "hint: relaunch this AI session via `wade implement` / `wade review` "
+                "on an up-to-date wade + crossby so Codex grants the git-metadata "
+                "dirs as sandbox writable roots. Do not edit files until this passes."
+            )
         return "\n".join(lines)
 
 
@@ -135,13 +161,77 @@ class ConfigCheckResult:
 # ---------------------------------------------------------------------------
 
 
+def _probe_dir_writable(dir_path: Path) -> bool:
+    """Attempt a real, self-cleaning write inside *dir_path*.
+
+    Creates and immediately deletes a uniquely-named probe file. Returns True
+    only when the write succeeds; any ``OSError`` — including a sandbox denial,
+    which surfaces even when the Unix mode bits report writable — returns False.
+    A **real write** is required: ``os.access()`` alone is insufficient because
+    OS sandbox policy (Codex Seatbelt/Landlock) denies the write while leaving
+    the permission bits looking writable.
+
+    The probe file is removed in a ``finally`` block so a partial success, a
+    failed write, or an interruption never leaves an artefact behind.
+    """
+    probe = dir_path / f".wade-write-probe-{os.getpid()}"
+    try:
+        probe.write_text("wade git-write readiness probe\n", encoding="utf-8")
+    except OSError:
+        return False
+    finally:
+        # Always clean up — the file may or may not exist depending on where the
+        # write failed; unlink defensively and swallow a missing/denied removal.
+        with contextlib.suppress(OSError):
+            probe.unlink()
+    return True
+
+
+def _blocked_git_metadata_dirs(path: Path) -> list[str]:
+    """Return the out-of-root git-metadata dirs that are NOT writable.
+
+    Probes the worktree's **private** git dir (``get_git_dir``) and the shared
+    **common** git dir (``get_git_common_dir``) — the two roots a linked
+    worktree's git writes (``index``/``index.lock``, refs, objects) target,
+    which live outside the worktree tree. Relative results (git may return the
+    common dir relative to *path*) are resolved against *path*, matching
+    ``repo._index_lock_present``.
+
+    Returns a sorted, de-duplicated list of blocked absolute paths (a
+    non-existent dir counts as blocked so the failure surfaces rather than being
+    silently skipped); empty when every resolvable root is writable.
+    """
+    candidates: list[Path] = []
+    for getter in (repo.get_git_dir, repo.get_git_common_dir):
+        raw = getter(path)
+        if not raw:
+            continue
+        d = Path(raw)
+        if not d.is_absolute():
+            d = path / d
+        candidates.append(d.resolve())
+
+    seen: set[Path] = set()
+    blocked: list[str] = []
+    for d in candidates:
+        # The private and common dir coincide in a plain checkout; probe once.
+        if d in seen:
+            continue
+        seen.add(d)
+        if not d.is_dir() or not _probe_dir_writable(d):
+            blocked.append(str(d))
+    return sorted(blocked)
+
+
 def check_worktree(cwd: Path | None = None) -> CheckResult:
     """Check if the current directory is in a worktree.
 
     Returns CheckResult with status and exit code:
-      0 / IN_WORKTREE       — safe for AI work
-      1 / NOT_IN_GIT_REPO   — not inside any git repo
-      2 / IN_MAIN_CHECKOUT  — in main checkout, only planning allowed
+      0 / IN_WORKTREE          — safe for AI work
+      1 / NOT_IN_GIT_REPO      — not inside any git repo
+      2 / IN_MAIN_CHECKOUT     — in main checkout, only planning allowed
+      3 / WORKTREE_GIT_BLOCKED — a linked worktree whose out-of-root git
+                                 metadata is not writable (git writes would fail)
     """
     path = cwd or Path.cwd()
 
@@ -164,6 +254,27 @@ def check_worktree(cwd: Path | None = None) -> CheckResult:
 
     if repo.is_worktree(path):
         git_dir = repo.get_git_dir(path)
+
+        # Readiness probe: a linked worktree's git metadata lives outside the
+        # tree, so a sandbox that confines writes to the worktree (Codex
+        # workspace-write) blocks every git write unless those dirs are granted
+        # as writable roots. Verify with a real write, not just "is a worktree".
+        blocked = _blocked_git_metadata_dirs(path)
+        if blocked:
+            logger.warning(
+                "check.worktree_git_blocked",
+                branch=branch,
+                toplevel=toplevel,
+                blocked=blocked,
+            )
+            return CheckResult(
+                status=CheckStatus.WORKTREE_GIT_BLOCKED,
+                exit_code=CheckExitCode.WORKTREE_GIT_BLOCKED,
+                toplevel=toplevel,
+                branch=branch,
+                git_dir=git_dir,
+                blocked_paths=blocked,
+            )
 
         logger.info("check.in_worktree", branch=branch, toplevel=toplevel)
         return CheckResult(
@@ -479,6 +590,10 @@ def _validate_ai_section(ai: dict[str, Any], errors: list[str]) -> None:
     if yolo is not None and not isinstance(yolo, bool):
         errors.append("ai.yolo: must be true or false")
 
+    network_access = ai.get("network_access")
+    if network_access is not None and not isinstance(network_access, bool):
+        errors.append("ai.network_access: must be true or false")
+
     # Validate per-command sections
     seen_sections: dict[str, str] = {}
     for cmd in (*AI_COMMAND_NAMES, *LEGACY_AI_COMMAND_ALIASES):
@@ -530,6 +645,10 @@ def _validate_ai_command_section(cmd: str, cmd_section: dict[str, Any], errors: 
     yolo = cmd_section.get("yolo")
     if yolo is not None and not isinstance(yolo, bool):
         errors.append(f"ai.{cmd}.yolo: must be true or false")
+
+    network_access = cmd_section.get("network_access")
+    if network_access is not None and not isinstance(network_access, bool):
+        errors.append(f"ai.{cmd}.network_access: must be true or false")
 
     timeout = cmd_section.get("timeout")
     if timeout is not None and (

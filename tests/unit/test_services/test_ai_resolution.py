@@ -14,6 +14,7 @@ from wade.models.permission import PermissionMode
 from wade.services.ai_resolution import (
     confirm_ai_selection,
     resolve_effort,
+    resolve_network_access,
     valid_effort_levels,
 )
 
@@ -698,3 +699,65 @@ class TestConfirmAiSelectionAlwaysDisplays:
             confirm_ai_selection(_CLAUDE, _MODEL_A, tool_explicit=False, model_explicit=False)
         tool_lines = [1 for k, _ in _kv_pairs(mock_kv) if k == "AI tool"]
         assert sum(tool_lines) == 1
+
+
+class TestResolveNetworkAccess:
+    """``resolve_network_access`` precedence: flag > command config > global > False."""
+
+    def test_default_is_false_when_unset(self) -> None:
+        # Nothing configured, no flag — network is disabled by default.
+        assert resolve_network_access(None, ProjectConfig(), "implement") is False
+
+    def test_explicit_flag_true_wins_over_config_false(self) -> None:
+        config = ProjectConfig(ai=AIConfig(network_access=False))
+        # --network overrides a config that (redundantly) disables it.
+        assert resolve_network_access(True, config, "implement") is True
+
+    def test_explicit_flag_false_wins_over_config_true(self) -> None:
+        config = ProjectConfig(ai=AIConfig(network_access=True))
+        # --no-network overrides a config that enables it (never silently on).
+        assert resolve_network_access(False, config, "implement") is False
+
+    def test_command_config_wins_over_global(self) -> None:
+        config = ProjectConfig(
+            ai=AIConfig(
+                network_access=False,
+                implement=AICommandConfig(network_access=True),
+            )
+        )
+        assert resolve_network_access(None, config, "implement") is True
+        # A different command falls back to the (disabled) global.
+        assert resolve_network_access(None, config, "review_pr_comments") is False
+
+    def test_global_config_used_when_no_command_override(self) -> None:
+        config = ProjectConfig(ai=AIConfig(network_access=True))
+        assert resolve_network_access(None, config, "implement") is True
+
+    def test_resume_reresolves_from_current_config(self) -> None:
+        """A resumed session reflects the CURRENT config, not the original launch.
+
+        The two ``build_resume_command`` call sites re-resolve ``network_access``
+        fresh from the config loaded at resume time — network policy is a
+        launch-time OS concern, not persisted session state. Model that here:
+        the same ``(None, config, command)`` call yields the *current* config's
+        value, so flipping the policy between launch and resume flips the result.
+        """
+        # Original launch: network enabled via config.
+        launch_cfg = ProjectConfig(ai=AIConfig(network_access=True))
+        assert resolve_network_access(None, launch_cfg, "implement") is True
+        # Policy changed before resume — a freshly loaded config disables it.
+        resume_cfg = ProjectConfig(ai=AIConfig(network_access=False))
+        assert resolve_network_access(None, resume_cfg, "implement") is False
+
+    def test_get_network_access_command_over_global_over_default(self) -> None:
+        # ProjectConfig.get_network_access is the config-level resolver the
+        # service resolver defers to; verify its fallback chain directly.
+        assert ProjectConfig().get_network_access("implement") is False
+        cfg = ProjectConfig(
+            ai=AIConfig(
+                network_access=True,
+                review_pr_comments=AICommandConfig(network_access=False),
+            )
+        )
+        assert cfg.get_network_access("review_pr_comments") is False
+        assert cfg.get_network_access("implement") is True

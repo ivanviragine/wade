@@ -20,9 +20,12 @@ def run_check() -> None:
     """Verify worktree safety for AI agents.
 
     Exit codes:
-      0  IN_WORKTREE       — safe to work
-      1  NOT_IN_GIT_REPO   — not inside a git repository
-      2  IN_MAIN_CHECKOUT  — unsafe for agent work
+      0  IN_WORKTREE          — safe to work
+      1  NOT_IN_GIT_REPO      — not inside a git repository
+      2  IN_MAIN_CHECKOUT     — unsafe for agent work
+      3  WORKTREE_GIT_BLOCKED — in a worktree, but its git metadata is not
+                                writable (git writes would fail); relaunch the
+                                session so the sandbox grants the git dirs
     """
     from wade.services.check_service import check_worktree
 
