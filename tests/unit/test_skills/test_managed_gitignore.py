@@ -40,7 +40,7 @@ class TestGetWorktreeGitignoreEntries:
         entries = get_worktree_gitignore_entries()
         assert ".claude/settings.json" in entries
         assert ".cursor/cli.json" in entries
-        # crossby's Codex hook writer enables [features].codex_hooks here per-session.
+        # crossby's Codex hook writer enables [features].hooks here per-session.
         assert ".codex/config.toml" in entries
 
     def test_includes_session_artifacts(self) -> None:

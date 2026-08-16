@@ -147,7 +147,7 @@ def get_worktree_gitignore_entries() -> list[str]:
     # AI tool settings (written per-session to worktrees only)
     entries.append(".claude/settings.json")
     entries.append(".cursor/cli.json")
-    # Codex config — crossby's hook writer sets [features].codex_hooks = true here
+    # Codex config — crossby's hook writer sets [features].hooks = true here
     # per-session so Codex loads the installed hooks; not user content in a worktree.
     entries.append(".codex/config.toml")
 

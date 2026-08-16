@@ -375,7 +375,9 @@ class TestBootstrapPlanMode:
         assert "session-complete" in (worktree_path / ".codex" / "hooks.json").read_text("utf-8")
 
     def test_codex_hooks_feature_flag_enabled(self, tmp_path: Path) -> None:
-        """crossby's Codex writer enables [features].codex_hooks so hooks load."""
+        """crossby's Codex writer enables the canonical [features].hooks so hooks
+        load, and does not write the deprecated ``codex_hooks`` alias (which newer
+        Codex builds warn on)."""
         import tomllib
 
         worktree_path = tmp_path / "worktree"
@@ -389,7 +391,8 @@ class TestBootstrapPlanMode:
         config = worktree_path / ".codex" / "config.toml"
         assert config.is_file(), "Codex hooks are inert without .codex/config.toml"
         parsed = tomllib.loads(config.read_text("utf-8"))
-        assert parsed["features"]["codex_hooks"] is True
+        assert parsed["features"]["hooks"] is True
+        assert "codex_hooks" not in parsed["features"]
 
     def test_stop_hook_guard_differs_by_mode(self, tmp_path: Path) -> None:
         """Impl/review sessions install a ``session-complete`` Stop hook; plan
