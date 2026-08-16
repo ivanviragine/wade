@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.45.7] — 2026-08-16
+
+### Bug Fixes
+
+- preserve user-set ai.implement keys on re-init (#425) (71a25db)
+
 ## [v0.45.6] — 2026-08-16
 
 ### Bug Fixes
