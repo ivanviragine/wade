@@ -390,6 +390,35 @@ class TestParseCommandConfig:
         config = parse_config_file(config_path)
         assert config.ai.effort == "medium"
 
+    def test_global_network_access_parsed(self, tmp_path: Path) -> None:
+        # `ai.network_access: true` must reach the model — the loader used to drop
+        # it, so the documented opt-in silently resolved to False (#423).
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  network_access: true\n")
+        config = parse_config_file(config_path)
+        assert config.ai.network_access is True
+        assert config.get_network_access() is True
+
+    def test_command_network_access_parsed(self, tmp_path: Path) -> None:
+        # `ai.<command>.network_access: true` must reach the command config and
+        # win over the (unset) global default in the resolver.
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nai:\n  implement:\n    tool: codex\n    network_access: true\n"
+        )
+        config = parse_config_file(config_path)
+        assert config.ai.implement.network_access is True
+        assert config.get_network_access("implement") is True
+
+    def test_network_access_defaults_to_none(self, tmp_path: Path) -> None:
+        # Unset at both levels — the resolver falls through to disabled.
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nai:\n  default_tool: codex\n")
+        config = parse_config_file(config_path)
+        assert config.ai.network_access is None
+        assert config.ai.implement.network_access is None
+        assert config.get_network_access("implement") is False
+
     def test_enabled_false_parsed(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text(
