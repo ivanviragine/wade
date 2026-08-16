@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.45.5] — 2026-08-16
+
+### Bug Fixes
+
+- drop done.require_review: false bypass hint from done review-refusal output (#422) (5424a00)
+
 ## [v0.45.4] — 2026-08-15
 
 ### Bug Fixes
