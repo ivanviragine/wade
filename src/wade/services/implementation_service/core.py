@@ -1093,6 +1093,7 @@ def start(
                                 or permission_mode is not None
                                 or yolo is not None
                             ),
+                            network_access=network_access,
                         )
                     except Exception:
                         logger.exception("post_implementation_lifecycle.failed")

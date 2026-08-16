@@ -171,9 +171,14 @@ def _probe_dir_writable(dir_path: Path) -> bool:
     must land in *dir_path* itself, never be redirected elsewhere. ``O_CREAT``
     without ``O_EXCL`` still truncates a stale regular probe from a crashed run
     with the same PID, so that never masquerades as an unwritable dir.
+
+    ``O_NOFOLLOW`` is absent on Windows, so the flag is resolved via ``getattr``
+    and degrades to ``0`` there (the no-follow guard is simply skipped) rather
+    than raising ``AttributeError`` and breaking the check on every Windows
+    linked-worktree session.
     """
     probe = dir_path / f".wade-write-probe-{os.getpid()}"
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
     try:
         fd = os.open(probe, flags, 0o600)
     except OSError:

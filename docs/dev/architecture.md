@@ -464,6 +464,16 @@ Codex acts on either value — crossby capability-gates every other tool via
 `supports_network_access` — and resume re-resolves both fresh from current config
 (a launch-time OS concern, not persisted session state).
 
+The **explicit** `--network`/`--no-network` override (the tri-state
+`bool | None`, not the resolved bool) is threaded through every session **handoff**
+so it survives instead of the next session silently re-resolving it: the
+post-implementation "Wait for reviews" path forwards it via
+`_post_implementation_lifecycle` → `review_service.start`, and the numeric
+`wade <N>` shorthand forwards it via `SmartStartContext` to whichever route it
+picks (implement / batch / review). `None` (unset) still re-resolves per the
+routed command's own config, matching how a non-explicit `permission_mode` is
+threaded.
+
 ### Session-start context injection (#351)
 
 The launch prompt injects the task **once**. Nothing re-injects it on **resume**

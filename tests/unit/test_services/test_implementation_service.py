@@ -2860,9 +2860,12 @@ class TestPostImplementationLifecyclePr:
                 ai_explicit=True,
                 model_explicit=True,
                 permission_mode="yolo",
+                network_access=False,
             )
 
         assert result == MergeStatus.NOT_MERGED
+        # An explicit --no-network pin survives into the follow-on review session
+        # rather than being silently re-resolved from ai.review_pr_comments config.
         mock_review_start.assert_called_once_with(
             "42",
             ai_tool="claude",
@@ -2873,6 +2876,7 @@ class TestPostImplementationLifecyclePr:
             model_explicit=True,
             permission_mode="yolo",
             permission_mode_explicit=False,
+            network_access=False,
         )
 
     def test_wait_for_reviews_quiet_timeout_preserves_review_context(self, tmp_path: Path) -> None:
@@ -2909,9 +2913,12 @@ class TestPostImplementationLifecyclePr:
                 ai_explicit=True,
                 model_explicit=True,
                 permission_mode="yolo",
+                network_access=True,
             )
 
         assert result == MergeStatus.NOT_MERGED
+        # An explicit --network pin survives into the quiet-timeout re-launch path
+        # rather than being silently re-resolved from ai.review_pr_comments config.
         mock_quiet.assert_called_once_with(
             tmp_path,
             "feat/42",
@@ -2926,6 +2933,7 @@ class TestPostImplementationLifecyclePr:
             model_explicit=True,
             permission_mode="yolo",
             permission_mode_explicit=False,
+            network_access=True,
         )
 
     def test_no_pr_found_returns_not_merged(self, tmp_path: Path) -> None:

@@ -148,6 +148,21 @@ class TestWorktreeGitReadinessProbe:
             common = wt_path / common
         assert _probe_artefacts(private, common) == []
 
+    def test_probe_survives_platform_without_o_nofollow(
+        self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # On Windows ``os.O_NOFOLLOW`` is undefined. The probe must resolve the
+        # flag defensively (getattr → 0) rather than raise ``AttributeError`` and
+        # break every linked-worktree session check. Simulate the missing symbol.
+        monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+
+        wt_path = _add_worktree(tmp_git_repo)
+        result = check_worktree(wt_path)
+
+        assert result.status == CheckStatus.IN_WORKTREE
+        assert result.exit_code == CheckExitCode.IN_WORKTREE
+        assert result.blocked_paths == []
+
     def test_main_checkout_is_not_probed(
         self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

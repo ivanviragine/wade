@@ -489,6 +489,7 @@ def smart_start_cmd(
     ),
     yolo: bool = typer.Option(False, "--yolo", help="Skip AI tool permission prompts."),
     permission_mode: str | None = _PERMISSION_MODE_OPT,
+    network_access: bool | None = _NETWORK_ACCESS_OPT,
 ) -> None:
     """Internal dispatch for `wade <N>` — routes to implement or review pr-comments.
 
@@ -512,6 +513,7 @@ def smart_start_cmd(
         effort_explicit=effort is not None,
         yolo=yolo or None,
         permission_mode=permission_mode,
+        network_access=network_access,
     )
     raise typer.Exit(0 if success else 1)
 
