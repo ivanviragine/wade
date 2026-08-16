@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from wade.git.pr import PRLookup, PRRef
 from wade.git.repo import GitError
 from wade.models.review import PollOutcome
@@ -17,6 +19,16 @@ def _make_task() -> Task:
     return Task(id="42", title="Fix the widget", state=TaskState.OPEN, body="")
 
 
+@pytest.fixture(autouse=True)
+def _default_no_open_pr() -> object:
+    """Default the issue→open-PR resolver to 'none' so routing tests don't spawn a
+    real ``gh pr list`` in the not-open-PR path. The resume-by-open-PR test
+    overrides this with its own patch.
+    """
+    with patch("wade.services.smart_start.find_open_pr_branch_for_issue", return_value=None):
+        yield
+
+
 class TestSmartStartNoPR:
     """When no PR exists, smart_start falls through to implement."""
 
@@ -25,7 +37,7 @@ class TestSmartStartNoPR:
         "wade.services.smart_start.git_pr.get_pr_for_branch",
         return_value=PRLookup(found=False),
     )
-    @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.smart_start.resolve_task_branch", return_value="feat/42-fix")
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")
     @patch("wade.services.smart_start.load_config")
@@ -52,7 +64,7 @@ class TestSmartStartMergedPR:
     """When PR is merged, shows info message."""
 
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
-    @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.smart_start.resolve_task_branch", return_value="feat/42-fix")
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")
     @patch("wade.services.smart_start.load_config")
@@ -83,7 +95,7 @@ class TestSmartStartOpenPR:
     @patch("wade.ui.prompts.is_tty", return_value=True)
     @patch("wade.git.worktree.list_worktrees", return_value=[])
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
-    @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.smart_start.resolve_task_branch", return_value="feat/42-fix")
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")
     @patch("wade.services.smart_start.load_config")
@@ -118,7 +130,7 @@ class TestSmartStartOpenPR:
     @patch("wade.ui.prompts.is_tty", return_value=False)
     @patch("wade.git.worktree.list_worktrees", return_value=[])
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
-    @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.smart_start.resolve_task_branch", return_value="feat/42-fix")
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")
     @patch("wade.services.smart_start.load_config")
@@ -160,7 +172,7 @@ class TestSmartStartOpenPR:
     @patch("wade.ui.prompts.is_tty", return_value=True)
     @patch("wade.git.worktree.list_worktrees", return_value=[])
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
-    @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.smart_start.resolve_task_branch", return_value="feat/42-fix")
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")
     @patch("wade.services.smart_start.load_config")
@@ -193,7 +205,7 @@ class TestSmartStartOpenPR:
     @patch("wade.ui.prompts.is_tty", return_value=True)
     @patch("wade.git.worktree.list_worktrees", return_value=[])
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
-    @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.smart_start.resolve_task_branch", return_value="feat/42-fix")
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")
     @patch("wade.services.smart_start.load_config")
@@ -231,7 +243,7 @@ class TestSmartStartDraftPR:
     @patch("wade.ui.prompts.is_tty", return_value=True)
     @patch("wade.git.worktree.list_worktrees", return_value=[])
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
-    @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.smart_start.resolve_task_branch", return_value="feat/42-fix")
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")
     @patch("wade.services.smart_start.load_config")
@@ -275,7 +287,7 @@ class TestSmartStartDraftPR:
         return_value=[Worktree(branch="feat/42-fix", path="/tmp/wt")],
     )
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
-    @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.smart_start.resolve_task_branch", return_value="feat/42-fix")
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")
     @patch("wade.services.smart_start.load_config")
@@ -315,7 +327,7 @@ class TestSmartStartDraftPR:
     @patch("wade.ui.prompts.is_tty", return_value=True)
     @patch("wade.git.worktree.list_worktrees", return_value=[])
     @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
-    @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.smart_start.resolve_task_branch", return_value="feat/42-fix")
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")
     @patch("wade.services.smart_start.load_config")
@@ -417,7 +429,7 @@ class TestSmartStartTrackingDetection:
         "wade.services.smart_start.git_pr.get_pr_for_branch",
         return_value=PRLookup(found=False),
     )
-    @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.smart_start.resolve_task_branch", return_value="feat/42-fix")
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")
     @patch("wade.services.smart_start.load_config")
@@ -514,9 +526,7 @@ class TestSmartStartTrackingDetection:
         "wade.services.smart_start.git_pr.get_pr_for_branch",
         return_value=PRLookup(found=False),
     )
-    @patch(
-        "wade.services.smart_start.git_branch.make_branch_name", return_value="feat/173-tracking"
-    )
+    @patch("wade.services.smart_start.resolve_task_branch", return_value="feat/173-tracking")
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")
     @patch("wade.services.smart_start.load_config")
@@ -549,9 +559,7 @@ class TestSmartStartTrackingDetection:
         "wade.services.smart_start.git_pr.get_pr_for_branch",
         return_value=PRLookup(found=False),
     )
-    @patch(
-        "wade.services.smart_start.git_branch.make_branch_name", return_value="feat/173-tracking"
-    )
+    @patch("wade.services.smart_start.resolve_task_branch", return_value="feat/173-tracking")
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")
     @patch("wade.services.smart_start.load_config")
@@ -613,7 +621,7 @@ class TestSmartStartTrackingDetection:
         "wade.services.smart_start.git_pr.get_pr_for_branch",
         return_value=PRLookup(found=False),
     )
-    @patch("wade.services.smart_start.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch("wade.services.smart_start.resolve_task_branch", return_value="feat/42-fix")
     @patch("wade.services.smart_start.git_repo.get_repo_root")
     @patch("wade.services.smart_start.get_provider")
     @patch("wade.services.smart_start.load_config")
@@ -638,6 +646,110 @@ class TestSmartStartTrackingDetection:
         call_kwargs = mock_do_start.call_args.kwargs
         assert call_kwargs["effort"] == "high"
         assert call_kwargs["effort_explicit"] is True
+
+
+class TestSmartStartResolvesByIssueNumber:
+    """Regression: a retitled issue must still resolve to its existing branch/PR.
+
+    ``done`` rewrites the issue title to add the required conventional-commit
+    prefix, so re-running ``wade <id>`` would re-slugify to a *different* branch.
+    smart_start must look up the PR by the branch the worktree actually lives on
+    (resolved via the stable issue number) instead of the drifted reconstruction,
+    or it would miss the live PR and send an in-flight task back to implement.
+    """
+
+    _SHARED = "wade.services.implementation_service._shared"
+
+    @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
+    @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
+    @patch("wade.services.smart_start.git_repo.get_repo_root")
+    @patch("wade.services.smart_start.get_provider")
+    @patch("wade.services.smart_start.load_config")
+    def test_looks_up_pr_by_existing_branch_not_retitled_slug(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_pr: MagicMock,
+        mock_implement: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_repo_root.return_value = tmp_path
+        mock_config.return_value.project.branch_prefix = "feat"
+        # The issue title was rewritten to conventional form after implement; its
+        # frozen branch still carries the original slug.
+        frozen_branch = "feat/104-llm-safety-gate-original-slug"
+        mock_get_provider.return_value.read_task.return_value = Task(
+            id="104",
+            title="fix: LLM safety gate always returns 6 unique numbers",
+            state=TaskState.OPEN,
+            body="",
+        )
+        mock_pr.return_value = PRLookup(
+            found=True, pr=PRRef(number=228, state="OPEN", isDraft=False)
+        )
+
+        with (
+            patch(f"{self._SHARED}.git_repo.get_current_branch", return_value="main"),
+            patch(
+                f"{self._SHARED}.git_worktree.list_worktrees",
+                return_value=[Worktree(path=str(tmp_path / "wt"), branch=frozen_branch)],
+            ),
+        ):
+            # cd_only short-circuits the interactive menu once the open PR is found.
+            result = smart_start("104", project_root=tmp_path, cd_only=True)
+
+        assert result is True
+        # The PR was resolved by the branch the worktree lives on — not the
+        # branch a fresh slug of the new title would produce.
+        mock_pr.assert_called_once_with(tmp_path, frozen_branch)
+
+    @patch("wade.services.smart_start.SmartStartContext.run_implement", return_value=True)
+    @patch("wade.services.smart_start.git_pr.get_pr_for_branch")
+    @patch("wade.services.smart_start.git_repo.get_repo_root")
+    @patch("wade.services.smart_start.get_provider")
+    @patch("wade.services.smart_start.load_config")
+    def test_resumes_open_pr_when_resolved_branch_is_closed(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_pr: MagicMock,
+        mock_implement: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Ambiguity settled by PR state: a stale closed branch must not shadow the
+        issue's live open PR on another branch (#428 review)."""
+        mock_repo_root.return_value = tmp_path
+        mock_config.return_value.project.branch_prefix = "feat"
+        stale_branch = "feat/42-closed-pr-branch"
+        live_branch = "feat/42-open-pr-branch"
+        mock_get_provider.return_value.read_task.return_value = _make_task()
+
+        def pr_by_branch(_repo_root: Path, branch: str) -> PRLookup:
+            if branch == live_branch:
+                return PRLookup(found=True, pr=PRRef(number=9, state="OPEN", isDraft=False))
+            return PRLookup(found=True, pr=PRRef(number=7, state="CLOSED"))
+
+        mock_pr.side_effect = pr_by_branch
+
+        with (
+            patch(f"{self._SHARED}.git_repo.get_current_branch", return_value="main"),
+            patch(
+                f"{self._SHARED}.git_worktree.list_worktrees",
+                return_value=[Worktree(path=str(tmp_path / "wt"), branch=stale_branch)],
+            ),
+            patch(
+                "wade.services.smart_start.find_open_pr_branch_for_issue",
+                return_value=live_branch,
+            ),
+        ):
+            result = smart_start("42", project_root=tmp_path, cd_only=True)
+
+        assert result is True
+        # Re-looked up the live open PR's branch rather than treating the issue as
+        # closed and starting fresh.
+        assert mock_pr.call_args_list[-1].args == (tmp_path, live_branch)
 
 
 class TestRunReviewPrComments:

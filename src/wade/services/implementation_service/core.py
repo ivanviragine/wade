@@ -40,7 +40,9 @@ from wade.services.ai_resolution import (
 )
 from wade.services.implementation_service._shared import (
     extract_issue_from_branch,
+    find_open_pr_branch_for_issue,
     find_worktree_path,
+    resolve_task_branch,
 )
 from wade.services.implementation_service.bootstrap import (
     _resolve_worktrees_dir,
@@ -510,12 +512,16 @@ def start(
         console.rule(f"implement #{task.id}")
         console.kv("Issue", console.issue_ref(task.id, task.title))
 
-        # Generate deterministic branch name early — only needs config + task, so it
-        # can be computed before AI selection to allow the PR/plan check below.
-        branch_name = git_branch.make_branch_name(
-            config.project.branch_prefix,
-            int(task.id),
-            task.title,
+        # Resolve the branch early — needs only config + task, so it can be
+        # computed before AI selection to allow the PR/plan check below. Resolve
+        # by the stable issue *number* rather than re-slugifying the title: the
+        # slug is frozen at the first ``wade implement``, but ``done`` later
+        # rewrites the issue title to add the required conventional-commit prefix.
+        # A reconstructed name would then drift from the real branch, so the
+        # PR/plan lookup below would miss the live draft PR and re-bootstrap a
+        # duplicate — leaving the resumed task with "no plan attached".
+        branch_name = resolve_task_branch(
+            repo_root, task.id, task.title, config.project.branch_prefix
         )
 
         # Check for existing draft PR (from plan flow) before AI selection so that
@@ -531,6 +537,41 @@ def start(
                 "Transient gh error — try again shortly",
             )
             return ImplementResult(success=False)
+
+        # resolve_task_branch matches by issue number, so it can adopt a branch left
+        # behind by a CLOSED/MERGED PR (or one that never got a PR) — and, when an
+        # issue has several such branches, a branch-name tiebreak could pick a dead
+        # one over a live one. When the resolved branch is not itself an open PR,
+        # settle the branch by PR *state* (#428 review):
+        #   1. resume the issue's OPEN PR if one exists (on any branch), else
+        #   2. start fresh on the current-title name — what bootstrap_draft_pr will
+        #      reconstruct — so the session's worktree and the draft PR agree rather
+        #      than diverging onto the stale branch.
+        if not pr_lookup.is_open:
+            try:
+                open_pr_branch = find_open_pr_branch_for_issue(repo_root, task.id)
+            except git_pr.GhCliError:
+                # Could NOT list open PRs — this is not "no open PR". Bootstrapping
+                # now could scaffold a duplicate over a live PR that lives on another
+                # same-issue branch we simply cannot see. Abort, like a failed PR
+                # lookup, rather than treat an unknown listing as absence (#428).
+                console.error_with_fix(
+                    f"Could not list open PRs for issue #{task.id}",
+                    "Transient gh error — try again shortly",
+                )
+                return ImplementResult(success=False)
+            resume_branch = open_pr_branch or git_branch.make_branch_name(
+                config.project.branch_prefix, int(task.id), task.title
+            )
+            if resume_branch != branch_name:
+                branch_name = resume_branch
+                pr_lookup = git_pr.get_pr_for_branch(repo_root, branch_name)
+                if pr_lookup.lookup_failed:
+                    console.error_with_fix(
+                        f"Could not look up the PR for branch {branch_name}",
+                        "Transient gh error — try again shortly",
+                    )
+                    return ImplementResult(success=False)
         existing_pr = pr_lookup.pr if pr_lookup.is_open else None
         plan_content: str | None = None
         proceed_needs_bootstrap = False

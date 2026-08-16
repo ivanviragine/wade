@@ -19,7 +19,6 @@ from crossby.models.ai import AIToolID
 from pydantic import BaseModel
 
 from wade.config.loader import load_config
-from wade.git import branch as git_branch
 from wade.git import pr as git_pr
 from wade.git import repo as git_repo
 from wade.git.repo import GitError
@@ -28,7 +27,12 @@ from wade.models.session import MergeStatus, SessionRecord
 from wade.models.worktree import Worktree
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
-from wade.services.implementation_service import _merge_pr, check_tracking_issue_and_batch
+from wade.services.implementation_service import (
+    _merge_pr,
+    check_tracking_issue_and_batch,
+    find_open_pr_branch_for_issue,
+    resolve_task_branch,
+)
 from wade.ui.console import console
 from wade.utils.markdown import parse_sessions_from_body
 
@@ -165,12 +169,13 @@ def smart_start(
     if batch_result is not None:
         return batch_result
 
-    # Build the expected branch name
-    branch_name = git_branch.make_branch_name(
-        config.project.branch_prefix,
-        int(task.id),
-        task.title,
-    )
+    # Resolve the branch by the stable issue *number*, not a re-slugified title.
+    # The slug is frozen at ``wade implement`` time, so once the issue is retitled
+    # (commonly: renamed to conventional-commit form when ``done`` opens/updates
+    # its PR) a reconstructed name drifts from the real branch and the PR lookup
+    # below misses the live PR — sending an in-flight task back through a fresh
+    # implement instead of resuming it.
+    branch_name = resolve_task_branch(repo_root, task.id, task.title, config.project.branch_prefix)
 
     # Check for existing PR
     lookup = git_pr.get_pr_for_branch(repo_root, branch_name)
@@ -179,6 +184,26 @@ def smart_start(
         # implement flow rather than acting on an unknown PR state.
         console.warn("Could not look up the PR for this branch — proceeding with implement.")
         return ctx.run_implement()
+    if not lookup.is_open:
+        # The resolved branch is not a live PR — a stale same-issue branch (closed
+        # PR) or a drifted title can shadow the issue's real open PR. Prefer the
+        # open PR's branch so we resume it here rather than mislabelling it closed
+        # and routing to a fresh implement (#428 review).
+        try:
+            open_branch = find_open_pr_branch_for_issue(repo_root, task.id)
+        except git_pr.GhCliError:
+            # Could not list PRs — route on the original lookup. The implement flow
+            # (the only path that bootstraps) makes the authoritative, failure-aware
+            # call, so we never open a duplicate PR from here.
+            open_branch = None
+        if open_branch and open_branch != branch_name:
+            branch_name = open_branch
+            lookup = git_pr.get_pr_for_branch(repo_root, branch_name)
+            if lookup.lookup_failed:
+                console.warn(
+                    "Could not look up the PR for this branch — proceeding with implement."
+                )
+                return ctx.run_implement()
     if not lookup.found or lookup.pr is None:
         # No PR → normal implement flow
         return ctx.run_implement()

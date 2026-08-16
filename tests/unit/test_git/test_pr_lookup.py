@@ -11,7 +11,9 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from wade.git.pr import PRLookup, PRRef, get_pr_for_branch
+import pytest
+
+from wade.git.pr import GhCliError, PRLookup, PRRef, get_pr_for_branch, list_prs
 
 
 def _gh_result(returncode: int, stdout: str = "", stderr: str = "") -> MagicMock:
@@ -113,3 +115,39 @@ class TestPRLookupProperties:
         assert lookup.is_open is True
         merged = PRLookup(found=True, pr=PRRef(number=1, state="merged"))
         assert merged.is_merged is True
+
+
+class TestListPrsRaiseOnError:
+    """``list_prs`` must be able to distinguish a failed listing from 'no PRs'."""
+
+    _ROW = (
+        '[{"number": 1, "url": "u", "headRefName": "feat/1-x", "state": "OPEN", "isDraft": false}]'
+    )
+
+    @patch("wade.git.pr._run_gh")
+    def test_default_swallows_failure_to_empty(self, mock_gh: MagicMock) -> None:
+        mock_gh.return_value = _gh_result(1, stderr="boom")
+        assert list_prs(Path("/repo")) == []
+
+    @patch("wade.git.pr._run_gh")
+    def test_raises_on_nonzero_exit_when_requested(self, mock_gh: MagicMock) -> None:
+        mock_gh.return_value = _gh_result(1, stderr="boom")
+        with pytest.raises(GhCliError):
+            list_prs(Path("/repo"), raise_on_error=True)
+
+    @patch("wade.git.pr._run_gh")
+    def test_raises_on_bad_json_when_requested(self, mock_gh: MagicMock) -> None:
+        mock_gh.return_value = _gh_result(0, stdout="not json at all")
+        with pytest.raises(GhCliError):
+            list_prs(Path("/repo"), raise_on_error=True)
+
+    @patch("wade.git.pr._run_gh")
+    def test_success_returns_prs_even_with_raise_on_error(self, mock_gh: MagicMock) -> None:
+        mock_gh.return_value = _gh_result(0, stdout=self._ROW)
+        prs = list_prs(Path("/repo"), state="open", raise_on_error=True)
+        assert [p.head_ref_name for p in prs] == ["feat/1-x"]
+
+    @patch("wade.git.pr._run_gh")
+    def test_empty_success_is_not_an_error(self, mock_gh: MagicMock) -> None:
+        mock_gh.return_value = _gh_result(0, stdout="[]")
+        assert list_prs(Path("/repo"), raise_on_error=True) == []
