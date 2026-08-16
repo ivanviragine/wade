@@ -983,6 +983,95 @@ class TestPatchConfig:
         config = yaml.safe_load(config_path.read_text())
         assert "implement" not in config["ai"]
 
+    def test_force_preserves_other_implement_keys_when_tool_removed(self, tmp_path: Path) -> None:
+        """Re-init must strip only the redundant ``tool`` key, not user-set siblings.
+
+        ``ai.implement`` legitimately carries yolo/effort/permission_mode/etc.
+        (all honored by the loader); a force re-init where the implement tool
+        matches the default previously deleted the whole section, silently
+        dropping those keys.
+        """
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nai:\n  default_tool: claude\n"
+            "  implement:\n    tool: claude\n    yolo: true\n    effort: xhigh\n"
+        )
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), implement_tool="claude", force=True
+        )
+        config = yaml.safe_load(config_path.read_text())
+        # tool (redundant, == default) is removed; effective tool is unchanged
+        # (claude → claude), so the tool-specific effort survives alongside yolo.
+        assert config["ai"]["implement"] == {"yolo": True, "effort": "xhigh"}
+
+    def test_force_preserves_toolless_implement_section(self, tmp_path: Path) -> None:
+        """A hand-authored ``ai.implement`` with no ``tool`` key survives re-init untouched."""
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nai:\n  default_tool: claude\n  implement:\n    yolo: true\n"
+        )
+        _patch_config(config_path, "claude", ComplexityModelMapping(), force=True)
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["implement"] == {"yolo": True}
+
+    def test_force_sets_implement_tool_preserves_siblings(self, tmp_path: Path) -> None:
+        """Setting a differing implement tool keeps other implement-scoped keys."""
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nai:\n  default_tool: claude\n  implement:\n    yolo: true\n"
+        )
+        _patch_config(
+            config_path,
+            "claude",
+            ComplexityModelMapping(),
+            implement_tool="antigravity-cli",
+            force=True,
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["implement"] == {"yolo": True, "tool": "antigravity-cli"}
+
+    def test_force_drops_stale_tool_specific_keys_on_tool_change(self, tmp_path: Path) -> None:
+        """Tool-specific ``model``/``effort`` are cleared when the impl tool changes.
+
+        Both outrank the freshly-written per-tool mapping (resolve_model /
+        resolve_effort precedence) and get rejected as incompatible for the new
+        tool (e.g. agy rejects ``xhigh``), so a stale pin silently voids the
+        re-init's choice. Portable keys still survive.
+        """
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nai:\n  default_tool: claude\n"
+            "  implement:\n    model: claude-opus-4.8\n    effort: xhigh\n    yolo: true\n"
+        )
+        _patch_config(
+            config_path,
+            "claude",
+            ComplexityModelMapping(),
+            implement_tool="antigravity-cli",
+            force=True,
+        )
+        config = yaml.safe_load(config_path.read_text())
+        # model + effort (pinned for claude) dropped; yolo (portable) survives; tool set.
+        assert config["ai"]["implement"] == {"yolo": True, "tool": "antigravity-cli"}
+
+    def test_force_keeps_tool_specific_keys_when_tool_unchanged(self, tmp_path: Path) -> None:
+        """``ai.implement`` model/effort survive re-init when the effective tool is unchanged."""
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\nai:\n  default_tool: claude\n"
+            "  implement:\n    model: claude-opus-4.8\n    effort: xhigh\n    yolo: true\n"
+        )
+        # implement_tool == default tool → effective tool stays claude → keys kept.
+        _patch_config(
+            config_path, "claude", ComplexityModelMapping(), implement_tool="claude", force=True
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["ai"]["implement"] == {
+            "model": "claude-opus-4.8",
+            "effort": "xhigh",
+            "yolo": True,
+        }
+
     def test_force_sets_command_overrides(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text("version: 2\nai:\n  default_tool: claude\n")
