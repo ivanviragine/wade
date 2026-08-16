@@ -792,6 +792,68 @@ class TestImplementationStart:
             assert result.success is True
             mock_create.assert_not_called()
 
+    def test_closed_pr_branch_falls_back_to_title_branch(self, tmp_path: Path) -> None:
+        """A retitled issue whose stale branch has a CLOSED PR must start fresh.
+
+        Resolution matches the stale branch by issue number, but its PR is closed
+        (not resumable). If start() kept that branch, the session's worktree would
+        sit on it while bootstrap_draft_pr opens the new draft PR on a different
+        title-based branch. Verify start() falls back to the reconstructed name so
+        the worktree and the bootstrapped PR agree (#428 review).
+        """
+        task = Task(id="42", title="renamed title")
+        stale_branch = "feat/42-original-slug"
+        reconstructed = "feat/42-renamed-title"
+
+        mock_provider = MagicMock()
+        mock_provider.read_task.return_value = task
+
+        def pr_by_branch(_repo_root: Path, branch: str) -> PRLookup:
+            if branch == stale_branch:
+                return PRLookup(found=True, pr=PRRef(number=7, state="CLOSED"))
+            return PRLookup(found=False)
+
+        with (
+            patch(
+                "wade.services.implementation_service.core.load_config",
+                return_value=self._make_config(),
+            ),
+            patch(
+                "wade.services.implementation_service.core.get_provider", return_value=mock_provider
+            ),
+            patch("wade.git.repo.get_repo_root", return_value=tmp_path),
+            patch(
+                "wade.services.implementation_service._shared.git_repo.get_current_branch",
+                return_value="main",
+            ),
+            patch(
+                "wade.git.worktree.list_worktrees",
+                return_value=[Worktree(path=str(tmp_path / "wt"), branch=stale_branch)],
+            ),
+            patch("wade.git.branch.branch_exists", return_value=False),
+            patch("wade.git.worktree.create_worktree") as mock_create,
+            patch("wade.services.implementation_service.core.write_plan_md"),
+            patch("wade.services.implementation_service.core.bootstrap_worktree"),
+            patch("crossby.ai_tools.base.AbstractAITool.detect_installed", return_value=[]),
+            patch(
+                "wade.services.implementation_service.core._detect_ai_cli_env", return_value=None
+            ),
+            patch("wade.git.pr.get_pr_for_branch", side_effect=pr_by_branch),
+            patch(
+                "wade.services.implementation_service.core.bootstrap_draft_pr",
+                return_value={"number": 1, "url": "http://test"},
+            ) as mock_bootstrap,
+            patch("wade.services.implementation_service.core.prompts") as mock_prompts,
+        ):
+            mock_prompts.is_tty.return_value = False
+            result = start("42", project_root=tmp_path)
+
+        assert result.success is True
+        # Started fresh on the title-based branch, never the closed PR's stale one.
+        mock_bootstrap.assert_called_once()
+        mock_create.assert_called_once()
+        assert mock_create.call_args.kwargs["branch_name"] == reconstructed
+
     def test_returns_false_on_creation_failure(self, tmp_path: Path) -> None:
         """create_worktree raises GitError → start() returns False."""
         task = self._make_task()

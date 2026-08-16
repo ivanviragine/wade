@@ -510,6 +510,29 @@ def start(
                 "Transient gh error — try again shortly",
             )
             return ImplementResult(success=False)
+
+        # resolve_task_branch matches by issue number, so it also adopts a branch
+        # left behind by a CLOSED/MERGED PR (or one that never got a PR). Those are
+        # not resumable: this run starts fresh, and bootstrap_draft_pr reconstructs
+        # a NEW title-based branch for its draft PR — so keeping the stale branch
+        # here would set up the session's worktree on it while the draft PR points
+        # at a different branch (#428 review). When the resolved branch has no open
+        # PR, fall back to the current-title name so the worktree and the
+        # bootstrapped PR agree; the re-lookup can also still surface an open PR
+        # that lives on the title-based branch.
+        if not pr_lookup.is_open:
+            reconstructed_branch = git_branch.make_branch_name(
+                config.project.branch_prefix, int(task.id), task.title
+            )
+            if branch_name != reconstructed_branch:
+                branch_name = reconstructed_branch
+                pr_lookup = git_pr.get_pr_for_branch(repo_root, branch_name)
+                if pr_lookup.lookup_failed:
+                    console.error_with_fix(
+                        f"Could not look up the PR for branch {branch_name}",
+                        "Transient gh error — try again shortly",
+                    )
+                    return ImplementResult(success=False)
         existing_pr = pr_lookup.pr if pr_lookup.is_open else None
         plan_content: str | None = None
         proceed_needs_bootstrap = False
