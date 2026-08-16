@@ -242,12 +242,18 @@ pr-comments`, or in `.wade.yml`:
 
 ```yaml
 ai:
-  network_access: true          # global default for every command
+  network_access: true          # default for the interactive session commands
   implement:
     network_access: false       # per-command override wins
 ```
 
-Precedence is `--network`/`--no-network` > `ai.<command>.network_access` >
+The policy applies to the **interactive session commands** — `wade implement`
+and `wade review pr-comments` — which are the ones that run `sync`/`done` and so
+may need `fetch`/`push`. The headless/analytical paths (`plan`, `deps`,
+`review plan`/`implementation`/`batch`) are **always** network-off by design:
+they never fetch or push, so `ai.network_access` does not apply to them and no
+flag enables it there. Precedence for the commands that honor it is
+`--network`/`--no-network` > `ai.<command>.network_access` >
 `ai.network_access` > **off**. WADE always passes an explicit pin, so an ambient
 `network_access = true` in your own Codex `config.toml` can never silently
 enable network for a WADE-managed sandbox. Enabling network never disables the
