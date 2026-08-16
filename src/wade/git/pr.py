@@ -625,13 +625,19 @@ def list_prs(
     *,
     state: str = "all",
     limit: int = 100,
+    raise_on_error: bool = False,
 ) -> list[PRSummary]:
     """List PRs for the repository.
 
     Returns a list of PRSummary objects with number, url, headRefName, state,
     isDraft, mergedAt fields.  Uses a single ``gh pr list`` call to avoid
-    per-branch API requests.  Returns an empty list on any failure (missing
-    ``gh`` binary, non-zero exit, or bad JSON).
+    per-branch API requests.
+
+    On any failure (missing ``gh`` binary, non-zero exit, or bad JSON) returns an
+    empty list — unless ``raise_on_error`` is set, in which case the failure is
+    re-raised as :class:`GhCliError`. Pass ``raise_on_error=True`` when the caller
+    must distinguish a genuine "no PRs" result from a listing that could not be
+    performed (which must NOT be read as absence).
     """
     try:
         result = _run_gh(
@@ -647,20 +653,28 @@ def list_prs(
             check=False,
         )
     except GhCliError:
+        if raise_on_error:
+            raise
         return []
     if result.returncode != 0:
+        if raise_on_error:
+            raise GhCliError(
+                f"gh pr list failed (exit {result.returncode}): {result.stderr.strip()}"
+            )
         return []
     try:
         rows = json.loads(result.stdout)
         if not isinstance(rows, list):
-            return []
+            raise ValueError("expected a JSON array")
         prs: list[PRSummary] = []
         for row in rows:
             if not isinstance(row, dict):
-                return []
+                raise ValueError("expected JSON objects")
             prs.append(PRSummary(**row))
         return prs
-    except (json.JSONDecodeError, TypeError, KeyError, ValueError):
+    except (json.JSONDecodeError, TypeError, KeyError, ValueError) as e:
+        if raise_on_error:
+            raise GhCliError(f"gh pr list returned unparseable output: {e}") from e
         return []
 
 

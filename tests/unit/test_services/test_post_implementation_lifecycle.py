@@ -4,6 +4,8 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from wade.git.pr import PRLookup, PRRef
 from wade.git.repo import GitError
 from wade.models.config import AIConfig, ProjectConfig, ProjectSettings
@@ -23,6 +25,19 @@ def _config(strategy: MergeStrategy) -> ProjectConfig:
         project=ProjectSettings(main_branch="main", merge_strategy=strategy),
         ai=AIConfig(default_tool="claude"),
     )
+
+
+@pytest.fixture(autouse=True)
+def _default_no_open_pr_for_issue() -> object:
+    """Skip the start() not-open-PR gate's ``gh pr list`` (which now raises on
+    failure) so these lifecycle tests exercise the merge flow, not a resolver
+    abort.
+    """
+    with patch(
+        "wade.services.implementation_service.core.find_open_pr_branch_for_issue",
+        return_value=None,
+    ):
+        yield
 
 
 @patch(_IS_HEAD_ATTACHED, return_value=True)

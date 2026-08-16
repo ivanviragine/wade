@@ -48,8 +48,17 @@ class TestExtractIssueFromBranch:
         assert extract_issue_from_branch("feature-branch") is None
 
     def test_multiple_numbers(self) -> None:
-        # Should match the first number after a slash
+        # The issue is the number before the slug (``/{issue}-``), not later ones.
         assert extract_issue_from_branch("feat/42-add-auth-99") == "42"
+
+    def test_numeric_multi_segment_prefix(self) -> None:
+        # A numeric prefix segment (e.g. branch_prefix="release/2026") must not
+        # shadow the real issue number that precedes the slug (#428 review).
+        assert extract_issue_from_branch("release/2026/42-title") == "42"
+
+    def test_hyphenless_branch_falls_back(self) -> None:
+        # No slug/hyphen (non-wade branch) → bare ``/{digits}`` still resolves.
+        assert extract_issue_from_branch("feat/42") == "42"
 
 
 # ---------------------------------------------------------------------------
