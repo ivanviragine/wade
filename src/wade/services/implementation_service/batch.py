@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 import structlog
+from crossby.models.ai import EffortLevel
 
 from wade.config.loader import load_config
 from wade.git import branch as git_branch
@@ -49,6 +50,7 @@ __all__ = [
     "_POLL_INTERVAL_SECONDS",
     "_POLL_TIMEOUT_SECONDS",
     "_build_graph_from_issues",
+    "_build_implement_cmd",
     "_build_pr_index",
     "_classify_issue_status",
     "_find_tracking_issue",
@@ -59,6 +61,50 @@ __all__ = [
     "check_tracking_issue_and_batch",
     "poll_batch_completion",
 ]
+
+
+def _build_implement_cmd(
+    issue_id: str,
+    *,
+    tool: str | None,
+    model: str | None,
+    model_explicit: bool,
+    effort: EffortLevel | None,
+    permission_mode: PermissionMode,
+    permission_mode_explicit: bool,
+    chain_ids: list[str] | None = None,
+) -> list[str]:
+    """Build the ``wade implement`` child command for one batch issue.
+
+    The permission mode is forwarded **only when it was explicit** — the user
+    passed ``--permission-mode``/``--yolo`` or changed it in the confirmation UI.
+    Two failure modes bound this:
+
+    - *Forward an explicit mode.* A child reloads the project config and
+      re-resolves its own permission mode, so an explicit ``default`` (e.g. the
+      user downgrading from a yolo-configured ``ai.implement``) that was *not*
+      forwarded would have every child resolve back to ``yolo`` — more autonomy
+      than the user confirmed. Forwarding it pins children to that decision.
+    - *Don't forward an implicit one.* ``wade implement`` derives
+      ``permission_mode_explicit`` from ``--permission-mode`` being present, and
+      that explicitness propagates into the post-implementation review flow. So
+      forwarding an *implicit* ``default`` would make it look chosen and suppress a
+      child's own config-driven autonomy downstream (e.g. a non-default
+      ``ai.review_pr_comments.permission_mode``). An implicit mode is left for each
+      child to re-resolve from the same config, reaching the same result.
+    """
+    cmd = ["wade", "implement", issue_id]
+    if tool:
+        cmd.extend(["--ai", tool])
+    if model and model_explicit:
+        cmd.extend(["--model", model])
+    if effort:
+        cmd.extend(["--effort", effort.value])
+    if permission_mode_explicit:
+        cmd.extend(["--permission-mode", permission_mode.value])
+    if chain_ids:
+        cmd.extend(["--chain", ",".join(chain_ids)])
+    return cmd
 
 
 def check_tracking_issue_and_batch(
@@ -153,6 +199,7 @@ def batch(
     resolved_effort = resolve_effort(effort, config, "implement", tool=resolved_tool)
     resolved_permission_mode = resolve_permission_mode(permission_mode, yolo, config, "implement")
     _pre_model = resolved_model
+    _pre_permission_mode = resolved_permission_mode
     (
         resolved_tool,
         resolved_model,
@@ -171,6 +218,16 @@ def batch(
     # If the user changed the model interactively, propagate it explicitly to child sessions
     if not model_explicit and resolved_model != _pre_model:
         model_explicit = True
+    # Forward the permission mode to children only when the user actually chose it —
+    # a CLI flag, or a change in the confirmation UI. An implicit default/yolo
+    # (resolved purely from config) is left for each child to re-resolve, so we do
+    # not make an implicit mode look explicit and suppress a child's own
+    # config-driven autonomy downstream (see _build_implement_cmd).
+    permission_mode_explicit = (
+        permission_mode is not None
+        or yolo is not None
+        or resolved_permission_mode != _pre_permission_mode
+    )
 
     if not model_explicit:
         console.info("Model: auto (per-issue complexity)")
@@ -194,24 +251,21 @@ def batch(
         chains = []
 
     def _build_cmd(issue_id: str, chain_ids: list[str] | None = None) -> list[str]:
-        """Build the wade implement command for a single issue.
+        """Build the ``wade implement`` command for a single issue.
 
-        Args:
-            issue_id: The issue number to implement.
-            chain_ids: Optional remaining issue IDs for --chain continuation.
+        Thin closure over the resolved selection; see :func:`_build_implement_cmd`
+        for the command shape and when the permission mode is forwarded.
         """
-        cmd = ["wade", "implement", issue_id]
-        if resolved_tool:
-            cmd.extend(["--ai", resolved_tool])
-        if resolved_model and model_explicit:
-            cmd.extend(["--model", resolved_model])
-        if resolved_effort:
-            cmd.extend(["--effort", resolved_effort.value])
-        if resolved_permission_mode is not PermissionMode.DEFAULT:
-            cmd.extend(["--permission-mode", resolved_permission_mode.value])
-        if chain_ids:
-            cmd.extend(["--chain", ",".join(chain_ids)])
-        return cmd
+        return _build_implement_cmd(
+            issue_id,
+            tool=resolved_tool,
+            model=resolved_model,
+            model_explicit=model_explicit,
+            effort=resolved_effort,
+            permission_mode=resolved_permission_mode,
+            permission_mode_explicit=permission_mode_explicit,
+            chain_ids=chain_ids,
+        )
 
     # Collect all items to launch in one batch
     batch_items: list[tuple[list[str], str | None, str | None]] = []
