@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.45.10] — 2026-08-16
+
+### Bug Fixes
+
+- resolve branch by issue number so retitled issues resume their PR/plan (#428) (c840b5e)
+
 ## [v0.45.9] — 2026-08-16
 
 ### Bug Fixes
