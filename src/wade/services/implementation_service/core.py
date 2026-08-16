@@ -26,7 +26,7 @@ from wade.git import worktree as git_worktree
 from wade.git.repo import GitError
 from wade.models.config import ProjectConfig
 from wade.models.hooks import SessionPhase
-from wade.models.permission import permission_mode_launch_kwargs
+from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 from wade.models.session import ImplementResult, MergeStatus, SyncEventType, SyncResult
 from wade.models.task import Task
 from wade.providers.base import AbstractTaskProvider
@@ -90,11 +90,37 @@ __all__ = [
     "_detect_ai_cli_env",
     "_resolve_task_target",
     "_resolve_worktree_from_plan",
+    "_resume_autonomy_args",
     "start",
 ]
 
 
 # ---------------------------------------------------------------------------
+
+
+def _resume_autonomy_args(adapter: AbstractAITool, permission_mode: PermissionMode) -> list[str]:
+    """Autonomy CLI flags to append to a resumed session, matching a fresh launch.
+
+    crossby's ``build_resume_command()`` takes only a session id, so — unlike
+    ``build_launch_command(**permission_mode_launch_kwargs(...))`` — it never applies
+    the resolved permission mode. Without this, a resumed session runs at the tool's
+    default tier regardless of config/UI (e.g. agy subagents get shell denied even
+    though the confirmation shows ``yolo``). Recompute the exact autonomy args a
+    fresh launch would emit — including crossby's capability-aware downgrades — and
+    append them to the resume command.
+
+    Reuses crossby's internal ``_autonomy_launch_args`` for parity with
+    ``build_launch_command``; calling ``yolo_args()`` etc. directly would skip the
+    downgrade ladder. The proper long-term home is a crossby-side
+    ``build_resume_command`` that accepts autonomy — a follow-up there; this MUST be
+    re-verified on a crossby bump. ``plan_mode=False`` mirrors this path's fresh
+    launch, which never requests plan mode.
+    """
+    return adapter._autonomy_launch_args(
+        adapter.capabilities(),
+        plan_mode=False,
+        **permission_mode_launch_kwargs(permission_mode),
+    )
 
 
 def _detect_ai_cli_env() -> str | None:
@@ -856,6 +882,12 @@ def start(
                             f"{resolved_tool} does not support resume — starting new session"
                         )
                         resume_session_id = None  # fall back to new session
+                    else:
+                        # build_resume_command() omits the autonomy flags a fresh
+                        # launch applies, so append them — otherwise a resumed session
+                        # ignores the resolved permission mode and runs at the tool's
+                        # default tier (see _resume_autonomy_args).
+                        cmd += _resume_autonomy_args(detach_adapter, resolved_permission_mode)
                 if not resume_session_id:
                     if prompt:
                         deliver_prompt_if_needed(detach_adapter, prompt)
@@ -903,6 +935,11 @@ def start(
                             f"{resolved_tool} does not support resume — starting new session"
                         )
                         resume_session_id = None  # fall back below
+                    else:
+                        # Match fresh launch: build_resume_command() drops the autonomy
+                        # flags, so without this a resumed session would ignore the
+                        # resolved permission mode and run at the default tier.
+                        resume_cmd += _resume_autonomy_args(adapter, resolved_permission_mode)
 
                 if resume_session_id and resume_cmd is not None:
                     logger.info(
