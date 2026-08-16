@@ -506,6 +506,7 @@ def start(
             effort_explicit=effort_explicit,
             yolo=yolo,
             permission_mode=permission_mode,
+            network_access=network_access,
             cd_only=cd_only,
         )
         if batch_result is not None:

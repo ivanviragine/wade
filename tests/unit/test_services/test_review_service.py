@@ -553,7 +553,38 @@ class TestReviewServiceStart:
     def test_inline_launch_network_defaults_off(
         self, tmp_path: Path, mock_setup: dict[str, MagicMock]
     ) -> None:
-        """With --no-network, the explicit pin reaches the builder as False."""
+        """With both flags omitted and config unset, the pin resolves to False.
+
+        Uses a real ``ProjectConfig()`` (network unset) so ``resolve_network_access``
+        reads the genuine default rather than a MagicMock truthy value — this
+        verifies the *omitted-option* default, not an explicit ``--no-network``.
+        """
+        from wade.models.config import ProjectConfig
+        from wade.models.permission import PermissionMode
+
+        mock_setup["load_config"].return_value = ProjectConfig()
+        mock_setup[
+            "get_comprehensive_review_status"
+        ].return_value = self._changes_requested_status()
+        mock_setup["confirm_ai_selection"].return_value = (
+            "codex",
+            None,
+            None,
+            PermissionMode.DEFAULT,
+        )
+        spy = self._spy_adapter()
+        with (
+            patch("crossby.ai_tools.AbstractAITool.get", return_value=spy),
+            patch("wade.services.review_service.deliver_prompt_if_needed"),
+        ):
+            start(target="42")
+
+        assert spy.launch.call_args.kwargs["network_access"] is False
+
+    def test_inline_launch_explicit_no_network(
+        self, tmp_path: Path, mock_setup: dict[str, MagicMock]
+    ) -> None:
+        """With ``--no-network``, the explicit pin reaches the builder as False."""
         from wade.models.permission import PermissionMode
 
         mock_setup[
@@ -600,6 +631,53 @@ class TestReviewServiceStart:
         kwargs = spy.build_launch_command.call_args.kwargs
         assert kwargs["working_dir"] == tmp_path / "wt"
         assert kwargs["network_access"] is True
+
+    def test_quiet_prompt_relaunch_forwards_network(self, tmp_path: Path) -> None:
+        """``--no-network`` survives a 'keep polling → comments found' re-launch.
+
+        Without threading, the nested ``start()`` would re-resolve from config —
+        silently re-enabling network on a project whose config turns it on.
+        """
+        from wade.services.review_service import PollOutcome
+
+        provider = MagicMock()
+        with (
+            patch("wade.ui.prompts.is_tty", return_value=True),
+            patch("wade.ui.prompts.select", return_value=0),  # Keep polling
+            patch(
+                "wade.services.review_service.get_comprehensive_review_status",
+                return_value=PRReviewStatus(),
+            ),
+            patch(
+                "wade.services.review_service.poll_for_reviews",
+                return_value=PollOutcome.COMMENTS_FOUND,
+            ),
+            patch("wade.services.review_service.start") as mock_start,
+        ):
+            _quiet_next_steps_prompt(
+                tmp_path, "feat/42", "42", tmp_path, 99, provider, network_access=False
+            )
+
+        assert mock_start.call_args.kwargs["network_access"] is False
+
+    def test_post_lifecycle_relaunch_forwards_network(self, tmp_path: Path) -> None:
+        """``--no-network`` survives a 'wait for new reviews → comments found' re-launch."""
+        from wade.services.review_service import PollOutcome
+
+        with (
+            patch("wade.ui.prompts.is_tty", return_value=True),
+            patch("wade.ui.prompts.select", return_value=1),  # Wait for new reviews
+            patch(
+                "wade.services.review_service.poll_for_reviews",
+                return_value=PollOutcome.COMMENTS_FOUND,
+            ),
+            patch("wade.services.review_service.start") as mock_start,
+        ):
+            _post_review_lifecycle(
+                tmp_path, "feat/42", "42", tmp_path, 99, MagicMock(), network_access=False
+            )
+
+        assert mock_start.call_args.kwargs["network_access"] is False
 
     def test_resolves_worktree_by_issue_when_title_drifted(
         self, mock_setup: dict[str, MagicMock]
@@ -2014,6 +2092,7 @@ class TestQuietNextStepsPrompt:
             effort_explicit=False,
             permission_mode=None,
             permission_mode_explicit=False,
+            network_access=None,
         )
 
     @patch("wade.services.review_service.get_comprehensive_review_status")
@@ -2064,6 +2143,7 @@ class TestQuietNextStepsPrompt:
             effort_explicit=False,
             permission_mode="yolo",
             permission_mode_explicit=False,
+            network_access=None,
         )
 
     @patch("wade.services.review_service.get_comprehensive_review_status")
@@ -2247,6 +2327,7 @@ class TestPostReviewLifecycle:
             model_explicit=False,
             permission_mode=None,
             permission_mode_explicit=False,
+            network_access=None,
         )
 
     @patch("wade.services.review_service.start")
@@ -2280,6 +2361,7 @@ class TestPostReviewLifecycle:
             model_explicit=False,
             permission_mode=None,
             permission_mode_explicit=False,
+            network_access=None,
         )
 
     @patch("wade.services.review_service.start")
@@ -2326,6 +2408,7 @@ class TestPostReviewLifecycle:
             model_explicit=True,
             permission_mode="yolo",
             permission_mode_explicit=False,
+            network_access=None,
         )
 
     @patch("wade.services.review_service._quiet_next_steps_prompt")

@@ -641,6 +641,6 @@ _pull_main_after_merge (services/implementation_service/lifecycle.py) is now ato
 
 ## fde883286787 | 2026-08-16 | implementation | tags: crossby, codex, gotcha | Issue #423
 
-On a crossby bump, re-verify the Codex hooks feature-flag key in the .codex/config.toml crossby writes: crossby #136 (v0.23.5) migrated the deprecated [features].codex_hooks alias to the canonical [features].hooks=true (and removes the old key). The wade bootstrap test test_bootstrap_allowlist.py::test_codex_hooks_feature_flag_enabled asserts the exact key, so it breaks on any crossby bump that crosses this migration — assert [features].hooks, not [features].codex_hooks. Same manual-mirror class as the _TOOL_DIALECTS re-sync gotcha.
+On a crossby bump, re-verify the Codex hooks feature-flag key in the `.codex/config.toml` crossby writes: crossby #136 (v0.23.5) migrated the deprecated `[features].codex_hooks` alias to the canonical `[features].hooks=true` (and removes the old key). The wade bootstrap test `test_bootstrap_allowlist.py::test_codex_hooks_feature_flag_enabled` asserts the exact key, so it breaks on any crossby bump that crosses this migration — assert `[features].hooks`, not `[features].codex_hooks`. Same manual-mirror class as the `_TOOL_DIALECTS` re-sync gotcha.
 
 ---

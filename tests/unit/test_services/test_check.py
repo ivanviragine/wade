@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -110,18 +111,19 @@ class TestWorktreeGitReadinessProbe:
     def test_blocked_when_write_denied_names_path_and_leaves_no_artefacts(
         self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Simulate an OS-sandbox denial by making the probe WRITE raise — not a
-        # chmod (CI often runs as root, where mode bits don't block writes).
+        # Simulate an OS-sandbox denial by making the probe OPEN raise — not a
+        # chmod (CI often runs as root, where mode bits don't block writes). The
+        # probe now creates its file via os.open (O_NOFOLLOW), so intercept that.
         wt_path = _add_worktree(tmp_git_repo)
 
-        orig_write_text = Path.write_text
+        orig_open = os.open
 
-        def deny_probe_write(self: Path, *args: object, **kwargs: object) -> int:
-            if self.name.startswith(".wade-write-probe-"):
+        def deny_probe_open(path: object, *args: object, **kwargs: object) -> int:
+            if os.path.basename(os.fsdecode(path)).startswith(".wade-write-probe-"):  # type: ignore[arg-type]
                 raise OSError("Operation not permitted")
-            return orig_write_text(self, *args, **kwargs)  # type: ignore[arg-type]
+            return orig_open(path, *args, **kwargs)  # type: ignore[arg-type]
 
-        monkeypatch.setattr(Path, "write_text", deny_probe_write)
+        monkeypatch.setattr(os, "open", deny_probe_open)
 
         result = check_worktree(wt_path)
         assert result.status == CheckStatus.WORKTREE_GIT_BLOCKED
@@ -136,7 +138,7 @@ class TestWorktreeGitReadinessProbe:
             assert f"blocked={blocked}" in output
         assert "relaunch" in output.lower()
 
-        # No probe artefacts left behind (the write raised before creating one).
+        # No probe artefacts left behind (the open raised before creating one).
         monkeypatch.undo()
         from wade.git import repo as git_repo
 
@@ -149,14 +151,16 @@ class TestWorktreeGitReadinessProbe:
     def test_main_checkout_is_not_probed(
         self, tmp_git_repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # A main checkout never runs the probe, so a would-be-denying write patch
+        # A main checkout never runs the probe, so a would-be-denying open patch
         # cannot flip it to WORKTREE_GIT_BLOCKED.
-        def boom(self: Path, *args: object, **kwargs: object) -> int:
-            if self.name.startswith(".wade-write-probe-"):
-                raise AssertionError("probe must not run in a main checkout")
-            raise AssertionError("unexpected probe write in a main checkout")
+        orig_open = os.open
 
-        monkeypatch.setattr(Path, "write_text", boom)
+        def boom(path: object, *args: object, **kwargs: object) -> int:
+            if os.path.basename(os.fsdecode(path)).startswith(".wade-write-probe-"):  # type: ignore[arg-type]
+                raise AssertionError("probe must not run in a main checkout")
+            return orig_open(path, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(os, "open", boom)
 
         result = check_worktree(tmp_git_repo)
         assert result.status == CheckStatus.IN_MAIN_CHECKOUT

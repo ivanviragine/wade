@@ -11,6 +11,7 @@ from typing import Any
 import structlog
 import yaml
 from crossby.models.ai import AIToolID, EffortLevel
+from pydantic import BaseModel, Field
 
 from wade.config.loader import (
     ConfigError,
@@ -71,25 +72,16 @@ class ConfigExitCode(IntEnum):
     INVALID = 3
 
 
-class CheckResult:
+class CheckResult(BaseModel):
     """Result of a worktree safety check."""
 
-    def __init__(
-        self,
-        status: CheckStatus,
-        exit_code: int,
-        toplevel: str | None = None,
-        branch: str | None = None,
-        git_dir: str | None = None,
-        blocked_paths: list[str] | None = None,
-    ) -> None:
-        self.status = status
-        self.exit_code = exit_code
-        self.toplevel = toplevel
-        self.branch = branch
-        self.git_dir = git_dir
-        # Git-metadata dirs that failed the write probe (WORKTREE_GIT_BLOCKED only).
-        self.blocked_paths = blocked_paths or []
+    status: CheckStatus
+    exit_code: int
+    toplevel: str | None = None
+    branch: str | None = None
+    git_dir: str | None = None
+    # Git-metadata dirs that failed the write probe (WORKTREE_GIT_BLOCKED only).
+    blocked_paths: list[str] = Field(default_factory=list)
 
     def format_output(self) -> str:
         """Format as structured text output matching Bash behavior."""
@@ -173,15 +165,28 @@ def _probe_dir_writable(dir_path: Path) -> bool:
 
     The probe file is removed in a ``finally`` block so a partial success, a
     failed write, or an interruption never leaves an artefact behind.
+
+    The file is created with ``O_NOFOLLOW`` so a pre-existing symlink planted at
+    the probe path is refused (``ELOOP``) rather than followed — a real write
+    must land in *dir_path* itself, never be redirected elsewhere. ``O_CREAT``
+    without ``O_EXCL`` still truncates a stale regular probe from a crashed run
+    with the same PID, so that never masquerades as an unwritable dir.
     """
     probe = dir_path / f".wade-write-probe-{os.getpid()}"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
     try:
-        probe.write_text("wade git-write readiness probe\n", encoding="utf-8")
+        fd = os.open(probe, flags, 0o600)
+    except OSError:
+        return False
+    try:
+        os.write(fd, b"wade git-write readiness probe\n")
     except OSError:
         return False
     finally:
-        # Always clean up — the file may or may not exist depending on where the
-        # write failed; unlink defensively and swallow a missing/denied removal.
+        # Always clean up — close the descriptor, then unlink the probe file.
+        # Both are defensive: swallow a missing/denied removal or a double close.
+        with contextlib.suppress(OSError):
+            os.close(fd)
         with contextlib.suppress(OSError):
             probe.unlink()
     return True
