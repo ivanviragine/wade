@@ -12,6 +12,8 @@ ai:
   plan:
     effort: xhigh
     yolo: true
+  implement:
+    yolo: true
   deps:
     tool: claude
     model: claude-sonnet-5
