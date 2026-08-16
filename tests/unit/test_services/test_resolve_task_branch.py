@@ -215,3 +215,26 @@ class TestFindOpenPrBranchForIssue:
         with patch(f"{_S}.git_pr.list_prs", return_value=[]) as mock_list:
             find_open_pr_branch_for_issue(tmp_path, 42)
         assert mock_list.call_args.kwargs.get("raise_on_error") is True
+
+    def test_full_page_without_match_is_indeterminate(self, tmp_path: Path) -> None:
+        """A full page and no match can't prove absence — must raise, not return None.
+
+        Otherwise, in a repo with more open PRs than one page fetches, a live PR
+        beyond the page would look like 'no open PR' and a caller could bootstrap a
+        duplicate (#428 review).
+        """
+        full_page = [_pr(i, f"feat/99-{i}") for i in range(3)]
+        with (
+            patch(f"{_S}._OPEN_PR_SCAN_LIMIT", 3),
+            patch(f"{_S}.git_pr.list_prs", return_value=full_page),
+            pytest.raises(GhCliError),
+        ):
+            find_open_pr_branch_for_issue(tmp_path, 42)
+
+    def test_partial_page_without_match_is_absence(self, tmp_path: Path) -> None:
+        """Fewer results than the page limit → None genuinely proves absence."""
+        with (
+            patch(f"{_S}._OPEN_PR_SCAN_LIMIT", 10),
+            patch(f"{_S}.git_pr.list_prs", return_value=[_pr(1, "feat/99-other")]),
+        ):
+            assert find_open_pr_branch_for_issue(tmp_path, 42) is None

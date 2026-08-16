@@ -56,8 +56,16 @@ def find_worktree_path(
 
 
 def extract_issue_from_branch(branch: str) -> str | None:
-    """Extract the issue number from a branch name like ``feat/42-slug``."""
-    m = re.search(r"/(\d+)", branch)
+    """Extract the issue number from a branch name like ``feat/42-slug``.
+
+    wade names branches ``{prefix}/{issue}-{slug}``, so the issue number is the
+    ``/{digits}-`` segment — the digits immediately before the slug. Preferring
+    that boundary keeps a *numeric* multi-segment prefix honest: e.g.
+    ``release/2026`` yields ``release/2026/42-title``, which must resolve to
+    ``42``, not the prefix's ``2026`` (#428 review). Fall back to a bare
+    ``/{digits}`` for hyphenless branches (``feat/42``).
+    """
+    m = re.search(r"/(\d+)-", branch) or re.search(r"/(\d+)", branch)
     return m.group(1) if m else None
 
 
@@ -141,6 +149,13 @@ def resolve_task_branch(
     return existing if existing is not None else reconstructed
 
 
+# ``gh pr list`` fetches at most this many PRs per call. It comfortably exceeds
+# any realistic open-PR count; a *full* page back means we cannot prove a missing
+# issue PR is truly absent (it could lie beyond the page), so that case is treated
+# as indeterminate rather than "no open PR" (#428 review).
+_OPEN_PR_SCAN_LIMIT = 1000
+
+
 def find_open_pr_branch_for_issue(repo_root: Path, issue_id: int | str) -> str | None:
     """Head branch of the OPEN PR that belongs to *issue_id*, or ``None``.
 
@@ -152,20 +167,27 @@ def find_open_pr_branch_for_issue(repo_root: Path, issue_id: int | str) -> str |
     ``gh pr list`` call.
 
     Returns ``None`` only when no open PR genuinely matches (nothing to resume —
-    start fresh). Raises :class:`~wade.git.pr.GhCliError` when the listing itself
-    fails: callers MUST NOT treat that as absence (an open PR may exist on another
-    same-issue branch), and should abort/report rather than bootstrap a duplicate.
+    start fresh). Raises :class:`~wade.git.pr.GhCliError` when the result cannot be
+    trusted as complete — either the listing failed, or a full page came back so an
+    open PR could exist beyond it. Callers MUST NOT treat those as absence (a live
+    PR may exist on another same-issue branch) and should abort/report rather than
+    bootstrap a duplicate.
     """
     issue = str(int(issue_id))
-    matches = [
-        pr
-        for pr in git_pr.list_prs(repo_root, state="open", raise_on_error=True)
-        if extract_issue_from_branch(pr.head_ref_name) == issue
-    ]
-    if not matches:
-        return None
-    # Deterministic when several open PRs carry the issue number (rare): the most
-    # recently updated wins. ``updated_at`` is an ISO-8601 string, so a reverse
-    # lexical sort is chronological; the PR number breaks exact ties.
-    matches.sort(key=lambda pr: (pr.updated_at or "", pr.number), reverse=True)
-    return matches[0].head_ref_name
+    open_prs = git_pr.list_prs(
+        repo_root, state="open", limit=_OPEN_PR_SCAN_LIMIT, raise_on_error=True
+    )
+    matches = [pr for pr in open_prs if extract_issue_from_branch(pr.head_ref_name) == issue]
+    if matches:
+        # Deterministic when several open PRs carry the issue number (rare): the
+        # most recently updated wins. ``updated_at`` is an ISO-8601 string, so a
+        # reverse lexical sort is chronological; the PR number breaks exact ties.
+        matches.sort(key=lambda pr: (pr.updated_at or "", pr.number), reverse=True)
+        return matches[0].head_ref_name
+    if len(open_prs) >= _OPEN_PR_SCAN_LIMIT:
+        # A full page with no match — an open PR for this issue could be beyond it,
+        # so absence is unproven. Fail loud rather than risk a duplicate PR.
+        raise git_pr.GhCliError(
+            f"more than {_OPEN_PR_SCAN_LIMIT} open PRs — cannot rule out an open PR for #{issue}"
+        )
+    return None
