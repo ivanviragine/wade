@@ -644,3 +644,15 @@ _pull_main_after_merge (services/implementation_service/lifecycle.py) is now ato
 On a crossby bump, re-verify the Codex hooks feature-flag key in the `.codex/config.toml` crossby writes: crossby #136 (v0.23.5) migrated the deprecated `[features].codex_hooks` alias to the canonical `[features].hooks=true` (and removes the old key). The wade bootstrap test `test_bootstrap_allowlist.py::test_codex_hooks_feature_flag_enabled` asserts the exact key, so it breaks on any crossby bump that crosses this migration — assert `[features].hooks`, not `[features].codex_hooks`. Same manual-mirror class as the `_TOOL_DIALECTS` re-sync gotcha.
 
 ---
+
+## fb2a067bb103 | 2026-08-16 | implementation | tags: crossby, ai-tools, model-registry | Issue #433
+
+WADE owns zero AI-tool model catalogs — catalog models come from crossby's static registry (crossby.data.get_models_for_tool) and per-tool complexity defaults come from crossby.config.defaults.get_defaults. Refreshing the available models for any tool is purely a crossby dependency bump in pyproject.toml + uv.lock regen; no WADE source or template edits are needed. antigravity-cli defaults intentionally use effort-suffixed IDs (e.g. gemini-3.6-flash-medium) that are not literal members of get_models_for_tool('antigravity-cli'); the init model pickers handle this by inserting the tier default into the option list (prompts_ai._prompt_model_mapping).
+
+---
+
+## 2112b028ab73 | 2026-08-16 | implementation | tags: dependencies, ci, crossby | Issue #433
+
+uv.lock is gitignored in the WADE repo (.gitignore:47) and NOT tracked. A dependency bump therefore commits only pyproject.toml (and the regenerated lock stays local for reproducibility). CI uses 'uv sync --all-extras' (not --locked/--frozen), so there is no lock-freshness gate. Do not 'git add -f uv.lock' during a dependency change.
+
+---
