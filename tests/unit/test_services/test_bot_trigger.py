@@ -120,6 +120,25 @@ class TestTriggerBotReviews:
         assert report.all_attempts_failed is True
         assert report.exit_code == 1
 
+    def test_bot_name_with_markup_renders_without_crashing(self, tmp_path: Path) -> None:
+        """A name carrying a Rich control token must render, not raise MarkupError.
+
+        Names are only required to be non-empty, so ``[/]`` is a valid config. It
+        reaches ``status_line()`` on both the dry-run (``detail``) and failure
+        (``warn``) render paths.
+        """
+        config = _config(bots=[ReviewBotConfig(name="[/]", trigger="go")])
+        # Dry-run exercises the detail() path.
+        with _mock_service(config, tmp_path=tmp_path):
+            dry = trigger_bot_reviews("42", dry_run=True)
+        assert dry.results[0].name == "[/]"
+        assert dry.exit_code == 0
+        # A raising post exercises the warn() path (status_line embeds the name).
+        comment = MagicMock(side_effect=Exception("[boom]"))
+        with _mock_service(config, comment=comment, tmp_path=tmp_path):
+            failed = trigger_bot_reviews("42")
+        assert failed.results[0].outcome is BotTriggerOutcome.FAILED
+
     def test_status_line_contract(self) -> None:
         from wade.models.review import BotTriggerResult
 
@@ -181,6 +200,16 @@ class TestTriggerSelection:
         assert report.unknown_bots == ["nope"]
         assert report.valid_bot_names == ["coderabbit", "codex", "bugbot"]
         assert report.results == []
+        assert comment.call_count == 0
+        assert report.exit_code == 1
+
+    def test_unknown_bot_error_renders_markup_names_safely(self, tmp_path: Path) -> None:
+        """The unknown/valid name lists reach markup-enabled error/hint output."""
+        config = _config(bots=[ReviewBotConfig(name="[/]", trigger="go")])
+        with _mock_service(config, tmp_path=tmp_path) as comment:
+            report = trigger_bot_reviews("42", selected_bots=["[bad]"])
+        assert report.unknown_bots == ["[bad]"]
+        assert report.valid_bot_names == ["[/]"]
         assert comment.call_count == 0
         assert report.exit_code == 1
 
@@ -298,6 +327,39 @@ class TestAutoTrigger:
         second = self._run(config, tmp_path, sha="sha1")
         assert second.call_count == 1
         assert second.call_args.args[2] == "@coderabbitai review"
+
+    def test_marker_write_failure_warns_not_silent_success(self, tmp_path: Path) -> None:
+        """A failed marker write is surfaced, not reported as durable success.
+
+        The comment is already posted, but ``write_marker`` returning ``False``
+        means the anti-spam marker is absent — so warn (a later same-sha done may
+        re-post) rather than print the success detail.
+        """
+        config = _config(
+            auto_trigger=True,
+            bots=[ReviewBotConfig(name="codex", trigger="@codex review", enabled=True)],
+        )
+        comment = MagicMock()
+        with (
+            patch(
+                "wade.services.implementation_service.done.git_repo.rev_parse",
+                return_value="sha1",
+            ),
+            patch(
+                "wade.services.implementation_service.done.git_pr.comment_on_pr",
+                comment,
+            ),
+            patch(
+                "wade.services.implementation_service.done.markers.write_marker",
+                return_value=False,
+            ),
+            patch("wade.services.implementation_service.done.console") as mock_console,
+        ):
+            mock_console.escape_markup.side_effect = lambda s: s
+            _auto_trigger_bot_reviews(config, tmp_path, "feat/42-x", 99, tmp_path)
+        assert comment.call_count == 1  # comment still posted
+        assert mock_console.warn.call_count == 1  # failure surfaced
+        assert mock_console.detail.call_count == 0  # not a durable-success report
 
     def test_manual_trigger_does_not_write_auto_markers(self, tmp_path: Path) -> None:
         """Manual command leaves auto markers untouched, so a same-sha done still fires."""

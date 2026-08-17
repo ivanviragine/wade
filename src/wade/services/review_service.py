@@ -338,8 +338,15 @@ def trigger_bot_reviews(
         unknown = [name for name in selected_bots if name not in by_name]
         if unknown:
             valid = [bot.name for bot in bots]
-            console.error(f"Unknown bot name(s): {', '.join(unknown)}.")
-            console.hint(f"Configured bots: {', '.join(valid) if valid else '(none)'}")
+            # Bot names are only required to be non-empty, so they may carry Rich
+            # control tokens (e.g. `[/]`); escape before rendering to markup-enabled
+            # console output so a stray token can't raise MarkupError.
+            unknown_display = ", ".join(console.escape_markup(name) for name in unknown)
+            valid_display = (
+                ", ".join(console.escape_markup(name) for name in valid) if valid else "(none)"
+            )
+            console.error(f"Unknown bot name(s): {unknown_display}.")
+            console.hint(f"Configured bots: {valid_display}")
             return BotTriggerReport(
                 pr_number=pr_number, unknown_bots=unknown, valid_bot_names=valid
             )
@@ -392,10 +399,14 @@ def trigger_bot_reviews(
     console.rule(f"review trigger #{task.id}")
     console.kv("PR", f"#{pr_number}")
     for result in results:
+        # status_line() embeds the configured bot name (and, on failure, the
+        # error text) — escape it so a Rich control token can't raise MarkupError
+        # in this markup-enabled output (even on --dry-run).
+        line = console.escape_markup(result.status_line())
         if result.outcome is BotTriggerOutcome.FAILED:
-            console.warn(result.status_line())
+            console.warn(line)
         else:
-            console.detail(result.status_line())
+            console.detail(line)
     if report.all_attempts_failed:
         console.error("All bot triggers failed — see the errors above.")
     return report

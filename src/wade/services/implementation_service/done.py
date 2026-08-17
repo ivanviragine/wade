@@ -943,6 +943,13 @@ def _auto_trigger_bot_reviews(
     retries next time. Each post is isolated in its own try/except
     (``comment_on_pr`` is fail-fast), and any failure here is best-effort — it
     never fails an otherwise-complete ``done``.
+
+    If the marker *write* itself fails (``write_marker`` returns ``False``), the
+    comment was already posted but the trigger is **not** durably recorded, so we
+    warn rather than report plain success — a later ``done`` at the same sha may
+    re-post it. Bot names are escaped before rendering: a name is only required
+    to be non-empty, so it may carry Rich control tokens (e.g. ``[/]``) that would
+    otherwise raise ``MarkupError`` in the markup-enabled console.
     """
     if not config.bot_review.auto_trigger:
         return
@@ -956,17 +963,28 @@ def _auto_trigger_bot_reviews(
         return
 
     for bot in enabled_bots:
+        safe_name = console.escape_markup(bot.name)
         marker_name = f"bot-triggered-{bot.name}"
         if markers.marker_present(marker_root, marker_name, sha):
             continue
         try:
             git_pr.comment_on_pr(repo_root, pr_number, bot.trigger)
         except Exception as e:  # fail-fast primitive — isolate + best-effort.
-            console.warn(f"Could not auto-trigger {bot.name} review: {e}")
+            console.warn(
+                f"Could not auto-trigger {safe_name} review: {console.escape_markup(str(e))}"
+            )
             logger.warning("done.auto_trigger_failed", bot=bot.name, error=str(e))
             continue
-        markers.write_marker(marker_root, marker_name, sha)
-        console.detail(f"Triggered {bot.name} review.")
+        if markers.write_marker(marker_root, marker_name, sha):
+            console.detail(f"Triggered {safe_name} review.")
+        else:
+            # Comment is posted but the marker isn't durable — say so, don't
+            # claim success. A later done at this sha may re-post it.
+            console.warn(
+                f"Triggered {safe_name} review, but could not record its "
+                "anti-spam marker — a repeat done at this commit may re-post it."
+            )
+            logger.warning("done.auto_trigger_marker_write_failed", bot=bot.name, sha=sha)
 
 
 def _done_via_pr(

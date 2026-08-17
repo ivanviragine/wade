@@ -94,6 +94,22 @@ class TestBotReviewLoader:
         with pytest.raises(ConfigError):
             parse_config_file(_write(tmp_path, text))
 
+    def test_duplicate_bot_names_raise(self, tmp_path: Path) -> None:
+        """Uniqueness is enforced in the loader, not only in ``wade check-config``.
+
+        Ordinary commands call ``load_config`` directly; a duplicate name would
+        make ``--bot`` selection and the per-bot auto-trigger marker ambiguous.
+        """
+        text = (
+            "version: 2\n"
+            "bot_review:\n"
+            "  bots:\n"
+            "    - {name: codex, trigger: a}\n"
+            "    - {name: codex, trigger: b}\n"
+        )
+        with pytest.raises(ConfigError, match="duplicate name 'codex'"):
+            parse_config_file(_write(tmp_path, text))
+
     def test_override_enabled_field(self, tmp_path: Path) -> None:
         text = (
             "version: 2\n"
