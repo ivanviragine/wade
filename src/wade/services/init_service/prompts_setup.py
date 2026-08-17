@@ -34,6 +34,7 @@ from wade.ui.console import console
 logger = structlog.get_logger()
 
 __all__ = [
+    "_prompt_bot_review_setup",
     "_prompt_claude_code_settings",
     "_prompt_command_overrides",
     "_prompt_configure_completions",
@@ -378,6 +379,34 @@ def _prompt_knowledge_setup(
     if path.strip():
         defaults["path"] = path.strip()
 
+    return defaults
+
+
+def _prompt_bot_review_setup(
+    non_interactive: bool,
+    *,
+    current_auto_trigger: bool = False,
+) -> dict[str, Any]:
+    """Collect the bot-review auto-trigger setting (#431).
+
+    A simple yes/no defaulting to **off** (consistent with the knowledge-base
+    learning that confusing YOLO-style prompts are undesirable). The three
+    built-in bot triggers are always written; only auto-trigger is prompted here.
+    Non-interactive/CI takes the safe default without prompting — the model
+    default already provides ``auto_trigger: false``, so the missing answer never
+    errors. Returns a dict with key: ``auto_trigger`` (bool).
+    """
+    from wade.ui import prompts
+
+    defaults: dict[str, Any] = {"auto_trigger": current_auto_trigger}
+    if non_interactive:
+        return defaults
+
+    console.rule("Bot review triggers")
+    defaults["auto_trigger"] = prompts.confirm(
+        "Auto-trigger external bot reviews (CodeRabbit/Codex/Bugbot) after `done` pushes?",
+        default=current_auto_trigger,
+    )
     return defaults
 
 

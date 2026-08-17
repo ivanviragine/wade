@@ -49,6 +49,7 @@ from wade.services.init_service.migrations import (
 )
 from wade.services.init_service.prompts_ai import _prompt_ai_section
 from wade.services.init_service.prompts_setup import (
+    _prompt_bot_review_setup,
     _prompt_claude_code_settings,
     _prompt_command_overrides,
     _prompt_configure_completions,
@@ -152,6 +153,7 @@ def init(
     command_overrides: dict[str, dict[str, Any]] = {}
     hooks_setup: dict[str, Any] = {}
     knowledge_setup: dict[str, Any] = {}
+    bot_review_setup: dict[str, Any] = {}
     tools_in_use: set[str] = set()
 
     # Current values for pre-fill — derived from existing config on first pass,
@@ -211,6 +213,9 @@ def init(
     )
     _cur_knowledge_enabled: bool = existing_config.knowledge.enabled if existing_config else False
     _cur_knowledge_path: str = existing_config.knowledge.path if existing_config else "KNOWLEDGE.md"
+    _cur_bot_review_auto: bool = (
+        existing_config.bot_review.auto_trigger if existing_config else False
+    )
 
     while True:
         # 4a. Provider
@@ -289,7 +294,13 @@ def init(
             current_path=_cur_knowledge_path,
         )
 
-        # 4i. Summary + Yes / Modify / Cancel
+        # 4i. Bot review triggers (auto-trigger opt-in; default off)
+        bot_review_setup = _prompt_bot_review_setup(
+            non_interactive,
+            current_auto_trigger=_cur_bot_review_auto,
+        )
+
+        # 4j. Summary + Yes / Modify / Cancel
         if non_interactive:
             break  # Skip summary in non-interactive mode
 
@@ -304,6 +315,7 @@ def init(
             command_overrides=command_overrides,
             hooks_setup=hooks_setup,
             knowledge_setup=knowledge_setup,
+            bot_review_setup=bot_review_setup,
         )
 
         from wade.ui import prompts as _ui_prompts
@@ -338,6 +350,7 @@ def init(
             _cur_hooks_copy = hooks_setup.get("copy_to_worktree")
             _cur_knowledge_enabled = bool(knowledge_setup.get("enabled"))
             _cur_knowledge_path = str(knowledge_setup.get("path", "KNOWLEDGE.md"))
+            _cur_bot_review_auto = bool(bot_review_setup.get("auto_trigger"))
             continue
         break  # "Write .wade.yml" — proceed to write phase
 
@@ -378,6 +391,7 @@ def init(
         hooks_setup=hooks_setup,
         provider_setup=provider_setup,
         knowledge_setup=knowledge_setup,
+        bot_review_setup=bot_review_setup,
     )
     if config_path.exists() and not parse_failed:
         console.info("Config .wade.yml already exists — updating with selected values")

@@ -193,6 +193,25 @@ def review_pr_comments_cmd(
     raise typer.Exit(0 if success else 1)
 
 
+@review_app.command("trigger")
+def review_trigger_cmd(
+    target: str = typer.Argument(..., help="Issue number."),
+    bot: list[str] | None = typer.Option(  # noqa: B008
+        None,
+        "--bot",
+        help="Trigger only the named bot(s). Repeatable. Overrides `enabled: false`.",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Print what would be posted without posting."
+    ),
+) -> None:
+    """Post configured bot-review trigger comments on the issue's PR."""
+    from wade.services.review_service import trigger_bot_reviews
+
+    report = trigger_bot_reviews(target, selected_bots=bot, dry_run=dry_run)
+    raise typer.Exit(report.exit_code)
+
+
 @review_app.command("batch")
 def review_batch_cmd(
     tracking_issue: int = typer.Argument(..., help="Tracking issue number."),

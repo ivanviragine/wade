@@ -34,6 +34,7 @@ def _show_init_summary(
     command_overrides: dict[str, dict[str, Any]],
     hooks_setup: dict[str, Any],
     knowledge_setup: dict[str, Any],
+    bot_review_setup: dict[str, Any] | None = None,
 ) -> None:
     """Render a summary of all wizard selections before the write phase."""
     console.rule("Configuration summary")
@@ -102,6 +103,12 @@ def _show_init_summary(
     # Knowledge
     if knowledge_setup.get("enabled"):
         console.kv("Knowledge file", knowledge_setup.get("path", "KNOWLEDGE.md"))
+
+    # Bot review triggers (#431)
+    if bot_review_setup is not None:
+        console.kv(
+            "Bot review auto-trigger", str(bool(bot_review_setup.get("auto_trigger"))).lower()
+        )
 
 
 def _read_manifest_version(root: Path) -> str | None:

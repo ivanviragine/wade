@@ -656,3 +656,75 @@ def format_review_status_summary(
             messages.append((LEVEL_SUCCESS, "SESSION COMPLETE — all review threads resolved."))
 
     return messages
+
+
+# ---------------------------------------------------------------------------
+# Bot-review trigger results (#431)
+# ---------------------------------------------------------------------------
+
+
+class BotTriggerOutcome(StrEnum):
+    """Per-bot disposition for ``wade review trigger`` — the output contract."""
+
+    POSTED = "posted"
+    SKIPPED_DISABLED = "skipped"
+    FAILED = "failed"
+    DRY_RUN = "dry_run"
+
+
+class BotTriggerResult(BaseModel):
+    """The outcome of attempting to trigger one review bot (#431)."""
+
+    name: str
+    trigger: str
+    outcome: BotTriggerOutcome
+    error: str | None = None
+
+    def status_line(self) -> str:
+        """One-line human status matching the documented per-bot output contract."""
+        if self.outcome is BotTriggerOutcome.POSTED:
+            return f"{self.name}: posted"
+        if self.outcome is BotTriggerOutcome.SKIPPED_DISABLED:
+            return f"{self.name}: skipped (disabled)"
+        if self.outcome is BotTriggerOutcome.DRY_RUN:
+            return f"{self.name}: would post (dry-run)"
+        return f"{self.name}: failed: {self.error or 'unknown error'}"
+
+
+class BotTriggerReport(BaseModel):
+    """Aggregate result of a ``wade review trigger`` invocation (#431).
+
+    Carries the per-bot results plus hard-error state (PR unresolved / unknown
+    ``--bot`` name) so the CLI can derive an exit code without re-deriving intent
+    from console output. Non-zero exit only on a hard failure — the PR could not
+    be resolved, an unknown bot was requested, or **every** attempted post
+    failed. A partial failure still exits zero.
+    """
+
+    pr_number: int | None = None
+    results: list[BotTriggerResult] = []
+    resolution_error: str | None = None
+    unknown_bots: list[str] = []
+    valid_bot_names: list[str] = []
+
+    @property
+    def attempted(self) -> list[BotTriggerResult]:
+        """Results that actually tried to post (``posted`` or ``failed``)."""
+        return [
+            r
+            for r in self.results
+            if r.outcome in (BotTriggerOutcome.POSTED, BotTriggerOutcome.FAILED)
+        ]
+
+    @property
+    def all_attempts_failed(self) -> bool:
+        """True when at least one post was attempted and every attempt failed."""
+        attempted = self.attempted
+        return bool(attempted) and all(r.outcome is BotTriggerOutcome.FAILED for r in attempted)
+
+    @property
+    def exit_code(self) -> int:
+        """0 on success (incl. partial failure / all-disabled), 1 on hard failure."""
+        if self.resolution_error is not None or self.unknown_bots:
+            return 1
+        return 1 if self.all_attempts_failed else 0

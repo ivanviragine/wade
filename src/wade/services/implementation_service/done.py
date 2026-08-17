@@ -922,6 +922,53 @@ def _push_branch_with_recovery(
     return False
 
 
+def _auto_trigger_bot_reviews(
+    config: ProjectConfig,
+    repo_root: Path,
+    branch: str,
+    pr_number: int,
+    marker_root: Path,
+) -> None:
+    """Post the enabled bots' review triggers after a successful ``done`` push (#431).
+
+    Opt-in via ``bot_review.auto_trigger``; a no-op otherwise. One CLI hook here
+    covers **both** ``done`` commands (implementation and review-pr-comments),
+    since both funnel through :func:`done` → :func:`_done_via_pr`.
+
+    **Idempotent, per-bot, per-commit.** Fires each bot at most once per commit
+    sha via a ``.wade/bot-triggered-<name>@<sha>`` marker: the marker is checked
+    before posting and written **only after** that bot's post succeeds. So a
+    repeated ``done``/``sync`` on the same sha posts nothing further for a bot
+    already triggered, while a bot whose post *failed* (no marker written)
+    retries next time. Each post is isolated in its own try/except
+    (``comment_on_pr`` is fail-fast), and any failure here is best-effort — it
+    never fails an otherwise-complete ``done``.
+    """
+    if not config.bot_review.auto_trigger:
+        return
+    enabled_bots = [bot for bot in config.bot_review.bots if bot.enabled]
+    if not enabled_bots:
+        return
+    try:
+        sha = git_repo.rev_parse(repo_root, branch)
+    except GitError:
+        logger.debug("done.auto_trigger_sha_failed", exc_info=True)
+        return
+
+    for bot in enabled_bots:
+        marker_name = f"bot-triggered-{bot.name}"
+        if markers.marker_present(marker_root, marker_name, sha):
+            continue
+        try:
+            git_pr.comment_on_pr(repo_root, pr_number, bot.trigger)
+        except Exception as e:  # fail-fast primitive — isolate + best-effort.
+            console.warn(f"Could not auto-trigger {bot.name} review: {e}")
+            logger.warning("done.auto_trigger_failed", bot=bot.name, error=str(e))
+            continue
+        markers.write_marker(marker_root, marker_name, sha)
+        console.detail(f"Triggered {bot.name} review.")
+
+
 def _done_via_pr(
     repo_root: Path,
     branch: str,
@@ -1169,6 +1216,7 @@ def _done_via_pr(
                 console.error("PR creation failed — could not determine the new PR number.")
                 return False
             pr_url = str(pr_info.get("url", ""))
+            pr_number = int(pr_info["number"])
             console.success(f"PR created: {pr_url}")
         except Exception as e:
             console.error(f"PR creation failed: {e}")
@@ -1177,6 +1225,13 @@ def _done_via_pr(
     # Remove in-progress label
     with contextlib.suppress(Exception):
         remove_in_progress_label(provider, issue_number)
+
+    # Opt-in bot-review auto-trigger (#431). Runs only after the push and PR
+    # finalize have succeeded, so the triggers land on a live, ready PR. Per-bot
+    # once-per-sha markers (under the same `marker_root` as the push marker) keep
+    # repeated done/sync runs from re-spamming the PR. `pr_number` is bound by both
+    # branches above (existing PR or freshly created).
+    _auto_trigger_bot_reviews(config, repo_root, branch, pr_number, marker_root)
 
     lines = []
     lines.append(f"  PR      [url]{pr_url}[/]")

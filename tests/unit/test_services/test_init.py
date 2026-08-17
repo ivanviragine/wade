@@ -287,6 +287,24 @@ class TestInit:
         content = manifest.read_text()
         assert ".wade.yml" in content
 
+    def test_non_interactive_writes_bot_review_default_off(self, tmp_git_repo: Path) -> None:
+        """Non-interactive init writes the bot_review block with auto_trigger off (#431).
+
+        The wizard prompt is bypassed, but the block (with the three default bots)
+        is still written and the safe default is taken without error.
+        """
+        assert init(project_root=tmp_git_repo, non_interactive=True)
+        config = yaml.safe_load((tmp_git_repo / ".wade.yml").read_text())
+        assert config["bot_review"]["auto_trigger"] is False
+        names = [bot["name"] for bot in config["bot_review"]["bots"]]
+        assert names == ["coderabbit", "codex", "bugbot"]
+        # And it round-trips through the loader to the model defaults.
+        from wade.config.loader import parse_config_file
+
+        loaded = parse_config_file(tmp_git_repo / ".wade.yml")
+        assert loaded.bot_review.auto_trigger is False
+        assert len(loaded.bot_review.bots) == 3
+
     def test_init_does_not_create_gitignore_block(self, tmp_git_repo: Path) -> None:
         """init() no longer writes a committed gitignore block."""
         init(project_root=tmp_git_repo, non_interactive=True)
@@ -933,6 +951,46 @@ class TestPatchConfig:
         _patch_config(config_path, "claude", ComplexityModelMapping(), force=True)
         config = yaml.safe_load(config_path.read_text())
         assert config["ai"]["default_tool"] == "claude"
+
+    def test_bot_review_setup_adds_block_on_reinit(self, tmp_path: Path) -> None:
+        """A re-init adds the bot_review block (auto_trigger + default bots) (#431)."""
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nprovider:\n  name: github\n")
+        _patch_config(
+            config_path,
+            "claude",
+            ComplexityModelMapping(),
+            force=True,
+            bot_review_setup={"auto_trigger": True},
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["bot_review"]["auto_trigger"] is True
+        assert [b["name"] for b in config["bot_review"]["bots"]] == [
+            "coderabbit",
+            "codex",
+            "bugbot",
+        ]
+
+    def test_bot_review_setup_preserves_custom_bots(self, tmp_path: Path) -> None:
+        """A user-customized bots list survives a re-init; only auto_trigger is patched."""
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text(
+            "version: 2\n"
+            "bot_review:\n"
+            "  auto_trigger: false\n"
+            "  bots:\n"
+            "    - {name: mybot, trigger: run it, enabled: true}\n"
+        )
+        _patch_config(
+            config_path,
+            "claude",
+            ComplexityModelMapping(),
+            force=True,
+            bot_review_setup={"auto_trigger": True},
+        )
+        config = yaml.safe_load(config_path.read_text())
+        assert config["bot_review"]["auto_trigger"] is True
+        assert [b["name"] for b in config["bot_review"]["bots"]] == ["mybot"]
 
     def test_no_force_preserves_ai_tool(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"

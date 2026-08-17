@@ -527,6 +527,14 @@ def _validate_config_file(config_path: Path) -> list[str]:
         else:
             _validate_done_section(done, errors)
 
+    # Validate bot_review section
+    bot_review = raw.get("bot_review")
+    if bot_review is not None:
+        if not isinstance(bot_review, dict):
+            errors.append("bot_review: must be a mapping")
+        else:
+            _validate_bot_review_section(bot_review, errors)
+
     # Check for unsupported top-level keys
     supported_keys = {
         "version",
@@ -538,6 +546,7 @@ def _validate_config_file(config_path: Path) -> list[str]:
         "hooks",
         "knowledge",
         "done",
+        "bot_review",
     }
     for key in raw:
         if key not in supported_keys:
@@ -893,3 +902,50 @@ def _validate_done_section(done: dict[str, Any], errors: list[str]) -> None:
                 errors.append(f"done.{key}: must be a positive integer")
         elif not isinstance(value, bool):
             errors.append(f"done.{key}: must be true or false")
+
+
+def _validate_bot_review_section(bot_review: dict[str, Any], errors: list[str]) -> None:
+    """Validate the ``bot_review`` external-bot trigger section (#431).
+
+    ``auto_trigger`` is a boolean; ``bots`` is a list of ``{name, trigger,
+    enabled?}`` mappings with non-empty string ``name`` / ``trigger``. Mirrors
+    the loader's parse rules so ``wade check`` catches a malformed section before
+    it reaches ``load_config``.
+    """
+    auto_trigger = bot_review.get("auto_trigger")
+    if auto_trigger is not None and not isinstance(auto_trigger, bool):
+        errors.append("bot_review.auto_trigger: must be true or false")
+
+    bots = bot_review.get("bots")
+    if bots is not None:
+        if not isinstance(bots, list):
+            errors.append("bot_review.bots: must be a list")
+        else:
+            _validate_bot_review_bots(bots, errors)
+
+    valid_keys = {"auto_trigger", "bots"}
+    supported = ", ".join(sorted(valid_keys))
+    for key in bot_review:
+        if key not in valid_keys:
+            errors.append(f"bot_review.{key}: unsupported key. Supported keys: {supported}")
+
+
+def _validate_bot_review_bots(bots: list[Any], errors: list[str]) -> None:
+    """Validate each entry of ``bot_review.bots`` (#431)."""
+    valid_bot_keys = {"name", "trigger", "enabled"}
+    for i, entry in enumerate(bots):
+        if not isinstance(entry, dict):
+            errors.append(f"bot_review.bots[{i}]: must be a mapping")
+            continue
+        name = entry.get("name")
+        if not isinstance(name, str) or not name.strip():
+            errors.append(f"bot_review.bots[{i}].name: must be a non-empty string")
+        trigger = entry.get("trigger")
+        if not isinstance(trigger, str) or not trigger.strip():
+            errors.append(f"bot_review.bots[{i}].trigger: must be a non-empty string")
+        enabled = entry.get("enabled")
+        if enabled is not None and not isinstance(enabled, bool):
+            errors.append(f"bot_review.bots[{i}].enabled: must be true or false")
+        for key in entry:
+            if key not in valid_bot_keys:
+                errors.append(f"bot_review.bots[{i}].{key}: unsupported key")

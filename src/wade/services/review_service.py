@@ -26,6 +26,9 @@ from wade.models.config import ProjectConfig
 from wade.models.hooks import SessionPhase
 from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 from wade.models.review import (
+    BotTriggerOutcome,
+    BotTriggerReport,
+    BotTriggerResult,
     PollOutcome,
     PRReviewStatus,
     ReviewBotStatus,
@@ -266,6 +269,136 @@ def fetch_reviews(
         )
 
     return True
+
+
+def trigger_bot_reviews(
+    target: str,
+    *,
+    selected_bots: list[str] | None = None,
+    dry_run: bool = False,
+    project_root: Path | None = None,
+) -> BotTriggerReport:
+    """Post external-bot review-trigger comments on an issue's PR (#431).
+
+    Resolves issue → branch → **open** PR, then posts each configured bot's
+    trigger phrase as a PR comment via ``git_pr.comment_on_pr``. That primitive
+    is fail-fast (it raises ``GhCliError``), so each post is wrapped in its own
+    try/except — one failing bot never aborts the rest.
+
+    - ``selected_bots`` (``--bot``, repeatable) restricts to a named subset and
+      **overrides** each named bot's ``enabled: false`` — an explicit request
+      beats the config default. An unknown name is a hard error: no posts are
+      made and the report lists the valid configured names.
+    - ``dry_run`` reports what *would* be posted without posting.
+
+    This manual path never reads or writes the auto-trigger
+    ``.wade/bot-triggered-<bot>@<sha>`` markers — those belong solely to the
+    ``done`` auto-trigger path — so an explicit trigger always fires and never
+    suppresses a later same-SHA ``done`` auto-trigger.
+
+    Returns a :class:`BotTriggerReport`; the caller derives the exit code from
+    it (non-zero only when the PR can't be resolved, an unknown ``--bot`` name is
+    given, or **every** attempted post fails).
+    """
+    config = load_config(project_root)
+    provider = get_provider(config)
+
+    cwd = project_root or Path.cwd()
+    try:
+        repo_root = git_repo.get_repo_root(cwd)
+    except GitError:
+        console.error_with_fix("Not inside a git repository", "Navigate to your project directory")
+        return BotTriggerReport(resolution_error="not inside a git repository")
+
+    issue_number = target.lstrip("#")
+    try:
+        task = provider.read_task(issue_number)
+    except Exception as e:
+        console.error(f"Could not read issue #{issue_number}: {e}")
+        return BotTriggerReport(resolution_error=f"could not read issue #{issue_number}")
+
+    branch_name = _resolve_task_branch(config, task, repo_root)
+
+    lookup = git_pr.get_pr_for_branch(repo_root, branch_name)
+    if lookup.lookup_failed:
+        console.error(f"Could not look up the PR for branch {branch_name} — try again shortly.")
+        return BotTriggerReport(resolution_error="PR lookup failed")
+    if not lookup.is_open or lookup.pr is None:
+        console.error_with_fix(
+            f"No open PR found for branch {branch_name}",
+            f"Run `wade implementation-session done` for #{task.id} to open a PR first",
+        )
+        return BotTriggerReport(resolution_error="no open PR")
+
+    pr_number = lookup.pr.number
+    bots = config.bot_review.bots
+    by_name = {bot.name: bot for bot in bots}
+
+    if selected_bots:
+        unknown = [name for name in selected_bots if name not in by_name]
+        if unknown:
+            valid = [bot.name for bot in bots]
+            console.error(f"Unknown bot name(s): {', '.join(unknown)}.")
+            console.hint(f"Configured bots: {', '.join(valid) if valid else '(none)'}")
+            return BotTriggerReport(
+                pr_number=pr_number, unknown_bots=unknown, valid_bot_names=valid
+            )
+        # Explicit selection overrides enabled:false. Iterate config order,
+        # filtered to the requested set, so repeated --bot values are deduped and
+        # ordering is deterministic.
+        wanted = set(selected_bots)
+        to_trigger = [bot for bot in bots if bot.name in wanted]
+        force_enabled = True
+    else:
+        to_trigger = list(bots)
+        force_enabled = False
+
+    results: list[BotTriggerResult] = []
+    for bot in to_trigger:
+        if not force_enabled and not bot.enabled:
+            results.append(
+                BotTriggerResult(
+                    name=bot.name, trigger=bot.trigger, outcome=BotTriggerOutcome.SKIPPED_DISABLED
+                )
+            )
+            continue
+        if dry_run:
+            results.append(
+                BotTriggerResult(
+                    name=bot.name, trigger=bot.trigger, outcome=BotTriggerOutcome.DRY_RUN
+                )
+            )
+            continue
+        try:
+            git_pr.comment_on_pr(repo_root, pr_number, bot.trigger)
+            results.append(
+                BotTriggerResult(
+                    name=bot.name, trigger=bot.trigger, outcome=BotTriggerOutcome.POSTED
+                )
+            )
+        except Exception as e:  # comment_on_pr is fail-fast — isolate per bot.
+            logger.warning("review.bot_trigger_failed", bot=bot.name, error=str(e))
+            results.append(
+                BotTriggerResult(
+                    name=bot.name,
+                    trigger=bot.trigger,
+                    outcome=BotTriggerOutcome.FAILED,
+                    error=str(e),
+                )
+            )
+
+    report = BotTriggerReport(pr_number=pr_number, results=results)
+
+    console.rule(f"review trigger #{task.id}")
+    console.kv("PR", f"#{pr_number}")
+    for result in results:
+        if result.outcome is BotTriggerOutcome.FAILED:
+            console.warn(result.status_line())
+        else:
+            console.detail(result.status_line())
+    if report.all_attempts_failed:
+        console.error("All bot triggers failed — see the errors above.")
+    return report
 
 
 def resolve_thread(
@@ -707,7 +840,7 @@ def start(
         if status.bot_status == ReviewBotStatus.PAUSED:
             console.warn(
                 "CodeRabbit review is paused — comments may arrive when resumed.\n"
-                "    Run '@coderabbitai resume' on the PR to trigger a new review."
+                f"    Run `wade review trigger {task.id}` to post a fresh bot review trigger."
             )
             return True
         if status.bot_status == ReviewBotStatus.IN_PROGRESS:

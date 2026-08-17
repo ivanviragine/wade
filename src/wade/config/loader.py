@@ -13,6 +13,7 @@ from wade.models.config import (
     WADE_BASE_ALLOWLIST_PATTERN,
     AICommandConfig,
     AIConfig,
+    BotReviewConfig,
     CommitMsgConfig,
     ComplexityModelMapping,
     DoneConfig,
@@ -24,6 +25,7 @@ from wade.models.config import (
     ProjectConfig,
     ProjectSettings,
     ProviderConfig,
+    ReviewBotConfig,
 )
 from wade.models.permission import coerce_permission_mode
 from wade.models.session import MergeStrategy
@@ -325,6 +327,14 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
         max_review_passes=_max_passes,
     )
 
+    # Parse bot_review section (#431). Optional and fully model-defaulted: an
+    # absent section loads the built-in CodeRabbit/Codex/Bugbot defaults (no
+    # config-version migration needed). `_build_config` is hand-rolled per
+    # section, so a new Pydantic model alone is not parsed — this explicit block
+    # is what makes the section take effect.
+    bot_review_raw = _section_mapping(raw, "bot_review")
+    bot_review = _parse_bot_review(bot_review_raw)
+
     return ProjectConfig(
         version=version,
         project=project,
@@ -335,9 +345,56 @@ def _build_config(raw: dict[str, Any], config_path: Path) -> ProjectConfig:
         hooks=hooks,
         knowledge=knowledge,
         done=done,
+        bot_review=bot_review,
         config_path=str(config_path),
         project_root=str(config_path.parent),
     )
+
+
+def _parse_review_bot(raw: Any) -> ReviewBotConfig:
+    """Parse one ``bot_review.bots`` entry into a :class:`ReviewBotConfig`.
+
+    ``name`` / ``trigger`` are required, non-empty strings — a missing or blank
+    one raises (caught by ``parse_config_file`` and surfaced as a
+    ``ConfigError``). A null ``enabled`` normalizes to the ``True`` default
+    rather than crashing the model.
+    """
+    if not isinstance(raw, dict):
+        raise TypeError("bot_review.bots entries must be mappings")
+    name = raw.get("name")
+    trigger = raw.get("trigger")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("each bot_review.bots entry requires a non-empty string `name`")
+    if not isinstance(trigger, str) or not trigger.strip():
+        raise ValueError("each bot_review.bots entry requires a non-empty string `trigger`")
+    enabled = raw.get("enabled", True)
+    return ReviewBotConfig(
+        name=name,
+        trigger=trigger,
+        enabled=True if enabled is None else enabled,
+    )
+
+
+def _parse_bot_review(raw: dict[str, Any]) -> BotReviewConfig:
+    """Parse the ``bot_review`` section into a :class:`BotReviewConfig`.
+
+    An empty/absent section keeps the model defaults (auto-trigger off, the three
+    built-in bots). A present section overrides ``auto_trigger`` and, when it
+    supplies an explicit ``bots`` list, replaces the defaults wholesale; an
+    omitted ``bots`` list keeps the built-in bots. A null ``auto_trigger``
+    normalizes to the ``False`` default.
+    """
+    if not raw:
+        return BotReviewConfig()
+    auto_trigger = raw.get("auto_trigger", False)
+    auto_trigger = False if auto_trigger is None else auto_trigger
+    bots_raw = raw.get("bots")
+    if bots_raw is None:
+        return BotReviewConfig(auto_trigger=auto_trigger)
+    if not isinstance(bots_raw, list):
+        raise TypeError("bot_review.bots must be a list")
+    bots = [_parse_review_bot(entry) for entry in bots_raw]
+    return BotReviewConfig(auto_trigger=auto_trigger, bots=bots)
 
 
 def _parse_command_config(raw: dict[str, Any] | None) -> AICommandConfig:

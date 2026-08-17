@@ -254,6 +254,56 @@ class DoneConfig(BaseModel):
     max_review_passes: StrictInt = Field(default=2, gt=0)
 
 
+class ReviewBotConfig(BaseModel):
+    """One external review bot and the PR comment that triggers it (#431).
+
+    ``name`` is the stable identifier used by ``--bot`` selection and the
+    per-bot auto-trigger marker; ``trigger`` is the exact comment body posted to
+    the PR to (re-)invoke that bot (e.g. ``"@coderabbitai review"``). ``enabled``
+    gates the default (no ``--bot``) trigger path; an explicit ``--bot <name>``
+    overrides it.
+    """
+
+    name: str
+    trigger: str
+    enabled: bool = True
+
+
+def _default_review_bots() -> list[ReviewBotConfig]:
+    """The built-in bot-review triggers shipped as defaults (#431).
+
+    Produced by a factory (not a shared module-level list) so every
+    :class:`BotReviewConfig` gets its own instances — a plain mutable default
+    would share one list across all ``ProjectConfig`` instances (a Pydantic
+    footgun). CodeRabbit / Codex / Bugbot ship enabled so the feature works out
+    of the box even when ``.wade.yml`` has no ``bot_review:`` section.
+    """
+    return [
+        ReviewBotConfig(name="coderabbit", trigger="@coderabbitai review"),
+        ReviewBotConfig(name="codex", trigger="@codex review"),
+        ReviewBotConfig(name="bugbot", trigger="bugbot run"),
+    ]
+
+
+class BotReviewConfig(BaseModel):
+    """``bot_review`` — external-bot review-trigger configuration (#431).
+
+    Deliberately distinct from the ``ai.review_*`` blocks (``review_plan``,
+    ``review_implementation``, ``review_batch``, ``review_pr_comments``): those
+    configure wade's own AI-tool reviews, whereas these are external-bot trigger
+    strings posted as PR comments. Keeping the name separate stops the two from
+    reading confusingly in ``.wade.yml``.
+
+    ``auto_trigger`` is opt-in: when ``True``, ``done`` posts the enabled bots'
+    triggers after a successful push. The three built-in bots ship as defaults
+    (via :func:`_default_review_bots`) so ``wade review trigger`` works with no
+    config; every field is overridable.
+    """
+
+    auto_trigger: bool = False
+    bots: list[ReviewBotConfig] = Field(default_factory=_default_review_bots)
+
+
 class ProjectSettings(BaseModel):
     """Core project settings section."""
 
@@ -281,6 +331,7 @@ class ProjectConfig(BaseModel):
     hooks: HooksConfig = HooksConfig()
     knowledge: KnowledgeConfig = KnowledgeConfig()
     done: DoneConfig = DoneConfig()
+    bot_review: BotReviewConfig = Field(default_factory=BotReviewConfig)
 
     # Resolved values (set after loading, not in YAML)
     config_path: str | None = Field(default=None, exclude=True)

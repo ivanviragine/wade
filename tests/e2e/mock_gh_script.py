@@ -455,6 +455,16 @@ def _handle_pr(args: list[str], state: dict[str, object]) -> int:
         print(json.dumps(items))
         return 0
 
+    if action == "comment":
+        # `gh pr comment <pr> --body <text>` succeeds when the PR exists.
+        if len(args) < 2:
+            return 1
+        target = args[1]
+        _pr_num, pr = _find_pr(prs, target)
+        if not pr:
+            return 1
+        return 0
+
     return 1
 
 

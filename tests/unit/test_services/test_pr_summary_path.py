@@ -47,7 +47,7 @@ class TestPrSummaryPathResolution:
             mock_provider = MagicMock()
             mock_provider.read_task.return_value = task
             mock_get_provider.return_value = mock_provider
-            mock_create_pr.return_value = {"url": "https://github.com/test/pr/1"}
+            mock_create_pr.return_value = {"url": "https://github.com/test/pr/1", "number": 1}
 
             # Act
             result = _done_via_pr(
@@ -99,7 +99,7 @@ class TestPrSummaryPathResolution:
             mock_provider = MagicMock()
             mock_provider.read_task.return_value = task
             mock_get_provider.return_value = mock_provider
-            mock_create_pr.return_value = {"url": "https://github.com/test/pr/1"}
+            mock_create_pr.return_value = {"url": "https://github.com/test/pr/1", "number": 1}
 
             # Act
             result = _done_via_pr(
