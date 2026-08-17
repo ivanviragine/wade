@@ -1,11 +1,11 @@
 """Shared mixin: delegate PR-review APIs to a GitHub provider.
 
-Issue providers whose tasks live elsewhere (Markdown file, ClickUp, etc.)
+Task providers whose tasks live elsewhere (Markdown file, ClickUp, etc.)
 still flow PRs through GitHub. Without this mixin they would raise
 ``NotImplementedError`` for review threads / PR comments and silently
-degrade ``wade fetch-reviews`` and the auto-poll loop. Composing the mixin
-makes those operations transparently delegate to a lazily-constructed
-:class:`wade.providers.github.GitHubProvider`.
+degrade ``wade review-pr-comments-session fetch`` and the auto-poll loop.
+Composing the mixin makes those operations transparently delegate to a
+lazily-constructed :class:`wade.providers.github.GitHubProvider`.
 
 Usage::
 
