@@ -23,8 +23,9 @@ while WADE handles the git and GitHub plumbing around every AI session.
   sessions never collide or stash-juggle.
 - **Full context, zero copy-paste** — the task, its description, labels, and your
   project conventions are loaded into the AI automatically.
-- **Agent guardrails** — per-session hooks keep the AI inside its worktree and
-  route it through a completion gate before any push.
+- **Agent guardrails** — on hook-capable AI tools, per-session hooks keep the AI
+  inside its worktree and route it through a completion gate before any push;
+  hookless tools fall back to skill rules (see the tool support table).
 - **Quality gates** — opt-in pre-commit lint/test and conventional-commit checks,
   plus an AI code-review pass before the PR is marked ready.
 - **Pluggable task providers** — GitHub Issues, ClickUp, or a committed Markdown
@@ -150,11 +151,13 @@ wade 42
 
 `wade <N>` routes on the task's **PR state**, not on whether a plan exists:
 
-- **No open PR** → starts (or resumes) an implementation session.
+- **No PR yet, or a closed unmerged one** → starts (or resumes) an implementation
+  session.
 - **Open draft PR** → continue the in-flight session (or start it if the
   worktree is gone).
 - **Open ready PR** → choose to continue working, address review comments, merge,
   or open the PR in your browser.
+- **Merged PR** → reports the task is already merged and stops — no session.
 
 It never launches a planning session on its own — reach for `wade plan` when you
 want planning.
