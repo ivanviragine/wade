@@ -381,7 +381,7 @@ class TestDocUpdateStep:
         assert "{doc_update_step}" not in content, "Placeholder must be expanded"
         assert "{doc_targets}" not in content, "Nested placeholder must be expanded"
         assert "**Step 2 — Documentation pass [MANDATORY]:**" in content
-        assert "**State the outcome**" in content, "Enforcement clause must survive"
+        assert "**State the outcome in one line**" in content, "Enforcement clause must survive"
         assert "`README.md`" in content, "tmp_git_repo's README.md must be detected"
 
     def test_expanded_in_review_pr_comments_session(self, tmp_git_repo: Path) -> None:
@@ -395,7 +395,7 @@ class TestDocUpdateStep:
         assert "{doc_update_step}" not in content, "Placeholder must be expanded"
         assert "{doc_targets}" not in content, "Nested placeholder must be expanded"
         assert "**Step 1 — Documentation pass [MANDATORY]:**" in content
-        assert "**State the outcome**" in content, "Enforcement clause must survive"
+        assert "**State the outcome in one line**" in content, "Enforcement clause must survive"
         assert "`README.md`" in content, "tmp_git_repo's README.md must be detected"
 
     def test_doc_update_reference_installed_for_both_sessions(self, tmp_git_repo: Path) -> None:

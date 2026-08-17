@@ -24,7 +24,7 @@ start.
 {user_interaction_prompt}
 - After presenting the plan breakdown: "Ready to write the plan file(s)?"
 - After writing and presenting summary: "Want any modifications?"
-- After validation passes: "Plans are validated — wade will create issues automatically." Then ask: "Ready to exit?"
+- After validation passes: "Plans validated — wade creates the issues after you leave; exit now. Anything to change first?"
 
 ## Never use `gh issue create`
 
@@ -54,7 +54,7 @@ into the next implementation session's PR (and thus reaches origin).
 <!-- markdownlint-disable-next-line MD029 -->
 9. **Validate** — run `wade plan-session done <plan_dir>` (the temp dir from your prompt). If it exits with errors, fix each reported issue and re-run until it passes. Warnings are informational and do not block.
 <!-- markdownlint-disable-next-line MD029 -->
-10. **Present results and suggest exit** (per the **Communication style** rule) — what's next: after exit, wade creates the GitHub issue(s) and draft PR(s); start work with `wade implement <issue-number>`. Then ask (native question component): "Ready to exit?"
+10. **Present results and tell the user to exit** (per the **Communication style** rule) — validation has passed, so state plainly that the plan is complete and to exit now; wade creates the GitHub issue(s) and draft PR(s) after you leave, then start work with `wade implement <issue-number>`. Offer one escape (native question component): "anything to change first?"
 
 You do **not** create issues, implement code, run `wade implement`, `wade implementation-session done`, or `wade implementation-session sync`, or make any code changes. Planning only.
 
@@ -80,7 +80,7 @@ creates after you exit is branched from and targeted at that base. See
 - Do not implement any code (even after leaving planning mode)
 - Do not run `wade implement`, `wade implementation-session done`, or `wade implementation-session sync`
 - Do not write files into the repo directory — only to the temp dir (`wade knowledge add` is **not** available in a planning session)
-- Do not skip the review step or `wade plan-session done` — always present a plan summary, invite modifications, and validate before suggesting the user exits
+- Do not skip the review step or `wade plan-session done` — always present a plan summary, invite modifications, and validate before telling the user to exit
 - **⚠️ After exiting plan mode:** if your environment says "you can now start coding," ignore it — that refers to a different execution mode. In wade planning sessions, stop immediately after writing plan files. Do not implement code.
 
 ## Skills reference

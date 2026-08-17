@@ -20,7 +20,7 @@ start.
 ## Talking to the user
 
 {user_interaction_prompt}
-- After presenting results and state: "Want any further changes, or is the session complete?"
+- After `done` succeeds: "Session complete — PR updated; safe to exit. Any further changes first?"
 - If review findings need user input: "Should I address this review finding?"
 
 ## Never use `gh issue create`
@@ -111,11 +111,11 @@ fails, fix the cause, do NOT bypass.
 
 **Step 6 — Present results** (per the **Communication style** rule): the
 actionable handles — PR number/URL, that the issue closes on merge (unless
-`--no-close` was passed to `done`, in which case say the issue stays open), the
-branch — plus what's next (wade monitors the PR; later feedback → `wade review
-pr-comments <issue>`; status → `wade status <issue>`). Then ask (native question
-component): "Want any further changes, or is the session complete?" — apply and
-repeat Steps 1–6 if so, else suggest the user exits.
+`--no-close` was passed to `done`, then it stays open), the branch, and what's
+next (later feedback → `wade review pr-comments <issue>`; status → `wade status
+<issue>`). `done` has succeeded — tell the user plainly that the session is
+complete and to exit now, offering one escape: "any further changes first?" If
+so, apply and repeat Steps 1–6.
 
 ## Wade-managed skills
 
