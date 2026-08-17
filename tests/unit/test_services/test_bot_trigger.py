@@ -120,24 +120,31 @@ class TestTriggerBotReviews:
         assert report.all_attempts_failed is True
         assert report.exit_code == 1
 
-    def test_bot_name_with_markup_renders_without_crashing(self, tmp_path: Path) -> None:
-        """A name carrying a Rich control token must render, not raise MarkupError.
+    def test_failure_with_markup_error_text_renders_safely(self, tmp_path: Path) -> None:
+        """Provider/exception text in ``status_line()`` is escaped, not parsed as markup.
 
-        Names are only required to be non-empty, so ``[/]`` is a valid config. It
-        reaches ``status_line()`` on both the dry-run (``detail``) and failure
-        (``warn``) render paths.
+        A bot ``name`` is now a validated safe identifier, but the failure
+        ``status_line`` still embeds untrusted ``str(e)`` — a stray Rich control
+        token there must not raise ``MarkupError`` on the ``warn`` render path.
         """
-        config = _config(bots=[ReviewBotConfig(name="[/]", trigger="go")])
-        # Dry-run exercises the detail() path.
-        with _mock_service(config, tmp_path=tmp_path):
-            dry = trigger_bot_reviews("42", dry_run=True)
-        assert dry.results[0].name == "[/]"
-        assert dry.exit_code == 0
-        # A raising post exercises the warn() path (status_line embeds the name).
-        comment = MagicMock(side_effect=Exception("[boom]"))
-        with _mock_service(config, comment=comment, tmp_path=tmp_path):
-            failed = trigger_bot_reviews("42")
-        assert failed.results[0].outcome is BotTriggerOutcome.FAILED
+        comment = MagicMock(side_effect=Exception("boom [/] unbalanced"))
+        with _mock_service(_config(), comment=comment, tmp_path=tmp_path):
+            report = trigger_bot_reviews("42")
+        assert all(r.outcome is BotTriggerOutcome.FAILED for r in report.results)
+        assert report.exit_code == 1
+
+    def test_provider_read_error_with_markup_renders_safely(self, tmp_path: Path) -> None:
+        """Provider read error text is rendered markup-disabled → structured exit-1."""
+        provider = MagicMock()
+        provider.read_task.side_effect = Exception("boom [/] token")
+        with (
+            patch("wade.services.review_service.load_config", return_value=_config()),
+            patch("wade.services.review_service.get_provider", return_value=provider),
+            patch("wade.services.review_service.git_repo.get_repo_root", return_value=tmp_path),
+        ):
+            report = trigger_bot_reviews("42")
+        assert report.resolution_error is not None
+        assert report.exit_code == 1
 
     def test_status_line_contract(self) -> None:
         from wade.models.review import BotTriggerResult
@@ -204,12 +211,14 @@ class TestTriggerSelection:
         assert report.exit_code == 1
 
     def test_unknown_bot_error_renders_markup_names_safely(self, tmp_path: Path) -> None:
-        """The unknown/valid name lists reach markup-enabled error/hint output."""
-        config = _config(bots=[ReviewBotConfig(name="[/]", trigger="go")])
-        with _mock_service(config, tmp_path=tmp_path) as comment:
-            report = trigger_bot_reviews("42", selected_bots=["[bad]"])
-        assert report.unknown_bots == ["[bad]"]
-        assert report.valid_bot_names == ["[/]"]
+        """`--bot` values are unvalidated user input; a markup token must not crash.
+
+        Configured names are validated safe, but the rejected ``--bot`` value is
+        echoed into markup-enabled error/hint output and could carry a Rich token.
+        """
+        with _mock_service(_config(), tmp_path=tmp_path) as comment:
+            report = trigger_bot_reviews("42", selected_bots=["[/]"])
+        assert report.unknown_bots == ["[/]"]
         assert comment.call_count == 0
         assert report.exit_code == 1
 

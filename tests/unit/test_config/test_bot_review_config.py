@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from wade.config.loader import ConfigError, parse_config_file
 from wade.models.config import BotReviewConfig, ProjectConfig, ReviewBotConfig
@@ -49,6 +50,26 @@ class TestBotReviewModels:
 
     def test_review_bot_enabled_defaults_true(self) -> None:
         assert ReviewBotConfig(name="x", trigger="y").enabled is True
+
+    @pytest.mark.parametrize("good", ["coderabbit", "codex-2", "my_bot", "bot.v1", "A1"])
+    def test_safe_bot_names_accepted(self, good: str) -> None:
+        assert ReviewBotConfig(name=good, trigger="t").name == good
+
+    @pytest.mark.parametrize("bad", ["a/b", "../evil", "a b", "[/]", "a\\b", "", "  "])
+    def test_unsafe_bot_names_rejected(self, bad: str) -> None:
+        """`name` becomes a `.wade/` marker component, so separators/spaces are out."""
+        with pytest.raises(ValidationError):
+            ReviewBotConfig(name=bad, trigger="t")
+
+    def test_duplicate_names_rejected_at_model_construction(self) -> None:
+        """The uniqueness invariant holds for direct construction, not only parsing."""
+        with pytest.raises(ValidationError):
+            BotReviewConfig(
+                bots=[
+                    ReviewBotConfig(name="x", trigger="a"),
+                    ReviewBotConfig(name="x", trigger="b"),
+                ]
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +129,12 @@ class TestBotReviewLoader:
             "    - {name: codex, trigger: b}\n"
         )
         with pytest.raises(ConfigError, match="duplicate name 'codex'"):
+            parse_config_file(_write(tmp_path, text))
+
+    def test_invalid_bot_name_raises(self, tmp_path: Path) -> None:
+        """A path-separator name is rejected by the model invariant at load time."""
+        text = "version: 2\nbot_review:\n  bots:\n    - {name: 'a/b', trigger: go}\n"
+        with pytest.raises(ConfigError):
             parse_config_file(_write(tmp_path, text))
 
     def test_override_enabled_field(self, tmp_path: Path) -> None:
@@ -178,6 +205,11 @@ class TestBotReviewValidation:
         )
         errors = _validate_config_file(_write(tmp_path, text))
         assert any("duplicated" in e and "bot_review.bots[1].name" in e for e in errors)
+
+    def test_unsafe_bot_name_errors(self, tmp_path: Path) -> None:
+        text = "version: 2\nbot_review:\n  bots:\n    - {name: 'a/b', trigger: go}\n"
+        errors = _validate_config_file(_write(tmp_path, text))
+        assert any("bot_review.bots[0].name" in e and "invalid" in e for e in errors)
 
     def test_distinct_bot_names_ok(self, tmp_path: Path) -> None:
         text = (

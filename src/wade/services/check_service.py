@@ -32,6 +32,7 @@ from wade.models.config import (
     PostToolUseConfig,
     PreCommitConfig,
     ProjectConfig,
+    is_valid_bot_name,
 )
 from wade.models.delegation import DelegationMode
 from wade.models.session import MergeStrategy
@@ -933,9 +934,14 @@ def _validate_bot_review_section(bot_review: dict[str, Any], errors: list[str]) 
 def _validate_bot_review_bots(bots: list[Any], errors: list[str]) -> None:
     """Validate each entry of ``bot_review.bots`` (#431).
 
-    Names must be unique: ``--bot`` selection and the per-bot auto-trigger marker
-    both key off ``name``, so a duplicate would silently collide (post twice /
-    share one marker).
+    Mirrors the ``ReviewBotConfig`` / ``BotReviewConfig`` model invariants so
+    ``wade check-config`` reports a bad section before it reaches ``load_config``:
+
+    - Names must be unique — ``--bot`` selection and the per-bot auto-trigger
+      marker both key off ``name``, so a duplicate would silently collide (post
+      twice / share one marker).
+    - Names must be a safe identifier (``[A-Za-z0-9._-]``) — ``name`` becomes a
+      ``.wade/`` marker-file component, so separators / traversal are rejected.
     """
     valid_bot_keys = {"name", "trigger", "enabled"}
     seen_names: set[str] = set()
@@ -947,6 +953,11 @@ def _validate_bot_review_bots(bots: list[Any], errors: list[str]) -> None:
         if not isinstance(name, str) or not name.strip():
             errors.append(f"bot_review.bots[{i}].name: must be a non-empty string")
         else:
+            if not is_valid_bot_name(name):
+                errors.append(
+                    f"bot_review.bots[{i}].name: '{name}' is invalid — use only letters, "
+                    "digits, '.', '_', '-' (no path separators or spaces)"
+                )
             if name in seen_names:
                 errors.append(
                     f"bot_review.bots[{i}].name: '{name}' is duplicated (names must be unique)"

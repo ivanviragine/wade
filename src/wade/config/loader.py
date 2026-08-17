@@ -384,12 +384,11 @@ def _parse_bot_review(raw: dict[str, Any]) -> BotReviewConfig:
     omitted ``bots`` list keeps the built-in bots. A null ``auto_trigger``
     normalizes to the ``False`` default.
 
-    Bot names must be unique. ``--bot`` selection and the per-bot auto-trigger
-    marker both key off ``name``, so a duplicate would silently collide (an
-    unfiltered/``--bot`` trigger posts both entries while auto-trigger posts only
-    the first, since both share one marker). Enforcing it here — not only in
-    ``wade check-config`` — means every ``load_config`` caller gets unambiguous
-    runtime selection without a separate validation command.
+    Name uniqueness and the safe-identifier rule are **model invariants**
+    (``BotReviewConfig`` / ``ReviewBotConfig`` validators), so they hold for every
+    construction path — this loader relies on them rather than re-checking. A
+    violation raises a Pydantic ``ValidationError`` (a ``ValueError`` subclass),
+    which :func:`parse_config_file` surfaces as a ``ConfigError``.
     """
     if not raw:
         return BotReviewConfig()
@@ -401,11 +400,6 @@ def _parse_bot_review(raw: dict[str, Any]) -> BotReviewConfig:
     if not isinstance(bots_raw, list):
         raise TypeError("bot_review.bots must be a list")
     bots = [_parse_review_bot(entry) for entry in bots_raw]
-    seen_names: set[str] = set()
-    for bot in bots:
-        if bot.name in seen_names:
-            raise ValueError(f"bot_review.bots: duplicate name '{bot.name}' (names must be unique)")
-        seen_names.add(bot.name)
     return BotReviewConfig(auto_trigger=auto_trigger, bots=bots)
 
 

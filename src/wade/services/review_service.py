@@ -314,7 +314,9 @@ def trigger_bot_reviews(
     try:
         task = provider.read_task(issue_number)
     except Exception as e:
-        console.error(f"Could not read issue #{issue_number}: {e}")
+        # Provider-controlled error text — disable markup so a bracket token in it
+        # can't raise MarkupError instead of returning the structured exit-1 report.
+        console.error(f"Could not read issue #{issue_number}: {e}", markup=False)
         return BotTriggerReport(resolution_error=f"could not read issue #{issue_number}")
 
     branch_name = _resolve_task_branch(config, task, repo_root)
@@ -332,15 +334,16 @@ def trigger_bot_reviews(
 
     pr_number = lookup.pr.number
     bots = config.bot_review.bots
-    by_name = {bot.name: bot for bot in bots}
+    configured_names = {bot.name for bot in bots}
 
     if selected_bots:
-        unknown = [name for name in selected_bots if name not in by_name]
+        unknown = [name for name in selected_bots if name not in configured_names]
         if unknown:
             valid = [bot.name for bot in bots]
-            # Bot names are only required to be non-empty, so they may carry Rich
-            # control tokens (e.g. `[/]`); escape before rendering to markup-enabled
-            # console output so a stray token can't raise MarkupError.
+            # `unknown` is arbitrary `--bot` user input (not the validated config
+            # names), so it may carry Rich control tokens; escape before rendering
+            # to markup-enabled console output so a stray token can't raise
+            # MarkupError. `valid` is already safe, but escaping it is harmless.
             unknown_display = ", ".join(console.escape_markup(name) for name in unknown)
             valid_display = (
                 ", ".join(console.escape_markup(name) for name in valid) if valid else "(none)"

@@ -947,9 +947,11 @@ def _auto_trigger_bot_reviews(
     If the marker *write* itself fails (``write_marker`` returns ``False``), the
     comment was already posted but the trigger is **not** durably recorded, so we
     warn rather than report plain success — a later ``done`` at the same sha may
-    re-post it. Bot names are escaped before rendering: a name is only required
-    to be non-empty, so it may carry Rich control tokens (e.g. ``[/]``) that would
-    otherwise raise ``MarkupError`` in the markup-enabled console.
+    re-post it. (Bot ``name`` is a validated safe identifier, so a ``/`` can no
+    longer break the marker path; a ``False`` here now means a genuine I/O
+    failure.) Provider/exception text is escaped before rendering — it is untrusted
+    and could carry a Rich control token that would otherwise raise ``MarkupError``
+    in the markup-enabled console; the name is escaped too, as belt-and-suspenders.
     """
     if not config.bot_review.auto_trigger:
         return

@@ -715,9 +715,12 @@ across `ProjectConfig`s. Because `_build_config` is hand-rolled per section, the
 model alone is not parsed — `_parse_bot_review` in `config/loader.py` is the
 explicit parse block (a present section overrides `auto_trigger`; an explicit
 `bots` list replaces the defaults wholesale, an omitted one keeps them). Bot
-names must be unique — `_parse_bot_review` rejects a duplicate here, not only in
-`check-config`, since `--bot` selection and the per-bot auto-trigger marker both
-key off `name`. No config-version migration is needed. `wade review trigger <issue>`
+`name` values are **model invariants** (`ReviewBotConfig`/`BotReviewConfig`
+validators, enforced on every construction path — not only `check-config`): they
+must be **unique** and a **safe identifier** (`[A-Za-z0-9._-]+`), since `--bot`
+selection and the per-bot auto-trigger marker (a `.wade/` filename component)
+both key off `name`. `check_service` mirrors both rules for friendly
+`check-config` messages. No config-version migration is needed. `wade review trigger <issue>`
 (`review_service.trigger_bot_reviews`) posts the enabled bots' triggers via
 `git_pr.comment_on_pr`, wrapping **each** post in its own try/except so one
 failing bot doesn't abort the rest, and returns a `BotTriggerReport`
@@ -728,10 +731,13 @@ commit SHA** via per-bot `.wade/bot-triggered-<name>@<sha>` markers
 (`utils/markers.py:write_marker`, written only after that bot's post succeeds —
 so a failed bot retries, a succeeded one never re-posts). A failed marker *write*
 is warned rather than reported as durable success, since the comment is already
-posted but a later same-SHA `done` may re-post it. The manual command never reads
-or writes those markers, so a same-SHA `done` still auto-fires. Configured bot
-names are escaped before markup-enabled console output (a name may contain a Rich
-control token such as `[/]`).
+posted but a later same-SHA `done` may re-post it. (The `name` safe-identifier
+invariant means a `/` can no longer break the marker path, so a `False` write now
+signals a genuine I/O failure.) The manual command never reads or writes those
+markers, so a same-SHA `done` still auto-fires. Untrusted text interpolated into
+markup-enabled console output — provider/exception error text, and arbitrary
+`--bot` values — is escaped (`console.escape_markup`) so a stray Rich control
+token can't raise `MarkupError` (even on `--dry-run`).
 
 **Model complexity mapping**: The `models` section maps AI tool names to complexity-tiered model IDs (`easy`, `medium`, `complex`, `very_complex`). When `wade implement` is invoked, the service reads the `complexity:X` label from the issue (falling back to `## Complexity` in the body), maps it to the appropriate configured model, and passes it as `--model` to the AI tool — unless the user explicitly passed `--model` themselves.
 
