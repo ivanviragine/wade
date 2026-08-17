@@ -72,6 +72,7 @@ def _build_implement_cmd(
     effort: EffortLevel | None,
     permission_mode: PermissionMode,
     permission_mode_explicit: bool,
+    network_access: bool | None = None,
     chain_ids: list[str] | None = None,
 ) -> list[str]:
     """Build the ``wade implement`` child command for one batch issue.
@@ -92,6 +93,12 @@ def _build_implement_cmd(
       child's own config-driven autonomy downstream (e.g. a non-default
       ``ai.review_pr_comments.permission_mode``). An implicit mode is left for each
       child to re-resolve from the same config, reaching the same result.
+
+    ``network_access`` follows the same explicit-only rule: an explicit
+    ``--network`` (``True``) / ``--no-network`` (``False``) on the parent is
+    forwarded so children honor the caller's Codex sandbox network decision
+    instead of silently re-resolving from config. ``None`` (unset) is left for
+    each child to re-resolve, matching the implicit-permission-mode path.
     """
     cmd = ["wade", "implement", issue_id]
     if tool:
@@ -102,6 +109,10 @@ def _build_implement_cmd(
         cmd.extend(["--effort", effort.value])
     if permission_mode_explicit:
         cmd.extend(["--permission-mode", permission_mode.value])
+    if network_access is True:
+        cmd.append("--network")
+    elif network_access is False:
+        cmd.append("--no-network")
     if chain_ids:
         cmd.extend(["--chain", ",".join(chain_ids)])
     return cmd
@@ -119,6 +130,7 @@ def check_tracking_issue_and_batch(
     effort_explicit: bool,
     yolo: bool | None,
     permission_mode: str | None = None,
+    network_access: bool | None = None,
     cd_only: bool = False,
 ) -> bool | None:
     """Detect tracking issues and redirect to batch implementation.
@@ -155,6 +167,7 @@ def check_tracking_issue_and_batch(
             effort_explicit=effort_explicit,
             yolo=yolo,
             permission_mode=permission_mode,
+            network_access=network_access,
         )
     return False
 
@@ -171,6 +184,7 @@ def batch(
     effort_explicit: bool = False,
     yolo: bool | None = None,
     permission_mode: str | None = None,
+    network_access: bool | None = None,
 ) -> bool:
     """Start parallel implementation sessions for multiple issues.
 
@@ -264,6 +278,7 @@ def batch(
             effort=resolved_effort,
             permission_mode=resolved_permission_mode,
             permission_mode_explicit=permission_mode_explicit,
+            network_access=network_access,
             chain_ids=chain_ids,
         )
 

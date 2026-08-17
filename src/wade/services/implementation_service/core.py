@@ -36,6 +36,7 @@ from wade.services.ai_resolution import (
     resolve_ai_tool,
     resolve_effort,
     resolve_model,
+    resolve_network_access,
     resolve_permission_mode,
 )
 from wade.services.implementation_service._shared import (
@@ -427,6 +428,7 @@ def start(
     yolo: bool | None = None,
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
+    network_access: bool | None = None,
     base_branch: str | None = None,
 ) -> ImplementResult:
     """Start an implementation session on an issue.
@@ -504,6 +506,7 @@ def start(
             effort_explicit=effort_explicit,
             yolo=yolo,
             permission_mode=permission_mode,
+            network_access=network_access,
             cd_only=cd_only,
         )
         if batch_result is not None:
@@ -628,6 +631,11 @@ def start(
         resolved_permission_mode = resolve_permission_mode(
             permission_mode, yolo, config, "implement"
         )
+
+        # Resolve the Codex sandbox network policy (default disabled). Always
+        # passed explicitly at launch so ambient Codex config can never silently
+        # enable network for this wade-managed sandbox; only Codex acts on it.
+        resolved_network_access = resolve_network_access(network_access, config, "implement")
 
         # When resuming, override the resolved tool and skip interactive confirmation
         if resume_ai_tool:
@@ -917,7 +925,14 @@ def start(
             try:
                 detach_adapter = AbstractAITool.get(AIToolID(resolved_tool))
                 if resume_session_id:
-                    cmd = detach_adapter.build_resume_command(resume_session_id)
+                    # Re-resolve the sandbox context (worktree writable roots +
+                    # network pin) fresh at resume — it is a launch-time OS
+                    # concern, not persisted session state.
+                    cmd = detach_adapter.build_resume_command(
+                        resume_session_id,
+                        working_dir=worktree_path,
+                        network_access=resolved_network_access,
+                    )
                     if cmd is None:
                         console.warn(
                             f"{resolved_tool} does not support resume — starting new session"
@@ -938,6 +953,8 @@ def start(
                         initial_message=prompt,
                         effort=resolved_effort,
                         allowed_commands=config.permissions.allowed_commands,
+                        working_dir=worktree_path,
+                        network_access=resolved_network_access,
                         **permission_mode_launch_kwargs(resolved_permission_mode),
                     )
             except (ValueError, KeyError):
@@ -970,7 +987,13 @@ def start(
                 if resume_session_id:
                     from wade.utils.process import run_with_transcript
 
-                    resume_cmd = adapter.build_resume_command(resume_session_id)
+                    # Re-resolve the sandbox context fresh at resume (launch-time
+                    # OS concern, not persisted session state).
+                    resume_cmd = adapter.build_resume_command(
+                        resume_session_id,
+                        working_dir=worktree_path,
+                        network_access=resolved_network_access,
+                    )
                     if resume_cmd is None:
                         console.warn(
                             f"{resolved_tool} does not support resume — starting new session"
@@ -1005,6 +1028,7 @@ def start(
                         trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
                         effort=resolved_effort,
                         allowed_commands=config.permissions.allowed_commands,
+                        network_access=resolved_network_access,
                         **permission_mode_launch_kwargs(resolved_permission_mode),
                     )
 
@@ -1069,6 +1093,7 @@ def start(
                                 or permission_mode is not None
                                 or yolo is not None
                             ),
+                            network_access=network_access,
                         )
                     except Exception:
                         logger.exception("post_implementation_lifecycle.failed")

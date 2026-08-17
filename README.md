@@ -150,7 +150,7 @@ wade 42
 
 Short aliases: `wade p` (plan), `wade i <N>` (implement), `wade r <N>` (review pr-comments).
 
-Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level>`, `--permission-mode <tier>`, and `--yolo` to override configured defaults. `implement` also supports `--detach` (new terminal tab), `--cd` (print worktree path only), and `--base <branch>` (see below).
+Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level>`, `--permission-mode <tier>`, and `--yolo` to override configured defaults. `implement`, `review pr-comments`, and the `wade <N>` shorthand also accept `--network` / `--no-network` (see [Codex sandbox](#codex-sandbox--network-policy)); the shorthand forwards the flag to whichever session it routes to. `implement` additionally supports `--detach` (new terminal tab), `--cd` (print worktree path only), and `--base <branch>` (see below).
 
 ### Base branch
 
@@ -218,12 +218,59 @@ worst-case total that the pre-launch advisory announces. Set `ai.<command>.timeo
 the scaling and the retry** — the escape hatch when your terminal/orchestrator
 enforces a hard tool-timeout (set it just under that limit).
 
+### Codex sandbox & network policy
+
+When WADE launches [Codex](https://github.com/openai/codex) in a linked
+worktree, Codex runs under `--sandbox workspace-write`, which confines writes to
+the worktree tree. A worktree's git metadata, however, lives **outside** that
+tree (`<main>/.git/worktrees/<wt>` and `<main>/.git`), so without extra grants
+every git write — `git add`/commit, ref updates, stash, and `wade
+sync`/`done` — fails with `Unable to create …/index.lock` or `could not write
+index`. WADE fixes this automatically: it passes the worktree's absolute path to
+the launcher, which grants those out-of-root git-metadata dirs as sandbox
+writable roots (the OS sandbox otherwise stays fully enabled — this widens
+nothing else). This is transparent; no Codex config or manual approval is
+needed, and it only affects Codex (every other tool ignores it).
+
+**Filesystem writes and network access are independent.** The metadata grant
+above makes **local** git work (stage, commit, stash, ref updates, and the
+local legs of `sync`/`done`) succeed with **network off**. Only operations that
+reach the network — `git fetch` (hence `sync`) and `git push` (hence the network
+leg of `done`) — need network access, which is **disabled by default**. Enable
+it explicitly per invocation with `--network` on `wade implement` / `wade review
+pr-comments`, or in `.wade.yml`:
+
+```yaml
+ai:
+  network_access: true          # default for the interactive session commands
+  implement:
+    network_access: false       # per-command override wins
+```
+
+The policy applies to the **interactive session commands** — `wade implement`
+and `wade review pr-comments` — which are the ones that run `sync`/`done` and so
+may need `fetch`/`push`. The headless/analytical paths (`plan`, `deps`,
+`review plan`/`implementation`/`batch`) are **always** network-off by design:
+they never fetch or push, so `ai.network_access` does not apply to them and no
+flag enables it there. Precedence for the commands that honor it is
+`--network`/`--no-network` > `ai.<command>.network_access` >
+`ai.network_access` > **off**. WADE always passes an explicit pin, so an ambient
+`network_access = true` in your own Codex `config.toml` can never silently
+enable network for a WADE-managed sandbox. Enabling network never disables the
+sandbox and never changes approval-policy semantics.
+
+`wade implementation-session check` (and the review equivalent) verifies this is
+actually working: on top of `IN_WORKTREE` / `IN_MAIN_CHECKOUT` /
+`NOT_IN_GIT_REPO`, it now reports **`WORKTREE_GIT_BLOCKED`** (exit code **3**)
+when a worktree's git metadata is not writable — naming the blocked path — so a
+session launched without the correct grant is caught before it wastes work.
+
 The auto-launched **review session** — the one started when you pick **"Wait
 for reviews"** after `wade implementation-session done` and comments land —
 resolves its tool, model, effort, and autonomy tier from a dedicated
 `ai.review_pr_comments` section (the same keys every `ai.<command>` section
 accepts: `tool`, `model`, `effort`, `mode`, `permission_mode` / `yolo`,
-`enabled`, `timeout`):
+`network_access`, `enabled`, `timeout`):
 
 ```yaml
 ai:

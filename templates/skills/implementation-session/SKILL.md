@@ -42,6 +42,10 @@ Run `wade implementation-session check` as your **first action**:
 - `IN_MAIN_CHECKOUT` — **editing any source file is forbidden, even before
   committing**. Tell the human to create a worktree first via `wade implement`.
 - `NOT_IN_GIT_REPO` — you are not inside a git repository.
+- `WORKTREE_GIT_BLOCKED` — in a worktree, but its git metadata (the `blocked=…`
+  path) is **not writable**, so git writes and `wade sync`/`done` will fail. Do
+  not edit files; tell the human to relaunch the session (an AI sandbox started
+  without write access to the worktree's out-of-root git dirs).
 
 `wade implement` auto-syncs your branch with the base branch at startup. If that
 catchup — or the closing sync — reports a conflict or error, see

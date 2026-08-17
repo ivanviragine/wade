@@ -43,6 +43,7 @@ from wade.services.ai_resolution import (
     resolve_ai_tool,
     resolve_effort,
     resolve_model,
+    resolve_network_access,
     resolve_permission_mode,
 )
 from wade.services.implementation_service import (
@@ -581,6 +582,7 @@ def start(
     yolo: bool | None = None,
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
+    network_access: bool | None = None,
 ) -> bool:
     """Start a review-addressing session on an issue.
 
@@ -751,6 +753,7 @@ def start(
             effort_explicit=effort_explicit,
             permission_mode=permission_mode,
             permission_mode_explicit=permission_mode_explicit,
+            network_access=network_access,
         )
         return True
 
@@ -809,6 +812,9 @@ def start(
     resolved_permission_mode = resolve_permission_mode(
         effective_pm, yolo, config, "review_pr_comments"
     )
+    # Codex sandbox network policy (default disabled); always pinned explicitly
+    # at launch so ambient Codex config can never silently enable it.
+    resolved_network_access = resolve_network_access(network_access, config, "review_pr_comments")
 
     if not detach:
         (
@@ -877,6 +883,8 @@ def start(
                 trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
                 initial_message=prompt,
                 effort=resolved_effort,
+                working_dir=worktree_path,
+                network_access=resolved_network_access,
                 **permission_mode_launch_kwargs(resolved_permission_mode),
             )
         except (ValueError, KeyError):
@@ -907,6 +915,7 @@ def start(
                 transcript_path=transcript_path,
                 trusted_dirs=[str(worktree_path), tempfile.gettempdir()],
                 effort=resolved_effort,
+                network_access=resolved_network_access,
                 **permission_mode_launch_kwargs(resolved_permission_mode),
             )
             launch_completed = True
@@ -969,6 +978,7 @@ def start(
                 model_explicit=model_explicit,
                 permission_mode=resolved_permission_mode.value,
                 permission_mode_explicit=permission_mode_explicit,
+                network_access=network_access,
             )
     else:
         console.info(
@@ -992,6 +1002,7 @@ def start(
             model_explicit=model_explicit,
             permission_mode=permission_mode,
             permission_mode_explicit=permission_mode_explicit,
+            network_access=network_access,
         )
 
     return True
@@ -1069,11 +1080,16 @@ def _quiet_next_steps_prompt(
     effort_explicit: bool = False,
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
+    network_access: bool | None = None,
 ) -> None:
     """Shared next-steps menu for quiet PRs: keep polling, merge, or exit.
 
     Used both when ``wade review pr-comments <issue>`` finds nothing to address
     and when the polling loop hits the quiet timeout.
+
+    ``network_access`` carries the caller's explicit ``--network`` / ``--no-network``
+    (``None`` = unset) into a "keep polling → comments found" re-launch, so a later
+    session preserves that decision instead of silently re-resolving to config.
     """
     from wade.ui import prompts
 
@@ -1116,6 +1132,7 @@ def _quiet_next_steps_prompt(
                         effort_explicit=effort_explicit,
                         permission_mode=permission_mode,
                         permission_mode_explicit=permission_mode_explicit,
+                        network_access=network_access,
                     )
                 return
             elif outcome in (PollOutcome.QUIET_TIMEOUT, PollOutcome.REVIEW_COMPLETE):
@@ -1144,6 +1161,7 @@ def _post_review_lifecycle(
     model_explicit: bool = False,
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
+    network_access: bool | None = None,
 ) -> None:
     """Post-review lifecycle menu: Merge PR or wait for new reviews.
 
@@ -1153,6 +1171,11 @@ def _post_review_lifecycle(
     "wait for new reviews" re-launch the recursed ``start()`` re-resolves effort
     from ``ai.review_pr_comments.effort`` (config governs). That matches how a
     non-explicit ``permission_mode`` re-resolves under the gating in ``start``.
+
+    ``network_access`` *is* threaded (unlike effort): ``wade review pr-comments``
+    has a ``--network`` / ``--no-network`` flag, so an explicit pin must survive a
+    "wait for new reviews" re-launch rather than re-resolve to config. ``None``
+    (unset) still re-resolves, matching the non-explicit ``permission_mode`` path.
     """
     from wade.ui import prompts
 
@@ -1179,6 +1202,7 @@ def _post_review_lifecycle(
                     model_explicit=model_explicit,
                     permission_mode=permission_mode,
                     permission_mode_explicit=permission_mode_explicit,
+                    network_access=network_access,
                 )
         elif outcome in (PollOutcome.QUIET_TIMEOUT, PollOutcome.REVIEW_COMPLETE):
             _quiet_next_steps_prompt(
@@ -1195,6 +1219,7 @@ def _post_review_lifecycle(
                 model_explicit=model_explicit,
                 permission_mode=permission_mode,
                 permission_mode_explicit=permission_mode_explicit,
+                network_access=network_access,
             )
         return
 

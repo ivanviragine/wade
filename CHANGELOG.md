@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.47.0] — 2026-08-17
+
+### Features
+
+- adopt crossby 0.24.0 refreshed AI-tool model catalogs (#434) (3842332)
+
+## [v0.46.1] — 2026-08-16
+
+### Bug Fixes
+
+- propagate Codex worktree launch context through sessions (#429) (032daa2)
+
 ## [v0.45.10] — 2026-08-16
 
 ### Bug Fixes

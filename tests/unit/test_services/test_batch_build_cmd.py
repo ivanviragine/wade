@@ -111,3 +111,51 @@ class TestBuildImplementCmd:
         assert cmd[cmd.index("--effort") + 1] == "high"
         assert cmd[cmd.index("--chain") + 1] == "4,5"
         assert cmd[cmd.index("--permission-mode") + 1] == "accept-edits"
+
+    def test_forwards_explicit_network_on(self) -> None:
+        """``--network`` on the parent reaches children so they honor the pin
+        instead of re-resolving from config."""
+        cmd = _build_implement_cmd(
+            "42",
+            tool="codex",
+            model=None,
+            model_explicit=False,
+            effort=None,
+            permission_mode=PermissionMode.DEFAULT,
+            permission_mode_explicit=False,
+            network_access=True,
+        )
+        assert "--network" in cmd
+        assert "--no-network" not in cmd
+
+    def test_forwards_explicit_network_off(self) -> None:
+        """``--no-network`` is forwarded so a child cannot re-enable network via
+        a config that turns it on."""
+        cmd = _build_implement_cmd(
+            "42",
+            tool="codex",
+            model=None,
+            model_explicit=False,
+            effort=None,
+            permission_mode=PermissionMode.DEFAULT,
+            permission_mode_explicit=False,
+            network_access=False,
+        )
+        assert "--no-network" in cmd
+        assert "--network" not in cmd
+
+    def test_omits_network_flag_when_unset(self) -> None:
+        """Unset (``None``) forwards no flag — each child re-resolves from config,
+        mirroring the implicit-permission-mode path."""
+        cmd = _build_implement_cmd(
+            "42",
+            tool="codex",
+            model=None,
+            model_explicit=False,
+            effort=None,
+            permission_mode=PermissionMode.DEFAULT,
+            permission_mode_explicit=False,
+            network_access=None,
+        )
+        assert "--network" not in cmd
+        assert "--no-network" not in cmd

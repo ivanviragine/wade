@@ -97,6 +97,11 @@ class AICommandConfig(BaseModel):
     # back-compat alias; ``permission_mode`` wins when both are set.
     permission_mode: str | None = None
     yolo: bool | None = None
+    # Codex sandbox network policy for this command. ``None`` means "unset — fall
+    # through to the global default"; a bool pins it explicitly. Only Codex acts
+    # on it (it forwards to crossby's launch-time network pin); other tools
+    # capability-gate it upstream. See :meth:`ProjectConfig.get_network_access`.
+    network_access: bool | None = None
     enabled: bool | None = None
     timeout: int | None = None
 
@@ -125,6 +130,12 @@ class AIConfig(BaseModel):
     effort: str | None = None
     permission_mode: str | None = None
     yolo: bool | None = None
+    # Global Codex sandbox network policy (default disabled). ``None`` here is
+    # the unset state that :meth:`ProjectConfig.get_network_access` resolves to
+    # ``False`` — network is off unless a project opts in. Wade always passes an
+    # explicit pin at launch so ambient Codex ``config.toml`` can never silently
+    # enable network for a wade-managed sandbox.
+    network_access: bool | None = None
     plan: AICommandConfig = AICommandConfig()
     deps: AICommandConfig = AICommandConfig()
     implement: AICommandConfig = AICommandConfig()
@@ -346,3 +357,20 @@ class ProjectConfig(BaseModel):
         source of truth.
         """
         return self.get_permission_mode(command) is PermissionMode.YOLO
+
+    def get_network_access(self, command: str | None = None) -> bool:
+        """Resolve the Codex sandbox network policy for a command.
+
+        Fallback: command-specific ``ai.<command>.network_access`` → global
+        ``ai.network_access`` → ``False``. Network is **disabled by default**;
+        an explicit ``True`` at either level opts in. Only Codex honors this
+        (crossby capability-gates every other tool), and wade always forwards
+        the resolved bool so ambient Codex config can never silently flip it on.
+        """
+        if command:
+            cmd_config = getattr(self.ai, command, None)
+            if isinstance(cmd_config, AICommandConfig) and cmd_config.network_access is not None:
+                return cmd_config.network_access
+        if self.ai.network_access is not None:
+            return self.ai.network_access
+        return False

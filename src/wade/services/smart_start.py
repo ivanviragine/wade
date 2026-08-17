@@ -54,6 +54,7 @@ class SmartStartContext(BaseModel):
     effort_explicit: bool
     yolo: bool | None
     permission_mode: str | None = None
+    network_access: bool | None = None
 
     def run_implement(
         self,
@@ -79,6 +80,7 @@ class SmartStartContext(BaseModel):
             resume_ai_tool=resume_ai_tool,
             yolo=self.yolo,
             permission_mode=self.permission_mode,
+            network_access=self.network_access,
         )
         return result.success
 
@@ -104,11 +106,17 @@ def smart_start(
     effort_explicit: bool = False,
     yolo: bool | None = None,
     permission_mode: str | None = None,
+    network_access: bool | None = None,
 ) -> bool:
     """Detect PR state for an issue and route to the right command.
 
     If no open PR exists, falls through to implement.
     If an open PR exists, offers a contextual menu.
+
+    ``network_access`` carries the caller's explicit ``--network`` /
+    ``--no-network`` (``None`` = unset) into whichever route is chosen —
+    implement, batch, or review pr-comments — so the pin is not silently dropped
+    on the numeric ``wade <N>`` shorthand.
 
     Returns:
         True on success, False on failure.
@@ -131,6 +139,7 @@ def smart_start(
         effort_explicit=effort_explicit,
         yolo=yolo,
         permission_mode=permission_mode,
+        network_access=network_access,
     )
 
     config = load_config(project_root)
@@ -164,6 +173,7 @@ def smart_start(
         effort_explicit=ctx.effort_explicit,
         yolo=ctx.yolo,
         permission_mode=ctx.permission_mode,
+        network_access=ctx.network_access,
         cd_only=ctx.cd_only,
     )
     if batch_result is not None:
@@ -352,6 +362,7 @@ def _run_review_pr_comments(
             yolo=ctx.yolo,
             permission_mode=ctx.permission_mode,
             permission_mode_explicit=(ctx.permission_mode is not None),
+            network_access=ctx.network_access,
         )
     elif outcome == PollOutcome.QUIET_TIMEOUT:
         review_service._quiet_next_steps_prompt(
@@ -368,6 +379,7 @@ def _run_review_pr_comments(
             model_explicit=ctx.model_explicit,
             permission_mode=ctx.permission_mode,
             permission_mode_explicit=(ctx.permission_mode is not None),
+            network_access=ctx.network_access,
         )
         return True
     else:  # INTERRUPTED or PR_CLOSED
