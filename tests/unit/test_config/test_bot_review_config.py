@@ -151,3 +151,24 @@ class TestBotReviewValidation:
     def test_unsupported_top_level_bot_review_key_errors(self, tmp_path: Path) -> None:
         errors = _validate_config_file(_write(tmp_path, "version: 2\nbot_review:\n  bogus: 1\n"))
         assert any("bot_review.bogus" in e for e in errors)
+
+    def test_duplicate_bot_names_error(self, tmp_path: Path) -> None:
+        text = (
+            "version: 2\n"
+            "bot_review:\n"
+            "  bots:\n"
+            "    - {name: codex, trigger: a}\n"
+            "    - {name: codex, trigger: b}\n"
+        )
+        errors = _validate_config_file(_write(tmp_path, text))
+        assert any("duplicated" in e and "bot_review.bots[1].name" in e for e in errors)
+
+    def test_distinct_bot_names_ok(self, tmp_path: Path) -> None:
+        text = (
+            "version: 2\n"
+            "bot_review:\n"
+            "  bots:\n"
+            "    - {name: codex, trigger: a}\n"
+            "    - {name: bugbot, trigger: b}\n"
+        )
+        assert _validate_config_file(_write(tmp_path, text)) == []

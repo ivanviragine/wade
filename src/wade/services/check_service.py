@@ -931,8 +931,14 @@ def _validate_bot_review_section(bot_review: dict[str, Any], errors: list[str]) 
 
 
 def _validate_bot_review_bots(bots: list[Any], errors: list[str]) -> None:
-    """Validate each entry of ``bot_review.bots`` (#431)."""
+    """Validate each entry of ``bot_review.bots`` (#431).
+
+    Names must be unique: ``--bot`` selection and the per-bot auto-trigger marker
+    both key off ``name``, so a duplicate would silently collide (post twice /
+    share one marker).
+    """
     valid_bot_keys = {"name", "trigger", "enabled"}
+    seen_names: set[str] = set()
     for i, entry in enumerate(bots):
         if not isinstance(entry, dict):
             errors.append(f"bot_review.bots[{i}]: must be a mapping")
@@ -940,6 +946,12 @@ def _validate_bot_review_bots(bots: list[Any], errors: list[str]) -> None:
         name = entry.get("name")
         if not isinstance(name, str) or not name.strip():
             errors.append(f"bot_review.bots[{i}].name: must be a non-empty string")
+        else:
+            if name in seen_names:
+                errors.append(
+                    f"bot_review.bots[{i}].name: '{name}' is duplicated (names must be unique)"
+                )
+            seen_names.add(name)
         trigger = entry.get("trigger")
         if not isinstance(trigger, str) or not trigger.strip():
             errors.append(f"bot_review.bots[{i}].trigger: must be a non-empty string")
