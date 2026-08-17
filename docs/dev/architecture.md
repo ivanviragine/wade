@@ -690,6 +690,12 @@ done:                        # completion-gate toggles (all default true)
   require_conventional_title: true  # block a non-conventional issue title; sync it onto the PR (#392)
   pre_push_backstop: true
   max_review_passes: 2       # impl-session review→fix loop cap (#384); strict positive int
+bot_review:                  # external-bot review triggers (#431); fully defaulted
+  auto_trigger: false        # opt-in; when true, `done` posts triggers after it pushes
+  bots:
+    - { name: coderabbit, trigger: "@coderabbitai review", enabled: true }
+    - { name: codex,      trigger: "@codex review",        enabled: true }
+    - { name: bugbot,     trigger: "bugbot run",           enabled: true }
 ```
 
 **`done` section** (`DoneConfig`): completion-gate escape hatches, all default
@@ -698,6 +704,40 @@ can drift — the Pydantic model (`models/config.py`), the loader
 (`config/loader.py`), and the `check_service.py` validator. The `done` validator
 allowlist is **derived** from `DoneConfig.model_fields`, so a new field is
 accepted automatically.
+
+**`bot_review` section** (`BotReviewConfig` / `ReviewBotConfig`, #431): a
+**top-level** section (deliberately *not* under `ai.review_*`, which configure
+wade's own AI-tool reviews — these are external-bot trigger strings posted as PR
+comments). Fully model-defaulted: an absent section yields `auto_trigger: false`
+and the three built-in bots (CodeRabbit / Codex / Bugbot), produced by
+`Field(default_factory=_default_review_bots)` so no list instance is shared
+across `ProjectConfig`s. Because `_build_config` is hand-rolled per section, the
+model alone is not parsed — `_parse_bot_review` in `config/loader.py` is the
+explicit parse block (a present section overrides `auto_trigger`; an explicit
+`bots` list replaces the defaults wholesale, an omitted one keeps them). Bot
+`name` values are **model invariants** (`ReviewBotConfig`/`BotReviewConfig`
+validators, enforced on every construction path — not only `check-config`): they
+must be **unique** and a **safe identifier** (`[A-Za-z0-9._-]+`), since `--bot`
+selection and the per-bot auto-trigger marker (a `.wade/` filename component)
+both key off `name`. `check_service` mirrors both rules for friendly
+`check-config` messages. No config-version migration is needed. `wade review trigger <issue>`
+(`review_service.trigger_bot_reviews`) posts the enabled bots' triggers via
+`git_pr.comment_on_pr`, wrapping **each** post in its own try/except so one
+failing bot doesn't abort the rest, and returns a `BotTriggerReport`
+(`models/review.py`) whose `exit_code` the CLI uses. With `auto_trigger: true`,
+`implementation_service.done()` → `_done_via_pr` → `_auto_trigger_bot_reviews`
+fires the same triggers **after a successful push**, at most **once per bot per
+commit SHA** via per-bot `.wade/bot-triggered-<name>@<sha>` markers
+(`utils/markers.py:write_marker`, written only after that bot's post succeeds —
+so a failed bot retries, a succeeded one never re-posts). A failed marker *write*
+is warned rather than reported as durable success, since the comment is already
+posted but a later same-SHA `done` may re-post it. (The `name` safe-identifier
+invariant means a `/` can no longer break the marker path, so a `False` write now
+signals a genuine I/O failure.) The manual command never reads or writes those
+markers, so a same-SHA `done` still auto-fires. Untrusted text interpolated into
+markup-enabled console output — provider/exception error text, and arbitrary
+`--bot` values — is escaped (`console.escape_markup`) so a stray Rich control
+token can't raise `MarkupError` (even on `--dry-run`).
 
 **Model complexity mapping**: The `models` section maps AI tool names to complexity-tiered model IDs (`easy`, `medium`, `complex`, `very_complex`). When `wade implement` is invoked, the service reads the `complexity:X` label from the issue (falling back to `## Complexity` in the body), maps it to the appropriate configured model, and passes it as `--model` to the AI tool — unless the user explicitly passed `--model` themselves.
 

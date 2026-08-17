@@ -127,6 +127,7 @@ wade 42
 | `wade implement <N>` | Create worktree and start AI session for an issue |
 | `wade implement-batch <N> <M> ...` | Start parallel sessions for multiple issues *(beta)* |
 | `wade review pr-comments <N>` | Address PR review comments |
+| `wade review trigger <N>` | Post configured bot-review triggers on the issue's PR |
 | `wade review plan <file>` | AI-powered plan review |
 | `wade review implementation` | AI-powered code review |
 | `wade review batch <N>` | Coherence review across parallel implementation branches |
@@ -290,6 +291,55 @@ tool / model / autonomy fall back to the global `ai.*` defaults (`default_tool`,
 implicitly governing the review session should set `ai.review_pr_comments.tool`
 / `model` (or the global defaults). An explicit `wade implement --yolo` /
 `--permission-mode` still carries into the auto-launched review session.
+
+### Triggering external bot reviews
+
+External review bots (CodeRabbit, Codex, Bugbot) normally auto-review on push,
+but WADE can **post a trigger comment** to force a fresh review — after
+addressing comments, pushing fixups, or when a bot has paused. The workflow gains
+an explicit trigger phase: `implement → done → trigger bots → poll/address
+comments`.
+
+```bash
+wade review trigger <N>            # post every enabled bot's trigger to #N's PR
+wade review trigger <N> --bot codex --bot bugbot   # only a named subset
+wade review trigger <N> --dry-run  # print what would be posted, post nothing
+```
+
+Each bot reports its own status line — `posted` / `skipped (disabled)` /
+`failed: <error>` / `would post (dry-run)`. A failing post for one bot never
+stops the others; the command exits non-zero only when the PR can't be resolved,
+an unknown `--bot` name is given, or **every** attempted post fails. An explicit
+`--bot <name>` triggers that bot even if it is `enabled: false`.
+
+The bots and their trigger phrases live in an optional top-level `bot_review:`
+block. It is fully defaulted — a project with no block still triggers CodeRabbit,
+Codex, and Bugbot — and every field is overridable:
+
+```yaml
+bot_review:
+  auto_trigger: false            # opt-in; when true, `done` posts triggers after it pushes
+  bots:
+    - { name: coderabbit, trigger: "@coderabbitai review", enabled: true }
+    - { name: codex,      trigger: "@codex review",        enabled: true }
+    - { name: bugbot,     trigger: "bugbot run",           enabled: true }
+```
+
+Each bot's `name` keys both `--bot` selection and the per-bot auto-trigger
+marker (a file under `.wade/`), so it must be **unique** and a **safe
+identifier** — letters, digits, `.`, `_`, `-` only (no path separators or
+spaces). A duplicate or invalid name is rejected when the config loads, not only
+under `wade check-config`.
+
+With `auto_trigger: true`, both `wade implementation-session done` and `wade
+review-pr-comments-session done` post the enabled bots' triggers **after a
+successful push**, at most **once per bot per commit SHA** (repeated `done`/`sync`
+on the same commit post nothing further; a bot whose post failed retries). The
+manual `wade review trigger` command always fires and ignores those markers, so a
+same-SHA `done` still auto-triggers independently. `wade init` can enable
+`auto_trigger` (default off) and writes the block for you. Whatever a bot posts
+back is **untrusted context** — the review session's verify-before-fixing rule
+still applies.
 
 `wade plan --issue <N>` re-plans an existing issue. If the session produces a
 single plan file, it's attached to `#N` and the issue stays open. If the

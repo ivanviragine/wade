@@ -30,10 +30,11 @@ Matches the v2 .wade.yml format:
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 
 from crossby.models.config import ComplexityModelMapping as ComplexityModelMapping
-from pydantic import BaseModel, Field, StrictInt
+from pydantic import BaseModel, Field, StrictInt, field_validator, model_validator
 
 from wade.models.permission import PermissionMode, coerce_permission_mode
 from wade.models.session import MergeStrategy
@@ -254,6 +255,103 @@ class DoneConfig(BaseModel):
     max_review_passes: StrictInt = Field(default=2, gt=0)
 
 
+# A bot ``name`` is a CLI-selectable identifier (`--bot <name>`) that is also
+# interpolated into the ``.wade/bot-triggered-<name>@<sha>`` marker filename, so
+# it must stay a safe path component: letters, digits, ``.``, ``_``, ``-`` only.
+# This keeps marker files confined to ``.wade/`` (no separators / traversal) and
+# rules out Rich-markup control tokens in the name.
+_SAFE_BOT_NAME_RE = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def is_valid_bot_name(name: str) -> bool:
+    """True if *name* is a safe bot identifier (see :data:`_SAFE_BOT_NAME_RE`)."""
+    return bool(name) and _SAFE_BOT_NAME_RE.fullmatch(name) is not None
+
+
+class ReviewBotConfig(BaseModel):
+    """One external review bot and the PR comment that triggers it (#431).
+
+    ``name`` is the stable identifier used by ``--bot`` selection and the
+    per-bot auto-trigger marker; ``trigger`` is the exact comment body posted to
+    the PR to (re-)invoke that bot (e.g. ``"@coderabbitai review"``). ``enabled``
+    gates the default (no ``--bot``) trigger path; an explicit ``--bot <name>``
+    overrides it.
+
+    ``name`` is constrained to a safe identifier (``[A-Za-z0-9._-]+``): it becomes
+    a ``.wade/`` marker-file component, so path separators / traversal are
+    rejected to keep markers confined to that directory (and, as a side effect,
+    a name can never carry a Rich-markup control token).
+    """
+
+    name: str
+    trigger: str
+    enabled: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("bot_review.bots entry requires a non-empty string `name`")
+        if not is_valid_bot_name(v):
+            raise ValueError(
+                f"bot_review.bots name '{v}' is invalid — use only letters, digits, "
+                "'.', '_', '-' (no path separators, spaces, or other characters)"
+            )
+        return v
+
+
+def _default_review_bots() -> list[ReviewBotConfig]:
+    """The built-in bot-review triggers shipped as defaults (#431).
+
+    Produced by a factory (not a shared module-level list) so every
+    :class:`BotReviewConfig` gets its own instances — a plain mutable default
+    would share one list across all ``ProjectConfig`` instances (a Pydantic
+    footgun). CodeRabbit / Codex / Bugbot ship enabled so the feature works out
+    of the box even when ``.wade.yml`` has no ``bot_review:`` section.
+    """
+    return [
+        ReviewBotConfig(name="coderabbit", trigger="@coderabbitai review"),
+        ReviewBotConfig(name="codex", trigger="@codex review"),
+        ReviewBotConfig(name="bugbot", trigger="bugbot run"),
+    ]
+
+
+class BotReviewConfig(BaseModel):
+    """``bot_review`` — external-bot review-trigger configuration (#431).
+
+    Deliberately distinct from the ``ai.review_*`` blocks (``review_plan``,
+    ``review_implementation``, ``review_batch``, ``review_pr_comments``): those
+    configure wade's own AI-tool reviews, whereas these are external-bot trigger
+    strings posted as PR comments. Keeping the name separate stops the two from
+    reading confusingly in ``.wade.yml``.
+
+    ``auto_trigger`` is opt-in: when ``True``, ``done`` posts the enabled bots'
+    triggers after a successful push. The three built-in bots ship as defaults
+    (via :func:`_default_review_bots`) so ``wade review trigger`` works with no
+    config; every field is overridable.
+
+    Bot ``name`` values must be unique — ``--bot`` selection and the per-bot
+    auto-trigger marker both key off ``name``, so a duplicate would silently
+    collide (post twice / share one marker). Enforcing it here makes the invariant
+    hold for every construction path (``load_config`` and direct instantiation
+    alike), not only under ``wade check-config``.
+    """
+
+    auto_trigger: bool = False
+    bots: list[ReviewBotConfig] = Field(default_factory=_default_review_bots)
+
+    @model_validator(mode="after")
+    def _validate_unique_names(self) -> BotReviewConfig:
+        seen: set[str] = set()
+        for bot in self.bots:
+            if bot.name in seen:
+                raise ValueError(
+                    f"bot_review.bots: duplicate name '{bot.name}' (names must be unique)"
+                )
+            seen.add(bot.name)
+        return self
+
+
 class ProjectSettings(BaseModel):
     """Core project settings section."""
 
@@ -281,6 +379,7 @@ class ProjectConfig(BaseModel):
     hooks: HooksConfig = HooksConfig()
     knowledge: KnowledgeConfig = KnowledgeConfig()
     done: DoneConfig = DoneConfig()
+    bot_review: BotReviewConfig = Field(default_factory=BotReviewConfig)
 
     # Resolved values (set after loading, not in YAML)
     config_path: str | None = Field(default=None, exclude=True)

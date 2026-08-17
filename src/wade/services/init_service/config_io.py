@@ -17,6 +17,7 @@ from crossby.config.defaults import get_defaults
 from wade.config.loader import ConfigError, ensure_yaml_mapping
 from wade.models.config import (
     AI_COMMAND_NAMES,
+    BotReviewConfig,
     ComplexityModelMapping,
     KnowledgeConfig,
     ProjectSettings,
@@ -175,6 +176,19 @@ def _tier_yaml_value(model: str | None, effort: str | None) -> dict[str, Any] | 
     return {"model": model, "effort": effort or None}
 
 
+def _bot_review_config_dict(auto_trigger: bool) -> dict[str, Any]:
+    """Build the ``bot_review`` YAML block: chosen auto_trigger + default bots (#431).
+
+    The bots list is derived from :class:`BotReviewConfig`'s model defaults so the
+    written block always matches the built-in CodeRabbit/Codex/Bugbot defaults —
+    one source of truth, discoverable and fully overridable in ``.wade.yml``.
+    """
+    return {
+        "auto_trigger": bool(auto_trigger),
+        "bots": [bot.model_dump() for bot in BotReviewConfig().bots],
+    }
+
+
 def _write_config(
     config_path: Path,
     ai_tool: str | None,
@@ -188,6 +202,7 @@ def _write_config(
     hooks_setup: dict[str, Any] | None = None,
     provider_setup: dict[str, Any] | None = None,
     knowledge_setup: dict[str, Any] | None = None,
+    bot_review_setup: dict[str, Any] | None = None,
 ) -> None:
     """Write a fresh .wade.yml config file."""
     config_dict: dict[str, Any] = {"version": 2}
@@ -283,6 +298,14 @@ def _write_config(
             "path": knowledge_setup.get("path", "KNOWLEDGE.md"),
         }
 
+    # Build bot_review section (#431). Always written when the wizard ran so the
+    # feature is discoverable and every field overridable, even though the models
+    # default it safely when the block is absent.
+    if bot_review_setup is not None:
+        config_dict["bot_review"] = _bot_review_config_dict(
+            bool(bot_review_setup.get("auto_trigger"))
+        )
+
     config_path.write_text(
         yaml.dump(config_dict, default_flow_style=False, sort_keys=False),
         encoding="utf-8",
@@ -303,6 +326,7 @@ def _patch_config(
     force: bool = False,
     provider_setup: dict[str, Any] | None = None,
     knowledge_setup: dict[str, Any] | None = None,
+    bot_review_setup: dict[str, Any] | None = None,
 ) -> None:
     """Patch values into an existing config.
 
@@ -533,6 +557,24 @@ def _patch_config(
             knowledge["path"] = k_path
             changed = True
         raw["knowledge"] = knowledge
+
+    # Patch bot_review section (#431). Set auto_trigger from the wizard (force
+    # overwrites; otherwise only fill when absent) and seed the default bots list
+    # only when the key is entirely absent, so a re-init makes a fresh block
+    # discoverable/overridable. A user-customized bots list — including a
+    # deliberate empty ``bots: []`` (disable all triggers) — is never clobbered;
+    # `"bots" not in section` (not a falsy check) is what preserves the empty list.
+    if bot_review_setup is not None:
+        existing_bot_review = raw.get("bot_review")
+        section = existing_bot_review if isinstance(existing_bot_review, dict) else {}
+        auto_trigger = bool(bot_review_setup.get("auto_trigger"))
+        if (force or "auto_trigger" not in section) and section.get("auto_trigger") != auto_trigger:
+            section["auto_trigger"] = auto_trigger
+            changed = True
+        if "bots" not in section:
+            section["bots"] = [bot.model_dump() for bot in BotReviewConfig().bots]
+            changed = True
+        raw["bot_review"] = section
 
     if changed:
         config_path.write_text(

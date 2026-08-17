@@ -548,3 +548,38 @@ class TestReviewCliEffortFlag:
         mock_delegate.assert_called_once()
         request = mock_delegate.call_args[0][0]
         assert request.effort == "high"
+
+
+# ---------------------------------------------------------------------------
+# Trigger (bot review triggers, #431)
+# ---------------------------------------------------------------------------
+
+
+class TestReviewTriggerCli:
+    @patch("wade.services.review_service.trigger_bot_reviews")
+    def test_dispatches_target_to_service(self, mock_trigger: MagicMock) -> None:
+        mock_trigger.return_value = MagicMock(exit_code=0)
+        result = runner.invoke(app, ["review", "trigger", "42"])
+        assert result.exit_code == 0
+        mock_trigger.assert_called_once()
+        _, kwargs = mock_trigger.call_args
+        assert mock_trigger.call_args.args[0] == "42"
+        assert kwargs["selected_bots"] is None
+        assert kwargs["dry_run"] is False
+
+    @patch("wade.services.review_service.trigger_bot_reviews")
+    def test_forwards_bot_and_dry_run_flags(self, mock_trigger: MagicMock) -> None:
+        mock_trigger.return_value = MagicMock(exit_code=0)
+        result = runner.invoke(
+            app, ["review", "trigger", "42", "--bot", "codex", "--bot", "bugbot", "--dry-run"]
+        )
+        assert result.exit_code == 0
+        _, kwargs = mock_trigger.call_args
+        assert kwargs["selected_bots"] == ["codex", "bugbot"]
+        assert kwargs["dry_run"] is True
+
+    @patch("wade.services.review_service.trigger_bot_reviews")
+    def test_propagates_nonzero_exit_code(self, mock_trigger: MagicMock) -> None:
+        mock_trigger.return_value = MagicMock(exit_code=1)
+        result = runner.invoke(app, ["review", "trigger", "42"])
+        assert result.exit_code == 1

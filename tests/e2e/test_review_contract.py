@@ -734,6 +734,65 @@ class TestReviewBatchCommand:
         assert any("Tracking issue: #80" in token for token in argv)
 
 
+class TestReviewTriggerCommand:
+    """Deterministic contracts for `wade review trigger` (#431)."""
+
+    def test_trigger_posts_all_enabled_bots(self, e2e_repo: Path, mock_gh_cli: MockGhCli) -> None:
+        """With the default bot_review config, every bot's trigger is posted."""
+        issue_number = 90
+        _worktree_path, pr_number = _bootstrap_review_target(
+            e2e_repo=e2e_repo,
+            mock_gh_cli=mock_gh_cli,
+            issue_number=issue_number,
+            issue_title="Trigger all bots",
+            branch_name="feat/90-trigger-all-bots",
+        )
+
+        result = _run(["review", "trigger", str(issue_number)], cwd=e2e_repo)
+
+        assert result.returncode == 0
+        assert _count_gh_calls(mock_gh_cli["log_file"], ["pr", "comment", pr_number]) == 3
+        for body in ("@coderabbitai review", "@codex review", "bugbot run"):
+            _assert_gh_called_with(
+                mock_gh_cli["log_file"], ["pr", "comment", pr_number, "--body", body]
+            )
+
+    def test_trigger_dry_run_posts_nothing(self, e2e_repo: Path, mock_gh_cli: MockGhCli) -> None:
+        issue_number = 91
+        _bootstrap_review_target(
+            e2e_repo=e2e_repo,
+            mock_gh_cli=mock_gh_cli,
+            issue_number=issue_number,
+            issue_title="Trigger dry run",
+            branch_name="feat/91-trigger-dry-run",
+        )
+
+        result = _run(["review", "trigger", str(issue_number), "--dry-run"], cwd=e2e_repo)
+
+        assert result.returncode == 0
+        assert _count_gh_calls(mock_gh_cli["log_file"], ["pr", "comment"]) == 0
+
+    def test_trigger_bot_subset_posts_only_named(
+        self, e2e_repo: Path, mock_gh_cli: MockGhCli
+    ) -> None:
+        issue_number = 92
+        _worktree_path, pr_number = _bootstrap_review_target(
+            e2e_repo=e2e_repo,
+            mock_gh_cli=mock_gh_cli,
+            issue_number=issue_number,
+            issue_title="Trigger subset",
+            branch_name="feat/92-trigger-subset",
+        )
+
+        result = _run(["review", "trigger", str(issue_number), "--bot", "codex"], cwd=e2e_repo)
+
+        assert result.returncode == 0
+        assert _count_gh_calls(mock_gh_cli["log_file"], ["pr", "comment", pr_number]) == 1
+        _assert_gh_called_with(
+            mock_gh_cli["log_file"], ["pr", "comment", pr_number, "--body", "@codex review"]
+        )
+
+
 class TestReviewPrCommentsSessionCommands:
     """Test review-pr-comments-session deterministic contracts."""
 
