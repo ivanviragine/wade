@@ -149,7 +149,7 @@ or they are not installed. Review needs its **own** `reference/recovery.md` and
 
 `tests/integration/test_skill_context_budget.py` pins the combined size of the
 session-start payload — launch prompt + rendered `SKILL.md` (partials expanded,
-reviews enabled) — under a fixed char ceiling (`BUDGET_CHARS`, currently **8,400**)
+reviews enabled) — under a fixed char ceiling (`BUDGET_CHARS`, currently **10,500**)
 for each of implement / plan / review, so the budget cannot silently regress. The
 unit is **chars** (a deliberate proxy for tokens; measured token savings differ
 slightly). If a skill edit pushes a session over budget, move the added detail

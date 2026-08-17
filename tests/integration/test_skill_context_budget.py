@@ -44,7 +44,17 @@ from wade.skills.installer import (
 # the agent how to react when a worktree's git metadata is not writable under a
 # Codex sandbox. The note was trimmed to its minimum first; this bump is the
 # explicit, reviewed adjustment the guard is designed to force.
-BUDGET_CHARS = 9400
+# Bumped 9400 -> 10500 for #435: the shared `{user_interaction_prompt}` partial
+# gained three load-bearing communication rules — a sharpened terse/nudge-vs-noise
+# split, a broadened "always state the recommended action" clause (previously
+# scoped to formal decisions only), and a new session-completion vocabulary rule
+# (never signal complete/done/safe-to-exit before the `done` gate succeeds; after
+# it, pair "complete" only with an imperative "exit"). `{doc_update_step}` also
+# gained a one-line "state the outcome in one line" nudge. The text was written at
+# minimal length and offset by trimming the "Present results" narration; this bump
+# is the explicit, reviewed adjustment the guard is designed to force, and it
+# still catches *silent* regressions.
+BUDGET_CHARS = 10500
 
 # (session label, launch prompt template, phase skill dir name)
 _SESSIONS = [

@@ -27,9 +27,10 @@ change makes wrong, including in-repo templates and generated-input sources.
 
 ## Stating the outcome
 
-The step is not complete until you say, in your own message, either:
+State it in **one terse line**, not a paragraph or a step recap. The step is not
+complete until you say, in your own message, either:
 
-- the documentation files you updated, or
+- the documentation files you updated (e.g. `Docs: README, AGENTS.md`), or
 - "no doc changes needed" **plus** the reason — not user-facing, no change to
   architecture, commands, or conventions.
 

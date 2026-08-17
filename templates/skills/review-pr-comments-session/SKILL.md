@@ -20,7 +20,7 @@ start.
 ## Talking to the user
 
 {user_interaction_prompt}
-- After presenting results and state: "Want any further changes, or is the session complete?"
+- After `done` succeeds: "Session complete — PR updated; exit now. Any further changes first?"
 - If a review comment is ambiguous: "How should I handle this comment?"
 
 ## Never use `gh issue create`
@@ -169,9 +169,9 @@ in one flag — it is a quality layer, not a boundary; do not route around it.
 
 **Step 5 — Present results** (per the **Communication style** rule): the
 actionable handles — PR number/URL, threads resolved and remaining — plus what's
-next (wade keeps monitoring the PR; reviewers are notified of your changes). Then
-ask (native question component): "Want any further changes, or is the session
-complete?" — apply and repeat Steps 1–5 if so, else suggest the user exits.
+next (reviewers are notified of your changes). `done` has succeeded — tell the
+user plainly that the session is complete and to exit now, offering one escape:
+"any further changes first?" If so, apply and repeat Steps 1–5.
 
 ## Skills reference
 
