@@ -68,7 +68,7 @@ git checkout feat/issue-42-user-auth
 git merge main          # resolve conflicts yourself, if any
 git push
 gh pr create --title "User Auth (#42)" --body "..."   # write description manually
-# don't forget to link the issue, clean up the branch...
+# don't forget to link the task, clean up the branch...
 ```
 
 *With* WADE (the AI handles all of this):
