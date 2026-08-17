@@ -325,6 +325,10 @@ bot_review:
     - { name: bugbot,     trigger: "bugbot run",           enabled: true }
 ```
 
+Each bot's `name` must be unique — it keys both `--bot` selection and the
+per-bot auto-trigger marker — so a duplicate name is rejected when the config
+loads, not only under `wade check-config`.
+
 With `auto_trigger: true`, both `wade implementation-session done` and `wade
 review-pr-comments-session done` post the enabled bots' triggers **after a
 successful push**, at most **once per bot per commit SHA** (repeated `done`/`sync`
