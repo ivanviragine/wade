@@ -89,6 +89,8 @@ src/wade/
 │   ├── base.py          # AbstractTaskProvider
 │   ├── github.py        # GitHubProvider (gh CLI subprocess)
 │   ├── clickup.py       # ClickUpProvider (REST API)
+│   ├── markdown.py      # MarkdownIssueProvider (single central task file)
+│   ├── _pr_delegate.py  # GitHubPRDelegateMixin (routes PR/review APIs through gh)
 │   └── registry.py      # Provider registry (register_provider / get_provider)
 ├── git/                 # Git operations (all subprocess)
 │   ├── repo.py          # Repo introspection
@@ -132,14 +134,14 @@ src/wade/
 > per-worktree at `.wade/githooks/pre-push` (see *Completion Gates & the
 > `done`-marker* below).
 >
-> **The `db/` package is unused scaffolding** — deliberately omitted from the
-> tree above. No code path under `services/` or `cli/` writes
-> session/worktree/PR rows, so its sole reader
-> (`implementation_service/cleanup._preserve_session_data`, a single
-> `SessionRepository.get_by_worktree_path` call) always gets an empty result and
-> falls back to directory-presence detection. Real persisted state lives in
-> GitHub (PR/issue body markers, labels) and worktree files, not SQLite. The
-> `db/` code still exists but is inert; removal is tracked as **#357 C5**.
+> **There is no `db/` package** (hence its absence from the tree above). Earlier
+> wade versions scaffolded a SQLite layer, but no code path under `services/` or
+> `cli/` ever wrote session/worktree/PR rows. The package and its sole reader — a
+> `SessionRepository.get_by_worktree_path` lookup in
+> `implementation_service/cleanup._preserve_session_data`, which always returned
+> empty — were removed in **#357 C5**; that function now detects the AI tool by
+> worktree directory presence alone. Real persisted state lives in GitHub
+> (PR/issue body markers, labels) and worktree files — never SQLite.
 
 ## AI Tool Layer (external: crossby)
 
@@ -496,7 +498,7 @@ session from starting.
   omitted if absent) and points at the phase's `done` command and the gates it
   enforces; for plan (a detached worktree with no `PLAN.md` at the root) it points
   at writing a valid `PLAN*.md` then `plan-session done .wade/plans`, plus — for a
-  `wade plan --issue-id` session — the issue ref parsed from `.wade/plan-issue.md`
+  `wade plan --issue` session — the issue ref parsed from `.wade/plan-issue.md`
   (which `plan_service` persists so a resumed/compacted plan session re-injects
   *which* issue it is planning; omitted for a from-scratch plan). Import-light and
   stdout-safe — it reads the issue-ref file with a plain file read, never the `wade.git`
@@ -629,11 +631,11 @@ boundary.
 
 ## Command Dispatch
 
-`src/wade/cli/main.py` is the root Typer application. It registers subcommand groups (`task`, `worktree`, `plan-session`, `implementation-session`, `review-pr-comments-session`, `review`) and admin commands (`init`, `update`, `deinit`, `check-config`, `shell-init`). The `tasks` alias is registered as a hidden Typer group pointing to the same `task_app`. The `wade` entry point (defined in `pyproject.toml` as `wade.cli.main:cli_main`) invokes the root app.
+`src/wade/cli/main.py` is the root Typer application. It registers subcommand groups (`task`, `worktree`, `plan-session`, `implementation-session`, `review-pr-comments-session`, `review`, `knowledge`) and admin commands (`init`, `update`, `deinit`, `check-config`, `shell-init`). The `tasks` alias (for `task`) and `address-reviews-session` (for `review-pr-comments-session`) are hidden Typer groups pointing at the same apps, and `hook` is a hidden write-guard entry point invoked by AI tools. The `wade` entry point (defined in `pyproject.toml` as `wade.cli.main:cli_main`) invokes the root app.
 
 CLI modules are **thin dispatch layers** — they parse flags via Typer, then call service methods. Business logic lives in `services/`, not in `cli/`.
 
-**Interactive menus**: `wade task` and `wade worktree` with no subcommand show interactive menus. `wade task create` prompts interactively for title and body. Top-level commands `plan`, `implement`, `implement-batch`, and `cd` are registered directly on the root app. The `review` subcommand group provides `plan`, `implementation`, `pr-comments`, and `batch` commands. Hidden short aliases `p`, `i`, and `r` map to `plan`, `implement`, and `review pr-comments` respectively. The numeric shorthand `wade <N>` is rewritten to the hidden `smart-start` command in `cli_main()`, which detects PR state and routes to implement or review pr-comments.
+**Interactive menus**: `wade task` and `wade worktree` with no subcommand show interactive menus. `wade task create` prompts interactively for title and body. Top-level commands `plan`, `implement`, `implement-batch`, and `cd` are registered directly on the root app (alongside the hidden `smart-start` and `address-reviews` commands). The `review` subcommand group provides `plan`, `implementation`, `pr-comments`, `trigger`, and `batch` commands. Hidden short aliases `p`, `i`, and `r` map to `plan`, `implement`, and `review pr-comments` respectively. The numeric shorthand `wade <N>` is rewritten to the hidden `smart-start` command in `cli_main()`, which detects PR state and routes to implement or review pr-comments.
 
 **Shell integration**: `wade shell-init` outputs a shell function wrapper for `eval "$(wade shell-init)"` that intercepts `wade cd <n>` and `wade worktree cd <n>` to perform a real `cd` in the caller's shell.
 
@@ -802,15 +804,61 @@ Each AI tool adapter must implement the abstract method `capabilities()` (binary
 
 **Deps delegation modes**: `deps_service.py` runs analysis via the generic delegation infrastructure (`delegation_service.py`). The default mode is `headless`; it can be overridden to `interactive` or `prompt` via the `ai.deps.mode` config key or the `--mode` CLI flag. There is no automatic fallback between modes — the resolved mode is used directly. Prompt mode prints the raw dependency-analysis prompt with no AI-tool requirement or worktree bootstrap. Headless and interactive modes perform the real AI launch path and are the only modes that create the temporary analysis worktree.
 
-## Issue Detection (Snapshot/Diff Pattern)
+## Planning Lifecycle (plan-file contract)
 
-`wade plan` uses a snapshot/diff pattern to detect issues created during an AI session (Path A — fallback):
+`wade plan` (`services/plan_service.py`) is a **two-phase** flow. The AI **never
+creates issues** — it writes one `PLAN*.md` per issue to a plan directory, and
+after it exits **wade** validates those files and persists the issues and draft
+PRs itself. This is a deliberate determinism boundary (see *Determinism via
+Services*): the agent authors plan content; code decides what becomes an issue.
 
-1. **Before AI** — Snapshot all open issue numbers with the configured label
-2. **AI runs** — The agent creates issues via `wade task create` from within the AI CLI
-3. **After AI** — Compare current issue numbers against the pre-snapshot, returning only newly created ones
+**Phase 1 — generate plan files.** In a git repo the service creates a
+detached-HEAD **planning worktree** (`git/worktree.py:create_detached_worktree`),
+bootstraps it (`PLAN_SKILLS`, `plan_mode=True`, `SessionPhase.PLAN`), and points
+the AI at `<worktree>/.wade/plans/`. Isolating outputs to that subdirectory keeps
+ordinary repo markdown (e.g. `README.md`) from being misread as a generated plan.
+Outside a git repo it falls back to a `tempfile.mkdtemp(prefix="wade-plan-")`
+temp dir and skips draft-PR creation. The launch prompt (`plan-session.md`) tells
+the agent to write a plan file per issue and to **not** create the issues.
 
-This avoids requiring the AI to report back which issues it created — the service detects them deterministically. When no issues are detected (Path B), the service reads plan files from the session temp dir and creates lightweight issues + draft PRs.
+**Phase 2 — validate, then persist.** After the AI exits, wade discovers the
+title-parseable files (`validate_plan_files`) and runs the **strict**
+`_select_valid_plans` gate (`utils/plan_validation.py:validate_plan_dir`): every
+plan must carry a `## Complexity` and a conventional-commit title prefix. Invalid
+files are surfaced loudly and skipped — a TTY run confirms before proceeding with
+the valid subset; a non-TTY / `yolo` run proceeds after the warning. For a
+from-scratch plan, `_create_issues_from_plans` then, **per valid plan file**:
+
+1. Creates a **lightweight task** (title + a brief context excerpt) via the
+   configured provider's `create_task` — this may be a **non-GitHub** provider.
+2. Adds the `complexity:X` label.
+3. Bootstraps a **draft PR** carrying the full plan body (`bootstrap_draft_pr`),
+   then appends the PR link to the task body. Draft-PR / review APIs always flow
+   through GitHub (`gh`) regardless of the task provider: non-GitHub providers
+   compose `GitHubPRDelegateMixin` (`providers/_pr_delegate.py`), so task CRUD
+   uses the provider's own backend while PR/review operations delegate to `gh`.
+
+**`--issue <id>` (attach / supersede).** With an issue id, the session is
+pre-loaded with that issue's context (and the issue heading is persisted to
+`.wade/plan-issue.md` so a resumed/compacted plan session can re-inject it). A
+**single** valid plan is attached to the existing issue via a draft PR
+(`_attach_plan_to_existing_issue`, preserving the original body and appending the
+PR link); **multiple** plans **supersede** it — one new issue per plan, then the
+original is commented on and closed as *not planned*
+(`_supersede_issue_with_plans`), but only if every plan became an issue (a
+partial split leaves the original open).
+
+**Partial-plan preservation.** When the strict gate rejects a batch (all invalid,
+or the user aborted a partial run) or a draft PR can't be persisted (e.g. an
+unresolvable declared base), the generated `PLAN*.md` are salvaged to a stable
+temp dir (`_preserve_generated_plans`) instead of being discarded with the
+worktree — a one-line fix (a missing `## Complexity`) shouldn't force a full
+re-plan. On the success paths the planning worktree/temp dir is cleaned up.
+
+**Automatic dependency analysis.** When a run produces **2+** issues,
+`_finalize_issues` runs `deps_service.analyze_deps` over them and applies any
+dependency edges it finds (reusing the planning worktree). A single-issue run
+instead offers to start implementing it immediately.
 
 ## Merge Strategy
 

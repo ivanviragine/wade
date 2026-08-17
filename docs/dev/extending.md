@@ -18,12 +18,14 @@ AI tool adapters (`AbstractAITool` subclasses, using `__init_subclass__` auto-re
 
 ## Adding a New Provider
 
-The provider system uses `AbstractTaskProvider` ABC (`src/wade/providers/base.py`) with `GitHubProvider` and `ClickUpProvider` as current implementations. Unlike AI tools (which are external, via crossby), providers are local to wade and use a registry pattern. To add a new provider (e.g., Linear, Jira):
+The provider system uses `AbstractTaskProvider` ABC (`src/wade/providers/base.py`) with `GitHubProvider`, `ClickUpProvider`, and `MarkdownIssueProvider` as current implementations. Unlike AI tools (which are external, via crossby), providers are local to wade and use a registry pattern. To add a new provider (e.g., Linear, Jira):
 
 1. Create `src/wade/providers/<provider_name>.py`
 2. Implement all abstract methods from `AbstractTaskProvider`
 3. Add the provider ID to `ProviderID` enum in `models/config.py`
 4. Register the provider in `providers/__init__.py` via `register_provider(ProviderID.YOUR_ID, YourProvider)` (use a lazy loader for optional dependencies)
+
+Non-GitHub providers (ClickUp, Markdown) still need PRs and PR-review APIs, which are GitHub-only. They get these by composing `GitHubPRDelegateMixin` (`providers/_pr_delegate.py`), which routes PR/review calls through `gh` while task CRUD stays on the provider's own backend.
 
 ## Version Bumping
 
