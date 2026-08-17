@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.48.0] — 2026-08-17
+
+### Features
+
+- add config-driven bot-review trigger command with optional auto-trigger (#432) (fc2ff0d)
+
 ## [v0.47.0] — 2026-08-17
 
 ### Features
