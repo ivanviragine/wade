@@ -992,6 +992,22 @@ class TestPatchConfig:
         assert config["bot_review"]["auto_trigger"] is True
         assert [b["name"] for b in config["bot_review"]["bots"]] == ["mybot"]
 
+    def test_bot_review_setup_preserves_explicit_empty_bots(self, tmp_path: Path) -> None:
+        """A deliberate ``bots: []`` (disable all triggers) survives a re-init (#431)."""
+        config_path = tmp_path / ".wade.yml"
+        config_path.write_text("version: 2\nbot_review:\n  auto_trigger: false\n  bots: []\n")
+        _patch_config(
+            config_path,
+            "claude",
+            ComplexityModelMapping(),
+            force=True,
+            bot_review_setup={"auto_trigger": True},
+        )
+        config = yaml.safe_load(config_path.read_text())
+        # auto_trigger is patched, but the empty bots list is NOT re-seeded.
+        assert config["bot_review"]["auto_trigger"] is True
+        assert config["bot_review"]["bots"] == []
+
     def test_no_force_preserves_ai_tool(self, tmp_path: Path) -> None:
         config_path = tmp_path / ".wade.yml"
         config_path.write_text("version: 2\nai:\n  default_tool: antigravity-cli\n")

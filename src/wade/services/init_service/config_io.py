@@ -559,9 +559,11 @@ def _patch_config(
         raw["knowledge"] = knowledge
 
     # Patch bot_review section (#431). Set auto_trigger from the wizard (force
-    # overwrites; otherwise only fill when absent) and ensure the default bots
-    # list exists so a re-init makes the block discoverable/overridable. A
-    # user-customized bots list is never clobbered.
+    # overwrites; otherwise only fill when absent) and seed the default bots list
+    # only when the key is entirely absent, so a re-init makes a fresh block
+    # discoverable/overridable. A user-customized bots list — including a
+    # deliberate empty ``bots: []`` (disable all triggers) — is never clobbered;
+    # `"bots" not in section` (not a falsy check) is what preserves the empty list.
     if bot_review_setup is not None:
         existing_bot_review = raw.get("bot_review")
         section = existing_bot_review if isinstance(existing_bot_review, dict) else {}
@@ -569,7 +571,7 @@ def _patch_config(
         if (force or "auto_trigger" not in section) and section.get("auto_trigger") != auto_trigger:
             section["auto_trigger"] = auto_trigger
             changed = True
-        if not section.get("bots"):
+        if "bots" not in section:
             section["bots"] = [bot.model_dump() for bot in BotReviewConfig().bots]
             changed = True
         raw["bot_review"] = section
