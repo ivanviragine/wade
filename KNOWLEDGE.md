@@ -647,7 +647,7 @@ On a crossby bump, re-verify the Codex hooks feature-flag key in the `.codex/con
 
 ## fb2a067bb103 | 2026-08-16 | implementation | tags: crossby, ai-tools, model-registry | Issue #433
 
-WADE owns zero AI-tool model catalogs — every selectable model comes from crossby's static registry (crossby.data.get_models_for_tool) and per-tool complexity defaults come from crossby.config.defaults.get_defaults. Refreshing the available models for any tool is purely a crossby dependency bump in pyproject.toml + uv.lock regen; no WADE source or template edits are needed. antigravity-cli defaults intentionally use effort-suffixed IDs (e.g. gemini-3.6-flash-medium) that are not literal members of get_models_for_tool('antigravity-cli'); the init model pickers handle this by inserting the tier default into the option list (prompts_ai._prompt_model_mapping).
+WADE owns zero AI-tool model catalogs — catalog models come from crossby's static registry (crossby.data.get_models_for_tool) and per-tool complexity defaults come from crossby.config.defaults.get_defaults. Refreshing the available models for any tool is purely a crossby dependency bump in pyproject.toml + uv.lock regen; no WADE source or template edits are needed. antigravity-cli defaults intentionally use effort-suffixed IDs (e.g. gemini-3.6-flash-medium) that are not literal members of get_models_for_tool('antigravity-cli'); the init model pickers handle this by inserting the tier default into the option list (prompts_ai._prompt_model_mapping).
 
 ---
 
