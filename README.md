@@ -219,9 +219,9 @@ These are invoked by the AI during a session — you normally don't run them by 
 | `wade implementation-session sync` | Sync the branch onto the base branch |
 | `wade implementation-session done` | Completion gate — runs the gates, pushes, and opens/updates the PR |
 | `wade review-pr-comments-session check \| sync \| done` | Same lifecycle for a review session |
-| `wade review-pr-comments-session fetch` | Fetch unresolved PR review comments as markdown |
+| `wade review-pr-comments-session fetch <N>` | Fetch unresolved PR review comments as markdown |
 | `wade review-pr-comments-session resolve <thread>` | Mark a PR review thread as resolved on GitHub |
-| `wade plan-session done` | Finalize a planning session |
+| `wade plan-session done <plan_dir>` | Finalize a planning session |
 
 Most workflow commands accept `--ai <tool>`, `--model <model>`, `--effort <level>`, `--permission-mode <tier>`, and `--yolo` to override configured defaults. `implement`, `review pr-comments`, and the `wade <N>` shorthand also accept `--network` / `--no-network` (see [Codex sandbox](#codex-sandbox--network-policy)); the shorthand forwards the flag to whichever session it routes to. `implement` additionally supports `--detach` (new terminal tab), `--cd` (print worktree path only), and `--base <branch>` (see [Planning & base branches](#planning--base-branches)).
 
@@ -276,7 +276,7 @@ WADE splits review into an **AI review pass** you or the agent can invoke, and
 | `wade review trigger <N>` | Posts configured bot-review trigger comments on the task's PR |
 
 To fetch the unresolved comments themselves during a review session, the agent
-runs `wade review-pr-comments-session fetch`; it resolves individual threads with
+runs `wade review-pr-comments-session fetch <N>`; it resolves individual threads with
 `wade review-pr-comments-session resolve`.
 
 ### The auto-launched review session
