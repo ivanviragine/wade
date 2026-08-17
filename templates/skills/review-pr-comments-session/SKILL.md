@@ -20,7 +20,7 @@ start.
 ## Talking to the user
 
 {user_interaction_prompt}
-- After `done` succeeds: "Session complete — PR updated; safe to exit. Any further changes first?"
+- After `done` succeeds: "Session complete — PR updated; exit now. Any further changes first?"
 - If a review comment is ambiguous: "How should I handle this comment?"
 
 ## Never use `gh issue create`
