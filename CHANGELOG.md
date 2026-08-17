@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.48.1] — 2026-08-17
+
+### Documentation
+
+- tighten session-skill communication — terse reporting and unambiguous exit/complete signaling (#436) (0384f72)
+
 ## [v0.48.0] — 2026-08-17
 
 ### Features
