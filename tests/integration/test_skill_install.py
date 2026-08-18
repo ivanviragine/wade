@@ -182,6 +182,38 @@ class TestSkillInstallation:
             "review_plan is disabled"
         )
 
+    def test_review_budget_notes_not_clobbered_when_both_flags_disabled(
+        self, tmp_git_repo: Path
+    ) -> None:
+        """Both review gates disabled + installing everything must not clobber one skill's note.
+
+        ``bootstrap_worktree``'s two override branches write to the same
+        ``{review_budget_notes}`` key; if both fired in one call (only reachable
+        via the unused ``skills=None`` default), the second would silently
+        overwrite the first and hand plan-session the implementation-flavored
+        "skipped" text. Guard: the ambiguous case declines to override at all, so
+        every skill keeps the full, non-contradictory default guidance.
+        """
+        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
+        from wade.services.implementation_service import bootstrap_worktree
+
+        config = ProjectConfig(
+            ai=AIConfig(
+                review_plan=AICommandConfig(enabled=False),
+                review_implementation=AICommandConfig(enabled=False),
+            )
+        )
+        bootstrap_worktree(tmp_git_repo, config, tmp_git_repo, skills=None)
+
+        for skill_name in ("plan-session", "implementation-session", "review-pr-comments-session"):
+            skill_md = tmp_git_repo / ".claude" / "skills" / skill_name / "SKILL.md"
+            content = skill_md.read_text(encoding="utf-8")
+            assert "{review_budget_notes}" not in content, "Placeholder must be expanded"
+            assert "done.max_review_passes" in content, (
+                f"{skill_name} must keep the full budget guidance in the ambiguous case, "
+                "not a mismatched disabled-reason string"
+            )
+
     def test_review_enforcement_rule_expanded_by_default(self, tmp_git_repo: Path) -> None:
         """review_enforcement_rule partial is included by default (reviews enabled)."""
         from wade.skills.installer import install_skills

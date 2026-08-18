@@ -965,19 +965,33 @@ def bootstrap_worktree(
     # would be wrong for whichever skill's review command is still enabled. Its
     # "review is required unless trivial" guidance is only contradictory for
     # the skill(s) whose own review flag is off, so scope the override to what
-    # this call is actually installing. Each bootstrap_worktree call installs
-    # only one of {plan-session} vs {implementation-session,
-    # review-pr-comments-session} (see PLAN_SKILLS/IMPLEMENT_SKILLS/
-    # REVIEW_SKILLS), so the two branches below never collide in practice (#450).
+    # this call is actually installing. Every current call site passes an
+    # explicit, mutually-exclusive skills= list (plan-session XOR
+    # {implementation-session, review-pr-comments-session} — see
+    # PLAN_SKILLS/IMPLEMENT_SKILLS/REVIEW_SKILLS), so the two categories below
+    # never both apply in practice. Guard the ambiguous case explicitly anyway
+    # (skills=None, or a future caller mixing both) — both branches write to the
+    # same extra_partials key, so if both fired, the second would silently
+    # clobber the first and hand plan-session the implementation-flavored
+    # "skipped" text (or vice versa). Detect that and decline to override —
+    # falling back to the full, non-contradictory-if-verbose default — rather
+    # than risk wrong text in one file (#450 review follow-up).
     installing = set(skills) if skills is not None else set(SKILL_FILES)
-    if config.ai.review_plan.enabled is False and "plan-session" in installing:
+    plan_selected = "plan-session" in installing
+    impl_selected = (
+        "implementation-session" in installing or "review-pr-comments-session" in installing
+    )
+    plan_review_off = config.ai.review_plan.enabled is False
+    impl_review_off = config.ai.review_implementation.enabled is False
+
+    if plan_selected and impl_selected and plan_review_off and impl_review_off:
+        logger.debug("implementation.review_budget_notes_ambiguous_skip", skills=sorted(installing))
+    elif plan_selected and plan_review_off:
         skill_extra_partials["{review_budget_notes}"] = (
             "## Review budget & skip guidance\n\n"
             "Skipped — `review_plan.enabled: false` in `.wade.yml` disables plan review."
         )
-    if config.ai.review_implementation.enabled is False and (
-        "implementation-session" in installing or "review-pr-comments-session" in installing
-    ):
+    elif impl_selected and impl_review_off:
         skill_extra_partials["{review_budget_notes}"] = (
             "## Review budget & skip guidance\n\n"
             "Skipped — `review_implementation.enabled: false` in `.wade.yml` disables "
