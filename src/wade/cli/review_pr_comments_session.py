@@ -103,7 +103,7 @@ def done(
                     "Report by exception: end with the emoji step-status summary (Docs, "
                     "PR-SUMMARY, Sync, Done) and its handles — PR number/URL, threads "
                     "resolved/remaining — then present the exit decision as a native dialog "
-                    "whose recommended first option is "
+                    "whose first option is "
                     "'Exit now — reviewers are notified (recommended)'. "
                     "Surface only what needs the developer's attention."
                 )

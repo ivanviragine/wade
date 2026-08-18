@@ -51,7 +51,7 @@ def done(
         "SESSION COMPLETE — do not implement anything. "
         "Report by exception: end with the emoji step-status summary (steps: Plan "
         "file(s), Review, Knowledge, Validate) and its handles, then present the exit "
-        "decision as a native dialog whose recommended first option is "
+        "decision as a native dialog whose first option is "
         "'Exit now — wade creates the issue(s) & draft PR(s) (recommended)'. "
         "Surface only what needs the user's attention."
     )
