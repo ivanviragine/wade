@@ -107,9 +107,10 @@ class TestAdapterYoloArgs:
     def test_antigravity_cli_yolo_args(self) -> None:
         from crossby.ai_tools.antigravity_cli import AntigravityCLIAdapter
 
-        # agy skips permission prompts but keeps the terminal sandbox active.
+        # agy's --sandbox is a terminal restriction (blocks shell commands),
+        # not a write sandbox, so yolo must not pair it with skip-permissions.
         result = AntigravityCLIAdapter().yolo_args()
-        assert result == ["--dangerously-skip-permissions", "--sandbox"]
+        assert result == ["--dangerously-skip-permissions"]
 
     def test_codex_yolo_args(self) -> None:
         from crossby.ai_tools.codex import CodexAdapter
@@ -193,7 +194,9 @@ class TestBuildLaunchCommandYolo:
 
         cmd = AntigravityCLIAdapter().build_launch_command(yolo=True)
         assert "--dangerously-skip-permissions" in cmd
-        assert "--sandbox" in cmd
+        # Regression guard: agy's --sandbox blocks shell commands, so yolo
+        # must never emit it.
+        assert "--sandbox" not in cmd
 
     def test_codex_yolo_includes_flag(self) -> None:
         from crossby.ai_tools.codex import CodexAdapter
