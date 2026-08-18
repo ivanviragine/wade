@@ -739,6 +739,31 @@ def test_merge_pr_mixed_lists_both_groups_defaults_no(
     assert any("PLAN.md" in m for m in detail_msgs)
 
 
+@patch(f"{_LC}.git_repo.is_clean", return_value=False)
+@patch(f"{_LC}._format_uncommitted_summary", return_value="dirty")
+@patch(f"{_LC}._get_dirty_file_paths", return_value=[])
+@patch(f"{_LC}._identify_session_dirty_files", return_value=[])
+@patch(f"{_LC}.prompts.confirm", return_value=False)
+@patch(f"{_LC}.console")
+def test_merge_pr_dirty_but_unenumerable_fails_closed(
+    _mock_console: MagicMock,
+    mock_confirm: MagicMock,
+    _mock_identify: MagicMock,
+    _mock_dirty: MagicMock,
+    _mock_summary: MagicMock,
+    _mock_is_clean: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """is_clean=False but no paths enumerated (git failure) → conservative default=False."""
+    from wade.services.implementation_service.lifecycle import _merge_pr
+
+    result = _merge_pr(tmp_path, "feat/x", 7, "7", tmp_path, MagicMock())
+
+    assert result == MergeStatus.NOT_MERGED
+    # Empty enumeration must NOT read as "safe scaffold-only" → default stays No.
+    assert mock_confirm.call_args.kwargs["default"] is False
+
+
 @patch(f"{_LC}._pull_main_after_merge")
 @patch(f"{_LC}.git_worktree.prune_worktrees")
 @patch(f"{_LC}.git_worktree.remove_worktree")

@@ -445,7 +445,13 @@ def _merge_pr(
             for path in artifacts:
                 console.detail(f"  {path}", markup=False)
 
-        if genuine:
+        # Default to the safe/regenerable wording (default=Yes) ONLY when we
+        # positively enumerated the dirty tree and every path is regenerable
+        # scaffold. If `git status` reported dirty (is_clean=False) but
+        # `_get_dirty_file_paths` came back empty (a transient git failure returns
+        # `[]`), we cannot vouch that it is all scaffold — fall back to the
+        # conservative fail-closed prompt so an empty list never reads as "safe".
+        if genuine or not dirty_paths:
             question = "Uncommitted changes will be lost. Proceed with the merge?"
             default = False
         else:
