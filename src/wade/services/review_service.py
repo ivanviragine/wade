@@ -26,6 +26,7 @@ from wade.models.config import ProjectConfig
 from wade.models.hooks import SessionPhase
 from wade.models.permission import PermissionMode, permission_mode_launch_kwargs
 from wade.models.review import (
+    BotArrivalState,
     BotTriggerOutcome,
     BotTriggerReport,
     BotTriggerResult,
@@ -33,6 +34,7 @@ from wade.models.review import (
     PRReviewStatus,
     ReviewBotStatus,
     ReviewState,
+    compute_bot_arrivals,
     detect_coderabbit_review_status,
     filter_actionable_threads,
     filter_unresolved_threads,
@@ -209,6 +211,12 @@ def fetch_reviews(
         print("Review status fetch failed — status may be incomplete. Try again shortly.")
         return False
 
+    # Expectation gating (#448): this AI-agent-facing command must not print
+    # "No unresolved review comments found." while an enabled bot hasn't reviewed
+    # HEAD. ``repo_root`` is the worktree here (cwd), so its ``.wade/`` trigger
+    # markers seed the arrival windows.
+    annotate_bot_expectations(status, config, marker_root=repo_root)
+
     # all_unresolved_threads covers both actionable (non-outdated) and outdated threads;
     # falls back to actionable_threads for providers that don't set it.
     all_threads = status.effective_unresolved_threads
@@ -221,6 +229,21 @@ def fetch_reviews(
         elif status.bot_status == ReviewBotStatus.IN_PROGRESS:
             print("No unresolved review comments found, but CodeRabbit is still reviewing.")
             print("Try fetching again shortly.")
+        elif status.blocking_bots:
+            # An expected bot has not reviewed HEAD within its window — name it
+            # rather than falsely reporting nothing to address.
+            for name in status.blocking_bots:
+                arrival = status.bot_arrivals.get(name)
+                if arrival and arrival.state == BotArrivalState.ACKNOWLEDGED:
+                    print(
+                        f"No unresolved review comments found yet, but {name} acknowledged"
+                        " the PR and is still reviewing — comments may still arrive."
+                    )
+                else:
+                    print(
+                        f"No unresolved review comments found yet, but {name} has not"
+                        " reviewed the latest commit — a review may still arrive."
+                    )
         elif not status.review_covers_latest_commit:
             print(
                 "No unresolved review comments found, but the latest commit has not"
@@ -228,6 +251,8 @@ def fetch_reviews(
             )
         else:
             print("No unresolved review comments found.")
+            for name in status.missing_bots:
+                print(f"⚠ No review from {name} arrived within its window — proceeding.")
 
         # Show PR-level review info even when no threads
         if status.changes_requested_by:
@@ -489,12 +514,18 @@ def get_review_status(
     pr_number = lookup.pr.number
 
     try:
-        return provider.get_pr_review_status(pr_number)
+        status = provider.get_pr_review_status(pr_number)
     except NotImplementedError:
         # Fallback: use legacy thread-only approach
-        return _fallback_review_status(provider, pr_number)
+        status = _fallback_review_status(provider, pr_number)
     except Exception:
         return None
+    # Expectation gating (#448): annotate so ``is_all_clear`` /
+    # ``format_review_status_summary`` (e.g. the ``done`` status recap) reflect
+    # which enabled bots have not yet reviewed HEAD. ``repo_root`` is the worktree,
+    # so its ``.wade/`` trigger markers seed the arrival windows.
+    annotate_bot_expectations(status, config, marker_root=repo_root)
+    return status
 
 
 def get_comprehensive_review_status(
@@ -541,6 +572,77 @@ def _fallback_review_status(
     )
 
 
+def annotate_bot_expectations(
+    status: PRReviewStatus,
+    config: ProjectConfig,
+    *,
+    marker_root: Path | None = None,
+    now: datetime | None = None,
+) -> PRReviewStatus:
+    """Populate expected-bot arrival state onto *status* in place (#448).
+
+    Sets ``expected_bots`` (the enabled ``bot_review.bots`` names WADE expects to
+    review) and computes the per-bot ``bot_arrivals`` map from the config
+    arrival/ack timeouts. When ``marker_root`` is given, ``.wade/bot-triggered-
+    <name>@*`` trigger markers seed each bot's arrival-window start; otherwise the
+    window starts at the commit push time (the documented marker-absent fallback).
+
+    A status that failed to fetch, or a config with no enabled bots, is left
+    untouched — expectation gating is off in that case and the model behaves
+    exactly as before this fix. Returns *status* for chaining.
+    """
+    if status.fetch_failed:
+        return status
+    enabled = [bot.name for bot in config.bot_review.bots if bot.enabled]
+    status.expected_bots = enabled
+    if not enabled:
+        status.bot_arrivals = {}
+        return status
+    window_starts = (
+        _bot_trigger_window_starts(marker_root, enabled) if marker_root is not None else {}
+    )
+    status.bot_arrivals = compute_bot_arrivals(
+        status,
+        now=now or datetime.now(UTC),
+        arrival_timeout=config.bot_review.arrival_timeout,
+        ack_timeout=config.bot_review.ack_timeout,
+        window_starts=window_starts,
+    )
+    return status
+
+
+def _bot_trigger_window_starts(marker_root: Path, bot_names: list[str]) -> dict[str, datetime]:
+    """Newest ``.wade/bot-triggered-<name>@*`` marker mtime per bot (#448).
+
+    The auto-trigger path writes one marker per bot per commit sha; its mtime is
+    when WADE (re-)triggered that bot. Used as the per-bot arrival-window start so
+    a bot triggered *after* the commit push is waited for from the trigger rather
+    than the earlier push. Best-effort: an unreadable marker or missing ``.wade/``
+    directory yields no entry, and ``compute_bot_arrivals`` then falls back to the
+    commit push time.
+    """
+    starts: dict[str, datetime] = {}
+    try:
+        entries = list((marker_root / ".wade").iterdir())
+    except OSError:
+        return starts
+    for name in bot_names:
+        prefix = f"bot-triggered-{name}@"
+        latest: datetime | None = None
+        for entry in entries:
+            if not entry.name.startswith(prefix):
+                continue
+            try:
+                mtime = datetime.fromtimestamp(entry.stat().st_mtime, tz=UTC)
+            except OSError:
+                continue
+            if latest is None or mtime > latest:
+                latest = mtime
+        if latest is not None:
+            starts[name] = latest
+    return starts
+
+
 def poll_for_reviews(
     provider: AbstractTaskProvider,
     repo_root: Path,
@@ -551,6 +653,7 @@ def poll_for_reviews(
     bot_settle: int = 60,
     human_settle: int = 120,
     quiet_timeout: int = 600,
+    config: ProjectConfig | None = None,
 ) -> PollOutcome:
     """Poll for new PR review comments, blocking until a terminal condition is reached.
 
@@ -561,6 +664,16 @@ def poll_for_reviews(
       the latest commit aged past the grace period.
     * ``PR_CLOSED`` — the PR was merged or closed externally.
     * ``INTERRUPTED`` — the user pressed Ctrl+C.
+
+    Expected-bot gating (#448): when ``config`` is provided, each cycle annotates
+    the status with the enabled ``bot_review.bots`` expectation. While any expected
+    bot has not posted a review covering HEAD *within its arrival window* the loop
+    keeps waiting (reporting per-bot progress) and never returns ``REVIEW_COMPLETE``
+    or lets the quiet-timeout fire with a clean "done". Once a bot's window elapses
+    it stops blocking and is surfaced as missing. When ``config`` is ``None`` (a
+    caller that predates this gating) the loop behaves as before. The marker-absent
+    commit-push fallback is used for arrival-window starts (see
+    ``compute_bot_arrivals``).
     """
     console.info("Waiting for review comments... (Ctrl+C to stop)")
 
@@ -595,6 +708,14 @@ def poll_for_reviews(
                 time.sleep(poll_interval)
                 continue
 
+            # Expected-bot expectation (#448): compute per-bot arrival so the gate
+            # and messaging below can tell "every expected bot has reviewed HEAD"
+            # from "still waiting on X". Off when config is None. ``repo_root`` is
+            # the worktree in the common in-worktree poll, so its ``.wade/`` trigger
+            # markers seed the arrival windows (missing dir → commit-push fallback).
+            if config is not None:
+                annotate_bot_expectations(status, config, marker_root=repo_root)
+
             if status.bot_status == ReviewBotStatus.IN_PROGRESS:
                 quiet_start = None  # bot is active; reset quiet timer
                 console.detail("Bot review in progress — checking again shortly...")
@@ -603,25 +724,25 @@ def poll_for_reviews(
 
             eff_threads = status.effective_unresolved_threads
             if (
-                status.bot_status == ReviewBotStatus.COMPLETED
-                and not eff_threads
+                not eff_threads
                 and not status.has_changes_requested
                 and not status.pending_reviewers
+                and status.review_covers_latest_commit
+                and (status.bot_status == ReviewBotStatus.COMPLETED or status.expected_bots)
             ):
-                # A COMPLETED marker carries no info about *which* commit was
-                # reviewed. Only declare completion when the newest bot signal
-                # covers HEAD; otherwise the latest push has not been re-reviewed
-                # yet — fall through to the freshness / quiet-timeout logic
-                # below (is_commit_fresh resets the quiet timer while the commit
-                # is fresh, and QUIET_TIMEOUT eventually fires if no newer review
-                # arrives, so this cannot hang forever).
-                if status.review_covers_latest_commit:
-                    console.info("Review bot completed — no actionable comments found.")
-                    return PollOutcome.REVIEW_COMPLETE
-                console.detail(
-                    "Review bot completed an earlier commit, but the latest commit "
-                    "has not been reviewed yet — waiting for an updated review..."
-                )
+                # Completion. A ``COMPLETED`` marker carries no info about *which*
+                # commit was reviewed, and (#448) an expected bot may never have
+                # posted at all — so completion requires ``review_covers_latest_commit``
+                # (every expected bot arrived, or its window elapsed). Any bot that
+                # never showed up is surfaced before we complete, never silently
+                # swallowed into "done".
+                if status.missing_bots:
+                    names = ", ".join(f"`{b}`" for b in status.missing_bots)
+                    console.warn(
+                        f"Proceeding without a review from {names} — arrival window elapsed."
+                    )
+                console.info("Review bot completed — no actionable comments found.")
+                return PollOutcome.REVIEW_COMPLETE
 
             if eff_threads or status.has_changes_requested:
                 count = len(eff_threads)
@@ -677,6 +798,42 @@ def poll_for_reviews(
                     time.sleep(eff_settle)
                 return PollOutcome.COMMENTS_FOUND
 
+            # Expected-bot gating (#448): an enabled bot that has not reviewed HEAD
+            # within its arrival window keeps the loop waiting (never a clean
+            # QUIET_TIMEOUT "done"), reporting per-bot progress. Once the window
+            # elapses the bot becomes MISSING and stops blocking, so this cannot
+            # hang forever. Takes precedence over the quiet-timeout logic below.
+            if status.blocking_bots:
+                quiet_start = None  # an expected bot is still awaited; hold the timer
+                for name in status.blocking_bots:
+                    arrival = status.bot_arrivals.get(name)
+                    progress = (
+                        f" ({arrival.waited_seconds}s/{arrival.window_seconds}s)"
+                        if arrival and arrival.window_seconds
+                        else ""
+                    )
+                    if arrival and arrival.state == BotArrivalState.ACKNOWLEDGED:
+                        console.detail(
+                            f"{name} acknowledged the PR and is still reviewing{progress}"
+                            f" — next check in {poll_interval}s..."
+                        )
+                    else:
+                        console.detail(
+                            f"Waiting for {name} to review the latest commit{progress}"
+                            f" — next check in {poll_interval}s..."
+                        )
+                time.sleep(poll_interval)
+                continue
+
+            # A bot signal exists but predates HEAD (stale coverage, legacy path) —
+            # explain rather than go quiet. Under expectation gating this is already
+            # handled by ``blocking_bots`` above.
+            if not status.review_covers_latest_commit and not status.expected_bots:
+                console.detail(
+                    "A review covers an earlier commit, but the latest commit has not"
+                    f" been reviewed yet — next check in {poll_interval}s..."
+                )
+
             # No review signals, no bot blocking — apply quiet-timeout logic.
             if status.pending_reviewers:
                 names = ", ".join(
@@ -697,6 +854,12 @@ def poll_for_reviews(
                     quiet_start = now
                 elapsed = now - quiet_start
                 if elapsed >= quiet_timeout:
+                    # Never exit with a clean "done" while an expected bot never
+                    # showed up (#448): name the missing bots so QUIET_TIMEOUT can't
+                    # be read as "all bots reviewed".
+                    if status.missing_bots:
+                        names = ", ".join(f"`{b}`" for b in status.missing_bots)
+                        console.warn(f"No review arrived from {names} within its window.")
                     console.info(
                         f"PR has been quiet for {int(elapsed)}s "
                         "with no new comments. Stopping poll."
@@ -838,6 +1001,10 @@ def start(
     if status.fetch_failed:
         console.warn("Review status fetch failed — status may be incomplete. Try again shortly.")
         return False
+    # Expectation gating (#448): don't emit "All review comments resolved" while an
+    # enabled bot hasn't reviewed HEAD. Seed arrival windows from the worktree's
+    # ``.wade/`` trigger markers.
+    annotate_bot_expectations(status, config, marker_root=worktree_path)
     # Use all_unresolved_threads (actionable + outdated) as the broader review signal;
     # falls back to actionable_threads for providers that don't set it.
     effective_threads = status.effective_unresolved_threads
@@ -861,20 +1028,41 @@ def start(
             console.warn("CodeRabbit is still reviewing — try again shortly.")
             return True
 
-        # No blocking conditions — message depends on commit freshness and
-        # whether a bot review actually covers the latest commit.
+        # No blocking conditions — message depends on commit freshness, expected-bot
+        # arrival, and whether a bot review actually covers the latest commit.
         if status.is_commit_fresh():
             console.info(
                 "No review comments found yet — the latest commit is less"
                 " than 2 minutes old. Review may still arrive."
             )
+        elif status.blocking_bots:
+            # An expected bot has not reviewed HEAD within its window (#448) — name
+            # it instead of falsely reporting all-clear.
+            for name in status.blocking_bots:
+                arrival = status.bot_arrivals.get(name)
+                progress = (
+                    f" ({arrival.waited_seconds}s/{arrival.window_seconds}s)"
+                    if arrival and arrival.window_seconds
+                    else ""
+                )
+                if arrival and arrival.state == BotArrivalState.ACKNOWLEDGED:
+                    console.info(
+                        f"{name} acknowledged the PR and is still reviewing{progress}"
+                        " — comments may still arrive."
+                    )
+                else:
+                    console.info(f"Still waiting for {name} to review the latest commit{progress}.")
         elif not status.review_covers_latest_commit:
             console.info(
                 "No review comments found yet, but the latest commit has not"
                 " been reviewed yet — an updated review may still arrive."
             )
         elif not status.pending_reviewers:
-            console.success("All review comments resolved — nothing to address! 🎉")
+            if status.missing_bots:
+                names = ", ".join(status.missing_bots)
+                console.warn(f"⚠ No review from {names} arrived within its window — proceeding.")
+            else:
+                console.success("All review comments resolved — nothing to address! 🎉")
 
         if status.pending_reviewers:
             names = ", ".join(
@@ -901,6 +1089,7 @@ def start(
             permission_mode=permission_mode,
             permission_mode_explicit=permission_mode_explicit,
             network_access=network_access,
+            config=config,
         )
         return True
 
@@ -1126,6 +1315,7 @@ def start(
                 permission_mode=resolved_permission_mode.value,
                 permission_mode_explicit=permission_mode_explicit,
                 network_access=network_access,
+                config=config,
             )
     else:
         console.info(
@@ -1150,6 +1340,7 @@ def start(
             permission_mode=permission_mode,
             permission_mode_explicit=permission_mode_explicit,
             network_access=network_access,
+            config=config,
         )
 
     return True
@@ -1228,6 +1419,7 @@ def _quiet_next_steps_prompt(
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
     network_access: bool | None = None,
+    config: ProjectConfig | None = None,
 ) -> None:
     """Shared next-steps menu for quiet PRs: keep polling, merge, or exit.
 
@@ -1264,7 +1456,7 @@ def _quiet_next_steps_prompt(
         choice = prompts.select(f"PR #{pr_number} — what next?", options)
 
         if choice == 0:  # Keep polling
-            outcome = poll_for_reviews(provider, repo_root, pr_number, branch)
+            outcome = poll_for_reviews(provider, repo_root, pr_number, branch, config=config)
             if outcome == PollOutcome.COMMENTS_FOUND:
                 if issue_number:
                     _ = start(
@@ -1309,6 +1501,7 @@ def _post_review_lifecycle(
     permission_mode: str | None = None,
     permission_mode_explicit: bool = False,
     network_access: bool | None = None,
+    config: ProjectConfig | None = None,
 ) -> None:
     """Post-review lifecycle menu: Merge PR or wait for new reviews.
 
@@ -1336,7 +1529,7 @@ def _post_review_lifecycle(
     )
 
     if choice == 1:  # Wait for new reviews
-        outcome = poll_for_reviews(provider, repo_root, pr_number, branch)
+        outcome = poll_for_reviews(provider, repo_root, pr_number, branch, config=config)
         if outcome == PollOutcome.COMMENTS_FOUND:
             if issue_number:
                 _ = start(
@@ -1367,6 +1560,7 @@ def _post_review_lifecycle(
                 permission_mode=permission_mode,
                 permission_mode_explicit=permission_mode_explicit,
                 network_access=network_access,
+                config=config,
             )
         return
 

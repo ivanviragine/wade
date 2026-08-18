@@ -161,6 +161,26 @@ def _seed_mock_review_threads(
     state_file.write_text(json.dumps(state_data))
 
 
+def _seed_mock_pr_commit_pushed_at(
+    state_file: Path,
+    pr_number: int | str,
+    pushed_at_iso: str,
+) -> None:
+    """Seed the latest-commit push timestamp the mock returns for a PR (#448).
+
+    Opt-in: without this seed the review-status GraphQL response omits the commit
+    node, so ``latest_commit_pushed_at`` is ``None`` and expected-bot arrival
+    gating stays off (matching every pre-#448 review-status contract).
+    """
+    state_data = json.loads(state_file.read_text())
+    state_data.setdefault("pr_commits", {})
+    pr_commits = state_data["pr_commits"]
+    if not isinstance(pr_commits, dict):
+        pytest.fail(f"Mock gh state has invalid pr_commits payload: {pr_commits!r}")
+    pr_commits[str(pr_number)] = pushed_at_iso
+    state_file.write_text(json.dumps(state_data))
+
+
 def _seed_mock_pr(
     state_file: Path,
     pr_number: int,

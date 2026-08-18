@@ -394,13 +394,21 @@ def _parse_bot_review(raw: dict[str, Any]) -> BotReviewConfig:
         return BotReviewConfig()
     auto_trigger = raw.get("auto_trigger", False)
     auto_trigger = False if auto_trigger is None else auto_trigger
+    # arrival_timeout / ack_timeout (#448). A ``None`` value keeps the model
+    # default; any other value is passed through untouched so a non-int scalar is
+    # rejected by ``StrictInt`` (surfaced as a ConfigError) rather than coerced.
+    kwargs: dict[str, Any] = {"auto_trigger": auto_trigger}
+    for key in ("arrival_timeout", "ack_timeout"):
+        value = raw.get(key)
+        if value is not None:
+            kwargs[key] = value
     bots_raw = raw.get("bots")
     if bots_raw is None:
-        return BotReviewConfig(auto_trigger=auto_trigger)
+        return BotReviewConfig(**kwargs)
     if not isinstance(bots_raw, list):
         raise TypeError("bot_review.bots must be a list")
     bots = [_parse_review_bot(entry) for entry in bots_raw]
-    return BotReviewConfig(auto_trigger=auto_trigger, bots=bots)
+    return BotReviewConfig(bots=bots, **kwargs)
 
 
 def _parse_command_config(raw: dict[str, Any] | None) -> AICommandConfig:
