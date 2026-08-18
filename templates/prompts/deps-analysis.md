@@ -1,4 +1,4 @@
-Analyze dependencies between the GitHub issues in the context below.
+Analyze dependencies between the tasks in the context below.
 
 Output requirements (strict):
 - Output ONLY dependency edges in this format: <number> -> <number> # reason

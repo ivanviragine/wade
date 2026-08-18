@@ -9,9 +9,10 @@ description: >
 
 # Dependency Analysis
 
-Analyze a set of GitHub issues and determine the dependency relationships
-between them. Output a structured file that `wade` will use to generate
-dependency graphs and update issue bodies.
+Analyze a set of tasks (GitHub Issues, or the project's configured task
+provider) and determine the dependency relationships between them. Output a
+structured file that `wade` will use to generate dependency graphs and update
+task bodies.
 
 ## When to activate
 

@@ -27,8 +27,8 @@ start.
 
 **NEVER** use `gh issue create` or the GitHub API to create issues directly.
 Always use `wade task create` for interactive issue creation.
-Using `gh` directly bypasses label enforcement, snapshot/diff detection, and
-dependency analysis hooks.
+Using `gh` directly bypasses conventional-title enforcement, the configured
+issue label, and the task-provider abstraction.
 
 {review_enforcement_rule}
 
@@ -112,8 +112,8 @@ fails, fix the cause, do NOT bypass.
 **Step 6 — Present results** (per the **Communication style** rule): the
 actionable handles — PR number/URL, that the issue closes on merge (unless
 `--no-close` was passed to `done`, then it stays open), the branch, and what's
-next (later feedback → `wade review pr-comments <issue>`; status → `wade status
-<issue>`). `done` has succeeded — tell the user plainly that the session is
+next (later feedback → `wade review pr-comments <issue>`; issue/PR status →
+`wade task read <issue>`). `done` has succeeded — tell the user plainly that the session is
 complete and to exit now, offering one escape: "any further changes first?" If
 so, apply and repeat Steps 1–6.
 

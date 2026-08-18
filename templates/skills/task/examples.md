@@ -9,10 +9,13 @@ uptime.
 > This plan is ~100 LOC touching 3 files (router, schema, test), all related
 > to a single health-check endpoint. I recommend keeping it as **1 issue**.
 
-**Result:** one plan file → one issue.
+**Result:** one plan file (`PLAN.md`) → one issue.
 
 ```markdown
-# Add health check endpoint
+# feat: add health check endpoint
+
+## Complexity
+easy
 
 ## Context / Problem
 There is no way to verify the app is running or check its version
@@ -35,7 +38,7 @@ Add a `GET /api/health` endpoint returning `{ "status": "ok", "version": "..." }
 
 ```bash
 wade task create
-# Created issue #42: Add health check endpoint
+# Created issue #42: feat: add health check endpoint
 ```
 
 ---
@@ -60,48 +63,52 @@ notification settings.
 > 1. Add user preferences schema, migration, and API (~500 LOC, 9 files)
 > 2. Add preferences UI panel (~400 LOC, 6 files)
 
-**Result:** two plan files → two issues + one epic.
+**Result:** two plan files (`PLAN-1-schema-api.md`, `PLAN-2-ui-panel.md`) → two
+issues + one epic. Each plan file carries a conventional-commit `# Title` and a
+`## Complexity` value.
 
 ### Issue creation
 
 ```bash
 wade task create
-# Created issue #50: Add user preferences schema and API
+# Created issue #50: feat: add user preferences schema and API
 
 wade task create
-# Created issue #51: Add preferences UI panel
+# Created issue #51: feat: add preferences UI panel
 ```
 
 ### Epic issue (offered after sub-issues are created)
 
 ```markdown
-# Epic: User preferences feature
+# feat(epic): user preferences feature
 
 ## Overview
 Add the ability for users to save and manage display and notification preferences.
 
 ## Sub-issues
-- [ ] #50 — Add user preferences schema and API
-- [ ] #51 — Add preferences UI panel
+- [ ] #50 — feat: add user preferences schema and API
+- [ ] #51 — feat: add preferences UI panel
 ```
 
 ```bash
 wade task create
-# Created issue #52: Epic: User preferences feature
+# Created issue #52: feat(epic): user preferences feature
 ```
 
 **Final report:**
 ```
 Created 3 issues:
-  #50 — Add user preferences schema and API (~500 LOC)
-  #51 — Add preferences UI panel (~400 LOC)
-  #52 — Epic: User preferences feature (links #50, #51)
+  #50 — feat: add user preferences schema and API (~500 LOC)
+  #51 — feat: add preferences UI panel (~400 LOC)
+  #52 — feat(epic): user preferences feature (links #50, #51)
 ```
 
-### Auto-dependency analysis (multi-issue plans)
+### Dependency analysis (multi-issue)
 
-When `wade plan` creates 2+ issues, it automatically runs `wade task deps`
-to analyze dependencies. It updates each issue and creates a tracking issue:
+For a standalone multi-issue set, run `wade task deps` yourself after creating
+the issues. When a project uses `wade plan` instead, wade creates the issues and
+draft PRs and runs `wade task deps` **automatically** after the planning session
+exits — updating each issue and creating a tracking issue:
 
 ```
 Multiple issues created — running dependency analysis...

@@ -1,30 +1,41 @@
 ---
 name: task
 description: >
-  Create one or more GitHub issues via wade — for a single bug/feature OR a
-  full plan/PRD breakdown. Assesses scope, proposes single or multi-issue
-  breakdown with reasoning, gets user confirmation, writes plan files, creates
-  issues via wade task create, and informs the user of next steps. ALL steps
-  are mandatory — do not stop after planning. Use whenever the user asks to
-  create a GitHub issue, regardless of scope.
+  Create one or more tasks via `wade task create` — for a single bug/feature OR
+  a full plan/PRD breakdown. This is the STANDALONE task-creation workflow, used
+  whenever the user directly asks to create a task/issue outside a `wade plan`
+  session. Assesses scope, proposes a single- or multi-issue breakdown with
+  reasoning, gets user confirmation, writes the plan content, creates the tasks
+  via `wade task create`, and informs the user of next steps. ALL steps are
+  mandatory — do not stop after planning. Use whenever the user asks to create a
+  task/issue, regardless of scope.
 ---
 
-# Plan → Issues
+# Create Tasks
 
-Convert a finished plan, PRD, or feature spec into one or more PR-sized GitHub
-issues using the project's `wade` infrastructure.
+Convert a finished plan, PRD, or feature spec into one or more PR-sized tasks
+(GitHub Issues, or whatever task provider the project configures) using the
+project's `wade` infrastructure.
+
+> **This is standalone task creation — not a planning session.** In a
+> `wade plan` session you do **not** run `wade task create`: you write plan
+> files and exit, and wade creates the tasks (and draft PRs) after you leave
+> (see @.claude/skills/plan-session/SKILL.md). Use this skill only when the user
+> asks to create tasks directly.
 
 > **Never use `gh issue create` directly.** Always use `wade task create`.
-> Using `gh` directly bypasses label enforcement, snapshot/diff detection,
-> and dependency analysis hooks.
+> Using `gh` directly bypasses conventional-title enforcement, the configured
+> issue label, and the task-provider abstraction.
 
 ## When to activate
 
-- The user asks to create **any** GitHub issue — a single bug, a single
+- The user asks to create **any** task/issue — a single bug, a single
   feature request, or a full plan/PRD breakdown
 - A plan or spec `.md` file has been written (or is finalized in conversation)
 - The user asks to "create issues from this plan" or "break this into issues"
-- After any planning session where the next step is GitHub issues
+
+Do **not** activate inside a `wade plan` planning session — that session only
+writes plan files and exits; wade creates the tasks afterward.
 
 > **Single issues are in scope.** Do not skip this skill just because there
 > is only one issue to create. The skill handles single-issue creation
@@ -80,36 +91,42 @@ Wait for explicit confirmation before proceeding.
 
 ## Step 4: Write plan files
 
-For each confirmed issue, write a `.md` file in the plan format.
+For each confirmed issue, write a `.md` file in the plan format. Its content
+becomes the task body you pass to `wade task create` in Step 5 — and that body
+seeds `PLAN.md` when the issue is later implemented with `wade implement`.
 
 See [plan-format.md](plan-format.md) for the exact format.
 
-**Include a `## Complexity` section** in every plan file with one of:
-`easy`, `medium`, `complex`, or `very_complex` (based on your LOC/scope
-estimate from Step 1). This lets `wade implement` automatically select
-the appropriate AI model for the implementation session. The complexity is
-also applied as a `complexity:X` label on the issue.
+**Every plan file needs a conventional-commit `# Title` and a `## Complexity`
+section** with one of `easy`, `medium`, `complex`, or `very_complex` (based on
+your LOC/scope estimate from Step 1). Complexity lets `wade implement`
+auto-select the AI model and is applied as a `complexity:X` label on the issue.
 
 File naming convention:
 - Single issue: `PLAN.md`
 - Multi-issue: `PLAN-1-<slug>.md`, `PLAN-2-<slug>.md`, etc.
 
-Write plan files to the **session directory**: the temp dir from your prompt
-if inside a `wade plan` session, or the worktree root if inside a work
-session. **Never write plan files into the repo's main checkout** — they are
-session artifacts, not committed code.
+Write plan files to the worktree root (or your current working directory).
+**Never write plan files into the repo's main checkout** — they are working
+artifacts, not committed code.
 
-## Step 5: Create issues
+## Step 5: Create tasks
 
-> **Note:** Issue creation is the *output* of this skill, not code implementation.
+> **Note:** Task creation is the *output* of this skill, not code implementation.
 > Do not call `exit_plan_mode` before running `wade task create` — user
 > confirmation in Step 3 is sufficient, even when running inside `[[PLAN]]` mode.
 
-For each plan, create a lightweight issue via `wade task create` (interactive)
-with the issue title and a brief description.
+For each plan, create a task via `wade task create` (interactive), passing the
+plan-file title and body. `wade task create` enforces the conventional-commit
+title and applies the configured issue label.
 
-The full plan content goes to a draft PR (created automatically by
-`wade plan`), not the issue body. Issues are lightweight tickets.
+The task body you provide seeds `PLAN.md` when the issue is later implemented, so
+include enough of the plan to work from.
+
+> **Contrast with `wade plan`:** when a project uses `wade plan` instead, wade
+> keeps the issue lightweight and puts the full plan in a draft PR it creates
+> automatically after the planning session exits. That path does not use this
+> skill.
 
 Collect the issue number and URL from each creation.
 
