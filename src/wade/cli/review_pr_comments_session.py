@@ -113,7 +113,7 @@ def done(
                 "Report by exception: end with the emoji step-status summary and its handles "
                 "(PR/URL, threads). Recommend checking the review status directly on the PR "
                 "page — easy fix — then present a native dialog: 'Check now (recommended)' / "
-                "'Exit now — reviewers are notified'."
+                "'Exit anyway'."
             )
     raise typer.Exit(0 if success else 1)
 
