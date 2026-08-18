@@ -401,6 +401,15 @@ what keeps a wade-opened PR from ever failing the `PR Title Lint` CI check;
 `done` also blocks on — and syncs — a stale non-conventional title on an already
 open PR (see the completion-gate table below).
 
+Like `wade plan`, `wade task create` also reads a `## Complexity` section from the
+task body (from `--body`, a plan file, or interactive input): when present, its
+value is attached as a `complexity:X` label on top of the project label — the same
+signal that drives automatic model routing, so a hand-created task routes to the
+right model just like a planned one. Labeling is best-effort: a failure to apply
+the label never fails task creation, and a body with no `## Complexity` section
+just skips it. An explicit `--label complexity:X` takes precedence over the body
+value, so the task never ends up with two conflicting complexity labels.
+
 If some files pass and others fail, an interactive run asks whether to continue
 with the valid ones; `--yolo` and non-interactive runs continue without asking.
 If you decline, or if every plan file fails validation, no tasks are created —
