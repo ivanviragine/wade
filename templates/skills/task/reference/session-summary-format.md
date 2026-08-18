@@ -42,7 +42,7 @@ the choice itself communicates what happens. The end-of-session exit decision:
 
 ### Implementation session (clean run)
 
-```
+```text
 ✅ Review · ✅ Docs (README, AGENTS.md) · ✅ PR-SUMMARY · ✅ Sync · ✅ Done
 PR #123 — https://github.com/…/pull/123 (closes #120 on merge)
 ✅ Nothing needs your attention.
@@ -54,7 +54,7 @@ Then the exit decision as a native dialog: `Exit now — wade takes over
 
 ### Review session (with a caveat)
 
-```
+```text
 ✅ Docs · ✅ PR-SUMMARY · ✅ Sync · ✅ Done
 PR #123 — https://github.com/…/pull/123 · 4/5 threads resolved
 ⚠️ 1 item needs your attention:
@@ -67,7 +67,7 @@ I have more changes`.
 
 ### Plan session (clean run)
 
-```
+```text
 ✅ Plan file(s) written · ✅ Review · ✅ Knowledge rated · ✅ Validated
 2 plan file(s): feat-x (complex), feat-y (medium)
 ✅ Nothing needs your attention.

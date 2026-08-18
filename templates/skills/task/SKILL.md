@@ -148,7 +148,7 @@ starts work sessions when they are ready.
 After creating all issues, list them with the emoji step-status legend
 (@.claude/skills/task/reference/session-summary-format.md):
 
-```
+```text
 ✅ Created 3 issues:
   #42 — feat: add user preferences schema (~200 LOC)
   #43 — feat: add preferences API endpoint (~250 LOC)

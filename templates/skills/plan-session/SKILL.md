@@ -55,7 +55,7 @@ into the next implementation session's PR (and thus reaches origin).
 <!-- markdownlint-disable-next-line MD029 -->
 9. **Validate** — run `wade plan-session done <plan_dir>` (the temp dir from your prompt). If it exits with errors, fix each reported issue and re-run until it passes. Warnings are informational and do not block.
 <!-- markdownlint-disable-next-line MD029 -->
-10. **Present results** — end with the emoji step-status summary (steps: `Plan file(s) · Review · Knowledge · Validate`) and its handles (each plan file's title + complexity). Validation has passed, so present the exit decision as a **native dialog**: `Exit now — wade creates the issue(s) & draft PR(s) (recommended)` (then start work with `wade implement <issue-number>`) and `Keep editing — I have changes` → apply and repeat. See @.claude/skills/task/reference/session-summary-format.md.
+10. **Present results** — end with the emoji step-status summary (steps: `Plan file(s) · Review · Knowledge · Validate`) and its handles (each plan file's title + complexity). Validation has passed, so present the exit decision as a **native dialog**: `Exit now — wade creates the issue(s) & draft PR(s) (recommended)` and `Keep editing — I have changes` → apply and repeat. Once wade has created the issues, the user starts a **separate** implementation session with `wade implement <issue-number>` — never run it yourself from here. See @.claude/skills/task/reference/session-summary-format.md.
 
 You do **not** create issues, implement code, run `wade implement`, `wade implementation-session done`, or `wade implementation-session sync`, or make any code changes. Planning only.
 
