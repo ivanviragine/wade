@@ -82,7 +82,7 @@ wade task create --title "feat: add preferences UI panel" \
 
 ### Parent issue — dependency analysis
 
-This set has a dependency (#51 → #50), so run `wade task deps` yourself after
+This set has a dependency (#50 → #51), so run `wade task deps` yourself after
 creating the issues — **pass the issue numbers explicitly**, since installed
 agents run in a non-TTY shell where bare `wade task deps` (no numbers) cannot
 fall back to its interactive picker and exits with "Provide at least 2 issue
@@ -102,7 +102,7 @@ issue:
 Multiple issues created — running dependency analysis...
 
 Found 1 dependency edge(s):
-  #51 → #50 (API must exist before UI can call it)
+  #50 → #51 (API must exist before UI can call it)
 
 Updating issue bodies with dependency refs...
   Updated #50
