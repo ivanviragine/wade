@@ -542,24 +542,27 @@ def _handle_api(args: list[str], state: dict[str, object]) -> int:
         assert isinstance(review_threads, dict)
         raw_threads = review_threads.get(str(pr_value), [])
         nodes = _review_threads_as_graphql_nodes(raw_threads)
+        pull_request: dict[str, object] = {
+            "reviewThreads": {
+                "pageInfo": {
+                    "hasNextPage": False,
+                    "endCursor": None,
+                },
+                "nodes": nodes,
+            }
+        }
+        # Opt-in commit timestamp for expected-bot arrival gating (#448). Absent by
+        # default so existing review-status contracts (no commit → gating off) are
+        # unchanged; seed via _seed_mock_pr_commit_pushed_at to exercise the wait.
+        pr_commits = state.setdefault("pr_commits", {})
+        assert isinstance(pr_commits, dict)
+        pushed_at = pr_commits.get(str(pr_value))
+        if isinstance(pushed_at, str):
+            pull_request["commits"] = {
+                "nodes": [{"commit": {"committedDate": pushed_at, "pushedDate": pushed_at}}]
+            }
         print(
-            json.dumps(
-                {
-                    "data": {
-                        "repository": {
-                            "pullRequest": {
-                                "reviewThreads": {
-                                    "pageInfo": {
-                                        "hasNextPage": False,
-                                        "endCursor": None,
-                                    },
-                                    "nodes": nodes,
-                                }
-                            }
-                        }
-                    }
-                }
-            )
+            json.dumps({"data": {"repository": {"pullRequest": pull_request}}})
         )
         return 0
 

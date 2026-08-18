@@ -220,3 +220,70 @@ class TestBotReviewValidation:
             "    - {name: bugbot, trigger: b}\n"
         )
         assert _validate_config_file(_write(tmp_path, text)) == []
+
+
+# ---------------------------------------------------------------------------
+# Arrival / ack timeouts (#448)
+# ---------------------------------------------------------------------------
+
+
+class TestBotReviewTimeouts:
+    def test_model_defaults(self) -> None:
+        config = BotReviewConfig()
+        assert config.arrival_timeout == 300
+        assert config.ack_timeout == 900
+
+    def test_ack_must_be_ge_arrival(self) -> None:
+        with pytest.raises(ValidationError, match="ack_timeout must be >= arrival_timeout"):
+            BotReviewConfig(arrival_timeout=600, ack_timeout=300)
+
+    def test_non_positive_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            BotReviewConfig(arrival_timeout=0)
+
+    def test_loader_parses_timeouts(self, tmp_path: Path) -> None:
+        text = "version: 2\nbot_review:\n  arrival_timeout: 120\n  ack_timeout: 480\n"
+        config = parse_config_file(_write(tmp_path, text))
+        assert config.bot_review.arrival_timeout == 120
+        assert config.bot_review.ack_timeout == 480
+
+    def test_loader_keeps_defaults_when_absent(self, tmp_path: Path) -> None:
+        text = "version: 2\nbot_review:\n  auto_trigger: true\n"
+        config = parse_config_file(_write(tmp_path, text))
+        assert config.bot_review.arrival_timeout == 300
+        assert config.bot_review.ack_timeout == 900
+
+    def test_loader_rejects_non_int_timeout(self, tmp_path: Path) -> None:
+        with pytest.raises(ConfigError):
+            parse_config_file(
+                _write(tmp_path, "version: 2\nbot_review:\n  arrival_timeout: soon\n")
+            )
+
+    def test_validator_flags_non_positive(self, tmp_path: Path) -> None:
+        errors = _validate_config_file(
+            _write(tmp_path, "version: 2\nbot_review:\n  arrival_timeout: 0\n")
+        )
+        assert any("bot_review.arrival_timeout: must be a positive integer" in e for e in errors)
+
+    def test_validator_flags_bool_timeout(self, tmp_path: Path) -> None:
+        errors = _validate_config_file(
+            _write(tmp_path, "version: 2\nbot_review:\n  ack_timeout: true\n")
+        )
+        assert any("bot_review.ack_timeout: must be a positive integer" in e for e in errors)
+
+    def test_validator_flags_ack_less_than_arrival(self, tmp_path: Path) -> None:
+        text = "version: 2\nbot_review:\n  arrival_timeout: 600\n  ack_timeout: 300\n"
+        errors = _validate_config_file(_write(tmp_path, text))
+        assert any("ack_timeout: must be >= arrival_timeout" in e for e in errors)
+
+    def test_valid_timeouts_have_no_errors(self, tmp_path: Path) -> None:
+        text = "version: 2\nbot_review:\n  arrival_timeout: 120\n  ack_timeout: 600\n"
+        assert _validate_config_file(_write(tmp_path, text)) == []
+
+    def test_written_init_block_round_trips(self, tmp_path: Path) -> None:
+        """The ``wade init`` bot_review block includes and round-trips the timeouts."""
+        from wade.services.init_service.config_io import _bot_review_config_dict
+
+        block = _bot_review_config_dict(auto_trigger=False)
+        assert block["arrival_timeout"] == 300
+        assert block["ack_timeout"] == 900

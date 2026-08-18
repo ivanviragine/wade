@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.49.1] — 2026-08-18
+
+### Bug Fixes
+
+- don't report review bots done until they've actually reviewed (#449) (01a3192)
+
 ## [v0.49.0] — 2026-08-18
 
 ### Features

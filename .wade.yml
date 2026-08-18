@@ -58,6 +58,22 @@ models:
       effort: xhigh
 provider:
   name: github
+bot_review:
+  # This repo runs CodeRabbit + Codex, not Cursor Bugbot. Bugbot is disabled so
+  # expectation-verified completion (#448) doesn't wait arrival_timeout for a
+  # review that never arrives on every review check. arrival_timeout/ack_timeout
+  # keep their defaults (300s / 900s).
+  auto_trigger: false
+  bots:
+  - name: coderabbit
+    trigger: '@coderabbitai review'
+    enabled: true
+  - name: codex
+    trigger: '@codex review'
+    enabled: true
+  - name: bugbot
+    trigger: bugbot run
+    enabled: false
 knowledge:
   enabled: true
   path: KNOWLEDGE.md
