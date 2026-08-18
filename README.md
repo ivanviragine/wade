@@ -212,6 +212,10 @@ wade plan ─▶ tasks + draft PRs ─▶ wade <N> ─▶ AI implements in an is
 
 Short aliases: `wade p` (plan), `wade i <N>` (implement), `wade r <N>` (review pr-comments).
 
+Interactive pickers (the arrow-key menus commands like `wade task create` show)
+wrap long choices to the terminal width instead of cropping them, so no option
+text is lost in narrow terminals and the list reflows automatically on resize.
+
 ### Session commands the AI runs
 
 These are invoked by the AI during a session — you normally don't run them by hand.
