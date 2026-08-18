@@ -10,13 +10,18 @@ self-sufficient without this file; this adds the legend and worked examples.
 - ✅ step completed successfully
 - ⚠️ completed **but needs the user's attention** — always paired with a one-line reason
 - ❌ step **failed or is blocked** — with the reason and the recommended action
+- ⏭️ step **skipped** — disabled in config or not applicable, e.g. Review when
+  `review_plan.enabled`/`review_implementation.enabled: false`, or Knowledge when
+  `knowledge.enabled: false` (the default). Use this — **never ✅** — for a step
+  that did not run.
 
 ## Final summary skeleton (session end)
 
 End the session with a compact block — no prose recap:
 
 1. **One status line for all steps**, each led by its glyph and joined with ` · `
-   (e.g. `✅ Review · ✅ Docs · ✅ Sync · ✅ Done`).
+   (e.g. `✅ Review · ✅ Docs · ✅ Sync · ✅ Done`). Mark a step that config
+   disabled with ⏭️, not ✅ — e.g. `⏭️ Review · ✅ Docs · …` when reviews are off.
 2. **Actionable handles** on their own line — issue/PR number + URL, `closes #N
    on merge` (or `stays open` when `--no-close`), branch when relevant.
 3. **An attention line** — either `✅ Nothing needs your attention.` or
@@ -77,6 +82,19 @@ Next: exit — wade creates the issue(s) and draft PR(s), then run `wade impleme
 Plan-session decisions that **are** dialogs: "write the plan file(s) now?",
 "revise or continue?", and the final exit decision. The single plain-text
 exception is step 1, "What would you like to plan?" — never a dialog.
+
+### Config-disabled steps (skipped)
+
+When `.wade.yml` disables a step — reviews off
+(`review_implementation.enabled: false`), or knowledge off
+(`knowledge.enabled: false`, the default) — mark it ⏭️, never ✅:
+
+```text
+✅ Docs · ⏭️ Review (reviews disabled in `.wade.yml`) · ✅ PR-SUMMARY · ✅ Sync · ✅ Done
+PR #123 — https://github.com/…/pull/123 · 4/5 threads resolved
+✅ Nothing needs your attention.
+Next: exit — reviewers are notified of your changes.
+```
 
 ## Cross-tool note (known limitation)
 

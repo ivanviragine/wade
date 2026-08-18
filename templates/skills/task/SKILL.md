@@ -145,26 +145,27 @@ of what was created and how to start working. Do NOT offer to run
 `wade implement` yourself or present it as a selectable option — the human
 starts work sessions when they are ready.
 
-After creating all issues, list them with the emoji step-status legend
-(@.claude/skills/task/reference/session-summary-format.md):
+After creating all issues, end with the shared final-summary skeleton
+(@.claude/skills/task/reference/session-summary-format.md) — a step-status line,
+the issue handles (number + title + URL), an attention line, and a bold `Next:`
+line:
 
 ```text
-✅ Created 3 issues:
-  #42 — feat: add user preferences schema (~200 LOC)
-  #43 — feat: add preferences API endpoint (~250 LOC)
-  #44 — feat: add preferences UI panel (~350 LOC)
-  #45 — feat(epic): user preferences feature (links #42, #43, #44)
+✅ Plan file(s) written · ✅ Issues created · ✅ Epic linked
+  #42 — feat: add user preferences schema (~200 LOC) — https://github.com/…/issues/42
+  #43 — feat: add preferences API endpoint (~250 LOC) — https://github.com/…/issues/43
+  #44 — feat: add preferences UI panel (~350 LOC) — https://github.com/…/issues/44
+  #45 — feat(epic): user preferences feature (links #42, #43, #44) — https://github.com/…/issues/45
+✅ Nothing needs your attention.
+Next: run `wade implement <number>` when you're ready — e.g. `wade implement 42`.
 ```
 
-Then show the next-step hint so the user knows how to proceed:
+For a **single issue** (no epic) the status line is `✅ Plan file written ·
+✅ Issue created · ⏭️ Epic (single issue)` — mark the epic step ⏭️, never ✅,
+since it did not run. If a creation failed or needs follow-up, use ⚠️/❌ on that
+step and add the reason to the attention line.
 
-> When you're ready to start, run:
->
-> ```
-> wade implement <number>
-> ```
->
-> For example: `wade implement 42`
+The `Next:` line **names** the command; it does not run it — see the rule below.
 
 **Do NOT run this command yourself.** Do NOT ask the user to pick an issue and
 then run it on their behalf. Simply inform them and end the session.
