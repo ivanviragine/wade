@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.48.3] — 2026-08-18
+
+### Documentation
+
+- reconcile developer references with the current codebase (#440) (c20a564)
+
 ## [v0.48.2] — 2026-08-17
 
 ### Documentation
