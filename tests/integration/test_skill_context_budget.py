@@ -65,7 +65,16 @@ from wade.skills.installer import (
 # steps were rewritten to the convention. The inline text was trimmed to its minimum
 # first; this bump is the explicit, reviewed adjustment the guard is designed to
 # force, and it still catches *silent* regressions.
-BUDGET_CHARS = 11000
+# Bumped 11000 -> 13700 for #450: a new canonical `{review_budget_notes}` partial
+# (time budget, pass-cap asymmetry across implementation/plan/pr-comments,
+# timeout-vs-error pattern-matching, and the trivial-change skip criteria +
+# AI-judgment trade-off) is now referenced by all three session skills — by
+# design the *same* ~2.2k-char block appears in each render so every review
+# workflow states identical guidance (replacing the drifting "600s" /
+# "at most 2 times" literals it superseded). This is the largest single bump so
+# far because the content itself — not incidental prose — is new; it was
+# trimmed for length before bumping. Still catches *silent* regressions.
+BUDGET_CHARS = 13700
 
 # (session label, launch prompt template, phase skill dir name)
 _SESSIONS = [

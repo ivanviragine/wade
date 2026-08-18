@@ -578,6 +578,12 @@ worst-case total that the pre-launch advisory announces. Set `ai.<command>.timeo
 the scaling and the retry** — the escape hatch when your terminal/orchestrator
 enforces a hard tool-timeout (set it just under that limit).
 
+A **headless** reviewer also gets told its own deadline: the plan/code/batch
+review prompt states the current attempt's budget in seconds, so it can
+prioritize the highest-severity findings and wrap up before being cut off
+rather than getting killed mid-thought. Interactive and self-review (prompt)
+reviews have no subprocess kill, so they get "no hard deadline" wording instead.
+
 ### Codex sandbox & network policy
 
 When WADE launches [Codex](https://github.com/openai/codex) in a linked

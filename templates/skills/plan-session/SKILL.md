@@ -44,6 +44,8 @@ here — record any new learning in the plan file so the implementation session 
 capture it. `wade knowledge rate` **is** available; your vote is carried forward
 into the next implementation session's PR (and thus reaches origin).
 
+{review_budget_notes}
+
 ## Your role
 
 1. **Ask the user** what they want to plan. If the session is interactive and the prompt does not already specify a feature or issue, ask before proceeding. Output a plain text question (e.g. "What would you like to plan?") — do NOT use a native selection/question component or present pre-defined categories.

@@ -438,11 +438,12 @@ def run_coherence_review(
 
     template = load_prompt_template("review-batch.md")
     batch_context_md = _format_batch_context(ctx)
-    prompt = template.replace("{batch_context}", batch_context_md)
 
     result = _run_review_delegation(
-        prompt,
+        template,
         "review_batch",
+        content_placeholder="{batch_context}",
+        content=batch_context_md,
         config=config,
         cmd_config=cmd_config,
         ai_tool=ai_tool,

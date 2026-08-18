@@ -116,6 +116,8 @@ identified a missing test case.
 - **Do NOT make unrelated changes** — stay focused on the review feedback
 - **Do NOT create new PRs** — push to the existing branch
 
+{review_budget_notes}
+
 ## Closing the session
 
 **NEVER** create Pull Requests manually (`gh pr create`) or push branches
@@ -156,7 +158,9 @@ it fails, debug and fix it — do NOT bypass.
   threads* above), then re-run `done`. A transient `gh` lookup failure does not
   block. Hatch: `done.require_resolved_threads: false` in `.wade.yml`.
 - `wade review implementation` has not run for the current commit → run it, or
-  pass `--skip-review`. Hatch: `done.require_review: false`.
+  pass `--skip-review` if the change meets a may-skip criterion (**Review
+  budget & skip guidance** above — name the criterion in your commit message
+  or `PR-SUMMARY.md`). Hatch: `done.require_review: false`.
 
 `done` also records the review outcome as a `## Review Status` line in the PR body
 (reviewed at `<sha>` / skipped via `--skip-review` / gate disabled), with the

@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+_CLOSING_STEP_HEADING = "Step 1 — Review [required unless the change is objectively trivial]"
+
 
 class TestSkillInstallation:
     def test_install_copies_skill_files(self, tmp_git_repo: Path) -> None:
@@ -87,6 +89,24 @@ class TestSkillInstallation:
             "Complexity + recommendation clause must be injected"
         )
 
+    @pytest.mark.parametrize(
+        "skill_name",
+        ["implementation-session", "plan-session", "review-pr-comments-session"],
+    )
+    def test_review_budget_notes_expanded_in_installed_skill(
+        self, tmp_git_repo: Path, skill_name: str
+    ) -> None:
+        """review_budget_notes (canonical time-budget/pass-cap/skip partial) is injected (#450)."""
+        from wade.skills.installer import install_skills
+
+        install_skills(tmp_git_repo, skills=[skill_name])
+
+        skill_md = tmp_git_repo / ".claude" / "skills" / skill_name / "SKILL.md"
+        content = skill_md.read_text(encoding="utf-8")
+        assert "{review_budget_notes}" not in content, "Placeholder must be expanded"
+        assert "## Review budget & skip guidance" in content, "Canonical section must be injected"
+        assert "done.max_review_passes" in content, "Pass-cap guidance must be injected"
+
     def test_review_enforcement_rule_expanded_by_default(self, tmp_git_repo: Path) -> None:
         """review_enforcement_rule partial is included by default (reviews enabled)."""
         from wade.skills.installer import install_skills
@@ -96,7 +116,9 @@ class TestSkillInstallation:
         skill_md = tmp_git_repo / ".claude" / "skills" / "implementation-session" / "SKILL.md"
         content = skill_md.read_text(encoding="utf-8")
         assert "{review_enforcement_rule}" not in content, "Placeholder must be expanded"
-        assert "## Never skip review" in content, "Rule heading must be present by default"
+        assert "## Review is required unless the change is objectively trivial" in content, (
+            "Rule heading must be present by default"
+        )
 
     def test_review_enforcement_rule_suppressed_by_extra_partials(self, tmp_git_repo: Path) -> None:
         """Passing empty string via extra_partials suppresses the review enforcement rule."""
@@ -111,7 +133,9 @@ class TestSkillInstallation:
         skill_md = tmp_git_repo / ".claude" / "skills" / "implementation-session" / "SKILL.md"
         content = skill_md.read_text(encoding="utf-8")
         assert "{review_enforcement_rule}" not in content, "Placeholder must be removed"
-        assert "## Never skip review" not in content, "Rule must be absent when suppressed"
+        assert "## Review is required unless the change is objectively trivial" not in content, (
+            "Rule must be absent when suppressed"
+        )
 
     def test_review_enforcement_rule_suppressed_via_config(self, tmp_git_repo: Path) -> None:
         """bootstrap_worktree with review_implementation.enabled=False suppresses the rule."""
@@ -124,7 +148,7 @@ class TestSkillInstallation:
         skill_md = tmp_git_repo / ".claude" / "skills" / "implementation-session" / "SKILL.md"
         content = skill_md.read_text(encoding="utf-8")
         assert "{review_enforcement_rule}" not in content, "Placeholder must be removed"
-        assert "## Never skip review" not in content, (
+        assert "## Review is required unless the change is objectively trivial" not in content, (
             "Rule must be absent when suppressed via config"
         )
 
@@ -181,7 +205,7 @@ class TestSkillInstallation:
         skill_md = tmp_git_repo / ".claude" / "skills" / "implementation-session" / "SKILL.md"
         content = skill_md.read_text(encoding="utf-8")
         assert "{review_implementation_closing_step}" not in content, "Placeholder must be expanded"
-        assert "Step 1 — Review [MANDATORY]" in content, "Full closing step must be present"
+        assert _CLOSING_STEP_HEADING in content, "Full closing step must be present"
 
     def test_review_implementation_closing_step_suppressed_by_extra_partials(
         self, tmp_git_repo: Path
@@ -202,7 +226,7 @@ class TestSkillInstallation:
         skill_md = tmp_git_repo / ".claude" / "skills" / "implementation-session" / "SKILL.md"
         content = skill_md.read_text(encoding="utf-8")
         assert "{review_implementation_closing_step}" not in content, "Placeholder must be removed"
-        assert "Step 1 — Review [MANDATORY]" not in content, "Full step must be absent"
+        assert _CLOSING_STEP_HEADING not in content, "Full step must be absent"
         assert "~~Review~~" in content, "Disabled one-liner must be present"
 
     def test_review_implementation_closing_step_suppressed_via_config(
@@ -218,7 +242,7 @@ class TestSkillInstallation:
         skill_md = tmp_git_repo / ".claude" / "skills" / "implementation-session" / "SKILL.md"
         content = skill_md.read_text(encoding="utf-8")
         assert "{review_implementation_closing_step}" not in content, "Placeholder must be removed"
-        assert "Step 1 — Review [MANDATORY]" not in content, "Full step must be absent"
+        assert _CLOSING_STEP_HEADING not in content, "Full step must be absent"
         assert "~~Review~~" in content, "Disabled one-liner must appear"
 
     def test_self_init_inject_skills_are_not_symlinked(self, tmp_git_repo: Path) -> None:

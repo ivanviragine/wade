@@ -1010,3 +1010,43 @@ class TestFormatBatchContextWithChains:
         assert "#20" in output
         assert "Stacked on:" in output
         assert "Diff (incremental)" in output
+
+
+# ---------------------------------------------------------------------------
+# {review_budget} substitution via run_coherence_review (#450)
+# ---------------------------------------------------------------------------
+
+
+class TestRunCoherenceReviewBudgetPlaceholder:
+    """review_batch defaults to interactive — no subprocess kill, no fake deadline."""
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.batch_review_service._load_review_config")
+    @patch("wade.services.batch_review_service.load_prompt_template")
+    def test_interactive_default_gets_no_hard_deadline_and_real_context(
+        self,
+        mock_template: MagicMock,
+        mock_load_review_config: MagicMock,
+        mock_delegate: MagicMock,
+    ) -> None:
+        from wade.services.batch_review_service import run_coherence_review
+
+        config = _batch_review_config(review_batch_enabled=True)  # mode unset -> interactive
+        mock_load_review_config.return_value = (config, config.ai.review_batch)
+        mock_template.return_value = "Review:\n{review_budget}\n---\n{batch_context}"
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.INTERACTIVE
+        )
+
+        ctx = BatchReviewContext(
+            issues=[BatchIssueContext(issue_number="10", issue_title="Feature A")],
+            tracking_issue="99",
+        )
+
+        run_coherence_review(ctx, config=config, cmd_config=config.ai.review_batch)
+
+        request = mock_delegate.call_args[0][0]
+        assert "Feature A" in request.prompt
+        assert "No hard deadline" in request.prompt
+        assert "{review_budget}" not in request.prompt
+        assert "{batch_context}" not in request.prompt

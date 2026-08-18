@@ -123,10 +123,31 @@ def _check_review_enabled(command: str, cmd_config: AICommandConfig) -> Delegati
     return None
 
 
+def _review_budget_line(mode: DelegationMode, timeout: int) -> str:
+    """Deadline wording substituted for ``{review_budget}`` in a review prompt (#450).
+
+    Only ``HEADLESS`` kills the subprocess at ``timeout`` seconds
+    (``_run_headless_once``) — the reviewer needs that number to prioritize and
+    wrap up before being cut off. ``INTERACTIVE``/``PROMPT`` reviews have no
+    subprocess kill, so stating a deadline there would fabricate one and could
+    cut a review short for no reason.
+    """
+    if mode == DelegationMode.HEADLESS:
+        return (
+            f"You have roughly **{timeout}s** to complete this review before it "
+            "is stopped; prioritize the most important findings and return "
+            "before then. Partial output is still used, so lead with the "
+            "highest-severity issues."
+        )
+    return "No hard deadline — take the time you need."
+
+
 def _run_review_delegation(
-    prompt: str,
+    template: str,
     command: str,
     *,
+    content_placeholder: str = "",
+    content: str = "",
     config: ProjectConfig | None = None,
     cmd_config: AICommandConfig | None = None,
     ai_tool: str | None = None,
@@ -140,9 +161,26 @@ def _run_review_delegation(
     yolo: bool | None = None,
     permission_mode_explicit: bool = False,
 ) -> DelegationResult:
-    """Shared pipeline: config load → mode resolve → AI resolve → confirm → delegate → display."""
+    """Shared pipeline: config load → mode resolve → AI resolve → confirm → delegate → display.
+
+    ``template`` is substituted here, not by the caller: ``{review_budget}`` is
+    replaced **in the bare template**, once ``delegation_mode`` and the
+    per-attempt ``request.timeout`` are known (#450) — a headless review gets a
+    concrete deadline naming that timeout, everything else gets "no hard
+    deadline" wording. ``content_placeholder`` (e.g. ``{diff_content}``) is
+    replaced with ``content`` **last**, after that. Order matters: ``content``
+    is untrusted, caller-supplied text (a diff, a plan file, batch context) that
+    may itself contain the literal substring ``{review_budget}`` — reviewing a
+    diff that touches this very prompt template is exactly that case. Replacing
+    ``{review_budget}`` first, before ``content`` is ever merged in, means that
+    later find-and-replace can never accidentally rewrite a matching literal
+    sitting inside the reviewed content.
+    """
     if config is None or cmd_config is None:
         config, cmd_config = _load_review_config(command)
+
+    def _merge_content(base: str) -> str:
+        return base.replace(content_placeholder, content) if content_placeholder else base
 
     try:
         default_mode = (
@@ -213,6 +251,20 @@ def _run_review_delegation(
     # scaling and — since it is the escape hatch for a hard tool-timeout — the
     # retry too (see ``_delegate_headless``).
     explicit_timeout = cmd_config.timeout is not None
+    # Size the budget off the real payload (content merged in), matching
+    # pre-#450 behavior — but only for *sizing*; the {review_budget} token is
+    # still raw here, so this throwaway string is never sent anywhere.
+    timeout = effective_timeout(_merge_content(template), cmd_config.timeout, effort_str)
+    # Substitute the reviewer's own deadline now that mode + the per-attempt
+    # budget are both known. This is the *first-attempt* budget, never the
+    # worst-case retry sum: the headless prompt is built once and reused across
+    # both attempts (``_delegate_headless``), so stating the worst case here
+    # would tell the reviewer it has more time than the attempt that is
+    # actually running it will allow — reproducing the silent-kill bug this
+    # placeholder exists to fix. Understating on a retry fails safe (wraps up
+    # early) rather than unsafe (runs long, gets killed).
+    budget_line = _review_budget_line(delegation_mode, timeout)
+    prompt = _merge_content(template.replace("{review_budget}", budget_line))
     request = DelegationRequest(
         mode=delegation_mode,
         prompt=prompt,
@@ -220,7 +272,7 @@ def _run_review_delegation(
         model=resolved_model,
         effort=effort_str,
         permission_mode=effective_permission_mode,
-        timeout=effective_timeout(prompt, cmd_config.timeout, effort_str),
+        timeout=timeout,
         explicit_timeout=explicit_timeout,
     )
 
@@ -314,11 +366,12 @@ def review_plan(
 
     plan_content = plan_path.read_text(encoding="utf-8")
     template = load_prompt_template("review-plan.md")
-    prompt = template.replace("{plan_content}", plan_content)
 
     return _run_review_delegation(
-        prompt,
+        template,
         "review_plan",
+        content_placeholder="{plan_content}",
+        content=plan_content,
         config=config,
         cmd_config=cmd_config,
         ai_tool=ai_tool,
@@ -413,11 +466,12 @@ def review_implementation(
         )
 
     template = load_prompt_template("review-code.md")
-    prompt = template.replace("{diff_content}", diff_content)
 
     result = _run_review_delegation(
-        prompt,
+        template,
         "review_implementation",
+        content_placeholder="{diff_content}",
+        content=diff_content,
         config=config,
         cmd_config=cmd_config,
         ai_tool=ai_tool,

@@ -15,6 +15,8 @@ For chain members, diff stats are **incremental** (against the parent branch, no
 
 Be specific and actionable. Reference issue numbers and branch names. If the changes are well-coordinated, say so briefly.
 
+{review_budget}
+
 ---
 
 {batch_context}
