@@ -138,7 +138,7 @@ and — from the `## Skills reference` index — `reference/tracking-issues.md`
 `reference/doc-update.md`. The `task` skill uses the same pattern with
 `plan-format.md` + `examples.md`, plus `reference/session-summary-format.md` —
 the shared **session-summary / decision convention** (emoji step-status legend
-✅/⚠️/❌, the final-summary skeleton, the recommended-first dialog-label rules, and
+✅/⚠️/❌/⏭️, the final-summary skeleton, the recommended-first dialog-label rules, and
 one worked example per session type). It is hosted under `task` deliberately:
 `task` installs in **every** session type (`PLAN`/`IMPLEMENT`/`REVIEW_SKILLS`), so
 all three session skills — plus `deps` — resolve it via the one

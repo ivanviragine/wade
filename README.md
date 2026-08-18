@@ -657,7 +657,8 @@ labelled "(recommended)".
 
 Each session **ends** with a compact emoji step-status summary instead of a
 prose recap: one glyph per step (✅ done · ⚠️ needs your attention · ❌
-failed/blocked) on a single line, the handles, an explicit attention line
+failed/blocked · ⏭️ skipped/disabled) on a single line, the handles, an
+explicit attention line
 (either "Nothing needs your attention" or the items that do), and a bold
 **Next:** action. Every finite-choice decision — including whether to exit —
 is a native dialog with the recommended option first.
