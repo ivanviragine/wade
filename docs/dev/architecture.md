@@ -492,8 +492,12 @@ session from starting.
   command as `--phase`). The AI-facing per-phase prose lives in
   `templates/prompts/session-start-<phase>.md` (the prompt source-of-truth per the
   "Prompts as .md Templates" principle) and is loaded via `load_prompt_template`
-  (a lazy import — off the hot PreToolUse path); the builder itself only prepends
-  the dynamic issue line, brands the payload, and caps it. For impl/review it
+  (a lazy import — off the hot PreToolUse path); the builder itself prepends the
+  dynamic issue line, overrides the template's static `Review budget:` line with
+  a disabled-skip note when the phase's review is off (`ai.review_implementation`
+  for impl/review, `ai.review_plan` for plan — mirrors `bootstrap.py`'s
+  skill-partial override for the same flags; a `.wade.yml` load failure fails
+  open to the default line), brands the payload, and caps it. For impl/review it
   parses the issue ref from `PLAN.md`'s first line (`# Issue #<id>: <title>`,
   omitted if absent) and points at the phase's `done` command and the gates it
   enforces; for plan (a detached worktree with no `PLAN.md` at the root) it points

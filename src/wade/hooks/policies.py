@@ -1375,6 +1375,47 @@ def _stale_base_line(count: int, phase: SessionPhase) -> str:
     )
 
 
+def _review_disabled_note(worktree_root: Path, phase: SessionPhase) -> str | None:
+    """Override text for the template's static ``Review budget:`` line, or ``None``.
+
+    The templates' last line always describes the review command as printing a
+    live budget/pass count, but that command short-circuits to a disabled-skip
+    result once the phase's review is off in ``.wade.yml`` — mirrors
+    ``bootstrap.py``'s ``skill_extra_partials`` override for the same flags
+    (#450 review). IMPLEMENT and REVIEW both close through ``wade review
+    implementation``, so both gate on ``review_implementation``; PLAN gates on
+    ``review_plan``. Returns ``None`` (leave the default line as-is) when the
+    phase's review is not disabled, the phase carries no such line, or config
+    fails to load for any reason — this must fail open, never suppress the
+    rest of the SessionStart payload.
+    """
+    try:
+        from wade.config.loader import load_config
+
+        config = load_config(worktree_root)
+    except Exception:
+        return None
+
+    if phase is SessionPhase.PLAN:
+        if config.ai.review_plan.enabled is False:
+            return (
+                "Review budget: skipped — `review_plan.enabled: false` in "
+                "`.wade.yml` disables plan review."
+            )
+        return None
+
+    if phase in (SessionPhase.IMPLEMENT, SessionPhase.REVIEW):
+        if config.ai.review_implementation.enabled is False:
+            return (
+                "Review budget: skipped — `review_implementation.enabled: false` in "
+                "`.wade.yml` disables `wade review implementation` and the `done` "
+                "review gate."
+            )
+        return None
+
+    return None
+
+
 def session_start_context(worktree_root: Path, phase: SessionPhase) -> str | None:
     """Build the compact context re-injected at session start / resume / compaction.
 
@@ -1438,7 +1479,15 @@ def session_start_context(worktree_root: Path, phase: SessionPhase) -> str | Non
         # heavy modules the lean entry avoids (no crossby adapters, no CLI graph).
         from wade.skills.installer import load_prompt_template
 
-        lines.extend(ln for ln in load_prompt_template(template_name).splitlines() if ln.strip())
+        template_lines = [
+            ln for ln in load_prompt_template(template_name).splitlines() if ln.strip()
+        ]
+        override = _review_disabled_note(worktree_root, phase)
+        if override is not None:
+            template_lines = [
+                override if ln.startswith("Review budget:") else ln for ln in template_lines
+            ]
+        lines.extend(template_lines)
 
     if not lines:
         return None
