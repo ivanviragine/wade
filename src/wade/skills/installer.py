@@ -38,7 +38,11 @@ _SKILL_PARTIALS: dict[str, str] = {
 # --- Skill registry: name → list of files ---
 
 SKILL_FILES: dict[str, list[str]] = {
-    "task": ["SKILL.md", "plan-format.md", "examples.md"],
+    # ``reference/session-summary-format.md`` is the canonical session-summary /
+    # decision convention (#443). ``task`` installs in every session type
+    # (PLAN/IMPLEMENT/REVIEW_SKILLS), so hosting it here makes the file resolve via
+    # ``@`` from plan-, implementation-, and review-session skills alike.
+    "task": ["SKILL.md", "plan-format.md", "examples.md", "reference/session-summary-format.md"],
     "plan-session": ["SKILL.md", "reference/plan-format.md"],
     "implementation-session": [
         "SKILL.md",

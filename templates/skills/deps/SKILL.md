@@ -85,9 +85,15 @@ Rules:
 
 ## Step 3: Confirm completion
 
-After writing the file, tell the user:
-> "Dependency file written to `<path>`. Exit this session so wade can apply
-> the dependencies to the issues."
+After writing the file, end with the shared session-summary block — a compact
+status, not a prose recap. Keep the blank `>` separators so the lines don't
+collapse into one paragraph:
+
+> ✅ Dependency file written to `<path>`
+>
+> ✅ Nothing needs your attention.
+>
+> **Next:** exit this session so wade applies the dependencies to the issues.
 
 ## Rules
 

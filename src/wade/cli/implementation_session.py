@@ -136,9 +136,15 @@ def done(
         # confirmed" advisory is redundant (and would contradict the gate).
         console.warn(DOC_PASS_ADVISORY)
 
+        # Reflect the actual close mode — `--no-close` leaves the issue open, so
+        # advertising "closes #N on merge" would be a false completion handle.
+        close_handle = "issue stays open (--no-close)" if no_close else "closes #N on merge"
         console.info(
             "SESSION COMPLETE. "
-            "Report by exception: give the PR/URL and what's next, and only call out "
-            "anything that needs the developer's attention. Suggest they exit the session."
+            "Report by exception: end with the emoji step-status summary (Review, Docs, "
+            f"PR-SUMMARY, Sync, Done) and its handles — PR number/URL, {close_handle}, "
+            "branch — then present the exit decision as a native dialog whose first option "
+            "is 'Exit now — wade takes over (recommended)'. Surface only what "
+            "needs the developer's attention."
         )
     raise typer.Exit(0 if success else 1)

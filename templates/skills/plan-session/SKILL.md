@@ -22,9 +22,10 @@ start.
 ## Talking to the user
 
 {user_interaction_prompt}
-- After presenting the plan breakdown: "Ready to write the plan file(s)?"
-- After writing and presenting summary: "Want any modifications?"
-- After validation passes: "Plans validated — wade creates the issues after you leave; exit now. Anything to change first?"
+- After the plan breakdown (dialog): `Write the plan file(s) now (recommended)` / `Keep planning — I have changes`.
+- After the plan summary (dialog): `Looks good — continue (recommended)` / `Revise — I want changes`.
+- After validation passes (dialog): `Exit now — wade creates the issue(s) & draft PR(s) (recommended)` / `Keep editing — I have changes`.
+- Step 1 ("What would you like to plan?") is the plain-text exception — never a dialog.
 
 ## Planning sessions create no tasks
 
@@ -48,16 +49,16 @@ into the next implementation session's PR (and thus reaches origin).
 1. **Ask the user** what they want to plan. If the session is interactive and the prompt does not already specify a feature or issue, ask before proceeding. Output a plain text question (e.g. "What would you like to plan?") — do NOT use a native selection/question component or present pre-defined categories.
 2. **Search relevant knowledge** for the feature topic (see **Project Knowledge** above). Do not dump all entries.
 3. **Plan the feature** with the user — analyze, break down, propose.
-4. **Present the plan(s)** and ask (native question component): "Ready to write the plan file(s)?" before writing any files.
+4. **Present the plan(s)**, then a native dialog — `Write the plan file(s) now (recommended)` / `Keep planning — I have changes` — before writing any files.
 5. **Write plan file(s)** to the temp directory shown in your prompt — one file per issue. Follow @.claude/skills/plan-session/reference/plan-format.md for the required structure, complexity values, and file naming.
-6. **Review with the user** — present a summary of every plan file (title, complexity, key tasks). Ask (native question component): "Want any modifications?" If so, apply and repeat; otherwise proceed.
+6. **Review with the user** — present a summary of every plan file (title, complexity, key tasks), then a native dialog: `Looks good — continue (recommended)` / `Revise — I want changes`. If revising, apply and repeat; otherwise proceed.
 {review_plan_step}
 <!-- markdownlint-disable-next-line MD029 -->
 8. **Capture knowledge (if enabled)** — `wade knowledge add` is **not** available in a planning session; record any learning worth keeping in the plan file so the implementation session captures it. Rate (`wade knowledge rate`) any entries you evaluated.
 <!-- markdownlint-disable-next-line MD029 -->
 9. **Validate** — run `wade plan-session done <plan_dir>` (the temp dir from your prompt). If it exits with errors, fix each reported issue and re-run until it passes. Warnings are informational and do not block.
 <!-- markdownlint-disable-next-line MD029 -->
-10. **Present results and tell the user to exit** (per the **Communication style** rule) — validation has passed, so state plainly that the plan is complete and to exit now; wade creates the task(s) and draft PR(s) after you leave, then start work with `wade implement <issue-number>`. Offer one escape (native question component): "anything to change first?"
+10. **Present results** — end with the emoji step-status summary (steps: `Plan file(s) · Review · Knowledge · Validate`) and its handles (each plan file's title + complexity). Validation has passed, so present the exit decision as a **native dialog**: `Exit now — wade creates the issue(s) & draft PR(s) (recommended)` and `Keep editing — I have changes` → apply and repeat. Once wade has created the issues, the user starts a **separate** implementation session with `wade implement <issue-number>` — never run it yourself from here. See @.claude/skills/task/reference/session-summary-format.md.
 
 You do **not** create issues, implement code, run `wade implement`, `wade implementation-session done`, or `wade implementation-session sync`, or make any code changes. Planning only.
 
