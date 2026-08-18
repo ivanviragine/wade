@@ -112,8 +112,9 @@ fails, fix the cause, do NOT bypass.
 **Step 6 — Present results** (per the **Communication style** rule): the
 actionable handles — PR number/URL, that the issue closes on merge (unless
 `--no-close` was passed to `done`, then it stays open), the branch, and what's
-next (later feedback → `wade review pr-comments <issue>`; issue/PR status →
-`wade task read <issue>`). `done` has succeeded — tell the user plainly that the session is
+next (later feedback → `wade review pr-comments <issue>`; issue status →
+`wade task read <issue>`; PR status → the PR URL above or `gh pr view
+<pr-number>`). `done` has succeeded — tell the user plainly that the session is
 complete and to exit now, offering one escape: "any further changes first?" If
 so, apply and repeat Steps 1–6.
 
