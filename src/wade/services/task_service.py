@@ -460,7 +460,7 @@ def create_task(
             try:
                 add_complexity_label(provider, task.id, complexity)
             except Exception as e:
-                logger.warning("task.complexity_label_failed", error=str(e))
+                logger.warning("task.complexity_label_failed", task_id=task.id, error=str(e))
 
     return task
 
