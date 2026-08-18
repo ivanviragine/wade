@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from wade.ui.prompts import select
+import questionary
+from questionary.prompts.common import InquirerControl
+
+from wade.ui.prompts import _enable_choice_wrapping, select
 
 
 def _mock_questionary_result(return_value: object) -> MagicMock:
@@ -12,6 +15,14 @@ def _mock_questionary_result(return_value: object) -> MagicMock:
     question = MagicMock()
     question.ask.return_value = return_value
     return question
+
+
+def _choice_window_wraps(question: questionary.Question) -> bool:
+    """True if the question's InquirerControl window has wrap_lines enabled."""
+    windows = question.application.layout.find_all_windows()
+    ic_windows = [w for w in windows if isinstance(w.content, InquirerControl)]
+    assert ic_windows, "expected at least one InquirerControl window"
+    return all(bool(w.wrap_lines()) for w in ic_windows)
 
 
 class TestSelect:
@@ -46,3 +57,36 @@ class TestSelectNonTty:
         with patch("wade.ui.prompts.is_tty", return_value=False):
             result = select("Pick one", ["a", "b"])
         assert result == 0
+
+
+class TestEnableChoiceWrapping:
+    """_enable_choice_wrapping() flips wrap_lines on the picker choice window."""
+
+    def test_select_wrapping_disabled_by_default(self) -> None:
+        # Guards against a questionary default change that would make our
+        # helper a no-op — the fix only matters because the default crops.
+        question = questionary.select("Pick", choices=["short", "x" * 120])
+        assert _choice_window_wraps(question) is False
+
+    def test_select_window_wraps_after_helper(self) -> None:
+        question = questionary.select("Pick", choices=["short", "x" * 120])
+        _enable_choice_wrapping(question)
+        assert _choice_window_wraps(question) is True
+
+    def test_checkbox_window_wraps_after_helper(self) -> None:
+        question = questionary.checkbox("Pick", choices=["short", "y" * 120])
+        _enable_choice_wrapping(question)
+        assert _choice_window_wraps(question) is True
+
+    def test_helper_is_noop_when_find_all_windows_raises(self) -> None:
+        # Fail-safe: a future questionary/prompt_toolkit change that breaks the
+        # walk must degrade to today's crop behavior, not crash the picker.
+        question = MagicMock()
+        question.application.layout.find_all_windows.side_effect = RuntimeError("boom")
+        _enable_choice_wrapping(question)  # must not raise
+
+    def test_helper_is_noop_on_magicmock_question(self) -> None:
+        # The existing select()/multi_select() tests patch questionary with a
+        # bare MagicMock; the helper must tolerate it (iterating the mock's
+        # find_all_windows() result raises TypeError, caught by the fail-safe).
+        _enable_choice_wrapping(MagicMock())  # must not raise

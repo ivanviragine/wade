@@ -656,3 +656,15 @@ WADE owns zero AI-tool model catalogs — catalog models come from crossby's sta
 uv.lock is gitignored in the WADE repo (.gitignore:47) and NOT tracked. A dependency bump therefore commits only pyproject.toml (and the regenerated lock stays local for reproducibility). CI uses 'uv sync --all-extras' (not --locked/--frozen), so there is no lock-freshness gate. Do not 'git add -f uv.lock' during a dependency change.
 
 ---
+
+## 82ad4c583c58 | 2026-08-18 | implementation | tags: ui, prompts, questionary | Issue #445
+
+wade's interactive pickers all funnel through src/wade/ui/prompts.py (select/menu/multi_select -> questionary select/checkbox). questionary builds the choice list as a prompt_toolkit Window(InquirerControl) with the default wrap_lines=False, which CROPS long choices to the terminal width (silently losing text). To make choices wrap, call _enable_choice_wrapping(question) BETWEEN constructing the Question and calling .ask(): it walks question.application.layout.find_all_windows() and sets win.wrap_lines = to_filter(True) on each Window whose .content is a questionary.prompts.common.InquirerControl. Done best-effort (try/except -> logger.debug("prompts.choice_wrap_failed")) because it depends on undocumented questionary internals; pyproject pins questionary>=2.0 with no ceiling. wrap_lines reflows on resize and the highlight/[SetCursorPosition] carry across wrapped rows, so selection + arrow-key scroll still work. Known limit: no hanging indent (continuation rows start at col 0). confirm()/input_prompt() left unchanged (Yes/No + free text, no long choices). Pinned by tests/unit/test_utils/test_prompts.py::TestEnableChoiceWrapping.
+
+---
+
+## b7e8aa32094f | 2026-08-18 | implementation | tags: ui, prompts, rich | Issue #445
+
+The plain non-interactive Rich-printed list rows (task_service.list_tasks, implementation_service/cleanup.list_sessions/worktree list) already WRAP via Console.print defaults (no_wrap=False, overflow "fold") — verified rendering a long row at width 40. The long-choice CROP bug (#445) was ONLY ever in the questionary arrow-key picker (src/wade/ui/prompts.py), never in the Rich output path. So a "text is cropped" report about a list should be triaged to whether it came from the interactive picker vs the plain printed list.
+
+---
