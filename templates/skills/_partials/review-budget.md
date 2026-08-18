@@ -16,9 +16,12 @@ left" each run; trust that over any number here.
 
 **Timeout ≠ error** — exit 1 whose output contains `Headless review timed out
 before finishing` or `Headless review timed out before producing any
-output.` is a budget overrun (expected on a large diff), not a bug: re-run
-once, or use the salvaged partial output. Only a non-timeout exit 1 warrants
-"debug and retry."
+output.` is a budget overrun (expected on a large diff), not a bug; only a
+non-timeout exit 1 warrants "debug and retry." But a timeout writes no
+review-ran marker, so it does **not** clear `done`'s gate — salvaged output is
+for addressing findings, not for completing. Re-run once; if the **same
+commit** keeps timing out (a repeat can't become a pass), finish via
+`--skip-review` (cite the timeout) or `done.require_review: false`. Don't loop.
 
 **Trivial-change skip** — review is required unless the change is objectively
 trivial. Applies to **implementation** and **pr-comments** review (a run is
@@ -30,12 +33,14 @@ flag.
   with no logic change.
 - *Never skip*: logic/control-flow changes, security/auth-sensitive code,
   public-API/signature changes, dependency changes, migrations.
-- Skip via `--skip-review` on the session's `done` command — already recorded
-  in the PR's `## Review Status` line. **Name which may-skip criterion
-  applied** in your commit message or `PR-SUMMARY.md`; an unstated criterion
-  is non-compliant.
+- Skip via `--skip-review` on the session's `done` command — recorded in the
+  PR's visible `## Review Status` line, so a human reviewer sees and ratifies
+  every skip (it defers to review, never ships unreviewed). **Name which
+  may-skip criterion applied** in your commit message or `PR-SUMMARY.md`; an
+  unstated criterion is non-compliant.
 - **Trade-off, stated plainly:** this is AI judgment, not a code-computed
   threshold — a deliberate departure from "if an agent can get it wrong by
   reasoning, put it in code," because diff size alone can't tell a trivial
-  rename from a trivial-looking bug fix. The named-criterion audit trail above
-  is how this compensates for the missing enforcement.
+  rename from a trivial-looking bug fix. Compensating for the missing
+  enforcement: the named-criterion audit trail above, plus the visible
+  `## Review Status` line that surfaces every skip to a human reviewer.
