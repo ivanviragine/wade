@@ -9,10 +9,15 @@ description: >
 
 # Dependency Analysis
 
-Analyze a set of tasks (GitHub Issues, or the project's configured task
-provider) and determine the dependency relationships between them. Output a
+Analyze a set of tasks (GitHub Issues, or any provider whose task IDs are
+numeric) and determine the dependency relationships between them. Output a
 structured file that `wade` will use to generate dependency graphs and update
 task bodies.
+
+> **Scope:** dependency analysis is **numeric-ID only** — the output contract
+> below (`X -> Y`) and wade's parser accept only digits. Providers with opaque
+> task IDs (e.g. ClickUp, IDs like `abc123`) can't use this skill; link their
+> tasks with an epic instead (see the [task skill](../task/SKILL.md)).
 
 ## When to activate
 

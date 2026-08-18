@@ -656,3 +656,9 @@ WADE owns zero AI-tool model catalogs — catalog models come from crossby's sta
 uv.lock is gitignored in the WADE repo (.gitignore:47) and NOT tracked. A dependency bump therefore commits only pyproject.toml (and the regenerated lock stays local for reproducibility). CI uses 'uv sync --all-extras' (not --locked/--frozen), so there is no lock-freshness gate. Do not 'git add -f uv.lock' during a dependency change.
 
 ---
+
+## 3f6332a4b61d | 2026-08-18 | implementation | tags: providers, deps, clickup | Issue #441
+
+WADE's dependency-graph and parent-linkage automation is numeric-ID only, so opaque-ID providers (ClickUp) cannot use it. Three places all assume digits: parse_deps_output's _ARROW_RE (deps_service.py, `^\d+ -> \d+`) rejects non-numeric edges; AbstractTaskProvider.find_parent_issue defaults to returning None (providers/base.py) and ClickUpProvider does NOT override it (GitHubProvider does, providers/github.py); and _CHECKLIST_ISSUE_RE / parse_all_issue_refs (models/task.py) match only `#<digits>`. Consequence: for ClickUp, `wade task deps` produces no accepted edges and an epic's `- [ ] #id` checklist is not recognized by done/batch parent flows — the epic is a human-readable tracking doc only. Documented in templates/skills/task/SKILL.md and deps/SKILL.md scope notes (PR #442).
+
+---

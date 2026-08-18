@@ -144,12 +144,17 @@ Collect the issue number and URL from each creation.
 
 A multi-issue set gets **exactly one** parent — never two competing checklists.
 
-> **Scope note:** `wade task deps` only works with numeric, GitHub-style issue
-> IDs — its CLI and dependency-graph parser both assume digits. Providers with
-> opaque task IDs (e.g. ClickUp — `provider.name: clickup` in `.wade.yml`,
-> IDs like `abc123`) cannot go through it. On such a project, **always use the
-> epic path below, even when the issues have dependencies** — note the
-> dependency order in the epic body instead.
+> **Scope note:** WADE's dependency **and parent-linkage** automation is
+> numeric-ID only. `wade task deps` (CLI + dependency-graph parser) assumes
+> digits, and parent detection (`find_parent_issue` plus the `- [ ] #<number>`
+> checklist parser behind `done` and batch lifecycle flows) matches only
+> `#<digits>` refs. Providers with opaque task IDs (e.g. ClickUp —
+> `provider.name: clickup` in `.wade.yml`, IDs like `abc123`) can use neither.
+> On such a project, skip `wade task deps` and **use the epic path below even
+> when the issues have dependencies** — but the epic is a **human-readable
+> tracking doc only**: wade will not auto-associate its children, tick its
+> checklist on merge, or auto-close it. Record the dependency order and the
+> sub-task list in the epic body for humans to follow.
 
 Choose the parent by whether the issues have dependencies (GitHub/numeric-ID
 providers only — see scope note above):
@@ -177,7 +182,9 @@ Write an epic with:
   format like any other issue (`wade task create` enforces it); `feat(epic)`
   keeps it self-identifying as the parent
 - Brief summary of the feature
-- Checklist linking each sub-issue: `- [ ] #<number> — <title>`
+- Checklist linking each sub-issue: `- [ ] #<number> — <title>` (the `#<number>`
+  form is what drives wade's parent automation on numeric-ID providers; on an
+  opaque-ID provider it is a plain human-readable list — see the scope note above)
 
 Create it non-interactively — write the epic body to a file first:
 
