@@ -942,7 +942,7 @@ def bootstrap_worktree(
         _carry_forward_pending_votes(worktree_path, repo_root, config)
 
     # Install skill files — not tracked by git so worktrees don't inherit them
-    from wade.skills.installer import get_wade_repo_root, install_skills
+    from wade.skills.installer import SKILL_FILES, get_wade_repo_root, install_skills
 
     is_self = repo_root.resolve() == get_wade_repo_root().resolve()
 
@@ -958,6 +958,30 @@ def bootstrap_worktree(
         skill_extra_partials["{review_implementation_closing_step}"] = (
             "**Step 1 — ~~Review~~** — skipped"
             " (`review_implementation.enabled: false` in `.wade.yml`)."
+        )
+
+    # {review_budget_notes} (review-budget.md) is shared by all three session
+    # skills, so — unlike the placeholders above — one global override string
+    # would be wrong for whichever skill's review command is still enabled. Its
+    # "review is required unless trivial" guidance is only contradictory for
+    # the skill(s) whose own review flag is off, so scope the override to what
+    # this call is actually installing. Each bootstrap_worktree call installs
+    # only one of {plan-session} vs {implementation-session,
+    # review-pr-comments-session} (see PLAN_SKILLS/IMPLEMENT_SKILLS/
+    # REVIEW_SKILLS), so the two branches below never collide in practice (#450).
+    installing = set(skills) if skills is not None else set(SKILL_FILES)
+    if config.ai.review_plan.enabled is False and "plan-session" in installing:
+        skill_extra_partials["{review_budget_notes}"] = (
+            "## Review budget & skip guidance\n\n"
+            "Skipped — `review_plan.enabled: false` in `.wade.yml` disables plan review."
+        )
+    if config.ai.review_implementation.enabled is False and (
+        "implementation-session" in installing or "review-pr-comments-session" in installing
+    ):
+        skill_extra_partials["{review_budget_notes}"] = (
+            "## Review budget & skip guidance\n\n"
+            "Skipped — `review_implementation.enabled: false` in `.wade.yml` disables "
+            "`wade review implementation` and the `done` review gate."
         )
     if is_self:
         # Worktree has its own templates/ checkout — symlink to those

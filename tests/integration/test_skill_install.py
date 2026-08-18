@@ -107,6 +107,81 @@ class TestSkillInstallation:
         assert "## Review budget & skip guidance" in content, "Canonical section must be injected"
         assert "done.max_review_passes" in content, "Pass-cap guidance must be injected"
 
+    def test_review_budget_notes_suppressed_via_plan_config(self, tmp_git_repo: Path) -> None:
+        """bootstrap_worktree with review_plan.enabled=False tailors plan-session's budget notes."""
+        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
+        from wade.services.implementation_service import bootstrap_worktree
+
+        config = ProjectConfig(ai=AIConfig(review_plan=AICommandConfig(enabled=False)))
+        bootstrap_worktree(tmp_git_repo, config, tmp_git_repo, skills=["plan-session"])
+
+        skill_md = tmp_git_repo / ".claude" / "skills" / "plan-session" / "SKILL.md"
+        content = skill_md.read_text(encoding="utf-8")
+        assert "{review_budget_notes}" not in content, "Placeholder must be expanded"
+        assert "done.max_review_passes" not in content, (
+            "Full budget guidance must not survive when plan review is disabled"
+        )
+        assert "Skipped — `review_plan.enabled: false`" in content, (
+            "Disabled note must explain why budget guidance was skipped"
+        )
+
+    def test_review_budget_notes_suppressed_via_implementation_config(
+        self, tmp_git_repo: Path
+    ) -> None:
+        """review_implementation.enabled=False tailors implementation-session's budget notes."""
+        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
+        from wade.services.implementation_service import bootstrap_worktree
+
+        config = ProjectConfig(ai=AIConfig(review_implementation=AICommandConfig(enabled=False)))
+        bootstrap_worktree(tmp_git_repo, config, tmp_git_repo, skills=["implementation-session"])
+
+        skill_md = tmp_git_repo / ".claude" / "skills" / "implementation-session" / "SKILL.md"
+        content = skill_md.read_text(encoding="utf-8")
+        assert "{review_budget_notes}" not in content, "Placeholder must be expanded"
+        assert "done.max_review_passes" not in content, (
+            "Full budget guidance must not survive when implementation review is disabled"
+        )
+        assert "Skipped — `review_implementation.enabled: false`" in content, (
+            "Disabled note must explain why budget guidance was skipped"
+        )
+
+    def test_review_budget_notes_suppressed_via_pr_comments_config(
+        self, tmp_git_repo: Path
+    ) -> None:
+        """review_implementation.enabled=False also tailors review-pr-comments-session's notes."""
+        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
+        from wade.services.implementation_service import bootstrap_worktree
+
+        config = ProjectConfig(ai=AIConfig(review_implementation=AICommandConfig(enabled=False)))
+        bootstrap_worktree(
+            tmp_git_repo, config, tmp_git_repo, skills=["review-pr-comments-session"]
+        )
+
+        skill_md = tmp_git_repo / ".claude" / "skills" / "review-pr-comments-session" / "SKILL.md"
+        content = skill_md.read_text(encoding="utf-8")
+        assert "{review_budget_notes}" not in content, "Placeholder must be expanded"
+        assert "done.max_review_passes" not in content, (
+            "Full budget guidance must not survive when implementation review is disabled"
+        )
+        assert "Skipped — `review_implementation.enabled: false`" in content, (
+            "Disabled note must explain why budget guidance was skipped"
+        )
+
+    def test_review_budget_notes_unaffected_by_other_flag(self, tmp_git_repo: Path) -> None:
+        """review_plan.enabled=False must not suppress implementation-session's budget notes."""
+        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
+        from wade.services.implementation_service import bootstrap_worktree
+
+        config = ProjectConfig(ai=AIConfig(review_plan=AICommandConfig(enabled=False)))
+        bootstrap_worktree(tmp_git_repo, config, tmp_git_repo, skills=["implementation-session"])
+
+        skill_md = tmp_git_repo / ".claude" / "skills" / "implementation-session" / "SKILL.md"
+        content = skill_md.read_text(encoding="utf-8")
+        assert "done.max_review_passes" in content, (
+            "implementation-session's budget guidance must stay intact when only "
+            "review_plan is disabled"
+        )
+
     def test_review_enforcement_rule_expanded_by_default(self, tmp_git_repo: Path) -> None:
         """review_enforcement_rule partial is included by default (reviews enabled)."""
         from wade.skills.installer import install_skills
