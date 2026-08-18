@@ -1186,6 +1186,52 @@ class TestFindExistingBranchForIssue:
 # ---------------------------------------------------------------------------
 
 
+class TestAnnotateBotExpectations:
+    """Unit tests for the annotate_bot_expectations() service helper (#448)."""
+
+    def _config(self, *names: str, **kwargs: int):
+        from wade.models.config import BotReviewConfig, ProjectConfig, ReviewBotConfig
+
+        return ProjectConfig(
+            bot_review=BotReviewConfig(
+                bots=[ReviewBotConfig(name=n, trigger=f"@{n} review") for n in names], **kwargs
+            )
+        )
+
+    def test_sets_expected_bots_and_arrivals(self) -> None:
+        from datetime import UTC, datetime, timedelta
+
+        from wade.models.review import BotArrivalState, PRReviewStatus
+        from wade.services.review_service import annotate_bot_expectations
+
+        now = datetime(2026, 8, 10, 10, 10, 0, tzinfo=UTC)
+        status = PRReviewStatus(latest_commit_pushed_at=now - timedelta(seconds=30))
+        annotate_bot_expectations(
+            status, self._config("coderabbit", arrival_timeout=300, ack_timeout=900), now=now
+        )
+        assert status.expected_bots == ["coderabbit"]
+        assert status.bot_arrivals["coderabbit"].state == BotArrivalState.AWAITING
+
+    def test_no_enabled_bots_is_noop(self) -> None:
+        from wade.models.review import PRReviewStatus
+        from wade.services.review_service import annotate_bot_expectations
+
+        cfg = self._config("coderabbit")
+        cfg.bot_review.bots[0].enabled = False
+        status = PRReviewStatus()
+        annotate_bot_expectations(status, cfg)
+        assert status.expected_bots == []
+        assert status.bot_arrivals == {}
+
+    def test_fetch_failed_left_untouched(self) -> None:
+        from wade.models.review import PRReviewStatus
+        from wade.services.review_service import annotate_bot_expectations
+
+        status = PRReviewStatus(fetch_failed=True)
+        annotate_bot_expectations(status, self._config("coderabbit"))
+        assert status.expected_bots == []
+
+
 class TestFetchReviews:
     """Tests for the fetch_reviews() subcommand function."""
 
@@ -1272,6 +1318,56 @@ class TestFetchReviews:
         assert result is True
         captured = capsys.readouterr()
         assert "No unresolved" in captured.out
+
+    @patch("wade.services.review_service.get_comprehensive_review_status")
+    @patch("wade.services.review_service.git_pr.get_pr_for_branch")
+    @patch("wade.services.review_service.git_branch.make_branch_name", return_value="feat/42-fix")
+    @patch(
+        "wade.services.review_service.git_repo.get_current_branch",
+        side_effect=GitError("detached"),
+    )
+    @patch("wade.services.review_service.git_repo.get_repo_root")
+    @patch("wade.services.review_service.get_provider")
+    @patch("wade.services.review_service.load_config")
+    def test_no_threads_reports_awaited_bot(
+        self,
+        mock_config: MagicMock,
+        mock_get_provider: MagicMock,
+        mock_repo_root: MagicMock,
+        mock_get_current_branch: MagicMock,
+        mock_branch: MagicMock,
+        mock_pr: MagicMock,
+        mock_status: MagicMock,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """With an enabled bot that hasn't reviewed HEAD, the AI-facing fetch must
+        NOT print "No unresolved review comments found." (#448)."""
+        from datetime import UTC, datetime
+
+        from wade.models.config import BotReviewConfig, ProjectConfig, ReviewBotConfig
+        from wade.models.review import PRReviewStatus
+
+        mock_config.return_value = ProjectConfig(
+            bot_review=BotReviewConfig(
+                bots=[ReviewBotConfig(name="coderabbit", trigger="@coderabbitai review")],
+                arrival_timeout=3600,
+                ack_timeout=7200,
+            )
+        )
+        mock_repo_root.return_value = tmp_path
+        provider = mock_get_provider.return_value
+        provider.read_task.return_value = self._make_task()
+        mock_pr.return_value = PRLookup(found=True, pr=PRRef(number=99, state="OPEN"))
+        # A just-pushed commit with no CodeRabbit signal → AWAITING within window.
+        mock_status.return_value = PRReviewStatus(latest_commit_pushed_at=datetime.now(UTC))
+
+        result = fetch_reviews("42", project_root=tmp_path)
+
+        assert result is True
+        captured = capsys.readouterr()
+        assert "coderabbit" in captured.out
+        assert "No unresolved review comments found." not in captured.out
 
     @patch(
         "wade.services.review_service.git_pr.get_pr_for_branch",

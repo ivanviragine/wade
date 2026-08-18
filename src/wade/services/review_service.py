@@ -737,8 +737,7 @@ def poll_for_reviews(
                 if status.missing_bots:
                     names = ", ".join(f"`{b}`" for b in status.missing_bots)
                     console.warn(
-                        f"Proceeding without a review from {names}"
-                        " — arrival window elapsed."
+                        f"Proceeding without a review from {names} — arrival window elapsed."
                     )
                 console.info("Review bot completed — no actionable comments found.")
                 return PollOutcome.REVIEW_COMPLETE
@@ -830,7 +829,7 @@ def poll_for_reviews(
             if not status.review_covers_latest_commit and not status.expected_bots:
                 console.detail(
                     "A review covers an earlier commit, but the latest commit has not"
-                    " been reviewed yet — next check in {}s...".format(poll_interval)
+                    f" been reviewed yet — next check in {poll_interval}s..."
                 )
 
             # No review signals, no bot blocking — apply quiet-timeout logic.
@@ -1050,9 +1049,7 @@ def start(
                         " — comments may still arrive."
                     )
                 else:
-                    console.info(
-                        f"Still waiting for {name} to review the latest commit{progress}."
-                    )
+                    console.info(f"Still waiting for {name} to review the latest commit{progress}.")
         elif not status.review_covers_latest_commit:
             console.info(
                 "No review comments found yet, but the latest commit has not"
@@ -1061,9 +1058,7 @@ def start(
         elif not status.pending_reviewers:
             if status.missing_bots:
                 names = ", ".join(status.missing_bots)
-                console.warn(
-                    f"⚠ No review from {names} arrived within its window — proceeding."
-                )
+                console.warn(f"⚠ No review from {names} arrived within its window — proceeding.")
             else:
                 console.success("All review comments resolved — nothing to address! 🎉")
 

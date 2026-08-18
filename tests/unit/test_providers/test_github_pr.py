@@ -27,6 +27,7 @@ class TestGetPrReviewStatus:
         review_threads: list[dict] | None = None,
         reviews: list[dict] | None = None,
         review_requests: list[dict] | None = None,
+        reactions: list[dict] | None = None,
     ) -> str:
         """Build a minimal GraphQL JSON response for _fetch_review_status_page."""
         commit: dict[str, str] = {}
@@ -46,6 +47,7 @@ class TestGetPrReviewStatus:
                             "reviews": {"nodes": reviews or []},
                             "reviewRequests": {"nodes": review_requests or []},
                             "commits": {"nodes": [{"commit": commit}] if commit else []},
+                            "reactions": {"nodes": reactions or []},
                         }
                     }
                 }
@@ -286,6 +288,58 @@ class TestGetPrReviewStatus:
             status = provider.get_pr_review_status(42)
 
         assert status.bot_status == ReviewBotStatus.IN_PROGRESS
+
+    @patch("wade.providers.github.GitHubProvider.get_pr_issue_comments", return_value=[])
+    @patch("wade.providers.github.GitHubProvider.get_repo_nwo", return_value="owner/repo")
+    @patch("wade.providers.github.run")
+    def test_bot_reactions_parsed_and_normalized(
+        self,
+        mock_run: MagicMock,
+        _mock_nwo: MagicMock,
+        _mock_comments: MagicMock,
+        provider: GitHubProvider,
+    ) -> None:
+        """PR-level bot reactions are parsed; GraphQL enum content is lowercased (#448)."""
+        mock_run.return_value = MagicMock(
+            stdout=self._make_graphql_response(
+                reactions=[
+                    {"content": "THUMBS_UP", "user": {"login": "chatgpt-codex-connector[bot]"}},
+                    {"content": "EYES", "user": {"login": "coderabbitai[bot]"}},
+                ]
+            )
+        )
+
+        status = provider.get_pr_review_status(42)
+
+        assert len(status.bot_reactions) == 2
+        assert status.bot_reactions[0].login == "chatgpt-codex-connector[bot]"
+        assert status.bot_reactions[0].content == "thumbs_up"
+        assert status.bot_reactions[0].is_acknowledgement
+        assert status.bot_reactions[1].content == "eyes"
+
+    @patch("wade.providers.github.GitHubProvider.get_pr_issue_comments", return_value=[])
+    @patch("wade.providers.github.GitHubProvider.get_repo_nwo", return_value="owner/repo")
+    @patch("wade.providers.github.run")
+    def test_human_reactions_dropped(
+        self,
+        mock_run: MagicMock,
+        _mock_nwo: MagicMock,
+        _mock_comments: MagicMock,
+        provider: GitHubProvider,
+    ) -> None:
+        """Only bot-actor reactions are stored — human reactions are ignored (#448)."""
+        mock_run.return_value = MagicMock(
+            stdout=self._make_graphql_response(
+                reactions=[
+                    {"content": "THUMBS_UP", "user": {"login": "octocat"}},
+                    {"content": "ROCKET", "user": {"login": "chatgpt-codex-connector[bot]"}},
+                ]
+            )
+        )
+
+        status = provider.get_pr_review_status(42)
+
+        assert [r.login for r in status.bot_reactions] == ["chatgpt-codex-connector[bot]"]
 
 
 class TestGetPrIssueComments:

@@ -341,6 +341,8 @@ Codex, and Bugbot — and every field is overridable:
 ```yaml
 bot_review:
   auto_trigger: false            # opt-in; when true, `done` posts triggers after it pushes
+  arrival_timeout: 300           # seconds to wait for an enabled bot to review HEAD
+  ack_timeout: 900               # longer ceiling once a bot acknowledges (👀/+1 reaction)
   bots:
     - { name: coderabbit, trigger: "@coderabbitai review", enabled: true }
     - { name: codex,      trigger: "@codex review",        enabled: true }
@@ -362,6 +364,19 @@ same-SHA `done` still auto-triggers independently. `wade init` can enable
 `auto_trigger` (default off) and writes the block for you. Whatever a bot posts
 back is **untrusted context** — the review session's verify-before-fixing rule
 still applies.
+
+**Expectation-verified completion.** WADE no longer reports a review "done" just
+because no blocking comments are present — it verifies that every **enabled** bot
+has actually posted a review covering the latest commit. While an expected bot has
+not, `wade review pr-comments` / `poll` / `fetch` keep waiting (and name the bot)
+rather than printing "All review comments resolved". The wait is bounded by
+`arrival_timeout` (default 300s); past it the bot stops blocking and is surfaced
+distinctly (`⚠ No review from <bot>`), never silently swallowed into "done". A bot
+that **acknowledges** with a reaction (👀 / +1) is treated as actively reviewing
+and waited for up to the longer `ack_timeout` (default 900s). **Latency note:**
+because all three bots ship enabled, a repo without one installed adds up to
+`arrival_timeout` to each review check before proceeding — disable an unused bot
+(`enabled: false`) to remove its floor. `ack_timeout` must be `>= arrival_timeout`.
 
 ## Guardrails & completion gates
 

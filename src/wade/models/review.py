@@ -725,8 +725,10 @@ def newest_signal_for_bot(status: PRReviewStatus, bot_name: str) -> datetime | N
     """
     candidates: list[datetime] = []
     for review in status.reviews:
-        if review.is_bot and review.submitted_at is not None and bot_login_matches(
-            bot_name, review.author
+        if (
+            review.is_bot
+            and review.submitted_at is not None
+            and bot_login_matches(bot_name, review.author)
         ):
             candidates.append(_as_utc(review.submitted_at))
     if status.bot_status_ts is not None and bot_login_matches(bot_name, _CODERABBIT_LOGIN):
@@ -909,9 +911,7 @@ def format_review_status_summary(
                 (LEVEL_WARN, f"Waiting for `{name}` to review the latest commit{progress}.")
             )
     for name in status.missing_bots:
-        messages.append(
-            (LEVEL_WARN, f"⚠ No review from `{name}` yet — proceeding without it.")
-        )
+        messages.append((LEVEL_WARN, f"⚠ No review from `{name}` yet — proceeding without it."))
 
     # Stale coverage: a bot signal exists but predates the latest commit, so the
     # newest push has not been re-reviewed. Explain it instead of going quiet —

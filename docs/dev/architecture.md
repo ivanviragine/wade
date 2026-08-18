@@ -694,6 +694,8 @@ done:                        # completion-gate toggles (all default true)
   max_review_passes: 2       # impl-session review→fix loop cap (#384); strict positive int
 bot_review:                  # external-bot review triggers (#431); fully defaulted
   auto_trigger: false        # opt-in; when true, `done` posts triggers after it pushes
+  arrival_timeout: 300       # #448: seconds to wait for an enabled bot to review HEAD
+  ack_timeout: 900           # #448: longer ceiling once a bot reacts (👀/+1); must be >= arrival
   bots:
     - { name: coderabbit, trigger: "@coderabbitai review", enabled: true }
     - { name: codex,      trigger: "@codex review",        enabled: true }
@@ -740,6 +742,29 @@ markers, so a same-SHA `done` still auto-fires. Untrusted text interpolated into
 markup-enabled console output — provider/exception error text, and arbitrary
 `--bot` values — is escaped (`console.escape_markup`) so a stray Rich control
 token can't raise `MarkupError` (even on `--dry-run`).
+
+**Expectation-verified review completion (#448)**: `arrival_timeout` / `ack_timeout`
+turn review completion from *presence-inferred* (no blocking signal → done) into
+*expectation-verified* — WADE refuses to report all-clear while any **enabled** bot
+has not posted a review covering HEAD. The mechanism is split by layer: the
+**provider** (`github.py`) fetches raw PR-level bot reactions (verified real signal:
+Codex posts a PR-level `THUMBS_UP`) into `PRReviewStatus.bot_reactions` via the same
+combined GraphQL page (no extra REST call); the **model** (`models/review.py`) holds
+the pure `compute_bot_arrivals()` helper (returns a per-bot
+`dict[str, BotArrival]` — `ARRIVED`/`AWAITING`/`ACKNOWLEDGED`/`MISSING` — and the
+`bot_login_matches()` name→login matcher, verified logins `coderabbitai[bot]` /
+`chatgpt-codex-connector`, best-effort `cursor`/`bugbot`), and `review_covers_latest_commit`
+gates on `blocking_bots` when `expected_bots` is set; the **service**
+(`review_service.annotate_bot_expectations`) is the only layer with both config and
+a runtime clock, so it populates `expected_bots` from the enabled bots and computes
+the arrival map (arrival window measured from the later of the commit push and a
+`.wade/bot-triggered-<name>@<sha>` marker, falling back to the commit push when
+absent). The arrival-window comparison is a service/param concern — the model stays
+config-free (layering rule). Every completion surface reads the map: the poll loop
+(`poll_for_reviews`, gated on `config`), single-shot `start()`, the AI-agent-facing
+`fetch_reviews()`, and `format_review_status_summary`. When `expected_bots` is empty
+(no config passed, or all bots disabled) the model behaves exactly as before #448.
+See knowledge `cc91cd11` for the generalized principle.
 
 **Model complexity mapping**: The `models` section maps AI tool names to complexity-tiered model IDs (`easy`, `medium`, `complex`, `very_complex`). When `wade implement` is invoked, the service reads the `complexity:X` label from the issue (falling back to `## Complexity` in the body), maps it to the appropriate configured model, and passes it as `--model` to the AI tool — unless the user explicitly passed `--model` themselves.
 

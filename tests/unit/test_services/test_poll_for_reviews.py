@@ -896,3 +896,131 @@ def test_changes_requested_settle_driven_by_submitted_at(
 
     assert result == PollOutcome.COMMENTS_FOUND
     mock_sleep.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Expected-bot completion gating (#448)
+# ---------------------------------------------------------------------------
+
+_NOW = dt.datetime(2026, 8, 10, 10, 10, 0, tzinfo=UTC)
+
+
+def _bot_config(*names: str, arrival_timeout: int = 300, ack_timeout: int = 900):
+    from wade.models.config import BotReviewConfig, ProjectConfig, ReviewBotConfig
+
+    return ProjectConfig(
+        bot_review=BotReviewConfig(
+            bots=[ReviewBotConfig(name=n, trigger=f"@{n} review") for n in names],
+            arrival_timeout=arrival_timeout,
+            ack_timeout=ack_timeout,
+        )
+    )
+
+
+@patch(_SLEEP)
+@patch(_DATETIME)
+@patch(_STATUS)
+@patch(_GET_PR)
+def test_expected_bot_awaiting_blocks_then_completes_on_arrival(
+    mock_get_pr: MagicMock,
+    mock_status: MagicMock,
+    mock_datetime: MagicMock,
+    mock_sleep: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """An enabled bot with no review covering HEAD keeps polling; completes once it arrives."""
+    mock_datetime.now.return_value = _NOW
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
+    commit = _NOW - dt.timedelta(seconds=30)  # within the arrival window
+    mock_status.side_effect = [
+        # coderabbit has posted nothing yet → AWAITING → blocking (keep polling).
+        PRReviewStatus(bot_status=None, latest_commit_pushed_at=commit),
+        # Now coderabbit's summary covers HEAD → ARRIVED → complete.
+        PRReviewStatus(
+            bot_status=ReviewBotStatus.COMPLETED, bot_status_ts=_NOW, latest_commit_pushed_at=commit
+        ),
+    ]
+
+    result = poll_for_reviews(
+        _provider(), tmp_path, 42, "feat/42-test", config=_bot_config("coderabbit")
+    )
+
+    assert result == PollOutcome.REVIEW_COMPLETE
+    assert mock_status.call_count == 2  # did NOT complete on the first (awaiting) cycle
+    mock_sleep.assert_called_once()  # slept once while awaiting the bot
+
+
+@patch(_SLEEP)
+@patch(_DATETIME)
+@patch(_STATUS)
+@patch(_GET_PR)
+def test_completed_coderabbit_does_not_mask_awaiting_codex(
+    mock_get_pr: MagicMock,
+    mock_status: MagicMock,
+    mock_datetime: MagicMock,
+    _mock_sleep: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """Multi-bot: a COMPLETED CodeRabbit must not complete while Codex is still awaited."""
+    mock_datetime.now.return_value = _NOW
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
+    commit = _NOW - dt.timedelta(seconds=30)
+    from wade.models.review import PRReview
+
+    codex_review = PRReview(author="chatgpt-codex-connector", submitted_at=_NOW, is_bot=True)
+    mock_status.side_effect = [
+        # CodeRabbit covered HEAD, but Codex has posted nothing → Codex blocks.
+        PRReviewStatus(
+            bot_status=ReviewBotStatus.COMPLETED, bot_status_ts=_NOW, latest_commit_pushed_at=commit
+        ),
+        # Codex now posts a review covering HEAD → both arrived → complete.
+        PRReviewStatus(
+            bot_status=ReviewBotStatus.COMPLETED,
+            bot_status_ts=_NOW,
+            reviews=[codex_review],
+            latest_commit_pushed_at=commit,
+        ),
+    ]
+
+    result = poll_for_reviews(
+        _provider(),
+        tmp_path,
+        42,
+        "feat/42-test",
+        config=_bot_config("coderabbit", "codex", arrival_timeout=3600, ack_timeout=7200),
+    )
+
+    assert result == PollOutcome.REVIEW_COMPLETE
+    assert mock_status.call_count == 2  # blocked on Codex for the first cycle
+
+
+@patch(_SLEEP)
+@patch(_DATETIME)
+@patch(_STATUS)
+@patch(_GET_PR)
+def test_expected_bot_window_elapsed_completes_without_blocking(
+    mock_get_pr: MagicMock,
+    mock_status: MagicMock,
+    mock_datetime: MagicMock,
+    mock_sleep: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """A bot that never arrives stops blocking once its window elapses (no infinite hang)."""
+    mock_datetime.now.return_value = _NOW
+    mock_get_pr.return_value = PRLookup(found=True, pr=PRRef(number=42, state="OPEN"))
+    commit = _NOW - dt.timedelta(seconds=600)  # past the 300s arrival window
+    mock_status.return_value = PRReviewStatus(
+        bot_status=ReviewBotStatus.COMPLETED, bot_status_ts=_NOW, latest_commit_pushed_at=commit
+    )
+
+    result = poll_for_reviews(
+        _provider(),
+        tmp_path,
+        42,
+        "feat/42-test",
+        config=_bot_config("coderabbit", "bugbot", arrival_timeout=300),
+    )
+
+    # coderabbit arrived; bugbot never showed but its window elapsed → complete.
+    assert result == PollOutcome.REVIEW_COMPLETE
+    mock_sleep.assert_not_called()

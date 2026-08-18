@@ -19,6 +19,7 @@ from tests.e2e._support import (
     _remote_has_branch,
     _run,
     _seed_mock_issue,
+    _seed_mock_pr_commit_pushed_at,
     _seed_mock_review_threads,
 )
 
@@ -572,6 +573,64 @@ class TestReviewPrCommentsCommand:
             mock_gh_cli["log_file"],
             ["api", "graphql", "-F", f"pr={pr_number}"],
         )
+
+    def test_review_pr_comments_waits_for_expected_bot_within_window(
+        self, e2e_repo: Path, mock_gh_cli: MockGhCli
+    ) -> None:
+        """A commit with no bot review yet must NOT report all-clear (#448).
+
+        With a commit pushed inside the arrival window and none of the default
+        enabled bots having reviewed it, ``review pr-comments`` must surface the
+        awaited bot rather than "All review comments resolved".
+        """
+        from datetime import UTC, datetime, timedelta
+
+        issue_number = 53
+        branch_name = "feat/53-await-the-review-bot"
+        _worktree_path, pr_number = _bootstrap_review_target(
+            e2e_repo=e2e_repo,
+            mock_gh_cli=mock_gh_cli,
+            issue_number=issue_number,
+            issue_title="Await the review bot",
+            branch_name=branch_name,
+        )
+        # Commit pushed ~3 min ago: past the 120s freshness grace, still well inside
+        # the 300s default arrival window → the bots are AWAITING (blocking).
+        pushed = (datetime.now(UTC) - timedelta(seconds=180)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        _seed_mock_pr_commit_pushed_at(mock_gh_cli["state_file"], pr_number, pushed)
+
+        result = _run(["review", "pr-comments", str(issue_number)], cwd=e2e_repo)
+
+        assert result.returncode == 0
+        output = result.stdout + result.stderr
+        assert "All review comments resolved" not in output
+        assert "coderabbit" in output
+
+    def test_review_pr_comments_reports_missing_bot_after_window(
+        self, e2e_repo: Path, mock_gh_cli: MockGhCli
+    ) -> None:
+        """Past the arrival window, a never-arriving bot is reported, not swallowed (#448)."""
+        from datetime import UTC, datetime, timedelta
+
+        issue_number = 54
+        branch_name = "feat/54-report-the-missing-bot"
+        _worktree_path, pr_number = _bootstrap_review_target(
+            e2e_repo=e2e_repo,
+            mock_gh_cli=mock_gh_cli,
+            issue_number=issue_number,
+            issue_title="Report the missing bot",
+            branch_name=branch_name,
+        )
+        # Commit pushed 20 min ago: past every default window (arrival 300s / ack
+        # 900s) → the bots are MISSING, surfaced explicitly and no longer blocking.
+        pushed = (datetime.now(UTC) - timedelta(seconds=1200)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        _seed_mock_pr_commit_pushed_at(mock_gh_cli["state_file"], pr_number, pushed)
+
+        result = _run(["review", "pr-comments", str(issue_number)], cwd=e2e_repo)
+
+        assert result.returncode == 0
+        output = result.stdout + result.stderr
+        assert "No review from" in output
 
 
 class TestReviewBatchCommand:
