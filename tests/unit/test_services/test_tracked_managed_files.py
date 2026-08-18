@@ -435,3 +435,61 @@ class TestIdentifySessionDirtyFiles:
 
         result = _identify_session_dirty_files([".github/skills"], tmp_git_repo)
         assert ".github/skills" not in result
+
+    def test_ignores_tracked_claude_settings(self, tmp_git_repo: Path) -> None:
+        """A tracked .claude/settings.json is real repo content, not scaffold.
+
+        Regression test for the PR #454 review comment: name-only matching
+        would classify a tracked edit as a regenerable artifact and default the
+        PR-merge confirmation to destructive Yes.
+        """
+        settings = tmp_git_repo / ".claude" / "settings.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text('{"tracked": true}')
+        subprocess.run(
+            ["git", "add", ".claude/settings.json"],
+            cwd=tmp_git_repo,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "add tracked settings"],
+            cwd=tmp_git_repo,
+            check=True,
+            capture_output=True,
+        )
+        settings.write_text('{"tracked": true, "edited": true}')
+
+        result = _identify_session_dirty_files([".claude/settings.json"], tmp_git_repo)
+        assert ".claude/settings.json" not in result
+
+    def test_ignores_staged_rename_onto_plan_md(self, tmp_git_repo: Path) -> None:
+        """A staged rename onto PLAN.md carries tracked content, not scaffold.
+
+        Regression test for the PR #454 review comment: ``_get_dirty_file_paths``
+        reports a rename's new path only (``user.txt -> PLAN.md`` becomes
+        ``PLAN.md``), so name-only matching would misclassify staged real work
+        as a regenerable session artifact.
+        """
+        (tmp_git_repo / "user.txt").write_text("real user content")
+        subprocess.run(
+            ["git", "add", "user.txt"], cwd=tmp_git_repo, check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "add user.txt"],
+            cwd=tmp_git_repo,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "mv", "user.txt", "PLAN.md"],
+            cwd=tmp_git_repo,
+            check=True,
+            capture_output=True,
+        )
+
+        dirty = _get_dirty_file_paths(tmp_git_repo)
+        assert dirty == ["PLAN.md"]
+
+        result = _identify_session_dirty_files(dirty, tmp_git_repo)
+        assert "PLAN.md" not in result

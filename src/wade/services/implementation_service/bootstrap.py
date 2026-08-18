@@ -120,6 +120,13 @@ def _identify_session_dirty_files(dirty_paths: list[str], worktree_path: Path) -
     Matches against ``get_worktree_gitignore_entries()`` plus
     ``_conditional_worktree_gitignore_entries()`` — the same set of paths
     ``write_worktree_gitignore()`` hides, static and conditional alike.
+
+    A name match alone isn't enough: session artifacts are never committed, so
+    a matched path that is tracked in the git index is real content wearing an
+    artifact's name — a staged ``git mv user.txt PLAN.md`` reports only the new
+    path, and a tracked ``.claude/settings.json`` can be genuine repo content —
+    not regenerable scaffold. Excluding tracked matches here sends them through
+    ``genuine`` instead, so the caller falls back to the conservative prompt.
     """
     from wade.skills.installer import get_worktree_gitignore_entries
 
@@ -128,8 +135,12 @@ def _identify_session_dirty_files(dirty_paths: list[str], worktree_path: Path) -
     dir_prefixes = [e for e in entries if e.endswith("/")]
     exact_paths = set(e for e in entries if not e.endswith("/"))
 
+    tracked = set(git_repo.list_tracked_files(worktree_path))
+
     matched: list[str] = []
     for path in dirty_paths:
+        if path in tracked:
+            continue
         if path in exact_paths or any(path.startswith(prefix) for prefix in dir_prefixes):
             matched.append(path)
 
