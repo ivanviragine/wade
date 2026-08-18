@@ -634,3 +634,150 @@ def test_lifecycle_skipped_after_ai_crash(
 
     assert result.success is False  # AI crash → failure
     mock_lifecycle.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _merge_pr uncommitted-changes display + adaptive confirm (issue #453)
+# ---------------------------------------------------------------------------
+
+_LC = "wade.services.implementation_service.lifecycle"
+
+
+@patch(f"{_LC}.git_repo.is_clean", return_value=False)
+@patch(f"{_LC}._format_uncommitted_summary", return_value="1 unstaged, 2 untracked")
+@patch(f"{_LC}._get_dirty_file_paths")
+@patch(f"{_LC}._identify_session_dirty_files")
+@patch(f"{_LC}.prompts.confirm", return_value=False)
+@patch(f"{_LC}.console")
+def test_merge_pr_genuine_changes_lists_and_defaults_no(
+    mock_console: MagicMock,
+    mock_confirm: MagicMock,
+    mock_identify: MagicMock,
+    mock_dirty: MagicMock,
+    _mock_summary: MagicMock,
+    _mock_is_clean: MagicMock,
+    tmp_path: Path,
+) -> None:
+    from wade.services.implementation_service.lifecycle import _merge_pr
+
+    mock_dirty.return_value = ["src/app.py", ".wade/state.json"]
+    mock_identify.return_value = [".wade/state.json"]
+
+    result = _merge_pr(tmp_path, "feat/x", 7, "7", tmp_path, MagicMock())
+
+    # Declined → never merges.
+    assert result == MergeStatus.NOT_MERGED
+    # Confirm defaults to No when genuine work is at risk.
+    assert mock_confirm.call_args.kwargs["default"] is False
+    # Genuine file is listed (markup disabled for arbitrary filenames).
+    detail_msgs = [c.args[0] for c in mock_console.detail.call_args_list]
+    assert any("src/app.py" in m for m in detail_msgs)
+    assert any("Your uncommitted changes:" in m for m in detail_msgs)
+
+
+@patch(f"{_LC}.git_repo.is_clean", return_value=False)
+@patch(f"{_LC}._format_uncommitted_summary", return_value="2 untracked")
+@patch(f"{_LC}._get_dirty_file_paths")
+@patch(f"{_LC}._identify_session_dirty_files")
+@patch(f"{_LC}.prompts.confirm", return_value=False)
+@patch(f"{_LC}.console")
+def test_merge_pr_scaffold_only_lists_and_defaults_yes(
+    mock_console: MagicMock,
+    mock_confirm: MagicMock,
+    mock_identify: MagicMock,
+    mock_dirty: MagicMock,
+    _mock_summary: MagicMock,
+    _mock_is_clean: MagicMock,
+    tmp_path: Path,
+) -> None:
+    from wade.services.implementation_service.lifecycle import _merge_pr
+
+    scaffold = ["PLAN.md", ".wade/state.json"]
+    mock_dirty.return_value = list(scaffold)
+    mock_identify.return_value = list(scaffold)
+
+    # Decline so we can assert the default without mocking the merge machinery.
+    _merge_pr(tmp_path, "feat/x", 7, "7", tmp_path, MagicMock())
+
+    # Confirm defaults to Yes when only regenerable scaffold is dirty.
+    assert mock_confirm.call_args.kwargs["default"] is True
+    detail_msgs = [c.args[0] for c in mock_console.detail.call_args_list]
+    assert any("wade session files (regenerable):" in m for m in detail_msgs)
+    assert any("PLAN.md" in m for m in detail_msgs)
+    # No "genuine" heading when there is no genuine work.
+    assert not any("Your uncommitted changes:" in m for m in detail_msgs)
+
+
+@patch(f"{_LC}.git_repo.is_clean", return_value=False)
+@patch(f"{_LC}._format_uncommitted_summary", return_value="1 unstaged, 1 untracked")
+@patch(f"{_LC}._get_dirty_file_paths")
+@patch(f"{_LC}._identify_session_dirty_files")
+@patch(f"{_LC}.prompts.confirm", return_value=False)
+@patch(f"{_LC}.console")
+def test_merge_pr_mixed_lists_both_groups_defaults_no(
+    mock_console: MagicMock,
+    mock_confirm: MagicMock,
+    mock_identify: MagicMock,
+    mock_dirty: MagicMock,
+    _mock_summary: MagicMock,
+    _mock_is_clean: MagicMock,
+    tmp_path: Path,
+) -> None:
+    from wade.services.implementation_service.lifecycle import _merge_pr
+
+    mock_dirty.return_value = ["src/app.py", "PLAN.md"]
+    mock_identify.return_value = ["PLAN.md"]
+
+    _merge_pr(tmp_path, "feat/x", 7, "7", tmp_path, MagicMock())
+
+    # Any genuine work present → default No.
+    assert mock_confirm.call_args.kwargs["default"] is False
+    detail_msgs = [c.args[0] for c in mock_console.detail.call_args_list]
+    assert any("Your uncommitted changes:" in m for m in detail_msgs)
+    assert any("wade session files (regenerable):" in m for m in detail_msgs)
+    assert any("src/app.py" in m for m in detail_msgs)
+    assert any("PLAN.md" in m for m in detail_msgs)
+
+
+@patch(f"{_LC}._pull_main_after_merge")
+@patch(f"{_LC}.git_worktree.prune_worktrees")
+@patch(f"{_LC}.git_worktree.remove_worktree")
+@patch(f"{_LC}._preserve_session_data")
+@patch(f"{_LC}.git_pr.merge_pr")
+@patch(f"{_LC}.git_repo.checkout_detach")
+@patch(f"{_LC}.git_repo.is_head_attached", return_value=True)
+@patch(f"{_LC}.git_repo.main_checkout_root")
+@patch(f"{_LC}.git_repo.is_clean", return_value=False)
+@patch(f"{_LC}._format_uncommitted_summary", return_value="2 untracked")
+@patch(f"{_LC}._get_dirty_file_paths")
+@patch(f"{_LC}._identify_session_dirty_files")
+@patch(f"{_LC}.prompts.confirm", return_value=True)
+def test_merge_pr_scaffold_only_proceed_merges(
+    mock_confirm: MagicMock,
+    mock_identify: MagicMock,
+    mock_dirty: MagicMock,
+    _mock_summary: MagicMock,
+    _mock_is_clean: MagicMock,
+    mock_main_root: MagicMock,
+    _mock_head_attached: MagicMock,
+    _mock_detach: MagicMock,
+    mock_merge: MagicMock,
+    _mock_preserve: MagicMock,
+    _mock_remove: MagicMock,
+    _mock_prune: MagicMock,
+    _mock_pull: MagicMock,
+    tmp_path: Path,
+) -> None:
+    from wade.services.implementation_service.lifecycle import _merge_pr
+
+    mock_main_root.return_value = tmp_path
+    scaffold = ["PLAN.md", ".wade/state.json"]
+    mock_dirty.return_value = list(scaffold)
+    mock_identify.return_value = list(scaffold)
+
+    result = _merge_pr(tmp_path, "feat/x", 7, "7", tmp_path, MagicMock())
+
+    # Proceeding on scaffold-only reaches the actual merge and completes.
+    assert result == MergeStatus.MERGED
+    assert mock_confirm.call_args.kwargs["default"] is True
+    mock_merge.assert_called_once()
