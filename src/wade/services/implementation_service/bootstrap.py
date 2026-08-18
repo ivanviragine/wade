@@ -970,12 +970,14 @@ def bootstrap_worktree(
     # {implementation-session, review-pr-comments-session} — see
     # PLAN_SKILLS/IMPLEMENT_SKILLS/REVIEW_SKILLS), so the two categories below
     # never both apply in practice. Guard the ambiguous case explicitly anyway
-    # (skills=None, or a future caller mixing both) — both branches write to the
-    # same extra_partials key, so if both fired, the second would silently
-    # clobber the first and hand plan-session the implementation-flavored
-    # "skipped" text (or vice versa). Detect that and decline to override —
-    # falling back to the full, non-contradictory-if-verbose default — rather
-    # than risk wrong text in one file (#450 review follow-up).
+    # (skills=None, or a future caller mixing both) — a single extra_partials
+    # dict can't hold two different override strings for two different skill
+    # files, so if the call installs *both* categories at once, overriding for
+    # either flag alone would clobber the other skill's (possibly still-enabled)
+    # guidance with the wrong disabled-reason text — not just when both flags
+    # are off. Decline to override in that case — falling back to the full,
+    # non-contradictory-if-verbose default — rather than risk wrong text in one
+    # file (#450 review follow-up).
     installing = set(skills) if skills is not None else set(SKILL_FILES)
     plan_selected = "plan-session" in installing
     impl_selected = (
@@ -984,8 +986,11 @@ def bootstrap_worktree(
     plan_review_off = config.ai.review_plan.enabled is False
     impl_review_off = config.ai.review_implementation.enabled is False
 
-    if plan_selected and impl_selected and plan_review_off and impl_review_off:
-        logger.debug("implementation.review_budget_notes_ambiguous_skip", skills=sorted(installing))
+    if plan_selected and impl_selected:
+        if plan_review_off or impl_review_off:
+            logger.debug(
+                "implementation.review_budget_notes_ambiguous_skip", skills=sorted(installing)
+            )
     elif plan_selected and plan_review_off:
         skill_extra_partials["{review_budget_notes}"] = (
             "## Review budget & skip guidance\n\n"

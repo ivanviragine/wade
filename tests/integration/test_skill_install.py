@@ -214,6 +214,34 @@ class TestSkillInstallation:
                 "not a mismatched disabled-reason string"
             )
 
+    def test_review_budget_notes_not_clobbered_when_only_plan_disabled(
+        self, tmp_git_repo: Path
+    ) -> None:
+        """Only review_plan disabled + installing everything must not clobber implementation's note.
+
+        The ambiguous-call guard must trigger whenever *both* skill categories
+        are installed together, not just when *both* flags happen to be off —
+        otherwise, with only ``review_plan.enabled: false`` set,
+        ``elif plan_selected and plan_review_off`` would fire and overwrite
+        ``{review_budget_notes}`` for every installed skill, wiping
+        implementation-session's still-relevant time-budget/pass-cap guidance
+        even though implementation review is fully enabled.
+        """
+        from wade.models.config import AICommandConfig, AIConfig, ProjectConfig
+        from wade.services.implementation_service import bootstrap_worktree
+
+        config = ProjectConfig(ai=AIConfig(review_plan=AICommandConfig(enabled=False)))
+        bootstrap_worktree(tmp_git_repo, config, tmp_git_repo, skills=None)
+
+        for skill_name in ("plan-session", "implementation-session", "review-pr-comments-session"):
+            skill_md = tmp_git_repo / ".claude" / "skills" / skill_name / "SKILL.md"
+            content = skill_md.read_text(encoding="utf-8")
+            assert "{review_budget_notes}" not in content, "Placeholder must be expanded"
+            assert "done.max_review_passes" in content, (
+                f"{skill_name} must keep the full budget guidance when only review_plan is "
+                "disabled and both skill categories are installed together"
+            )
+
     def test_review_enforcement_rule_expanded_by_default(self, tmp_git_repo: Path) -> None:
         """review_enforcement_rule partial is included by default (reviews enabled)."""
         from wade.skills.installer import install_skills
