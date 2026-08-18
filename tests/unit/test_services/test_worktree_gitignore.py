@@ -14,6 +14,7 @@ from wade.services.implementation_service import (
     strip_worktree_gitignore,
     write_worktree_gitignore,
 )
+from wade.skills.pointer import MARKER_END, MARKER_START
 
 
 @pytest.fixture
@@ -98,11 +99,25 @@ class TestWriteWorktreeGitignore:
         assert ".github/skills" not in block_lines
 
     def test_includes_untracked_pointer_files(self, worktree: Path) -> None:
-        # Create an untracked AGENTS.md
-        (worktree / "AGENTS.md").write_text("# Agents\n")
+        # Create an untracked AGENTS.md containing only wade's injected pointer
+        (worktree / "AGENTS.md").write_text(f"{MARKER_START}\n## Git Workflow\n{MARKER_END}\n")
         write_worktree_gitignore(worktree)
         content = (worktree / ".gitignore").read_text()
         assert "AGENTS.md" in content
+
+    def test_excludes_untracked_pointer_file_with_user_content(self, worktree: Path) -> None:
+        """A pointer file that also carries user-authored content must not be gitignored.
+
+        Regression test for #454: gitignoring it would hide genuine edits from
+        `git status`, and later cause `_merge_pr` to misclassify them as a
+        regenerable session artifact.
+        """
+        (worktree / "AGENTS.md").write_text(
+            f"# My project notes\n\n{MARKER_START}\n## Git Workflow\n{MARKER_END}\n"
+        )
+        write_worktree_gitignore(worktree)
+        content = (worktree / ".gitignore").read_text()
+        assert "AGENTS.md" not in content
 
     def test_excludes_tracked_pointer_files(self, worktree: Path) -> None:
         # Create and track AGENTS.md

@@ -24,6 +24,7 @@ from wade.models.config import (
 )
 from wade.models.hooks import SessionPhase, StopGuard
 from wade.models.task import Task
+from wade.skills.pointer import is_pointer_only
 from wade.utils.markdown import has_marker_block, remove_marker_block
 
 logger = structlog.get_logger()
@@ -105,7 +106,9 @@ def _conditional_worktree_gitignore_entries(worktree_path: Path) -> list[str]:
         target = worktree_path / name
         if not (target.exists() or target.is_symlink()):
             continue
-        if not git_repo.is_file_tracked(worktree_path, name):
+        if git_repo.is_file_tracked(worktree_path, name):
+            continue
+        if is_pointer_only(target):
             entries.append(name)
 
     return entries

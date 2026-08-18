@@ -376,6 +376,28 @@ class TestIdentifySessionDirtyFiles:
         result = _identify_session_dirty_files(["AGENTS.md"], tmp_git_repo)
         assert "AGENTS.md" in result
 
+    def test_identifies_untracked_marker_pointer_file(self, tmp_git_repo: Path) -> None:
+        """An untracked AGENTS.md with only the marker-based pointer is a session artifact."""
+        (tmp_git_repo / "AGENTS.md").write_text(
+            "<!-- wade:pointer:start -->\n## Git Workflow\n<!-- wade:pointer:end -->\n"
+        )
+        result = _identify_session_dirty_files(["AGENTS.md"], tmp_git_repo)
+        assert "AGENTS.md" in result
+
+    def test_ignores_untracked_pointer_file_with_user_content(self, tmp_git_repo: Path) -> None:
+        """An untracked AGENTS.md that gained user content is genuine work, not a session artifact.
+
+        Regression test for #454: classifying by "untracked" alone would treat
+        user-authored guidance added around the wade pointer as regenerable
+        scaffold, defaulting the PR-merge confirmation to destructive Yes.
+        """
+        (tmp_git_repo / "AGENTS.md").write_text(
+            "# My project notes\n\n"
+            "<!-- wade:pointer:start -->\n## Git Workflow\n<!-- wade:pointer:end -->\n"
+        )
+        result = _identify_session_dirty_files(["AGENTS.md"], tmp_git_repo)
+        assert "AGENTS.md" not in result
+
     def test_ignores_tracked_pointer_file(self, tmp_git_repo: Path) -> None:
         """A tracked AGENTS.md is real project content, never a session artifact."""
         agents = tmp_git_repo / "AGENTS.md"
