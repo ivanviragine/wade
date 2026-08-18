@@ -116,12 +116,21 @@ artifacts, not committed code.
 > Do not call `exit_plan_mode` before running `wade task create` — user
 > confirmation in Step 3 is sufficient, even when running inside `[[PLAN]]` mode.
 
-For each plan, create a task via `wade task create` (interactive), passing the
-plan-file title and body. `wade task create` enforces the conventional-commit
-title and applies the configured issue label.
+For each plan, create a task **non-interactively** — installed agents run in a
+non-TTY shell, where bare `wade task create` cannot read a title or body (it
+exits with "Title is required" and discards the body). Pass the plan-file title
+and body explicitly:
+
+```bash
+wade task create --title "<plan-file title>" --body-file PLAN.md
+```
+
+`--body-file` reads the whole plan file as the issue body (`--body "<text>"`
+takes a short inline body instead). `wade task create` enforces the
+conventional-commit title and applies the configured issue label.
 
 The task body you provide seeds `PLAN.md` when the issue is later implemented, so
-include enough of the plan to work from.
+pass the full plan file — include enough to work from.
 
 > **Contrast with `wade plan`:** when a project uses `wade plan` instead, wade
 > keeps the issue lightweight and puts the full plan in a draft PR it creates
@@ -130,14 +139,24 @@ include enough of the plan to work from.
 
 Collect the issue number and URL from each creation.
 
-## Step 6: Offer epic (multi-issue only)
+## Step 6: Create the parent issue (multi-issue only)
 
-When **3 or more** issues are created, automatically create a parent/epic issue
-that links all sub-issues — no user confirmation needed:
+A multi-issue set gets **exactly one** parent — never two competing checklists.
+Choose the parent by whether the issues have dependencies:
+
+**Issues with dependencies → run `wade task deps`.** This matches the `wade plan`
+lifecycle: it writes cross-references onto each issue **and creates a tracking
+issue** (execution plan + dependency graph) that serves as the parent. The
+tracking issue *is* the parent — do **not** also create an epic. See
+[examples.md](examples.md) for the command and its output.
+
+**Independent issues (no dependencies) → create an epic** instead of running
+`wade task deps`. When **3 or more** independent issues are created, create the
+epic automatically — no user confirmation needed:
 
 > "Creating an epic issue to link all N sub-issues…"
 
-When **2 issues** are created, offer first:
+When **2** independent issues are created, offer first:
 
 > "Want me to create an epic issue linking both sub-issues?"
 
@@ -148,7 +167,11 @@ Write an epic with:
 - Brief summary of the feature
 - Checklist linking each sub-issue: `- [ ] #<number> — <title>`
 
-Create it via `wade task create`.
+Create it non-interactively — write the epic body to a file first:
+
+```bash
+wade task create --title "feat(epic): <overall feature title>" --body-file EPIC.md
+```
 
 ## Step 7: Inform the user — MANDATORY
 
@@ -160,11 +183,11 @@ starts work sessions when they are ready.
 After creating all issues, list them clearly:
 
 ```
-✓ Created 3 issues:
+✓ Created 3 issues + 1 tracking issue:
   #42 — feat: add user preferences schema (~200 LOC)
   #43 — feat: add preferences API endpoint (~250 LOC)
   #44 — feat: add preferences UI panel (~350 LOC)
-  #45 — feat(epic): user preferences feature (links #42, #43, #44)
+  #45 — Tracking: #42, #43, #44 (execution plan + dependency graph)
 ```
 
 Then show the next-step hint so the user knows how to proceed:

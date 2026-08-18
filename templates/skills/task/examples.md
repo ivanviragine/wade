@@ -37,13 +37,13 @@ Add a `GET /api/health` endpoint returning `{ "status": "ok", "version": "..." }
 ```
 
 ```bash
-wade task create
+wade task create --title "feat: add health check endpoint" --body-file PLAN.md
 # Created issue #42: feat: add health check endpoint
 ```
 
 ---
 
-## Multi-issue example with epic (large PRD)
+## Multi-issue example (large PRD)
 
 **Plan summary:** Add user preferences — schema, API, UI panel, and
 notification settings.
@@ -64,20 +64,73 @@ notification settings.
 > 2. Add preferences UI panel (~400 LOC, 6 files)
 
 **Result:** two plan files (`PLAN-1-schema-api.md`, `PLAN-2-ui-panel.md`) → two
-issues + one epic. Each plan file carries a conventional-commit `# Title` and a
-`## Complexity` value.
+issues + **one** parent. Because the UI depends on the API, the parent is the
+tracking issue that `wade task deps` creates (not a separate epic). Each plan
+file carries a conventional-commit `# Title` and a `## Complexity` value.
 
 ### Issue creation
 
 ```bash
-wade task create
+wade task create --title "feat: add user preferences schema and API" \
+  --body-file PLAN-1-schema-api.md
 # Created issue #50: feat: add user preferences schema and API
 
-wade task create
+wade task create --title "feat: add preferences UI panel" \
+  --body-file PLAN-2-ui-panel.md
 # Created issue #51: feat: add preferences UI panel
 ```
 
-### Epic issue (offered after sub-issues are created)
+### Parent issue — dependency analysis
+
+This set has a dependency (#51 → #50), so run `wade task deps` yourself after
+creating the issues. It updates each issue with cross-references **and** creates
+the tracking issue that serves as the single parent — do **not** also create an
+epic. When a project uses `wade plan` instead, wade runs `wade task deps`
+**automatically** after the planning session exits, producing the same tracking
+issue:
+
+```
+Multiple issues created — running dependency analysis...
+
+Found 1 dependency edge(s):
+  #51 → #50 (API must exist before UI can call it)
+
+Updating issue bodies with dependency refs...
+  Updated #50
+  Updated #51
+
+Creating tracking issue with execution plan...
+  Created tracking issue #52
+  https://github.com/user/repo/issues/52
+```
+
+The **tracking issue** is the parent and contains the full execution plan:
+- Topologically sorted tasklist (checkbox format)
+- Mermaid dependency graph
+
+Individual issues get lightweight cross-references ("Depends on" / "Blocks") only.
+
+**Final report:**
+```
+Created 2 issues + 1 tracking issue:
+  #50 — feat: add user preferences schema and API (~500 LOC)
+  #51 — feat: add preferences UI panel (~400 LOC)
+  #52 — Tracking: #50, #51 (execution plan + dependency graph)
+```
+
+You can also run dependency analysis manually:
+
+```bash
+wade task deps               # select issues interactively
+wade task deps --ai claude   # override AI tool
+```
+
+### Independent issues → epic instead
+
+For a set of **independent** issues (no dependencies, so no `wade task deps`
+run), create a manual **epic** as the single parent — never create both a
+tracking issue and an epic. Write the epic body to a file and create it
+non-interactively:
 
 ```markdown
 # feat(epic): user preferences feature
@@ -91,49 +144,6 @@ Add the ability for users to save and manage display and notification preference
 ```
 
 ```bash
-wade task create
+wade task create --title "feat(epic): user preferences feature" --body-file EPIC.md
 # Created issue #52: feat(epic): user preferences feature
-```
-
-**Final report:**
-```
-Created 3 issues:
-  #50 — feat: add user preferences schema and API (~500 LOC)
-  #51 — feat: add preferences UI panel (~400 LOC)
-  #52 — feat(epic): user preferences feature (links #50, #51)
-```
-
-### Dependency analysis (multi-issue)
-
-For a standalone multi-issue set, run `wade task deps` yourself after creating
-the issues. When a project uses `wade plan` instead, wade creates the issues and
-draft PRs and runs `wade task deps` **automatically** after the planning session
-exits — updating each issue and creating a tracking issue:
-
-```
-Multiple issues created — running dependency analysis...
-
-Found 1 dependency edge(s):
-  #51 → #50 (API must exist before UI can call it)
-
-Updating issue bodies with dependency refs...
-  Updated #50
-  Updated #51
-
-Creating tracking issue with execution plan...
-  Created tracking issue #53
-  https://github.com/user/repo/issues/53
-```
-
-The **tracking issue** contains the full execution plan:
-- Topologically sorted tasklist (checkbox format)
-- Mermaid dependency graph
-
-Individual issues get lightweight cross-references ("Depends on" / "Blocks") only.
-
-You can also run dependency analysis manually:
-
-```bash
-wade task deps               # select issues interactively
-wade task deps --ai claude   # override AI tool
 ```
