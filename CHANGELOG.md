@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.48.4] — 2026-08-18
+
+### Bug Fixes
+
+- wrap long choices in interactive pickers instead of cropping (#446) (6b162b6)
+
 ## [v0.48.3] — 2026-08-18
 
 ### Documentation
