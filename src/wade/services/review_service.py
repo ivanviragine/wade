@@ -710,9 +710,11 @@ def poll_for_reviews(
 
             # Expected-bot expectation (#448): compute per-bot arrival so the gate
             # and messaging below can tell "every expected bot has reviewed HEAD"
-            # from "still waiting on X". Off when config is None.
+            # from "still waiting on X". Off when config is None. ``repo_root`` is
+            # the worktree in the common in-worktree poll, so its ``.wade/`` trigger
+            # markers seed the arrival windows (missing dir → commit-push fallback).
             if config is not None:
-                annotate_bot_expectations(status, config)
+                annotate_bot_expectations(status, config, marker_root=repo_root)
 
             if status.bot_status == ReviewBotStatus.IN_PROGRESS:
                 quiet_start = None  # bot is active; reset quiet timer
