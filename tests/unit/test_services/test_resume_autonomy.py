@@ -16,11 +16,12 @@ from wade.services.implementation_service.core import _resume_autonomy_args
 
 
 class TestResumeAutonomyArgs:
-    def test_agy_yolo_appends_sandbox_flags(self) -> None:
+    def test_agy_yolo_appends_skip_permissions_flag(self) -> None:
         # The exact flags a fresh yolo launch of agy emits — what actually unblocks
-        # subagent shell on resume.
+        # subagent shell on resume. No --sandbox: it's a terminal restriction that
+        # blocks shell commands, not a write sandbox (crossby no longer emits it).
         args = _resume_autonomy_args(AntigravityCLIAdapter(), PermissionMode.YOLO)
-        assert args == ["--dangerously-skip-permissions", "--sandbox"]
+        assert args == ["--dangerously-skip-permissions"]
 
     def test_agy_default_appends_nothing(self) -> None:
         # Default tier adds no flags (parity with fresh launch), so a plain resume
