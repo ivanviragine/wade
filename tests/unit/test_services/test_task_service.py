@@ -308,6 +308,31 @@ class TestCreateTask:
         assert "conventional commit prefix" in msg
         assert "feat" in msg
 
+    def test_create_applies_complexity_label_from_body(
+        self, mock_provider: MagicMock, config: ProjectConfig
+    ) -> None:
+        body = "## Complexity\neasy\n\n## Tasks\n- Do the thing\n"
+        create_task("feat: it", body=body, config=config, provider=mock_provider)
+        mock_provider.add_label.assert_called_once_with("42", "complexity:easy")
+
+    def test_create_without_complexity_section_skips_label(
+        self, mock_provider: MagicMock, config: ProjectConfig
+    ) -> None:
+        create_task(
+            "feat: it", body="## Tasks\n- Do the thing\n", config=config, provider=mock_provider
+        )
+        mock_provider.add_label.assert_not_called()
+
+    def test_create_complexity_label_failure_does_not_fail_creation(
+        self, mock_provider: MagicMock, config: ProjectConfig
+    ) -> None:
+        mock_provider.add_label.side_effect = Exception("label API error")
+        task = create_task(
+            "feat: it", body="## Complexity\nmedium\n", config=config, provider=mock_provider
+        )
+        assert task is not None
+        assert task.id == "42"
+
 
 class TestCreateFromPlanFile:
     def test_create_success(

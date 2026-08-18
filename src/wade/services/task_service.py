@@ -15,7 +15,15 @@ from crossby.models.ai import ModelBreakdown
 
 from wade.config.loader import load_config
 from wade.models.config import ProjectConfig
-from wade.models.task import Complexity, Label, LabelType, PlanFile, Task, TaskState
+from wade.models.task import (
+    Complexity,
+    Label,
+    LabelType,
+    PlanFile,
+    Task,
+    TaskState,
+    parse_complexity_from_body,
+)
 from wade.providers.base import AbstractTaskProvider
 from wade.providers.registry import get_provider
 from wade.ui.console import console
@@ -428,10 +436,18 @@ def create_task(
         console.success(f"Created {console.issue_ref(task.id, task.title)}")
         if task.url:
             console.detail(task.url)
-        return task
     except Exception as e:
         console.error(f"Failed to create issue: {e}")
         return None
+
+    complexity = parse_complexity_from_body(body)
+    if complexity:
+        try:
+            add_complexity_label(provider, task.id, complexity)
+        except Exception as e:
+            logger.warning("task.complexity_label_failed", error=str(e))
+
+    return task
 
 
 def create_interactive(
