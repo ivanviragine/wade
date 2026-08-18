@@ -843,17 +843,24 @@ pre-loaded with that issue's context (and the issue heading is persisted to
 `.wade/plan-issue.md` so a resumed/compacted plan session can re-inject it). A
 **single** valid plan is attached to the existing issue via a draft PR
 (`_attach_plan_to_existing_issue`, preserving the original body and appending the
-PR link); **multiple** plans **supersede** it — one new issue per plan, then the
-original is commented on and closed as *not planned*
-(`_supersede_issue_with_plans`), but only if every plan became an issue (a
-partial split leaves the original open).
+PR link); **multiple** plans **supersede** it — one new issue per plan
+(`_supersede_issue_with_plans`). Only if every plan became an issue does it then
+comment on the original and — unless `yolo` — prompt to close it as *not
+planned*; declining that prompt leaves the original open even though every plan
+succeeded. A partial split (some plans failed to become issues) always leaves
+the original open, no prompt asked.
 
 **Partial-plan preservation.** When the strict gate rejects a batch (all invalid,
 or the user aborted a partial run) or a draft PR can't be persisted (e.g. an
 unresolvable declared base), the generated `PLAN*.md` are salvaged to a stable
 temp dir (`_preserve_generated_plans`) instead of being discarded with the
 worktree — a one-line fix (a missing `## Complexity`) shouldn't force a full
-re-plan. On the success paths the planning worktree/temp dir is cleaned up.
+re-plan. This covers the from-scratch multi-plan path and the single-plan attach
+failure path. The `--issue` **supersede** path is the exception: on a partial
+split, the failed plan files are *not* salvaged — `_supersede_issue_with_plans`
+returns only the successful issue numbers, and the caller finalizes those and
+removes the planning worktree/temp dir, discarding the failed plan(s) along with
+it. On the full-success paths the planning worktree/temp dir is cleaned up.
 
 **Automatic dependency analysis.** When a run produces **2+** issues,
 `_finalize_issues` runs `deps_service.analyze_deps` over them and applies any
