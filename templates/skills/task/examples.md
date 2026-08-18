@@ -83,9 +83,18 @@ wade task create --title "feat: add preferences UI panel" \
 ### Parent issue — dependency analysis
 
 This set has a dependency (#51 → #50), so run `wade task deps` yourself after
-creating the issues. It updates each issue with cross-references **and** creates
-the tracking issue that serves as the single parent — do **not** also create an
-epic. When a project uses `wade plan` instead, wade runs `wade task deps`
+creating the issues — **pass the issue numbers explicitly**, since installed
+agents run in a non-TTY shell where bare `wade task deps` (no numbers) cannot
+fall back to its interactive picker and exits with "Provide at least 2 issue
+numbers.":
+
+```bash
+wade task deps 50 51
+```
+
+This updates each issue with cross-references **and** creates the tracking
+issue that serves as the single parent — do **not** also create an epic. When a
+project uses `wade plan` instead, wade runs the same dependency analysis
 **automatically** after the planning session exits, producing the same tracking
 issue:
 
@@ -118,11 +127,13 @@ Created 2 issues + 1 tracking issue:
   #52 — Tracking: #50, #51 (execution plan + dependency graph)
 ```
 
-You can also run dependency analysis manually:
+You can also run dependency analysis manually — always pass issue numbers
+explicitly (bare `wade task deps` only offers interactive selection, and that
+requires a TTY a running agent doesn't have):
 
 ```bash
-wade task deps               # select issues interactively
-wade task deps --ai claude   # override AI tool
+wade task deps 50 51               # analyze specific issues
+wade task deps 50 51 --ai claude   # override AI tool
 ```
 
 ### Independent issues → epic instead

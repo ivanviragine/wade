@@ -15,7 +15,8 @@ description: >
 
 Convert a finished plan, PRD, or feature spec into one or more PR-sized tasks
 (GitHub Issues, or whatever task provider the project configures) using the
-project's `wade` infrastructure.
+project's `wade` infrastructure. Task creation itself is provider-neutral;
+**dependency-parent creation is not** — see the scope note in Step 6.
 
 > **This is standalone task creation — not a planning session.** In a
 > `wade plan` session you do **not** run `wade task create`: you write plan
@@ -142,13 +143,24 @@ Collect the issue number and URL from each creation.
 ## Step 6: Create the parent issue (multi-issue only)
 
 A multi-issue set gets **exactly one** parent — never two competing checklists.
-Choose the parent by whether the issues have dependencies:
 
-**Issues with dependencies → run `wade task deps`.** This matches the `wade plan`
-lifecycle: it writes cross-references onto each issue **and creates a tracking
-issue** (execution plan + dependency graph) that serves as the parent. The
-tracking issue *is* the parent — do **not** also create an epic. See
-[examples.md](examples.md) for the command and its output.
+> **Scope note:** `wade task deps` only works with numeric, GitHub-style issue
+> IDs — its CLI and dependency-graph parser both assume digits. Providers with
+> opaque task IDs (e.g. ClickUp — `provider.name: clickup` in `.wade.yml`,
+> IDs like `abc123`) cannot go through it. On such a project, **always use the
+> epic path below, even when the issues have dependencies** — note the
+> dependency order in the epic body instead.
+
+Choose the parent by whether the issues have dependencies (GitHub/numeric-ID
+providers only — see scope note above):
+
+**Issues with dependencies → run `wade task deps <issue-numbers>`.** Pass the
+issue numbers explicitly — bare `wade task deps` only falls back to an
+interactive picker, which requires a TTY a running agent doesn't have. This
+matches the `wade plan` lifecycle: it writes cross-references onto each issue
+**and creates a tracking issue** (execution plan + dependency graph) that
+serves as the parent. The tracking issue *is* the parent — do **not** also
+create an epic. See [examples.md](examples.md) for the command and its output.
 
 **Independent issues (no dependencies) → create an epic** instead of running
 `wade task deps`. When **3 or more** independent issues are created, create the
