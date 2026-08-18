@@ -79,10 +79,15 @@ Rules:
 
 ## Step 3: Confirm completion
 
-After writing the file, end with a compact status line and the next action:
+After writing the file, end with the shared session-summary block — a compact
+status, not a prose recap. Keep the blank `>` separators so the lines don't
+collapse into one paragraph:
 
-> ✅ Dependency file written to `<path>`.
-> Next: exit this session so wade applies the dependencies to the issues.
+> ✅ Dependency file written to `<path>`
+>
+> ✅ Nothing needs your attention.
+>
+> **Next:** exit this session so wade applies the dependencies to the issues.
 
 ## Rules
 

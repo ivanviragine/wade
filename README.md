@@ -647,14 +647,20 @@ wade installs Skills that teach your AI agent the workflow — task format, plan
 
 ### Session communication
 
-Sessions report **by exception**: terse on success — just the actionable
-handles (task/PR numbers, URLs, the next command), never a list of completed
-steps or a reassurance that nothing broke. When something needs your
-attention or a decision only you can make, the agent reports it in 1–2
-sentences with brief context, its complexity
+While a session works, it reports **by exception**: terse on success — just
+the actionable handles (task/PR numbers, URLs, the next command), no running
+recap. When something needs your attention or a decision only you can make,
+the agent reports it in 1–2 sentences with brief context, its complexity
 (easy/medium/complex/very_complex), and a recommendation. It then asks
 through the native question component, with the recommended option first and
 labelled "(recommended)".
+
+Each session **ends** with a compact emoji step-status summary instead of a
+prose recap: one glyph per step (✅ done · ⚠️ needs your attention · ❌
+failed/blocked) on a single line, the handles, an explicit attention line
+(either "Nothing needs your attention" or the items that do), and a bold
+**Next:** action. Every finite-choice decision — including whether to exit —
+is a native dialog with the recommended option first.
 
 ## Extension Hooks
 
