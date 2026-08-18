@@ -60,7 +60,7 @@ Then the exit decision as a native dialog: `Exit now — wade takes over
 ### Review session (with a caveat)
 
 ```text
-✅ Docs · ✅ PR-SUMMARY · ✅ Sync · ✅ Done
+✅ Review · ✅ Docs · ✅ PR-SUMMARY · ✅ Sync · ✅ Done
 PR #123 — https://github.com/…/pull/123 · 4/5 threads resolved
 ⚠️ 1 item needs your attention:
    • Thread on auth.py left unresolved — reviewer asked for a design decision only you can make.
@@ -91,7 +91,7 @@ When `.wade.yml` disables a step — reviews off
 
 ```text
 ✅ Docs · ⏭️ Review (reviews disabled in `.wade.yml`) · ✅ PR-SUMMARY · ✅ Sync · ✅ Done
-PR #123 — https://github.com/…/pull/123 · 4/5 threads resolved
+PR #123 — https://github.com/…/pull/123 · 5/5 threads resolved
 ✅ Nothing needs your attention.
 Next: exit — reviewers are notified of your changes.
 ```

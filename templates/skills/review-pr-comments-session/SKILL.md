@@ -168,8 +168,10 @@ A **pre-push git hook** refuses a push of the session branch without a current
 in one flag — it is a quality layer, not a boundary; do not route around it.
 
 **Step 5 — Present results:** end with the emoji step-status summary (steps:
-`Docs · PR-SUMMARY · Sync · Done`) and its handles — PR number/URL, threads
-resolved/remaining. `done` has succeeded, so present the exit decision as a
+`Review · Docs · PR-SUMMARY · Sync · Done`; mark `Review` ⏭️ when `done` ran via
+`--skip-review` or `done.require_review: false`, ✅ otherwise) and its handles —
+PR number/URL, threads resolved/remaining. `done` has succeeded, so present the
+exit decision as a
 **native dialog**: `Exit now — reviewers are notified (recommended)` and `Keep
 editing — I have more changes` → apply and repeat Steps 1–5. See
 @.claude/skills/task/reference/session-summary-format.md.
