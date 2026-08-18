@@ -403,7 +403,8 @@ value is attached as a `complexity:X` label on top of the project label — the 
 signal that drives automatic model routing, so a hand-created task routes to the
 right model just like a planned one. Labeling is best-effort: a failure to apply
 the label never fails task creation, and a body with no `## Complexity` section
-just skips it.
+just skips it. An explicit `--label complexity:X` takes precedence over the body
+value, so the task never ends up with two conflicting complexity labels.
 
 If some files pass and others fail, an interactive run asks whether to continue
 with the valid ones; `--yolo` and non-interactive runs continue without asking.
