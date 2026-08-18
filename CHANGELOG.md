@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.50.1] — 2026-08-18
+
+### Chores
+
+- bump crossby to v0.24.3 (#452) (403daa8)
+
 ## [v0.50.0] — 2026-08-18
 
 ### Features
