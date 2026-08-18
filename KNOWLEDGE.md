@@ -660,5 +660,14 @@ uv.lock is gitignored in the WADE repo (.gitignore:47) and NOT tracked. A depend
 ## 3f6332a4b61d | 2026-08-18 | implementation | tags: providers, deps, clickup | Issue #441
 
 WADE's dependency-graph and parent-linkage automation is numeric-ID only, so opaque-ID providers (ClickUp) cannot use it. Three places all assume digits: parse_deps_output's _ARROW_RE (deps_service.py, `^\d+ -> \d+`) rejects non-numeric edges; AbstractTaskProvider.find_parent_issue defaults to returning None (providers/base.py) and ClickUpProvider does NOT override it (GitHubProvider does, providers/github.py); and _CHECKLIST_ISSUE_RE / parse_all_issue_refs (models/task.py) match only `#<digits>`. Consequence: for ClickUp, `wade task deps` produces no accepted edges and an epic's `- [ ] #id` checklist is not recognized by done/batch parent flows — the epic is a human-readable tracking doc only. Documented in templates/skills/task/SKILL.md and deps/SKILL.md scope notes (PR #442).
+## 82ad4c583c58 | 2026-08-18 | implementation | tags: ui, prompts, questionary | Issue #445
+
+wade's interactive pickers all funnel through src/wade/ui/prompts.py (select/menu/multi_select -> questionary select/checkbox). questionary builds the choice list as a prompt_toolkit Window(InquirerControl) with the default wrap_lines=False, which CROPS long choices to the terminal width (silently losing text). To make choices wrap, call _enable_choice_wrapping(question) BETWEEN constructing the Question and calling .ask(): it walks question.application.layout.find_all_windows() and sets win.wrap_lines = to_filter(True) on each Window whose .content is a questionary.prompts.common.InquirerControl. Done best-effort (try/except -> logger.debug("prompts.choice_wrap_failed")) because it depends on undocumented questionary internals; pyproject pins questionary>=2.0 with no ceiling. wrap_lines reflows on resize and the highlight/[SetCursorPosition] carry across wrapped rows, so selection + arrow-key scroll still work. Known limit: no hanging indent (continuation rows start at col 0). confirm()/input_prompt() left unchanged (Yes/No + free text, no long choices). Pinned by tests/unit/test_utils/test_prompts.py::TestEnableChoiceWrapping.
+
+---
+
+## b7e8aa32094f | 2026-08-18 | implementation | tags: ui, prompts, rich | Issue #445
+
+The plain non-interactive Rich-printed list rows (task_service.list_tasks, implementation_service/cleanup.list_sessions/worktree list) already WRAP via Console.print defaults (no_wrap=False, overflow "fold") — verified rendering a long row at width 40. The long-choice CROP bug (#445) was ONLY ever in the questionary arrow-key picker (src/wade/ui/prompts.py), never in the Rich output path. So a "text is cropped" report about a list should be triaged to whether it came from the interactive picker vs the plain printed list.
 
 ---

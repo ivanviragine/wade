@@ -11,11 +11,13 @@ from __future__ import annotations
 import sys
 
 import questionary
+import structlog
 import typer
 from prompt_toolkit.styles import Style
 from rich.console import Console
 
 _console = Console(stderr=True)
+logger = structlog.get_logger()
 
 # Custom prompt_toolkit style matching the color palette
 _style = Style(
@@ -40,6 +42,47 @@ def _handle_none(result: object) -> None:
     """Raise typer.Exit if questionary returns None (Ctrl+C)."""
     if result is None:
         raise typer.Exit(1)
+
+
+def _enable_choice_wrapping(question: questionary.Question) -> None:
+    """Best-effort: make a questionary picker wrap long choices instead of cropping.
+
+    questionary builds its selection/checkbox list as a prompt_toolkit
+    ``Window(InquirerControl(...))`` with no ``wrap_lines`` argument, so
+    prompt_toolkit's default ``wrap_lines=False`` applies and long choice lines
+    are *cropped* to the terminal width (silently losing text). We flip
+    ``wrap_lines`` to ``True`` on that window so choices wrap to the current
+    display width and reflow automatically on terminal resize — strictly better
+    than pre-wrapping the strings ourselves at build-time width. Call this
+    between constructing the ``Question`` and calling ``.ask()``.
+
+    Coupling / accepted risk: this reaches into two questionary internals — the
+    ``InquirerControl`` class (``questionary.prompts.common``) and
+    ``Question.application`` + ``Layout.find_all_windows()`` (a public
+    prompt_toolkit method questionary itself uses in
+    ``_fix_unecessary_blank_lines``). ``pyproject.toml`` pins ``questionary>=2.0``
+    with no upper ceiling, so a future upgrade could move or rename these. The
+    whole walk is therefore wrapped in ``try/except`` and fails *safe*: on any
+    error the picker keeps working with today's crop behavior rather than
+    crashing. We log at ``debug`` (not swallow silently) so a genuine bug — a
+    typo or wrong attribute — stays discoverable in logs and is distinguishable
+    from a legitimate upstream API change. ``test_prompts.py`` pins this so a
+    breaking upgrade surfaces in CI (only when CI runs the upgraded version)
+    instead of silently reverting to crop.
+
+    Known limitation: prompt_toolkit has no hanging indent for wrapped lines, so
+    continuation rows begin at column 0 rather than indented under the choice
+    title. No text is lost; a hanging indent is a possible future follow-up.
+    """
+    try:
+        from prompt_toolkit.filters import to_filter
+        from questionary.prompts.common import InquirerControl
+
+        for win in question.application.layout.find_all_windows():
+            if isinstance(win.content, InquirerControl):
+                win.wrap_lines = to_filter(True)
+    except Exception:
+        logger.debug("prompts.choice_wrap_failed", exc_info=True)
 
 
 def confirm(message: str, default: bool = False) -> bool:
@@ -120,14 +163,16 @@ def select(
     default_choice: str | questionary.Choice = (
         q_choices[adjusted_default] if 0 <= adjusted_default < len(q_choices) else q_choices[0]
     )
-    result: object = questionary.select(
+    question = questionary.select(
         title,
         choices=q_choices,
         default=default_choice,
         pointer="\u203a",
         style=_style,
         instruction="",
-    ).ask()
+    )
+    _enable_choice_wrapping(question)
+    result: object = question.ask()
     _handle_none(result)
 
     # result is a plain string — map it to a 0-based index into the original items
@@ -192,13 +237,15 @@ def multi_select(
     if not is_tty():
         return list(range(len(items)))
 
-    result: list[str] | None = questionary.checkbox(
+    question = questionary.checkbox(
         title,
         choices=items,
         pointer="\u203a",
         style=_style,
         instruction="(Space to toggle, Enter to confirm)",
-    ).ask()
+    )
+    _enable_choice_wrapping(question)
+    result: list[str] | None = question.ask()
     _handle_none(result)
 
     # Map selected labels back to indices
