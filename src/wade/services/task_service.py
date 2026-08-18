@@ -409,7 +409,9 @@ def create_task(
     """Create a GitHub Issue with the given title, body, and optional extra labels.
 
     The project issue label is always applied.  ``extra_labels`` are applied
-    in addition to it.
+    in addition to it. If ``body`` has a ``## Complexity`` section, a
+    ``complexity:X`` label is applied too (best-effort — failure doesn't fail
+    creation).
 
     Raises:
         ConventionalTitleError: If ``title`` is not a conventional-commit title.
