@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -1265,3 +1266,213 @@ class TestReviewPassCountUnaffectedByRetry:
         review_implementation()
 
         mock_record.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# {review_budget} prompt substitution (#450)
+# ---------------------------------------------------------------------------
+
+
+class TestReviewBudgetPlaceholder:
+    """The reviewer learns its own deadline via {review_budget} (#450)."""
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.confirm_ai_selection")
+    @patch("wade.services.review_delegation_service.resolve_effort")
+    @patch("wade.services.review_delegation_service.resolve_model")
+    @patch("wade.services.review_delegation_service.resolve_ai_tool")
+    @patch("wade.services.review_delegation_service.load_config")
+    def test_headless_scaled_budget_names_per_attempt_timeout_not_worst_case(
+        self,
+        mock_config: MagicMock,
+        mock_tool: MagicMock,
+        mock_model: MagicMock,
+        mock_effort: MagicMock,
+        mock_confirm: MagicMock,
+        mock_delegate: MagicMock,
+    ) -> None:
+        """A scaled (retrying) headless budget must inject the per-attempt timeout only.
+
+        The prompt is built once and reused across both attempts
+        (``_delegate_headless``) — each attempt is killed at its own budget, so
+        naming the worst-case retry sum here would understate how soon the
+        *current* attempt is actually cut off.
+        """
+        from wade.services.delegation_service import extended_timeout
+
+        mock_config.return_value = _review_config(
+            review_plan_mode="headless", review_plan_timeout=None
+        )
+        mock_tool.return_value = "claude"
+        mock_model.return_value = None
+        mock_effort.return_value = None
+        mock_confirm.return_value = ("claude", None, None, PermissionMode.DEFAULT)
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.HEADLESS
+        )
+
+        _run_review_delegation("Body.\n\n{review_budget}\n\n---\n", "review_plan")
+
+        request = mock_delegate.call_args[0][0]
+        assert "{review_budget}" not in request.prompt
+        assert f"{request.timeout}s" in request.prompt
+        worst_case = request.timeout + extended_timeout(request.timeout)
+        assert worst_case != request.timeout  # sanity: the two numbers differ
+        assert str(worst_case) not in request.prompt
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.confirm_ai_selection")
+    @patch("wade.services.review_delegation_service.resolve_effort")
+    @patch("wade.services.review_delegation_service.resolve_model")
+    @patch("wade.services.review_delegation_service.resolve_ai_tool")
+    @patch("wade.services.review_delegation_service.load_config")
+    def test_headless_explicit_timeout_names_the_configured_value(
+        self,
+        mock_config: MagicMock,
+        mock_tool: MagicMock,
+        mock_model: MagicMock,
+        mock_effort: MagicMock,
+        mock_confirm: MagicMock,
+        mock_delegate: MagicMock,
+    ) -> None:
+        """An explicit ai.<cmd>.timeout (no retry) is named verbatim in the prompt."""
+        mock_config.return_value = _review_config(
+            review_implementation_mode="headless", review_implementation_timeout=420
+        )
+        mock_tool.return_value = "claude"
+        mock_model.return_value = None
+        mock_effort.return_value = None
+        mock_confirm.return_value = ("claude", None, None, PermissionMode.DEFAULT)
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.HEADLESS
+        )
+
+        _run_review_delegation("{review_budget}", "review_implementation")
+
+        request = mock_delegate.call_args[0][0]
+        assert request.timeout == 420
+        assert "420s" in request.prompt
+        assert "{review_budget}" not in request.prompt
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.confirm_ai_selection")
+    @patch("wade.services.review_delegation_service.resolve_effort")
+    @patch("wade.services.review_delegation_service.resolve_model")
+    @patch("wade.services.review_delegation_service.resolve_ai_tool")
+    @patch("wade.services.review_delegation_service.load_config")
+    def test_interactive_mode_gets_no_hard_deadline_wording(
+        self,
+        mock_config: MagicMock,
+        mock_tool: MagicMock,
+        mock_model: MagicMock,
+        mock_effort: MagicMock,
+        mock_confirm: MagicMock,
+        mock_delegate: MagicMock,
+    ) -> None:
+        """review_batch's default (interactive) has no subprocess kill — no fake deadline."""
+        mock_config.return_value = ProjectConfig(
+            ai=AIConfig(review_batch=AICommandConfig(enabled=True))
+        )
+        mock_tool.return_value = "claude"
+        mock_model.return_value = None
+        mock_effort.return_value = None
+        mock_confirm.return_value = ("claude", None, None, PermissionMode.DEFAULT)
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.INTERACTIVE
+        )
+
+        _run_review_delegation("{review_budget}", "review_batch")
+
+        request = mock_delegate.call_args[0][0]
+        assert request.mode == DelegationMode.INTERACTIVE
+        assert "No hard deadline" in request.prompt
+        assert "{review_budget}" not in request.prompt
+        # No fabricated numeric deadline anywhere in the substituted line.
+        assert not re.search(r"\broughly \*\*\d+s\*\*", request.prompt)
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    def test_prompt_mode_gets_no_hard_deadline_wording(
+        self,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+    ) -> None:
+        """Self-review (PROMPT mode) has no subprocess kill either — same wording as interactive."""
+        mock_config.return_value = _review_config(review_plan_mode="prompt")
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.PROMPT
+        )
+
+        _run_review_delegation("{review_budget}", "review_plan")
+
+        request = mock_delegate.call_args[0][0]
+        assert "No hard deadline" in request.prompt
+        assert not re.search(r"\broughly \*\*\d+s\*\*", request.prompt)
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    @patch("wade.git.repo.diff_worktree")
+    @patch("wade.git.repo.get_repo_root")
+    def test_review_implementation_prompt_carries_content_and_budget(
+        self,
+        mock_repo_root: MagicMock,
+        mock_diff: MagicMock,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+    ) -> None:
+        """The final prompt sent to delegate() has both the diff and the budget line."""
+        mock_repo_root.return_value = Path("/repo")
+        mock_diff.return_value = "diff --git a/f.py b/f.py\n+new line\n"
+        mock_template.return_value = "Review:\n{review_budget}\n---\n{diff_content}"
+        mock_config.return_value = _review_config(review_implementation_enabled=True)
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.PROMPT
+        )
+
+        review_implementation()
+
+        call_args = mock_delegate.call_args[0][0]
+        assert "diff --git" in call_args.prompt
+        assert "No hard deadline" in call_args.prompt
+        assert "{review_budget}" not in call_args.prompt
+        assert "{diff_content}" not in call_args.prompt
+
+    @patch("wade.services.review_delegation_service.delegate")
+    @patch("wade.services.review_delegation_service.load_config")
+    @patch("wade.services.review_delegation_service.load_prompt_template")
+    @patch("wade.git.repo.diff_worktree")
+    @patch("wade.git.repo.get_repo_root")
+    def test_diff_containing_literal_review_budget_token_is_not_corrupted(
+        self,
+        mock_repo_root: MagicMock,
+        mock_diff: MagicMock,
+        mock_template: MagicMock,
+        mock_config: MagicMock,
+        mock_delegate: MagicMock,
+    ) -> None:
+        """A diff that itself touches this prompt template must survive verbatim.
+
+        {review_budget} must be substituted into the bare template *before*
+        content is merged in — otherwise reviewing a diff that adds a
+        ``{review_budget}`` line (e.g. to review-code.md itself) would have its
+        own diff hunk corrupted by the later blind find-and-replace.
+        """
+        mock_repo_root.return_value = Path("/repo")
+        mock_diff.return_value = "diff --git a/review-code.md b/review-code.md\n+{review_budget}\n"
+        mock_template.return_value = "Review:\n{review_budget}\n---\n{diff_content}"
+        mock_config.return_value = _review_config(review_implementation_enabled=True)
+        mock_delegate.return_value = DelegationResult(
+            success=True, feedback="ok", mode=DelegationMode.PROMPT
+        )
+
+        review_implementation()
+
+        call_args = mock_delegate.call_args[0][0]
+        # The diff hunk's own literal "{review_budget}" line survives untouched.
+        assert "+{review_budget}" in call_args.prompt
+        # The real scaffold placeholder was still replaced with real wording.
+        assert "No hard deadline" in call_args.prompt
+        # Exactly one substituted budget line, not zero and not a corrupted mix.
+        assert call_args.prompt.count("No hard deadline") == 1

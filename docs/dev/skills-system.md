@@ -82,6 +82,25 @@ different position in each session (Step 2 in implement, after review; Step 1 in
 review-pr-comments), so the numbered heading lives in each `SKILL.md` and the
 partial holds only the shared body.
 
+`review-budget.md` is the canonical source for the shared review time-budget,
+pass-cap, timeout-vs-error, and trivial-change-skip rules (`{review_budget_notes}`)
+— referenced from all **three** session skills so every review workflow states
+identical guidance by default. `wade review batch` intentionally has **no**
+session skill (its worktrees come from `wade implement-batch`, not a session
+command), so its copy of this guidance rides in the `{review_budget}` line of
+`templates/prompts/review-batch.md` instead — do not "fix" the 3-vs-4 count by
+adding a batch skill.
+
+When `review_plan.enabled: false` or `review_implementation.enabled: false` is
+set in `.wade.yml`, `bootstrap_worktree` (`implementation_service/bootstrap.py`)
+overrides `{review_budget_notes}` with a one-line "skipped" note instead of the
+full guidance — otherwise an agent would be told review is required unless
+trivial for a review command that is explicitly disabled. Because the
+placeholder is shared by all three skills but each `bootstrap_worktree` call
+only ever installs one of {`plan-session`} vs {`implementation-session`,
+`review-pr-comments-session`}, the override is scoped to whichever skill(s) the
+call is actually installing rather than applied globally.
+
 ## Documentation Targets
 
 The closing documentation pass names the files a project actually maintains.
@@ -158,7 +177,7 @@ or they are not installed. Review needs its **own** `reference/recovery.md` and
 
 `tests/integration/test_skill_context_budget.py` pins the combined size of the
 session-start payload — launch prompt + rendered `SKILL.md` (partials expanded,
-reviews enabled) — under a fixed char ceiling (`BUDGET_CHARS`, currently **11,000**)
+reviews enabled) — under a fixed char ceiling (`BUDGET_CHARS`, currently **13,700**)
 for each of implement / plan / review, so the budget cannot silently regress. The
 unit is **chars** (a deliberate proxy for tokens; measured token savings differ
 slightly). If a skill edit pushes a session over budget, move the added detail

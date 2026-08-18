@@ -9,6 +9,8 @@ Review the diff below for:
 
 Be specific and actionable. Reference file paths and line numbers. If the code is clean, say so briefly.
 
+{review_budget}
+
 ---
 
 {diff_content}

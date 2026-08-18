@@ -65,7 +65,28 @@ from wade.skills.installer import (
 # steps were rewritten to the convention. The inline text was trimmed to its minimum
 # first; this bump is the explicit, reviewed adjustment the guard is designed to
 # force, and it still catches *silent* regressions.
-BUDGET_CHARS = 11000
+# Bumped 11000 -> 13700 for #450: a new canonical `{review_budget_notes}` partial
+# (time budget, pass-cap asymmetry across implementation/plan/pr-comments,
+# timeout-vs-error pattern-matching, and the trivial-change skip criteria +
+# AI-judgment trade-off) is now referenced by all three session skills — by
+# design the *same* ~2.2k-char block appears in each render so every review
+# workflow states identical guidance (replacing the drifting "600s" /
+# "at most 2 times" literals it superseded). This is the largest single bump so
+# far because the content itself — not incidental prose — is new; it was
+# trimmed for length before bumping. Still catches *silent* regressions.
+# Bumped 13700 -> 14100 for the #451 review pass: the `{review_budget_notes}`
+# partial gained two P1-driven corrections flagged on PR #451. (1) The
+# timeout-vs-error note now states that a timed-out headless review writes no
+# review-ran marker, so it does **not** clear `done`'s gate — its salvaged
+# output is for addressing findings, not for completing; on a repeated
+# same-commit timeout, finish via `--skip-review`/`done.require_review: false`
+# rather than looping (a repeat can't produce a pass, and pr-comments sessions
+# have no cap). (2) The trivial-skip note now states that every `--skip-review`
+# is surfaced to a human reviewer via the visible `## Review Status` line, so a
+# skip *defers to human review* instead of shipping unreviewed. Both were
+# trimmed to minimum before bumping; this is the explicit, reviewed adjustment
+# the guard is designed to force, and it still catches *silent* regressions.
+BUDGET_CHARS = 14100
 
 # (session label, launch prompt template, phase skill dir name)
 _SESSIONS = [

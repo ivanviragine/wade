@@ -159,6 +159,77 @@ class TestPhaseContent:
         assert "wade plan-session done .wade/plans" in ctx
 
 
+class TestReviewDisabledOverride:
+    """#450 review: the static 'Review budget:' line must reflect a disabled review.
+
+    ``ai.review_implementation.enabled: false`` (IMPLEMENT/REVIEW) or
+    ``ai.review_plan.enabled: false`` (PLAN) makes the review command
+    short-circuit to a disabled-skip result — the SessionStart line must say so
+    instead of claiming the command "prints your live time budget and pass
+    count", which mirrors bootstrap.py's skill-partial override for the same
+    flags.
+    """
+
+    def _ctx(self, r: subprocess.CompletedProcess[str]) -> str:
+        return json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
+
+    def _write_config(self, root: Path, body: str) -> None:
+        (root / ".wade.yml").write_text(body, encoding="utf-8")
+
+    def test_implement_shows_skip_note_when_review_implementation_disabled(
+        self, tmp_path: Path
+    ) -> None:
+        _write_plan(tmp_path)
+        self._write_config(tmp_path, "ai:\n  review_implementation:\n    enabled: false\n")
+        ctx = self._ctx(_run_ss("claude", str(tmp_path), "implement"))
+        assert "Review budget: skipped" in ctx
+        assert "review_implementation.enabled: false" in ctx
+        assert "prints your live time budget and pass count" not in ctx
+
+    def test_review_shows_skip_note_when_review_implementation_disabled(
+        self, tmp_path: Path
+    ) -> None:
+        # review-pr-comments-session closes through `wade review implementation`
+        # too, so it gates on the same ``review_implementation`` flag as IMPLEMENT.
+        _write_plan(tmp_path)
+        self._write_config(tmp_path, "ai:\n  review_implementation:\n    enabled: false\n")
+        ctx = self._ctx(_run_ss("claude", str(tmp_path), "review"))
+        assert "Review budget: skipped" in ctx
+        assert "review_implementation.enabled: false" in ctx
+        assert "prints your live time budget" not in ctx
+
+    def test_plan_shows_skip_note_when_review_plan_disabled(self, tmp_path: Path) -> None:
+        self._write_config(tmp_path, "ai:\n  review_plan:\n    enabled: false\n")
+        ctx = self._ctx(_run_ss("claude", str(tmp_path), "plan"))
+        assert "Review budget: skipped" in ctx
+        assert "review_plan.enabled: false" in ctx
+        assert "advisory, not code-tracked" not in ctx
+
+    def test_implement_keeps_default_line_when_review_plan_disabled(self, tmp_path: Path) -> None:
+        # Disabling the *other* phase's review flag must not affect this one.
+        _write_plan(tmp_path)
+        self._write_config(tmp_path, "ai:\n  review_plan:\n    enabled: false\n")
+        ctx = self._ctx(_run_ss("claude", str(tmp_path), "implement"))
+        assert "prints your live time budget and pass count" in ctx
+        assert "Review budget: skipped" not in ctx
+
+    def test_default_config_keeps_default_line(self, tmp_path: Path) -> None:
+        _write_plan(tmp_path)
+        ctx = self._ctx(_run_ss("claude", str(tmp_path), "implement"))
+        assert "prints your live time budget and pass count" in ctx
+
+    def test_malformed_config_fails_open_to_default_line(self, tmp_path: Path) -> None:
+        # Invalid YAML must not suppress the whole SessionStart payload — the
+        # config-load failure is swallowed and the default (enabled-state) line
+        # stands, same fail-open contract as the rest of the builder.
+        _write_plan(tmp_path)
+        self._write_config(tmp_path, "ai: [not, a, mapping\n")
+        r = _run_ss("claude", str(tmp_path), "implement")
+        assert r.returncode == 0
+        ctx = self._ctx(r)
+        assert "prints your live time budget and pass count" in ctx
+
+
 class TestFailOpen:
     """A SessionStart hook must never block a session from starting (exit 0)."""
 

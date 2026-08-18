@@ -32,6 +32,8 @@ issue label, and the task-provider abstraction.
 
 {review_enforcement_rule}
 
+{review_budget_notes}
+
 {knowledge_step}
 
 ## First action: check your context

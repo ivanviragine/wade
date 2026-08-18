@@ -25,11 +25,21 @@ logger = structlog.get_logger()
 
 # Placeholder substitutions applied when skill files are copied to a project.
 # Maps placeholder string → relative path inside templates/skills/_partials/.
+#
+# ``{review_budget_notes}`` (review-budget.md) is the single source of truth for
+# the shared time-budget / pass-cap / timeout-vs-error / trivial-skip rules
+# (#450). It is referenced from exactly 3 skills — plan-session,
+# implementation-session, review-pr-comments-session — not 4: `wade review
+# batch` is a standalone human-invoked CLI command with no session skill of its
+# own (its worktrees come from `wade implement-batch`), so its copy of this
+# guidance rides in the `review-batch.md` prompt's `{review_budget}` line
+# instead. Do not "fix" this by adding a batch skill.
 _SKILL_PARTIALS: dict[str, str] = {
     "{user_interaction_prompt}": "_partials/user-interaction.md",
     "{review_enforcement_rule}": "_partials/review-enforcement-rule.md",
     "{review_plan_step}": "_partials/review-plan-step.md",
     "{review_implementation_closing_step}": "_partials/review-implementation-closing-step.md",
+    "{review_budget_notes}": "_partials/review-budget.md",
     "{doc_update_step}": "_partials/doc-update-step.md",
     "{knowledge_step}": "_partials/knowledge-step.md",
 }

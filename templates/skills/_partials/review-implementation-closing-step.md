@@ -1,4 +1,4 @@
-**Step 1 — Review [MANDATORY]:**
+**Step 1 — Review [required unless the change is objectively trivial]:**
 
 Run `wade review implementation` to review your changes and check the exit code:
 - **Exit 0**: Review completed externally or skipped. If there is output, it is
@@ -7,28 +7,19 @@ Run `wade review implementation` to review your changes and check the exit code:
 - **Exit 2**: Self-review mode. The output is a review prompt — you must act as
   the reviewer: read the instructions, analyze the diff, identify issues, and
   fix them. Commit fixes before proceeding.
-- **Exit 1**: Error — debug and retry.
+- **Exit 1**: If the output contains the timeout marker (see **Review budget &
+  skip guidance** above), it is a budget overrun, not a bug — re-run once, or
+  use the salvaged partial output. Any other exit 1: a real error — debug and
+  retry.
 
-For staged-only review: `wade review implementation --staged`.
+For staged-only review: `wade review implementation --staged`. See **Review
+budget & skip guidance** above for the time budget, the pass cap, and the
+may-skip / never-skip criteria for a sanctioned `--skip-review`.
 
-**Headless review can be slow.** When `review_implementation.mode` is `headless`,
-it launches an external AI subprocess that may run for a few minutes. wade prints
-the budget when it starts ("can take up to Ns"). Keep it in the foreground and
-allow more than that before timing out. Do not kill it early or background it — a
-premature kill is an infra timeout, not a review result. Budget:
-`ai.review_implementation.timeout` (600s).
-
-**Bounded by `done.max_review_passes` (default 2) — code-enforced.** `wade review
-implementation` prints your budget each pass ("review pass N of M — K left").
 After fixing a finding, commit and re-review (the commit stales the `reviewed`
-marker); major findings, re-run once. Once spent, `done` completes anyway (with a
-notice) instead of looping — break a stuck loop with `wade implementation-session
-done --skip-review`.
+marker); for major findings, re-run once — always proceed to Step 2 after that,
+regardless of new findings.
 
-**Skipping review is visible.** `done` records the outcome (reviewed / skipped /
-gate-disabled / cap-reached) with the pass count as a `## Review Status` line in
-the PR body, so `--skip-review` is not a silent shortcut.
-
-**This step is mandatory when `review_implementation.enabled` is not `false`.
-Do NOT proceed to Step 2 until this step is complete and any actionable
-findings are addressed and committed.**
+Do NOT proceed to Step 2 until this step is complete (reviewed, cap-reached, or
+a sanctioned skip naming its criterion) and any actionable findings are
+addressed and committed.

@@ -942,7 +942,7 @@ def bootstrap_worktree(
         _carry_forward_pending_votes(worktree_path, repo_root, config)
 
     # Install skill files — not tracked by git so worktrees don't inherit them
-    from wade.skills.installer import get_wade_repo_root, install_skills
+    from wade.skills.installer import SKILL_FILES, get_wade_repo_root, install_skills
 
     is_self = repo_root.resolve() == get_wade_repo_root().resolve()
 
@@ -958,6 +958,49 @@ def bootstrap_worktree(
         skill_extra_partials["{review_implementation_closing_step}"] = (
             "**Step 1 — ~~Review~~** — skipped"
             " (`review_implementation.enabled: false` in `.wade.yml`)."
+        )
+
+    # {review_budget_notes} (review-budget.md) is shared by all three session
+    # skills, so — unlike the placeholders above — one global override string
+    # would be wrong for whichever skill's review command is still enabled. Its
+    # "review is required unless trivial" guidance is only contradictory for
+    # the skill(s) whose own review flag is off, so scope the override to what
+    # this call is actually installing. Every current call site passes an
+    # explicit, mutually-exclusive skills= list (plan-session XOR
+    # {implementation-session, review-pr-comments-session} — see
+    # PLAN_SKILLS/IMPLEMENT_SKILLS/REVIEW_SKILLS), so the two categories below
+    # never both apply in practice. Guard the ambiguous case explicitly anyway
+    # (skills=None, or a future caller mixing both) — a single extra_partials
+    # dict can't hold two different override strings for two different skill
+    # files, so if the call installs *both* categories at once, overriding for
+    # either flag alone would clobber the other skill's (possibly still-enabled)
+    # guidance with the wrong disabled-reason text — not just when both flags
+    # are off. Decline to override in that case — falling back to the full,
+    # non-contradictory-if-verbose default — rather than risk wrong text in one
+    # file (#450 review follow-up).
+    installing = set(skills) if skills is not None else set(SKILL_FILES)
+    plan_selected = "plan-session" in installing
+    impl_selected = (
+        "implementation-session" in installing or "review-pr-comments-session" in installing
+    )
+    plan_review_off = config.ai.review_plan.enabled is False
+    impl_review_off = config.ai.review_implementation.enabled is False
+
+    if plan_selected and impl_selected:
+        if plan_review_off or impl_review_off:
+            logger.debug(
+                "implementation.review_budget_notes_ambiguous_skip", skills=sorted(installing)
+            )
+    elif plan_selected and plan_review_off:
+        skill_extra_partials["{review_budget_notes}"] = (
+            "## Review budget & skip guidance\n\n"
+            "Skipped — `review_plan.enabled: false` in `.wade.yml` disables plan review."
+        )
+    elif impl_selected and impl_review_off:
+        skill_extra_partials["{review_budget_notes}"] = (
+            "## Review budget & skip guidance\n\n"
+            "Skipped — `review_implementation.enabled: false` in `.wade.yml` disables "
+            "`wade review implementation` and the `done` review gate."
         )
     if is_self:
         # Worktree has its own templates/ checkout — symlink to those

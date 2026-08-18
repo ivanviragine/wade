@@ -9,6 +9,8 @@ Review the plan below for:
 
 Be specific and actionable. If the plan is solid, say so briefly. If there are issues, list them with concrete suggestions.
 
+{review_budget}
+
 ---
 
 {plan_content}
