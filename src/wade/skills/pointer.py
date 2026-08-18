@@ -72,12 +72,14 @@ def extract_pointer_content(file_path: Path) -> str | None:
     return extract_marker_block(content, MARKER_START, MARKER_END)
 
 
-def _content_without_pointer(content: str) -> str | None:
-    """Return *content* with the pointer block removed, or None if not found.
+def _content_without_pointer(content: str) -> tuple[str, bool] | None:
+    """Return (*content* with the pointer block removed, is_legacy_format).
 
-    Handles both marker-based and old-style (bare ``## Git Workflow``)
-    formats. Shared by ``remove_pointer()`` (which writes the result back)
-    and ``is_pointer_only()`` (which only inspects it).
+    Returns None if no pointer block is found. Handles both marker-based and
+    old-style (bare ``## Git Workflow``) formats — the ``is_legacy_format``
+    flag lets ``remove_pointer()`` keep logging distinct events per format.
+    Shared by ``remove_pointer()`` (which writes the result back) and
+    ``is_pointer_only()`` (which only inspects it).
     """
     # Try marker-based removal (last pair — skip documentation examples)
     end_idx = content.rfind(MARKER_END)
@@ -89,7 +91,7 @@ def _content_without_pointer(content: str) -> str | None:
         new_content = before
         if after.strip():
             new_content += "\n\n" + after
-        return new_content.rstrip() + "\n" if new_content.strip() else ""
+        return (new_content.rstrip() + "\n" if new_content.strip() else "", False)
 
     # Fallback: old-style removal (## Git Workflow to next ## or EOF)
     lines = content.split("\n")
@@ -108,7 +110,7 @@ def _content_without_pointer(content: str) -> str | None:
     if not in_pointer and len(new_lines) == len(lines):
         return None  # no pointer found
 
-    return "\n".join(new_lines).rstrip() + "\n"
+    return ("\n".join(new_lines).rstrip() + "\n", True)
 
 
 def is_pointer_only(file_path: Path) -> bool:
@@ -126,9 +128,10 @@ def is_pointer_only(file_path: Path) -> bool:
 
     content = file_path.read_text(encoding="utf-8")
     _warn_if_multiple_markers(content, file_path)
-    remainder = _content_without_pointer(content)
-    if remainder is None:
+    result = _content_without_pointer(content)
+    if result is None:
         return False  # no pointer found — not wade's file to discard
+    remainder, _ = result
     return not remainder.strip()
 
 
@@ -144,9 +147,10 @@ def remove_pointer(file_path: Path) -> bool:
     content = file_path.read_text(encoding="utf-8")
     _warn_if_multiple_markers(content, file_path)
 
-    new_content = _content_without_pointer(content)
-    if new_content is None:
+    result = _content_without_pointer(content)
+    if result is None:
         return False
+    new_content, is_legacy = result
 
     if not new_content.strip():
         # File is empty after removal — remove the file
@@ -155,7 +159,7 @@ def remove_pointer(file_path: Path) -> bool:
         return True
 
     file_path.write_text(new_content, encoding="utf-8")
-    logger.info("pointer.removed", path=str(file_path))
+    logger.info("pointer.removed_legacy" if is_legacy else "pointer.removed", path=str(file_path))
     return True
 
 

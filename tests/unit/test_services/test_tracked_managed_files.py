@@ -7,6 +7,7 @@ from pathlib import Path
 
 from wade.services.implementation_service import (
     _check_tracked_managed_files,
+    _format_uncommitted_summary,
     _get_dirty_file_paths,
     _identify_session_dirty_files,
 )
@@ -330,6 +331,30 @@ class TestGetDirtyFilePaths:
         assert ".claude/" not in paths
         assert ".claude/skills/task/SKILL.md" in paths
         assert ".claude/notes.txt" in paths
+
+
+class TestFormatUncommittedSummary:
+    def test_untracked_directory_count_matches_expanded_file_list(self, tmp_git_repo: Path) -> None:
+        """The summary's untracked count must agree with the expanded file list.
+
+        Regression test for the PR #454 review finding: ``_format_uncommitted_summary``
+        (via ``get_dirty_status``) used to collapse an untracked directory into a
+        single line while ``_get_dirty_file_paths`` (``--untracked-files=all``)
+        expands it into one entry per file — producing a mismatched count and
+        list (e.g. "1 untracked" next to 3 listed files) in the very
+        confirmation prompt this PR exists to make trustworthy.
+        """
+        untracked_dir = tmp_git_repo / "new_stuff"
+        untracked_dir.mkdir()
+        (untracked_dir / "a.txt").write_text("a")
+        (untracked_dir / "b.txt").write_text("b")
+        (untracked_dir / "c.txt").write_text("c")
+
+        summary = _format_uncommitted_summary(tmp_git_repo)
+        paths = _get_dirty_file_paths(tmp_git_repo)
+
+        assert summary == "3 untracked"
+        assert len(paths) == 3
 
 
 class TestIdentifySessionDirtyFiles:

@@ -403,8 +403,14 @@ def get_dirty_status(path: Path) -> dict[str, int]:
     """Get detailed dirty working tree status.
 
     Returns a dict with counts for staged, unstaged, and untracked files.
+
+    Uses ``--untracked-files=all`` so an untracked directory contributes one
+    count per file inside it, matching ``get_dirty_file_paths()`` — otherwise
+    a directory collapses to a single line here while the file list expands
+    it, producing a summary count that disagrees with the listed files (e.g.
+    "1 untracked" next to 3 listed files) in the same confirmation prompt.
     """
-    result = _run_git("status", "--porcelain", cwd=path)
+    result = _run_git("status", "--porcelain", "--untracked-files=all", cwd=path)
     staged = 0
     unstaged = 0
     untracked = 0
