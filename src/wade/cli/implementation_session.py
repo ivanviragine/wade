@@ -138,7 +138,10 @@ def done(
 
         console.info(
             "SESSION COMPLETE. "
-            "Report by exception: give the PR/URL and what's next, and only call out "
-            "anything that needs the developer's attention. Suggest they exit the session."
+            "Report by exception: end with the emoji step-status summary (Review, Docs, "
+            "PR-SUMMARY, Sync, Done) and its handles — PR number/URL, closes #N on merge, "
+            "branch — then present the exit decision as a native dialog whose recommended "
+            "first option is 'Exit now — wade takes over (recommended)'. Surface only what "
+            "needs the developer's attention."
         )
     raise typer.Exit(0 if success else 1)

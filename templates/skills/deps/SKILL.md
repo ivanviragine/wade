@@ -79,9 +79,10 @@ Rules:
 
 ## Step 3: Confirm completion
 
-After writing the file, tell the user:
-> "Dependency file written to `<path>`. Exit this session so wade can apply
-> the dependencies to the issues."
+After writing the file, end with a compact status line and the next action:
+
+> ✅ Dependency file written to `<path>`.
+> Next: exit this session so wade applies the dependencies to the issues.
 
 ## Rules
 

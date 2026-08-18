@@ -20,8 +20,8 @@ start.
 ## Talking to the user
 
 {user_interaction_prompt}
-- After `done` succeeds: "Session complete — PR updated; exit now. Any further changes first?"
-- If a review comment is ambiguous: "How should I handle this comment?"
+- After `done` succeeds (dialog): `Exit now — reviewers are notified (recommended)` / `Keep editing — I have more changes`.
+- If a comment is ambiguous (dialog): name the concrete handling options, e.g. `Apply as suggested (recommended)` / `Push back — I disagree` / `Ask the reviewer`.
 
 ## Never use `gh issue create`
 
@@ -167,11 +167,12 @@ A **pre-push git hook** refuses a push of the session branch without a current
 `.wade/done@<sha>` marker (`done` writes it). `git push --no-verify` bypasses it
 in one flag — it is a quality layer, not a boundary; do not route around it.
 
-**Step 5 — Present results** (per the **Communication style** rule): the
-actionable handles — PR number/URL, threads resolved and remaining — plus what's
-next (reviewers are notified of your changes). `done` has succeeded — tell the
-user plainly that the session is complete and to exit now, offering one escape:
-"any further changes first?" If so, apply and repeat Steps 1–5.
+**Step 5 — Present results:** end with the emoji step-status summary (steps:
+`Docs · PR-SUMMARY · Sync · Done`) and its handles — PR number/URL, threads
+resolved/remaining. `done` has succeeded, so present the exit decision as a
+**native dialog**: `Exit now — reviewers are notified (recommended)` and `Keep
+editing — I have more changes` → apply and repeat Steps 1–5. See
+@.claude/skills/task/reference/session-summary-format.md.
 
 ## Skills reference
 

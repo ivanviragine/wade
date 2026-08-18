@@ -49,9 +49,11 @@ def done(
 
     console.info(
         "SESSION COMPLETE — do not implement anything. "
-        "Report by exception: tell the user what happens next (wade will read the "
-        "plan files and create GitHub issues and draft PRs automatically) and only "
-        "call out anything that needs their attention. Suggest they exit the session now."
+        "Report by exception: end with the emoji step-status summary (steps: Plan "
+        "file(s), Review, Knowledge, Validate) and its handles, then present the exit "
+        "decision as a native dialog whose recommended first option is "
+        "'Exit now — wade creates the issue(s) & draft PR(s) (recommended)'. "
+        "Surface only what needs the user's attention."
     )
 
     raise typer.Exit(0)

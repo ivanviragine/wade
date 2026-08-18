@@ -136,7 +136,16 @@ and — from the `## Skills reference` index — `reference/tracking-issues.md`
 (child/epic issues) and `reference/new-plan.md` (finalizing a plan mid-session).
 `review-pr-comments-session` points at its own `reference/recovery.md` and
 `reference/doc-update.md`. The `task` skill uses the same pattern with
-`plan-format.md` + `examples.md`.
+`plan-format.md` + `examples.md`, plus `reference/session-summary-format.md` —
+the shared **session-summary / decision convention** (emoji step-status legend
+✅/⚠️/❌, the final-summary skeleton, the recommended-first dialog-label rules, and
+one worked example per session type). It is hosted under `task` deliberately:
+`task` installs in **every** session type (`PLAN`/`IMPLEMENT`/`REVIEW_SKILLS`), so
+all three session skills — plus `deps` — resolve it via the one
+`@.claude/skills/task/reference/session-summary-format.md` pointer. The inline
+"Present results" trigger in each session skill is self-sufficient without it, so
+a session type where that `@`-path fails to resolve still renders a correct
+summary.
 
 Reference files must be registered in `SKILL_FILES` (see [Skill Installation
 Lifecycle](#skill-installation-lifecycle)) using the `reference/<file>.md` path,
@@ -149,7 +158,7 @@ or they are not installed. Review needs its **own** `reference/recovery.md` and
 
 `tests/integration/test_skill_context_budget.py` pins the combined size of the
 session-start payload — launch prompt + rendered `SKILL.md` (partials expanded,
-reviews enabled) — under a fixed char ceiling (`BUDGET_CHARS`, currently **10,500**)
+reviews enabled) — under a fixed char ceiling (`BUDGET_CHARS`, currently **11,000**)
 for each of implement / plan / review, so the budget cannot silently regress. The
 unit is **chars** (a deliberate proxy for tokens; measured token savings differ
 slightly). If a skill edit pushes a session over budget, move the added detail

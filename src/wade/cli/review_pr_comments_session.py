@@ -100,16 +100,20 @@ def done(
                     console.info(message)
             if status.is_all_clear:
                 console.info(
-                    "Report by exception: give the PR/URL and what's next, and only call out "
-                    "anything that needs the developer's attention. Suggest they exit the session."
+                    "Report by exception: end with the emoji step-status summary (Docs, "
+                    "PR-SUMMARY, Sync, Done) and its handles — PR number/URL, threads "
+                    "resolved/remaining — then present the exit decision as a native dialog "
+                    "whose recommended first option is "
+                    "'Exit now — reviewers are notified (recommended)'. "
+                    "Surface only what needs the developer's attention."
                 )
         else:
             console.warn(
                 "SESSION COMPLETE — push succeeded, but review status could not be verified. "
-                "Report by exception: give the PR/URL and what's next. Recommend checking the "
-                "review status directly on the PR page — easy fix — then ask via the native "
-                'question component with options "Check now (recommended)" first and "Exit" '
-                "second."
+                "Report by exception: end with the emoji step-status summary and its handles "
+                "(PR/URL, threads). Recommend checking the review status directly on the PR "
+                "page — easy fix — then present a native dialog: 'Check now (recommended)' / "
+                "'Exit now — reviewers are notified'."
             )
     raise typer.Exit(0 if success else 1)
 

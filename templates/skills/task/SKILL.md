@@ -70,13 +70,17 @@ Always include:
 
 ## Step 3: Get user confirmation
 
-**Ask before creating anything.** The user may want to:
-- Merge two proposed issues into one
-- Split a proposed issue further
-- Adjust titles or task groupings
-- Skip the epic/parent issue
+**Ask before creating anything.** Present a native dialog whose first option is
+recommended and whose labels name the next step
+(@.claude/skills/task/reference/session-summary-format.md):
 
-Wait for explicit confirmation before proceeding.
+- `Create the issue(s) now (recommended)`
+- `Adjust first — merge, split, or retitle`
+
+The user may want to merge two proposed issues into one, split one further,
+adjust titles or task groupings, or skip the epic/parent issue. If they choose to
+adjust, apply the changes and re-present. Wait for explicit confirmation before
+proceeding.
 
 ## Step 4: Write plan files
 
@@ -120,9 +124,10 @@ that links all sub-issues — no user confirmation needed:
 
 > "Creating an epic issue to link all N sub-issues…"
 
-When **2 issues** are created, offer first:
+When **2 issues** are created, offer first via a native dialog:
 
-> "Want me to create an epic issue linking both sub-issues?"
+- `Create the epic (recommended)` — links both sub-issues
+- `Skip the epic`
 
 Write an epic with:
 - `# feat(epic): <overall feature title>` — the title must be conventional-commit
@@ -140,10 +145,11 @@ of what was created and how to start working. Do NOT offer to run
 `wade implement` yourself or present it as a selectable option — the human
 starts work sessions when they are ready.
 
-After creating all issues, list them clearly:
+After creating all issues, list them with the emoji step-status legend
+(@.claude/skills/task/reference/session-summary-format.md):
 
 ```
-✓ Created 3 issues:
+✅ Created 3 issues:
   #42 — feat: add user preferences schema (~200 LOC)
   #43 — feat: add preferences API endpoint (~250 LOC)
   #44 — feat: add preferences UI panel (~350 LOC)
