@@ -341,6 +341,34 @@ class TestGetPrReviewStatus:
 
         assert [r.login for r in status.bot_reactions] == ["chatgpt-codex-connector[bot]"]
 
+    @patch("wade.providers.github.GitHubProvider.get_pr_issue_comments", return_value=[])
+    @patch("wade.providers.github.GitHubProvider.get_repo_nwo", return_value="owner/repo")
+    @patch("wade.providers.github.run")
+    def test_bracketless_bot_reaction_login_kept(
+        self,
+        mock_run: MagicMock,
+        _mock_nwo: MagicMock,
+        _mock_comments: MagicMock,
+        provider: GitHubProvider,
+    ) -> None:
+        """A bracket-less known-bot reaction login is kept via login_is_known_bot (#448).
+
+        GraphQL can surface a Bot actor without the ``[bot]`` suffix (as it does for
+        review authors); the reactions filter must not drop it.
+        """
+        mock_run.return_value = MagicMock(
+            stdout=self._make_graphql_response(
+                reactions=[
+                    {"content": "THUMBS_UP", "user": {"login": "chatgpt-codex-connector"}},
+                ]
+            )
+        )
+
+        status = provider.get_pr_review_status(42)
+
+        assert [r.login for r in status.bot_reactions] == ["chatgpt-codex-connector"]
+        assert status.bot_reactions[0].is_acknowledgement
+
 
 class TestGetPrIssueComments:
     """Tests for get_pr_issue_comments() — including updated_at projection/parsing."""

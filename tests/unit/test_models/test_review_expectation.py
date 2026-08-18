@@ -21,6 +21,7 @@ from wade.models.review import (
     bot_login_matches,
     compute_bot_arrivals,
     format_review_status_summary,
+    login_is_known_bot,
     newest_signal_for_bot,
 )
 
@@ -76,6 +77,17 @@ class TestBotLoginMatches:
         assert not bot_login_matches("ai", "coderabbitai[bot]")
         assert bot_login_matches("ai", "ai")
         assert bot_login_matches("ai", "ai[bot]")
+
+
+class TestLoginIsKnownBot:
+    def test_matches_known_bots_bracket_and_bracketless(self) -> None:
+        assert login_is_known_bot("coderabbitai[bot]")
+        assert login_is_known_bot("chatgpt-codex-connector")  # bracket-less
+        assert login_is_known_bot("chatgpt-codex-connector[bot]")
+        assert login_is_known_bot("cursor[bot]")
+
+    def test_rejects_human_login(self) -> None:
+        assert not login_is_known_bot("octocat")
 
 
 class TestBotReaction:

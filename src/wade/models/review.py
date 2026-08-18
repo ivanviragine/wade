@@ -143,6 +143,20 @@ def bot_login_matches(bot_name: str, login: str) -> bool:
     return name_l in login_l
 
 
+def login_is_known_bot(login: str) -> bool:
+    """True if *login* matches any built-in bot's verified login substrings.
+
+    Robustness helper for the reactions path (#448): a reacting actor's login is
+    surfaced without the GraphQL ``__typename`` the reviews path uses to classify
+    bots, so a bracket-less bot login (e.g. ``chatgpt-codex-connector`` rather than
+    ``chatgpt-codex-connector[bot]``) would slip past a plain ``[bot]``-suffix
+    heuristic. Matching against the known built-in substrings catches both forms
+    without misclassifying a human reactor.
+    """
+    login_l = login.lower()
+    return any(sub in login_l for subs in _KNOWN_BOT_LOGIN_SUBSTRINGS.values() for sub in subs)
+
+
 # Reaction ``content`` values (normalized lowercase) that count as a bot
 # "acknowledged — actively reviewing" signal. GraphQL returns the enum form
 # (``THUMBS_UP``/``EYES``/``ROCKET``…); the provider lowercases it. The observed

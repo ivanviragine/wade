@@ -30,6 +30,7 @@ from wade.models.review import (
     detect_coderabbit_review_status,
     filter_actionable_threads,
     filter_unresolved_threads,
+    login_is_known_bot,
 )
 from wade.models.task import (
     CloseReason,
@@ -852,12 +853,17 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
             user = react_node.get("user") or {}
             login = user.get("login", "")
             normalized = login.lower()
+            # A reaction's actor is a GraphQL ``User`` (no ``__typename`` bot
+            # discriminator like the reviews path has), so classify by login:
+            # generic ``[bot]``-style markers, or a verified known-bot substring
+            # so a bracket-less bot login (e.g. ``chatgpt-codex-connector``) is
+            # still kept. Human reactions are dropped — only bot acks are used.
             looks_like_bot = (
                 normalized == "bot"
                 or normalized.startswith(("bot-", "bot_"))
                 or normalized.endswith(("[bot]", "-bot", "_bot"))
             )
-            if not login or not looks_like_bot:
+            if not login or not (looks_like_bot or login_is_known_bot(login)):
                 continue
             reactions.append(
                 BotReaction(login=login, content=str(react_node.get("content", "")).lower())
