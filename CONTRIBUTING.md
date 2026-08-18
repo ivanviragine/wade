@@ -35,14 +35,15 @@ uv pip install -e ".[dev]"
 
 ```
 CLI Layer      →  services, models, config, logging, ui
-Service Layer  →  providers, crossby (AI tool adapters), git, db, models, config, logging
+Service Layer  →  providers, crossby (AI tool adapters), git, models, config, logging
 Provider Layer →  models, config, logging  (no service imports)
 Git Layer      →  models, config, logging  (no service imports)
-DB Layer       →  models, logging          (no config imports)
 Models Layer   →  nothing (leaf)
 ```
 
-AI tool adapters live in the external [`crossby`](https://github.com/ivanviragine/crossby) package, not this repo — see `docs/dev/architecture.md`.
+Never import a higher layer from a lower one, and keep business logic out of `cli/`. One sanctioned exception runs the other way: services may import the lower `skills/` utility layer for skill-file management (`install_skills`, the `*_SKILLS` registries, gitignore/cross-tool constants), never the reverse.
+
+AI tool adapters live in the external [`crossby`](https://github.com/ivanviragine/crossby) package, not this repo — wade's services import `crossby.ai_tools` and `crossby.models.ai` directly. See `docs/dev/architecture.md`.
 
 CLI modules are thin dispatch — parse flags with Typer, call service methods. Business logic lives in `services/`, not `cli/`.
 

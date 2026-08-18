@@ -14,27 +14,39 @@ tests/
 │   ├── test_config/         # Config parsing tests
 │   ├── test_utils/          # Utility function tests
 │   ├── test_cli/            # CLI command tests (shell-init, AI flags)
-│   ├── test_db/             # Database repository tests
 │   ├── test_git/            # Git operation tests (branch, sync, worktree)
-│   ├── test_hooks/          # Hook tests (plan write guard)
-│   └── test_providers/      # Provider tests (GitHub PR, ClickUp, labels)
+│   ├── test_hooks/          # Hook guard-policy tests (worktree/plan/shell/Stop)
+│   ├── test_providers/      # Provider tests (GitHub PR, ClickUp, Markdown, labels)
+│   └── test_skills/         # Skill helpers (doc targets, managed gitignore, knowledge attrs)
 ├── integration/             # Needs git repos, mock gh
+│   ├── test_autostash.py
 │   ├── test_check.py
-│   ├── test_init.py
 │   ├── test_git.py
 │   ├── test_implementation_lifecycle.py
+│   ├── test_init.py
+│   ├── test_knowledge.py
+│   ├── test_markdown_provider.py
+│   ├── test_skill_context_budget.py
 │   └── test_skill_install.py
 ├── e2e/                     # End-to-end contract tests (mocked gh, deterministic)
 │   ├── conftest.py
 │   ├── _support.py
 │   ├── mock_gh_script.py
+│   ├── test_admin_contract.py
 │   ├── test_check_contract.py
+│   ├── test_implement_work_done_contract.py
+│   ├── test_knowledge_contract.py
+│   ├── test_mock_gh_contract.py
 │   ├── test_plan_contract.py
-│   ├── test_review_contract.py # review plan/implementation/pr-comments + session fetch/resolve
+│   ├── test_review_contract.py     # review plan/implementation/pr-comments + session fetch/resolve
 │   ├── test_smart_start_contract.py
 │   ├── test_task_contract.py
-│   ├── test_implement_work_done_contract.py
 │   └── test_work_sync_list_contract.py
+├── concurrency/             # Deterministic forced-interleaving races (#357), mocked gh
+│   ├── test_batch_multi_pr.py     # multi-PR batch classification
+│   ├── test_knowledge_merge.py    # concurrent KNOWLEDGE.md merges
+│   ├── test_lock_retry.py         # lock contention
+│   └── test_stash_race.py         # stash-stack races
 ├── live/                    # Manual live lanes (env-gated)
 │   ├── test_wade_live_gh.py
 │   ├── test_wade_live_ai.py
@@ -60,6 +72,9 @@ tests/
 
 # Integration tests only (needs git, uses mock gh)
 ./scripts/test.sh tests/integration/
+
+# Concurrency lane only (deterministic forced-interleaving; real git + mock gh)
+./scripts/test-concurrency.sh
 
 # Specific test file
 ./scripts/test.sh tests/unit/test_services/test_implementation_done_sync.py
@@ -105,6 +120,7 @@ credentials, or binaries are missing.
 
 - `e2e_docker`: deterministic e2e tests executed in docker/CI lanes
 - `contract`: behavior contract tests for CLI/service integration
+- `concurrency`: deterministic forced-interleaving tests for shared git/remote state (#357)
 - `live_gh`: manual live tests requiring gh auth + network
 - `live_ai`: manual live tests requiring real AI credentials
 
@@ -137,9 +153,9 @@ The recommended manual sandbox repo for both live GH and live AI workflow runs i
   [smoke.sh](/Users/ivanviragine/Documents/workspace/taskr/scripts/smoke.sh).
 
 Current live AI coverage is split deliberately:
-- [tests/live/test_wade_live_ai.py](/Users/ivanviragine/.codex/worktrees/c780/wade/tests/live/test_wade_live_ai.py)
+- [tests/live/test_wade_live_ai.py](../../tests/live/test_wade_live_ai.py)
   is the minimal provider smoke (API key + Claude headless + parseable output).
-- [tests/live/test_wade_live_ai_taskr.py](/Users/ivanviragine/.codex/worktrees/c780/wade/tests/live/test_wade_live_ai_taskr.py)
+- [tests/live/test_wade_live_ai_taskr.py](../../tests/live/test_wade_live_ai_taskr.py)
   is the taskr workflow lane (real repo, real edits, real tests, real PR lifecycle).
   It uses WADE's real issue/worktree/bootstrap flow plus WADE's implementation
   prompt, then completes via `wade implementation-session done`.
@@ -172,7 +188,7 @@ The taskr workflow lane is host-only and destructive by design:
 ## CI Execution Model
 
 - Full non-live validation requires both `./scripts/test.sh` and `./scripts/test-e2e-docker.sh`.
-- Unit + integration + top-level CLI smoke (`tests/test_cli_basics.py`) run directly on the CI host.
+- Unit + integration + concurrency + top-level CLI smoke (`tests/test_cli_basics.py`) run directly on the CI host — the default `./scripts/test.sh` (i.e. `tests/`, minus `tests/live/`) already includes `tests/concurrency/`; `./scripts/test-concurrency.sh` runs only that lane.
 - Deterministic E2E contract tests run via `./scripts/test-e2e-docker.sh` and `docker-compose.e2e.yml`.
 - Live lanes remain manual and env-gated (`test-live-gh.sh`, `test-live-ai.sh`, `test-live-ai-taskr.sh`).
 
