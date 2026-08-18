@@ -87,6 +87,121 @@ class PollOutcome(StrEnum):
 RECENT_COMMIT_GRACE_SECONDS = 120
 
 
+# ---------------------------------------------------------------------------
+# Bot identity, reactions, and per-bot arrival tracking (#448)
+# ---------------------------------------------------------------------------
+#
+# Review completion is *expectation-verified*: WADE knows which bots it expects
+# to review (the enabled ``bot_review.bots``) and refuses to report all-clear
+# while any expected bot has not posted a review covering HEAD — bounded by a
+# per-bot arrival window so a bot that is not installed on the repo cannot hang
+# the session. See ``compute_bot_arrivals`` and ``PRReviewStatus.blocking_bots``.
+
+# Known configured-bot ``name`` → the login substrings that identify the actor it
+# posts under. Verified against live PRs (#448): CodeRabbit posts as
+# ``coderabbitai[bot]``; Codex as ``chatgpt-codex-connector`` (GraphQL drops the
+# ``[bot]`` suffix the REST API keeps, so a substring match covers both forms).
+# The Cursor *Bugbot* login had no live sample available, so it is matched loosely
+# by ``cursor``/``bugbot`` — a wrong login would read as "never arrived" forever,
+# so the loose match is deliberate.
+_KNOWN_BOT_LOGIN_SUBSTRINGS: dict[str, tuple[str, ...]] = {
+    "coderabbit": ("coderabbit",),
+    "codex": ("chatgpt-codex-connector", "codex"),
+    "bugbot": ("cursor", "bugbot"),
+}
+
+# Minimum length for the unknown-bot name-substring fallback. A very short or
+# generic custom name (e.g. a bot literally named ``ai``) would over-match
+# unrelated logins, so below this length we require an exact login match instead.
+_MIN_NAME_SUBSTRING_LEN = 4
+
+# The CodeRabbit summary marker (``bot_status_ts``) is a CodeRabbit-specific
+# signal; attribute it to whichever expected bot matches this canonical login.
+_CODERABBIT_LOGIN = "coderabbitai[bot]"
+
+
+def bot_login_matches(bot_name: str, login: str) -> bool:
+    """True if a GitHub actor *login* belongs to the configured bot *bot_name*.
+
+    Uses the verified login substrings for the three built-in bots
+    (:data:`_KNOWN_BOT_LOGIN_SUBSTRINGS`); an **unknown** configured bot degrades
+    gracefully to matching its own ``name`` as a case-insensitive substring of the
+    login — guarded by :data:`_MIN_NAME_SUBSTRING_LEN` so a short/generic custom
+    name (e.g. ``ai``) cannot over-match an unrelated bot login.
+    """
+    login_l = login.lower()
+    known = _KNOWN_BOT_LOGIN_SUBSTRINGS.get(bot_name.lower())
+    if known is not None:
+        return any(sub in login_l for sub in known)
+    name_l = bot_name.lower()
+    if not name_l:
+        return False
+    if len(name_l) < _MIN_NAME_SUBSTRING_LEN:
+        # Too short to substring-match safely — require an exact (bare or
+        # ``[bot]``-suffixed) login match.
+        return login_l == name_l or login_l == f"{name_l}[bot]"
+    return name_l in login_l
+
+
+# Reaction ``content`` values (normalized lowercase) that count as a bot
+# "acknowledged — actively reviewing" signal. GraphQL returns the enum form
+# (``THUMBS_UP``/``EYES``/``ROCKET``…); the provider lowercases it. The observed
+# real-world Codex signal (#448) is a PR-level ``THUMBS_UP`` (``+1``) — the plan's
+# assumed "👀" is kept alongside it as an equally valid engagement marker.
+# Negative reactions (``thumbs_down``/``confused``) are excluded.
+_ACK_REACTION_CONTENTS = frozenset(
+    {"eyes", "rocket", "thumbs_up", "+1", "heart", "hooray", "laugh"}
+)
+
+
+class BotReaction(BaseModel):
+    """A reaction (emoji) left by a bot actor on the PR (#448).
+
+    ``content`` is normalized to the lowercase REST-style name
+    (``thumbs_up``/``eyes``/``rocket``…). A bot's positive reaction is treated as
+    "acknowledged, actively reviewing" — it keeps the poll alive (up to
+    ``ack_timeout``) for a bot that has not yet posted a review covering HEAD.
+    """
+
+    login: str
+    content: str
+
+    @property
+    def is_acknowledgement(self) -> bool:
+        """True when this reaction counts as an 'acknowledged, reviewing' signal."""
+        return self.content.lower() in _ACK_REACTION_CONTENTS
+
+
+class BotArrivalState(StrEnum):
+    """Per-expected-bot arrival state relative to the latest commit (#448)."""
+
+    ARRIVED = "arrived"  # posted a signal covering HEAD
+    AWAITING = "awaiting"  # no covering signal yet, still within the arrival window
+    ACKNOWLEDGED = "acknowledged"  # reacted but no covering signal; within the (longer) ack window
+    MISSING = "missing"  # window elapsed without a covering signal — reported, no longer blocking
+
+
+class BotArrival(BaseModel):
+    """Computed arrival status for one expected bot (#448).
+
+    ``signal_ts`` is the newest signal seen from this bot (review submission,
+    CodeRabbit summary edit, or inline-thread comment); ``waited_seconds`` /
+    ``window_seconds`` drive the poll progress line ("45s/300s").
+    """
+
+    name: str
+    state: BotArrivalState
+    signal_ts: datetime | None = None
+    reacted: bool = False
+    waited_seconds: int = 0
+    window_seconds: int = 0
+
+    @property
+    def is_blocking(self) -> bool:
+        """True while this bot should still block completion (within its window)."""
+        return self.state in (BotArrivalState.AWAITING, BotArrivalState.ACKNOWLEDGED)
+
+
 def detect_coderabbit_review_status(
     comments: list[PRComment],
 ) -> tuple[ReviewBotStatus | None, datetime | None]:
@@ -353,6 +468,15 @@ class PRReviewStatus(BaseModel):
     bot_status_ts: datetime | None = None
     fetch_failed: bool = False
     latest_commit_pushed_at: datetime | None = None
+    # Expectation verification (#448). ``expected_bots`` is the list of enabled
+    # ``bot_review.bots`` names WADE expects to review; ``bot_reactions`` are raw
+    # PR-level reactions from bot actors; ``bot_arrivals`` is the per-bot arrival
+    # map. All three are populated by the *service* layer (which has config +
+    # runtime clock) — see ``review_service.annotate_bot_expectations``. When
+    # ``expected_bots`` is empty the model behaves exactly as before this fix.
+    expected_bots: list[str] = []
+    bot_reactions: list[BotReaction] = []
+    bot_arrivals: dict[str, BotArrival] = {}
 
     @property
     def effective_unresolved_threads(self) -> list[ReviewThread]:
@@ -418,21 +542,61 @@ class PRReviewStatus(BaseModel):
         ]
 
     @property
+    def blocking_bots(self) -> list[str]:
+        """Expected bots that still block completion (un-arrived within their window).
+
+        Un-arrived means the bot has posted *no* signal covering HEAD — it never
+        posted at all, or its newest signal predates the latest commit. A bot is
+        blocking while it is ``AWAITING`` (within the arrival window) or
+        ``ACKNOWLEDGED`` (reacted; within the longer ack window). Empty until the
+        service computes :attr:`bot_arrivals`.
+        """
+        return [name for name, arrival in self.bot_arrivals.items() if arrival.is_blocking]
+
+    @property
+    def acknowledged_bots(self) -> list[str]:
+        """Expected bots that reacted (acknowledged) but haven't posted a covering review."""
+        return [
+            name
+            for name, arrival in self.bot_arrivals.items()
+            if arrival.state == BotArrivalState.ACKNOWLEDGED
+        ]
+
+    @property
+    def missing_bots(self) -> list[str]:
+        """Expected bots whose arrival window elapsed with no review covering HEAD.
+
+        These are surfaced explicitly ("⚠ no review from X") but no longer block —
+        a bot not installed on the repo cannot hang the session past its window.
+        """
+        return [
+            name
+            for name, arrival in self.bot_arrivals.items()
+            if arrival.state == BotArrivalState.MISSING
+        ]
+
+    @property
     def review_covers_latest_commit(self) -> bool:
-        """True when *every* distinct bot signal is at/after the latest commit.
+        """True when every expected/known bot has a review covering the latest commit.
 
         A ``bot_status == COMPLETED`` marker carries no information about *which*
         commit was reviewed, so a completion from before the latest push must not
         count as "done with HEAD". This predicate gates every "review complete /
         all clear" surface on the bot having actually reviewed the current commit.
 
-        Covered (``True``) when the commit timestamp is unknown, or no bot signal
-        exists (nothing to be stale relative to — a human-only or never-reviewed
-        PR always stays covered), or every distinct bot source's latest signal is
-        at/after the commit. Not covered (``False``) when any bot source's latest
-        signal is strictly older than the latest commit — a fresh signal from one
-        bot (e.g. Codex) cannot mask a stale one from another (e.g. CodeRabbit);
-        see ``latest_bot_signal_ts``.
+        **Expectation-verified (#448).** When ``expected_bots`` is populated, the
+        per-bot :attr:`bot_arrivals` map is authoritative: covered iff no expected
+        bot is still ``blocking`` (un-arrived within its window). An ``ARRIVED``
+        bot covers HEAD by definition; a ``MISSING`` bot (window elapsed) is
+        surfaced via :attr:`missing_bots` and no longer blocks. This closes the
+        original bug — an expected bot with *no* signal at all used to count as
+        "covered" (nothing to be stale relative to).
+
+        **Legacy path (no expectation configured).** Covered when the commit
+        timestamp is unknown, or no bot signal exists (a human-only or
+        never-reviewed PR stays covered), or every distinct bot source's latest
+        signal is at/after the commit — a fresh signal from one bot cannot mask a
+        stale one from another (see ``latest_bot_signal_ts``).
 
         Bot signals only (``bot_status_ts`` + bot ``submitted_at``): human review
         timestamps are deliberately excluded so an approve-then-fixup-commit flow
@@ -442,6 +606,8 @@ class PRReviewStatus(BaseModel):
         """
         if self.latest_commit_pushed_at is None:
             return True
+        if self.expected_bots:
+            return not self.blocking_bots
         bot_ts = latest_bot_signal_ts(self)
         if bot_ts is None:
             return True
@@ -548,6 +714,104 @@ def latest_bot_signal_ts(status: PRReviewStatus) -> datetime | None:
     return min(latest_by_source.values()) if latest_by_source else None
 
 
+def newest_signal_for_bot(status: PRReviewStatus, bot_name: str) -> datetime | None:
+    """Newest signal timestamp attributable to the expected bot *bot_name* (#448).
+
+    Considers, across everything that login matches (see :func:`bot_login_matches`):
+    every bot review's ``submitted_at``, the CodeRabbit summary marker
+    ``bot_status_ts`` (attributed to whichever bot matches the CodeRabbit login),
+    and unresolved-thread comment ``created_at``. Returns ``None`` when the bot has
+    posted no signal at all — the case the original bug mis-counted as "covered".
+    """
+    candidates: list[datetime] = []
+    for review in status.reviews:
+        if review.is_bot and review.submitted_at is not None and bot_login_matches(
+            bot_name, review.author
+        ):
+            candidates.append(_as_utc(review.submitted_at))
+    if status.bot_status_ts is not None and bot_login_matches(bot_name, _CODERABBIT_LOGIN):
+        candidates.append(_as_utc(status.bot_status_ts))
+    for thread in status.effective_unresolved_threads:
+        for comment in thread.comments:
+            if comment.created_at is not None and bot_login_matches(bot_name, comment.author):
+                candidates.append(_as_utc(comment.created_at))
+    return max(candidates) if candidates else None
+
+
+def bot_has_ack_reaction(status: PRReviewStatus, bot_name: str) -> bool:
+    """True if *bot_name* left an acknowledging reaction (👀/+1/🚀…) on the PR (#448)."""
+    return any(
+        reaction.is_acknowledgement and bot_login_matches(bot_name, reaction.login)
+        for reaction in status.bot_reactions
+    )
+
+
+def compute_bot_arrivals(
+    status: PRReviewStatus,
+    *,
+    now: datetime,
+    arrival_timeout: int,
+    ack_timeout: int,
+    window_starts: dict[str, datetime] | None = None,
+) -> dict[str, BotArrival]:
+    """Compute each expected bot's arrival state — pure, config-free (#448).
+
+    For every name in ``status.expected_bots``:
+
+    * **ARRIVED** — the bot's newest signal covers HEAD (``>= latest_commit``), or
+      the commit timestamp is unknown (staleness cannot be reasoned about, so we
+      never block — matching the legacy predicate).
+    * otherwise, measure the wait from the **later of** the latest commit push and
+      this bot's trigger time (``window_starts[name]``, from a ``.wade/`` trigger
+      marker). **Marker-absent degradation:** with no ``window_starts`` entry the
+      window starts at the commit push — an intentional fallback for fresh clones,
+      recreated worktrees, or a poll run from a different checkout than the one
+      that posted the trigger.
+    * a bot that **reacted** (👀/+1) gets the longer ``ack_timeout`` ceiling and is
+      reported ``ACKNOWLEDGED`` while it waits; otherwise ``AWAITING`` under
+      ``arrival_timeout``. Past its ceiling the bot is ``MISSING`` (surfaced, not
+      blocking).
+
+    The arrival-window comparison lives here (a runtime timeout passed in as
+    ``arrival_timeout``/``ack_timeout``) rather than on the model, keeping
+    ``PRReviewStatus`` free of config imports.
+    """
+    commit = (
+        _as_utc(status.latest_commit_pushed_at)
+        if status.latest_commit_pushed_at is not None
+        else None
+    )
+    starts = window_starts or {}
+    arrivals: dict[str, BotArrival] = {}
+    for name in status.expected_bots:
+        signal_ts = newest_signal_for_bot(status, name)
+        reacted = bot_has_ack_reaction(status, name)
+        if commit is None or (signal_ts is not None and signal_ts >= commit):
+            arrivals[name] = BotArrival(
+                name=name, state=BotArrivalState.ARRIVED, signal_ts=signal_ts, reacted=reacted
+            )
+            continue
+        # No signal covering HEAD — measure the wait from the later of the commit
+        # push and this bot's trigger marker (when present).
+        trigger_ts = starts.get(name)
+        window_start = max(commit, _as_utc(trigger_ts)) if trigger_ts is not None else commit
+        elapsed = int((now - window_start).total_seconds())
+        ceiling = ack_timeout if reacted else arrival_timeout
+        if elapsed < ceiling:
+            state = BotArrivalState.ACKNOWLEDGED if reacted else BotArrivalState.AWAITING
+        else:
+            state = BotArrivalState.MISSING
+        arrivals[name] = BotArrival(
+            name=name,
+            state=state,
+            signal_ts=signal_ts,
+            reacted=reacted,
+            waited_seconds=max(elapsed, 0),
+            window_seconds=ceiling,
+        )
+    return arrivals
+
+
 # ---------------------------------------------------------------------------
 # Review status summary formatting
 # ---------------------------------------------------------------------------
@@ -624,11 +888,37 @@ def format_review_status_summary(
             )
         )
 
+    # Expected-bot arrival (#448): name the specific bots WADE is still waiting on
+    # (or that never showed up) rather than the generic staleness line below.
+    for name in status.blocking_bots:
+        arrival = status.bot_arrivals.get(name)
+        progress = (
+            f" ({arrival.waited_seconds}s/{arrival.window_seconds}s)"
+            if arrival and arrival.window_seconds
+            else ""
+        )
+        if arrival and arrival.state == BotArrivalState.ACKNOWLEDGED:
+            messages.append(
+                (
+                    LEVEL_WARN,
+                    f"`{name}` acknowledged the PR and is still reviewing{progress} — waiting.",
+                )
+            )
+        else:
+            messages.append(
+                (LEVEL_WARN, f"Waiting for `{name}` to review the latest commit{progress}.")
+            )
+    for name in status.missing_bots:
+        messages.append(
+            (LEVEL_WARN, f"⚠ No review from `{name}` yet — proceeding without it.")
+        )
+
     # Stale coverage: a bot signal exists but predates the latest commit, so the
     # newest push has not been re-reviewed. Explain it instead of going quiet —
     # ``is_all_clear`` is already False here, so the SESSION COMPLETE / all-clear
-    # lines below are suppressed.
-    if not status.review_covers_latest_commit:
+    # lines below are suppressed. Skipped when ``expected_bots`` is set: the
+    # per-bot messages above already say precisely which bot is awaited.
+    if not status.review_covers_latest_commit and not status.expected_bots:
         messages.append(
             (
                 LEVEL_WARN,

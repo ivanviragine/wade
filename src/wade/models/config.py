@@ -330,6 +330,17 @@ class BotReviewConfig(BaseModel):
     (via :func:`_default_review_bots`) so ``wade review trigger`` works with no
     config; every field is overridable.
 
+    ``arrival_timeout`` / ``ack_timeout`` bound how long review completion waits
+    for an expected bot (#448). WADE refuses to report all-clear while an enabled
+    bot has not posted a review covering HEAD; ``arrival_timeout`` (seconds) caps
+    that wait, after which the bot stops blocking and is reported as missing. A bot
+    that *acknowledges* with a reaction (👀/+1) gets the longer ``ack_timeout``
+    ceiling instead. **Latency note:** because all three bots ship enabled, a repo
+    without one installed adds up to ``arrival_timeout`` to every session before
+    proceeding with a "no review from X" note — disable an unused bot
+    (``enabled: false``) to remove its floor. ``ack_timeout`` must be
+    ``>= arrival_timeout``.
+
     Bot ``name`` values must be unique — ``--bot`` selection and the per-bot
     auto-trigger marker both key off ``name``, so a duplicate would silently
     collide (post twice / share one marker). Enforcing it here makes the invariant
@@ -338,6 +349,8 @@ class BotReviewConfig(BaseModel):
     """
 
     auto_trigger: bool = False
+    arrival_timeout: StrictInt = Field(default=300, gt=0)
+    ack_timeout: StrictInt = Field(default=900, gt=0)
     bots: list[ReviewBotConfig] = Field(default_factory=_default_review_bots)
 
     @model_validator(mode="after")
@@ -349,6 +362,15 @@ class BotReviewConfig(BaseModel):
                     f"bot_review.bots: duplicate name '{bot.name}' (names must be unique)"
                 )
             seen.add(bot.name)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_timeout_ordering(self) -> BotReviewConfig:
+        if self.ack_timeout < self.arrival_timeout:
+            raise ValueError(
+                "bot_review.ack_timeout must be >= arrival_timeout "
+                f"(got ack_timeout={self.ack_timeout}, arrival_timeout={self.arrival_timeout})"
+            )
         return self
 
 

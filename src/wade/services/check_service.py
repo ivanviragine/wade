@@ -917,6 +917,25 @@ def _validate_bot_review_section(bot_review: dict[str, Any], errors: list[str]) 
     if auto_trigger is not None and not isinstance(auto_trigger, bool):
         errors.append("bot_review.auto_trigger: must be true or false")
 
+    # arrival_timeout / ack_timeout (#448): strict positive integers (reject bool,
+    # which is an int subclass) mirroring the ``BotReviewConfig`` StrictInt fields.
+    for key in ("arrival_timeout", "ack_timeout"):
+        value = bot_review.get(key)
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or value < 1
+        ):
+            errors.append(f"bot_review.{key}: must be a positive integer")
+    arrival_timeout = bot_review.get("arrival_timeout")
+    ack_timeout = bot_review.get("ack_timeout")
+    if (
+        isinstance(arrival_timeout, int)
+        and not isinstance(arrival_timeout, bool)
+        and isinstance(ack_timeout, int)
+        and not isinstance(ack_timeout, bool)
+        and ack_timeout < arrival_timeout
+    ):
+        errors.append("bot_review.ack_timeout: must be >= arrival_timeout")
+
     bots = bot_review.get("bots")
     if bots is not None:
         if not isinstance(bots, list):
@@ -924,7 +943,7 @@ def _validate_bot_review_section(bot_review: dict[str, Any], errors: list[str]) 
         else:
             _validate_bot_review_bots(bots, errors)
 
-    valid_keys = {"auto_trigger", "bots"}
+    valid_keys = {"auto_trigger", "arrival_timeout", "ack_timeout", "bots"}
     supported = ", ".join(sorted(valid_keys))
     for key in bot_review:
         if key not in valid_keys:

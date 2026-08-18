@@ -179,13 +179,17 @@ def _tier_yaml_value(model: str | None, effort: str | None) -> dict[str, Any] | 
 def _bot_review_config_dict(auto_trigger: bool) -> dict[str, Any]:
     """Build the ``bot_review`` YAML block: chosen auto_trigger + default bots (#431).
 
-    The bots list is derived from :class:`BotReviewConfig`'s model defaults so the
-    written block always matches the built-in CodeRabbit/Codex/Bugbot defaults —
-    one source of truth, discoverable and fully overridable in ``.wade.yml``.
+    The bots list and the arrival/ack timeouts are derived from
+    :class:`BotReviewConfig`'s model defaults so the written block always matches
+    the built-in CodeRabbit/Codex/Bugbot defaults — one source of truth,
+    discoverable and fully overridable in ``.wade.yml``.
     """
+    defaults = BotReviewConfig()
     return {
         "auto_trigger": bool(auto_trigger),
-        "bots": [bot.model_dump() for bot in BotReviewConfig().bots],
+        "arrival_timeout": defaults.arrival_timeout,
+        "ack_timeout": defaults.ack_timeout,
+        "bots": [bot.model_dump() for bot in defaults.bots],
     }
 
 

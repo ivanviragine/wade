@@ -18,6 +18,7 @@ import structlog
 
 from wade.models.config import ProviderConfig
 from wade.models.review import (
+    BotReaction,
     PendingReviewer,
     PRComment,
     PRReview,
@@ -596,12 +597,19 @@ mutation($threadId: ID!) {
         reviews: list[PRReview] = []
         pending_reviewers: list[PendingReviewer] = []
         latest_commit_pushed_at: datetime | None = None
+        bot_reactions: list[BotReaction] = []
         fetch_failed = False
 
         try:
-            page_threads, has_next, cursor, page_reviews, page_pending, latest_commit_pushed_at = (
-                self._fetch_review_status_page(owner, repo, pr_number, cursor=None)
-            )
+            (
+                page_threads,
+                has_next,
+                cursor,
+                page_reviews,
+                page_pending,
+                latest_commit_pushed_at,
+                bot_reactions,
+            ) = self._fetch_review_status_page(owner, repo, pr_number, cursor=None)
             threads.extend(page_threads)
             reviews.extend(page_reviews)
             pending_reviewers.extend(page_pending)
@@ -650,6 +658,10 @@ mutation($threadId: ID!) {
             bot_status_ts=bot_status_ts,
             fetch_failed=fetch_failed,
             latest_commit_pushed_at=latest_commit_pushed_at,
+            # Raw bot reactions (#448). ``expected_bots`` and the arrival map are
+            # populated later by the service layer, which has config + a runtime
+            # clock — the provider stays raw-signal focused.
+            bot_reactions=bot_reactions,
         )
 
     def _fetch_review_status_page(
@@ -659,12 +671,18 @@ mutation($threadId: ID!) {
         pr_number: int,
         cursor: str | None = None,
     ) -> tuple[
-        list[ReviewThread], bool, str | None, list[PRReview], list[PendingReviewer], datetime | None
+        list[ReviewThread],
+        bool,
+        str | None,
+        list[PRReview],
+        list[PendingReviewer],
+        datetime | None,
+        list[BotReaction],
     ]:
-        """Fetch first page with threads, reviews, review requests, and latest commit.
+        """Fetch first page with threads, reviews, review requests, commit, reactions.
 
         Returns (threads, has_next, end_cursor, reviews, pending_reviewers,
-        latest_commit_pushed_at).
+        latest_commit_pushed_at, bot_reactions).
         """
         query = """
 query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
@@ -714,6 +732,12 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
             committedDate
             pushedDate
           }
+        }
+      }
+      reactions(first: 100) {
+        nodes {
+          content
+          user { login }
         }
       }
     }
@@ -817,6 +841,28 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
                 except (ValueError, AttributeError):
                     logger.debug("github.latest_commit_date_parse_failed", raw=date_str)
 
+        # Parse PR-level reactions from bot actors (#448). A known bot's positive
+        # reaction (verified real-world: Codex posts a PR-level THUMBS_UP/``+1``)
+        # acknowledges it will review — see ``compute_bot_arrivals``. Human
+        # reactions are dropped here (only known-bot logins are ever consulted),
+        # keeping the stored list tiny. Content is lowercased to the REST-style
+        # name (``THUMBS_UP`` -> ``thumbs_up``).
+        reactions: list[BotReaction] = []
+        for react_node in pr_data.get("reactions", {}).get("nodes", []):
+            user = react_node.get("user") or {}
+            login = user.get("login", "")
+            normalized = login.lower()
+            looks_like_bot = (
+                normalized == "bot"
+                or normalized.startswith(("bot-", "bot_"))
+                or normalized.endswith(("[bot]", "-bot", "_bot"))
+            )
+            if not login or not looks_like_bot:
+                continue
+            reactions.append(
+                BotReaction(login=login, content=str(react_node.get("content", "")).lower())
+            )
+
         # Warn if hard query limits may have been hit (potential truncation)
         if len(reviews) == 100:
             logger.warning(
@@ -846,6 +892,7 @@ query($owner: String!, $repo: String!, $pr: Int!, $after: String) {
             reviews,
             pending,
             latest_commit_pushed_at,
+            reactions,
         )
 
     # --- Repository info ---

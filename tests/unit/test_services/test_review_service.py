@@ -2328,6 +2328,7 @@ class TestPostReviewLifecycle:
             permission_mode=None,
             permission_mode_explicit=False,
             network_access=None,
+            config=None,
         )
 
     @patch("wade.services.review_service.start")
