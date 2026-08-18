@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Conventional Commits](https://conventionalcommits.org/).
 
+## [v0.50.0] — 2026-08-18
+
+### Features
+
+- harden and align review-pass budget and skip guidance across workflows (#451) (cef9d99)
+
 ## [v0.49.1] — 2026-08-18
 
 ### Bug Fixes
